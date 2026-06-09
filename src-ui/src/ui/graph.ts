@@ -645,14 +645,12 @@ export class StarGraph {
   }
 
   private showPieMenu(x: number, y: number): void {
-    this.pieMenu.style.display = 'flex';
     this.pieMenu.style.left = `${x}px`;
     this.pieMenu.style.top = `${y}px`;
     this.pieMenu.classList.add('visible');
   }
 
   private hidePieMenu(): void {
-    this.pieMenu.style.display = 'none';
     this.pieMenu.classList.remove('visible');
     this.pieNodeIdx = -1;
   }

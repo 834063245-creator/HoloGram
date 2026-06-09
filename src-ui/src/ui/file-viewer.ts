@@ -76,8 +76,15 @@ export class FileViewer {
       minHeight: '180px',
     });
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.el.appendChild(brackets);
+
     // Header (draggable)
     this.header = document.createElement('div');
+    this.header.className = 'fv-header';
     Object.assign(this.header.style, {
       display: 'flex',
       alignItems: 'center',
@@ -91,6 +98,7 @@ export class FileViewer {
     });
 
     this.title = document.createElement('span');
+    this.title.className = 'fv-title';
     Object.assign(this.title.style, {
       fontSize: '12px',
       fontWeight: '600',
@@ -141,6 +149,7 @@ export class FileViewer {
 
     // Content area
     this.contentEl = document.createElement('div');
+    this.contentEl.className = 'fv-body';
     Object.assign(this.contentEl.style, {
       flex: '1',
       overflow: 'auto',
@@ -178,6 +187,7 @@ export class FileViewer {
 
     // Resize handle
     this.resizeHandle = document.createElement('div');
+    this.resizeHandle.className = 'fv-grip';
     Object.assign(this.resizeHandle.style, {
       position: 'absolute',
       right: '0',

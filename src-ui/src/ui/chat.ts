@@ -85,6 +85,12 @@ export class ChatPanel {
     this.panel = document.createElement('div');
     this.panel.id = PANEL_ID;
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.panel.appendChild(brackets);
+
     // Resize handle
     const resize = document.createElement('div');
     resize.className = 'chat-resize';

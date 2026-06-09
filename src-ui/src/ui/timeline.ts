@@ -56,6 +56,12 @@ export class TimelinePanel {
     this.panel = document.createElement('div');
     this.panel.id = 'timeline-panel';
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.panel.appendChild(brackets);
+
     // Tab (always visible at bottom left of status bar area)
     const tab = document.createElement('div');
     tab.className = 'tl-tab';

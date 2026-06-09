@@ -90,6 +90,12 @@ export class CheckPanel {
     this.panel = document.createElement('div');
     this.panel.id = PANEL_ID;
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.panel.appendChild(brackets);
+
     // Tab handle (always visible when results exist)
     const tab = document.createElement('div');
     tab.className = 'check-tab';

@@ -86,6 +86,7 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 | 事件总线 | events.ts — navigate:node 跨组件通信 | ✅ |
 | **简报 ↔ 星图链路** | Signal.graph_node_ids + summary enrich + 前端点击跳转 | ✅ P2 |
 | **CSS 变量换皮** | index.html :root + constraints/terminal/file-viewer/graph 内联 → var() | ✅ 2026-06-10 |
+| **原型视觉对齐** | Google Fonts (Orbitron/JetBrains/Noto SC) + 深空气氛层(星场/全息网格/轨道环/扫描线/暗角) + 面板角括号装饰 + CSS 重写对齐原型 | ✅ 2026-06-10 |
 
 ### 未落地 ❌
 
@@ -93,6 +94,7 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 |---|---|
 | — | 全部落地 ✅ |
 
+> 2026-06-10: 原型视觉对齐完工。8 文件变更 — Google Fonts + 深空气氛 + 角括号装饰 + CSS 全部对齐 prototype.html 水准。
 > 2026-06-10: CSS 变量换皮完工。4 个 TS 文件内联样式全部迁移到 var() 引用，index.html :root 底座统一主题。
 > 2026-06-09: P0-P4 全线完工。22 个 Tauri 命令，16 个 Agent 工具，740 个 Python 测试。
 

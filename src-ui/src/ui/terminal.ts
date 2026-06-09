@@ -49,6 +49,12 @@ export class TerminalPanel {
       transition: 'transform var(--glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1))',
     });
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.panel.appendChild(brackets);
+
     // Tab (always visible)
     const tab = document.createElement('div');
     tab.className = 'term-tab';
@@ -78,6 +84,7 @@ export class TerminalPanel {
     });
 
     const clearBtn = document.createElement('button');
+    clearBtn.className = 'term-clear';
     clearBtn.textContent = '清除';
     Object.assign(clearBtn.style, {
       fontSize: '10px', padding: '2px 8px',
@@ -224,13 +231,13 @@ export class TerminalPanel {
   toggle(): void {
     this.openState = !this.openState;
     if (this.openState) {
-      this.panel.style.transform = 'translateY(0)';
+      this.panel.classList.add('term-open');
       setTimeout(() => {
         try { this.fitAddon.fit(); } catch { /* ignore */ }
         this.inputLine.focus();
-      }, 260);
+      }, 290);
     } else {
-      this.panel.style.transform = 'translateY(100%)';
+      this.panel.classList.remove('term-open');
     }
   }
 

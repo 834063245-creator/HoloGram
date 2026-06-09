@@ -53,6 +53,12 @@ export class ConstraintsPanel {
       transition: 'transform var(--glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1))',
     });
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.panel.appendChild(brackets);
+
     // Header
     const header = document.createElement('div');
     Object.assign(header.style, {
@@ -118,12 +124,12 @@ export class ConstraintsPanel {
 
   open(): void {
     this.openState = true;
-    this.panel.style.transform = 'translateX(0)';
+    this.panel.classList.add('cs-open');
   }
 
   close(): void {
     this.openState = false;
-    this.panel.style.transform = 'translateX(100%)';
+    this.panel.classList.remove('cs-open');
   }
 
   // ── Simple YAML parser (enough for the constraints file structure) ──
