@@ -24,3 +24,6 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test projects
+test_projects/
