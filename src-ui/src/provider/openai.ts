@@ -1,6 +1,5 @@
-// OpenAI-compatible provider — 抄自 Reasonix internal/provider/openai/openai.go
-// DeepSeek, MiMo, and any OpenAI-compatible endpoint all use this.
-// 手写 fetch() + SSE 解析。
+// OpenAI-compatible provider — DeepSeek, MiMo, and any OpenAI-compatible endpoint
+// 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
 

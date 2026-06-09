@@ -194,7 +194,11 @@ def cmd_diff(args) -> int:
     after = Graph.from_json(args.after)
     differ = GraphDiffer()
     diff = differ.diff(before, after)
-    print(GraphDiffer.impact_summary(diff))
+    if args.json:
+        import json
+        _safe_print(json.dumps(diff.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(GraphDiffer.impact_summary(diff))
     return 0
 
 
@@ -522,7 +526,9 @@ def cmd_check(args) -> int:
     )
 
     # Step 9: 输出
-    if summary.passed:
+    if args.json:
+        _safe_print(json.dumps(summary.to_dict(), indent=2, ensure_ascii=False))
+    elif summary.passed:
         _safe_print(summary.one_line())
     else:
         _safe_print(summary_gen.render_panel(summary))
@@ -638,6 +644,201 @@ def cmd_incremental(args) -> int:
     return 0
 
 
+def cmd_preflight(args) -> int:
+    """起飞前检查：变更这些文件会产生什么影响？"""
+    root = os.path.abspath(args.root)
+    graph_path = args.graph or os.path.join(root, "hologram_graph.json")
+
+    if not os.path.exists(graph_path):
+        print(f"Error: 图文件不存在: {graph_path}", file=sys.stderr)
+        print("请先运行 hologram analyze", file=sys.stderr)
+        return 1
+
+    graph = Graph.from_json(graph_path)
+
+    changed_files = args.files or []
+    if not changed_files:
+        # 如果没指定文件，检查所有文件
+        changed_files = sorted(set(
+            node.location.rsplit(":", 1)[0] if ":" in (node.location or "") else (node.location or "")
+            for node in graph.nodes.values()
+            if node.location
+        ))
+
+    from .routing.preflight import run_preflight
+    report = run_preflight(graph, changed_files, project_root=root)
+
+    if args.json:
+        _safe_print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        _print_preflight_text(report)
+
+    return 0 if report.risk_level == "low" else 1
+
+
+def _print_preflight_text(report) -> None:
+    """终端友好的 preflight 报告渲染。"""
+    W = 66
+
+    def _box(text: str) -> str:
+        return f"| {text:<{W - 4}} |"
+
+    print(f"+{'=' * (W - 2)}+")
+    print(_box("PREFLIGHT CHECK — 起飞前检查"))
+    print(_box(""))
+
+    # Risk badge
+    risk_icons = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}
+    icon = risk_icons.get(report.risk_level, "⚪")
+    print(_box(f"风险等级: {icon} {report.risk_level.upper()}  (评分: {report.risk_score}/100)"))
+    print(_box(""))
+
+    # Files
+    print(_box(f"检查文件: {len(report.files_checked)} 个"))
+    for f in report.files_checked[:5]:
+        print(_box(f"  - {os.path.basename(f)}"))
+    if len(report.files_checked) > 5:
+        print(_box(f"  ... 还有 {len(report.files_checked) - 5} 个"))
+    print(_box(""))
+
+    # Impact
+    print(_box(f"直接影响节点: {report.nodes_directly_changed}"))
+    print(_box(f"波及节点数:   {report.blast_radius}"))
+    print(_box(""))
+
+    # Coupling
+    if report.l4_violations > 0:
+        print(_box(f"L4 封装穿透: {report.l4_violations} 个"))
+    else:
+        print(_box("L4 封装穿透: 无"))
+
+    # Community
+    if report.cross_community:
+        comms = ", ".join(c["community_label"] for c in report.cross_community_details)
+        print(_box(f"跨社区影响: 是 — {comms}"))
+    else:
+        print(_box("跨社区影响: 否"))
+
+    # Cycles
+    if report.cycles_touched > 0:
+        print(_box(f"涉及数据流环: {len(report.cycle_details)} 个"))
+    print(_box(""))
+
+    # Warnings
+    if report.warnings:
+        print(_box("⚠ 警告:"))
+        for w in report.warnings:
+            print(_box(f"  - {w}"))
+        print(_box(""))
+
+    # Per-file details
+    if report.per_file:
+        print(_box("按文件详情:"))
+        for pf in report.per_file[:5]:
+            total_impact = sum(n["impact_count"] for n in pf["nodes"])
+            print(_box(f"  {os.path.basename(pf['file'])}: {len(pf['nodes'])} 节点, 波及 {total_impact}"))
+        print(_box(""))
+
+    print(f"+{'=' * (W - 2)}+")
+
+
+def cmd_health(args) -> int:
+    """健康趋势报告：聚合时间轴 + 耦合快照。"""
+    root = os.path.abspath(args.root)
+    graph_path = args.graph or os.path.join(root, "hologram_graph.json")
+
+    from .routing.preflight import run_health
+
+    graph = None
+    if os.path.exists(graph_path):
+        graph = Graph.from_json(graph_path)
+
+    report = run_health(root, graph=graph, days=args.days)
+
+    if args.json:
+        _safe_print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        _print_health_text(report)
+
+    return 0 if report.health_score >= 60 else 1
+
+
+def _print_health_text(report) -> None:
+    """终端友好的 health 报告渲染。"""
+    W = 66
+
+    def _box(text: str) -> str:
+        return f"| {text:<{W - 4}} |"
+
+    # Health score color
+    if report.health_score >= 80:
+        badge = f"🟢 {report.health_score}/100"
+    elif report.health_score >= 50:
+        badge = f"🟡 {report.health_score}/100"
+    else:
+        badge = f"🔴 {report.health_score}/100"
+
+    print(f"+{'=' * (W - 2)}+")
+    print(_box("PROJECT HEALTH — 项目健康趋势"))
+    print(_box(""))
+    print(_box(f"健康评分: {badge}"))
+    print(_box(""))
+
+    # Graph snapshot
+    print(_box(f"图规模: {report.total_nodes} 节点, {report.total_edges} 边, "
+              f"{report.community_count} 社区"))
+    print(_box(""))
+
+    # Coupling
+    cd = report.coupling_distribution
+    if cd:
+        print(_box(f"耦合分布: L1={cd.get('l1', 0)} L2={cd.get('l2', 0)} "
+                  f"L3={cd.get('l3', 0)} L4={cd.get('l4', 0)}"))
+
+    # Cycles
+    print(_box(f"数据流环: {report.cycle_count} 个 "
+              f"(数据持久={report.data_persistent_cycles}, "
+              f"LLM参与={report.llm_involved_cycles})"))
+    print(_box(""))
+
+    # Trends
+    if report.trends:
+        print(_box("趋势:"))
+        for key, val in report.trends.items():
+            label = {"coupling": "耦合", "cycles": "环", "change_frequency": "变更频率"}.get(key, key)
+            print(_box(f"  {label}: {val}"))
+
+    print(_box(""))
+
+    # Timeline
+    print(_box(f"时间轴事件: {report.timeline_total_events} 总计, "
+              f"{report.timeline_recent_changes} 近期"))
+    print(_box(""))
+
+    # Top changed
+    if report.top_changed_files:
+        print(_box("高频变更文件:"))
+        for f in report.top_changed_files[:5]:
+            print(_box(f"  {os.path.basename(f['file'])} — {f['changes']} 次"))
+        print(_box(""))
+
+    # Fragility
+    if report.fragility_top5:
+        print(_box("最脆弱模块 Top 5:"))
+        for r in report.fragility_top5:
+            print(_box(f"  {r['module']} — fragility={r['fragility_score']}, L4={r['l4_count']}"))
+        print(_box(""))
+
+    # Warnings
+    if report.warnings:
+        print(_box("⚠ 警告:"))
+        for w in report.warnings:
+            print(_box(f"  - {w}"))
+        print(_box(""))
+
+    print(f"+{'=' * (W - 2)}+")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="hologram",
@@ -677,6 +878,7 @@ def main() -> None:
     p_diff = sub.add_parser("diff", help="Compare two graph snapshots")
     p_diff.add_argument("before", help="Before graph JSON file")
     p_diff.add_argument("after", help="After graph JSON file")
+    p_diff.add_argument("--json", action="store_true", help="Output structured JSON")
     p_diff.set_defaults(func=cmd_diff)
 
     # ── V2 commands ──
@@ -718,6 +920,7 @@ def main() -> None:
     p_check = sub.add_parser("check", help="Run constraint validation and show change summary (V3)")
     p_check.add_argument("root", help="Project root directory")
     p_check.add_argument("-g", "--graph", help="Graph JSON file path")
+    p_check.add_argument("--json", action="store_true", help="Output structured JSON instead of text panel")
     p_check.set_defaults(func=cmd_check)
 
     # hologram constraints
@@ -726,6 +929,22 @@ def main() -> None:
     p_constraints.add_argument("--init", action="store_true",
                                help="Generate default hologram.constraints.yaml")
     p_constraints.set_defaults(func=cmd_constraints)
+
+    # hologram preflight
+    p_preflight = sub.add_parser("preflight", help="Pre-flight check: what happens if these files change? (V3)")
+    p_preflight.add_argument("root", help="Project root directory")
+    p_preflight.add_argument("--files", nargs="+", help="Changed file paths (if omitted, checks all files)")
+    p_preflight.add_argument("-g", "--graph", help="Graph JSON file path")
+    p_preflight.add_argument("--json", action="store_true", help="Output structured JSON")
+    p_preflight.set_defaults(func=cmd_preflight)
+
+    # hologram health
+    p_health = sub.add_parser("health", help="Project health trends — timeline + coupling snapshot (V3)")
+    p_health.add_argument("root", help="Project root directory")
+    p_health.add_argument("-g", "--graph", help="Graph JSON file path")
+    p_health.add_argument("--days", type=int, default=30, help="Days to look back for trends (default 30)")
+    p_health.add_argument("--json", action="store_true", help="Output structured JSON")
+    p_health.set_defaults(func=cmd_health)
 
     args = parser.parse_args()
     if args.command is None:

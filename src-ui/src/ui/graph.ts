@@ -207,6 +207,12 @@ export class StarGraph {
   private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
   private nodeGlows2: THREE.Sprite[] = []; // second glow layer (full mode)
 
+  // Diff overlay (P4: 变更回看着色)
+  private diffActive = false;
+  private diffAddedIds = new Set<string>();
+  private diffRemovedIds = new Set<string>();
+  private diffModifiedIds = new Set<string>();
+
   // Hover
   private raycaster: THREE.Raycaster;
   private mouse = new THREE.Vector2(-999, -999);
@@ -1049,6 +1055,65 @@ export class StarGraph {
   }
 
   toggleFold(): void { this.setFoldMode(!this.foldMode); }
+
+  // ── Diff overlay (P4: 变更回看着色) ──────────────────────
+
+  /** Apply diff coloring: green=added, red=removed, orange=modified. */
+  showDiff(diffJson: { added_nodes?: Array<{id:string}>; removed_nodes?: Array<{id:string}>; modified_nodes?: Array<{node_id:string}> }): void {
+    this.diffActive = true;
+    this.diffAddedIds = new Set((diffJson.added_nodes || []).map(n => n.id));
+    this.diffRemovedIds = new Set((diffJson.removed_nodes || []).map(n => n.id));
+    this.diffModifiedIds = new Set((diffJson.modified_nodes || []).map(n => n.node_id));
+
+    const GREEN = 0x44dd44, RED = 0xee4444, ORANGE = 0xf0a020;
+
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const nid = this.graphNodes[i].id;
+      let diffColor: number | null = null;
+      if (this.diffAddedIds.has(nid)) diffColor = GREEN;
+      else if (this.diffRemovedIds.has(nid)) diffColor = RED;
+      else if (this.diffModifiedIds.has(nid)) diffColor = ORANGE;
+
+      if (diffColor !== null && this.nodeGlows[i]) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(diffColor);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.85;
+      }
+    }
+
+    // Pulse effect on diff nodes: slightly increase scale
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      if (this.diffAddedIds.has(this.graphNodes[i].id) && this.nodeCores[i]) {
+        this.nodeCores[i].scale.setScalar((this.nodeCores[i].scale.x || 1) * 1.3);
+      }
+    }
+  }
+
+  /** Remove diff coloring, restore normal colors. */
+  clearDiff(): void {
+    if (!this.diffActive) return;
+    this.diffActive = false;
+    this.diffAddedIds.clear();
+    this.diffRemovedIds.clear();
+    this.diffModifiedIds.clear();
+
+    const isFull = this.mode === 'full';
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
+      const glowColor = GLOW_COLORS[kind] || 0x4488cc;
+      if (this.nodeGlows[i]) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+      }
+      if (this.nodeCores[i]) {
+        const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
+        (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor);
+        const baseScale = 0.6 + (this.deg[i] / this.maxDeg) * 2.8;
+        this.nodeCores[i].scale.setScalar(isFull ? baseScale * 0.4 : baseScale);
+      }
+    }
+  }
+
+  get hasDiff(): boolean { return this.diffActive; }
 
   // ══════════════════════════════════════════════════════════
   // Fold overlay — two layers

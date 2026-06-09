@@ -1,5 +1,4 @@
-// Agent 循环 — 抄自 Reasonix internal/agent/agent.go
-// 核心：Run() → stream() → executeBatch() → 循环直到模型给最终答案
+// Agent 循环 — Run() → stream() → executeBatch() → 循环直到模型给出最终答案
 
 import type {
   Chunk,
@@ -11,7 +10,7 @@ import type {
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import type { Tool, ToolRegistry } from './tool';
 
-// ---- Event types (抄自 Reasonix internal/event) ----
+// ---- Event types ----
 
 export enum EventKind {
   TurnStarted = 'turn_started',
@@ -62,7 +61,7 @@ export function computeCost(p: Pricing | undefined, u: Usage | undefined): numbe
     u.completion_tokens * p.output) / 1_000_000;
 }
 
-/** Sink receives the agent's typed event stream. Like Reasonix's event.Sink. */
+/** Sink receives the agent's typed event stream. */
 export type EventSink = (event: AgentEvent) => void;
 
 // ---- Agent Options ----
@@ -100,11 +99,11 @@ export class Agent {
   private recentKeep: number;
   private compactStuck = false;
 
-  // Storm breaker (抄自 Reasonix stormSig/stormCount)
+  // Storm breaker — detect repetitive failing tool calls
   private stormSig = '';
   private stormCount = 0;
 
-  // Cache accumulation (抄自 Reasonix sessCacheHit/Miss)
+  // Cache accumulation
   private cacheHitTotal = 0;
   private cacheMissTotal = 0;
 
@@ -322,7 +321,7 @@ export class Agent {
       });
     }
 
-    // Execute — parallel read-only, serial writers (抄自 Reasonix partitionToolCalls)
+    // Execute — parallel read-only, serial writers
     const batches = partitionCalls(this.tools, calls);
     for (const batch of batches) {
       if (batch.parallel && batch.end - batch.start > 1) {
@@ -412,7 +411,7 @@ export class Agent {
     };
   }
 
-  // ---- Storm breaker (抄自 Reasonix applyStormBreaker) ----
+  // ---- Storm breaker — break repetitive tool-call loops ----
 
   private applyStormBreaker(
     calls: ToolCall[],
@@ -451,7 +450,7 @@ export class Agent {
     });
   }
 
-  // ---- Context management (抄自 Reasonix maybeCompact) ----
+  // ---- Context window management ----
 
   private maybeCompact(usage: Usage | undefined): void {
     if (this.contextWindow <= 0) return;

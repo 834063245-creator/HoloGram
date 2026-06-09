@@ -177,6 +177,20 @@ class ChangeSummaryGenerator:
                 elif v.signal.level == 2:
                     l2_violations.append(d)
 
+        # 补充 graph_node_ids：将 affected_nodes 中的节点名解析为图节点 ID
+        if after_graph:
+            for v_list in [l5_violations, l4_violations, l3_violations, l2_violations]:
+                for v in v_list:
+                    signal = v.get("signal", {})
+                    affected = signal.get("affected_nodes", [])
+                    if affected:
+                        ids: List[str] = []
+                        for name in affected:
+                            nodes = after_graph.find_node_by_name(name)
+                            for node in nodes:
+                                ids.append(node.id)
+                        signal["graph_node_ids"] = ids
+
         # 统计
         blast_radius = 0
         cross_community_edges = 0

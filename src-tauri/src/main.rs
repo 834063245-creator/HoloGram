@@ -196,7 +196,7 @@ async fn hologram_path(from: String, to: String) -> Result<String, String> {
 #[tauri::command]
 async fn hologram_diff(before_path: String, after_path: Option<String>) -> Result<String, String> {
     let after = after_path.unwrap_or_else(default_graph);
-    run_hologram(&["diff", &before_path, &after])
+    run_hologram(&["diff", &before_path, &after, "--json"])
 }
 
 #[tauri::command]
@@ -363,6 +363,86 @@ print(json.dumps(summary, indent=2, ensure_ascii=False))
         default_graph(),
     );
     run_python_code(&code)
+}
+
+// ═══════════════════════════════════════════════════════
+// V3: Check — constraint validation + change summary
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_run_check(path: String) -> Result<String, String> {
+    let graph_path = format!("{}/hologram_graph.json", path);
+    run_hologram(&["check", &path, "--json", "-g", &graph_path])
+}
+
+// ═══════════════════════════════════════════════════════
+// V3: Preflight — pre-commit impact analysis
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<String, String> {
+    let graph_path = format!("{}/hologram_graph.json", path);
+    let mut args: Vec<&str> = vec!["preflight", &path, "--json", "-g", &graph_path];
+    if !files.is_empty() {
+        args.push("--files");
+        // We need to collect the file strings into the args vec
+        // Use a different approach: build args as Vec<String> and then convert
+    }
+    // Build args with owned strings
+    let mut owned_args: Vec<String> = vec![
+        "preflight".into(), path.clone(), "--json".into(), "-g".into(), graph_path,
+    ];
+    if !files.is_empty() {
+        owned_args.push("--files".into());
+        owned_args.extend(files);
+    }
+    let str_args: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+    run_hologram(&str_args)
+}
+
+// ═══════════════════════════════════════════════════════
+// V3: Health — project health trends
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
+    let graph_path = format!("{}/hologram_graph.json", path);
+    let d = days.unwrap_or(30);
+    run_hologram(&["health", &path, "--json", "-g", &graph_path, "--days", &d.to_string()])
+}
+
+// ═══════════════════════════════════════════════════════
+// P4: File viewer — read file content for floating editor
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn read_file_content(file_path: String) -> Result<String, String> {
+    std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))
+}
+
+// ═══════════════════════════════════════════════════════
+// P4: Constraints UI — read/write hologram.constraints.yaml
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn read_constraints(project_path: String) -> Result<String, String> {
+    let yaml_path = std::path::PathBuf::from(&project_path).join("hologram.constraints.yaml");
+    if !yaml_path.exists() {
+        // Return default constraints from the repo template
+        let default_path = project_root().join("hologram.constraints.yaml");
+        return std::fs::read_to_string(&default_path)
+            .map_err(|e| format!("无法读取默认约束文件: {}", e));
+    }
+    std::fs::read_to_string(&yaml_path)
+        .map_err(|e| format!("无法读取约束文件: {}", e))
+}
+
+#[tauri::command]
+async fn write_constraints(project_path: String, content: String) -> Result<(), String> {
+    let yaml_path = std::path::PathBuf::from(&project_path).join("hologram.constraints.yaml");
+    std::fs::write(&yaml_path, &content)
+        .map_err(|e| format!("无法写入约束文件: {}", e))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -599,8 +679,14 @@ fn main() {
             hologram_graph_summary,
             load_graph_json,
             analyze_and_load,
+            hologram_run_check,
+            hologram_run_preflight,
+            hologram_run_health,
             start_watching,
             stop_watching,
+            read_file_content,
+            read_constraints,
+            write_constraints,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");

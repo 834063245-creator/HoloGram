@@ -1,9 +1,8 @@
-// Tool 系统 — 抄自 Reasonix internal/tool/tool.go
-// Tool 接口 + Registry 注册表 + Hologram 工具定义
+// Tool 系统 — Tool 接口 + Registry 注册表 + Hologram 工具定义
 
 import type { ToolSchema } from '../provider/types';
 
-// ---- Tool 接口 (抄自 Reasonix tool.go) ----
+// ---- Tool 接口 ----
 
 /** A Tool is one callable tool the agent can dispatch. */
 export interface Tool {
@@ -19,7 +18,7 @@ export interface Tool {
   execute(args: Record<string, unknown>): Promise<string>;
 }
 
-// ---- Tool Registry (抄自 Reasonix tool.go) ----
+// ---- Tool Registry ----
 
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
@@ -272,6 +271,100 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_graph_summary', args),
+    },
+    {
+      name: () => 'hologram_run_check',
+      description: () =>
+        'Run full constraint validation (V3) on the current project. Re-analyzes the codebase, generates L5-L1 signals, checks against constraints, and returns a change summary with violations grouped by severity level. Use this when the user asks "检查一下" or "有没有问题" or "跑一遍约束".',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Project root directory path (use the current project path)',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('hologram_run_check', args),
+    },
+    {
+      name: () => 'hologram_run_preflight',
+      description: () =>
+        'Pre-flight check (V3): analyze what would happen if the given files change. Runs impact BFS, checks coupling depth, community cross-edges, and cycle detection. Returns risk level (low/medium/high/critical) and warnings. Use BEFORE making changes — "先看看改这里会怎样" or "这个改动安全吗？"',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Project root directory path (use the current project path)',
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of file paths that would be changed',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_run_preflight', args),
+    },
+    {
+      name: () => 'hologram_run_health',
+      description: () =>
+        'Project health report (V3): aggregates timeline change history and coupling depth snapshot to compute a health score (0-100), trends (coupling/cycles/change frequency), top changed files, and most fragile modules. Use when the user asks "项目健康吗？" or "最近的趋势怎么样？"',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Project root directory path (use the current project path)',
+          },
+          days: {
+            type: 'integer',
+            description: 'Number of days to look back for trends (default 30)',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_run_health', args),
+    },
+    {
+      name: () => 'read_file_content',
+      description: () =>
+        'Read the content of a file on disk. Returns the full text content. Use to inspect source code files when analyzing dependencies or investigating violations.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Absolute path to the file to read',
+          },
+        },
+        required: ['filePath'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('read_file_content', args),
+    },
+    {
+      name: () => 'read_constraints',
+      description: () =>
+        'Read the current constraint configuration (hologram.constraints.yaml) for the project. Returns the YAML content. Use to check routing rules, thresholds, and allowlist/denylist settings.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Project root directory path',
+          },
+        },
+        required: ['projectPath'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('read_constraints', args),
     },
   ];
 }

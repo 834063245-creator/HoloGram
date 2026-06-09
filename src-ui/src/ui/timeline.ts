@@ -1,0 +1,233 @@
+// Timeline Panel — 决策时间轴
+// 消费 hologram_timeline 命令的输出，渲染事件时间线
+
+import { invoke } from '@tauri-apps/api/core';
+import { bus } from './events';
+
+export interface TimelineEvent {
+  id: number;
+  timestamp: string;
+  event_type: string;
+  file: string;
+  changed_by: string;
+  related_nodes: string[];
+  summary: string;
+  data_file_diff?: Record<string, unknown>;
+  properties?: Record<string, unknown>;
+}
+
+interface TimelineData {
+  events: TimelineEvent[];
+  total?: number;
+}
+
+const TYPE_ICONS: Record<string, string> = {
+  file_changed: '📝',
+  data_file_changed: '💾',
+  commit: '🔖',
+  blindspot_detected: '⚠️',
+  user_action: '👤',
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  file_changed: '文件变更',
+  data_file_changed: '数据变更',
+  commit: 'Commit',
+  blindspot_detected: '边界检测',
+  user_action: '用户操作',
+};
+
+export class TimelinePanel {
+  private panel!: HTMLElement;
+  private content!: HTMLElement;
+  private tabStatus!: HTMLElement;
+  private openState = false;
+  private events: TimelineEvent[] = [];
+  private loading = false;
+  private path: string | null = null;
+  private refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+  constructor(container: HTMLElement) {
+    this.buildDOM(container);
+  }
+
+  private buildDOM(container: HTMLElement): void {
+    // Panel
+    this.panel = document.createElement('div');
+    this.panel.id = 'timeline-panel';
+
+    // Tab (always visible at bottom left of status bar area)
+    const tab = document.createElement('div');
+    tab.className = 'tl-tab';
+    tab.addEventListener('click', () => this.toggle());
+
+    this.tabStatus = document.createElement('span');
+    this.tabStatus.className = 'tl-tab-status';
+    this.tabStatus.textContent = '🕐';
+
+    const label = document.createElement('span');
+    label.className = 'tl-tab-label';
+    label.textContent = '时间轴';
+
+    const arrow = document.createElement('span');
+    arrow.className = 'tl-tab-arrow';
+    arrow.textContent = '▴';
+
+    tab.appendChild(this.tabStatus);
+    tab.appendChild(label);
+    tab.appendChild(arrow);
+
+    // Content area
+    this.content = document.createElement('div');
+    this.content.className = 'tl-content';
+
+    this.panel.appendChild(tab);
+    this.panel.appendChild(this.content);
+    container.appendChild(this.panel);
+  }
+
+  // ── Public API ──
+
+  setProjectPath(path: string | null): void {
+    this.path = path;
+    this.events = [];
+    if (path) {
+      this.refresh();
+      // Auto-refresh every 30s
+      if (this.refreshInterval) clearInterval(this.refreshInterval);
+      this.refreshInterval = setInterval(() => this.refresh(), 30000);
+    }
+  }
+
+  async refresh(): Promise<void> {
+    if (!this.path || this.loading) return;
+    this.loading = true;
+    this.tabStatus.textContent = '⏳';
+
+    try {
+      const json = await invoke<string>('hologram_timeline', {
+        limit: 60,
+        module: null as unknown as string,
+        since: null as unknown as string,
+      });
+      const data = JSON.parse(json) as TimelineData;
+      this.events = data.events || [];
+      this.tabStatus.textContent = `🕐 ${this.events.length}`;
+      if (this.openState) this.render();
+    } catch (err) {
+      console.error('Timeline refresh failed:', err);
+      this.tabStatus.textContent = '🕐';
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  toggle(): void {
+    this.openState = !this.openState;
+    if (this.openState) {
+      this.panel.classList.add('tl-open');
+      this.render();
+    } else {
+      this.panel.classList.remove('tl-open');
+    }
+  }
+
+  private render(): void {
+    if (this.events.length === 0) {
+      this.content.innerHTML = `<div class="tl-empty">暂无时间轴事件。开始编辑代码后，事件会自动记录。</div>`;
+      return;
+    }
+
+    let html = '<div class="tl-timeline">';
+
+    for (let i = 0; i < this.events.length; i++) {
+      const ev = this.events[i];
+      const prev = i > 0 ? this.events[i - 1] : null;
+      const sameMinute = prev && prev.timestamp?.slice(0, 16) === ev.timestamp?.slice(0, 16);
+      const icon = TYPE_ICONS[ev.event_type] || '📌';
+      const label = TYPE_LABELS[ev.event_type] || ev.event_type;
+      const ts = ev.timestamp ? formatTimestamp(ev.timestamp) : '';
+      const file = ev.file ? extractFilename(ev.file) : '';
+
+      // Show time header if minute changed
+      if (!sameMinute) {
+        html += `<div class="tl-time-divider"><span>${ts}</span></div>`;
+      }
+
+      html += `<div class="tl-event" data-event-id="${ev.id}">`;
+      html += `<div class="tl-event-dot"></div>`;
+      html += `<div class="tl-event-body">`;
+      html += `<div class="tl-event-header">`;
+      html += `<span class="tl-event-icon">${icon}</span>`;
+      html += `<span class="tl-event-type">${label}</span>`;
+      if (file) html += `<span class="tl-event-file">${escapeHtml(file)}</span>`;
+      html += `</div>`;
+      if (ev.summary) html += `<div class="tl-event-summary">${escapeHtml(ev.summary)}</div>`;
+      if (ev.changed_by) html += `<div class="tl-event-meta">${escapeHtml(ev.changed_by)}</div>`;
+      if (ev.related_nodes && ev.related_nodes.length > 0) {
+        const nodes = ev.related_nodes.slice(0, 3).map(n => {
+          const short = n.split('.').pop() || n;
+          return `<span class="tl-event-node-link" data-node="${escapeHtml(n)}">${escapeHtml(short)}</span>`;
+        }).join(', ');
+        const more = ev.related_nodes.length > 3 ? ` +${ev.related_nodes.length - 3}` : '';
+        html += `<div class="tl-event-nodes">${nodes}${more}</div>`;
+      }
+      html += `</div></div>`;
+    }
+
+    html += '</div>';
+    this.content.innerHTML = html;
+
+    // Wire up node link clicks
+    this.content.querySelectorAll('.tl-event-node-link').forEach(el => {
+      el.addEventListener('click', () => {
+        const nodeName = (el as HTMLElement).dataset['node'];
+        if (nodeName) {
+          bus.emit('navigate:node', nodeName);
+        }
+      });
+    });
+
+    // Wire up file clicks → open in file viewer
+    this.content.querySelectorAll('.tl-event-file').forEach(el => {
+      el.addEventListener('click', async () => {
+        const fileName = (el as HTMLElement).textContent;
+        if (fileName && this.path) {
+          // Try to find full path
+          for (const ev of this.events) {
+            if (ev.file && ev.file.endsWith(fileName!)) {
+              const { FileViewer } = await import('./file-viewer');
+              FileViewer.get().open(ev.file);
+              break;
+            }
+          }
+        }
+      });
+    });
+  }
+
+  destroy(): void {
+    if (this.refreshInterval) clearInterval(this.refreshInterval);
+    this.panel.remove();
+  }
+}
+
+// ── Helpers ──
+
+function formatTimestamp(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return iso;
+  }
+}
+
+function extractFilename(path: string): string {
+  return path.replace(/\\/g, '/').split('/').pop() || path;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}

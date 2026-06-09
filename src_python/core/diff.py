@@ -30,6 +30,17 @@ class GraphDiff:
     def is_empty(self) -> bool:
         return self.total_changes == 0
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "added_nodes": [n.to_dict() for n in self.added_nodes],
+            "removed_nodes": [n.to_dict() for n in self.removed_nodes],
+            "modified_nodes": [{"node_id": mn.node_id, "name": mn.name, "changed_properties": {k: list(v) for k, v in mn.changed_properties.items()}} for mn in self.modified_nodes],
+            "added_edges": [e.to_dict() for e in self.added_edges],
+            "removed_edges": [e.to_dict() for e in self.removed_edges],
+            "total_changes": self.total_changes,
+            "is_empty": self.is_empty,
+        }
+
 
 @dataclass
 class ModifiedNode:

@@ -18,6 +18,9 @@ V2 新增工具（5 个查询 + 1 个边界路由）：
   - hologram_coupling_report(module)   → 模块的 L1-L4 分布
   - hologram_timeline(limit)       → 因果审计时间线查询
   - hologram_blindspots(filter)    → 边界列表 + 上下文数据
+
+V3 新增工具（1 个）：
+  - hologram_preflight(files)      → 起飞前检查：impact + coupling + community
 """
 
 from __future__ import annotations
@@ -65,6 +68,8 @@ class MCPServer:
             "hologram_timeline": self._tool_timeline,
             # V2 boundary routing
             "hologram_blindspots": self._tool_blindspots,
+            # V3 preflight
+            "hologram_preflight": self._tool_preflight,
         }
 
         self._tool_definitions = [
@@ -204,6 +209,22 @@ class MCPServer:
                         "limit": {"type": "integer", "description": "Max events to return (default 100)"},
                         "since": {"type": "string", "description": "ISO timestamp to filter events after (optional)"},
                     },
+                },
+            },
+            # ── V3 preflight ──
+            {
+                "name": "hologram_preflight",
+                "description": "Pre-flight check: analyze what would happen if the given files change. Combines impact BFS, coupling depth, community cross-edges, and cycle detection. Returns risk level and warnings.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of file paths that would be changed",
+                        },
+                    },
+                    "required": ["files"],
                 },
             },
         ]
@@ -677,6 +698,22 @@ class MCPServer:
             }
         except Exception as e:
             return {"error": str(e), "events": []}
+
+    # ── V3 preflight 工具实现 ─────────────────────────────
+
+    def _tool_preflight(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """起飞前检查：变更这些文件会产生什么影响？"""
+        files = args.get("files", [])
+        if not files:
+            return {"error": "No files provided", "risk_level": "unknown"}
+
+        try:
+            from .routing.preflight import run_preflight
+            project_root = getattr(self.graph, 'source_root', '') or '.'
+            report = run_preflight(self.graph, files, project_root=project_root)
+            return report.to_dict()
+        except Exception as e:
+            return {"error": str(e), "risk_level": "unknown"}
 
     # ── JSON-RPC 协议 ───────────────────────────────────
 

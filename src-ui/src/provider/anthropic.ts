@@ -1,5 +1,4 @@
-// Anthropic Messages API provider — 抄自 Reasonix internal/provider/anthropic/anthropic.go
-// 手写 fetch() + SSE 解析，零第三方 SDK。self-registers as "anthropic" kind.
+// Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
 
@@ -37,7 +36,7 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
   };
 }
 
-// ---- Request building (抄自 Reasonix buildRequest) ----
+// ---- Request building ----
 
 interface CacheControl {
   type: 'ephemeral';
@@ -192,7 +191,7 @@ function buildRequest(
   return r;
 }
 
-// ---- Retry logic (抄自 Reasonix sendWithRetry) ----
+// ---- Retry logic ----
 
 async function sendWithRetry(
   signal: AbortSignal,
@@ -252,7 +251,7 @@ function isRetryableStatus(s: number): boolean {
   return s === 408 || s === 429 || (s >= 500 && s <= 599);
 }
 
-// ---- SSE stream parsing (抄自 Reasonix readStream) ----
+// ---- SSE stream parsing ----
 
 interface WireUsage {
   input_tokens: number;

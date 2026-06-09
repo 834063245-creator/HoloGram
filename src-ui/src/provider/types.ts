@@ -1,5 +1,4 @@
-// Provider 抽象层 —— 抄自 Reasonix internal/provider/provider.go
-// 统一 Message / Chunk / ToolCall，抹平 Anthropic 和 OpenAI 的 API 差异
+// Provider 抽象层 — 统一 Message / Chunk / ToolCall，抹平 Anthropic 和 OpenAI 的 API 差异
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -66,14 +65,14 @@ export interface Chunk {
   err?: Error;
 }
 
-/** Provider is a chat-capable model backend — 跟 Reasonix 的 interface 一模一样 */
+/** Provider is a chat-capable model backend. */
 export interface Provider {
   name(): string;
   /** Start a streaming completion, yielding chunks. Cancelling signal aborts. */
   stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk>;
 }
 
-// ---- Tool pairing sanitization (copied from Reasonix) ----
+// ---- Tool pairing sanitization ----
 
 const interruptedToolResult =
   '[no result: the previous turn was interrupted before this tool call completed]';

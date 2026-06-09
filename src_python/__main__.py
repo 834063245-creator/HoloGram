@@ -176,7 +176,7 @@ def main():
         # 子命令通过 CLI 处理
         if cmd in ("analyze", "neighbors", "impact", "path", "diff", "serve",
                     "fragile", "cycle", "coupling-report", "check", "constraints",
-                    "incremental"):
+                    "incremental", "preflight", "health"):
             from .cli import main as cli_main
             cli_main()
             return

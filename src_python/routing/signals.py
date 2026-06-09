@@ -36,6 +36,7 @@ class Signal:
     file_path: str = ""
     line: int = 0
     affected_nodes: List[str] = field(default_factory=list)  # 受影响的节点名
+    graph_node_ids: List[str] = field(default_factory=list)   # 图中节点ID（由 summary enrich 填充）
     affected_files: List[str] = field(default_factory=list)   # 受影响的文件
     old_value: Optional[str] = None
     new_value: Optional[str] = None
@@ -51,6 +52,7 @@ class Signal:
             "file_path": self.file_path,
             "line": self.line,
             "affected_nodes": self.affected_nodes,
+            "graph_node_ids": self.graph_node_ids,
             "affected_files": self.affected_files,
             "old_value": self.old_value,
             "new_value": self.new_value,
