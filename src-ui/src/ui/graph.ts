@@ -247,6 +247,7 @@ export class StarGraph {
   private _fileHighlight = false;
   private _fileHighlightIndices = new Set<number>();
   private _fileOpacityOriginal = new Map<number, number>();
+  private _agentHighlightIndices = new Set<number>();
 
   // Blast
   private blastMode = false;
@@ -1165,6 +1166,120 @@ export class StarGraph {
     this._fileHighlight = false;
     this._fileHighlightIndices.clear();
     this._applyFileHighlight();
+  }
+
+  // ── Agent highlight (Agent ↔ 星图联动) ──────────────────
+
+  /** Highlight a set of nodes by name (fuzzy match). Matched nodes glow in the given color; others dim. */
+  highlightNodeNames(names: string[], colorHex?: string): void {
+    this._clearAgentHighlightState();
+    if (!names.length || this.graphNodes.length === 0) return;
+
+    const color = colorHex ? parseInt(colorHex.replace('#', ''), 16) : 0xf0b848; // default sol
+    const lowerNames = names.map(n => n.trim().toLowerCase());
+
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const nodeName = (this.graphNodes[i].name || '').toLowerCase();
+      const shortName = nodeName.split('.').pop() || '';
+      const found = lowerNames.some(q =>
+        nodeName === q || nodeName.startsWith(q) || nodeName.includes(q) || shortName === q
+      );
+      if (found) {
+        this._agentHighlightIndices.add(i);
+      }
+    }
+
+    if (this._agentHighlightIndices.size === 0) return;
+
+    // Apply: dim non-highlighted, recolor highlighted
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      if (this._agentHighlightIndices.has(i)) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(color);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.88;
+        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      } else {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.025;
+        if (this.mode !== 'full' && this.nodeCores[i]) this.nodeCores[i].visible = false;
+      }
+    }
+    // Dim non-path edges
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity = 0.008;
+    }
+    // Fly to centroid of highlighted nodes
+    this._flyToCentroid(this._agentHighlightIndices);
+  }
+
+  /** Show the dependency path between two nodes on the graph. */
+  showPathOnGraph(fromName: string, toName: string): boolean {
+    const srcIdx = this._findNodeIndexByName(fromName);
+    const dstIdx = this._findNodeIndexByName(toName);
+    if (srcIdx < 0 || dstIdx < 0) return false;
+    this.setPathSource(srcIdx);
+    this.setPathTarget(dstIdx);
+    return this._pathNodes.size > 0;
+  }
+
+  /** Clear all Agent-triggered highlights (path + node highlight). */
+  clearAgentHighlight(): void {
+    this._clearAgentHighlightState();
+    this.clearPath();
+    // Also restore any file highlight if active
+    if (this._fileHighlight) {
+      this._applyFileHighlight();
+    }
+  }
+
+  private _clearAgentHighlightState(): void {
+    if (this._agentHighlightIndices.size === 0) return;
+    // Restore original glows for previously highlighted nodes
+    for (const i of this._agentHighlightIndices) {
+      if (this.nodeGlows[i]) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+      }
+      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+    }
+    // Restore non-highlighted dimmed nodes
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      if (!this._agentHighlightIndices.has(i)) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+      }
+    }
+    // Restore edge opacities
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity =
+        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
+    }
+    this._agentHighlightIndices.clear();
+  }
+
+  /** Find a node's array index by name (fuzzy). Returns -1 if not found. */
+  private _findNodeIndexByName(query: string): number {
+    const q = query.trim().toLowerCase();
+    if (!q || this.graphNodes.length === 0) return -1;
+    let idx = this.graphNodes.findIndex(n => n.name.toLowerCase() === q);
+    if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
+    if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
+    return idx;
+  }
+
+  /** Fly camera to the centroid of a set of node indices. */
+  private _flyToCentroid(indices: Set<number>): void {
+    if (indices.size === 0) return;
+    let cx = 0, cy = 0, cz = 0;
+    for (const i of indices) {
+      cx += this.nodePositions[i * 3];
+      cy += this.nodePositions[i * 3 + 1];
+      cz += this.nodePositions[i * 3 + 2];
+    }
+    const n = indices.size;
+    this.focusTarget.set(cx / n, cy / n, cz / n);
+    this.focusStartCam.copy(this.camera.position);
+    this.focusStartLook.copy(this.controls.target);
+    this.focusActive = true;
+    this.focusProgress = 0;
+    this.focusFlash = 0;
   }
 
   private _applyFileHighlight(): void {

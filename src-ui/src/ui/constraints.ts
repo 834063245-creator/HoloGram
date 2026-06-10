@@ -3,6 +3,7 @@
 
 import { invoke } from '../bridge';
 import { iconHtml } from './icons';
+import { askAgent } from './agent-visualizer';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;
@@ -85,7 +86,28 @@ export class ConstraintsPanel {
     closeBtn.addEventListener('mouseleave', () => closeBtn.style.color = 'var(--text-muted, #4a5568)');
     closeBtn.addEventListener('click', () => this.close());
 
+    // "Ask Agent" button
+    const askBtn = document.createElement('button');
+    askBtn.innerHTML = iconHtml('agent', 12);
+    askBtn.title = '问 Agent 关于当前约束配置';
+    Object.assign(askBtn.style, {
+      width: '24px', height: '24px', padding: '0',
+      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
+      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
+      transition: 'color var(--snap, 0.12s)',
+      marginRight: '4px',
+    });
+    askBtn.addEventListener('mouseenter', () => askBtn.style.color = 'var(--signal, #7eb8ff)');
+    askBtn.addEventListener('mouseleave', () => askBtn.style.color = 'var(--text-muted, #4a5568)');
+    askBtn.addEventListener('click', () => {
+      const routingSummary = this.data?.routing
+        ? Object.entries(this.data.routing).filter(([, v]) => v).map(([k]) => k).join(', ')
+        : '未知';
+      askAgent(`解释当前项目的约束配置。启用的路由: ${routingSummary}。这些约束规则的作用是什么？有没有可以优化的地方？`);
+    });
+
     header.appendChild(title);
+    header.appendChild(askBtn);
     header.appendChild(closeBtn);
 
     // Content

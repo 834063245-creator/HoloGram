@@ -4,6 +4,7 @@
 import { invoke } from '../bridge';
 import { bus } from './events';
 import { iconHtml } from './icons';
+import { askAgent } from './agent-visualizer';
 
 export interface TimelineEvent {
   id: number;
@@ -167,13 +168,14 @@ export class TimelinePanel {
         html += `<div class="tl-time-divider"><span>${ts}</span></div>`;
       }
 
-      html += `<div class="tl-event" data-event-id="${ev.id}">`;
+      html += `<div class="tl-event" data-event-id="${ev.id}" data-tl-file="${escapeHtml(ev.file || '')}" data-tl-summary="${escapeHtml(ev.summary || '')}" data-tl-type="${escapeHtml(label)}">`;
       html += `<div class="tl-event-dot"></div>`;
       html += `<div class="tl-event-body">`;
       html += `<div class="tl-event-header">`;
       html += `<span class="tl-event-icon">${icon}</span>`;
       html += `<span class="tl-event-type">${label}</span>`;
       if (file) html += `<span class="tl-event-file">${escapeHtml(file)}</span>`;
+      html += `<button class="tl-ask-btn" title="问 Agent 关于这次变更">${iconHtml('agent', 10)}</button>`;
       html += `</div>`;
       if (ev.summary) html += `<div class="tl-event-summary">${escapeHtml(ev.summary)}</div>`;
       if (ev.changed_by) html += `<div class="tl-event-meta">${escapeHtml(ev.changed_by)}</div>`;
@@ -190,6 +192,29 @@ export class TimelinePanel {
 
     html += '</div>';
     this.content.innerHTML = html;
+
+    // Wire up "Ask Agent" buttons
+    this.content.querySelectorAll('.tl-ask-btn').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const eventEl = (el as HTMLElement).closest('.tl-event') as HTMLElement;
+        if (!eventEl) return;
+        const typeLabel = eventEl.dataset['tlType'] || '变更';
+        const file = eventEl.dataset['tlFile'] || '';
+        const summary = eventEl.dataset['tlSummary'] || '';
+        const nodes = Array.from(eventEl.querySelectorAll('.tl-event-node-link'))
+          .map(n => (n as HTMLElement).dataset['node'] || '')
+          .filter(Boolean)
+          .join(', ');
+        const context = [
+          `[${typeLabel}]`,
+          file ? `文件: ${file}` : '',
+          summary ? `摘要: ${summary}` : '',
+          nodes ? `相关节点: ${nodes}` : '',
+        ].filter(Boolean).join(' | ');
+        askAgent(`分析这次变更: ${context}`);
+      });
+    });
 
     // Wire up node link clicks
     this.content.querySelectorAll('.tl-event-node-link').forEach(el => {

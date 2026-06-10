@@ -4,6 +4,7 @@
 
 import { invoke } from '../bridge';
 import { iconHtml } from './icons';
+import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
 
 // -- Monaco worker config for Vite ESM --
@@ -133,7 +134,29 @@ export class FileViewer {
     });
     this.windowCloseBtn.addEventListener('click', () => this.closeAll());
 
+    // "Ask Agent" button — analyze the current file
+    const askBtn = document.createElement('button');
+    askBtn.className = 'fv-ask-btn';
+    askBtn.innerHTML = iconHtml('agent', 13);
+    askBtn.title = '问 Agent 分析当前文件';
+    Object.assign(askBtn.style, {
+      width: '22px', height: '22px', padding: '0', flexShrink: '0',
+      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
+      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      transition: 'color var(--snap, 0.12s)',
+    });
+    askBtn.addEventListener('mouseenter', () => { askBtn.style.color = 'var(--signal, #7eb8ff)'; });
+    askBtn.addEventListener('mouseleave', () => { askBtn.style.color = 'var(--text-muted, #4a5568)'; });
+    askBtn.addEventListener('click', () => {
+      const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+      if (tab) {
+        askAgent(`分析文件 "${tab.filePath}" 的依赖关系和耦合状况。它和其他模块的关联是什么？如果修改它会影响哪些模块？`);
+      }
+    });
+
     this.header.appendChild(this.tabBar);
+    this.header.appendChild(askBtn);
     this.header.appendChild(this.windowCloseBtn);
 
     // Editor container

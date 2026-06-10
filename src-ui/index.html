@@ -1368,6 +1368,17 @@
       max-width: 130px; transition: color var(--snap);
     }
     .tl-event-file:hover { color: var(--signal-bright); }
+    .tl-ask-btn {
+      width: 18px; height: 18px; padding: 0; margin-left: auto;
+      background: none; border: 1px solid transparent;
+      color: var(--text-muted); cursor: pointer;
+      border-radius: 3px; font-size: 10px;
+      display: flex; align-items: center; justify-content: center;
+      transition: color var(--snap), border-color var(--snap);
+      flex-shrink: 0; opacity: 0;
+    }
+    .tl-event:hover .tl-ask-btn { opacity: 0.5; }
+    .tl-ask-btn:hover { opacity: 1 !important; color: var(--signal); border-color: var(--panel-edge); }
     .tl-event-summary {
       font-size: 10px; color: var(--starlight-dim); line-height: 1.35;
       margin-top: 1px; word-break: break-word;

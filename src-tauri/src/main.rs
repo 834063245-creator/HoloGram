@@ -458,6 +458,158 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 }
 
 // ═══════════════════════════════════════════════════════
+// Agent native tools — graph introspection (from MCP)
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_history(node_id: String) -> Result<String, String> {
+    let root = project_root();
+    let graph = default_graph();
+    let code = format!(
+        r#"
+import sys, json
+sys.path.insert(0, r"{root}")
+from core.graph import Graph
+graph = Graph.from_json(r"{graph}")
+node = graph.get_node("{node_id}")
+if not node:
+    print(json.dumps({{"error": "Node not found"}}))
+else:
+    incoming = graph.incoming_edges("{node_id}")
+    outgoing = graph.outgoing_edges("{node_id}")
+    result = {{
+        "node": node.to_dict(),
+        "decision_history": node.properties.get("history", []) if node.properties else [],
+        "dependency_count": len(incoming),
+        "dependent_count": len(outgoing),
+    }}
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+"#,
+        root = root.join("src_python").to_string_lossy(),
+        graph = graph,
+        node_id = node_id,
+    );
+    run_python_code(&code)
+}
+
+#[tauri::command]
+async fn hologram_community(node_id: String) -> Result<String, String> {
+    let root = project_root();
+    let graph = default_graph();
+    let code = format!(
+        r#"
+import sys, json
+sys.path.insert(0, r"{root}")
+from core.graph import Graph
+graph = Graph.from_json(r"{graph}")
+node = graph.get_node("{node_id}")
+if not node:
+    print(json.dumps({{"error": "Node not found"}}))
+elif not hasattr(node, 'community_id') or not node.community_id:
+    print(json.dumps({{"node_id": "{node_id}", "community": None, "message": "Community detection not yet run"}}))
+else:
+    found = None
+    for c in graph.communities:
+        if c.id == node.community_id:
+            found = c
+            break
+    if found:
+        print(json.dumps({{
+            "node_id": "{node_id}",
+            "community": found.to_dict(),
+            "sibling_nodes": [nid for nid in found.node_ids if nid != "{node_id}"],
+        }}, indent=2, ensure_ascii=False))
+    else:
+        print(json.dumps({{"node_id": "{node_id}", "community": None}}))
+"#,
+        root = root.join("src_python").to_string_lossy(),
+        graph = graph,
+        node_id = node_id,
+    );
+    run_python_code(&code)
+}
+
+#[tauri::command]
+async fn hologram_delayed() -> Result<String, String> {
+    let root = project_root();
+    let graph = default_graph();
+    let code = format!(
+        r#"
+import sys, json
+sys.path.insert(0, r"{root}")
+from core.graph import Graph, EdgeType
+graph = Graph.from_json(r"{graph}")
+delayed = []
+for edge in graph.edges.values():
+    delay = getattr(edge, 'temporal_delay_sec', None)
+    edge_type = edge.type.value if isinstance(edge.type, EdgeType) else str(edge.type)
+    if delay is not None and edge_type == 'temporal':
+        src = graph.get_node(edge.source)
+        tgt = graph.get_node(edge.target)
+        delayed.append({{
+            "source": src.to_dict() if src else {{"id": edge.source}},
+            "target": tgt.to_dict() if tgt else {{"id": edge.target}},
+            "delay_sec": delay,
+            "edge_direction": getattr(edge, 'direction', 'unknown'),
+        }})
+realtime = [d for d in delayed if d["delay_sec"] is None or d["delay_sec"] == 0]
+periodic = [d for d in delayed if d["delay_sec"] and d["delay_sec"] > 0]
+result = {{
+    "total_delayed_edges": len(delayed),
+    "realtime_count": len(realtime),
+    "periodic_count": len(periodic),
+    "realtime": realtime[:20],
+    "periodic": periodic[:20],
+}}
+print(json.dumps(result, indent=2, ensure_ascii=False))
+"#,
+        root = root.join("src_python").to_string_lossy(),
+        graph = graph,
+    );
+    run_python_code(&code)
+}
+
+#[tauri::command]
+async fn hologram_changes() -> Result<String, String> {
+    let root = project_root();
+    let code = format!(
+        r#"
+import sys, json, os
+sys.path.insert(0, r"{root}")
+source_root = os.environ.get("HOLOGRAM_PROJECT", "")
+timeline_path = os.path.join(source_root, ".hologram", "timeline.json") if source_root else ""
+if not timeline_path or not os.path.exists(timeline_path):
+    print(json.dumps({{"message": "No timeline data available", "changes": []}}))
+else:
+    with open(timeline_path, "r") as f:
+        timeline = json.load(f)
+    anchors = timeline.get("anchors", [])
+    last_change = None
+    for a in anchors:
+        if a.get("action") == "changed":
+            last_change = a
+            break
+    if not last_change:
+        print(json.dumps({{"message": "No recent changes found", "changes": []}}))
+    else:
+        print(json.dumps({{
+            "last_change": {{
+                "timestamp": last_change.get("timestamp"),
+                "summary": last_change.get("summary"),
+                "impact_count": last_change.get("impactCount", 0),
+                "delayed_count": last_change.get("delayedCount", 0),
+                "affected_nodes": last_change.get("affectedNodeIds", []),
+                "commit_hash": last_change.get("commitHash"),
+            }},
+            "timeline_anchor_count": len(anchors),
+        }}, indent=2, ensure_ascii=False))
+"#,
+        root = root.join("src_python").to_string_lossy(),
+    );
+    run_python_code(&code)
+}
+
+// ═══════════════════════════════════════════════════════
 // P4: Terminal — execute shell commands
 // ═══════════════════════════════════════════════════════
 
@@ -849,6 +1001,10 @@ fn main() {
             hologram_run_check,
             hologram_run_preflight,
             hologram_run_health,
+            hologram_history,
+            hologram_community,
+            hologram_delayed,
+            hologram_changes,
             start_watching,
             stop_watching,
             list_directory,

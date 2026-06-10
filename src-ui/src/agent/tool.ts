@@ -366,5 +366,55 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       readOnly: () => true,
       execute: (args) => exec('read_constraints', args),
     },
+    {
+      name: () => 'hologram_history',
+      description: () =>
+        'Get the decision history for a specific node — what past changes involved this node, its dependency count (fan-in), and dependent count (fan-out). Use when asked about a node\'s change history or stability.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          node_id: { type: 'string', description: 'The node ID or name to query history for' },
+        },
+        required: ['node_id'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_history', args),
+    },
+    {
+      name: () => 'hologram_community',
+      description: () =>
+        'Get community/cluster membership for a specific node. Returns the galaxy it belongs to and its sibling nodes (other nodes in the same community). Use when asked "which group does this module belong to?" or "what modules are closely related to this one?"',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          node_id: { type: 'string', description: 'The node ID or name to query' },
+        },
+        required: ['node_id'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_community', args),
+    },
+    {
+      name: () => 'hologram_delayed',
+      description: () =>
+        'List all edges with temporal/async delays in the graph. Returns realtime (0 delay) and periodic (non-zero delay) edges separately. Use when asked about async calls, scheduled tasks, or temporal coupling patterns.',
+      parameters: () => ({
+        type: 'object',
+        properties: {},
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_delayed', {}),
+    },
+    {
+      name: () => 'hologram_changes',
+      description: () =>
+        'Get the most recent change recorded in the timeline — what was changed, impact count, affected nodes, and commit hash. Use when asked "what changed last?" or "what was the last commit\'s impact?"',
+      parameters: () => ({
+        type: 'object',
+        properties: {},
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_changes', {}),
+    },
   ];
 }

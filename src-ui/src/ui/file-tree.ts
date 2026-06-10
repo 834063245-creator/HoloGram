@@ -6,6 +6,7 @@ import { invoke } from '../bridge';
 import { iconSvg } from './icons';
 import { FileViewer } from './file-viewer';
 import { bus } from './events';
+import { askAgent } from './agent-visualizer';
 
 interface DirEntry {
   name: string;
@@ -184,10 +185,27 @@ export class FileTreePanel {
 
     // Name
     const name = document.createElement('span');
-    name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
     name.textContent = entry.name;
     name.style.color = entry.is_dir ? 'var(--starlight, #e6edf3)' : 'var(--text-muted)';
     row.appendChild(name);
+
+    // "Ask Agent" icon — appears on hover for files
+    if (!entry.is_dir) {
+      const askIcon = document.createElement('span');
+      askIcon.innerHTML = iconSvg('agent', 11);
+      askIcon.title = '问 Agent 分析这个文件';
+      askIcon.style.cssText = 'width:16px;height:16px;flex-shrink:0;opacity:0;cursor:pointer;transition:opacity 0.15s;display:flex;align-items:center;justify-content:center;';
+      askIcon.addEventListener('click', (e) => {
+        e.stopPropagation();
+        askAgent(`分析文件 "${entry.path}"。它在依赖图中的位置是什么？和其他模块的耦合关系如何？修改它会影响什么？`);
+      });
+      askIcon.addEventListener('mouseenter', () => { askIcon.style.opacity = '1'; });
+      askIcon.addEventListener('mouseleave', () => { if (!row.matches(':hover')) askIcon.style.opacity = '0'; });
+      row.addEventListener('mouseenter', () => { askIcon.style.opacity = '0.7'; });
+      row.addEventListener('mouseleave', () => { askIcon.style.opacity = '0'; });
+      row.appendChild(askIcon);
+    }
 
     return row;
   }

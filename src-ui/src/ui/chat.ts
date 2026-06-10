@@ -6,6 +6,7 @@ import type { Agent, AgentEvent } from '../agent/agent';
 import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
+import { visualizeAgentTool } from './agent-visualizer';
 
 // ── Constants ──
 
@@ -437,6 +438,15 @@ export class ChatPanel {
     // Auto-expand on error
     if (tool.err) {
       card.classList.add('tool-expanded');
+    }
+
+    // Trigger star graph visualization from tool result
+    if (!tool.err && tool.output && this.starGraph) {
+      try {
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tool.args || '{}'); } catch { /* ignore */ }
+        visualizeAgentTool(tool.name, args, tool.output, this.starGraph);
+      } catch { /* visualization failure is silent */ }
     }
   }
 

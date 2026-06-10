@@ -19,6 +19,7 @@ import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { iconSvg } from './ui/icons';
+import { visualizeAgentTool } from './ui/agent-visualizer';
 
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
@@ -169,7 +170,12 @@ function setupAgent(): void {
   const registry = new ToolRegistry();
   if (currentGraphData) {
     const exec: ToolExecutor = async (name, args) => {
-      return await invoke<string>(name, args);
+      const result = await invoke<string>(name, args);
+      // 触发星图可视化（解析失败不影响对话）
+      try {
+        visualizeAgentTool(name, args, result, starGraph);
+      } catch { /* 可视化失败静默跳过 */ }
+      return result;
     };
     for (const tool of createHologramTools(exec)) {
       registry.register(tool);
@@ -201,7 +207,7 @@ function buildSystemPrompt(): string {
 项目: ${currentPath || '未知'}
 规模: ${nodes} 节点, ${edges} 边
 
-工具: hologram_analyze / neighbors / impact / path / fragile / cycle / coupling_report / blindspots / thread_conflicts / timeline / diff / community_report / graph_summary
+工具: hologram_analyze / neighbors / impact / path / fragile / cycle / coupling_report / blindspots / thread_conflicts / timeline / diff / community_report / graph_summary / history / community / delayed / changes
 
 用户会问"哪个模块最脆弱？""A 和 B 怎么关联？""改这里会炸吗？""有没有循环依赖？"——直接用工具查，给出结论。`;
 }
@@ -486,6 +492,7 @@ async function init(): Promise<void> {
     if (e.key === 'Escape') {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
       else if (FileViewer.get().isOpen) FileViewer.get().close();
+      else starGraph.clearAgentHighlight();
     }
   });
   function updateFoldBtn(): void {
