@@ -111,6 +111,17 @@ function buildChatRequest(
     }
   }
 
+  // Apply cache breakpoint to the last system message (DeepSeek supports cache_control)
+  let sysSet = false;
+  for (let i = chatMsgs.length - 1; i >= 0; i--) {
+    if (chatMsgs[i].role === 'system') {
+      if (!sysSet) {
+        (chatMsgs[i] as any).cache_control = { type: 'ephemeral' };
+        sysSet = true;
+      }
+    }
+  }
+
   const chatTools: ChatTool[] | undefined =
     tools.length > 0
       ? tools.map((t) => ({

@@ -154,6 +154,21 @@ export class Agent {
     return { hit: this.cacheHitTotal, miss: this.cacheMissTotal };
   }
 
+  /** Start a fresh conversation — keep system prompt, clear everything else. */
+  newSession(): void {
+    const sys = this.session.length > 0 && this.session[0].role === 'system'
+      ? this.session[0]
+      : null;
+    this.session = sys ? [sys] : [];
+    this.cacheHitTotal = 0;
+    this.cacheMissTotal = 0;
+    this.lastUsage = undefined;
+    this.stormSig = '';
+    this.stormCount = 0;
+    this.compactStuck = false;
+    this.sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
+  }
+
   /** Run one turn: append user input, drive the tool loop. */
   async run(signal: AbortSignal, input: string): Promise<void> {
     this.sink({ kind: EventKind.TurnStarted });

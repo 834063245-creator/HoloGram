@@ -47,6 +47,9 @@ export class ChatPanel {
 
   private openState = false;
   private lastUsageText = '';
+  private onOpenSettings: (() => void) | null = null;
+
+  setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -213,12 +216,30 @@ export class ChatPanel {
 
   // ── Send ──
 
+  private newSession(): void {
+    if (!this.agent) return;
+    this.agent.newSession();
+    // Clear message list UI (keep the agent object)
+    this.msgList.innerHTML = '';
+    this.addNotice('已开启新会话 — 上下文已清空', 'info');
+    this.finishTurn();
+    this.updateFooter();
+  }
+
   private async sendMessage(): Promise<void> {
     const text = this.inputArea.value.trim();
     if (!text || this.running) return;
 
     if (!this.agent) {
       this.addNotice('Agent 未就绪 — 请先配置 API Key 或等待项目加载', 'error');
+      return;
+    }
+
+    // Detect /new command
+    if (text === '/new') {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.newSession();
       return;
     }
 
@@ -575,20 +596,27 @@ export class ChatPanel {
 
     this.footerEl.innerHTML = `
       <div class="chat-footer-left">
-        <span class="chat-model-badge" title="${active?.name} / ${active?.model}">
+        <button class="chat-model-badge chat-model-clickable" title="点击切换模型 · ${active?.name} / ${active?.model}">
           ${iconHtml('agent', 10)} ${modelLabel}${thinking}
-        </span>
+        </button>
         <span class="chat-usage-badge">${usageStr}</span>
       </div>
       <div class="chat-footer-right">
+        <button class="chat-slash-btn chat-slash-new" data-text="/new" title="新建会话">${iconHtml('plus', 9)} /new</button>
         <button class="chat-slash-btn" data-text="哪些模块最脆弱？" title="查找脆弱模块">${iconHtml('alert', 9)} /fragile</button>
         <button class="chat-slash-btn" data-text="检查循环依赖" title="检查循环依赖">${iconHtml('refresh', 9)} /cycles</button>
         <button class="chat-slash-btn" data-text="分析最近改动的影响" title="影响分析">${iconHtml('blast', 9)} /impact</button>
         <button class="chat-slash-btn" data-text="" data-placeholder="追踪从 " title="依赖路径">${iconHtml('link', 9)} /path</button>
       </div>`;
 
+    // Model badge click → open settings
+    const modelBadge = this.footerEl.querySelector('.chat-model-clickable') as HTMLElement;
+    if (modelBadge && this.onOpenSettings) {
+      modelBadge.addEventListener('click', () => this.onOpenSettings!());
+    }
+
     // Wire slash buttons
-    this.footerEl.querySelectorAll('.chat-slash-btn').forEach((btn) => {
+    this.footerEl.querySelectorAll('.chat-slash-btn:not(.chat-slash-new)').forEach((btn) => {
       btn.addEventListener('click', () => {
         const el = btn as HTMLElement;
         const text = el.dataset['text'] || '';
@@ -602,6 +630,12 @@ export class ChatPanel {
         this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
         this.inputArea.focus();
       });
+    });
+
+    // /new button — execute directly
+    this.footerEl.querySelector('.chat-slash-new')?.addEventListener('click', () => {
+      this.inputArea.value = '/new';
+      this.sendMessage();
     });
   }
 
