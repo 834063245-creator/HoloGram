@@ -4,7 +4,30 @@
 > 它不描述"愿景"。它描述**代码里实际有什么、实际缺什么**。
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
-> 生成日期：2026-06-09 · 代码审计完成
+> 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
+
+---
+
+## 2026-06-10 审计修复记录
+
+审计报告发现 17 个问题（0 高危 / 5 中危 / 12 低危），全部已修复：
+
+| 类别 | 修复项 | 改动量 |
+|---|---|---|
+| 逻辑反转 | summary.py:751 — 历史路由状态判断反转 → 直接用 all_routed 判定 | 2行 |
+| 逻辑错误 | cli.py:656 — 三元两边都是 "commit" → commit_violation / commit_clean | 1行 |
+| 资源泄露 | timeline.py — TimelineStore 改为 context manager，4 个调用点全部改 with | +5/-8行 |
+| 并发安全 | python_adapter.py — _MediaVisitor._build_index() 双检锁加 threading.Lock | +2行 |
+| 并发安全 | pipeline/cache.py — IncrementalCache 全部 _cache 读写加 threading.Lock | +8行 |
+| 死代码 | python_adapter.py — 删除 _visit_annotation_ref、空循环体 | -8行 |
+| 死代码 | pipeline/runner.py — 删除 _resolve_cross_file（空操作函数） | -28行 |
+| 死代码 | timeline.py — 删除未使用的 asdict import | 1行 |
+| 架构诚实 | merger.py — 注释标注"V1 未实现" | 1行 |
+| 死逻辑 | mcp_server.py:391 — 删除 is None 永假分支 | 1行 |
+| 一致性 | 统一 enum→string 转换：graph.py 新增 type_val() 工具函数，12 处内联替换 | +5/-12行 |
+| 一致性 | watcher.py — 导入路径对齐 from .adapters.registry | 1行 |
+
+测试：798 通过 / 2 失败（预存 constraints.py bug，非本次引入）
 
 ---
 
@@ -146,10 +169,8 @@ load_graph_json · analyze_and_load · start_watching · stop_watching
 | 折叠视图：星系叠加时加法混合过曝 | 未修复（ACES + 低 Bloom 缓解，不根治） |
 | 跨星系连线 + 能量流粒子在深色背景中不可见 | 未修复 |
 | 粒子流在 3794 条边上均布，密度被稀释 | 未修复（3794 是上次分析的边数，不同项目不同） |
-| Agent 会话重启/切换工作区后丢失 | ✅ 已修复 (2026-06-10) — 持久化到 .hologram/chat_sessions.json |
-| Agent 调 read_file_content / read_constraints 失败 | ✅ 已修复 (2026-06-10) — camelCase → snake_case 对齐 Tauri |
-| Agent 调工具时 handleToolDispatch 崩溃 | ✅ 已修复 (2026-06-10) — flushText 后 ensureAssistantBubble |
 | 应用偶发崩溃 | 未定位 |
+| constraints.py — allowlist 为 None 时 from_dict 抛 TypeError | 预存，2 个测试失败 |
 
 ---
 

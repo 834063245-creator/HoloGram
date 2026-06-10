@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import os
+import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .base import LanguageAdapter, AdapterResult
@@ -176,11 +177,6 @@ class _SymbolVisitor(ast.NodeVisitor):
         self._current_class = None
         self._scope_stack.append(fn_node.id)
 
-        # 形参类型注解中的引用
-        for arg in node.args.args:
-            if arg.annotation:
-                self._visit_annotation_ref(arg.annotation, fn_node.id)
-
         self.generic_visit(node)
 
         self._scope_stack.pop()
@@ -209,12 +205,7 @@ class _SymbolVisitor(ast.NodeVisitor):
 
         self._make_edge(cls_node.id, self._scope_stack[-1], StructuralDirection.IMPORT)
 
-        # 继承边
-        for base in node.bases:
-            base_name = self._name_of(base)
-            if base_name:
-                # 继承边是占位：target 使用名称字符串，合并时解析
-                pass  # 继承关系在 merger 中基于名称解析
+        # 继承关系在 merger 中基于名称解析
 
         prev_class = self._current_class
         self._current_class = full_name
@@ -289,11 +280,6 @@ class _SymbolVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     # -- helpers --
-
-    def _visit_annotation_ref(self, ann: ast.expr, from_id: str) -> None:
-        name = self._name_of(ann)
-        if name:
-            pass  # 类型引用边在合并时解析
 
     @staticmethod
     def _decorator_name(node: ast.expr) -> str:
@@ -403,18 +389,22 @@ class _MediaVisitor(ast.NodeVisitor):
     # 快速查找索引
     IO_INDEX: Dict[str, List[Tuple[MediumKind, DataDirection]]] = {}
     _index_built = False
+    _index_lock = threading.Lock()
 
     @classmethod
     def _build_index(cls) -> None:
         if cls._index_built:
             return
-        for module_func, func, kind, direction in cls.IO_PATTERNS:
-            # 全限定名始终索引
-            cls.IO_INDEX.setdefault(module_func, []).append((kind, direction))
-            # 短名仅对非通用动词索引
-            if func not in cls._GENERIC_VERBS:
-                cls.IO_INDEX.setdefault(func, []).append((kind, direction))
-        cls._index_built = True
+        with cls._index_lock:
+            if cls._index_built:
+                return
+            for module_func, func, kind, direction in cls.IO_PATTERNS:
+                # 全限定名始终索引
+                cls.IO_INDEX.setdefault(module_func, []).append((kind, direction))
+                # 短名仅对非通用动词索引
+                if func not in cls._GENERIC_VERBS:
+                    cls.IO_INDEX.setdefault(func, []).append((kind, direction))
+            cls._index_built = True
 
     def __init__(self, file_path: str, graph: Graph):
         _MediaVisitor._build_index()

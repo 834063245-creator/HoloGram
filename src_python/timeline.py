@@ -34,7 +34,7 @@ import json
 import os
 import sqlite3
 import hashlib
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -367,6 +367,13 @@ class TimelineStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
 
 # ============================================================

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Tuple
 
-from .graph import Graph, Node, Edge, NodeType, EdgeType
+from .graph import Graph, Node, Edge, NodeType, EdgeType, type_val
 
 
 class GraphMerger:
@@ -24,7 +24,7 @@ class GraphMerger:
     @staticmethod
     def edge_key(edge: Edge) -> str:
         """边的去重键：source + target + type + direction。"""
-        return f"{edge.source}::{edge.target}::{edge.type.value if hasattr(edge.type, 'value') else edge.type}::{edge.direction}"
+        return f"{edge.source}::{edge.target}::{type_val(edge.type)}::{edge.direction}"
 
     def merge_many(self, graphs: List[Graph], source_root: str = "") -> Graph:
         """合并多个图为一个全图。"""
@@ -107,7 +107,7 @@ class CrossFileResolver:
           - 继承匹配 → 建立 INHERIT 边
           - 函数调用匹配 → 建立 CALL 边
 
-        (跨文件 IMPORT 边需语义级适配器支持，暂不处理。)
+        (已知限制：跨文件 IMPORT 边需语义级适配器支持，V1 未实现。)
         """
         added = 0
 

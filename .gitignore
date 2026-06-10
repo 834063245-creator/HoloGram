@@ -25,8 +25,21 @@ target/
 .DS_Store
 Thumbs.db
 
+# Binaries
+*.dll
+*.exe
+*.pdb
+*.so
+*.dylib
+
 # Test projects
 test_projects/
+
+# Project-local runtime data (generated per project)
+.hologram/
+*.db
+.last_project
+hologram_graph.json
+hologram_before.json
 hologram_full.json
-src_python/hologram_graph.json
-src_python/.hologram/
+chat_sessions.json

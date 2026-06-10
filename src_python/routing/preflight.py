@@ -407,40 +407,38 @@ def run_health(
     # ── 3. 时间轴聚合 ──
     try:
         from ..timeline import TimelineStore
-        store = TimelineStore(project_root)
-        events = store.query(limit=500)
+        with TimelineStore(project_root) as store:
+            events = store.query(limit=500)
 
-        report.timeline_total_events = len(events)
+            report.timeline_total_events = len(events)
 
-        # 最近 N 天的变更
-        cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
-        recent = [e for e in events if e.get("timestamp", "") >= cutoff]
-        report.timeline_recent_changes = len(recent)
+            # 最近 N 天的变更
+            cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
+            recent = [e for e in events if e.get("timestamp", "") >= cutoff]
+            report.timeline_recent_changes = len(recent)
 
-        # Top changed files
-        file_counts: Dict[str, int] = {}
-        for e in events:
-            file_str = e.get("file", "")
-            if file_str:
-                for f in file_str.split(", "):
-                    f = f.strip()
-                    if f:
-                        file_counts[f] = file_counts.get(f, 0) + 1
+            # Top changed files
+            file_counts: Dict[str, int] = {}
+            for e in events:
+                file_str = e.get("file", "")
+                if file_str:
+                    for f in file_str.split(", "):
+                        f = f.strip()
+                        if f:
+                            file_counts[f] = file_counts.get(f, 0) + 1
 
-        report.top_changed_files = sorted(
-            [{"file": f, "changes": c} for f, c in file_counts.items()],
-            key=lambda x: x["changes"],
-            reverse=True,
-        )[:10]
+            report.top_changed_files = sorted(
+                [{"file": f, "changes": c} for f, c in file_counts.items()],
+                key=lambda x: x["changes"],
+                reverse=True,
+            )[:10]
 
-        # 高频变更预警
-        if report.top_changed_files:
-            top = report.top_changed_files[0]
-            if top["changes"] > 20:
-                health_deductions += 10
-                warnings.append(f"文件 {top['file']} 变更过于频繁 ({top['changes']} 次)")
-
-        store.close()
+            # 高频变更预警
+            if report.top_changed_files:
+                top = report.top_changed_files[0]
+                if top["changes"] > 20:
+                    health_deductions += 10
+                    warnings.append(f"文件 {top['file']} 变更过于频繁 ({top['changes']} 次)")
 
     except Exception as e:
         warnings.append(f"时间轴数据不可用: {e}")

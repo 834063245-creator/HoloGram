@@ -119,9 +119,8 @@ class PipelineRunner:
             if on_progress:
                 on_progress(file_path, i + 1, len(files))
 
-        # Phase 3: 跨文件关系解析
+        # Phase 3: 跨文件关系解析（已知限制：REFERENCE 边创建留给后续版本）
         report.phase = "cross_file_resolution"
-        self._resolve_cross_file(merged_graph, file_graphs)
 
         report.phase = "done"
         report.elapsed_sec = time.time() - t0
@@ -215,33 +214,6 @@ class PipelineRunner:
                 return f.read()
         except (PermissionError, OSError):
             return None
-
-    def _resolve_cross_file(self, graph: Graph, file_graphs: Dict[str, Graph]) -> None:
-        """
-        跨文件关系解析：基于导入/调用名称匹配，补全结构边。
-        当前版本：基于同名符号做简单的跨文件引用边。
-        """
-        def _type_val(t) -> str:
-            return t.value if hasattr(t, 'value') else str(t)
-
-        name_index: Dict[str, List[Node]] = {}
-        for node in graph.nodes.values():
-            if _type_val(node.type) == "symbol":
-                short = node.name.split(".")[-1]
-                name_index.setdefault(short, []).append(node)
-
-        # 对每个文件的导入映射建立引用边
-        for file_path, fg in file_graphs.items():
-            for edge in fg.edges.values():
-                if _type_val(edge.type) == "structural" and edge.direction == "import":
-                    target_node = graph.get_node(edge.target)
-                    if target_node:
-                        # 目标符号在其他文件中被引用时，建立 REFERENCE 边
-                        target_short = target_node.name.split(".")[-1]
-                        for ref_node in name_index.get(target_short, []):
-                            if ref_node.id != target_node.id:
-                                pass  # 避免过度连接，留到后续版本增强
-
 
 class PipelineReport:
     """流水线执行报告。"""

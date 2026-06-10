@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, SymbolKind, file_from_location
+from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, SymbolKind, file_from_location, type_val
 
 
 # ============================================================
@@ -134,13 +134,10 @@ def _parse_all_exports(file_path: str, source: str) -> Set[str]:
 def _is_public_name(name: str, all_exports: Set[str]) -> bool:
     """判断符号名是否为公开 API。"""
     short = name.split(".")[-1]
-    # 下划线前缀表示私有（Python 约定）
     if short.startswith("_"):
         return False
-    # 在 __all__ 中的认为是公开
     if all_exports and short in all_exports:
         return True
-    # 无 __all__ 时，非 _ 开头的认为是公开
     if not all_exports:
         return True
     return False
@@ -324,7 +321,7 @@ class CouplingDepthAnalyzer:
 
         # 遍历所有结构边
         for edge in graph.edges.values():
-            edge_type_str = edge.type.value if isinstance(edge.type, EdgeType) else str(edge.type)
+            edge_type_str = type_val(edge.type)
             if edge_type_str != "structural":
                 continue
 
@@ -382,7 +379,7 @@ class CouplingDepthAnalyzer:
         """对单条边进行 L1-L4 分类。"""
         edge_dir = getattr(edge, 'direction', '')
         edge_props = getattr(edge, 'properties', {}) or {}
-        edge_type_str = edge.type.value if isinstance(edge.type, EdgeType) else str(edge.type)
+        edge_type_str = type_val(edge.type)
 
         # 数据边 → 检查是否为 L3 共享数据
         if edge_type_str == "data":
@@ -435,7 +432,7 @@ class CouplingDepthAnalyzer:
             return False
 
         # 检查是否多个不同的源节点访问同一介质
-        tgt_type_str = tgt_node.type.value if isinstance(tgt_node.type, NodeType) else str(tgt_node.type)
+        tgt_type_str = type_val(tgt_node.type)
         if tgt_type_str == "medium":
             incoming = graph.incoming_edges(tgt_node.id)
             sources = set()

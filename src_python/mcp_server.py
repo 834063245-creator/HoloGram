@@ -30,7 +30,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from .core.graph import Graph, EdgeType, file_from_location
+from .core.graph import Graph, EdgeType, file_from_location, type_val
 
 
 class MCPServer:
@@ -377,7 +377,7 @@ class MCPServer:
         delayed = []
         for edge in self.graph.edges.values():
             delay = getattr(edge, 'temporal_delay_sec', None)
-            edge_type = edge.type.value if isinstance(edge.type, EdgeType) else str(edge.type)
+            edge_type = type_val(edge.type)
             if delay is not None and edge_type == 'temporal':
                 src = self.graph.get_node(edge.source)
                 tgt = self.graph.get_node(edge.target)
@@ -388,7 +388,7 @@ class MCPServer:
                     "edge_direction": getattr(edge, 'direction', 'unknown'),
                 })
 
-        realtime = [d for d in delayed if d["delay_sec"] is None or d["delay_sec"] == 0]
+        realtime = [d for d in delayed if d["delay_sec"] == 0]
         periodic = [d for d in delayed if d["delay_sec"] and d["delay_sec"] > 0]
 
         return {
@@ -498,7 +498,7 @@ class MCPServer:
         temporal_nodes = []
         for node in self.graph.nodes.values():
             if hasattr(node, 'type'):
-                nt = node.type.value if hasattr(node.type, 'value') else str(node.type)
+                nt = type_val(node.type)
                 if nt == 'temporal':
                     temporal_nodes.append(node)
 
@@ -506,7 +506,7 @@ class MCPServer:
         medium_nodes = []
         for node in self.graph.nodes.values():
             if hasattr(node, 'type'):
-                nt = node.type.value if hasattr(node.type, 'value') else str(node.type)
+                nt = type_val(node.type)
                 if nt == 'medium':
                     medium_nodes.append(node)
 
@@ -626,7 +626,7 @@ class MCPServer:
                 cd = edge.properties.get("coupling_depth") if hasattr(edge, 'properties') else None
                 edge_details.append({
                     "edge_id": edge.id,
-                    "type": edge.type.value if hasattr(edge.type, 'value') else str(edge.type),
+                    "type": type_val(edge.type),
                     "direction": getattr(edge, 'direction', ''),
                     "source": edge.source,
                     "target": edge.target,
@@ -670,10 +670,9 @@ class MCPServer:
         try:
             from .timeline import TimelineStore
             source_root = getattr(self.graph, 'source_root', '') or '.'
-            store = TimelineStore(source_root)
-            events = store.query(limit=limit, since=since)
-            stats = store.stats()
-            store.close()
+            with TimelineStore(source_root) as store:
+                events = store.query(limit=limit, since=since)
+                stats = store.stats()
             return {
                 "events": events,
                 "total_events": len(events),

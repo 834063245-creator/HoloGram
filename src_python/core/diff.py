@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
-from .graph import Graph, Node, Edge
+from .graph import Graph, Node, Edge, type_val
 
 
 @dataclass
@@ -99,7 +99,7 @@ class GraphDiffer:
 
         # 边的 diff（基于 source+target+type+direction 键）
         def _edge_key(e: Edge) -> str:
-            t = e.type.value if hasattr(e.type, 'value') else e.type
+            t = type_val(e.type)
             return f"{e.source}::{e.target}::{t}::{e.direction}"
 
         before_edge_index = {_edge_key(e): e for e in before.edges.values()}

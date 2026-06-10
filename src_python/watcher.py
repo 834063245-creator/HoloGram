@@ -12,7 +12,7 @@ from typing import Callable, Optional, Set
 
 from .core.graph import Graph
 from .pipeline import PipelineRunner, IncrementalCache
-from .adapters import AdapterRegistry
+from .adapters.registry import AdapterRegistry
 
 
 class FileWatcher:

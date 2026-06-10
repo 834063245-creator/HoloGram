@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType
+from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, type_val
 from ..core.diff import GraphDiffer, GraphDiff
 from .patterns import PatternMatcher, PatternMatch, FileChange
 
@@ -539,7 +539,7 @@ class SignalGenerator:
 
         # 查找 medium 类型节点，检测是否有写边
         for node in after_graph.nodes.values():
-            node_type_str = node.type.value if isinstance(node.type, NodeType) else str(node.type)
+            node_type_str = type_val(node.type)
             if node_type_str != "medium":
                 continue
 

@@ -98,7 +98,7 @@ class Node:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         # 兼容：type 可能已是字符串（从 JSON 反序列化后）
-        d["type"] = self.type.value if isinstance(self.type, NodeType) else self.type
+        d["type"] = type_val(self.type)
         return d
 
     def __hash__(self) -> int:
@@ -133,7 +133,7 @@ class Edge:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         # 兼容：type 可能已是字符串（从 JSON 反序列化后）
-        d["type"] = self.type.value if isinstance(self.type, EdgeType) else self.type
+        d["type"] = type_val(self.type)
         return d
 
     def __hash__(self) -> int:
@@ -428,14 +428,14 @@ class Graph:
     def nodes_by_type(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
         for n in self.nodes.values():
-            t = n.type.value if hasattr(n.type, 'value') else str(n.type)
+            t = type_val(n.type)
             counts[t] = counts.get(t, 0) + 1
         return counts
 
     def edges_by_type(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
         for e in self.edges.values():
-            t = e.type.value if hasattr(e.type, 'value') else str(e.type)
+            t = type_val(e.type)
             counts[t] = counts.get(t, 0) + 1
         return counts
 
@@ -545,3 +545,12 @@ def file_from_location(loc: str) -> str:
     if len(parts) == 2 and parts[1].strip().isdigit():
         return parts[0]
     return loc
+
+
+def type_val(t) -> str:
+    """统一提取枚举值的字符串形式，兼容 enum 和原生 str。
+
+    项目内 NodeType/EdgeType 序列化后可能变成字符串，
+    此函数同时处理 enum.value 和已反序列化的 str。
+    """
+    return t.value if hasattr(t, 'value') else str(t)

@@ -456,15 +456,14 @@ class ChangeSummaryGenerator:
         """历史稳定性：从时间轴查询变更历史。"""
         try:
             from ..timeline import TimelineStore
-            store = TimelineStore(project_root)
-            file_history: Dict[str, Any] = {}
-            for f in changed_files[:5]:
-                events = store.query(file=f, limit=10)
-                file_history[f] = {
-                    "total_events": len(events),
-                    "recent_events": events[:5],
-                }
-            store.close()
+            with TimelineStore(project_root) as store:
+                file_history: Dict[str, Any] = {}
+                for f in changed_files[:5]:
+                    events = store.query(file=f, limit=10)
+                    file_history[f] = {
+                        "total_events": len(events),
+                        "recent_events": events[:5],
+                    }
             return {
                 "available": True,
                 "file_history": file_history,
@@ -748,9 +747,8 @@ class ChangeSummaryGenerator:
                     all_routed = all(
                         e.get("summary", "").find("routed") >= 0 for e in recent
                     ) if recent else False
-                    first_route = not all_routed  # simplified
                     lines.append(_box(f"    Last {min(3, len(recent))} changes: all passed, no rollbacks"
-                                    if first_route else
+                                    if all_routed else
                                     f"    First time being routed to human"))
 
         # V1: Community Associations

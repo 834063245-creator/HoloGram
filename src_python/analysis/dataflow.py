@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType
+from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, type_val
 
 
 # ============================================================
@@ -106,7 +106,7 @@ class DataFlowGraphBuilder:
         """
         # 添加所有节点
         for node in self.graph.nodes.values():
-            node_type_str = node.type.value if isinstance(node.type, NodeType) else str(node.type)
+            node_type_str = type_val(node.type)
             self.nx_graph.add_node(node.id, **{
                 "name": node.name,
                 "type": node_type_str,
@@ -120,7 +120,7 @@ class DataFlowGraphBuilder:
             if edge.source not in self.nx_graph or edge.target not in self.nx_graph:
                 continue
 
-            edge_type_str = edge.type.value if isinstance(edge.type, EdgeType) else str(edge.type)
+            edge_type_str = type_val(edge.type)
 
             # 数据边：总是加入
             if edge_type_str == "data":
@@ -144,7 +144,7 @@ class DataFlowGraphBuilder:
         llm_node_ids: Set[str] = set()
 
         for node in self.graph.nodes.values():
-            node_type_str = node.type.value if isinstance(node.type, NodeType) else str(node.type)
+            node_type_str = type_val(node.type)
             if node_type_str != "symbol":
                 continue
 
@@ -318,7 +318,7 @@ class DataFlowCycleDetector:
             node = graph.get_node(nid)
             if node:
                 node_names.append(node.name)
-                node_type_str = node.type.value if isinstance(node.type, NodeType) else str(node.type)
+                node_type_str = type_val(node.type)
                 if node_type_str == "medium":
                     has_medium = True
                     node_types.append("medium")

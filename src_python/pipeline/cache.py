@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from typing import Dict, Optional
 
 from ..core.graph import Graph
@@ -28,6 +29,7 @@ class IncrementalCache:
         self._cache: Dict[str, Dict] = {}
         self._cache_dir = cache_dir
         self._max_size = max_size
+        self._lock = threading.Lock()
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             self._load_from_disk()
@@ -45,28 +47,34 @@ class IncrementalCache:
             return None
 
     def has(self, file_path: str) -> bool:
-        return file_path in self._cache
+        with self._lock:
+            return file_path in self._cache
 
     def get_hash(self, file_path: str) -> Optional[str]:
-        entry = self._cache.get(file_path)
+        with self._lock:
+            entry = self._cache.get(file_path)
         return entry["hash"] if entry else None
 
     def get_graph(self, file_path: str) -> Optional[Graph]:
-        entry = self._cache.get(file_path)
+        with self._lock:
+            entry = self._cache.get(file_path)
         return entry.get("graph") if entry else None
 
     def set(self, file_path: str, file_hash: str, graph: Graph) -> None:
-        if len(self._cache) >= self._max_size:
-            # Simple FIFO eviction: remove oldest entry (dict insertion order)
-            oldest = next(iter(self._cache))
-            self._cache.pop(oldest)
-        self._cache[file_path] = {"hash": file_hash, "graph": graph}
+        with self._lock:
+            if len(self._cache) >= self._max_size:
+                # Simple FIFO eviction: remove oldest entry (dict insertion order)
+                oldest = next(iter(self._cache))
+                self._cache.pop(oldest)
+            self._cache[file_path] = {"hash": file_hash, "graph": graph}
 
     def invalidate(self, file_path: str) -> None:
-        self._cache.pop(file_path, None)
+        with self._lock:
+            self._cache.pop(file_path, None)
 
     def clear(self) -> None:
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     # -- 磁盘持久化 --
 

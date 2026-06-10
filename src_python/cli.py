@@ -652,19 +652,18 @@ def cmd_check(args) -> int:
     # Step 10: 写入时间轴
     try:
         from .timeline import TimelineStore
-        store = TimelineStore(root)
-        store.record(
-            event_type="commit" if not summary.passed else "commit",
-            file=", ".join(changed_files[:3]),
-            changed_by=f"hologram check {'⚠' if not summary.passed else '✅'}",
-            summary=summary.one_line(),
-            properties={
-                "passed": summary.passed,
-                "violations": summary.to_dict(),
-                "signals_count": len(signals),
-            },
-        )
-        store.close()
+        with TimelineStore(root) as store:
+            store.record(
+                event_type="commit_violation" if not summary.passed else "commit_clean",
+                file=", ".join(changed_files[:3]),
+                changed_by=f"hologram check {'⚠' if not summary.passed else '✅'}",
+                summary=summary.one_line(),
+                properties={
+                    "passed": summary.passed,
+                    "violations": summary.to_dict(),
+                    "signals_count": len(signals),
+                },
+            )
     except Exception:
         pass
 
