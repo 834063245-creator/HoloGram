@@ -97,12 +97,14 @@ class TestCmdImpact:
         return g
 
     def test_impact_two_layers(self, graph):
-        """BFS 应找到两层波及。"""
-        layers = graph.impact_bfs("n1", max_depth=2)
-        # 3 层: depth 0 (root), depth 1 (child), depth 2 (grandchild)
+        """BFS 应找到两层波及（反向追踪 dependents）。
+        图: n1→n2→n3 (n1依赖n2, n2依赖n3)
+        从 n3 出发: n3 被 n2 依赖 → n2 被 n1 依赖 → 共 3 层"""
+        layers = graph.impact_bfs("n3", max_depth=2)
+        # 3 层: depth 0 (n3), depth 1 (n2), depth 2 (n1)
         assert len(layers) == 3
         assert layers[0]["depth"] == 0
-        assert len(layers[0]["nodes"]) == 1  # root
+        assert len(layers[0]["nodes"]) == 1  # n3
         assert layers[1]["depth"] == 1
         assert layers[2]["depth"] == 2
 

@@ -81,13 +81,14 @@ class TestMCPServer:
     # -- hologram_impact --
 
     def test_impact(self, server):
+        """波及分析：从叶子节点 n3 出发，应波及 n2 和 n1（n1→n2→n3 依赖链反向追踪）"""
         req = self._req("tools/call", {
             "name": "hologram_impact",
-            "arguments": {"node_id": "n1", "depth": 3},
+            "arguments": {"node_id": "n3", "depth": 3},
         })
         resp = server.handle_request(req)
         content = json.loads(resp["result"]["content"][0]["text"])
-        assert content["source_node_id"] == "n1"
+        assert content["source_node_id"] == "n3"
         assert content["max_depth"] == 3
         assert content["total_affected_nodes"] >= 1
 

@@ -56,17 +56,12 @@ def _load_graph(graph_path: str) -> Optional[Graph]:
 
 
 def _find_node_id(graph: Graph, name_or_id: str) -> Optional[str]:
-    """按名称或 ID 查找节点。"""
-    if name_or_id in graph.nodes:
-        return name_or_id
-    matches = graph.find_node_by_name(name_or_id)
-    if matches:
-        return matches[0].id
-    # 按短名称匹配
-    for n in graph.nodes.values():
-        if n.name.split(".")[-1] == name_or_id:
-            return n.id
-    return None
+    """统一的模糊节点查找 — 委托给 Graph.resolve_node()。
+
+    支持：精确 ID、精确名称、短名称、大小写不敏感、子串、location 匹配。
+    """
+    node = graph.resolve_node(name_or_id)
+    return node.id if node else None
 
 
 def cmd_analyze(args) -> int:

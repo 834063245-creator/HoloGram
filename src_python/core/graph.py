@@ -251,6 +251,52 @@ class Graph:
     def find_node_by_name(self, name: str) -> List[Node]:
         return [n for n in self.nodes.values() if n.name == name]
 
+    def resolve_node(self, query: str) -> Optional[Node]:
+        """统一的模糊节点查找 — 所有工具共享同一套匹配策略。
+
+        按优先级依次尝试：
+        1. 精确 ID 匹配 (graph.nodes key)
+        2. 精确名称匹配
+        3. 短名称匹配（. 分割的最后一段，如 "process" 匹配 "Foo.process"）
+        4. 大小写不敏感名称匹配
+        5. 名称子串匹配
+        6. location 包含查询串
+        """
+        if not query:
+            return None
+        # 1. Exact ID
+        if query in self.nodes:
+            return self.nodes[query]
+        # 2. Exact name
+        for n in self.nodes.values():
+            if n.name == query:
+                return n
+        # 3. Short name (last segment after .)
+        #    也处理用户输入带点的情况（如 "Class.method"）—
+        #    先精确匹配，再逐级后缀匹配
+        for n in self.nodes.values():
+            if n.name.split(".")[-1] == query:
+                return n
+        # 3b. 用户输入是点分格式 — 检查节点名是否以该后缀结尾
+        if "." in query:
+            for n in self.nodes.values():
+                if n.name.endswith("." + query) or n.name.endswith(query):
+                    return n
+        # 4. Case-insensitive exact
+        ql = query.lower()
+        for n in self.nodes.values():
+            if n.name.lower() == ql:
+                return n
+        # 5. Substring in name
+        for n in self.nodes.values():
+            if ql in n.name.lower():
+                return n
+        # 6. Location contains query
+        for n in self.nodes.values():
+            if n.location and ql in n.location.lower():
+                return n
+        return None
+
     def find_nodes_by_location(self, file_path: str) -> List[Node]:
         """返回指定文件中的所有节点。
 
@@ -309,7 +355,11 @@ class Graph:
 
     def impact_bfs(self, node_id: str, max_depth: int = 3) -> List[Dict[str, Any]]:
         """
-        BFS 波及分析：从 node_id 出发，按层扩散，返回每层的节点列表。
+        BFS 波及分析：从 node_id 出发，追踪所有依赖它的节点（dependents）。
+        在依赖图中 A→B 表示 A 依赖 B，所以沿 target→source 反向追踪：
+        找所有 e.target == node_id 的 e.source（即依赖 node_id 的节点），
+        然后递归追踪这些 source 节点的 dependents。
+
         结果格式：[{"depth": 0, "nodes": [...]}, {"depth": 1, "nodes": [...]}, ...]
         """
         if node_id not in self.nodes:
@@ -324,10 +374,12 @@ class Graph:
             })
             next_frontier: Set[str] = set()
             for nid in frontier:
+                # Reverse traversal: find nodes whose edge TARGETS nid
+                # (i.e., nodes that depend ON nid — they are impacted)
                 for e in self.edges.values():
-                    if e.source == nid and e.target not in visited:
-                        next_frontier.add(e.target)
-                        visited.add(e.target)
+                    if e.target == nid and e.source not in visited:
+                        next_frontier.add(e.source)
+                        visited.add(e.source)
             if not next_frontier:
                 break
             frontier = next_frontier

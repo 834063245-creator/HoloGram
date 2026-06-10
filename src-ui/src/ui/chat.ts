@@ -264,8 +264,11 @@ export class ChatPanel {
   /** Save all sessions to project's .hologram/chat_sessions.json */
   async saveAllSessions(projectPath: string): Promise<void> {
     if (!projectPath || this.sessions.length === 0) return;
+    // Save current DOM state to sessionMessages cache before serializing
+    if (this.activeIdx >= 0) this.saveCurrentMessages();
     const data = {
-      version: 1,
+      version: 2,
+      savedAt: new Date().toISOString(),
       sessions: this.sessions.map((s) => ({
         id: s.id,
         label: s.label,
@@ -312,9 +315,17 @@ export class ChatPanel {
       const savedConv = (saved.messages as Message[]).filter((m) => m.role !== 'system');
       agent.setSession([...freshSystem, ...savedConv]);
 
+      // Auto-label: use first user message as session name
+      const firstUserMsg = savedConv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
+      const label = (saved.label && !saved.label.startsWith('会话 '))
+        ? saved.label
+        : firstUserMsg
+          ? firstUserMsg.content!.slice(0, 28) + (firstUserMsg.content!.length > 28 ? '…' : '')
+          : `会话 ${restored.length + 1}`;
+
       restored.push({
         id: saved.id,
-        label: saved.label || `会话 ${restored.length + 1}`,
+        label,
         agent,
       });
     }
@@ -334,9 +345,297 @@ export class ChatPanel {
     );
     this.renderSessionTabs();
     this.msgList.innerHTML = '';
+
+    // Render restored messages to DOM — this is the key fix
+    this.renderRestoredSession();
+
     this.lastUsageText = '';
     this.updateFooter();
-    this.addNotice(`已恢复 ${restored.length} 个会话`, 'info');
+  }
+
+  /** Walk through active agent's session array and build DOM bubbles. */
+  private renderRestoredSession(): void {
+    const agent = this.agent;
+    if (!agent) return;
+
+    const msgs = agent.getSession();
+    // Index tool results by call_id
+    const toolResults = new Map<string, string>();
+    for (const m of msgs) {
+      if (m.role === 'tool' && m.tool_call_id) {
+        toolResults.set(m.tool_call_id, m.content || '');
+      }
+    }
+
+    for (const m of msgs) {
+      if (m.role === 'system') continue;
+
+      if (m.role === 'user') {
+        if (m.content?.startsWith('<compacted-context>')) {
+          const el = document.createElement('div');
+          el.className = 'msg-notice msg-notice-info';
+          el.textContent = '📋 上下文已压缩';
+          this.msgList.appendChild(el);
+          continue;
+        }
+        this.appendUserBubble(m.content || '');
+        continue;
+      }
+
+      if (m.role === 'tool') continue; // handled inline with tool cards
+
+      if (m.role === 'assistant') {
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble assistant';
+
+        // Reasoning (collapsed by default)
+        if (m.reasoning_content) {
+          const reasoning = document.createElement('div');
+          reasoning.className = 'msg-reasoning';
+          const toggle = document.createElement('button');
+          toggle.className = 'msg-reasoning-toggle';
+          toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
+          const content = document.createElement('div');
+          content.className = 'msg-reasoning-content';
+          content.textContent = m.reasoning_content;
+          toggle.addEventListener('click', () => {
+            const show = content.classList.toggle('msg-reasoning-open');
+            toggle.innerHTML = show
+              ? `${iconHtml('chevron-down')} 收起思考`
+              : `${iconHtml('chevron-right')} 思考过程`;
+          });
+          reasoning.append(toggle, content);
+          bubble.appendChild(reasoning);
+        }
+
+        // Text content — markdown rendered
+        if (m.content) {
+          const textEl = document.createElement('div');
+          textEl.className = 'msg-text msg-markdown';
+          try {
+            const html = marked.parse(m.content) as string;
+            textEl.innerHTML = html;
+            textEl.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block as HTMLElement);
+            });
+          } catch {
+            textEl.textContent = m.content;
+          }
+          bubble.appendChild(textEl);
+        }
+
+        // Tool calls — render as completed cards with results
+        if (m.tool_calls) {
+          for (const tc of m.tool_calls) {
+            const card = document.createElement('div');
+            card.className = 'msg-tool-card';
+            const header = document.createElement('div');
+            header.className = 'msg-tool-header';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'tool-name';
+            nameEl.innerHTML = `${iconHtml('check-circle', 12)} ${tc.name}`;
+
+            const argsEl = document.createElement('span');
+            argsEl.className = 'tool-args';
+            if (tc.arguments) {
+              argsEl.textContent = truncateArgs(tc.arguments);
+              argsEl.title = tc.arguments;
+            }
+
+            const status = document.createElement('span');
+            status.className = 'tool-status tool-ok';
+            status.innerHTML = iconHtml('check-circle', 12);
+
+            header.append(nameEl, argsEl, status);
+            header.addEventListener('click', () => card.classList.toggle('tool-expanded'));
+
+            const resultEl = document.createElement('div');
+            resultEl.className = 'msg-tool-result';
+            resultEl.textContent = toolResults.get(tc.id) || '(无输出)';
+
+            card.append(header, resultEl);
+            bubble.appendChild(card);
+          }
+        }
+
+        // Message actions (copy button)
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'msg-action-btn';
+        copyBtn.innerHTML = iconHtml('copy', 12);
+        copyBtn.title = '复制回复';
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const txt = bubble.querySelector('.msg-text')?.textContent || '';
+          navigator.clipboard.writeText(txt).then(() => {
+            copyBtn.innerHTML = iconHtml('check-circle', 12);
+            setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 12); }, 1500);
+          }).catch(() => {});
+        });
+        actions.append(copyBtn);
+        bubble.appendChild(actions);
+
+        this.msgList.appendChild(bubble);
+      }
+    }
+
+    // Re-wire node-link click handlers
+    this.msgList.querySelectorAll('.node-link').forEach((link) => {
+      link.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = (link as HTMLElement).dataset['nodename'] || '';
+        if (name && this.starGraph) {
+          const found = this.starGraph.focusNode(name);
+          if (!found) this.addNotice(`未在图中找到 "${name}"`, 'info');
+        }
+      });
+    });
+
+    this.scrollBottom();
+    this.addNotice(`已恢复 ${this.sessions.length} 个会话`, 'info');
+  }
+
+  // ── History panel — browse saved conversations ──
+
+  private historyPanel: HTMLElement | null = null;
+  private historyOpen = false;
+
+  private toggleHistory(): void {
+    if (this.historyOpen) {
+      this.closeHistory();
+      return;
+    }
+    this.openHistory();
+  }
+
+  private openHistory(): void {
+    if (this.historyPanel) this.historyPanel.remove();
+
+    this.historyPanel = document.createElement('div');
+    this.historyPanel.className = 'chat-history-panel';
+
+    const title = document.createElement('div');
+    title.className = 'chat-history-title';
+    title.textContent = '历史会话';
+    this.historyPanel.appendChild(title);
+
+    const list = document.createElement('div');
+    list.className = 'chat-history-list';
+
+    // Show current in-memory sessions
+    if (this.sessions.length > 0) {
+      const currentLabel = document.createElement('div');
+      currentLabel.className = 'chat-history-section';
+      currentLabel.textContent = `当前项目 (${this.sessions.length})`;
+      list.appendChild(currentLabel);
+
+      for (let i = 0; i < this.sessions.length; i++) {
+        const s = this.sessions[i];
+        const entry = this.buildHistoryEntry(s.label, `消息: ${s.agent.getSession().filter(m => m.role !== 'system').length}`, () => {
+          if (i !== this.activeIdx) this.switchSession(i);
+          this.closeHistory();
+        }, i === this.activeIdx);
+        list.appendChild(entry);
+      }
+    }
+
+    // Show saved sessions from file (if different from current)
+    if (this.projectPath) {
+      const savedLabel = document.createElement('div');
+      savedLabel.className = 'chat-history-section';
+      savedLabel.textContent = '已保存到磁盘';
+      list.appendChild(savedLabel);
+
+      const loadingEntry = document.createElement('div');
+      loadingEntry.className = 'chat-history-entry';
+      loadingEntry.textContent = '加载中…';
+      list.appendChild(loadingEntry);
+
+      // Load saved file asynchronously
+      this.loadSavedHistoryList(list, loadingEntry);
+    }
+
+    this.historyPanel.appendChild(list);
+
+    // Click outside to close
+    const closeOverlay = document.createElement('div');
+    closeOverlay.className = 'chat-history-overlay';
+    closeOverlay.addEventListener('click', () => this.closeHistory());
+    this.historyPanel.appendChild(closeOverlay);
+
+    this.panel.appendChild(this.historyPanel);
+    this.historyOpen = true;
+  }
+
+  private async loadSavedHistoryList(list: HTMLElement, loadingEntry: HTMLElement): Promise<void> {
+    try {
+      const json = await invoke<string>('read_file_content', {
+        file_path: `${this.projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`,
+      });
+      const data = JSON.parse(json);
+      if (!data.sessions || data.sessions.length === 0) {
+        loadingEntry.textContent = '暂无保存的会话';
+        return;
+      }
+      loadingEntry.remove();
+
+      for (const saved of data.sessions) {
+        const firstMsg = (saved.messages as Message[]).find(
+          (m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>')
+        );
+        const preview = firstMsg?.content?.slice(0, 60) || '(空会话)';
+        const msgCount = (saved.messages as Message[]).filter((m: Message) => m.role !== 'system').length;
+        const time = data.savedAt ? new Date(data.savedAt).toLocaleString('zh-CN') : '';
+
+        const entry = this.buildHistoryEntry(
+          saved.label || firstMsg?.content?.slice(0, 20) || '会话',
+          `${msgCount} 条消息${time ? ' · ' + time : ''}`,
+          () => {
+            // Check if already loaded
+            const existing = this.sessions.findIndex(s => s.id === saved.id);
+            if (existing >= 0) {
+              this.switchSession(existing);
+            } else {
+              this.addNotice('此会话不在当前标签页中，已保存到磁盘', 'info');
+            }
+            this.closeHistory();
+          },
+          false,
+        );
+        list.appendChild(entry);
+      }
+    } catch {
+      loadingEntry.textContent = '暂无保存的会话';
+    }
+  }
+
+  private buildHistoryEntry(
+    title: string,
+    subtitle: string,
+    onClick: () => void,
+    active: boolean,
+  ): HTMLElement {
+    const entry = document.createElement('div');
+    entry.className = 'chat-history-entry' + (active ? ' active' : '');
+    const titleEl = document.createElement('div');
+    titleEl.className = 'chat-history-entry-title';
+    titleEl.textContent = title;
+    const subEl = document.createElement('div');
+    subEl.className = 'chat-history-entry-sub';
+    subEl.textContent = subtitle;
+    entry.append(titleEl, subEl);
+    entry.addEventListener('click', onClick);
+    return entry;
+  }
+
+  private closeHistory(): void {
+    if (this.historyPanel) {
+      this.historyPanel.remove();
+      this.historyPanel = null;
+    }
+    this.historyOpen = false;
   }
 
   // ── Build DOM ──
@@ -382,6 +681,15 @@ export class ChatPanel {
     addBtn.title = '新建会话';
     addBtn.addEventListener('click', () => this.createNewSession());
     this.headerEl.appendChild(addBtn);
+
+    // History button — browse saved conversations
+    const historyBtn = document.createElement('button');
+    historyBtn.className = 'chat-session-add';
+    historyBtn.innerHTML = iconHtml('bookmark', 12);
+    historyBtn.title = '历史记录';
+    historyBtn.addEventListener('click', () => this.toggleHistory());
+    this.headerEl.appendChild(historyBtn);
+
     this.headerEl.appendChild(closeBtn);
     this.panel.appendChild(this.headerEl);
 
@@ -594,6 +902,15 @@ export class ChatPanel {
         this.addNotice(`压缩失败: ${err.message}`, 'error');
       });
       return;
+    }
+
+    // Auto-label session on first user message
+    if (this.activeIdx >= 0) {
+      const session = this.sessions[this.activeIdx];
+      if (session && session.label.startsWith('会话 ')) {
+        session.label = text.length > 28 ? text.slice(0, 27) + '…' : text;
+        this.renderSessionTabs();
+      }
     }
 
     this.inputArea.value = '';

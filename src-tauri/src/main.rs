@@ -478,14 +478,15 @@ import sys, json
 sys.path.insert(0, r"{root}")
 from core.graph import Graph
 graph = Graph.from_json(r"{graph}")
-node = graph.get_node("{node_id}")
+node = graph.resolve_node("{node_id}")
 if not node:
-    print(json.dumps({{"error": "Node not found"}}))
+    print(json.dumps({{"error": "Node not found", "query": "{node_id}"}}))
 else:
-    incoming = graph.incoming_edges("{node_id}")
-    outgoing = graph.outgoing_edges("{node_id}")
+    incoming = graph.incoming_edges(node.id)
+    outgoing = graph.outgoing_edges(node.id)
     result = {{
         "node": node.to_dict(),
+        "query": "{node_id}",
         "decision_history": node.properties.get("history", []) if node.properties else [],
         "dependency_count": len(incoming),
         "dependent_count": len(outgoing),
@@ -509,11 +510,11 @@ import sys, json
 sys.path.insert(0, r"{root}")
 from core.graph import Graph
 graph = Graph.from_json(r"{graph}")
-node = graph.get_node("{node_id}")
+node = graph.resolve_node("{node_id}")
 if not node:
-    print(json.dumps({{"error": "Node not found"}}))
+    print(json.dumps({{"error": "Node not found", "query": "{node_id}"}}))
 elif not hasattr(node, 'community_id') or not node.community_id:
-    print(json.dumps({{"node_id": "{node_id}", "community": None, "message": "Community detection not yet run"}}))
+    print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": "{node_id}", "community": None, "message": "Community detection not yet run"}}))
 else:
     found = None
     for c in graph.communities:
@@ -522,12 +523,14 @@ else:
             break
     if found:
         print(json.dumps({{
-            "node_id": "{node_id}",
+            "node_id": node.id,
+            "node_name": node.name,
+            "query": "{node_id}",
             "community": found.to_dict(),
-            "sibling_nodes": [nid for nid in found.node_ids if nid != "{node_id}"],
+            "sibling_nodes": [nid for nid in found.node_ids if nid != node.id],
         }}, indent=2, ensure_ascii=False))
     else:
-        print(json.dumps({{"node_id": "{node_id}", "community": None}}))
+        print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": "{node_id}", "community": None}}))
 "#,
         root = root.join("src_python").to_string_lossy(),
         graph = graph,
