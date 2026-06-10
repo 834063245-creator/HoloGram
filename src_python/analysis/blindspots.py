@@ -233,3 +233,39 @@ class BoundaryDetector:
             if b.id == boundary_id:
                 return b
         return None
+
+
+def find_blindspots(graph: Graph, min_confidence: float = 0.5) -> List[Dict[str, Any]]:
+    """快捷函数：检测图中所有盲区边界。
+
+    Args:
+        graph: 依赖图
+        min_confidence: 最小置信度阈值（暂未使用于过滤，预留接口）
+
+    Returns:
+        盲区边界列表（dict 格式），按 priority 降序排列
+    """
+    from .coupling import coupling_depth_report
+    from .dataflow import cycle_report
+
+    detector = BoundaryDetector()
+
+    # 耦合分析 → L4 封装穿透边界
+    try:
+        coupling_result = coupling_depth_report(graph)
+        detector.detect_from_coupling(coupling_result)
+    except Exception:
+        pass
+
+    # 数据流环 → LLM 参与环边界
+    try:
+        cycle_result = cycle_report(graph, mode="all")
+        detector.detect_from_cycles(cycle_result)
+    except Exception:
+        pass
+
+    # 按 priority 降序排列
+    boundaries = detector.all()
+    boundaries.sort(key=lambda b: b.priority, reverse=True)
+
+    return [b.to_dict() for b in boundaries]

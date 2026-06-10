@@ -277,13 +277,13 @@ async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
         r#"
 import sys, json
 sys.path.insert(0, r"{}")
-from analysis.blindspots import find_blindspots
-from core.graph import Graph
+from src_python.analysis.blindspots import find_blindspots
+from src_python.core.graph import Graph
 graph = Graph.from_json(r"{}")
 results = find_blindspots(graph, min_confidence={})
 print(json.dumps(results, indent=2, ensure_ascii=False))
 "#,
-        root.join("src_python").to_string_lossy(),
+        root.to_string_lossy(),
         default_graph(),
         t,
     );
@@ -297,7 +297,7 @@ async fn hologram_thread_conflicts(_severity: Option<String>) -> Result<String, 
         r#"
 import sys, json, os
 sys.path.insert(0, r"{}")
-from analysis.threading import thread_conflict_report
+from src_python.analysis.threading import thread_conflict_report
 sources = {{}}
 sp = r"{}"
 for dirpath, _, filenames in os.walk(sp):
@@ -311,7 +311,7 @@ for dirpath, _, filenames in os.walk(sp):
 result = thread_conflict_report(sources, language="python")
 print(json.dumps(result, indent=2, ensure_ascii=False))
 "#,
-        root.join("src_python").to_string_lossy(),
+        root.to_string_lossy(),
         root.join("src_python").to_string_lossy(),
     );
     run_python_code(&code)
@@ -366,15 +366,15 @@ async fn hologram_community_report(
         r#"
 import sys, json
 sys.path.insert(0, r"{}")
-from core.graph import Graph
-from core.community import CommunityDetector
+from src_python.core.graph import Graph
+from src_python.core.community import CommunityDetector
 graph = Graph.from_json(r"{}")
 detector = CommunityDetector()
 communities = detector.detect(graph)
-filtered = [c for c in communities if len(c.get('nodes', [])) >= {}]
+filtered = [c.to_dict() for c in communities if len(c.node_ids) >= {}]
 print(json.dumps(filtered, indent=2, ensure_ascii=False))
 "#,
-        project_root().join("src_python").to_string_lossy(),
+        project_root().to_string_lossy(),
         default_graph(),
         min,
     );

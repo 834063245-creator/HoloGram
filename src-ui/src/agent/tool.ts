@@ -82,10 +82,10 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          node_id: { type: 'string', description: 'The node identifier (function/class/module name)' },
+          nodeId: { type: 'string', description: 'The node identifier (function/class/module name)' },
           depth: { type: 'integer', description: 'Neighbor depth (default: 1)', default: 1 },
         },
-        required: ['node_id'],
+        required: ['nodeId'],
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_neighbors', args),
@@ -97,10 +97,10 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          node_id: { type: 'string', description: 'The node to analyze impact for' },
-          max_depth: { type: 'integer', description: 'Maximum depth to trace (default: unlimited)', default: 0 },
+          nodeId: { type: 'string', description: 'The node to analyze impact for' },
+          maxDepth: { type: 'integer', description: 'Maximum depth to trace (default: unlimited)', default: 0 },
         },
-        required: ['node_id'],
+        required: ['nodeId'],
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_impact', args),
@@ -142,8 +142,8 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
         properties: {
           mode: {
             type: 'string',
-            enum: ['all', 'critical'],
-            description: 'Show all cycles or only critical ones (L3-L4, module-level) (default: all)',
+            enum: ['all', 'data', 'llm'],
+            description: 'Cycle filter: all=all cycles, data=data-persistent cycles, llm=LLM-involved cycles (default: all)',
             default: 'all',
           },
         },
@@ -225,16 +225,16 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          before_path: {
+          beforePath: {
             type: 'string',
             description: 'Path to the baseline graph JSON',
           },
-          after_path: {
+          afterPath: {
             type: 'string',
             description: 'Path to the updated graph JSON (omit to compare against live analysis)',
           },
         },
-        required: ['before_path'],
+        required: ['beforePath'],
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_diff', args),
@@ -251,7 +251,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
             description: 'Leiden resolution parameter (higher = more, smaller communities; default: 1.0)',
             default: 1.0,
           },
-          min_size: {
+          minSize: {
             type: 'integer',
             description: 'Minimum community size to report (default: 3)',
             default: 3,
@@ -339,12 +339,12 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          file_path: {
+          filePath: {
             type: 'string',
             description: 'Absolute path to the file to read',
           },
         },
-        required: ['file_path'],
+        required: ['filePath'],
       }),
       readOnly: () => true,
       execute: (args) => exec('read_file_content', args),
@@ -356,12 +356,12 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          project_path: {
+          projectPath: {
             type: 'string',
             description: 'Project root directory path',
           },
         },
-        required: ['project_path'],
+        required: ['projectPath'],
       }),
       readOnly: () => true,
       execute: (args) => exec('read_constraints', args),
@@ -373,9 +373,9 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          node_id: { type: 'string', description: 'The node ID or name to query history for' },
+          nodeId: { type: 'string', description: 'The node ID or name to query history for' },
         },
-        required: ['node_id'],
+        required: ['nodeId'],
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_history', args),
@@ -387,9 +387,9 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          node_id: { type: 'string', description: 'The node ID or name to query' },
+          nodeId: { type: 'string', description: 'The node ID or name to query' },
         },
-        required: ['node_id'],
+        required: ['nodeId'],
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_community', args),

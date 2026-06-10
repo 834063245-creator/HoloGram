@@ -177,11 +177,11 @@ async function setupAgent(): Promise<void> {
     return;
   }
 
-  // ── Load memory index ──
-  let memoryIndex = '';
+  // ── Load memories into prompt ──
+  let memorySection = '';
   if (currentPath) {
     memoryManager = new MemoryManager(currentPath);
-    try { memoryIndex = await memoryManager.loadIndexText(); } catch { /* ignore */ }
+    try { memorySection = await memoryManager.loadPromptSection(); } catch { /* ignore */ }
   } else {
     memoryManager = null;
   }
@@ -225,7 +225,7 @@ async function setupAgent(): Promise<void> {
   }
 
   const pricing = defaultPricing(active.kind, active.model);
-  const systemPrompt = buildSystemPrompt(memoryIndex);
+  const systemPrompt = buildSystemPrompt(memorySection);
   const agentOpts = settings.agent || {};
   agent = new Agent(prov, registry, systemPrompt, {
     pricing,
@@ -260,12 +260,12 @@ async function setupAgent(): Promise<void> {
     }
     const pr = defaultPricing(act.kind, act.model);
     const aOpts = s.agent || {};
-    // Reload memory index so new sessions see latest memories from other tabs
-    let memIdx = '';
+    // Reload memory content so new sessions see latest memories from other tabs
+    let memSection = '';
     if (mm) {
-      try { memIdx = await mm.loadIndexText(); } catch { /* ignore */ }
+      try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }
     }
-    return new Agent(p, r, buildSystemPrompt(memIdx), {
+    return new Agent(p, r, buildSystemPrompt(memSection), {
       pricing: pr,
       temperature: aOpts.temperature,
       maxSteps: aOpts.maxSteps,
@@ -274,15 +274,15 @@ async function setupAgent(): Promise<void> {
   });
 }
 
-function buildSystemPrompt(memoryIndex = ''): string {
+function buildSystemPrompt(memorySection = ''): string {
   if (!currentGraphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
 身份：你是一个代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断。
 语言：始终用中文回复。代码和文件名用原样标记。
 行为：诚实——不确定的事不说。工具返回空结果不要编造。提示用户可能需要加载项目。`;
-    if (memoryIndex.trim()) {
-      prompt += `\n\n## 记忆库\n以下是跨会话保存的记忆（使用 \`hologram_memory_read 名称\` 查看完整内容，\`hologram_memory_save\` 保存新记忆）:\n\n${memoryIndex}`;
+    if (memorySection.trim()) {
+      prompt += `\n\n## 记忆库\n${memorySection}`;
     }
     return prompt;
   }
@@ -413,11 +413,12 @@ function buildSystemPrompt(memoryIndex = ''): string {
 
 - **先查后写** — 保存前用 \`hologram_memory_list\` 检查是否已有类似记忆。已有则更新而非新建，避免重复堆积
 - **错了就改** — 发现已有记忆内容过时或错误，直接覆盖或删除，不要追加修正
+- **置信度纪律** — Agent 自己发现的最高给 reference。fact 级别仅用户通过 /remember 命令授权
 - **关联记忆** — 对有联系的记忆，在正文中引用其他记忆名（用 \`[[记忆名]]\` 格式），便于追溯
 
-${memoryIndex.trim()
-  ? `### 当前已保存的记忆\n\n${memoryIndex}`
-  : '### 当前已保存的记忆\n\n暂无。'}`;
+### 当前已保存的记忆
+
+${memorySection.trim() || '暂无。'}`;
 }
 
 // ── Check ──
@@ -747,8 +748,6 @@ async function init(): Promise<void> {
     }
   });
 
-  setupAgent().catch(() => {});
-
   const open = () => openProject();
   btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
@@ -831,7 +830,9 @@ async function init(): Promise<void> {
     }
   } catch { /* no cache */ }
 
+  // 没有缓存图 — 创建一个无项目上下文的 Agent（仅用于一般对话）
   welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
+  setupAgent().catch(() => {});
 }
 
 init();
