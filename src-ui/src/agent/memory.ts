@@ -1,11 +1,20 @@
 // Agent 持久化记忆系统 — 对标 Claude Code MEMORY.md
 // 存储位置: .hologram/memory/*.md + MEMORY.md 索引
 // 跨会话、跨 session tab 共享
+//
+// 记忆置信度体系 (inspired by 初痕 MemoryDirective):
+//   fact       — 用户明确要求，过去的确定结论。仅作提醒，不替代代码和约束决策
+//   reference  — Agent 发现或用户提过的参考信息（默认级别）
+//   background — 用于调整回复风格和语气，不需要在回复中提及
+//   suppressed — 不给 LLM 看到
+//   Agent 自己主动存的记忆最高只能给 reference。fact 级别只有用户通过 /remember 明确要求时才能使用。
 
 import { invoke } from '../bridge';
 import type { Tool } from './tool';
 
 // ── Types ──
+
+export type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
 
 /** Parsed entry from MEMORY.md index */
 export interface MemoryEntry {
@@ -20,8 +29,10 @@ export interface MemoryFile {
   name: string;
   description: string;
   type: 'user' | 'feedback' | 'project' | 'reference';
+  confidence: Confidence;
+  hit_count: number;
   content: string;    // body only (without frontmatter)
-  raw: string;        // full file text
+  raw: string;        // full file text (for rewriting with updated metadata)
 }
 
 // ── MemoryManager ──
@@ -41,9 +52,14 @@ export class MemoryManager {
     return this.dir + '/' + name + '.md';
   }
 
+  // ── Prompt section cache ──
+
+  private _promptSectionCache: string | null = null;
+  private _promptSectionCacheTime = 0;
+
   // ── Index ──
 
-  /** Load the raw MEMORY.md text for injection into system prompt. */
+  /** Load the raw MEMORY.md text. */
   async loadIndexText(): Promise<string> {
     try {
       return await invoke<string>('read_file_content', { file_path: this.indexPath() });
@@ -77,36 +93,123 @@ export class MemoryManager {
 
   // ── Read ──
 
-  /** Read a full memory file by name (without .md). Returns null if not found. */
-  async read(name: string): Promise<MemoryFile | null> {
+  /** Read a full memory file by name (without .md). Returns null if not found.
+   *  Set incrementHit to track recall frequency. */
+  async read(name: string, incrementHit = false): Promise<MemoryFile | null> {
     try {
       const raw = await invoke<string>('read_file_content', { file_path: this.filePath(name) });
-      return parseFrontmatter(raw);
+      const mf = parseFrontmatter(raw);
+
+      if (incrementHit) {
+        mf.hit_count = (mf.hit_count || 0) + 1;
+        mf.raw = rebuildRaw(mf);
+        await invoke('write_file_content', {
+          file_path: this.filePath(name),
+          content: mf.raw,
+        });
+      }
+
+      return mf;
     } catch {
       return null;
     }
   }
 
+  // ── Prompt section — loaded into system prompt ──
+
+  /** Load all non-suppressed memories and format as system prompt section.
+   *  Cached for 5 seconds for rapid session creation. */
+  async loadPromptSection(): Promise<string> {
+    const now = Date.now();
+    if (this._promptSectionCache && (now - this._promptSectionCacheTime) < 5000) {
+      return this._promptSectionCache;
+    }
+
+    const entries = await this.list();
+    if (entries.length === 0) {
+      const section =
+        '暂无已保存的记忆。用户说"记住..."时保存，说"忘了..."时删除。';
+      this._promptSectionCache = section;
+      this._promptSectionCacheTime = now;
+      return section;
+    }
+
+    // Group by confidence
+    const byConfidence: Record<Confidence, MemoryFile[]> = {
+      fact: [],
+      reference: [],
+      background: [],
+      suppressed: [],
+    };
+
+    for (const entry of entries) {
+      const mf = await this.read(entry.name);
+      if (!mf) continue;
+      const c = mf.confidence || 'reference';
+      if (c === 'suppressed') continue;
+      byConfidence[c].push(mf);
+    }
+
+    const parts: string[] = [];
+
+    // Fact group — 铁律，但只是提醒
+    if (byConfidence.fact.length > 0) {
+      parts.push('### 🔒 铁律 (fact)\n用户明确要求的规则。仅作提醒——Agent 仍需基于代码和约束做决策:\n');
+      for (const m of byConfidence.fact) {
+        parts.push(formatMemoryLine(m));
+      }
+    }
+
+    // Reference group — 默认级别
+    if (byConfidence.reference.length > 0) {
+      parts.push('### 📋 参考 (reference)\nAgent 发现或用户提过的信息。可以参考，引用时带核实语气:\n');
+      for (const m of byConfidence.reference) {
+        parts.push(formatMemoryLine(m));
+      }
+    }
+
+    // Background group — 风格/语气
+    if (byConfidence.background.length > 0) {
+      parts.push('### 🎨 背景 (background)\n用于调整回复风格和语气，不需要在回复中提及:\n');
+      for (const m of byConfidence.background) {
+        parts.push(formatMemoryLine(m));
+      }
+    }
+
+    const section = parts.length > 0 ? parts.join('\n') : '暂无已保存的记忆。';
+    this._promptSectionCache = section;
+    this._promptSectionCacheTime = now;
+    return section;
+  }
+
   // ── Write ──
 
-  /** Save a memory (creates or updates). Also updates MEMORY.md index. */
+  /** Save a memory (creates or updates). Also updates MEMORY.md index.
+   *  Preserves existing hit_count on update. Confidence defaults to 'reference'. */
   async save(
     name: string,
     description: string,
     type: 'user' | 'feedback' | 'project' | 'reference',
     content: string,
+    confidence: Confidence = 'reference',
   ): Promise<void> {
-    // Build frontmatter
-    const frontmatter = [
-      '---',
-      `name: ${name}`,
-      `description: ${description}`,
-      'metadata:',
-      `  type: ${type}`,
-      '---',
-      '',
+    // Preserve hit_count if updating existing memory
+    let hitCount = 0;
+    const existing = await this.read(name);
+    if (existing) {
+      hitCount = existing.hit_count || 0;
+    }
+
+    const mf: MemoryFile = {
+      name,
+      description,
+      type,
+      confidence,
+      hit_count: hitCount,
       content,
-    ].join('\n');
+      raw: '',
+    };
+    const frontmatter = rebuildRaw(mf);
 
     // Write the memory file
     await invoke('write_file_content', {
@@ -118,7 +221,10 @@ export class MemoryManager {
     const title = description.length > 40 ? description.slice(0, 39) + '…' : description;
 
     // Update MEMORY.md index
-    await this.upsertIndex(name, title + '.md', description);
+    await this.upsertIndex(title, name + '.md', description);
+
+    // Bust prompt section cache
+    this._promptSectionCache = null;
   }
 
   // ── Delete ──
@@ -143,19 +249,22 @@ export class MemoryManager {
       content: index,
     });
 
+    // Bust prompt section cache
+    this._promptSectionCache = null;
+
     return true;
   }
 
   // ── Internal ──
 
   /** Insert or update a line in MEMORY.md. */
-  private async upsertIndex(name: string, file: string, description: string): Promise<void> {
+  private async upsertIndex(title: string, file: string, description: string): Promise<void> {
     let index = await this.loadIndexText();
-    const newLine = `- [${name}](${file}) — ${description}`;
+    const newLine = `- [${title}](${file}) — ${description}`;
 
     // Try to replace existing line for same file
     const pattern = new RegExp(
-      `^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(name)}\\.md\\)\\s+[—–-]\\s+.+$`,
+      `^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(file.replace(/\.md$/, ''))}\\.md\\)\\s+[—–-]\\s+.+$`,
       'm',
     );
     if (pattern.test(index)) {
@@ -174,16 +283,17 @@ export class MemoryManager {
   }
 }
 
-// ── Frontmatter parser ──
+// ── Frontmatter ──
 
 function parseFrontmatter(raw: string): MemoryFile {
   const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!fmMatch) {
-    // No frontmatter — treat entire file as content
     return {
       name: 'unknown',
       description: '',
       type: 'reference',
+      confidence: 'reference',
+      hit_count: 0,
       content: raw,
       raw,
     };
@@ -198,14 +308,40 @@ function parseFrontmatter(raw: string): MemoryFile {
   const type = (
     ['user', 'feedback', 'project', 'reference'] as const
   ).includes(typeRaw as any) ? (typeRaw as MemoryFile['type']) : 'reference';
+  const confRaw = (fm.match(/^\s+confidence:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
+  const confidence = (
+    ['fact', 'reference', 'background', 'suppressed'] as const
+  ).includes(confRaw as any) ? (confRaw as Confidence) : 'reference';
+  const hitCountRaw = (fm.match(/^\s+hit_count:\s*(\d+)$/m) || [])[1];
+  const hit_count = hitCountRaw ? parseInt(hitCountRaw, 10) : 0;
 
-  return { name, description: desc, type, content: body, raw };
+  return { name, description: desc, type, confidence, hit_count, content: body, raw };
+}
+
+function rebuildRaw(mf: MemoryFile): string {
+  return [
+    '---',
+    `name: ${mf.name}`,
+    `description: ${mf.description}`,
+    'metadata:',
+    `  type: ${mf.type}`,
+    `  confidence: ${mf.confidence}`,
+    `  hit_count: ${mf.hit_count}`,
+    '---',
+    '',
+    mf.content,
+  ].join('\n');
 }
 
 // ── Helpers ──
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+}
+
+function formatMemoryLine(m: MemoryFile): string {
+  const body = m.content.length > 120 ? m.content.slice(0, 119) + '…' : m.content;
+  return `- **${m.description}** — ${body}`;
 }
 
 // ── Agent Tools ──
@@ -216,21 +352,34 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
     {
       name: () => 'hologram_memory_list',
       description: () =>
-        '列出所有已保存的记忆。保存新记忆前，先调用此工具检查是否已有类似记忆——已有则用 hologram_memory_save 更新而非新建。',
+        '列出所有已保存的记忆及其置信度。保存新记忆前，先调用此工具检查是否已有类似记忆——已有则用 hologram_memory_save 更新而非新建。',
       parameters: () => ({ type: 'object', properties: {} }),
       readOnly: () => true,
       execute: async () => {
         const entries = await mm.list();
         if (entries.length === 0) return '暂无已保存的记忆。';
-        return entries
-          .map((e) => `- **${e.title}** (\`${e.name}\`) — ${e.description}`)
-          .join('\n');
+
+        // Load full info for each entry to get confidence
+        const lines: string[] = [];
+        for (const e of entries) {
+          const mf = await mm.read(e.name);
+          const conf = mf?.confidence || 'reference';
+          const confTag = {
+            fact: '[fact]',
+            reference: '[ref]',
+            background: '[bg]',
+            suppressed: '[sup]',
+          }[conf];
+          const hit = mf?.hit_count ? ` · 回想${mf.hit_count}次` : '';
+          lines.push(`- ${confTag} **${e.title}** (\`${e.name}\`)${hit} — ${e.description}`);
+        }
+        return lines.join('\n');
       },
     },
     {
       name: () => 'hologram_memory_read',
       description: () =>
-        '读取一条已保存的 Agent 记忆的完整内容。当你需要回忆某个具体事实、用户偏好或决策时使用。',
+        '读取一条已保存记忆的完整内容。需要回忆具体事实、用户偏好或过往决策时使用。每次读取会记录回想次数。',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -244,15 +393,34 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
       readOnly: () => true,
       execute: async (args) => {
         const name = args.name as string;
-        const mf = await mm.read(name);
+        const mf = await mm.read(name, true); // incrementHit
         if (!mf) return `未找到记忆 "${name}"。用 hologram_memory_list 查看所有记忆。`;
-        return `## ${mf.description || mf.name}\n类型: ${mf.type}\n\n${mf.content}`;
+        const confLabels: Record<Confidence, string> = {
+          fact: '🔒 铁律 — 用户明确要求。仅作提醒，不替代代码决策',
+          reference: '📋 参考 — 可以参考，引用时带核实语气',
+          background: '🎨 背景 — 用于调整风格，无需在回复中提及',
+          suppressed: '🚫 已抑制',
+        };
+        return [
+          `## ${mf.description || mf.name}`,
+          `类型: ${mf.type}`,
+          `置信度: ${confLabels[mf.confidence] || mf.confidence}`,
+          `回想次数: ${mf.hit_count}`,
+          '',
+          mf.content,
+        ].join('\n');
       },
     },
     {
       name: () => 'hologram_memory_save',
       description: () =>
-        '保存或更新一条记忆。保守使用——只记代码库查不到且未来会话忘了会出错的东西（用户偏好、非显而易见的决策、反馈）。先 hologram_memory_list 检查是否已有类似记忆，有则更新而非新建。不要保存代码结构、文件路径等代码库本身记录的信息。',
+        '保存或更新一条记忆。保守使用——只记代码库查不到且未来会话忘了会出错的东西。\n\n'
+        + '置信度级别:\n'
+        + '- reference (默认) — Agent 自己发现的信息最高只能给此级别\n'
+        + '- fact — 仅用户通过 /remember 命令明确要求时才能使用\n'
+        + '- background — 仅影响风格/语气\n'
+        + '- suppressed — 已废弃，不再给 LLM 看到\n\n'
+        + '先 hologram_memory_list 检查是否已有类似记忆——已有则更新而非新建。',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -262,16 +430,21 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           },
           description: {
             type: 'string',
-            description: '一句话摘要，用于快速判断是否相关。也是 MEMORY.md 索引的标题。',
+            description: '一句话摘要，用于快速判断是否相关',
           },
           type: {
             type: 'string',
             enum: ['user', 'feedback', 'project', 'reference'],
             description: '记忆类型: user=用户画像, feedback=用户反馈/要求, project=项目决策/进展, reference=外部参考',
           },
+          confidence: {
+            type: 'string',
+            enum: ['fact', 'reference', 'background', 'suppressed'],
+            description: '置信度。Agent 自己最高只能给 reference。fact 只有用户明确要求时才能用。默认: reference',
+          },
           content: {
             type: 'string',
-            description: '记忆正文。paragraph 或项目要点均可。对于 feedback/project 类型，应包含 **Why:** 和 **How to apply:** 段落。',
+            description: '记忆正文。对于 feedback/project 类型，应包含 **Why:** 和 **How to apply:** 段落。',
           },
         },
         required: ['name', 'description', 'type', 'content'],
@@ -282,19 +455,29 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         if (!['user', 'feedback', 'project', 'reference'].includes(type)) {
           return `错误: type 必须是 user/feedback/project/reference，收到了 "${type}"`;
         }
+        let confidence = (args.confidence as Confidence) || 'reference';
+        if (!['fact', 'reference', 'background', 'suppressed'].includes(confidence)) {
+          confidence = 'reference';
+        }
+        // Enforce: Agent cannot self-elevate to fact
+        if (confidence === 'fact') {
+          confidence = 'reference';
+          return '提示: Agent 不能自己指定 fact 级别。已降为 reference。fact 级别只能由用户通过 /remember 命令授权。';
+        }
         await mm.save(
           args.name as string,
           args.description as string,
           type as MemoryFile['type'],
           args.content as string,
+          confidence,
         );
-        return `已保存记忆 "${args.name}"。`;
+        return `已保存记忆 "${args.name}" (${confidence})。`;
       },
     },
     {
       name: () => 'hologram_memory_delete',
       description: () =>
-        '删除一条已保存的 Agent 记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
+        '删除一条已保存的记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
       parameters: () => ({
         type: 'object',
         properties: {
