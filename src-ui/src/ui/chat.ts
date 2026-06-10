@@ -807,7 +807,6 @@ export class ChatPanel {
     const settings = loadSettings();
     const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
 
-    // Model badge
     let modelLabel = active?.model || 'unknown';
     if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '…';
 
@@ -822,24 +821,66 @@ export class ChatPanel {
         <span class="chat-usage-badge">${usageStr}</span>
       </div>
       <div class="chat-footer-right">
-        <button class="chat-slash-btn chat-slash-new" data-text="/new" title="重置当前会话上下文">${iconHtml('refresh', 9)} /new</button>
-        <button class="chat-slash-btn chat-slash-cmd" data-cmd="compact" title="压缩上下文（释放空间）">${iconHtml('save', 9)} /compact</button>
-        <button class="chat-slash-btn" data-text="哪些模块最脆弱？" title="查找脆弱模块">${iconHtml('alert', 9)} /fragile</button>
-        <button class="chat-slash-btn" data-text="检查循环依赖" title="检查循环依赖">${iconHtml('refresh', 9)} /cycles</button>
-        <button class="chat-slash-btn" data-text="分析最近改动的影响" title="影响分析">${iconHtml('blast', 9)} /impact</button>
-        <button class="chat-slash-btn" data-text="" data-placeholder="追踪从 " title="依赖路径">${iconHtml('link', 9)} /path</button>
+        <button class="chat-slash-trigger" title="命令菜单">
+          ${iconHtml('code', 12)}<span class="chat-slash-label">/</span>
+        </button>
+        <button class="chat-session-add" title="新建会话">${iconHtml('plus', 12)}</button>
       </div>`;
 
-    // Model badge click → open settings
-    const modelBadge = this.footerEl.querySelector('.chat-model-clickable') as HTMLElement;
-    if (modelBadge && this.onOpenSettings) {
-      modelBadge.addEventListener('click', () => this.onOpenSettings!());
-    }
+    // Popup menu for /
+    const popup = document.createElement('div');
+    popup.className = 'chat-slash-popup';
+    popup.innerHTML = `
+      <div class="sp-group">
+        <div class="sp-group-title">操作</div>
+        <button class="sp-item" data-cmd="new">${iconHtml('refresh', 10)} 重置当前会话<span class="sp-key">/new</span></button>
+        <button class="sp-item" data-cmd="compact">${iconHtml('save', 10)} 压缩上下文<span class="sp-key">/compact</span></button>
+      </div>
+      <div class="sp-group">
+        <div class="sp-group-title">查询</div>
+        <button class="sp-item" data-cmd="q" data-text="哪些模块最脆弱？">${iconHtml('alert', 10)} 查找脆弱模块</button>
+        <button class="sp-item" data-cmd="q" data-text="检查循环依赖">${iconHtml('refresh', 10)} 检查循环依赖</button>
+        <button class="sp-item" data-cmd="q" data-text="分析最近改动的影响">${iconHtml('blast', 10)} 影响分析</button>
+        <button class="sp-item" data-cmd="q" data-text="" data-placeholder="追踪从 ">${iconHtml('link', 10)} 依赖路径查询</button>
+      </div>`;
+    this.footerEl.appendChild(popup);
 
-    // Wire slash buttons (skip special-cmd buttons handled separately)
-    this.footerEl.querySelectorAll('.chat-slash-btn:not(.chat-slash-new):not(.chat-slash-cmd)').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const el = btn as HTMLElement;
+    // Model badge click → open settings
+    this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
+      this.onOpenSettings?.();
+    });
+
+    // / button → toggle popup
+    const trigger = this.footerEl.querySelector('.chat-slash-trigger') as HTMLElement;
+    trigger?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      popup.classList.toggle('open');
+    });
+
+    // Close popup on outside click
+    document.addEventListener('click', (e) => {
+      if (!popup.contains(e.target as Node) && e.target !== trigger) {
+        popup.classList.remove('open');
+      }
+    }, { once: true });
+
+    // Popup items
+    popup.querySelectorAll('.sp-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        popup.classList.remove('open');
+        const el = item as HTMLElement;
+        const cmd = el.dataset['cmd'];
+        if (cmd === 'new') {
+          this.inputArea.value = '/new';
+          this.sendMessage();
+          return;
+        }
+        if (cmd === 'compact') {
+          this.inputArea.value = '/compact';
+          this.sendMessage();
+          return;
+        }
+        // Query commands — fill input text
         const text = el.dataset['text'] || '';
         const placeholder = el.dataset['placeholder'] || '';
         this.inputArea.value = text;
@@ -853,16 +894,9 @@ export class ChatPanel {
       });
     });
 
-    // /new button — execute directly
-    this.footerEl.querySelector('.chat-slash-new')?.addEventListener('click', () => {
-      this.inputArea.value = '/new';
-      this.sendMessage();
-    });
-
-    // /compact button — execute directly
-    this.footerEl.querySelector('.chat-slash-cmd')?.addEventListener('click', () => {
-      this.inputArea.value = '/compact';
-      this.sendMessage();
+    // + new session
+    this.footerEl.querySelector('.chat-session-add')?.addEventListener('click', () => {
+      this.createNewSession();
     });
   }
 
