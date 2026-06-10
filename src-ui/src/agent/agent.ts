@@ -469,6 +469,46 @@ export class Agent {
 
   // ---- Context window management ----
 
+  private compactRunning = false;
+
+  /** Manual compaction trigger (from /compact command). Returns summary text or error. */
+  async compactNow(signal: AbortSignal): Promise<string> {
+    if (this.compactRunning) throw new Error('compaction already in progress');
+    this.compactRunning = true;
+    try {
+      const msgs = this.session;
+      const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
+      // Keep last N messages verbatim (tail), compact the middle
+      const tailCount = Math.max(4, this.recentKeep);
+      const start = Math.max(head + 4, msgs.length - tailCount); // at least 4 compactable messages
+      if (start - head < 4) {
+        this.sink({ kind: EventKind.Notice, level: 'info', text: '对话太短，无需压缩' });
+        return '';
+      }
+      const region = msgs.slice(head, start);
+      const summary = await this.summarizeRegion(signal, region);
+      if (!summary) return '';
+
+      const compacted: Message[] = [
+        ...msgs.slice(0, head),
+        { role: 'user' as const, content: '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' + summary + '\n</compacted-context>' },
+        ...msgs.slice(start),
+      ];
+      this.session = compacted;
+      this.stormSig = '';
+      this.stormCount = 0;
+      this.compactStuck = false;
+      this.sink({
+        kind: EventKind.Notice,
+        level: 'info',
+        text: `上下文已压缩: ${region.length} 条消息 → 摘要 (保留了最近 ${msgs.length - start} 条)`,
+      });
+      return summary;
+    } finally {
+      this.compactRunning = false;
+    }
+  }
+
   private maybeCompact(usage: Usage | undefined): void {
     if (this.contextWindow <= 0) return;
     if (!usage || usage.total_tokens <= 0) return;
@@ -480,16 +520,101 @@ export class Agent {
     }
     if (this.compactStuck) return;
 
-    // Simple compaction: summarize older messages, keep recent tail
-    // For now, just flag — full summarization needs a separate model call
-    if (ratio > 0.95) {
+    // Auto-compact: trigger summarization in background after this turn
+    this.sink({
+      kind: EventKind.Notice,
+      level: 'info',
+      text: `上下文使用率 ${(ratio * 100).toFixed(0)}% — 自动压缩中…`,
+    });
+
+    // Run compaction asynchronously (non-blocking for the turn)
+    const msgs = this.session;
+    const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
+    const tailCount = Math.max(4, this.recentKeep);
+    const start = Math.max(head + 4, msgs.length - tailCount);
+    if (start - head < 4) {
       this.compactStuck = true;
       this.sink({
         kind: EventKind.Notice,
         level: 'warn',
-        text: `Context window ${(ratio * 100).toFixed(0)}% full — compaction needed but not yet implemented. Start a new conversation soon.`,
+        text: `上下文窗口 ${(ratio * 100).toFixed(0)}% 已满但对话太短无法压缩。建议用 /new 开启新会话。`,
       });
+      return;
     }
+
+    const region = msgs.slice(head, start);
+    const abortCtrl = new AbortController();
+    this.summarizeRegion(abortCtrl.signal, region).then((summary) => {
+      if (!summary) return;
+      const compacted: Message[] = [
+        ...msgs.slice(0, head),
+        { role: 'user' as const, content: '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' + summary + '\n</compacted-context>' },
+        ...msgs.slice(start),
+      ];
+      this.session = compacted;
+      this.stormSig = '';
+      this.stormCount = 0;
+      this.compactStuck = false;
+      this.sink({
+        kind: EventKind.Notice,
+        level: 'info',
+        text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
+      });
+    }).catch(() => {
+      this.compactStuck = true;
+      this.sink({
+        kind: EventKind.Notice,
+        level: 'warn',
+        text: '自动压缩失败。建议用 /new 开启新会话或手动 /compact。',
+      });
+    });
+  }
+
+  /** Call the provider (no tools) to summarize a message region. */
+  private async summarizeRegion(signal: AbortSignal, msgs: Message[]): Promise<string> {
+    const summaryPrompt = `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。
+
+按这些标题写（没有内容的标题可以省略）：
+
+## 目标
+用户的需求和意图，尽量用用户的措辞。包含明确的约束和偏好。
+
+## 决策与理由
+已做出的关键选择及原因——避免被推翻或重复争论。
+
+## 文件与代码
+读取或修改过的文件，包含具体事实：签名、位置、数据形状、应用的具体编辑。
+
+## 命令与结果
+执行过的命令（构建、测试、git）及结果——哪些通过、哪些失败、错误信息。
+
+## 错误与修复
+遇到的问题及解决方式（或未解决），避免走重复的弯路。
+
+## 待办与下一步
+仍在进行中或未开始的工作，以及最具体的下一个行动。
+
+规则：简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于消息中的内容。`;
+
+    const transcript = renderTranscript(msgs);
+    const gen = this.prov.stream(signal, {
+      messages: [
+        { role: 'system', content: summaryPrompt },
+        { role: 'user', content: transcript },
+      ],
+      tools: [], // no tools for summarization
+      temperature: 0.3, // low temp for factual summary
+      max_tokens: 0,
+    });
+
+    let text = '';
+    for await (const chunk of gen) {
+      if (chunk.type === ChunkType.Text && chunk.text) {
+        text += chunk.text;
+      }
+      if (chunk.type === ChunkType.Error) throw chunk.err!;
+    }
+    return text.trim();
   }
 
   private toolReadOnly(name: string): boolean {
@@ -576,6 +701,34 @@ function finishReasonMessage(u?: Usage): string | undefined {
     default:
       return undefined;
   }
+}
+
+function renderTranscript(msgs: Message[]): string {
+  const lines: string[] = [];
+  for (const m of msgs) {
+    switch (m.role) {
+      case 'user':
+        lines.push(`[用户]\n${m.content || ''}\n`);
+        break;
+      case 'assistant': {
+        if (m.content) lines.push(`[助手]\n${m.content}`);
+        if (m.tool_calls) {
+          for (const tc of m.tool_calls) {
+            lines.push(`[助手调用 ${tc.name}] ${tc.arguments}`);
+          }
+        }
+        lines.push('');
+        break;
+      }
+      case 'tool':
+        lines.push(`[工具 ${m.name || ''} 结果]\n${m.content || ''}\n`);
+        break;
+      case 'system':
+        lines.push(`[系统]\n${m.content || ''}\n`);
+        break;
+    }
+  }
+  return lines.join('\n');
 }
 
 function firstLine(s: string): string {

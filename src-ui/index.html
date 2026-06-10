@@ -828,6 +828,46 @@
       background: rgba(255, 255, 255, 0.04);
     }
 
+    /* Session tabs */
+    .chat-session-tabs {
+      display: flex; align-items: center; gap: 2px;
+      flex: 1; overflow-x: auto; margin: 0 8px;
+      min-width: 0;
+    }
+    .chat-session-tabs::-webkit-scrollbar { height: 2px; }
+    .chat-session-tabs::-webkit-scrollbar-thumb { background: rgba(40, 60, 100, 0.3); border-radius: 1px; }
+    .chat-session-tab {
+      display: flex; align-items: center; gap: 2px;
+      font-family: var(--font-mono); font-size: 8px;
+      padding: 3px 8px; cursor: pointer; white-space: nowrap;
+      background: transparent; color: rgba(100, 140, 200, 0.4);
+      border: 1px solid transparent; border-radius: 3px;
+      transition: all var(--snap);
+    }
+    .chat-session-tab:hover { color: var(--starlight-dim); background: rgba(20, 35, 60, 0.4); }
+    .chat-session-tab.active {
+      color: var(--signal-bright);
+      background: rgba(20, 40, 70, 0.5);
+      border-color: rgba(50, 80, 140, 0.2);
+    }
+    .chat-session-x {
+      font-size: 10px; opacity: 0; transition: opacity var(--snap);
+      color: rgba(200, 60, 60, 0.6); margin-left: 2px;
+    }
+    .chat-session-tab:hover .chat-session-x { opacity: 0.6; }
+    .chat-session-x:hover { opacity: 1 !important; color: var(--fail); }
+    .chat-session-add {
+      width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+      background: transparent; border: 1px solid transparent; border-radius: 3px;
+      color: rgba(100, 140, 200, 0.35); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all var(--snap); margin-left: 4px;
+    }
+    .chat-session-add:hover {
+      color: var(--signal); background: rgba(20, 35, 60, 0.4);
+      border-color: rgba(40, 60, 100, 0.2);
+    }
+
     /* Messages */
     .chat-messages {
       flex: 1; overflow-y: auto; padding: 14px;

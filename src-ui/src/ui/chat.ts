@@ -21,6 +21,14 @@ const PANEL_ID = 'chat-panel';
 
 // ── ChatPanel ──
 
+interface ChatSession {
+  id: number;
+  label: string;
+  agent: Agent;
+}
+
+let nextSessionId = 1;
+
 export class ChatPanel {
   private container: HTMLElement;
 
@@ -31,9 +39,15 @@ export class ChatPanel {
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
   private footerEl!: HTMLElement;
+  private headerEl!: HTMLElement;
+  private sessionTabs!: HTMLElement;
+
+  // Session state
+  private sessions: ChatSession[] = [];
+  private activeIdx = -1;
+  private agentFactory: (() => Agent | null) | null = null;
 
   // Streaming state
-  private agent: Agent | null = null;
   private starGraph: StarGraph | null = null;
   private abortCtrl: AbortController | null = null;
   private running = false;
@@ -45,11 +59,15 @@ export class ChatPanel {
   private currentTextEl: HTMLElement | null = null;
   private pendingToolCards = new Map<string, HTMLElement>(); // id → card element
 
+  // Per-session message cache (DOM elements)
+  private sessionMessages = new Map<number, HTMLElement[]>();
+
   private openState = false;
   private lastUsageText = '';
   private onOpenSettings: (() => void) | null = null;
 
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
+  setAgentFactory(fn: () => Agent | null): void { this.agentFactory = fn; }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -58,7 +76,23 @@ export class ChatPanel {
 
   // ── Public API ──
 
-  setAgent(agent: Agent | null): void { this.agent = agent; }
+  private get agent(): Agent | null {
+    return this.sessions[this.activeIdx]?.agent ?? null;
+  }
+
+  setAgent(agent: Agent | null): void {
+    if (!agent) return;
+    // Add as a new session
+    const s: ChatSession = {
+      id: nextSessionId++,
+      label: `会话 ${this.sessions.length + 1}`,
+      agent,
+    };
+    this.sessions.push(s);
+    if (this.activeIdx < 0) this.activeIdx = 0;
+    this.renderSessionTabs();
+  }
+
   getAgent(): Agent | null { return this.agent; }
   setStarGraph(g: StarGraph): void { this.starGraph = g; }
 
@@ -91,6 +125,136 @@ export class ChatPanel {
 
   isOpen(): boolean { return this.openState; }
 
+  // ── Session management ──
+
+  private renderSessionTabs(): void {
+    this.sessionTabs.innerHTML = '';
+    for (let i = 0; i < this.sessions.length; i++) {
+      const s = this.sessions[i];
+      const tab = document.createElement('button');
+      tab.className = 'chat-session-tab';
+      if (i === this.activeIdx) tab.classList.add('active');
+      // Short label
+      const shortLabel = s.label.length > 8 ? s.label.slice(0, 7) + '…' : s.label;
+      tab.textContent = shortLabel;
+      tab.title = `${s.label} (点击切换)`;
+      tab.addEventListener('click', () => this.switchSession(i));
+
+      if (this.sessions.length > 1) {
+        // Close button on each tab
+        const xBtn = document.createElement('span');
+        xBtn.className = 'chat-session-x';
+        xBtn.innerHTML = '×';
+        xBtn.title = '关闭会话';
+        xBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.closeSession(i);
+        });
+        tab.appendChild(xBtn);
+      }
+      this.sessionTabs.appendChild(tab);
+    }
+  }
+
+  private switchSession(idx: number): void {
+    if (idx === this.activeIdx || idx < 0 || idx >= this.sessions.length) return;
+    // Save current messages to cache
+    if (this.activeIdx >= 0) {
+      this.saveCurrentMessages();
+    }
+    // Flush any in-progress streaming
+    this.flushReasoning();
+    this.flushText();
+    this.pendingToolCards.clear();
+    // Switch
+    this.activeIdx = idx;
+    this.renderSessionTabs();
+    this.restoreMessages();
+    this.lastUsageText = '';
+    this.updateFooter();
+  }
+
+  private closeSession(idx: number): void {
+    if (this.sessions.length <= 1) {
+      this.addNotice('至少保留一个会话', 'info');
+      return;
+    }
+    // Abort if closing active running session
+    if (idx === this.activeIdx && this.running) this.abort();
+    // Remove session
+    const s = this.sessions[idx];
+    this.sessionMessages.delete(s.id);
+    this.sessions.splice(idx, 1);
+    // Adjust active index
+    if (this.activeIdx >= this.sessions.length) this.activeIdx = this.sessions.length - 1;
+    if (this.activeIdx < 0) this.activeIdx = 0;
+    this.renderSessionTabs();
+    this.restoreMessages();
+    this.updateFooter();
+  }
+
+  private createNewSession(): void {
+    if (!this.agentFactory) {
+      this.addNotice('请先配置 API Key（设置 → Provider）', 'info');
+      return;
+    }
+    const newAgent = this.agentFactory();
+    if (!newAgent) {
+      this.addNotice('无法创建会话: Agent 工厂返回空', 'error');
+      return;
+    }
+    // Save current messages
+    if (this.activeIdx >= 0) this.saveCurrentMessages();
+    this.flushReasoning();
+    this.flushText();
+    this.pendingToolCards.clear();
+    // Add new session
+    const s: ChatSession = {
+      id: nextSessionId++,
+      label: `会话 ${this.sessions.length + 1}`,
+      agent: newAgent,
+    };
+    this.sessions.push(s);
+    this.activeIdx = this.sessions.length - 1;
+    this.renderSessionTabs();
+    // Clear displayed messages for the new session
+    this.msgList.innerHTML = '';
+    this.addNotice('新会话已创建 — 可以开始对话', 'info');
+    this.lastUsageText = '';
+    this.updateFooter();
+  }
+
+  private saveCurrentMessages(): void {
+    const sid = this.sessions[this.activeIdx]?.id;
+    if (!sid) return;
+    const children = Array.from(this.msgList.children) as HTMLElement[];
+    this.sessionMessages.set(sid, children);
+  }
+
+  private restoreMessages(): void {
+    this.msgList.innerHTML = '';
+    const sid = this.sessions[this.activeIdx]?.id;
+    if (!sid) return;
+    const cached = this.sessionMessages.get(sid);
+    if (cached) {
+      for (const el of cached) {
+        this.msgList.appendChild(el.cloneNode(true));
+      }
+    }
+    // Re-wire node-link click handlers
+    this.msgList.querySelectorAll('.node-link').forEach((link) => {
+      link.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = (link as HTMLElement).dataset['nodename'] || '';
+        if (name && this.starGraph) {
+          const found = this.starGraph.focusNode(name);
+          if (!found) this.addNotice(`未在图中找到 "${name}"`, 'info');
+        }
+      });
+    });
+    this.scrollBottom();
+  }
+
   // ── Build DOM ──
 
   private buildDOM(): void {
@@ -111,8 +275,8 @@ export class ChatPanel {
     this.setupResize(resize);
 
     // Header
-    const header = document.createElement('div');
-    header.className = 'chat-header';
+    this.headerEl = document.createElement('div');
+    this.headerEl.className = 'chat-header';
     const title = document.createElement('span');
     title.className = 'chat-title';
     title.innerHTML = `${iconHtml('chat')} 全息对话`;
@@ -120,8 +284,22 @@ export class ChatPanel {
     closeBtn.className = 'chat-close-btn';
     closeBtn.innerHTML = iconHtml('close', 16);
     closeBtn.addEventListener('click', () => this.close());
-    header.append(title, closeBtn);
-    this.panel.appendChild(header);
+    this.headerEl.append(title);
+
+    // Session tabs
+    this.sessionTabs = document.createElement('div');
+    this.sessionTabs.className = 'chat-session-tabs';
+    this.headerEl.appendChild(this.sessionTabs);
+
+    // + new session button
+    const addBtn = document.createElement('button');
+    addBtn.className = 'chat-session-add';
+    addBtn.innerHTML = iconHtml('plus', 12);
+    addBtn.title = '新建会话';
+    addBtn.addEventListener('click', () => this.createNewSession());
+    this.headerEl.appendChild(addBtn);
+    this.headerEl.appendChild(closeBtn);
+    this.panel.appendChild(this.headerEl);
 
     // Messages
     this.msgList = document.createElement('div');
@@ -218,8 +396,10 @@ export class ChatPanel {
 
   private newSession(): void {
     if (!this.agent) return;
+    // Save current messages before clearing
+    if (this.activeIdx >= 0) this.saveCurrentMessages();
     this.agent.newSession();
-    // Clear message list UI (keep the agent object)
+    // Clear message list UI
     this.msgList.innerHTML = '';
     this.addNotice('已开启新会话 — 上下文已清空', 'info');
     this.finishTurn();
@@ -240,6 +420,46 @@ export class ChatPanel {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
       this.newSession();
+      return;
+    }
+
+    // Detect /compact command
+    if (text === '/compact') {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      if (!this.agent) return;
+      this.addNotice('正在压缩上下文…', 'info');
+      const ctrl = new AbortController();
+      this.agent.compactNow(ctrl.signal).then(() => {
+        this.msgList.innerHTML = '';
+        // Rebuild message list from agent session
+        const msgs = this.agent!.getSession();
+        for (const m of msgs) {
+          if (m.role === 'system') continue;
+          if (m.role === 'user' && m.content?.startsWith('<compacted-context>')) {
+            const el = document.createElement('div');
+            el.className = 'msg-notice msg-notice-info';
+            el.textContent = '📋 上下文已压缩';
+            this.msgList.appendChild(el);
+            continue;
+          }
+          if (m.role === 'user') {
+            this.appendUserBubble(m.content || '');
+          }
+          if (m.role === 'assistant') {
+            const bubble = document.createElement('div');
+            bubble.className = 'msg-bubble assistant';
+            const textEl = document.createElement('div');
+            textEl.className = 'msg-text msg-markdown';
+            textEl.textContent = m.content || '';
+            bubble.appendChild(textEl);
+            this.msgList.appendChild(bubble);
+          }
+        }
+        this.scrollBottom();
+      }).catch((err) => {
+        this.addNotice(`压缩失败: ${err.message}`, 'error');
+      });
       return;
     }
 
@@ -602,7 +822,8 @@ export class ChatPanel {
         <span class="chat-usage-badge">${usageStr}</span>
       </div>
       <div class="chat-footer-right">
-        <button class="chat-slash-btn chat-slash-new" data-text="/new" title="新建会话">${iconHtml('plus', 9)} /new</button>
+        <button class="chat-slash-btn chat-slash-new" data-text="/new" title="重置当前会话上下文">${iconHtml('refresh', 9)} /new</button>
+        <button class="chat-slash-btn chat-slash-cmd" data-cmd="compact" title="压缩上下文（释放空间）">${iconHtml('save', 9)} /compact</button>
         <button class="chat-slash-btn" data-text="哪些模块最脆弱？" title="查找脆弱模块">${iconHtml('alert', 9)} /fragile</button>
         <button class="chat-slash-btn" data-text="检查循环依赖" title="检查循环依赖">${iconHtml('refresh', 9)} /cycles</button>
         <button class="chat-slash-btn" data-text="分析最近改动的影响" title="影响分析">${iconHtml('blast', 9)} /impact</button>
@@ -615,8 +836,8 @@ export class ChatPanel {
       modelBadge.addEventListener('click', () => this.onOpenSettings!());
     }
 
-    // Wire slash buttons
-    this.footerEl.querySelectorAll('.chat-slash-btn:not(.chat-slash-new)').forEach((btn) => {
+    // Wire slash buttons (skip special-cmd buttons handled separately)
+    this.footerEl.querySelectorAll('.chat-slash-btn:not(.chat-slash-new):not(.chat-slash-cmd)').forEach((btn) => {
       btn.addEventListener('click', () => {
         const el = btn as HTMLElement;
         const text = el.dataset['text'] || '';
@@ -635,6 +856,12 @@ export class ChatPanel {
     // /new button — execute directly
     this.footerEl.querySelector('.chat-slash-new')?.addEventListener('click', () => {
       this.inputArea.value = '/new';
+      this.sendMessage();
+    });
+
+    // /compact button — execute directly
+    this.footerEl.querySelector('.chat-slash-cmd')?.addEventListener('click', () => {
+      this.inputArea.value = '/compact';
       this.sendMessage();
     });
   }

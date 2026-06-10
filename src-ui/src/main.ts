@@ -208,6 +208,34 @@ function setupAgent(): void {
     contextWindow: agentOpts.contextWindow,
   }, chatPanel.sink);
   chatPanel.setAgent(agent);
+
+  // Set factory for creating new sessions
+  chatPanel.setAgentFactory(() => {
+    const s = loadSettings();
+    const act = getActiveProvider(s);
+    if (!act.apiKey || act.apiKey.trim() === '') return null;
+    const p: Provider =
+      act.kind === 'anthropic'
+        ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
+        : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
+    const r = new ToolRegistry();
+    if (currentGraphData) {
+      const exec: ToolExecutor = async (name, args) => {
+        const result = await invoke<string>(name, args);
+        try { visualizeAgentTool(name, args, result, starGraph); } catch {}
+        return result;
+      };
+      for (const tool of createHologramTools(exec)) r.register(tool);
+    }
+    const pr = defaultPricing(act.kind, act.model);
+    const aOpts = s.agent || {};
+    return new Agent(p, r, buildSystemPrompt(), {
+      pricing: pr,
+      temperature: aOpts.temperature,
+      maxSteps: aOpts.maxSteps,
+      contextWindow: aOpts.contextWindow,
+    }, chatPanel.sink);
+  });
 }
 
 function buildSystemPrompt(): string {
