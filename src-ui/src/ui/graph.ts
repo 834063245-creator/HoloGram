@@ -230,9 +230,7 @@ export class StarGraph {
   // Tooltip & Detail card & Pie menu
   private tooltipEl!: HTMLDivElement;
   private detailCard!: HTMLDivElement;
-  private pieMenu!: HTMLDivElement;
-  private pieNodeIdx = -1;
-  private selectedIdx = -1;
+private selectedIdx = -1;
 
   // Focus
   private focusTarget = new THREE.Vector3();
@@ -330,7 +328,6 @@ export class StarGraph {
     this.setupHover();
     this.setupTooltip();
     this.setupDetailCard();
-    this.setupPieMenu();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
@@ -353,19 +350,13 @@ export class StarGraph {
     });
     canvas.addEventListener('pointerup', (e: PointerEvent) => {
       if (pointerDragged) return;
-      // Ctrl+click or right-click → pie menu
-      if (e.ctrlKey || e.button === 2) {
-        this.onContextMenu(e);
-      } else {
-        this.onClick(e);
-      }
+      this.onClick(e);
     });
     // Prevent browser context menu on canvas
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (this.pieMenu?.classList.contains('visible')) { this.hidePieMenu(); e.stopImmediatePropagation(); return; }
-        if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
+if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
         if (this.blastMode) { this.exitBlastMode(); return; }
       }
       if (e.key === 'b' || e.key === 'B') {
@@ -707,87 +698,6 @@ export class StarGraph {
     this.detailCard.style.left = `${left}px`; this.detailCard.style.top = `${top}px`;
   }
 
-  // ── Pie Menu ──────────────────────────────────────────────
-
-  private setupPieMenu(): void {
-    this.pieMenu = document.createElement('div');
-    this.pieMenu.id = 'pie-menu';
-    this.pieMenu.innerHTML = `
-      <div class="pie-item" data-action="blast"><span class="pie-icon">${iconHtml('blast', 14)}</span><span>波及</span></div>
-      <div class="pie-item" data-action="focus"><span class="pie-icon">${iconHtml('focus', 14)}</span><span>聚焦</span></div>
-      <div class="pie-item" data-action="path"><span class="pie-icon">${iconHtml('link', 14)}</span><span>路径</span></div>
-      <div class="pie-item" data-action="info"><span class="pie-icon">${iconHtml('info', 14)}</span><span>信息</span></div>`;
-    this.pieMenu.style.cssText =
-      'position:absolute;z-index:20;pointer-events:auto;display:none;' +
-      'background:var(--panel-bg,rgba(6,12,24,0.95));border:1px solid var(--panel-edge,rgba(88,120,180,0.3));' +
-      'border-radius:8px;padding:4px;box-shadow:0 8px 32px rgba(0,0,0,0.5);' +
-      'flex-direction:column;gap:2px;min-width:80px;';
-    // Pie item hover style
-    const style = document.createElement('style');
-    style.textContent = `
-      #pie-menu .pie-item {
-        display:flex;align-items:center;gap:8px;padding:6px 12px;
-        font-size:13px;color:var(--starlight-dim,#c9d1d9);border-radius:5px;cursor:pointer;
-        transition:background 0.1s;white-space:nowrap;
-      }
-      #pie-menu .pie-item:hover { background:rgba(80,140,240,0.25);color:var(--starlight,#e6edf3); }
-      #pie-menu .pie-icon { font-size:14px;width:20px;text-align:center; }
-    `;
-    this.pieMenu.appendChild(style);
-    this.container.appendChild(this.pieMenu);
-    // Click handlers on pie items
-    this.pieMenu.querySelectorAll('.pie-item').forEach(item => {
-      item.addEventListener('pointerdown', (e) => {
-        e.stopPropagation(); e.preventDefault();
-        const action = (item as HTMLElement).dataset['action'];
-        const idx = this.pieNodeIdx;
-        this.hidePieMenu();
-        this.handlePieAction(action, idx);
-      });
-    });
-  }
-
-  private onContextMenu(e: PointerEvent | MouseEvent): void {
-    if (this.foldMode && !this.enteredGalaxyId) return;
-    const rect = this.container.getBoundingClientRect();
-    const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
-    const visibleCores = this.nodeCores.filter(c => c.visible);
-    const hits = this.raycaster.intersectObjects(visibleCores);
-    if (hits.length === 0) return;
-    const idx = (hits[0].object as THREE.Mesh).userData['nodeIndex'] as number;
-    if (idx === undefined || idx < 0) return;
-    this.pieNodeIdx = idx;
-    this.showPieMenu(e.clientX, e.clientY);
-  }
-
-  private showPieMenu(x: number, y: number): void {
-    this.pieMenu.style.left = `${x}px`;
-    this.pieMenu.style.top = `${y}px`;
-    this.pieMenu.classList.add('visible');
-  }
-
-  private hidePieMenu(): void {
-    this.pieMenu.classList.remove('visible');
-    this.pieNodeIdx = -1;
-  }
-
-  private handlePieAction(action: string | undefined, idx: number): void {
-    if (idx < 0 || idx >= this.graphNodes.length) return;
-    switch (action) {
-      case 'blast': this.startBlastMode(idx); break;
-      case 'focus': this.flyToNode(idx); break;
-      case 'path':
-        if (this._pathSource < 0) {
-          this.setPathSource(idx);
-        } else if (idx !== this._pathSource) {
-          this.setPathTarget(idx);
-        }
-        break;
-      case 'info': this.showDetail(idx); break;
-    }
-  }
 
   // ── Path finding ─────────────────────────────────────────
 
@@ -2444,7 +2354,7 @@ export class StarGraph {
     this.renderer.domElement.remove();
     this.glowTex.dispose(); this.sphereGeo.dispose();
     for (const d of this.galaxyLabelDivs) d.remove(); this.galaxyLabelDivs = [];
-    this.galaxyTitleEl?.remove(); this.pieMenu?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
+    this.galaxyTitleEl?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
   }
 }
 

@@ -648,30 +648,6 @@
     #detail-card .dc-open-btn { color: rgba(80, 210, 170, 0.8); border-color: rgba(60, 180, 140, 0.25); }
 
     /* ═══════════════════════════════════════════════════════════════
-       PIE MENU — right-click context menu
-       ═══════════════════════════════════════════════════════════════ */
-    #pie-menu {
-      position: absolute; z-index: 20; pointer-events: auto; display: none;
-      background: var(--panel-bg, rgba(6,12,24,0.95));
-      border: 1px solid var(--panel-edge, rgba(88,120,180,0.3));
-      border-radius: 8px; padding: 4px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-      flex-direction: column; gap: 2px; min-width: 80px;
-    }
-    #pie-menu.visible { display: flex; }
-    #pie-menu .pie-item {
-      display: flex; align-items: center; gap: 8px; padding: 6px 12px;
-      font-size: 13px; color: var(--starlight-dim, #c9d1d9);
-      border-radius: 5px; cursor: pointer;
-      transition: background 0.1s; white-space: nowrap;
-    }
-    #pie-menu .pie-item:hover {
-      background: rgba(80, 140, 240, 0.25);
-      color: var(--starlight, #e6edf3);
-    }
-    #pie-menu .pie-icon { font-size: 14px; width: 20px; text-align: center; }
-
-    /* ═══════════════════════════════════════════════════════════════
        DOCK TABS — floating tab bars
        ═══════════════════════════════════════════════════════════════ */
     #left-tabs {
