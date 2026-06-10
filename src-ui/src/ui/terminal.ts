@@ -7,6 +7,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { invoke } from '../bridge';
 import { iconSvg } from './icons';
+import { bus } from './events';
 
 // ── Terminal Session ──────────────────────────────────────────
 
@@ -336,7 +337,6 @@ export class TerminalPanel {
 
   toggle(): void {
     if (this.collapsed) {
-      // Expand from collapsed state
       this.expand();
       return;
     }
@@ -370,13 +370,14 @@ export class TerminalPanel {
       }, 280);
     }
     this.renderTabs();
+    bus.emit('panel:toggle');
   }
 
   private close(): void {
     this.openState = false;
     this.collapsed = false;
     this.panel.style.transform = 'translateY(100%)';
-    // Keep sessions alive — don't dispose
+    bus.emit('panel:toggle');
   }
 
   /** Collapse to just the tab bar — processes keep running. */
@@ -404,6 +405,7 @@ export class TerminalPanel {
       }, 50);
     }
     this.renderTabs();
+    bus.emit('panel:toggle');
   }
 
   isOpen(): boolean { return this.openState && !this.collapsed; }

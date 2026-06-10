@@ -65,7 +65,7 @@ function edgeColorByType(edgeType: string, direction: string): THREE.Color {
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
   const m = mode === 'full' ? 0.7 : mode === 'minimal' ? 0.6 : 1.0;
-  switch (depth) { case 1: return 0.14 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
+  switch (depth) { case 1: return 0.04 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
 }
 
 const BG_COLOR = 0x030812;
@@ -597,7 +597,7 @@ export class StarGraph {
       '<div class="dc-name"></div><div class="dc-meta"></div><div class="dc-divider"></div>' +
       '<div class="dc-coupling"></div><div class="dc-divider"></div>' +
       '<div class="dc-location"></div>' +
-      `<div class="dc-actions"><button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button><button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button><button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button></div>`;
+      `<div class="dc-actions"><button class="dc-open-btn">${iconHtml('file', 11)} 打开</button><button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button><button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button><button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button></div>`;
     this.container.appendChild(this.detailCard);
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
@@ -607,6 +607,18 @@ export class StarGraph {
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) this.startBlastMode(this.selectedIdx);
+    });
+    this.detailCard.querySelector('.dc-open-btn')!.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      if (this.selectedIdx >= 0) {
+        const node = this.graphNodes[this.selectedIdx];
+        if (node.location) {
+          const loc = node.location;
+          const lastColon = loc.lastIndexOf(':');
+          const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
+          import('./events').then(m => m.bus.emit('navigate:file', filePath));
+        }
+      }
     });
     this.detailCard.querySelector('.dc-agent-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
@@ -674,6 +686,8 @@ export class StarGraph {
       return `<div class="dc-bar-row"><span class="dc-bar-label">${b.label}</span><span class="dc-bar-count">${b.v} 条</span><span class="dc-bar-track"><span class="dc-bar-fill ${b.cls}" style="width:${pct}%"></span></span>${warn}</div>`;
     }).join('') || '<div class="dc-empty">无耦合边</div>';
     this.detailCard.querySelector('.dc-location')!.textContent = node.location || '';
+    const openBtn = this.detailCard.querySelector('.dc-open-btn') as HTMLButtonElement;
+    if (openBtn) openBtn.style.display = node.location ? '' : 'none';
     this.positionDetailCard(idx);
     this.detailCard.classList.add('visible');
   }

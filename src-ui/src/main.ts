@@ -309,11 +309,27 @@ async function init(): Promise<void> {
   });
 
   // ── Dock tabs: sync active state ──
+  const leftTabs = document.getElementById('left-tabs')!;
   const rightTabs = document.getElementById('right-tabs')!;
   const bottomTabs = document.getElementById('bottom-tabs')!;
+  leftTabs.style.display = '';
   rightTabs.style.display = '';
   bottomTabs.style.display = '';
+  // Listen for panel close buttons (they don't go through our toggle handlers)
+  bus.on('panel:toggle', () => updateTabs());
+
   const updateTabs = () => {
+    // Hide edge tabs when their side's panel is open (avoid overlap)
+    const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
+      || checkPanel.isOpen() || TerminalPanel.get().isOpen();
+    const hideRight = chatPanel.isOpen() || ConstraintsPanel.get().isOpen();
+    leftTabs.style.display = hideLeft ? 'none' : '';
+    rightTabs.style.display = hideRight ? 'none' : '';
+    leftTabs.querySelectorAll('.dock-tab').forEach(t => {
+      const p = (t as HTMLElement).dataset['panel'];
+      const active = (p === 'explorer' && FileTreePanel.get().isOpen()) || (p === 'timeline' && timelinePanel.isOpen());
+      t.classList.toggle('active', !!active);
+    });
     rightTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
       const active = (p === 'chat' && chatPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
@@ -325,6 +341,25 @@ async function init(): Promise<void> {
       t.classList.toggle('active', !!active);
     });
   };
+
+  // ── Left dock: explorer ↔ timeline (mutual exclusion) ──
+  leftTabs.addEventListener('click', (e) => {
+    const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
+    if (!tab) return;
+    const p = tab.dataset['panel'];
+    if (p === 'explorer') {
+      if (timelinePanel.isOpen()) timelinePanel.close();
+      const ft = FileTreePanel.get();
+      if (!ft.isOpen() && currentPath) ft.load(currentPath);
+      ft.toggle();
+      btnExplorer.classList.toggle('active', ft.isOpen());
+    } else if (p === 'timeline') {
+      if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
+      if (currentPath) timelinePanel.setProjectPath(currentPath);
+      timelinePanel.toggle();
+    }
+    updateTabs();
+  });
 
   // ── Right dock: chat ↔ constraints (mutual exclusion) ──
   rightTabs.addEventListener('click', (e) => {
@@ -393,7 +428,7 @@ async function init(): Promise<void> {
         });
         const diff = JSON.parse(diffJson);
         if (diff.is_empty) {
-          statusText.textContent = '无结构变更';
+          statusText.textContent = '已创建变更基线 · 再次分析后即可比较差异';
         } else {
           starGraph.showDiff(diff);
           diffActive = true;
@@ -406,19 +441,12 @@ async function init(): Promise<void> {
     }
   });
 
-  // ── P4: Timeline button ──
+  // ── P4: Timeline button ── (mutual exclusion with file tree)
   btnTimeline.addEventListener('click', () => {
     if (currentPath) timelinePanel.setProjectPath(currentPath);
+    if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
     timelinePanel.toggle();
-    tlHandle.classList.toggle('active', timelinePanel.isOpen());
-  });
-
-  // Left-edge timeline handle
-  const tlHandle = document.getElementById('tl-handle')!;
-  tlHandle.addEventListener('click', () => {
-    if (currentPath) timelinePanel.setProjectPath(currentPath);
-    timelinePanel.toggle();
-    tlHandle.classList.toggle('active', timelinePanel.isOpen());
+    updateTabs();
   });
 
   // ── P4: Constraints button ──
@@ -461,8 +489,10 @@ async function init(): Promise<void> {
       e.preventDefault();
       const ft = FileTreePanel.get();
       if (!ft.isOpen() && currentPath) ft.load(currentPath);
+      if (!ft.isOpen() && timelinePanel.isOpen()) timelinePanel.close();
       ft.toggle();
       btnExplorer.classList.toggle('active', ft.isOpen());
+      updateTabs();
     }
   });
 
@@ -472,12 +502,14 @@ async function init(): Promise<void> {
   btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
 
-  // File explorer toggle
+  // File explorer toggle — mutual exclusion with timeline (both left-edge)
   btnExplorer.addEventListener('click', () => {
     const ft = FileTreePanel.get();
     if (!ft.isOpen() && currentPath) ft.load(currentPath);
+    if (!ft.isOpen() && timelinePanel.isOpen()) timelinePanel.close();
     ft.toggle();
     btnExplorer.classList.toggle('active', ft.isOpen());
+    updateTabs();
   });
 
   searchBtn.addEventListener('click', doSearch);
@@ -491,6 +523,8 @@ async function init(): Promise<void> {
     }
     if (e.key === 'Escape') {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
+      else if (timelinePanel.isOpen()) { timelinePanel.close(); updateTabs(); }
+      else if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); updateTabs(); }
       else if (FileViewer.get().isOpen) FileViewer.get().close();
       else starGraph.clearAgentHighlight();
     }

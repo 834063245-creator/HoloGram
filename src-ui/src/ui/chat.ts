@@ -7,6 +7,7 @@ import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { visualizeAgentTool } from './agent-visualizer';
+import { bus } from './events';
 
 // ── Constants ──
 
@@ -59,6 +60,7 @@ export class ChatPanel {
     this.openState = true;
     this.panel.classList.add('chat-open');
     setTimeout(() => this.inputArea.focus(), 200);
+    bus.emit('panel:toggle');
   }
 
   /** Programmatically ask the agent a question. Opens the panel and sends. */
@@ -75,6 +77,7 @@ export class ChatPanel {
     this.openState = false;
     this.panel.classList.remove('chat-open');
     if (this.running) this.abort();
+    bus.emit('panel:toggle');
   }
 
   isOpen(): boolean { return this.openState; }

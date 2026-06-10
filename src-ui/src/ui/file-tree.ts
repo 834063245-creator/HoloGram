@@ -53,17 +53,28 @@ export class FileTreePanel {
       color: 'var(--text-muted)',
     });
 
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = iconSvg('close', 12);
+    Object.assign(closeBtn.style, {
+      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',
+      padding: '2px', display: 'flex', marginLeft: 'auto',
+    });
+    closeBtn.title = '关闭';
+    closeBtn.addEventListener('click', () => this.close());
+
     // Refresh button
     const refreshBtn = document.createElement('button');
     refreshBtn.innerHTML = iconSvg('refresh', 12);
     Object.assign(refreshBtn.style, {
       background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',
-      padding: '2px', display: 'flex', marginLeft: 'auto',
+      padding: '2px', display: 'flex',
     });
     refreshBtn.title = '刷新';
     refreshBtn.addEventListener('click', () => this.refresh());
 
     this.headerEl.appendChild(refreshBtn);
+    this.headerEl.appendChild(closeBtn);
     this.el.appendChild(this.headerEl);
 
     // Tree container
@@ -102,12 +113,14 @@ export class FileTreePanel {
     requestAnimationFrame(() => {
       this.el.style.transform = 'translateX(0)';
     });
+    bus.emit('panel:toggle');
   }
 
   close(): void {
     this.open = false;
     this.el.style.transform = 'translateX(-100%)';
     setTimeout(() => { if (!this.open) this.el.style.display = 'none'; }, 200);
+    bus.emit('panel:toggle');
   }
 
   isOpen(): boolean { return this.open; }

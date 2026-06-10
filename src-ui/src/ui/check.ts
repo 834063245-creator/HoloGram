@@ -94,11 +94,13 @@ export class CheckPanel {
   open(): void {
     this.openState = true;
     this.panel.classList.add('check-open');
+    bus.emit('panel:toggle');
   }
 
   close(): void {
     this.openState = false;
     this.panel.classList.remove('check-open');
+    bus.emit('panel:toggle');
   }
 
   isOpen(): boolean {

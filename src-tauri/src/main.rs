@@ -242,6 +242,13 @@ async fn hologram_path(from: String, to: String) -> Result<String, String> {
 #[tauri::command]
 async fn hologram_diff(before_path: String, after_path: Option<String>) -> Result<String, String> {
     let after = after_path.unwrap_or_else(default_graph);
+    // Auto-create baseline snapshot if missing
+    if !std::path::Path::new(&before_path).exists() {
+        if let Err(e) = std::fs::copy(&after, &before_path) {
+            return Err(format!("无法创建变更基线: {}", e));
+        }
+        return Ok(r#"{"is_empty":true,"added_nodes":[],"removed_nodes":[],"modified_nodes":[]}"#.to_string());
+    }
     run_hologram(&["diff", &before_path, &after, "--json"])
 }
 

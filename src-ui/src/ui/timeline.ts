@@ -85,6 +85,14 @@ export class TimelinePanel {
     tab.appendChild(label);
     tab.appendChild(arrow);
 
+    // Close button inside tab bar (right-aligned)
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'tl-close';
+    closeBtn.innerHTML = iconHtml('close', 11);
+    closeBtn.title = '关闭';
+    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
+    tab.appendChild(closeBtn);
+
     // Content area
     this.content = document.createElement('div');
     this.content.className = 'tl-content';
@@ -138,6 +146,7 @@ export class TimelinePanel {
     } else {
       this.panel.classList.remove('tl-open');
     }
+    bus.emit('panel:toggle');
   }
 
   isOpen(): boolean { return this.openState; }
