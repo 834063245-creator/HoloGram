@@ -11,10 +11,12 @@ import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
 import { SettingsPanel } from './ui/settings-panel';
+import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
 import { ToolRegistry, createHologramTools, type ToolExecutor } from './agent/tool';
+import { MemoryManager, createMemoryTools } from './agent/memory';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
@@ -51,6 +53,7 @@ let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
 let agent: Agent | null = null;
 let diffActive = false;
+let memoryManager: MemoryManager | null = null;
 
 // ── Mode switch ──
 
@@ -111,7 +114,11 @@ async function openProject(path?: string): Promise<void> {
   const folder = path || (await pickFolder());
   if (!folder) return;
 
-  if (currentPath) { try { await invoke('stop_watching'); } catch { /* ignore */ } }
+  // Save current sessions before switching workspace
+  if (currentPath) {
+    try { await chatPanel.saveAllSessions(currentPath); } catch { /* ignore */ }
+    try { await invoke('stop_watching'); } catch { /* ignore */ }
+  }
 
   setLoading(true, folder);
   try {
@@ -120,7 +127,10 @@ async function openProject(path?: string): Promise<void> {
     currentGraphData = graph;
     starGraph.render(graph);
     showGraphView(folder);
-    setupAgent();
+    setupAgent().catch(() => {});
+    // Restore saved sessions for this project
+    chatPanel.setProjectPath(folder);
+    chatPanel.loadAllSessions(folder).catch(() => {});
     setLoading(false); // 图已就绪，不等 check
     // 文件树
     if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
@@ -157,7 +167,7 @@ function doSearch(): void {
 
 // ── Agent setup ──
 
-function setupAgent(): void {
+async function setupAgent(): Promise<void> {
   const settings = loadSettings();
   const active = getActiveProvider(settings);
 
@@ -165,6 +175,15 @@ function setupAgent(): void {
     agent = null;
     chatPanel.setAgent(null);
     return;
+  }
+
+  // ── Load memory index ──
+  let memoryIndex = '';
+  if (currentPath) {
+    memoryManager = new MemoryManager(currentPath);
+    try { memoryIndex = await memoryManager.loadIndexText(); } catch { /* ignore */ }
+  } else {
+    memoryManager = null;
   }
 
   const prov: Provider =
@@ -198,8 +217,15 @@ function setupAgent(): void {
     }
   }
 
+  // Register memory tools
+  if (memoryManager) {
+    for (const tool of createMemoryTools(memoryManager)) {
+      registry.register(tool);
+    }
+  }
+
   const pricing = defaultPricing(active.kind, active.model);
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildSystemPrompt(memoryIndex);
   const agentOpts = settings.agent || {};
   agent = new Agent(prov, registry, systemPrompt, {
     pricing,
@@ -210,7 +236,8 @@ function setupAgent(): void {
   chatPanel.setAgent(agent);
 
   // Set factory for creating new sessions
-  chatPanel.setAgentFactory(() => {
+  const mm = memoryManager; // capture for closure
+  chatPanel.setAgentFactory(async () => {
     const s = loadSettings();
     const act = getActiveProvider(s);
     if (!act.apiKey || act.apiKey.trim() === '') return null;
@@ -227,9 +254,18 @@ function setupAgent(): void {
       };
       for (const tool of createHologramTools(exec)) r.register(tool);
     }
+    // Memory tools for new sessions too
+    if (mm) {
+      for (const tool of createMemoryTools(mm)) r.register(tool);
+    }
     const pr = defaultPricing(act.kind, act.model);
     const aOpts = s.agent || {};
-    return new Agent(p, r, buildSystemPrompt(), {
+    // Reload memory index so new sessions see latest memories from other tabs
+    let memIdx = '';
+    if (mm) {
+      try { memIdx = await mm.loadIndexText(); } catch { /* ignore */ }
+    }
+    return new Agent(p, r, buildSystemPrompt(memIdx), {
       pricing: pr,
       temperature: aOpts.temperature,
       maxSteps: aOpts.maxSteps,
@@ -238,13 +274,17 @@ function setupAgent(): void {
   });
 }
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(memoryIndex = ''): string {
   if (!currentGraphData) {
-    return `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
+    let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
 身份：你是一个代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断。
 语言：始终用中文回复。代码和文件名用原样标记。
 行为：诚实——不确定的事不说。工具返回空结果不要编造。提示用户可能需要加载项目。`;
+    if (memoryIndex.trim()) {
+      prompt += `\n\n## 记忆库\n以下是跨会话保存的记忆（使用 \`hologram_memory_read 名称\` 查看完整内容，\`hologram_memory_save\` 保存新记忆）:\n\n${memoryIndex}`;
+    }
+    return prompt;
   }
   const nodes = currentGraphData.nodes
     ? Array.isArray(currentGraphData.nodes)
@@ -342,7 +382,42 @@ function buildSystemPrompt(): string {
 - 路径: \`${currentPath || '未知'}\`
 - 节点: ${nodes} 个
 - 边: ${edges} 条
-- 当前约束配置可通过 \`read_constraints\` 查看`;
+- 当前约束配置可通过 \`read_constraints\` 查看
+
+## 记忆库
+
+你拥有跨会话持久化记忆。记忆存储在项目的 \`.hologram/memory/\` 目录下，以 Markdown 文件保存，\`MEMORY.md\` 作为索引。
+
+### 记忆操作工具
+- **\`hologram_memory_list\`** — 列出所有已保存的记忆
+- **\`hologram_memory_read 名称\`** — 读取一条记忆的完整内容
+- **\`hologram_memory_save\`** — 保存新记忆或更新已有记忆
+- **\`hologram_memory_delete 名称\`** — 删除一条记忆
+
+### 何时保存记忆
+
+保守为上——大部分对话内容不需要保存。只在以下情况写入：
+
+1. **用户画像** (type: user) — 用户是谁、角色、偏好、风格要求。例如"用户是外行、不看代码、只关心会不会炸"
+2. **用户反馈** (type: feedback) — 用户明确表示"以后这样做"，附带 **Why:** 和 **How to apply:**。例如"不要用术语跟我解释，用比喻"
+3. **项目决策** (type: project) — 非代码可查的重要决策、架构演变、已完成的工作结论。附带 **Why:** 和 **How to apply:**
+4. **参考资料** (type: reference) — 外部链接、文档地址
+
+### 何时不保存
+
+- **代码库能查到的不存** — 文件路径、函数名、import 关系、配置内容这些都是代码本身记录的，不需要记忆
+- **仅限当前对话的不存** — 这一轮临时需要的上下文不需要持久化
+- **靠常识能推断的不存** — 错误信息、运行结果、单次工具输出
+
+### 操作纪律
+
+- **先查后写** — 保存前用 \`hologram_memory_list\` 检查是否已有类似记忆。已有则更新而非新建，避免重复堆积
+- **错了就改** — 发现已有记忆内容过时或错误，直接覆盖或删除，不要追加修正
+- **关联记忆** — 对有联系的记忆，在正文中引用其他记忆名（用 \`[[记忆名]]\` 格式），便于追溯
+
+${memoryIndex.trim()
+  ? `### 当前已保存的记忆\n\n${memoryIndex}`
+  : '### 当前已保存的记忆\n\n暂无。'}`;
 }
 
 // ── Check ──
@@ -441,6 +516,13 @@ async function init(): Promise<void> {
     updateTabs();
   });
 
+  // Auto-save chat sessions after each turn
+  bus.on('chat:turn-done', () => {
+    if (currentPath) {
+      chatPanel.saveAllSessions(currentPath).catch(() => {});
+    }
+  });
+
   // ── Dock tabs: sync active state ──
   const leftTabs = document.getElementById('left-tabs')!;
   const rightTabs = document.getElementById('right-tabs')!;
@@ -454,13 +536,15 @@ async function init(): Promise<void> {
   const updateTabs = () => {
     // Hide edge tabs when their side's panel is open (avoid overlap)
     const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
-      || checkPanel.isOpen() || TerminalPanel.get().isOpen();
+      || GitPanel.get().isOpen() || checkPanel.isOpen() || TerminalPanel.get().isOpen();
     const hideRight = chatPanel.isOpen() || ConstraintsPanel.get().isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
     leftTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'explorer' && FileTreePanel.get().isOpen()) || (p === 'timeline' && timelinePanel.isOpen());
+      const active = (p === 'explorer' && FileTreePanel.get().isOpen())
+        || (p === 'timeline' && timelinePanel.isOpen())
+        || (p === 'git' && GitPanel.get().isOpen());
       t.classList.toggle('active', !!active);
     });
     rightTabs.querySelectorAll('.dock-tab').forEach(t => {
@@ -480,16 +564,27 @@ async function init(): Promise<void> {
     const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
     if (!tab) return;
     const p = tab.dataset['panel'];
+    // Close all left-edge siblings
+    const closeLeftSiblings = (except: string) => {
+      if (except !== 'explorer' && FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
+      if (except !== 'timeline' && timelinePanel.isOpen()) timelinePanel.close();
+      if (except !== 'git' && GitPanel.get().isOpen()) GitPanel.get().close();
+    };
+
     if (p === 'explorer') {
-      if (timelinePanel.isOpen()) timelinePanel.close();
+      closeLeftSiblings('explorer');
       const ft = FileTreePanel.get();
       if (!ft.isOpen() && currentPath) ft.load(currentPath);
       ft.toggle();
       btnExplorer.classList.toggle('active', ft.isOpen());
     } else if (p === 'timeline') {
-      if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
+      closeLeftSiblings('timeline');
       if (currentPath) timelinePanel.setProjectPath(currentPath);
       timelinePanel.toggle();
+    } else if (p === 'git') {
+      closeLeftSiblings('git');
+      if (currentPath) GitPanel.get().load(currentPath);
+      else GitPanel.get().toggle();
     }
     updateTabs();
   });
@@ -556,8 +651,8 @@ async function init(): Promise<void> {
         const beforePath = `${currentPath}/hologram_before.json`;
         const afterPath = `${currentPath}/hologram_graph.json`;
         const diffJson = await invoke<string>('hologram_diff', {
-          beforePath,
-          afterPath,
+          before_path: beforePath,
+          after_path: afterPath,
         });
         const diff = JSON.parse(diffJson);
         if (diff.is_empty) {
@@ -574,10 +669,11 @@ async function init(): Promise<void> {
     }
   });
 
-  // ── P4: Timeline button ── (mutual exclusion with file tree)
+  // ── P4: Timeline button ── (mutual exclusion with file tree + git)
   btnTimeline.addEventListener('click', () => {
     if (currentPath) timelinePanel.setProjectPath(currentPath);
     if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
+    if (GitPanel.get().isOpen()) GitPanel.get().close();
     timelinePanel.toggle();
     updateTabs();
   });
@@ -599,11 +695,19 @@ async function init(): Promise<void> {
 
   // ── Settings button ──
   const settingsPanel = SettingsPanel.get();
-  settingsPanel.setOnSave(() => setupAgent());
+  settingsPanel.setOnSave(() => { setupAgent().catch(() => {}); });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
   btnSettings.addEventListener('click', () => {
     settingsPanel.toggle();
+  });
+
+  // Save sessions on app close
+  window.addEventListener('beforeunload', () => {
+    if (currentPath) {
+      // Synchronous save via sendBeacon-style — use invoke without awaiting
+      chatPanel.saveAllSessions(currentPath).catch(() => {});
+    }
   });
 
   // Ctrl+L → open chat
@@ -643,17 +747,20 @@ async function init(): Promise<void> {
     }
   });
 
-  setupAgent();
+  setupAgent().catch(() => {});
 
   const open = () => openProject();
   btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
 
-  // File explorer toggle — mutual exclusion with timeline (both left-edge)
+  // File explorer toggle — mutual exclusion with timeline + git (all left-edge)
   btnExplorer.addEventListener('click', () => {
     const ft = FileTreePanel.get();
     if (!ft.isOpen() && currentPath) ft.load(currentPath);
-    if (!ft.isOpen() && timelinePanel.isOpen()) timelinePanel.close();
+    if (!ft.isOpen()) {
+      if (timelinePanel.isOpen()) timelinePanel.close();
+      if (GitPanel.get().isOpen()) GitPanel.get().close();
+    }
     ft.toggle();
     btnExplorer.classList.toggle('active', ft.isOpen());
     updateTabs();
@@ -671,6 +778,7 @@ async function init(): Promise<void> {
     if (e.key === 'Escape') {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
       else if (timelinePanel.isOpen()) { timelinePanel.close(); updateTabs(); }
+      else if (GitPanel.get().isOpen()) { GitPanel.get().close(); updateTabs(); }
       else if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); updateTabs(); }
       else if (FileViewer.get().isOpen) FileViewer.get().close();
       else starGraph.clearAgentHighlight();
@@ -692,7 +800,7 @@ async function init(): Promise<void> {
         starGraph.render(graph);
         // Clear diff on update
         if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
-        setupAgent();
+        setupAgent().catch(() => {});
         runCheck();
         timelinePanel.setProjectPath(currentPath);
         statusText.textContent = `已更新 (${nodeCount} 节点)`;
@@ -711,7 +819,10 @@ async function init(): Promise<void> {
       currentGraphData = graph;
       starGraph.render(graph);
       showGraphView(root);
-      setupAgent();
+      setupAgent().catch(() => {});
+      // Restore saved sessions for the cached project
+      chatPanel.setProjectPath(root);
+      chatPanel.loadAllSessions(root).catch(() => {});
       runCheck();
       timelinePanel.setProjectPath(root || null);
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';

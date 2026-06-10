@@ -94,6 +94,8 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 | **CSS 对比度修复** | --starlight-dim 0.7→0.85, --text-muted 0.5→0.65, 45处硬编码提亮 | ✅ 2026-06-10 |
 | **原型视觉对齐** | Google Fonts (Orbitron/JetBrains/Noto SC) + 深空气氛层(全息网格/轨道环/扫描线/暗角) + 面板角括号装饰 | ✅ 2026-06-10 |
 | **Tree-sitter 多语言适配器** | 通用 TreeSitterAdapter 实现 LanguageAdapter 接口，支持 15 种语言（Python/JS/TS/Go/Rust/Java/C/C++/Ruby/C#/Kotlin/Swift/PHP/Lua/TSX），GrammarManager 自动下载编译缓存 | ✅ 2026-06-10 |
+| **Agent 会话持久化** | 对话历史自动保存到 .hologram/chat_sessions.json，重启/切换工作区后恢复 | ✅ 2026-06-10 |
+| **Git 源代码管理** | GitPanel — 变更文件列表/暂存/提交/推送/拉取/差异查看，左边缘 dock | ✅ 2026-06-10 |
 | **Agent ↔ 星图联动** | Agent 调工具后自动触发星图可视化 — path→路径高亮、fragile→脆弱节点标琥珀、cycle→循环节点标红、impact/neighbors→聚焦飞行、diff→绿增红删、blindspots→盲区标记 | ✅ 2026-06-10 |
 | **"问 Agent" 全面板覆盖** | 星图详情卡 + 简报违规行 + 文件查看器 + 文件树 + 时间轴事件 + 约束面板 — 6 个面板全部有"问 Agent"入口，点一下打开聊天窗自动发送上下文 | ✅ 2026-06-10 |
 
@@ -144,6 +146,9 @@ load_graph_json · analyze_and_load · start_watching · stop_watching
 | 折叠视图：星系叠加时加法混合过曝 | 未修复（ACES + 低 Bloom 缓解，不根治） |
 | 跨星系连线 + 能量流粒子在深色背景中不可见 | 未修复 |
 | 粒子流在 3794 条边上均布，密度被稀释 | 未修复（3794 是上次分析的边数，不同项目不同） |
+| Agent 会话重启/切换工作区后丢失 | ✅ 已修复 (2026-06-10) — 持久化到 .hologram/chat_sessions.json |
+| Agent 调 read_file_content / read_constraints 失败 | ✅ 已修复 (2026-06-10) — camelCase → snake_case 对齐 Tauri |
+| Agent 调工具时 handleToolDispatch 崩溃 | ✅ 已修复 (2026-06-10) — flushText 后 ensureAssistantBubble |
 | 应用偶发崩溃 | 未定位 |
 
 ---

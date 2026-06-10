@@ -730,6 +730,10 @@ async fn read_file_content(file_path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn write_file_content(file_path: String, content: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&file_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建目录: {}", e))?;
+    }
     std::fs::write(&file_path, &content)
         .map_err(|e| format!("无法写入文件 {}: {}", file_path, e))
 }
@@ -977,6 +981,185 @@ async fn stop_watching(
 }
 
 // ═══════════════════════════════════════════════════════
+// Git 集成 — 轻量 SCM，直接调 git CLI
+// ═══════════════════════════════════════════════════════
+
+fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(NO_WINDOW);
+    }
+    let output = cmd
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("git 命令失败: {}", e))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Parse `git status --porcelain` into structured JSON.
+fn parse_status(raw: &str) -> serde_json::Value {
+    let files: Vec<serde_json::Value> = raw
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let (st, path) = if line.len() >= 4 {
+                (&line[..2], line[3..].trim())
+            } else {
+                ("  ", line)
+            };
+            let status = match st.trim() {
+                "M" => "modified",
+                "A" => "added",
+                "D" => "deleted",
+                "R" => "renamed",
+                "C" => "copied",
+                "?" => "untracked",
+                _ if st.starts_with(' ') && st.ends_with('M') => "modified",
+                _ if st.starts_with(' ') && st.ends_with('D') => "deleted",
+                _ => "modified",
+            };
+            let staged = !st.starts_with(' ') && st != "??";
+            let is_rename = st.contains('R');
+            // For renames, the path looks like "old -> new"
+            let (display_path, old_path) = if is_rename && path.contains(" -> ") {
+                let parts: Vec<&str> = path.split(" -> ").collect();
+                (parts[1].to_string(), Some(parts[0].to_string()))
+            } else {
+                (path.to_string(), None)
+            };
+            let mut obj = serde_json::json!({
+                "path": display_path,
+                "status": status,
+                "staged": staged,
+            });
+            if let Some(old) = old_path {
+                obj["old_path"] = serde_json::json!(old);
+            }
+            obj
+        })
+        .collect();
+    serde_json::json!(files)
+}
+
+#[tauri::command]
+async fn git_status(path: String) -> Result<String, String> {
+    let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    let branch = branch.trim().to_string();
+
+    let mut ahead = 0i32;
+    let mut behind = 0i32;
+    if !branch.is_empty() {
+        // Ahead/behind vs upstream
+        if let Ok(ab) = run_git(&path, &["rev-list", "--left-right", "--count", &format!("...origin/{}", branch)]) {
+            let parts: Vec<&str> = ab.trim().split('\t').collect();
+            if parts.len() == 2 {
+                behind = parts[0].trim().parse().unwrap_or(0);
+                ahead = parts[1].trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    let porcelain = run_git(&path, &["status", "--porcelain"]).unwrap_or_default();
+    let files = parse_status(&porcelain);
+
+    let result = serde_json::json!({
+        "branch": branch,
+        "ahead": ahead,
+        "behind": behind,
+        "files": files,
+    });
+    Ok(result.to_string())
+}
+
+#[tauri::command]
+async fn git_diff_unstaged(path: String, file: String) -> Result<String, String> {
+    run_git(&path, &["diff", "--", &file])
+}
+
+#[tauri::command]
+async fn git_diff_staged(path: String, file: String) -> Result<String, String> {
+    run_git(&path, &["diff", "--cached", "--", &file])
+}
+
+#[tauri::command]
+async fn git_stage(path: String, files: Vec<String>) -> Result<String, String> {
+    let mut args = vec!["add", "--"];
+    let strs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+    args.extend(&strs);
+    run_git(&path, &args)?;
+    Ok("ok".into())
+}
+
+#[tauri::command]
+async fn git_unstage(path: String, files: Vec<String>) -> Result<String, String> {
+    let mut args = vec!["reset", "HEAD", "--"];
+    let strs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+    args.extend(&strs);
+    run_git(&path, &args)?;
+    Ok("ok".into())
+}
+
+#[tauri::command]
+async fn git_stage_all(path: String) -> Result<String, String> {
+    run_git(&path, &["add", "-A"])?;
+    Ok("ok".into())
+}
+
+#[tauri::command]
+async fn git_commit(path: String, message: String) -> Result<String, String> {
+    run_git(&path, &["commit", "-m", &message]).map(|s| s.trim().to_string())
+}
+
+#[tauri::command]
+async fn git_push(path: String) -> Result<String, String> {
+    run_git(&path, &["push"]).map(|s| s.trim().to_string())
+}
+
+#[tauri::command]
+async fn git_pull(path: String) -> Result<String, String> {
+    run_git(&path, &["pull", "--ff-only"]).map(|s| s.trim().to_string())
+}
+
+#[tauri::command]
+async fn git_log(path: String, limit: Option<i32>) -> Result<String, String> {
+    let n = limit.unwrap_or(20);
+    let raw = run_git(
+        &path,
+        &["log", &format!("-{}", n), "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ai"],
+    )?;
+    let commits: Vec<serde_json::Value> = raw
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\x00').collect();
+            if parts.len() >= 5 {
+                Some(serde_json::json!({
+                    "hash": parts[0],
+                    "short": parts[1],
+                    "message": parts[2],
+                    "author": parts[3],
+                    "date": parts[4],
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(serde_json::json!(commits).to_string())
+}
+
+#[tauri::command]
+async fn git_init(path: String) -> Result<String, String> {
+    run_git(&path, &["init"]).map(|s| s.trim().to_string())
+}
+
+// ═══════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════
 
@@ -1020,6 +1203,18 @@ fn main() {
             read_constraints,
             write_constraints,
             exec_command,
+            // Git commands
+            git_status,
+            git_diff_unstaged,
+            git_diff_staged,
+            git_stage,
+            git_unstage,
+            git_stage_all,
+            git_commit,
+            git_push,
+            git_pull,
+            git_log,
+            git_init,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");

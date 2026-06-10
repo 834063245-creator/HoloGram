@@ -211,6 +211,20 @@ const icons: Record<string, IconDef> = {
     label: '复制',
     path: '<rect x="5" y="5" width="8" height="10" rx="1"/><polyline points="9,3 13,3 13,12 11,12"/>',
   },
+
+  // ── Git SCM ──
+  'git-branch': {
+    label: '分支',
+    path: '<circle cx="9" cy="4" r="2.5"/><line x1="9" y1="6.5" x2="9" y2="13"/><path d="M9 10 L13 14 L13 16 M13 12 L13 16"/>',
+  },
+  upload: {
+    label: '推送',
+    path: '<line x1="9" y1="3" x2="9" y2="11"/><polyline points="5,6 9,2 13,6"/><line x1="3" y1="15" x2="15" y2="15"/>',
+  },
+  download: {
+    label: '拉取',
+    path: '<line x1="9" y1="13" x2="9" y2="5"/><polyline points="5,10 9,14 13,10"/><line x1="3" y1="3" x2="15" y2="3"/>',
+  },
   regenerate: {
     label: '重新生成',
     path: '<path d="M4 4 A6 6 0 0 1 13 2"/><polyline points="4,4 7.5,4 7.5,1"/><circle cx="13" cy="12" r="4"/><polyline points="10.5,12 12.5,10 14.5,12"/>',

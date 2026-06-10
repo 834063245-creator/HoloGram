@@ -9,6 +9,8 @@ import { iconHtml } from './icons';
 import { visualizeAgentTool } from './agent-visualizer';
 import { bus } from './events';
 import { loadSettings } from '../settings';
+import { invoke } from '../bridge';
+import type { Message } from '../provider/types';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
 
@@ -45,7 +47,7 @@ export class ChatPanel {
   // Session state
   private sessions: ChatSession[] = [];
   private activeIdx = -1;
-  private agentFactory: (() => Agent | null) | null = null;
+  private agentFactory: (() => Promise<Agent | null>) | null = null;
 
   // Streaming state
   private starGraph: StarGraph | null = null;
@@ -64,10 +66,11 @@ export class ChatPanel {
 
   private openState = false;
   private lastUsageText = '';
+  private projectPath = '';
   private onOpenSettings: (() => void) | null = null;
 
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
-  setAgentFactory(fn: () => Agent | null): void { this.agentFactory = fn; }
+  setAgentFactory(fn: () => Promise<Agent | null>): void { this.agentFactory = fn; }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -95,6 +98,7 @@ export class ChatPanel {
 
   getAgent(): Agent | null { return this.agent; }
   setStarGraph(g: StarGraph): void { this.starGraph = g; }
+  setProjectPath(p: string): void { this.projectPath = p; }
 
   toggle(): void { this.openState ? this.close() : this.open(); }
 
@@ -193,12 +197,12 @@ export class ChatPanel {
     this.updateFooter();
   }
 
-  private createNewSession(): void {
+  private async createNewSession(): Promise<void> {
     if (!this.agentFactory) {
       this.addNotice('请先配置 API Key（设置 → Provider）', 'info');
       return;
     }
-    const newAgent = this.agentFactory();
+    const newAgent = await this.agentFactory();
     if (!newAgent) {
       this.addNotice('无法创建会话: Agent 工厂返回空', 'error');
       return;
@@ -253,6 +257,86 @@ export class ChatPanel {
       });
     });
     this.scrollBottom();
+  }
+
+  // ── Session persistence ──
+
+  /** Save all sessions to project's .hologram/chat_sessions.json */
+  async saveAllSessions(projectPath: string): Promise<void> {
+    if (!projectPath || this.sessions.length === 0) return;
+    const data = {
+      version: 1,
+      sessions: this.sessions.map((s) => ({
+        id: s.id,
+        label: s.label,
+        messages: s.agent.getSession(),
+      })),
+      activeIdx: this.activeIdx,
+      nextId: nextSessionId,
+    };
+    const json = JSON.stringify(data);
+    try {
+      await invoke('write_file_content', {
+        file_path: `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`,
+        content: json,
+      });
+    } catch (e) {
+      console.error('[chat] 保存会话失败:', e);
+    }
+  }
+
+  /** Load sessions from project's .hologram/chat_sessions.json */
+  async loadAllSessions(projectPath: string): Promise<void> {
+    if (!this.agentFactory || !projectPath) return;
+
+    let json: string;
+    try {
+      json = await invoke<string>('read_file_content', {
+        file_path: `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`,
+      });
+    } catch {
+      return; // No saved sessions, first time
+    }
+
+    let data: any;
+    try { data = JSON.parse(json); } catch { return; }
+    if (!data.sessions || data.sessions.length === 0) return;
+
+    // Rebuild sessions
+    const restored: ChatSession[] = [];
+    for (const saved of data.sessions) {
+      const agent = await this.agentFactory();
+      if (!agent) continue;
+      // Keep fresh system prompt, restore conversation
+      const freshSystem = agent.getSession().filter((m) => m.role === 'system');
+      const savedConv = (saved.messages as Message[]).filter((m) => m.role !== 'system');
+      agent.setSession([...freshSystem, ...savedConv]);
+
+      restored.push({
+        id: saved.id,
+        label: saved.label || `会话 ${restored.length + 1}`,
+        agent,
+      });
+    }
+    if (restored.length === 0) return;
+
+    // Save current messages before replacing
+    if (this.activeIdx >= 0) this.saveCurrentMessages();
+    this.flushReasoning();
+    this.flushText();
+    this.pendingToolCards.clear();
+
+    this.sessions = restored;
+    nextSessionId = Math.max(nextSessionId, data.nextId || 0);
+    this.activeIdx = Math.min(
+      Math.max(0, data.activeIdx ?? 0),
+      restored.length - 1,
+    );
+    this.renderSessionTabs();
+    this.msgList.innerHTML = '';
+    this.lastUsageText = '';
+    this.updateFooter();
+    this.addNotice(`已恢复 ${restored.length} 个会话`, 'info');
   }
 
   // ── Build DOM ──
@@ -374,22 +458,18 @@ export class ChatPanel {
       e.preventDefault();
     });
 
-    const onMove = (e: MouseEvent) => {
+    document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
       const w = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + (startX - e.clientX)));
       this.panel.style.width = w + 'px';
-    };
+    });
 
-    const onUp = () => {
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
       dragging = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    });
   }
 
   // ── Send ──
@@ -406,12 +486,65 @@ export class ChatPanel {
     this.updateFooter();
   }
 
+  /** Send a hidden instruction to the agent (no user bubble shown). For slash commands. */
+  private sendAgentText(text: string): void {
+    if (!this.agent || this.running) return;
+    this.setRunning(true);
+
+    const hint = this.msgList.querySelector('.chat-hint');
+    if (hint) hint.remove();
+
+    this.addTurnSep();
+    this.scrollBottom();
+
+    this.abortCtrl = new AbortController();
+    this.agent.run(this.abortCtrl.signal, text).then(() => {
+      // Success
+    }).catch((err: any) => {
+      if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
+        this.addNotice('已中止', 'info');
+      } else if (err.message?.includes('paused after')) {
+        this.addNotice(err.message, 'warn');
+      } else {
+        this.addNotice(`错误: ${err.message || err}`, 'error');
+      }
+    }).finally(() => {
+      this.setRunning(false);
+      this.abortCtrl = null;
+      this.finishTurn();
+    });
+    bus.emit('chat:turn-done', {});
+  }
+
   private async sendMessage(): Promise<void> {
     const text = this.inputArea.value.trim();
     if (!text || this.running) return;
 
     if (!this.agent) {
       this.addNotice('Agent 未就绪 — 请先配置 API Key 或等待项目加载', 'error');
+      return;
+    }
+
+    // Redirect slash commands to sendAgentText
+    if (text === '/memory') {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.sendAgentText('列出所有已保存的记忆（使用 hologram_memory_list）');
+      return;
+    }
+    if (text.startsWith('/remember ')) {
+      const fact = text.slice('/remember '.length).trim();
+      if (!fact) {
+        this.addNotice('用法: /remember 要记住的内容', 'info');
+        this.inputArea.value = '';
+        this.inputArea.style.height = 'auto';
+        return;
+      }
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.sendAgentText(
+        `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
+      );
       return;
     }
 
@@ -495,6 +628,8 @@ export class ChatPanel {
       this.abortCtrl = null;
       this.finishTurn();
     }
+    // Signal main.ts to persist sessions
+    bus.emit('chat:turn-done', {});
   }
 
   private abort(): void {
@@ -688,9 +823,9 @@ export class ChatPanel {
       return;
     }
 
-    this.ensureAssistantBubble();
     this.flushReasoning();
     this.flushText();
+    this.ensureAssistantBubble();
 
     const card = document.createElement('div');
     card.className = 'msg-tool-card';
@@ -835,6 +970,8 @@ export class ChatPanel {
         <div class="sp-group-title">操作</div>
         <button class="sp-item" data-cmd="new">${iconHtml('refresh', 10)} 重置当前会话<span class="sp-key">/new</span></button>
         <button class="sp-item" data-cmd="compact">${iconHtml('save', 10)} 压缩上下文<span class="sp-key">/compact</span></button>
+        <button class="sp-item" data-cmd="memory">${iconHtml('bookmark', 10)} 查看记忆<span class="sp-key">/memory</span></button>
+        <button class="sp-item" data-cmd="remember">${iconHtml('save', 10)} 记住一件事<span class="sp-key">/remember</span></button>
       </div>
       <div class="sp-group">
         <div class="sp-group-title">查询</div>
@@ -878,6 +1015,16 @@ export class ChatPanel {
         if (cmd === 'compact') {
           this.inputArea.value = '/compact';
           this.sendMessage();
+          return;
+        }
+        if (cmd === 'memory') {
+          this.inputArea.value = '/memory';
+          this.sendMessage();
+          return;
+        }
+        if (cmd === 'remember') {
+          this.inputArea.value = '/remember ';
+          this.inputArea.focus();
           return;
         }
         // Query commands — fill input text

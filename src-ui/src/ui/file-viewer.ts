@@ -327,7 +327,7 @@ export class FileViewer {
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
 
     try {
-      const content = await invoke<string>('read_file_content', { filePath });
+      const content = await invoke<string>('read_file_content', { file_path: filePath });
 
       // Dispose temp loading model
       loadingModel.dispose();
@@ -377,7 +377,7 @@ export class FileViewer {
 
     const content = tab.model.getValue();
     try {
-      await invoke('write_file_content', { filePath: tab.filePath, content });
+      await invoke('write_file_content', { file_path: tab.filePath, content });
       tab.originalContent = content;
       tab.dirty = false;
       tab.error = '';
@@ -385,6 +385,32 @@ export class FileViewer {
     } catch (err: any) {
       alert(`保存失败: ${err}`);
     }
+  }
+
+  /** Open a read-only diff view — used by GitPanel. */
+  openDiff(fileName: string, diffContent: string): void {
+    const label = `差异: ${fileName.replace(/\\/g, '/').split('/').pop() || fileName}`;
+    const uri = monaco.Uri.parse(`diff:///${label}`);
+    const model = monaco.editor.createModel(diffContent, 'diff', uri);
+
+    const tab: TabData = {
+      filePath: `[diff] ${fileName}`,
+      fileName: label,
+      model,
+      dirty: false,
+      originalContent: diffContent,
+      loading: false,
+      error: '',
+    };
+    this.tabs.push(tab);
+    this.activeIdx = this.tabs.length - 1;
+    this.editor.setModel(model);
+    this.renderTabs();
+    this.el.style.display = 'flex';
+    this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
+    this.centerOnScreen();
+    this.editor.layout();
+    this.editor.focus();
   }
 
   closeAll(): void {

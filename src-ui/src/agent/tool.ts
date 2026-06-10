@@ -339,12 +339,12 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          filePath: {
+          file_path: {
             type: 'string',
             description: 'Absolute path to the file to read',
           },
         },
-        required: ['filePath'],
+        required: ['file_path'],
       }),
       readOnly: () => true,
       execute: (args) => exec('read_file_content', args),
@@ -356,12 +356,12 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          projectPath: {
+          project_path: {
             type: 'string',
             description: 'Project root directory path',
           },
         },
-        required: ['projectPath'],
+        required: ['project_path'],
       }),
       readOnly: () => true,
       execute: (args) => exec('read_constraints', args),
