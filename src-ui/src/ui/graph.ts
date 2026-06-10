@@ -1100,6 +1100,11 @@ export class StarGraph {
         this.mode === 'full' ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff)
       );
     }
+    // Restore edge opacities
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity =
+        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
+    }
     const st = document.getElementById('status-text');
     if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
   }
@@ -1557,6 +1562,10 @@ export class StarGraph {
   enterGalaxy(galaxyId: string): void {
     if (!this.foldMode || this.enteredGalaxyId === galaxyId) return;
     this.enteredGalaxyId = galaxyId;
+    // Dismiss galaxy hover tooltip and cursor
+    this.tooltipEl.classList.remove('visible');
+    this.hoveredGalaxyIdx = -1;
+    this.container.style.cursor = '';
     // Clear fold group (clouds), re-apply for constellation view
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     this.galaxyClouds = []; this.galaxyGlows = [];
@@ -1640,6 +1649,8 @@ export class StarGraph {
     if (!this.foldMode || !this.enteredGalaxyId) return;
     this.enteredGalaxyId = null;
     this.hideGalaxyTitle();
+    this.tooltipEl.classList.remove('visible');
+    this.hoveredGalaxyIdx = -1;
     // Restore free controls
     this.controls.enablePan = true;
     this.controls.minDistance = 15;
@@ -2104,6 +2115,7 @@ export class StarGraph {
         geo.setAttribute('color', new THREE.Float32BufferAttribute(cl, 3));
         const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: edgeOpacityByDepth(g.depth, this.mode), depthWrite: false, blending: g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending });
         const lines = new THREE.LineSegments(geo, mat);
+        lines.userData['edgeDepth'] = g.depth;
         this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
       }
     }
