@@ -1,7 +1,7 @@
 # 星图规模化升级 SPEC
 
 **日期**: 2026-06-11  
-**状态**: 就绪  
+**状态**: A1 完成 · A2 待开工  
 **目标**: 从"小项目 5K 节点凑合看"升级到"大型项目可分析、监控场景可驾驭"
 
 ---
@@ -123,6 +123,15 @@ nodeMesh.instanceMatrix.needsUpdate = true;
 **风险**: 低。InstancedMesh 是 Three.js 最成熟的优化 API。  
 **回退**: 保留 `buildNodesLegacy()` 通过 URL param `?instanced=0` 切换。  
 **成功标准**: 5000 节点场景 draw calls 从 ~10000 降到 <10，帧率 60 FPS。
+
+**实施记录 (2026-06-11)**:
+- `graph.ts` ~30 处修改: `nodeCores: Mesh[]` → `nodeCoresIM: InstancedMesh` + `_coreScale`/`_coreBaseScale` CPU 缓冲
+- 全部交互路径适配: hover/click/file highlight/agent highlight/blast/path/diff/fold/constellation/focus
+- 辅助方法: `_setCoreScale()` / `_writeCoreMatrix()` / `_flushCores()` 批量 GPU 同步
+- Glow Sprites 未动 — 延后到阶段 D
+- hover 修正: full mode `base*0.4` 一致性 + 放大系数 `1.2→0.7`
+- 构建: tsc 零错误 / Rust release 编译通过
+- 提交: `63625ec`
 
 ---
 
