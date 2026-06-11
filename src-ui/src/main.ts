@@ -23,6 +23,7 @@ import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { iconSvg } from './ui/icons';
 import { visualizeAgentTool } from './ui/agent-visualizer';
+import { dbg } from './ui/debug';
 
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
@@ -127,11 +128,12 @@ async function openProject(path?: string): Promise<void> {
     currentGraphData = graph;
     starGraph.render(graph);
     showGraphView(folder);
-    setupAgent().catch(() => {});
-    // Restore saved sessions for this project
+    setLoading(false); // 图已就绪，不等 Agent
+    // Agent 初始化（异步，不阻塞图的显示）
+    try { await setupAgent(); } catch (e) { console.error('[openProject] setupAgent failed:', e); }
+    // Restore saved sessions for this project (must be AFTER setupAgent sets agentFactory)
     chatPanel.setProjectPath(folder);
     chatPanel.loadAllSessions(folder).catch(() => {});
-    setLoading(false); // 图已就绪，不等 check
     // 文件树
     if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
     // 后台异步跑 check + watcher
@@ -501,17 +503,21 @@ async function init(): Promise<void> {
 
   // File tree → star graph highlight
   bus.on('highlight:file', (filePath: string) => {
+    dbg('main.highlight:file', filePath);
     starGraph.highlightFile(filePath);
   });
   bus.on('highlight:folder', (folderPath: string) => {
+    dbg('main.highlight:folder', folderPath);
     starGraph.highlightFolder(folderPath);
   });
   bus.on('highlight:clear', () => {
+    dbg('main.highlight:clear');
     starGraph.clearFileHighlight();
   });
 
   // "Send to Agent" from detail card (P4: 发送给 Agent)
   bus.on('agent:query', (question: string) => {
+    dbg('main.agent:query', question);
     if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
     chatPanel.ask(question);
     updateTabs();
@@ -523,6 +529,23 @@ async function init(): Promise<void> {
       chatPanel.saveAllSessions(currentPath).catch(() => {});
     }
   });
+
+  // ── graph→file tree reverse linking: click node in star graph → expand file tree ──
+  window.addEventListener('graph:node-selected', ((e: CustomEvent) => {
+    const filePath = e.detail as string;
+    if (!filePath) return;
+    dbg('main.graph:node-selected', filePath);
+    const ft = FileTreePanel.get();
+    if (!ft.isOpen()) {
+      ft.show();
+      btnExplorer.classList.add('active');
+      if (currentPath) ft.load(currentPath);
+      // Wait for tree to load, then highlight
+      setTimeout(() => ft.highlightPath(filePath), 300);
+    } else {
+      ft.highlightPath(filePath);
+    }
+  }) as EventListener);
 
   // ── Dock tabs: sync active state ──
   const leftTabs = document.getElementById('left-tabs')!;
@@ -536,8 +559,9 @@ async function init(): Promise<void> {
 
   const updateTabs = () => {
     // Hide edge tabs when their side's panel is open (avoid overlap)
+    // Left-edge panels: file tree, timeline, git only (NOT check/terminal — those are bottom)
     const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
-      || GitPanel.get().isOpen() || checkPanel.isOpen() || TerminalPanel.get().isOpen();
+      || GitPanel.get().isOpen();
     const hideRight = chatPanel.isOpen() || ConstraintsPanel.get().isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
@@ -828,8 +852,10 @@ async function init(): Promise<void> {
       currentGraphData = graph;
       starGraph.render(graph);
       showGraphView(root);
-      setupAgent().catch(() => {});
-      // Restore saved sessions for the cached project
+      setLoading(false);
+      // Agent 初始化（异步，不阻塞图的显示）
+      try { await setupAgent(); } catch (e) { console.error('[init] setupAgent failed:', e); }
+      // Restore saved sessions for the cached project (must be AFTER setupAgent sets agentFactory)
       chatPanel.setProjectPath(root);
       chatPanel.loadAllSessions(root).catch(() => {});
       runCheck();

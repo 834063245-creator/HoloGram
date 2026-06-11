@@ -9,6 +9,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { iconHtml } from './icons';
+import { dbg } from './debug';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -137,21 +138,17 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   if (n === 0) return new Float32Array(0);
   const shellRadius = Math.cbrt(n) * 14, pos = fibonacciSphere(n, shellRadius);
   const vel = new Float32Array(n * 3);
-  const rep = 600, att = 0.018, damp = 0.72, sp = 0.006;
-  const maxIter = Math.min(70, 20 + Math.floor(n / 4));
+  const deg = new Uint16Array(n);
+  for (const [s, t] of edgePairs) { deg[s]++; deg[t]++; }
+
+  const att = 0.02, damp = 0.72, sp = 0.008;
+  const maxIter = Math.min(60, 25 + Math.floor(n / 5));
   for (let iter = 0; iter < maxIter; iter++) {
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
-        const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
-        const f = rep / (dist * dist + 1);
-        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
-        vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
-      }
-    }
+    // Edge springs only — no repulsion, zero divergence risk
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
-      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz)), f = dist * att;
+      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      const f = dist * att / Math.sqrt((1 + deg[s]) * (1 + deg[t]));
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
     }
@@ -244,8 +241,11 @@ private selectedIdx = -1;
   // File highlight (from file tree)
   private _fileHighlight = false;
   private _fileHighlightIndices = new Set<number>();
-  private _fileOpacityOriginal = new Map<number, number>();
+  // Store both glow opacity AND core opacity for proper restore
+  private _fileOpacityOriginal = new Map<number, [number, number]>();
   private _agentHighlightIndices = new Set<number>();
+  // Project source root (for normalizing file paths)
+  private _graphRoot = '';
 
   // Blast
   private blastMode = false;
@@ -305,8 +305,8 @@ private selectedIdx = -1;
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.06;
-    this.controls.minDistance = 15;
-    this.controls.maxDistance = 4000;
+    this.controls.minDistance = 5;
+    this.controls.maxDistance = 20000;
 
     this.glowTex = mode === 'full' ? createSpikeTexture() : createGlowTexture();
     this.sphereGeo = new THREE.SphereGeometry(1, 24, 16);
@@ -657,6 +657,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const filePath = node.location.indexOf(':') >= 0
         ? node.location.substring(0, node.location.lastIndexOf(':'))
         : node.location;
+      dbg('StarGraph.showDetail', `emitting graph:node-selected filePath="${filePath}"`);
       window.dispatchEvent(new CustomEvent('graph:node-selected', { detail: filePath }));
     }
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
@@ -1029,11 +1030,16 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   focusNode(query: string): boolean {
     const q = query.trim().toLowerCase();
+    dbg('StarGraph.focusNode', `query="${q}" total=${this.graphNodes.length}`);
     if (!q || this.graphNodes.length === 0) return false;
     let idx = this.graphNodes.findIndex(n => n.name.toLowerCase() === q);
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
-    if (idx < 0) return false;
+    if (idx < 0) {
+      dbg('StarGraph.focusNode', `"${q}" NOT FOUND`);
+      return false;
+    }
+    dbg('StarGraph.focusNode', `found at idx=${idx} name="${this.graphNodes[idx].name}"`);
     // If fold mode is on, enter that galaxy instead of flying to node
     if (this.foldMode) {
       const cid = this.nodeCommMap.get(idx);
@@ -1052,15 +1058,29 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (this._fileHighlight) this.clearFileHighlight();
 
     const normalized = filePath.replace(/\\/g, '/');
+    dbg('StarGraph.highlightFile', `input="${normalized}" root="${this._graphRoot}"`);
+
+    // Build a set of possible path forms to try:
+    // 1. As-is (absolute or relative)
+    // 2. Strip root prefix (absolute → relative)
+    // 3. Strip leading drive letter (C:/path → /path for Windows)
+    const tryPaths = [normalized];
+    if (this._graphRoot && normalized.toLowerCase().startsWith(this._graphRoot.toLowerCase())) {
+      tryPaths.push(normalized.substring(this._graphRoot.length).replace(/^\//, ''));
+    }
+    // Also try just the filename (last segment) as a fallback
+    const baseName = normalized.split('/').pop() || '';
 
     for (let i = 0; i < this.graphNodes.length; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
       const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
-      if (f === normalized) {
+      if (tryPaths.some(p => f === p || f.endsWith('/' + p) || p.endsWith('/' + f))
+          || (baseName && f.endsWith('/' + baseName))) {
         this._fileHighlightIndices.add(i);
       }
     }
 
+    dbg('StarGraph.highlightFile', `found ${this._fileHighlightIndices.size} nodes`);
     if (this._fileHighlightIndices.size === 0) return;
 
     this._fileHighlight = true;
@@ -1074,17 +1094,26 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     const normalized = folderPath.replace(/\\/g, '/');
     const prefix = normalized.endsWith('/') ? normalized : normalized + '/';
+    dbg('StarGraph.highlightFolder', `prefix="${prefix}" root="${this._graphRoot}"`);
     this._fileHighlightIndices.clear();
     this._fileOpacityOriginal.clear();
+
+    // Build try prefixes: as-is + stripped root
+    const tryPrefixes = [prefix];
+    if (this._graphRoot && normalized.toLowerCase().startsWith(this._graphRoot.toLowerCase())) {
+      const relPrefix = normalized.substring(this._graphRoot.length).replace(/^\//, '');
+      tryPrefixes.push(relPrefix.endsWith('/') ? relPrefix : relPrefix + '/');
+    }
 
     for (let i = 0; i < this.graphNodes.length; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
       const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
-      if (f.startsWith(prefix)) {
+      if (tryPrefixes.some(p => f.startsWith(p))) {
         this._fileHighlightIndices.add(i);
       }
     }
 
+    dbg('StarGraph.highlightFolder', `found ${this._fileHighlightIndices.size} nodes`);
     if (this._fileHighlightIndices.size === 0) return;
 
     this._fileHighlight = true;
@@ -1092,6 +1121,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
   }
 
   clearFileHighlight(): void {
+    dbg('StarGraph.clearFileHighlight', `indices=${this._fileHighlightIndices.size} opacityBackup=${this._fileOpacityOriginal.size}`);
     this._fileHighlight = false;
     this._fileHighlightIndices.clear();
     this._applyFileHighlight();
@@ -1217,16 +1247,39 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     // Nodes: dim non-highlighted
     for (let i = 0; i < this.nodeGlows.length; i++) {
+      // Skip nodes already modified by agent highlight — don't touch them
+      if (this._agentHighlightIndices.size > 0 && this._agentHighlightIndices.has(i)) continue;
+
       const visible = !hl || idxs.has(i);
-      if (hl && !visible && this.nodeGlows[i].visible) {
-        this._fileOpacityOriginal.set(i, (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.03;
-        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = 0.03;
+      const glowMat = this.nodeGlows[i]?.material as THREE.SpriteMaterial;
+      const coreMat = this.nodeCores[i]?.material as THREE.MeshBasicMaterial;
+      if (!glowMat) continue;
+
+      if (hl && !visible) {
+        // Save both glow and core opacity before dimming
+        if (!this._fileOpacityOriginal.has(i)) {
+          const coreOpacity = coreMat?.opacity ?? 0.55;
+          this._fileOpacityOriginal.set(i, [glowMat.opacity, coreOpacity]);
+        }
+        glowMat.opacity = 0.03;
+        if (coreMat) coreMat.opacity = 0.03;
       } else if (!hl && this._fileOpacityOriginal.has(i)) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)!;
-        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)! * 0.6;
+        const [glowOp, coreOp] = this._fileOpacityOriginal.get(i)!;
+        glowMat.opacity = glowOp;
+        if (coreMat) coreMat.opacity = coreOp;
         this._fileOpacityOriginal.delete(i);
       }
+    }
+
+    // Also restore any nodes that were missed (only when clearing)
+    if (!hl) {
+      for (const [i, [glowOp, coreOp]] of this._fileOpacityOriginal) {
+        if (this.nodeGlows[i]) {
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = glowOp;
+          if (this.nodeCores[i]) (this.nodeCores[i].material as THREE.MeshBasicMaterial).opacity = coreOp;
+        }
+      }
+      this._fileOpacityOriginal.clear();
     }
 
     // Edges: dim all when highlighting
@@ -1563,8 +1616,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.hoveredGalaxyIdx = -1;
     // Restore free controls
     this.controls.enablePan = true;
-    this.controls.minDistance = 15;
-    this.controls.maxDistance = 4000;
+    this.controls.minDistance = 5;
+    this.controls.maxDistance = 20000;
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     // Re-hide all nodes
     for (let i = 0; i < this.graphNodes.length; i++) {
@@ -1627,7 +1680,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
         size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.55,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.35,
       })));
       // ── Sparse outer halo particles with spiral arm structure ──
       const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
@@ -1670,7 +1723,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
         size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.40,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.28,
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
       // Tag halo particles with galaxy index for potential future use
@@ -1678,7 +1731,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       // ── Soft ambient glow sprite (ACES tone mapping prevents washout) ──
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.20,
+        depthWrite: false, transparent: true, opacity: 0.12,
       }));
       glow.position.copy(gm.centroid);
       glow.scale.setScalar(r * 4.5);
@@ -1687,7 +1740,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       // ── Bright central core (additive — the focal point of each galaxy) ──
       const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.75,
+        depthWrite: false, transparent: true, opacity: 0.45,
       }));
       coreSprite.position.copy(gm.centroid);
       coreSprite.scale.setScalar(r * 0.7);
@@ -1737,15 +1790,24 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         gs ? gs.centroid.x : pos[d.s * 3], gs ? gs.centroid.y : pos[d.s * 3 + 1], gs ? gs.centroid.z : pos[d.s * 3 + 2],
         gt ? gt.centroid.x : pos[d.t * 3], gt ? gt.centroid.y : pos[d.t * 3 + 1], gt ? gt.centroid.z : pos[d.t * 3 + 2]);
       const c = edgeColorByType(d.edgeType, d.direction);
-      colors.push(c.r * 1.6, c.g * 1.6, c.b * 1.6, c.r * 1.6, c.g * 1.6, c.b * 1.6);
+      // Brighter color multiplier for visibility on dark background
+      colors.push(c.r * 2.2, c.g * 2.2, c.b * 2.2, c.r * 2.2, c.g * 2.2, c.b * 2.2);
     }
     if (verts.length === 0) return;
+    // Glow layer: slightly wider, additive-blended glow behind the solid line
+    const glowGeo = new THREE.BufferGeometry();
+    glowGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts.slice(), 3));
+    this.commFoldGroup.add(new THREE.LineSegments(glowGeo, new THREE.LineBasicMaterial({
+      color: 0x335577, transparent: true, opacity: 0.20, linewidth: 1,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })));
+    // Solid line: normal blending for visible definition
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.38,
-      depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexColors: true, transparent: true, opacity: 0.55,
+      depthWrite: false, blending: THREE.NormalBlending,
     })));
   }
 
@@ -1775,8 +1837,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       });
     }
     if (this.crossFlowSegments.length === 0) return;
-    // Create flow particles — 5 per segment for density
-    const totalParticles = this.crossFlowSegments.length * 5;
+    // Create flow particles — 15 per segment for visible density
+    const totalParticles = this.crossFlowSegments.length * 15;
     const pArr = new Float32Array(totalParticles * 3);
     const cArr = new Float32Array(totalParticles * 3);
     this.crossFlowData = [];
@@ -1787,23 +1849,23 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
       pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
       pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
-      // Mix of cyan, gold, and warm white for visual variety
-      const colorChoice = Math.random();
-      if (colorChoice < 0.4) {
-        cArr[i * 3] = 0.4; cArr[i * 3 + 1] = 0.9; cArr[i * 3 + 2] = 1.0; // cyan
-      } else if (colorChoice < 0.8) {
-        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.8; cArr[i * 3 + 2] = 0.3; // gold
+      // Mix of cyan, gold, and warm white with slight hue jitter for visual variety
+      const colorChoice = Math.random() + (i % 3) * 0.1;
+      if (colorChoice < 0.45) {
+        cArr[i * 3] = 0.3 + Math.random() * 0.2; cArr[i * 3 + 1] = 0.8 + Math.random() * 0.2; cArr[i * 3 + 2] = 0.9 + Math.random() * 0.1; // cyan range
+      } else if (colorChoice < 0.85) {
+        cArr[i * 3] = 0.9 + Math.random() * 0.1; cArr[i * 3 + 1] = 0.7 + Math.random() * 0.2; cArr[i * 3 + 2] = 0.2 + Math.random() * 0.2; // gold range
       } else {
-        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.95; cArr[i * 3 + 2] = 0.85; // warm white
+        cArr[i * 3] = 0.9 + Math.random() * 0.1; cArr[i * 3 + 1] = 0.85 + Math.random() * 0.15; cArr[i * 3 + 2] = 0.7 + Math.random() * 0.25; // warm white range
       }
-      this.crossFlowData.push({ segIdx, t, speed: 0.004 + Math.random() * 0.012 });
+      this.crossFlowData.push({ segIdx, t, speed: 0.003 + Math.random() * 0.008 });
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
     const mat = new THREE.PointsMaterial({
-      size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.9,
+      size: 6.0, map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 1.0,
     });
     this.crossFlowParticles = new THREE.Points(geo, mat);
     this.commFoldGroup.add(this.crossFlowParticles);
@@ -1880,8 +1942,13 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   render(graph: GraphJSON): void {
     this.clearGraph();
+    // Store project root for path normalization
+    this._graphRoot = ((graph.meta?.source_root || graph.meta?.root || '') as string).replace(/\\/g, '/');
+    if (this._graphRoot && !this._graphRoot.endsWith('/')) this._graphRoot += '/';
+    dbg('StarGraph.render', `root="${this._graphRoot}"`);
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
+    console.log(`[StarGraph.render] nodes=${nodes.length} edges=${edges.length} graphRoot="${this._graphRoot}"`);
     if (nodes.length === 0) { this.updateStatus(0, 0); return; }
     this.graphNodes = nodes;
 
@@ -1947,7 +2014,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     let maxR = 50;
     for (let i = 0; i < nodes.length; i++) maxR = Math.max(maxR, Math.sqrt(rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2));
-    const camDist = maxR * 2.6;
+    const camDist = maxR * 1.6;
     this.camera.position.set(camDist * 0.55, camDist * 0.45, camDist * 0.65);
     this.controls.target.set(0, 0, 0);
     this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
@@ -1979,6 +2046,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (this.foldMode) this.applyFoldOverlay();
 
     this.updateStatus(nodes.length, edges.length, graph.meta);
+    this.onResize(); // ensure renderer/composer match container after data load
   }
 
   private clearGraph(): void {
@@ -2000,6 +2068,12 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.blastMode = false; this.blastSource = -1; this.blastDistances = []; this.l34Count = [];
     this.tooltipEl?.classList.remove('visible');
     this.detailCard?.classList.remove('visible');
+    // Reset file/agent highlight state (prevents stale indices from old project)
+    this._fileHighlight = false;
+    this._fileHighlightIndices.clear();
+    this._fileOpacityOriginal.clear();
+    this._agentHighlightIndices.clear();
+    this._graphRoot = '';
   }
 
   // ── Edges ────────────────────────────────────────────────
@@ -2203,7 +2277,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (!isMinimal) this.animateEdgeParticles();
     if (isMinimal) {
       this.controls.update();
-      this.composer.render();
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
       return;
     }
 
@@ -2327,7 +2402,12 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     this.updateTooltip(); this.updateLabels();
     this.controls.update();
-    this.composer.render();
+    if (isFull) {
+      this.composer.render();
+    } else {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   // ── Resize ───────────────────────────────────────────────

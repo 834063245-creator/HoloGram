@@ -3,6 +3,7 @@
 
 import type { StarGraph } from './graph';
 import { bus } from './events';
+import { dbg } from './debug';
 
 /**
  * Shared helper — send a question to the Agent (opens chat panel if closed).
@@ -27,6 +28,7 @@ export function visualizeAgentTool(
   graph: StarGraph,
 ): void {
   try {
+    dbg('agent-viz', `tool="${toolName}" args keys:`, Object.keys(args).join(','));
     switch (toolName) {
       case 'hologram_path':
         handlePath(args, graph);
@@ -83,19 +85,22 @@ function handlePath(args: Record<string, unknown>, graph: StarGraph): void {
 }
 
 function handleImpact(args: Record<string, unknown>, graph: StarGraph): void {
-  const node = String(args['node_id'] || '');
+  const node = String(args['node_id'] || args['nodeId'] || '');
+  dbg('agent-viz.impact', `node="${node}"`);
   if (!node) return;
   graph.focusNode(node);
 }
 
 function handleNeighbors(args: Record<string, unknown>, graph: StarGraph): void {
-  const node = String(args['node_id'] || '');
+  const node = String(args['node_id'] || args['nodeId'] || '');
+  dbg('agent-viz.neighbors', `node="${node}"`);
   if (!node) return;
   graph.focusNode(node);
 }
 
 function handleCouplingReport(args: Record<string, unknown>, graph: StarGraph): void {
-  const module = String(args['module'] || '');
+  const module = String(args['module'] || args['module_name'] || args['moduleName'] || '');
+  dbg('agent-viz.coupling', `module="${module}"`);
   if (!module) return;
   graph.focusNode(module);
 }
@@ -218,7 +223,8 @@ function parseCycleOutput(text: string): string[] {
 // ── New tools (from MCP) ──────────────────────────────
 
 function handleHistory(args: Record<string, unknown>, graph: StarGraph): void {
-  const node = String(args['node_id'] || '');
+  const node = String(args['node_id'] || args['nodeId'] || '');
+  dbg('agent-viz.history', `node="${node}"`);
   if (!node) return;
   graph.focusNode(node);
 }

@@ -1,3 +1,5 @@
+import { dbg } from './debug';
+
 // Event Bus — lightweight pub/sub for cross-component communication
 // Used by: CheckPanel → Main → StarGraph (navigate:node)
 //          Future: detail card → Agent (agent:send)
@@ -26,6 +28,7 @@ class EventBus {
   }
 
   emit(event: string, ...args: any[]): void {
+    dbg('EventBus.emit', event, ...args);
     const list = this.handlers.get(event);
     if (list) {
       for (const h of list) {

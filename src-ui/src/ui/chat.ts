@@ -13,6 +13,7 @@ import { invoke } from '../bridge';
 import type { Message } from '../provider/types';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
+import { dbg } from './debug';
 
 // ── Constants ──
 
@@ -251,7 +252,11 @@ export class ChatPanel {
         e.stopPropagation();
         const name = (link as HTMLElement).dataset['nodename'] || '';
         if (name && this.starGraph) {
-          const found = this.starGraph.focusNode(name);
+          let found = this.starGraph.focusNode(name);
+          if (!found) {
+            const alt = name.split('.').pop() || '';
+            if (alt && alt !== name) found = this.starGraph.focusNode(alt);
+          }
           if (!found) this.addNotice(`未在图中找到 "${name}"`, 'info');
         }
       });
@@ -263,7 +268,10 @@ export class ChatPanel {
 
   /** Save all sessions to project's .hologram/chat_sessions.json */
   async saveAllSessions(projectPath: string): Promise<void> {
-    if (!projectPath || this.sessions.length === 0) return;
+    if (!projectPath || this.sessions.length === 0) {
+      dbg('Chat.saveAllSessions', `skip — projectPath="${projectPath}" sessions=${this.sessions.length}`);
+      return;
+    }
     // Save current DOM state to sessionMessages cache before serializing
     if (this.activeIdx >= 0) this.saveCurrentMessages();
     const data = {
@@ -278,27 +286,30 @@ export class ChatPanel {
       nextId: nextSessionId,
     };
     const json = JSON.stringify(data);
+    const filePath = `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`;
     try {
-      await invoke('write_file_content', {
-        file_path: `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`,
-        content: json,
-      });
+      await invoke('write_file_content', { file_path: filePath, content: json });
+      dbg('Chat.saveAllSessions', `✓ saved ${this.sessions.length} sessions (${json.length} bytes) → ${filePath}`);
     } catch (e) {
       console.error('[chat] 保存会话失败:', e);
+      dbg('Chat.saveAllSessions', `✗ FAILED: ${e}`);
     }
   }
 
   /** Load sessions from project's .hologram/chat_sessions.json */
   async loadAllSessions(projectPath: string): Promise<void> {
-    if (!this.agentFactory || !projectPath) return;
+    if (!this.agentFactory || !projectPath) {
+      dbg('Chat.loadAllSessions', `skip — factory=${!!this.agentFactory} projectPath="${projectPath}"`);
+      return;
+    }
 
+    const filePath = `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`;
     let json: string;
     try {
-      json = await invoke<string>('read_file_content', {
-        file_path: `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`,
-      });
-    } catch {
-      return; // No saved sessions, first time
+      json = await invoke<string>('read_file_content', { file_path: filePath });
+    } catch (e) {
+      dbg('Chat.loadAllSessions', `file not found or read error: ${e}`);
+      return;
     }
 
     let data: any;
@@ -1214,6 +1225,7 @@ export class ChatPanel {
       try {
         let args: Record<string, unknown> = {};
         try { args = JSON.parse(tool.args || '{}'); } catch { /* ignore */ }
+        dbg('Chat.handleToolResult', `tool="${tool.name}" output=${tool.output.length} chars`);
         visualizeAgentTool(tool.name, args, tool.output, this.starGraph);
       } catch { /* visualization failure is silent */ }
     }
@@ -1439,7 +1451,13 @@ export class ChatPanel {
         span.addEventListener('click', (e) => {
           e.stopPropagation();
           if (graph) {
-            const found = graph.focusNode(token);
+            // Try exact match, then prefix, then contains (case-insensitive)
+            let found = graph.focusNode(token);
+            if (!found) {
+              // Try alternative forms: last segment of dotted name, lowercase
+              const alt = token.split('.').pop() || '';
+              if (alt && alt !== token) found = graph.focusNode(alt);
+            }
             if (!found) {
               this.addNotice(`未在图中找到 "${token}"`, 'info');
             }

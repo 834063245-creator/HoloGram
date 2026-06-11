@@ -7,6 +7,7 @@ import { iconSvg } from './icons';
 import { FileViewer } from './file-viewer';
 import { bus } from './events';
 import { askAgent } from './agent-visualizer';
+import { dbg } from './debug';
 
 interface DirEntry {
   name: string;
@@ -125,6 +126,39 @@ export class FileTreePanel {
 
   isOpen(): boolean { return this.open; }
 
+  /** Highlight and scroll to a file path in the tree. Used by graph→tree reverse linking. */
+  highlightPath(filePath: string): void {
+    const normalized = filePath.replace(/\\/g, '/');
+    // Find all row elements and look for matching file path
+    const rows = this.treeEl.querySelectorAll<HTMLElement>('div[data-file-path]');
+    for (const row of rows) {
+      const rowPath = (row.dataset['filePath'] || '').replace(/\\/g, '/');
+      if (rowPath === normalized || rowPath.endsWith('/' + normalized) || normalized.endsWith('/' + rowPath)) {
+        // Expand parent containers
+        let parent = row.parentElement;
+        while (parent && parent !== this.treeEl) {
+          if (parent.style.display === 'none') {
+            parent.style.display = 'block';
+            // Update parent arrow icon
+            const parentRow = parent.previousElementSibling as HTMLElement;
+            const arrow = parentRow?.querySelector('.ft-arrow') as HTMLElement;
+            if (arrow) arrow.textContent = '▾';
+          }
+          parent = parent.parentElement;
+        }
+        // Scroll into view and highlight
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        row.style.background = 'rgba(60, 100, 170, 0.45)';
+        row.style.borderLeftColor = 'rgba(100, 160, 240, 0.8)';
+        setTimeout(() => {
+          row.style.background = '';
+          row.style.borderLeftColor = 'transparent';
+        }, 2000);
+        break;
+      }
+    }
+  }
+
   // ── Tree rendering ──
 
   private renderTree(entries: DirEntry[], parent: HTMLElement, basePath: string, depth: number = 0): void {
@@ -146,16 +180,19 @@ export class FileTreePanel {
           if (expanded) {
             childContainer.style.display = 'none';
             if (icon) icon.textContent = '▸';
+            dbg('FileTree.collapse', entry.path);
             bus.emit('highlight:clear');
           } else {
             childContainer.style.display = 'block';
             if (icon) icon.textContent = '▾';
+            dbg('FileTree.expand', entry.path);
             bus.emit('highlight:folder', entry.path);
           }
         });
       } else if (!entry.is_dir) {
         row.addEventListener('click', () => {
           FileViewer.get().open(entry.path);
+          dbg('FileTree.clickFile', entry.path);
           bus.emit('highlight:file', entry.path);
         });
       }
@@ -173,6 +210,7 @@ export class FileTreePanel {
       transition: 'background 0.1s',
       borderLeft: '2px solid transparent',
     });
+    row.dataset['filePath'] = entry.path;
 
     row.addEventListener('mouseenter', () => {
       row.style.background = 'rgba(30, 55, 100, 0.3)';
