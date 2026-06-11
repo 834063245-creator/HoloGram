@@ -1,7 +1,7 @@
 # 星图规模化升级 SPEC
 
 **日期**: 2026-06-11  
-**状态**: A1 完成 · A2 待开工  
+**状态**: 阶段 A 全部完成 (A1+A2+A3) · 阶段 B 待开工  
 **目标**: 从"小项目 5K 节点凑合看"升级到"大型项目可分析、监控场景可驾驭"
 
 ---
@@ -261,6 +261,16 @@ const rawPos = precomputed
 
 **成功标准**: 同一项目布局质量肉眼优于现在（社区间距清晰），布局每次打开一致（确定性）。
 
+**实施记录 (2026-06-11)**:
+- 新建 `pipeline/layout.py`: `compute_layout()` + `apply_layout()` — igraph FR(≤10K)/DrL(>10K) + Python Random(42) 确定性
+- `graph.py`: Node 加 `position: Optional[List[float]]`
+- `cli.py`: `cmd_analyze` 社区检测后调用 `apply_layout(graph)`
+- `graph.ts`: `GraphNode` 接口加 `position?: [number,number,number]|null`，`render()` 优先读预计算坐标
+- 球壳缩放: `cbrt(n)*14` → `sqrt(n)*5` (表面积∝n, 密度恒定)
+- 布局弹簧从 `dist*att` 改为 `(dist-idealDist)*att` (有 rest length)
+- 空间网格斥力 + 全局伪随机斥力 + 壳约束
+- 提交: `f634141` (弹簧 rest length), `d5485d6` (sqrt ball), `dab2724` (力平衡), A2 commits
+
 ---
 
 #### A3. JSON → MessagePack（50K+ 节点场景）
@@ -275,6 +285,13 @@ const rawPos = precomputed
 **输出文件**: `hologram_full.hologram` (msgpack) 替代 `hologram_full.json`。小项目两种格式都生成。
 
 **成功标准**: 50K 节点项目加载时间 < 2 秒（含解析）。
+
+**实施记录 (2026-06-11)**:
+- Python: `graph.to_msgpack()` — `msgpack.pack(d, f)` 二进制写入
+- CLI: `cmd_analyze` 同时输出 `hologram_full.json` + `hologram_full.hologram`
+- Rust: `load_binary_graph` 命令 — 透传 `Vec<u8>`, 无 rmp-serde 依赖
+- 前端: `@msgpack/msgpack` decode, `openProject()` 和 init 缓存路径都优先读 `.hologram`
+- 提交: `d468455` (重分析按钮), A3 commits
 
 ---
 

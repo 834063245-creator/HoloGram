@@ -6,6 +6,7 @@ import { invoke, listen, isMockMode } from './bridge';
 import { StarGraph, VisualMode } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
+import { decode } from '@msgpack/msgpack';
 import { FileViewer } from './ui/file-viewer';
 import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
@@ -124,8 +125,17 @@ async function openProject(path?: string): Promise<void> {
 
   setLoading(true, folder);
   try {
-    const json = await invoke<string>('analyze_and_load', { path: folder });
-    const graph = JSON.parse(json);
+    // A3: try MessagePack binary first, fall back to JSON
+    let graph: any;
+    try {
+      const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_full.hologram';
+      const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
+      graph = decode(bytes) as any;
+    } catch {
+      // Fallback: run analysis or load cached JSON
+      const json = await invoke<string>('analyze_and_load', { path: folder });
+      graph = JSON.parse(json);
+    }
     currentGraphData = graph;
     starGraph.render(graph);
     showGraphView(folder);
@@ -860,10 +870,16 @@ async function init(): Promise<void> {
     } catch { /* ignore */ }
   });
 
-  // Try cached graph
+  // Try cached graph (A3: msgpack first, JSON fallback)
   try {
-    const json = await invoke<string>('load_graph_json');
-    const graph = JSON.parse(json);
+    let graph: any;
+    try {
+      const bytes = await invoke<Uint8Array>('load_binary_graph');
+      graph = decode(bytes) as any;
+    } catch {
+      const json = await invoke<string>('load_graph_json');
+      graph = JSON.parse(json);
+    }
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
     if (nodeCount > 0) {
       const root = graph.meta?.source_root || '';

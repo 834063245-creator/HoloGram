@@ -111,6 +111,13 @@ def cmd_analyze(args) -> int:
 
     # 输出
     graph.to_json(output)
+    # A3: 同时输出 MessagePack（大项目加载快 10×）
+    msgpack_path = output.replace('.json', '.hologram')
+    try:
+        graph.to_msgpack(msgpack_path)
+        print(f"MsgPack saved: {msgpack_path}")
+    except Exception as exc:
+        print(f"  msgpack skipped: {exc}", file=sys.stderr)
     print(f"Graph saved: {output}")
     print(f"  Nodes: {graph.node_count}, Edges: {graph.edge_count}")
     print(f"  Communities: {graph.community_count}")

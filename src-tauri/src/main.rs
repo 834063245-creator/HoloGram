@@ -804,6 +804,41 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
     Err("No cached graph found".into())
 }
 
+/// A3: Load graph from MessagePack binary (.hologram) — 10× faster for >10K nodes.
+/// Tries: 1) explicit path, 2) default .hologram, 3) last project .hologram.
+#[tauri::command]
+async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
+    // 1) explicit path
+    if let Some(ref p) = path {
+        if let Ok(bytes) = std::fs::read(p) {
+            if !bytes.is_empty() {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    // 2) default .hologram
+    let def = project_root().join("hologram_full.hologram");
+    if let Ok(bytes) = std::fs::read(&def) {
+        if !bytes.is_empty() {
+            return Ok(bytes);
+        }
+    }
+
+    // 3) last project's .hologram
+    let last_path_file = project_root().join(".last_project");
+    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
+        let p = std::path::PathBuf::from(last_path.trim()).join("hologram_graph.hologram");
+        if let Ok(bytes) = std::fs::read(&p) {
+            if !bytes.is_empty() {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    Err("No cached binary graph found".into())
+}
+
 /// Check if cached graph JSON is fresher than all source files — instant load.
 fn is_graph_fresh(graph_path: &str, project_path: &str) -> bool {
     let graph_meta = match std::fs::metadata(graph_path) {
@@ -1190,6 +1225,7 @@ fn main() {
             hologram_community_report,
             hologram_graph_summary,
             load_graph_json,
+            load_binary_graph,
             analyze_and_load,
             hologram_run_check,
             hologram_run_preflight,

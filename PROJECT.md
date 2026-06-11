@@ -5,7 +5,7 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
-> **最后更新：2026-06-11 · 星图规模化升级 A1 阶段完成**
+> **最后更新：2026-06-11 · 星图规模化升级 阶段 A 全部完成 (A1+A2+A3)**
 
 ---
 
@@ -25,6 +25,43 @@
 **变更范围**: `graph.ts` ~30 处修改点，覆盖全部交互路径。Glow Sprites 不变。  
 **回滚点**: commit `2e94468`  
 **升级方案**: [STARGRAPH_SPEC.md](STARGRAPH_SPEC.md) — 四阶段规模化路线 (A/B/C/D)
+
+---
+
+## 2026-06-11 星图规模化升级 — 阶段 A2 布局预计算 ✅
+
+**目标**: 布局计算从 JS 搬到 Python igraph，专业算法一次算完存磁盘，前端不再跑力导向。
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| Node.position 字段 | `graph.py` | `Optional[List[float]]` 预计算坐标 |
+| 布局引擎 | `pipeline/layout.py` (新) | igraph FR/DrL + Z 轴社区层级编码 |
+| CLI 接入 | `cli.py` | `cmd_analyze` 社区检测后自动调用布局 |
+| 前端适配 | `graph.ts` | `render()` 优先读预计算坐标，无则 fallback `layout3D()` |
+| 球壳缩放 | `graph.ts` | `sqrt(n)*5` — 表面积∝节点数，密度恒定 |
+
+**关键设计**:
+- 2D 布局由 igraph 产生（≤10K: FR, >10K: DrL），行业标准质量
+- Z 轴 = `hash(community_id)` 映射到层 → 同社区节点在同一"星盘层"
+- 确定性：同一项目每次重跑布局一致（Python Random(42) 作为 igraph RNG）
+- 向后兼容：旧项目 JSON 无 `position` 字段 → 前端自动 fallback `layout3D()`
+
+---
+
+## 2026-06-11 星图规模化升级 — 阶段 A3 MessagePack ✅
+
+**目标**: 大项目（>10K 节点）数据传输从 JSON 切换到 MessagePack 二进制。
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| Python 写入 | `graph.py` `to_msgpack()` | `msgpack.pack(d, f)` 二进制输出 |
+| CLI 双输出 | `cli.py` `cmd_analyze` | 同时生成 `.json` + `.hologram` |
+| Rust 透传 | `main.rs` `load_binary_graph` | `Vec<u8>` 原样返回，零解析开销 |
+| 前端解码 | `main.ts` 两处加载路径 | `@msgpack/msgpack` decode, 优先 `.hologram` |
+| 工具栏 | `index.html` + `main.ts` | 「重分析」按钮一键重新跑流水线 |
+
+**数据流**: `Python msgpack.pack → .hologram 文件 → Rust Vec<u8> → 前端 decode → 渲染`  
+**兼容**: `.hologram` 不存在时自动 fallback JSON 分析流水线
 
 ---
 
