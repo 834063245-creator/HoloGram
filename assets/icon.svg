@@ -1,0 +1,279 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background: deep space gradient -->
+    <radialGradient id="bgGrad" cx="48%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#161e3a"/>
+      <stop offset="45%" stop-color="#0c1025"/>
+      <stop offset="100%" stop-color="#050810"/>
+    </radialGradient>
+
+    <!-- Holographic grid gradient -->
+    <linearGradient id="gridFade" x1="256" y1="480" x2="256" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#00e5ff" stop-opacity="0.06"/>
+      <stop offset="70%" stop-color="#00e5ff" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Central core glow -->
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff9a62" stop-opacity="0.8"/>
+      <stop offset="25%" stop-color="#ff7b3d" stop-opacity="0.4"/>
+      <stop offset="60%" stop-color="#ff5e1a" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#ff5e1a" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Core specular highlight -->
+    <radialGradient id="coreSpec" cx="38%" cy="32%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="20%" stop-color="#ffd4b8" stop-opacity="0.6"/>
+      <stop offset="60%" stop-color="#ff7b3d" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#cc4400" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Satellite node body -->
+    <radialGradient id="nodeCyan" cx="38%" cy="32%" r="55%">
+      <stop offset="0%" stop-color="#a0f4ff"/>
+      <stop offset="30%" stop-color="#00e5ff"/>
+      <stop offset="75%" stop-color="#0080a0"/>
+      <stop offset="100%" stop-color="#004a60"/>
+    </radialGradient>
+
+    <radialGradient id="nodeTeal" cx="38%" cy="32%" r="55%">
+      <stop offset="0%" stop-color="#80ffe8"/>
+      <stop offset="30%" stop-color="#00e5b8"/>
+      <stop offset="75%" stop-color="#008060"/>
+      <stop offset="100%" stop-color="#004030"/>
+    </radialGradient>
+
+    <!-- Satellite outer glow -->
+    <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#00e5ff" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="nodeGlowTeal" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00e5b8" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#00e5b8" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#00e5b8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Edge gradient: center → satellite -->
+    <linearGradient id="edgeRadial1" x1="256" y1="268" x2="256" y2="135" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff7b3d" stop-opacity="0.4"/>
+      <stop offset="40%" stop-color="#00e5ff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.35"/>
+    </linearGradient>
+
+    <linearGradient id="edgeRadial2" x1="256" y1="268" x2="370" y2="195" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff7b3d" stop-opacity="0.35"/>
+      <stop offset="35%" stop-color="#00e5ff" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.3"/>
+    </linearGradient>
+
+    <linearGradient id="edgeRadial3" x1="256" y1="268" x2="370" y2="341" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff7b3d" stop-opacity="0.3"/>
+      <stop offset="40%" stop-color="#00e5b8" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#00e5b8" stop-opacity="0.3"/>
+    </linearGradient>
+
+    <linearGradient id="edgeRadial4" x1="256" y1="268" x2="256" y2="401" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff7b3d" stop-opacity="0.25"/>
+      <stop offset="40%" stop-color="#00e5b8" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#00e5b8" stop-opacity="0.25"/>
+    </linearGradient>
+
+    <linearGradient id="edgeRadial5" x1="256" y1="268" x2="142" y2="341" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff7b3d" stop-opacity="0.3"/>
+      <stop offset="40%" stop-color="#00e5ff" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.3"/>
+    </linearGradient>
+
+    <linearGradient id="edgeRadial6" x1="256" y1="268" x2="142" y2="195" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff7b3d" stop-opacity="0.35"/>
+      <stop offset="35%" stop-color="#00e5ff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.35"/>
+    </linearGradient>
+
+    <!-- Subtle scan ring -->
+    <radialGradient id="scanRing" cx="50%" cy="52%" r="50%">
+      <stop offset="42%" stop-color="#00e5ff" stop-opacity="0"/>
+      <stop offset="44%" stop-color="#00e5ff" stop-opacity="0.08"/>
+      <stop offset="45%" stop-color="#00e5ff" stop-opacity="0.15"/>
+      <stop offset="46%" stop-color="#00e5ff" stop-opacity="0.08"/>
+      <stop offset="48%" stop-color="#00e5ff" stop-opacity="0"/>
+    </radialGradient>
+
+    <clipPath id="iconShape">
+      <rect width="512" height="512" rx="96"/>
+    </clipPath>
+
+    <!-- Glow filters -->
+    <filter id="outerGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="coreFilter" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- ===== BACKGROUND ===== -->
+  <rect width="512" height="512" rx="96" fill="url(#bgGrad)"/>
+
+  <!-- ===== BORDER ===== -->
+  <rect x="2" y="2" width="508" height="508" rx="94"
+        fill="none" stroke="rgba(0,229,255,0.15)" stroke-width="1"/>
+  <rect x="4" y="4" width="504" height="504" rx="92"
+        fill="none" stroke="rgba(255,123,61,0.06)" stroke-width="0.5"/>
+
+  <!-- ===== HOLOGRAPHIC GRID ===== -->
+  <g opacity="0.5">
+    <!-- Radiating lines from vanishing point (256, 480) -->
+    <g stroke="url(#gridFade)" stroke-width="0.8">
+      <line x1="256" y1="480" x2="-20" y2="220"/>
+      <line x1="256" y1="480" x2="70" y2="40"/>
+      <line x1="256" y1="480" x2="180" y2="-10"/>
+      <line x1="256" y1="480" x2="256" y2="-20"/>
+      <line x1="256" y1="480" x2="332" y2="-10"/>
+      <line x1="256" y1="480" x2="442" y2="40"/>
+      <line x1="256" y1="480" x2="532" y2="220"/>
+    </g>
+
+    <!-- Horizontal perspective lines -->
+    <g stroke="#00e5ff" stroke-width="0.5" opacity="0.04">
+      <line x1="60" y1="320" x2="452" y2="320"/>
+      <line x1="100" y1="240" x2="412" y2="240"/>
+      <line x1="140" y1="175" x2="372" y2="175"/>
+      <line x1="170" y1="120" x2="342" y2="120"/>
+      <line x1="195" y1="75" x2="317" y2="75"/>
+    </g>
+  </g>
+
+  <!-- ===== SCAN RINGS ===== -->
+  <circle cx="256" cy="268" r="145" fill="none"
+          stroke="#00e5ff" stroke-width="0.8" opacity="0.06"/>
+  <circle cx="256" cy="268" r="142" fill="none"
+          stroke="#00e5ff" stroke-width="0.5" opacity="0.1" stroke-dasharray="3 7"/>
+  <circle cx="256" cy="268" r="155" fill="none"
+          stroke="#00e5ff" stroke-width="0.4" opacity="0.04"/>
+
+  <!-- ===== EDGES: Ring (behind front nodes) ===== -->
+  <g stroke="#00e5ff" stroke-width="1.2" opacity="0.15">
+    <line x1="256" y1="135" x2="370" y2="195"/>
+    <line x1="370" y1="195" x2="370" y2="341"/>
+    <line x1="370" y1="341" x2="256" y2="401"/>
+    <line x1="256" y1="401" x2="142" y2="341"/>
+    <line x1="142" y1="341" x2="142" y2="195"/>
+    <line x1="142" y1="195" x2="256" y2="135"/>
+  </g>
+
+  <!-- ===== EDGES: Cross connections ===== -->
+  <g stroke="#00e5ff" stroke-width="1" opacity="0.1">
+    <line x1="256" y1="135" x2="256" y2="401"/>
+    <line x1="370" y1="195" x2="142" y2="341"/>
+    <line x1="142" y1="195" x2="370" y2="341"/>
+  </g>
+
+  <!-- ===== EDGES: Radial (center → satellites) ===== -->
+  <!-- Top -->
+  <line x1="256" y1="268" x2="256" y2="135" stroke="url(#edgeRadial1)" stroke-width="2"/>
+  <!-- Top-Right -->
+  <line x1="256" y1="268" x2="370" y2="195" stroke="url(#edgeRadial2)" stroke-width="2"/>
+  <!-- Bottom-Right -->
+  <line x1="256" y1="268" x2="370" y2="341" stroke="url(#edgeRadial3)" stroke-width="1.8"/>
+  <!-- Bottom -->
+  <line x1="256" y1="268" x2="256" y2="401" stroke="url(#edgeRadial4)" stroke-width="1.6"/>
+  <!-- Bottom-Left -->
+  <line x1="256" y1="268" x2="142" y2="341" stroke="url(#edgeRadial5)" stroke-width="1.8"/>
+  <!-- Top-Left -->
+  <line x1="256" y1="268" x2="142" y2="195" stroke="url(#edgeRadial6)" stroke-width="2"/>
+
+  <!-- ===== SATELLITE NODES ===== -->
+
+  <!-- Bottom (farthest) -->
+  <g transform="translate(256, 401)">
+    <circle cx="0" cy="0" r="24" fill="url(#nodeGlowTeal)"/>
+    <circle cx="0" cy="0" r="15" fill="url(#nodeTeal)"/>
+    <circle cx="-2" cy="-3" r="5" fill="rgba(255,255,255,0.15)"/>
+  </g>
+
+  <!-- Bottom-Right -->
+  <g transform="translate(370, 341)">
+    <circle cx="0" cy="0" r="28" fill="url(#nodeGlowTeal)"/>
+    <circle cx="0" cy="0" r="18" fill="url(#nodeTeal)"/>
+    <circle cx="-2" cy="-3" r="6" fill="rgba(255,255,255,0.18)"/>
+  </g>
+
+  <!-- Bottom-Left -->
+  <g transform="translate(142, 341)">
+    <circle cx="0" cy="0" r="28" fill="url(#nodeGlow)"/>
+    <circle cx="0" cy="0" r="18" fill="url(#nodeCyan)"/>
+    <circle cx="-2" cy="-3" r="6" fill="rgba(255,255,255,0.18)"/>
+  </g>
+
+  <!-- Top-Left -->
+  <g transform="translate(142, 195)">
+    <circle cx="0" cy="0" r="30" fill="url(#nodeGlow)"/>
+    <circle cx="0" cy="0" r="19" fill="url(#nodeCyan)"/>
+    <circle cx="-2" cy="-4" r="7" fill="rgba(255,255,255,0.2)"/>
+  </g>
+
+  <!-- Top-Right -->
+  <g transform="translate(370, 195)">
+    <circle cx="0" cy="0" r="32" fill="url(#nodeGlow)"/>
+    <circle cx="0" cy="0" r="20" fill="url(#nodeCyan)"/>
+    <circle cx="-2" cy="-4" r="7" fill="rgba(255,255,255,0.2)"/>
+  </g>
+
+  <!-- Top (closest satellite) -->
+  <g transform="translate(256, 135)">
+    <circle cx="0" cy="0" r="30" fill="url(#nodeGlow)"/>
+    <circle cx="0" cy="0" r="19" fill="url(#nodeCyan)"/>
+    <circle cx="-2" cy="-4" r="7" fill="rgba(255,255,255,0.22)"/>
+  </g>
+
+  <!-- ===== CENTER NODE (warm, with strong glow) ===== -->
+  <circle cx="256" cy="268" r="58" fill="url(#coreGlow)" filter="url(#coreFilter)"/>
+  <circle cx="256" cy="268" r="32" fill="url(#coreGlow)"/>
+  <circle cx="256" cy="268" r="32" fill="#ff7b3d"/>
+  <circle cx="256" cy="268" r="32" fill="url(#coreSpec)"/>
+  <circle cx="248" cy="258" r="10" fill="rgba(255,255,255,0.25)"/>
+
+  <!-- ===== PARTICLES / STARS ===== -->
+  <g fill="#ffffff">
+    <circle cx="95" cy="130" r="1.2" opacity="0.4"/>
+    <circle cx="420" cy="110" r="1" opacity="0.3"/>
+    <circle cx="380" cy="430" r="1.4" opacity="0.35"/>
+    <circle cx="110" cy="420" r="0.8" opacity="0.25"/>
+    <circle cx="190" cy="80" r="1" opacity="0.3"/>
+    <circle cx="340" cy="75" r="0.8" opacity="0.25"/>
+    <circle cx="60" cy="280" r="1.2" opacity="0.35"/>
+    <circle cx="455" cy="310" r="1" opacity="0.3"/>
+    <circle cx="300" cy="450" r="0.9" opacity="0.2"/>
+    <circle cx="200" cy="455" r="1.1" opacity="0.25"/>
+  </g>
+
+  <!-- Colored accent particles (tiny dependencies in the distance) -->
+  <g>
+    <circle cx="310" cy="90" r="1.5" fill="#00e5ff" opacity="0.15"/>
+    <circle cx="180" cy="445" r="1.5" fill="#00e5b8" opacity="0.12"/>
+    <circle cx="430" cy="260" r="1.2" fill="#00e5ff" opacity="0.12"/>
+    <circle cx="70" cy="240" r="1.3" fill="#00e5b8" opacity="0.1"/>
+    <circle cx="350" cy="395" r="1" fill="#ff7b3d" opacity="0.08"/>
+    <circle cx="150" cy="105" r="1.2" fill="#ff7b3d" opacity="0.08"/>
+  </g>
+
+  <!-- ===== VERY SUBTLE VIGNETTE ===== -->
+  <rect width="512" height="512" rx="96" fill="none"
+        stroke="#000000" stroke-width="40" opacity="0.3"/>
+</svg>

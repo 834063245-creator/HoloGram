@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全息观测站 · Icon Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --space-deep: #050810;
+    --space-mid: #0c1025;
+    --space-light: #141a38;
+    --cyan: #00e5ff;
+    --cyan-dim: rgba(0, 229, 255, 0.4);
+    --cyan-faint: rgba(0, 229, 255, 0.12);
+    --teal: #00e5b8;
+    --warm: #ff7b3d;
+    --warm-dim: rgba(255, 123, 61, 0.3);
+    --text: #d8e0ec;
+    --text-dim: #6a7290;
+    --card-bg: rgba(12, 16, 37, 0.75);
+    --card-border: rgba(0, 229, 255, 0.1);
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--space-deep);
+    color: var(--text);
+    font-family: 'Rajdhani', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== STARFIELD CANVAS ===== */
+  #starfield {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ===== MAIN CONTAINER ===== */
+  .main {
+    position: relative;
+    z-index: 1;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 60px 24px 120px;
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 80px 0 60px;
+    text-align: center;
+  }
+
+  .icon-stage {
+    position: relative;
+    width: 220px;
+    height: 220px;
+    margin-bottom: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon-stage::before {
+    content: '';
+    position: absolute;
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,229,255,0.08) 0%, transparent 70%);
+    animation: pulse-ring 3s ease-in-out infinite;
+  }
+
+  .icon-stage::after {
+    content: '';
+    position: absolute;
+    width: 240px;
+    height: 240px;
+    border: 1px solid rgba(0,229,255,0.06);
+    border-radius: 50%;
+    animation: pulse-ring 3s ease-in-out 0.5s infinite;
+  }
+
+  @keyframes pulse-ring {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.08); opacity: 0.5; }
+  }
+
+  .hero-icon {
+    width: 180px;
+    height: 180px;
+    position: relative;
+    z-index: 2;
+    filter: drop-shadow(0 0 40px rgba(0,229,255,0.2)) drop-shadow(0 0 80px rgba(255,123,61,0.1));
+    animation: icon-float 6s ease-in-out infinite;
+  }
+
+  @keyframes icon-float {
+    0%, 100% { transform: translateY(0); }
+    25% { transform: translateY(-4px); }
+    75% { transform: translateY(2px); }
+  }
+
+  .hero h1 {
+    font-family: 'Audiowide', 'Microsoft YaHei', sans-serif;
+    font-size: clamp(36px, 6vw, 56px);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    background: linear-gradient(180deg, #e8f0ff 0%, #8ab4f8 50%, #5a8ed4 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: none;
+    margin-bottom: 12px;
+  }
+
+  .hero .subtitle {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 14px;
+    letter-spacing: 0.2em;
+    color: var(--cyan-dim);
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .hero .desc {
+    font-size: 16px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+    max-width: 500px;
+    line-height: 1.6;
+  }
+
+  .hero .desc em {
+    color: var(--warm);
+    font-style: normal;
+    opacity: 0.7;
+  }
+
+  /* ===== DIVIDER ===== */
+  .divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(0,229,255,0.15) 20%, rgba(0,229,255,0.25) 50%, rgba(0,229,255,0.15) 80%, transparent);
+    margin: 40px 0;
+  }
+
+  /* ===== SECTION HEADINGS ===== */
+  section h2 {
+    font-family: 'Audiowide', sans-serif;
+    font-size: 20px;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--cyan);
+    margin-bottom: 28px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  section h2::before {
+    content: '';
+    width: 32px;
+    height: 2px;
+    background: var(--warm);
+    border-radius: 1px;
+  }
+
+  /* ===== SIZE GRID ===== */
+  .sizes-section { margin: 60px 0; }
+
+  .size-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 24px;
+  }
+
+  .size-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 28px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .size-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%; transform: translateX(-50%);
+    width: 40px; height: 1px;
+    background: var(--cyan);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  .size-card:hover {
+    border-color: rgba(0,229,255,0.3);
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4), 0 0 30px rgba(0,229,255,0.06);
+  }
+
+  .size-card:hover::before { opacity: 1; }
+
+  .size-card img {
+    display: block;
+    image-rendering: auto;
+    filter: drop-shadow(0 0 6px rgba(0,229,255,0.15));
+  }
+
+  .size-card .label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .size-card .label strong {
+    color: var(--cyan);
+    font-weight: 400;
+  }
+
+  /* ===== PALETTE ===== */
+  .palette-section { margin: 60px 0; }
+
+  .palette-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 16px;
+  }
+
+  .swatch {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.06);
+    transition: transform 0.3s ease;
+  }
+
+  .swatch:hover { transform: translateY(-3px); }
+
+  .swatch .color-block {
+    height: 80px;
+    position: relative;
+  }
+
+  .swatch .color-block.space-deep { background: #050810; }
+  .swatch .color-block.space-mid { background: #0c1025; }
+  .swatch .color-block.cyan-primary { background: #00e5ff; }
+  .swatch .color-block.teal-accent { background: #00e5b8; }
+  .swatch .color-block.warm-core { background: #ff7b3d; }
+  .swatch .color-block.text-main { background: #d8e0ec; }
+
+  .swatch .info {
+    padding: 10px 12px;
+    background: rgba(12, 16, 37, 0.9);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .swatch .info .name {
+    color: var(--text);
+    text-transform: uppercase;
+  }
+
+  .swatch .info .hex {
+    color: var(--text-dim);
+  }
+
+  /* ===== DOWNLOAD ===== */
+  .download-section { margin: 60px 0; }
+
+  .download-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+  }
+
+  .dl-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 32px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+  }
+
+  .dl-card:hover {
+    border-color: var(--cyan-dim);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 24px rgba(0,229,255,0.04);
+  }
+
+  .dl-card .format-badge {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    padding: 4px 12px;
+    border: 1px solid var(--cyan-faint);
+    border-radius: 20px;
+    color: var(--cyan);
+  }
+
+  .dl-card .format-badge.warm {
+    border-color: var(--warm-dim);
+    color: var(--warm);
+  }
+
+  .dl-card h3 {
+    font-family: 'Audiowide', sans-serif;
+    font-size: 16px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    color: var(--text);
+  }
+
+  .dl-card p {
+    font-size: 14px;
+    color: var(--text-dim);
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  .dl-card .arrow {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 20px;
+    color: var(--cyan-dim);
+    transition: transform 0.3s ease;
+  }
+
+  .dl-card:hover .arrow { transform: translateX(4px); }
+
+  /* ===== TOAST ===== */
+  .toast {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: rgba(0, 229, 184, 0.12);
+    border: 1px solid rgba(0, 229, 184, 0.3);
+    color: var(--teal);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    padding: 12px 28px;
+    border-radius: 24px;
+    z-index: 100;
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+  }
+
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 600px) {
+    .main { padding: 40px 16px 80px; }
+    .hero { padding: 40px 0 30px; }
+    .icon-stage { width: 160px; height: 160px; }
+    .hero-icon { width: 130px; height: 130px; }
+    .hero h1 { font-size: 28px; }
+    .size-grid { grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .size-card { padding: 20px 12px 14px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="starfield"></canvas>
+
+<div class="main">
+
+  <!-- ===== HERO ===== -->
+  <header class="hero">
+    <div class="icon-stage">
+      <img src="icon.svg" alt="全息观测站 Icon" class="hero-icon" />
+    </div>
+    <h1>全息观测站</h1>
+    <p class="subtitle">Holographic Observatory Station</p>
+    <p class="desc">
+      图标设计 — <em>星图</em> 般的依赖拓扑，
+      <em>全息投影</em> 的 3D 深度，
+      每一个节点都是一颗恒星
+    </p>
+  </header>
+
+  <div class="divider"></div>
+
+  <!-- ===== SIZE PREVIEWS ===== -->
+  <section class="sizes-section">
+    <h2>尺寸预览</h2>
+    <div class="size-grid">
+      <div class="size-card">
+        <img src="icon.svg" width="256" height="256" alt="256px icon" />
+        <span class="label"><strong>256</strong> · 应用图标</span>
+      </div>
+      <div class="size-card">
+        <img src="icon.svg" width="128" height="128" alt="128px icon" />
+        <span class="label"><strong>128</strong> · 任务栏大</span>
+      </div>
+      <div class="size-card">
+        <img src="icon.svg" width="64" height="64" alt="64px icon" />
+        <span class="label"><strong>64</strong> · 桌面快捷</span>
+      </div>
+      <div class="size-card">
+        <img src="icon.svg" width="48" height="48" alt="48px icon" />
+        <span class="label"><strong>48</strong> · 开始菜单</span>
+      </div>
+      <div class="size-card">
+        <img src="icon.svg" width="32" height="32" alt="32px icon" />
+        <span class="label"><strong>32</strong> · 任务栏小</span>
+      </div>
+      <div class="size-card">
+        <img src="icon.svg" width="16" height="16" alt="16px icon" />
+        <span class="label"><strong>16</strong> · 系统托盘</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== COLOR PALETTE ===== -->
+  <section class="palette-section">
+    <h2>色彩方案</h2>
+    <div class="palette-grid">
+      <div class="swatch">
+        <div class="color-block space-deep"></div>
+        <div class="info"><span class="name">深空底色</span><span class="hex">#050810</span></div>
+      </div>
+      <div class="swatch">
+        <div class="color-block space-mid"></div>
+        <div class="info"><span class="name">星云中层</span><span class="hex">#0C1025</span></div>
+      </div>
+      <div class="swatch">
+        <div class="color-block cyan-primary"></div>
+        <div class="info"><span class="name">全息主色</span><span class="hex">#00E5FF</span></div>
+      </div>
+      <div class="swatch">
+        <div class="color-block teal-accent"></div>
+        <div class="info"><span class="name">深度节点</span><span class="hex">#00E5B8</span></div>
+      </div>
+      <div class="swatch">
+        <div class="color-block warm-core"></div>
+        <div class="info"><span class="name">核心恒星</span><span class="hex">#FF7B3D</span></div>
+      </div>
+      <div class="swatch">
+        <div class="color-block text-main"></div>
+        <div class="info"><span class="name">前景文字</span><span class="hex">#D8E0EC</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== DOWNLOAD ===== -->
+  <section class="download-section">
+    <h2>导出</h2>
+    <div class="download-grid">
+      <button class="dl-card" onclick="downloadSVG()" style="border:none;background:var(--card-bg);width:100%;font-family:inherit;">
+        <span class="format-badge">矢量源</span>
+        <h3>下载 SVG</h3>
+        <p>512×512 矢量源文件，可无限缩放。用于后续生成 .ico 和 .icns</p>
+        <span class="arrow">→</span>
+      </button>
+      <button class="dl-card" onclick="exportPNG(1024)" style="border:none;background:var(--card-bg);width:100%;font-family:inherit;">
+        <span class="format-badge warm">栅格</span>
+        <h3>导出 PNG 1024×1024</h3>
+        <p>高分辨率栅格图。用 <code style="color:var(--warn);background:rgba(255,123,61,0.1);padding:2px 6px;border-radius:4px;">cargo tauri icon</code> 生成 .ico</p>
+        <span class="arrow">→</span>
+      </button>
+      <button class="dl-card" onclick="exportPNG(256)" style="border:none;background:var(--card-bg);width:100%;font-family:inherit;">
+        <span class="format-badge warm">栅格</span>
+        <h3>导出 PNG 256×256</h3>
+        <p>标准图标尺寸 PNG。可直接覆盖 src-tauri/icons/</p>
+        <span class="arrow">→</span>
+      </button>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <p style="text-align:center;font-size:13px;color:var(--text-dim);letter-spacing:0.04em;margin-top:20px;">
+    设计语言：<span style="color:var(--cyan);">全息星座</span> — 深空背景 +
+    <span style="color:var(--warn);">暖核</span> 中心 +
+    <span style="color:var(--cyan);">青蓝</span> 卫星节点 — 六边形拓扑呼应依赖图的星图隐喻
+  </p>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===== STARFIELD ===== */
+(function() {
+  const canvas = document.getElementById('starfield');
+  const ctx = canvas.getContext('2d');
+  let stars = [];
+  let w, h;
+
+  function resize() {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+    initStars();
+  }
+
+  function initStars() {
+    const count = Math.floor((w * h) / 1800);
+    stars = [];
+    for (let i = 0; i < count; i++) {
+      stars.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        r: Math.random() * 1.4 + 0.2,
+        a: Math.random(),
+        speed: Math.random() * 0.015 + 0.003,
+        phase: Math.random() * Math.PI * 2,
+        hue: Math.random() < 0.08 ? 'cyan' : Math.random() < 0.04 ? 'warm' : 'white'
+      });
+    }
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, w, h);
+    for (const s of stars) {
+      const alpha = s.a * (0.5 + 0.5 * Math.sin(t * s.speed + s.phase));
+      if (s.hue === 'cyan') {
+        ctx.fillStyle = `rgba(0, 229, 255, ${alpha * 0.5})`;
+      } else if (s.hue === 'warm') {
+        ctx.fillStyle = `rgba(255, 123, 61, ${alpha * 0.4})`;
+      } else {
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.6})`;
+      }
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(draw);
+})();
+
+/* ===== TOAST ===== */
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ===== DOWNLOAD SVG ===== */
+function downloadSVG() {
+  fetch('icon.svg')
+    .then(r => r.text())
+    .then(svg => {
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      triggerDownload(blob, 'hologram-icon.svg');
+      showToast('SVG 已下载 ✓');
+    })
+    .catch(() => showToast('下载失败 — 请确保 icon.svg 在同一目录'));
+}
+
+/* ===== EXPORT PNG ===== */
+function exportPNG(size) {
+  fetch('icon.svg')
+    .then(r => r.text())
+    .then(svgText => {
+      const img = new Image();
+      const blob = new Blob([svgText], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = size;
+        c.height = size;
+        const cx = c.getContext('2d');
+        cx.drawImage(img, 0, 0, size, size);
+        URL.revokeObjectURL(url);
+        c.toBlob(b => {
+          triggerDownload(b, `hologram-icon-${size}.png`);
+          showToast(`PNG ${size}×${size} 已导出 ✓`);
+        }, 'image/png');
+      };
+      img.src = url;
+    })
+    .catch(() => showToast('导出失败 — 请确保 icon.svg 在同一目录'));
+}
+
+function triggerDownload(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+
+</body>
+</html>

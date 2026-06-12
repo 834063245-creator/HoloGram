@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全息观测站 — Design Comparison</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Audiowide&family=Share+Tech+Mono&family=Orbitron:wght@400;600;800&family=JetBrains+Mono&family=Noto+Sans+SC&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   DESIGN TOKENS — Current vs Proposed
+   ═══════════════════════════════════════════════════════════ */
+:root {
+  /* Current (线上版) */
+  --c-void:       #030812;
+  --c-panel-bg:   rgba(4, 12, 28, 0.92);
+  --c-panel-edge: rgba(54, 82, 128, 0.28);
+  --c-starlight:  #e2edff;
+  --c-text-dim:   rgba(145, 165, 190, 0.65);
+  --c-signal:     #68a8ff;
+  --c-sol:        #f0b848;
+  --c-toolbar-blur: blur(16px) saturate(0.8);
+
+  /* Proposed (新方案) */
+  --p-void:       #080e1c;
+  --p-void-deep:  #040a14;
+  --p-panel-bg:   rgba(12, 22, 38, 0.97);
+  --p-panel-edge: rgba(70, 100, 150, 0.38);
+  --p-starlight:  #eaf2fa;
+  --p-text:       #bcc8d8;
+  --p-text-dim:   rgba(150, 170, 195, 0.6);
+  --p-signal:     #5e9ef0;
+  --p-stellar:    #f0c860;
+  --p-stellar-dim:#b89030;
+  --p-toolbar-bg: rgba(8, 14, 26, 0.98);
+
+  /* Active set (toggled by JS) */
+  --void:        var(--c-void);
+  --panel-bg:    var(--c-panel-bg);
+  --panel-edge:  var(--c-panel-edge);
+  --starlight:   var(--c-starlight);
+  --text-dim:    var(--c-text-dim);
+  --signal:      var(--c-signal);
+  --stellar:     var(--c-sol);
+  --stellar-dim: #a07830;
+  --toolbar-bg:  rgba(3, 8, 18, 0.85);
+  --toolbar-blur: blur(16px) saturate(0.8);
+  --has-blur:    blur(16px);
+  --has-scanlines: 1;
+  --has-vignette:  1;
+  --font-ui:     'Orbitron', sans-serif;
+  --font-label:  'Orbitron', sans-serif;
+  --label-ls:    1.2px;
+  --label-tt:    uppercase;
+}
+
+body.proposed {
+  --void:        var(--p-void);
+  --panel-bg:    var(--p-panel-bg);
+  --panel-edge:  var(--p-panel-edge);
+  --starlight:   var(--p-starlight);
+  --text-dim:    var(--p-text-dim);
+  --signal:      var(--p-signal);
+  --stellar:     var(--p-stellar);
+  --stellar-dim: var(--p-stellar-dim);
+  --toolbar-bg:  var(--p-toolbar-bg);
+  --toolbar-blur: none;
+  --has-blur:    none;
+  --has-scanlines: 0;
+  --has-vignette:  0;
+  --font-ui:     'Rajdhani', sans-serif;
+  --font-label:  'Rajdhani', sans-serif;
+  --label-ls:    0.04em;
+  --label-tt:    none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESET & BASE
+   ═══════════════════════════════════════════════════════════ */
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--void);
+  color: var(--starlight);
+  font-family: 'Noto Sans SC', sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  transition: background 0.5s ease;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCANLINES OVERLAY (current only)
+   ═══════════════════════════════════════════════════════════ */
+#scanlines {
+  position: fixed; inset: 0; z-index: 9998;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.04) 2px, rgba(0,0,0,0.04) 4px);
+  opacity: var(--has-scanlines);
+  transition: opacity 0.5s;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   VIGNETTE (current only)
+   ═══════════════════════════════════════════════════════════ */
+#vignette {
+  position: fixed; inset: 0; z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 55%, var(--void) 100%);
+  opacity: var(--has-vignette);
+  transition: opacity 0.5s;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   3D GRAPH CANVAS
+   ═══════════════════════════════════════════════════════════ */
+#graph3d { position: fixed; inset:0; z-index:2; }
+
+/* ═══════════════════════════════════════════════════════════
+   TOOLBAR
+   ═══════════════════════════════════════════════════════════ */
+#toolbar {
+  position: fixed; top:0; left:0; right:0; height:38px; z-index:100;
+  display: flex; align-items: center; gap: 10px; padding: 0 16px;
+  background: var(--toolbar-bg);
+  backdrop-filter: var(--toolbar-blur);
+  -webkit-backdrop-filter: var(--toolbar-blur);
+  border-bottom: 1px solid rgba(60,100,160,0.2);
+  transition: opacity 0.45s ease, background 0.5s, backdrop-filter 0.5s;
+}
+#toolbar.idle { opacity: 0.2; }
+#toolbar.idle:hover { opacity: 1; }
+
+.toolbar-brand {
+  font-family: 'Audiowide', sans-serif;
+  font-size: 14px; letter-spacing: 0.06em;
+  color: var(--stellar);
+  margin-right: 8px;
+  flex-shrink: 0;
+  transition: color 0.5s;
+}
+
+.toolbar-sep {
+  width: 1px; height: 16px;
+  background: rgba(60,100,160,0.2);
+  flex-shrink: 0;
+}
+
+.toolbar-btn {
+  font-family: var(--font-ui);
+  font-size: 10px; letter-spacing: var(--label-ls);
+  text-transform: var(--label-tt);
+  font-weight: 600;
+  color: rgba(180,200,225,0.65);
+  background: transparent;
+  border: none; padding: 4px 8px;
+  cursor: pointer; white-space: nowrap;
+  transition: color 0.15s, background 0.15s, font-family 0.5s;
+}
+.toolbar-btn:hover { color: var(--starlight); background: rgba(80,130,210,0.12); }
+.toolbar-btn.active { color: var(--stellar); }
+
+.toolbar-spacer { flex:1; }
+
+.toolbar-search {
+  width: 160px; height: 26px;
+  background: rgba(20,40,70,0.3);
+  border: 1px solid rgba(60,100,160,0.25);
+  border-radius: 3px;
+  padding: 0 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--starlight);
+  outline: none;
+  transition: border-color 0.2s, background 0.5s;
+}
+.toolbar-search:focus { border-color: rgba(80,140,220,0.5); }
+.toolbar-search::placeholder { color: rgba(130,155,185,0.4); }
+
+.toolbar-path {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: rgba(130,155,185,0.55);
+  max-width: 200px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   STATUS BAR
+   ═══════════════════════════════════════════════════════════ */
+#status {
+  position: fixed; bottom:0; left:0; right:0; height:26px; z-index:60;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  background: var(--toolbar-bg);
+  backdrop-filter: var(--toolbar-blur);
+  -webkit-backdrop-filter: var(--toolbar-blur);
+  border-top: 1px solid rgba(60,100,160,0.15);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: rgba(130,155,185,0.6);
+  transition: background 0.5s, backdrop-filter 0.5s;
+}
+#status .status-left { display:flex; gap:16px; }
+#status .status-right { display:flex; gap:16px; }
+#status .val { color: var(--starlight); }
+
+/* ═══════════════════════════════════════════════════════════
+   DOCK TABS
+   ═══════════════════════════════════════════════════════════ */
+.dock-tabs {
+  position: fixed; z-index:55;
+  display: flex; gap: 6px;
+  transition: opacity 0.45s ease;
+}
+.dock-tabs.idle { opacity: 0.2; }
+.dock-tabs.idle:hover { opacity: 1; }
+
+#left-tabs {
+  left: 8px; top: 50%; transform: translateY(-50%);
+  flex-direction: column;
+}
+#right-tabs {
+  right: 8px; top: 50%; transform: translateY(-50%);
+  flex-direction: column;
+}
+#bottom-tabs {
+  bottom: 34px; left: 50%; transform: translateX(-50%);
+}
+
+.dock-tab {
+  font-family: var(--font-ui);
+  font-size: 9px; letter-spacing: var(--label-ls);
+  text-transform: var(--label-tt);
+  font-weight: 600;
+  color: rgba(180,200,225,0.5);
+  background: var(--toolbar-bg);
+  backdrop-filter: var(--has-blur);
+  -webkit-backdrop-filter: var(--has-blur);
+  border: 1px solid rgba(60,100,160,0.15);
+  padding: 5px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.5s, font-family 0.5s;
+}
+.dock-tab:hover { color: var(--starlight); border-color: rgba(80,140,220,0.3); }
+.dock-tab.active { color: var(--stellar); border-color: rgba(240,200,96,0.3); }
+
+/* ═══════════════════════════════════════════════════════════
+   SLIDE PANELS
+   ═══════════════════════════════════════════════════════════ */
+.slide-panel {
+  position: fixed; top:44px; bottom:32px; z-index:50;
+  background: var(--panel-bg);
+  backdrop-filter: var(--has-blur);
+  -webkit-backdrop-filter: var(--has-blur);
+  border: 1px solid var(--panel-edge);
+  padding: 16px;
+  overflow-y: auto;
+  transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), background 0.5s, backdrop-filter 0.5s;
+}
+
+/* Right panel (chat-style) */
+#chat-panel {
+  right: 0; width: 380px;
+  border-right: none;
+  transform: translateX(100%);
+}
+#chat-panel.open { transform: translateX(0); }
+
+/* Left panel (timeline-style) */
+#timeline-panel {
+  left: 0; width: 340px;
+  border-left: none;
+  transform: translateX(-100%);
+}
+#timeline-panel.open { transform: translateX(0); }
+
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px; padding-bottom: 10px;
+  border-bottom: 1px solid rgba(60,100,160,0.2);
+}
+.panel-title {
+  font-family: var(--font-ui);
+  font-size: 11px; letter-spacing: var(--label-ls);
+  text-transform: var(--label-tt);
+  font-weight: 600;
+  color: var(--starlight);
+  transition: font-family 0.5s;
+}
+.panel-close {
+  font-family: var(--font-ui);
+  font-size: 14px; color: rgba(160,180,205,0.5);
+  background: none; border: none; cursor: pointer;
+  transition: color 0.15s;
+}
+.panel-close:hover { color: #e04848; }
+
+/* Chat messages */
+.chat-msg {
+  margin-bottom: 12px; padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 11px; line-height: 1.55;
+}
+.chat-msg.user {
+  background: rgba(60,130,220,0.12);
+  border: 1px solid rgba(60,130,220,0.2);
+  margin-left: 20px;
+  color: #c8d8f0;
+}
+.chat-msg.assistant {
+  background: rgba(20,35,55,0.5);
+  border: 1px solid rgba(40,65,100,0.2);
+  margin-right: 20px;
+  color: #bcc8d8;
+}
+
+/* Timeline events */
+.timeline-event {
+  display: flex; gap: 10px; padding: 8px 0;
+  border-left: 2px solid rgba(60,100,160,0.2);
+  padding-left: 12px; margin-left: 8px;
+  font-size: 11px;
+  transition: border-color 0.15s;
+}
+.timeline-event:hover { border-left-color: var(--signal); }
+.timeline-event .evt-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: rgba(130,155,185,0.5);
+  flex-shrink: 0; width: 50px;
+}
+.timeline-event .evt-file {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--stellar);
+}
+.timeline-event .evt-msg { color: rgba(170,190,210,0.7); }
+
+/* ═══════════════════════════════════════════════════════════
+   TOGGLE BUTTON
+   ═══════════════════════════════════════════════════════════ */
+#style-toggle {
+  position: fixed; top: 50px; left: 50%; transform: translateX(-50%);
+  z-index: 200;
+  display: flex; gap: 0;
+  background: rgba(10,18,30,0.95);
+  border: 1px solid rgba(70,100,150,0.3);
+  border-radius: 8px;
+  overflow: hidden;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em;
+  transition: opacity 0.3s;
+}
+#style-toggle.idle { opacity: 0.25; }
+#style-toggle.idle:hover { opacity: 1; }
+#style-toggle button {
+  padding: 8px 18px;
+  background: transparent;
+  border: none; color: rgba(180,200,225,0.5);
+  cursor: pointer; font-family: inherit;
+  font-size: inherit; font-weight: inherit;
+  letter-spacing: inherit;
+  transition: all 0.25s;
+}
+#style-toggle button.active {
+  background: rgba(70,130,210,0.2);
+  color: var(--p-starlight);
+}
+body.proposed #style-toggle button.current { background: transparent; color: rgba(180,200,225,0.5); }
+body.proposed #style-toggle button.proposed-btn { background: rgba(240,200,96,0.15); color: var(--p-stellar); }
+
+/* ═══════════════════════════════════════════════════════════
+   DIFF LABEL
+   ═══════════════════════════════════════════════════════════ */
+#diff-label {
+  position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+  z-index: 199; pointer-events: none;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+  color: var(--stellar);
+  transition: color 0.5s;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INFO OVERLAY
+   ═══════════════════════════════════════════════════════════ */
+#info-overlay {
+  position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+  z-index: 20; pointer-events: none;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px; letter-spacing: 0.05em;
+  color: rgba(180,200,225,0.5);
+  transition: opacity 0.6s;
+}
+#info-overlay span { color: var(--stellar); }
+</style>
+</head>
+<body>
+
+<!-- Scanlines (current only) -->
+<div id="scanlines"></div>
+
+<!-- Vignette (current only) -->
+<div id="vignette"></div>
+
+<!-- 3D Graph -->
+<canvas id="graph3d"></canvas>
+
+<!-- Style Toggle -->
+<div id="style-toggle">
+  <button class="current active" onclick="setStyle('current')">CURRENT</button>
+  <button class="proposed-btn" onclick="setStyle('proposed')">PROPOSED</button>
+</div>
+<div id="diff-label"></div>
+
+<!-- Toolbar -->
+<div id="toolbar">
+  <span class="toolbar-brand">◈ HoloGram</span>
+  <span class="toolbar-sep"></span>
+  <button class="toolbar-btn active">Files</button>
+  <button class="toolbar-btn">Standard</button>
+  <button class="toolbar-btn">Full</button>
+  <span class="toolbar-sep"></span>
+  <button class="toolbar-btn">Explorer</button>
+  <button class="toolbar-btn">Open Folder</button>
+  <button class="toolbar-btn">Check</button>
+  <button class="toolbar-btn">Chat</button>
+  <span class="toolbar-spacer"></span>
+  <input class="toolbar-search" placeholder="search nodes..." spellcheck="false">
+  <span class="toolbar-path">D:\project\src\main.ts</span>
+</div>
+
+<!-- Left dock tabs -->
+<div class="dock-tabs" id="left-tabs">
+  <button class="dock-tab active" onclick="togglePanel('timeline')">Explorer</button>
+  <button class="dock-tab" onclick="togglePanel('timeline')">Timeline</button>
+  <button class="dock-tab">Git</button>
+</div>
+
+<!-- Right dock tabs -->
+<div class="dock-tabs" id="right-tabs">
+  <button class="dock-tab" onclick="togglePanel('chat')">Chat</button>
+  <button class="dock-tab">Constraints</button>
+</div>
+
+<!-- Bottom dock tabs -->
+<div class="dock-tabs" id="bottom-tabs">
+  <button class="dock-tab">Check</button>
+  <button class="dock-tab">Terminal</button>
+</div>
+
+<!-- Timeline panel (left) -->
+<div class="slide-panel" id="timeline-panel">
+  <div class="panel-header">
+    <span class="panel-title">SIGNAL LOG</span>
+    <button class="panel-close" onclick="togglePanel('timeline')">✕</button>
+  </div>
+  <div class="timeline-event">
+    <span class="evt-time">14:32:01</span>
+    <div><span class="evt-file">graph.ts</span><br><span class="evt-msg">Dependency count updated: 12 edges</span></div>
+  </div>
+  <div class="timeline-event">
+    <span class="evt-time">14:28:55</span>
+    <div><span class="evt-file">chat.ts</span><br><span class="evt-msg">Agent response received in 1.4s</span></div>
+  </div>
+  <div class="timeline-event">
+    <span class="evt-time">14:15:30</span>
+    <div><span class="evt-file">main.ts</span><br><span class="evt-msg">Graph analyzed: 24 nodes, 31 edges</span></div>
+  </div>
+  <div class="timeline-event">
+    <span class="evt-time">14:10:12</span>
+    <div><span class="evt-file">check.ts</span><br><span class="evt-msg">Threat check passed — 0 anomalies</span></div>
+  </div>
+</div>
+
+<!-- Chat panel (right) -->
+<div class="slide-panel" id="chat-panel">
+  <div class="panel-header">
+    <span class="panel-title">COMMS CHANNEL</span>
+    <button class="panel-close" onclick="togglePanel('chat')">✕</button>
+  </div>
+  <div class="chat-msg user">What depends on events.ts?</div>
+  <div class="chat-msg assistant">events.ts is imported by 6 modules: graph.ts, chat.ts, terminal.ts, timeline.ts, layout.ts, and main.ts. It has no outgoing dependencies — it's a pure leaf module. <span style="color:var(--p-ok, #48cc68)">● STABLE</span></div>
+  <div class="chat-msg user">Show me the impact if I change it.</div>
+  <div class="chat-msg assistant">Blasting from events.ts... <span style="color:#f0c860">6 direct dependents</span> would need review. The blast radius is moderate — all dependents are UI-layer modules, no core engine impact. <span style="color:#f07838">⚠ Recommended: run check.ts after changes.</span></div>
+</div>
+
+<!-- Status bar -->
+<div id="status">
+  <div class="status-left">
+    <span>SYS <span class="val" style="color:#48cc68">● NOMINAL</span></span>
+    <span>ENGINE <span class="val">Python 3.14</span></span>
+  </div>
+  <div class="status-right">
+    <span>NODES <span class="val">10</span></span>
+    <span>EDGES <span class="val">16</span></span>
+    <span>FPS <span class="val" id="fpsVal">—</span></span>
+  </div>
+</div>
+
+<!-- Info overlay -->
+<div id="info-overlay"><span>DRAG</span> orbit &nbsp; <span>SCROLL</span> zoom &nbsp; <span>CLICK</span> node</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   STYLE TOGGLE
+   ═══════════════════════════════════════════════════════════ */
+function setStyle(mode) {
+  const body = document.body;
+  const btns = document.querySelectorAll('#style-toggle button');
+  const label = document.getElementById('diff-label');
+
+  if (mode === 'proposed') {
+    body.classList.add('proposed');
+    btns[0].classList.remove('active');
+    btns[1].classList.add('active');
+    label.textContent = 'PROPOSED — lighter bg, sharp chrome, Rajdhani, auto-hide, no scanlines';
+  } else {
+    body.classList.remove('proposed');
+    btns[0].classList.add('active');
+    btns[1].classList.remove('active');
+    label.textContent = 'CURRENT — deep void, full blur, Orbitron, scanlines, vignette';
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PANEL TOGGLE
+   ═══════════════════════════════════════════════════════════ */
+let openPanels = {};
+
+function togglePanel(name) {
+  const panel = document.getElementById(name + '-panel');
+  if (!panel) return;
+  openPanels[name] = !openPanels[name];
+  if (openPanels[name]) {
+    panel.classList.add('open');
+  } else {
+    panel.classList.remove('open');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   AUTO-HIDE CHROME
+   ═══════════════════════════════════════════════════════════ */
+let idleTimer;
+function resetIdle() {
+  document.getElementById('toolbar').classList.remove('idle');
+  document.getElementById('style-toggle').classList.remove('idle');
+  document.querySelectorAll('.dock-tabs').forEach(el => el.classList.remove('idle'));
+  document.getElementById('info-overlay').style.opacity = '1';
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    document.getElementById('toolbar').classList.add('idle');
+    document.getElementById('style-toggle').classList.add('idle');
+    document.querySelectorAll('.dock-tabs').forEach(el => el.classList.add('idle'));
+    document.getElementById('info-overlay').style.opacity = '0.3';
+  }, 3000);
+}
+document.addEventListener('mousemove', resetIdle);
+document.addEventListener('click', resetIdle);
+resetIdle();
+
+/* ═══════════════════════════════════════════════════════════
+   3D GRAPH (simplified star map)
+   ═══════════════════════════════════════════════════════════ */
+const canvas = document.getElementById('graph3d');
+const ctx = canvas.getContext('2d');
+let W, H;
+let orbit = { theta:0.4, phi:0.6, zoom:5.5, tTheta:0.4, tPhi:0.6, tZoom:5.5 };
+let mouse = { x:0, y:0, dx:0, dy:0, down:false };
+let hovered = -1, selected = -1;
+let fps = 0, fc = 0, lastFps = performance.now();
+let stars = [];
+
+const NODES = [
+  { id:0, name:'main.ts',      x:0.0,  y:0.0,  z:0.0,  type:'core',    deps:[1,2,3,4,5,6,7] },
+  { id:1, name:'graph.ts',     x:1.3,  y:0.7,  z:-0.4, type:'module',   deps:[2,8] },
+  { id:2, name:'events.ts',    x:-0.9, y:0.4,  z:0.5,  type:'module',   deps:[] },
+  { id:3, name:'chat.ts',      x:0.7,  y:-0.9, z:-0.2, type:'module',   deps:[2,4] },
+  { id:4, name:'file-tree.ts', x:-1.1, y:-0.3, z:0.7,  type:'module',   deps:[] },
+  { id:5, name:'terminal.ts',  x:0.4,  y:-1.2, z:1.1,  type:'module',   deps:[2] },
+  { id:6, name:'settings.ts',  x:-1.4, y:0.3,  z:-0.7, type:'module',   deps:[4] },
+  { id:7, name:'timeline.ts',  x:1.0,  y:0.2,  z:0.9,  type:'module',   deps:[2,4] },
+  { id:8, name:'layout.ts',    x:1.6,  y:-0.5, z:-0.3, type:'utility',  deps:[2] },
+  { id:9, name:'check.ts',     x:-0.4, y:-0.8, z:-0.6, type:'utility',  deps:[1,6] },
+];
+
+const EDGES = [];
+(function buildEdges() {
+  const seen = new Set();
+  for (const n of NODES) {
+    for (const d of n.deps) {
+      const k = Math.min(n.id,d)+'_'+Math.max(n.id,d);
+      if (!seen.has(k)) { seen.add(k); EDGES.push({a:n.id, b:d}); }
+    }
+  }
+})();
+
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// Stars
+for (let i=0; i<300; i++) {
+  stars.push({ x:Math.random()*2400-400, y:Math.random()*2400-400, r:Math.random()*1.2+0.2,
+               s:Math.random()*2+0.5, p:Math.random()*Math.PI*2, a:Math.random()*0.4+0.15 });
+}
+
+function rotX(p,a) { const c=Math.cos(a),s=Math.sin(a); return {x:p.x,y:p.y*c-p.z*s,z:p.y*s+p.z*c}; }
+function rotY(p,a) { const c=Math.cos(a),s=Math.sin(a); return {x:p.x*c+p.z*s,y:p.y,z:-p.x*s+p.z*c}; }
+
+function project(node) {
+  let p = rotX(rotY({x:node.x,y:node.y,z:node.z}, orbit.theta), orbit.phi);
+  const s = 3.5 / (orbit.zoom + 3 - p.z);
+  return { x:W/2 + p.x*s*(W/6), y:H/2 - p.y*s*(H/6), z:p.z, scale:s };
+}
+
+function draw(t) {
+  ctx.clearRect(0,0,W,H);
+
+  // Grid
+  const gy = H*0.72;
+  ctx.strokeStyle = 'rgba(20,38,58,0.2)';
+  ctx.lineWidth = 0.5;
+  for (let i=-10;i<=10;i++) { ctx.beginPath(); ctx.moveTo(W/2+i*120,H*1.25); ctx.lineTo(W/2+i*120,gy-300); ctx.stroke(); }
+  for (let j=0;j<12;j++) { const y=gy-j*35,w=200+j*60; ctx.beginPath(); ctx.moveTo(W/2-w,y); ctx.lineTo(W/2+w,y); ctx.stroke(); }
+
+  // Project
+  const proj = NODES.map(n => { const p=project(n); return {...n,sx:p.x,sy:p.y,sz:p.z,sc:p.scale}; });
+  proj.sort((a,b)=>a.sz-b.sz);
+  const map = {}; proj.forEach(p=>map[p.id]=p);
+
+  // Edges
+  for (const e of EDGES) {
+    const a=map[e.a], b=map[e.b]; if(!a||!b) continue;
+    const hl = (hovered>=0&&(e.a===hovered||e.b===hovered))||(selected>=0&&(e.a===selected||e.b===selected));
+    const alpha = hl ? 0.6 : 0.15;
+    ctx.strokeStyle = hl ? `rgba(240,200,96,${alpha})` : `rgba(60,110,180,${alpha})`;
+    ctx.lineWidth = hl ? 1.8 : 0.7;
+    ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke();
+  }
+
+  // Nodes
+  for (const p of proj) {
+    const isCore = p.type==='core', isHov = hovered===p.id, isSel = selected===p.id;
+    let r = (isCore?10:5) * (0.6+0.4*p.sc);
+    if (isHov||isSel) r*=1.35;
+    r = Math.max(2.5, r);
+    const alpha = isSel?1:isHov?0.9:(0.4+0.3*p.sc);
+
+    // Glow
+    const gr = r * (isCore?4:3);
+    const glow = ctx.createRadialGradient(p.sx,p.sy,r*0.3,p.sx,p.sy,gr);
+    if (isCore) { glow.addColorStop(0,`rgba(240,200,96,${alpha*0.55})`); glow.addColorStop(0.35,`rgba(240,180,60,${alpha*0.15})`); glow.addColorStop(1,'rgba(240,160,30,0)'); }
+    else { const c=isHov||isSel?'240,200,96':'96,160,220'; glow.addColorStop(0,`rgba(${c},${alpha*0.45})`); glow.addColorStop(0.4,`rgba(${c},${alpha*0.1})`); glow.addColorStop(1,`rgba(${c},0)`); }
+    ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(p.sx,p.sy,gr,0,Math.PI*2); ctx.fill();
+
+    // Body
+    const bg = ctx.createRadialGradient(p.sx-r*0.25,p.sy-r*0.3,r*0.05,p.sx,p.sy,r);
+    if (isCore) { bg.addColorStop(0,'#fff8e0'); bg.addColorStop(0.3,'#f0c860'); bg.addColorStop(0.7,'#b89030'); bg.addColorStop(1,'#604010'); }
+    else if (isHov||isSel) { bg.addColorStop(0,'#ffe8c0'); bg.addColorStop(0.4,'#f0c860'); bg.addColorStop(1,'#806020'); }
+    else { bg.addColorStop(0,'#d0f0ff'); bg.addColorStop(0.4,'#60b8d8'); bg.addColorStop(1,'#205060'); }
+    ctx.fillStyle=bg; ctx.beginPath(); ctx.arc(p.sx,p.sy,r,0,Math.PI*2); ctx.fill();
+
+    // Highlight
+    ctx.fillStyle=`rgba(255,255,255,${alpha*0.3})`;
+    ctx.beginPath(); ctx.arc(p.sx-r*0.3,p.sy-r*0.35,r*0.32,0,Math.PI*2); ctx.fill();
+
+    // Core spikes
+    if (isCore) { ctx.strokeStyle=`rgba(240,200,96,${alpha*0.25})`; ctx.lineWidth=0.5;
+      for(let a=0;a<Math.PI;a+=Math.PI/2){ctx.beginPath();ctx.moveTo(p.sx,p.sy);ctx.lineTo(p.sx+Math.cos(a)*r*2.5,p.sy+Math.sin(a)*r*2.5);ctx.stroke();} }
+
+    // Selection ring
+    if (isSel) { ctx.strokeStyle='rgba(240,200,96,0.65)'; ctx.lineWidth=2; ctx.setLineDash([4,3]); ctx.beginPath(); ctx.arc(p.sx,p.sy,r+6,0,Math.PI*2); ctx.stroke(); ctx.setLineDash([]); }
+
+    // Ping
+    if (isHov) { const ph=(t*0.004)%1; ctx.strokeStyle=`rgba(240,200,96,${alpha*0.3*(1-ph)})`; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(p.sx,p.sy,r+ph*28,0,Math.PI*2); ctx.stroke(); }
+
+    p._r = r+(isHov||isSel?8:4);
+  }
+
+  // Scan ring
+  const sp = (t*0.00025)%1;
+  ctx.strokeStyle=`rgba(240,200,96,${0.07*(1-sp)})`; ctx.lineWidth=0.8;
+  ctx.beginPath(); ctx.arc(W/2,H/2-40,70+sp*180,0,Math.PI*2); ctx.stroke();
+
+  window._proj = proj;
+}
+
+function hitTest(mx,my) {
+  let best=-1,bd=18;
+  if (!window._proj) return -1;
+  for (const p of window._proj) {
+    const d=Math.hypot(mx-p.sx,my-p.sy);
+    if (d<bd&&d<(p._r||8)){bd=d;best=p.id;}
+  }
+  return best;
+}
+
+// Input
+canvas.addEventListener('mousedown',e=>{if(e.button===0){mouse.down=true;mouse.x=e.clientX;mouse.y=e.clientY;mouse.dx=0;mouse.dy=0;}});
+window.addEventListener('mouseup',e=>{if(!mouse.down)return;mouse.down=false;if(Math.abs(mouse.dx)<3&&Math.abs(mouse.dy)<3){const h=hitTest(e.clientX,e.clientY);selected=h>=0?h:-1;}});
+window.addEventListener('mousemove',e=>{
+  if(mouse.down){mouse.dx=e.clientX-mouse.x;mouse.dy=e.clientY-mouse.y;mouse.x=e.clientX;mouse.y=e.clientY;orbit.tTheta-=mouse.dx*0.005;orbit.tPhi+=mouse.dy*0.005;orbit.tPhi=Math.max(-1.2,Math.min(1.2,orbit.tPhi));}
+  hovered=hitTest(e.clientX,e.clientY);
+});
+canvas.addEventListener('wheel',e=>{orbit.tZoom+=e.deltaY*0.005;orbit.tZoom=Math.max(2.5,Math.min(15,orbit.tZoom));});
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
+// Touch
+canvas.addEventListener('touchstart',e=>{if(e.touches.length===1){mouse.down=true;mouse.x=e.touches[0].clientX;mouse.y=e.touches[0].clientY;mouse.dx=0;mouse.dy=0;}});
+canvas.addEventListener('touchmove',e=>{if(mouse.down&&e.touches.length===1){mouse.dx=e.touches[0].clientX-mouse.x;mouse.dy=e.touches[0].clientY-mouse.y;mouse.x=e.touches[0].clientX;mouse.y=e.touches[0].clientY;orbit.tTheta-=mouse.dx*0.005;orbit.tPhi+=mouse.dy*0.005;orbit.tPhi=Math.max(-1.2,Math.min(1.2,orbit.tPhi));}});
+canvas.addEventListener('touchend',()=>{mouse.down=false;});
+
+// Keyboard
+window.addEventListener('keydown',e=>{
+  if(e.key===' '){e.preventDefault();orbit.tTheta=0.4;orbit.tPhi=0.6;orbit.tZoom=5.5;selected=-1;}
+});
+
+// Render loop
+function animate(ts) {
+  const lerp=0.12;
+  orbit.theta+=(orbit.tTheta-orbit.theta)*lerp;
+  orbit.phi+=(orbit.tPhi-orbit.phi)*lerp;
+  orbit.zoom+=(orbit.tZoom-orbit.zoom)*lerp;
+  fc++; if(ts-lastFps>=1000){fps=Math.round(fc/((ts-lastFps)/1000));fc=0;lastFps=ts;document.getElementById('fpsVal').textContent=fps;}
+
+  // Stars
+  const sxCtx = ctx;
+  // Stars move to secondary canvas? No, just draw them on the main canvas first
+  // Actually, the grid and nodes paint over stars anyway. Let's skip separate starfield for simplicity
+  // since the grid provides the spatial reference
+
+  draw(ts);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// Start in proposed mode to show the improved design first
+setTimeout(() => setStyle('proposed'), 200);
+</script>
+</body>
+</html>
