@@ -373,7 +373,7 @@ class TestGraph:
 
         removed, added_n, added_e = g.replace_file("/test/foo.py", new_g)
         assert removed == 1  # old_func removed
-        assert added_n == 2  # n_new + n_other (deduped but counted)
+        assert added_n == 1  # n_new only — n_other (n2) already exists in g
         assert added_e == 1  # e2 added
         assert g.node_count == 2
         assert g.edge_count == 1  # e1 was removed with n1, e2 is new

@@ -13,6 +13,7 @@ import datetime
 import json
 
 from .adapters import AdapterRegistry, PythonAdapter
+from .adapters.tree_sitter_adapter import TreeSitterAdapter
 from .adapters.typescript_adapter import TypeScriptAdapter
 from .core.graph import Graph
 from .core.merger import GraphMerger, CrossFileResolver
@@ -40,6 +41,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
             graph = Graph(source_root=root)
 
         registry = AdapterRegistry()
+        registry.register(TreeSitterAdapter())  # fallback: 通用 tree-sitter（31+ 语言）
         registry.register(PythonAdapter())
         registry.register(TypeScriptAdapter())
         runner = PipelineRunner(registry, cache)
@@ -82,14 +84,9 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
               f"{len(diff.added_edges)} edges added "
               f"→ {graph.node_count} total nodes", file=sys.stderr)
 
-        # Output
+        # Output — to_dict() now includes generated_at + coupling_summary
         if output_json:
-            d = graph.to_dict()
-            d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
-            if hasattr(graph, 'coupling_summary'):
-                d["meta"]["coupling"] = {k: graph.coupling_summary[k] for k in
-                    ('total_l1', 'total_l2', 'total_l3', 'total_l4') if k in graph.coupling_summary}
-            json.dump(d, sys.stdout, indent=2, ensure_ascii=False)
+            json.dump(graph.to_dict(), sys.stdout, indent=2, ensure_ascii=False)
         else:
             graph.to_json(graph_path)
             print(f"  saved: {graph_path}", file=sys.stderr)
@@ -98,6 +95,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
 
     # ── 全量模式（原有逻辑）──
     registry = AdapterRegistry()
+    registry.register(TreeSitterAdapter())  # fallback: 通用 tree-sitter（31+ 语言）
     registry.register(PythonAdapter())
     registry.register(TypeScriptAdapter())
 
@@ -113,13 +111,6 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     cross_added = resolver.resolve(graph)
     if cross_added:
         print(f"  cross-file edges: {cross_added}", file=sys.stderr)
-
-    # ── Phase 1 complete — nodes + edges ready, write early so next open is instant ──
-    save_path = output_path or os.path.join(root, "hologram_graph.json")
-    try:
-        graph.to_json(save_path)
-    except Exception:
-        pass
 
     # Coupling depth analysis — classify every structural edge L1-L4
     print(f"  coupling analysis...", file=sys.stderr)
@@ -177,14 +168,8 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         print(f"  file-graph skipped: {exc}", file=sys.stderr)
 
     if output_json:
-        # JSON to stdout
-        d = graph.to_dict()
-        d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
-        # Attach coupling summary for frontend status bar
-        if hasattr(graph, 'coupling_summary'):
-            d["meta"]["coupling"] = {k: graph.coupling_summary[k] for k in
-                ('total_l1', 'total_l2', 'total_l3', 'total_l4') if k in graph.coupling_summary}
-        json.dump(d, sys.stdout, indent=2, ensure_ascii=False)
+        # JSON to stdout — to_dict() now includes generated_at + coupling_summary
+        json.dump(graph.to_dict(), sys.stdout, indent=2, ensure_ascii=False)
     else:
         path = output_path or os.path.join(root, "hologram_graph.json")
         graph.to_json(path)

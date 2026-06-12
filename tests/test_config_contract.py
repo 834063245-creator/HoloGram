@@ -81,7 +81,7 @@ class TestDenylistConsistency:
 
     def test_patterns_denylist_matches_constraints_default(self):
         """两个数据源的 denylist 关键字必须完全相同。"""
-        from src_python.routing.patterns import DENYLIST_KEYWORDS as plist
+        from src_python.routing.constraints import DENYLIST_KEYWORDS as plist
         clist = DEFAULT_CONSTRAINTS["denylist"]["keywords"]
 
         in_p_not_c = set(plist) - set(clist)
@@ -311,7 +311,8 @@ class TestPatternsConsistency:
 
     def test_denylist_keywords_compiled(self):
         """每个 denylist 关键词都应被编译。"""
-        from src_python.routing.patterns import PatternMatcher, DENYLIST_KEYWORDS
+        from src_python.routing.patterns import PatternMatcher
+        from src_python.routing.constraints import DENYLIST_KEYWORDS
         matcher = PatternMatcher()
         # 编译后的模式数应等于关键词数
         assert len(matcher._compiled_denylist) == len(DENYLIST_KEYWORDS), (

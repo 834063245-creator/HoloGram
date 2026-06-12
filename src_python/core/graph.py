@@ -595,9 +595,9 @@ class Graph:
         conn = None
         try:
             conn = sqlite3.connect(tmp_path)
-            conn.execute("BEGIN TRANSACTION")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("BEGIN TRANSACTION")
             conn.executescript("""
                 DROP TABLE IF EXISTS nodes;
                 DROP TABLE IF EXISTS edges;

@@ -37,3 +37,7 @@ include = ["src_python*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "integration: 集成测试（需要完整流水线，较慢）",
+    "slow: 慢速测试（>5s）",
+]

@@ -48,6 +48,9 @@ DEFAULT_CONSTRAINTS = {
     },
 }
 
+# Backward-compatible module-level constant (moved from patterns.py)
+DENYLIST_KEYWORDS = list(DEFAULT_CONSTRAINTS["denylist"]["keywords"])
+
 
 # ============================================================
 # 约束配置数据模型
@@ -80,18 +83,18 @@ class ConstraintConfig:
         routing = {**DEFAULT_CONSTRAINTS["routing"], **d.get("routing", {})}
         thresholds = {**DEFAULT_CONSTRAINTS["thresholds"], **d.get("thresholds", {})}
         # 兼容两种格式：嵌套 {allowlist: {modules: [...], files: [...]}} 或扁平 {allowlist_modules: [...], ...}
-        allowlist = d.get("allowlist", {})
+        allowlist = d.get("allowlist", {}) or {}
         if not allowlist and "allowlist_modules" in d:
             allowlist = {"modules": d.get("allowlist_modules", []), "files": d.get("allowlist_files", [])}
-        denylist = d.get("denylist", {})
+        denylist = d.get("denylist", {}) or {}
         if not denylist and "denylist_keywords" in d:
             denylist = {"keywords": d.get("denylist_keywords", [])}
         return cls(
             routing=routing,
             thresholds=thresholds,
-            allowlist_modules=list(allowlist.get("modules", [])),
-            allowlist_files=list(allowlist.get("files", [])),
-            denylist_keywords=list(denylist.get("keywords", [])),
+            allowlist_modules=list(allowlist.get("modules") or []),
+            allowlist_files=list(allowlist.get("files") or []),
+            denylist_keywords=list(denylist.get("keywords") or []),
         )
 
     @classmethod

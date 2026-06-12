@@ -7,8 +7,8 @@ from src_python.routing.patterns import (
     MIGRATION_FILE_PATTERNS, SERIALIZATION_FILE_PATTERNS, CONFIG_FILE_PATTERNS,
     THRESHOLD_VARIABLE_PATTERNS, LLM_PROMPT_VARIABLE_PATTERNS,
     SORT_FILTER_FUNCTION_PATTERNS, RHYTHM_VARIABLE_PATTERNS,
-    DENYLIST_KEYWORDS,
 )
+from src_python.routing.constraints import DENYLIST_KEYWORDS
 
 
 # ============================================================

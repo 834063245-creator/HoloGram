@@ -324,3 +324,132 @@ class TestCrossFileResolverSymmetry:
             "No cross-file call edges found. "
             "resolve() must create CALL edges (was the H2 bug)."
         )
+
+
+# ============================================================
+# 2.6.2 + 2.6.3: TreeSitterAdapter 注册验证
+# ============================================================
+
+@pytest.fixture
+def multi_lang_project(tmp_path):
+    """创建含 Python + Rust 源文件的项目，验证 TreeSitterAdapter 覆盖。"""
+    (tmp_path / "src").mkdir()
+    files = {
+        "src/main.py": (
+            "def run():\n"
+            "    return helper()\n"
+            "\n"
+            "def helper():\n"
+            "    return 42\n"
+        ),
+        "src/utils.rs": (
+            "pub fn add(a: i32, b: i32) -> i32 {\n"
+            "    a + b\n"
+            "}\n"
+            "\n"
+            "pub struct Config {\n"
+            "    pub name: String,\n"
+            "}\n"
+        ),
+    }
+    for path, content in files.items():
+        fp = tmp_path / path
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(content, encoding="utf-8")
+    return tmp_path
+
+
+# — Tree-sitter 库可用性检查 —
+try:
+    import tree_sitter
+    _HAS_TREE_SITTER = True
+except ImportError:
+    _HAS_TREE_SITTER = False
+
+
+class TestTreeSitterAdapterRegistration:
+    """验证 TreeSitterAdapter 在所有分析入口都被注册。"""
+
+    @pytest.mark.skipif(not _HAS_TREE_SITTER, reason="tree-sitter library not installed")
+    def test_full_analysis_registers_treesitter(self, multi_lang_project):
+        """2.6.2: _analyze_and_output 全量模式注册了 TreeSitterAdapter。"""
+        from src_python.__main__ import _analyze_and_output
+        graph = _analyze_and_output(str(multi_lang_project))
+
+        # 应有 Python 符号和 Rust 符号
+        all_names = [n.name for n in graph.nodes.values()]
+
+        # Python 符号
+        assert "run" in all_names, f"Python 'run' not found in: {all_names}"
+        assert "helper" in all_names, f"Python 'helper' not found in: {all_names}"
+
+        # Rust 符号（来自 TreeSitterAdapter 泛用 fallback）
+        rust_names = [n for n in all_names if "add" in n or "Config" in n]
+        assert len(rust_names) > 0, \
+            f"No Rust symbols found — TreeSitterAdapter may not be registered. Names: {all_names}"
+
+    @pytest.mark.skipif(not _HAS_TREE_SITTER, reason="tree-sitter library not installed")
+    def test_cli_analysis_registers_treesitter(self, multi_lang_project):
+        """2.6.2: cmd_analyze 也注册了 TreeSitterAdapter。"""
+        import subprocess
+        import sys
+
+        out_path = multi_lang_project / "out.json"
+        result = subprocess.run(
+            [sys.executable, "-m", "src_python", "analyze",
+             str(multi_lang_project), "-o", str(out_path)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"CLI analyze failed: {result.stderr}"
+        assert out_path.exists(), "Output file not created"
+
+        d = json.loads(out_path.read_text(encoding="utf-8"))
+        all_names = {n["name"] for n in d.get("nodes", [])}
+
+        # Python 符号
+        assert "run" in all_names
+        assert "helper" in all_names
+
+        # Rust 符号（来自 TreeSitterAdapter）
+        rust_names = [n for n in all_names if "add" in n or "Config" in n]
+        assert len(rust_names) > 0, \
+            f"CLI mode: no Rust symbols found. TreeSitterAdapter may not be registered."
+
+    @pytest.mark.skipif(not _HAS_TREE_SITTER, reason="tree-sitter library not installed")
+    def test_incremental_registers_treesitter(self, multi_lang_project):
+        """2.6.3: _analyze_and_output 增量模式也注册了 TreeSitterAdapter。"""
+        from src_python.__main__ import _analyze_and_output
+
+        # 先全量分析
+        full_graph = _analyze_and_output(str(multi_lang_project))
+        nc_before = full_graph.node_count
+
+        all_names_before = {n.name for n in full_graph.nodes.values()}
+        assert "add" in all_names_before or any("add" in n for n in all_names_before), \
+            "Rust 'add' should exist after full analysis"
+
+        # 修改 Rust 文件
+        rust_path = multi_lang_project / "src" / "utils.rs"
+        original = rust_path.read_text(encoding="utf-8")
+        rust_path.write_text(
+            original + "\npub fn multiply(a: i32, b: i32) -> i32 { a * b }\n",
+            encoding="utf-8",
+        )
+
+        try:
+            # 增量分析 — 只传 Rust 文件
+            inc_graph = _analyze_and_output(
+                str(multi_lang_project),
+                changed_files=[str(rust_path)],
+            )
+
+            # Rust 符号应被更新（multiply 出现）
+            all_names_after = {n.name for n in inc_graph.nodes.values()}
+            assert "multiply" in all_names_after, \
+                f"New Rust symbol 'multiply' not found after incremental. Names: {sorted(all_names_after)}"
+
+            # node_count 应增加（至少新符号）
+            assert inc_graph.node_count >= nc_before, \
+                f"Incremental should not lose nodes: {inc_graph.node_count} < {nc_before}"
+        finally:
+            rust_path.write_text(original, encoding="utf-8")

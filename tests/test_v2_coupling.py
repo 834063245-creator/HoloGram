@@ -186,7 +186,8 @@ class TestCouplingAnalyzer:
 
         e3 = sample_graph.get_edge("e3")
         assert e3 is not None
-        assert e3.properties.get("coupling_depth") == CouplingLevel.L4_ENCAPSULATION_VIOLATION
+        # coupling_depth is now a proper Edge field, not in properties dict
+        assert e3.coupling_depth == CouplingLevel.L4_ENCAPSULATION_VIOLATION
 
     def test_convenience_function(self, sample_graph):
         """coupling_depth_report 应返回结构化结果。"""

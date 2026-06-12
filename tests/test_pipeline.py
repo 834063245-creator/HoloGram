@@ -435,3 +435,254 @@ class TestPipelineReport:
         s = repr(r)
         assert "PipelineReport" in s
         assert "phase=init" in s
+
+
+# ============================================================
+# 2.2 增量分析一致性 (TEST_SPEC 2.2.1 - 2.2.5)
+# ============================================================
+
+@pytest.mark.integration
+class TestIncrementalFullEquivalence:
+    """2.2.1: 增量分析结果与全量再分析完全一致。"""
+
+    @pytest.fixture
+    def registry(self):
+        reg = AdapterRegistry()
+        reg.register(PythonAdapter())
+        return reg
+
+    def test_after_modification_result_matches_full(self, registry):
+        import tempfile, shutil
+        d = tempfile.mkdtemp()
+        try:
+            # Create a multi-file project
+            os.makedirs(os.path.join(d, "pkg"), exist_ok=True)
+            files = {
+                "pkg/__init__.py": "from .core import run\n",
+                "pkg/core.py": "def helper(x):\n    return x * 2\n\ndef run(x):\n    return helper(x)\n",
+                "pkg/utils.py": "def format_output(x):\n    return str(x)\n",
+                "pkg/io.py": "from .utils import format_output\n\ndef write(x):\n    return format_output(x)\n",
+                "pkg/main.py": "from .core import run\nfrom .io import write\n\ndef main():\n    x = run(1)\n    return write(x)\n",
+            }
+            for relpath, content in files.items():
+                fp = os.path.join(d, relpath)
+                os.makedirs(os.path.dirname(fp), exist_ok=True)
+                with open(fp, "w") as f:
+                    f.write(content)
+
+            # 1. Full analysis
+            runner = PipelineRunner(registry)
+            graph_full_1, _ = runner.run(d)
+            nc1, ec1 = graph_full_1.node_count, graph_full_1.edge_count
+
+            # 2. Modify one file (add a function)
+            mod_path = os.path.join(d, "pkg", "core.py")
+            with open(mod_path, "w") as f:
+                f.write("def helper(x):\n    return x * 2\n\ndef run(x):\n    return helper(x)\n\ndef new_func(y):\n    return y + 1\n")
+
+            # 3. Incremental analysis
+            diff = runner.run_incremental(d, [mod_path], graph_full_1)
+            assert len(diff.added_nodes) >= 1, "Should detect new function"
+
+            # 4. Full re-analysis on modified project
+            runner2 = PipelineRunner(registry)
+            graph_full_2, _ = runner2.run(d)
+
+            # Verify equivalence
+            assert graph_full_1.node_count == graph_full_2.node_count, \
+                f"Incremental node count {graph_full_1.node_count} != full {graph_full_2.node_count}"
+            assert graph_full_1.edge_count == graph_full_2.edge_count, \
+                f"Incremental edge count {graph_full_1.edge_count} != full {graph_full_2.edge_count}"
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_remove_import_edge_disappears(self, registry):
+        """2.2.2: 删除 import 后增量分析移除对应边。"""
+        import tempfile, shutil
+        d = tempfile.mkdtemp()
+        try:
+            a_path = os.path.join(d, "a.py")
+            b_path = os.path.join(d, "b.py")
+            with open(a_path, "w") as f:
+                f.write("from b import func_b\n\ndef func_a():\n    return func_b()\n")
+            with open(b_path, "w") as f:
+                f.write("def func_b():\n    return 42\n")
+
+            # Use full pipeline (includes CrossFileResolver for cross-file edges)
+            from tests.helpers import analyze
+            d1 = analyze(d)
+            # Load graph for incremental operations
+            from src_python.core.graph import Graph
+            graph = Graph.from_json(os.path.join(d, "hologram_graph.json"))
+            node_count_before = graph.node_count
+
+            # Verify cross-file edges exist before modification
+            a_nodes = graph.find_nodes_by_location(a_path)
+            b_nodes = graph.find_nodes_by_location(b_path)
+            a_ids = {n.id for n in a_nodes}
+            b_ids = {n.id for n in b_nodes}
+            cross_edges_before = [
+                e for e in graph.edges.values()
+                if e.source in a_ids and e.target in b_ids
+            ]
+            assert len(cross_edges_before) > 0, \
+                f"Should have cross-file edges from a to b. a_ids={a_ids}, b_ids={b_ids}"
+
+            # Remove import from a.py
+            with open(a_path, "w") as f:
+                f.write("def func_a():\n    return 42\n")
+
+            # Incremental analysis — use raw runner to patch graph
+            runner = PipelineRunner(registry)
+            runner.run_incremental(d, [a_path], graph)
+
+            # Verify a → b edges are gone
+            a_ids_after = {n.id for n in graph.find_nodes_by_location(a_path)}
+            edges_after = [
+                e for e in graph.edges.values()
+                if e.source in a_ids_after and e.target in b_ids
+            ]
+            assert len(edges_after) == 0, \
+                f"Cross-file edges should be removed after import deleted, found {len(edges_after)}"
+
+            # But both a and b nodes still exist
+            assert len(graph.find_nodes_by_location(a_path)) > 0, "Node a should still exist"
+            assert len(graph.find_nodes_by_location(b_path)) > 0, "Node b should still exist"
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_delete_file_removes_nodes_and_edges(self, registry):
+        """2.2.3: 删除文件后节点和边都被移除。"""
+        import tempfile, shutil
+        d = tempfile.mkdtemp()
+        try:
+            a_path = os.path.join(d, "a.py")
+            b_path = os.path.join(d, "b.py")
+            with open(a_path, "w") as f:
+                f.write("from b import func_b\n\ndef func_a():\n    return func_b()\n")
+            with open(b_path, "w") as f:
+                f.write("def func_b():\n    return 42\n")
+
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+            nc_before = graph.node_count
+            ec_before = graph.edge_count
+
+            # Delete b.py
+            os.unlink(b_path)
+
+            # Incremental analysis
+            diff = runner.run_incremental(d, [b_path], graph)
+
+            # b.py 的节点被移除
+            b_nodes_remaining = graph.find_nodes_by_location(b_path)
+            assert len(b_nodes_remaining) == 0, \
+                f"All nodes from deleted file should be removed, found {len(b_nodes_remaining)}"
+
+            # node_count 减少
+            assert graph.node_count < nc_before, \
+                f"Node count should decrease after deleting file: {graph.node_count} >= {nc_before}"
+
+            # edge_count 减少
+            assert graph.edge_count < ec_before, \
+                f"Edge count should decrease: {graph.edge_count} >= {ec_before}"
+
+            # a.py 的节点还在
+            assert len(graph.find_nodes_by_location(a_path)) > 0, "Node a should still exist"
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_consecutive_incrementals_no_drift(self, registry):
+        """2.2.4: 连续 5 次增量分析不累积错误。"""
+        import tempfile, shutil, random
+        d = tempfile.mkdtemp()
+        try:
+            # Create 10 source files
+            rng = random.Random(42)
+            for i in range(10):
+                fp = os.path.join(d, f"mod{i}.py")
+                funcs = []
+                for j in range(3):
+                    funcs.append(f"def f{i}_{j}():\n    pass\n")
+                content = "\n".join(funcs)
+                with open(fp, "w") as f:
+                    f.write(content)
+
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+
+            # 5 rounds of incremental
+            for round_idx in range(5):
+                # Pick a random file to modify
+                mod_idx = rng.randint(0, 9)
+                mod_path = os.path.join(d, f"mod{mod_idx}.py")
+
+                # Read, modify, write
+                with open(mod_path, "r") as f:
+                    original = f.read()
+                with open(mod_path, "w") as f:
+                    f.write(original + f"\ndef new_r{round_idx}():\n    pass\n")
+
+                runner.run_incremental(d, [mod_path], graph)
+
+            # Full re-analysis
+            runner2 = PipelineRunner(registry)
+            graph_final, _ = runner2.run(d)
+
+            assert graph.node_count == graph_final.node_count, \
+                f"After 5 incrementals: {graph.node_count} nodes vs full {graph_final.node_count}"
+            assert graph.edge_count == graph_final.edge_count, \
+                f"After 5 incrementals: {graph.edge_count} edges vs full {graph_final.edge_count}"
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_incremental_updates_coupling_summary(self, registry):
+        """2.2.5: 增量分析后 coupling_summary 被更新。"""
+        import tempfile, shutil
+        d = tempfile.mkdtemp()
+        try:
+            # Create a multi-module project with cross-module calls
+            for i in range(3):
+                fp = os.path.join(d, f"mod{i}.py")
+                imports = "\n".join(
+                    f"from mod{j} import f{j}" for j in range(3) if j != i
+                )
+                content = f"""\
+{imports}
+def f{i}():
+    pass
+"""
+                with open(fp, "w") as f:
+                    f.write(content)
+
+            # Full analysis via _analyze_and_output (runs coupling)
+            from tests.helpers import analyze, has_coupling
+            d1 = analyze(d)
+            assert has_coupling(d1), \
+                "Full analysis should produce coupling_summary in meta"
+
+            # Remember L4 count before
+            coupling_before = d1["meta"]["coupling"]
+            l4_before = coupling_before.get("total_l4", 0)
+
+            # Add a cross-module call to mod0
+            mod0_path = os.path.join(d, "mod0.py")
+            with open(mod0_path, "a") as f:
+                f.write("\ndef f0_new():\n    from mod1 import f1\n    return f1()\n")
+
+            # Incremental analysis
+            from src_python.__main__ import _analyze_and_output
+            graph = _analyze_and_output(d, changed_files=[mod0_path])
+            d2 = graph.to_dict()
+
+            # coupling_summary must exist
+            assert has_coupling(d2), \
+                "Incremental analysis should still have coupling_summary"
+            coupling_after = d2["meta"]["coupling"]
+            l4_after = coupling_after.get("total_l4", 0)
+
+            # L4 should be at least as many as before (new violation may be detected)
+            assert l4_after >= l4_before, \
+                f"L4 violations should not decrease: {l4_before} → {l4_after}"
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
