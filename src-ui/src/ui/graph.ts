@@ -188,6 +188,12 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
     for (let i = 0; i < n; i++) {
       const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2], dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > 1) { const drift = (dist - shellRadius) * sp; pos[i * 3] -= (dx / dist) * drift; pos[i * 3 + 1] -= (dy / dist) * drift; pos[i * 3 + 2] -= (dz / dist) * drift; }
+      // ── Escape clamp: high-degree hubs can escape shell, force back ──
+      if (dist > shellRadius * 3) {
+        const scale = shellRadius * 0.95 / dist;
+        pos[i * 3] *= scale; pos[i * 3 + 1] *= scale; pos[i * 3 + 2] *= scale;
+        vel[i * 3] = 0; vel[i * 3 + 1] = 0; vel[i * 3 + 2] = 0;
+      }
     }
   }
   return pos;
@@ -2040,7 +2046,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   // ── Render ───────────────────────────────────────────────
 
-  render(graph: GraphJSON, layoutPositions?: Float32Array): void {
+  render(graph: GraphJSON): void {
     this.clearGraph();
     // Store project root for path normalization
     this._graphRoot = ((graph.meta?.source_root || graph.meta?.root || '') as string).replace(/\\/g, '/');
@@ -2105,7 +2111,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
-    const rawPos = layoutPositions || layout3D(nodes.length, pairs);
+    const rawPos = layout3D(nodes.length, pairs);
     // ── Safety: replace any NaN positions with origin ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
