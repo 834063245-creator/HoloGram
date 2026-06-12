@@ -10,6 +10,7 @@ import type {
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import type { Tool, ToolRegistry } from './tool';
 import type { PermissionGate } from './permission';
+import { bus } from '../ui/events';
 
 // ---- Event types ----
 
@@ -380,6 +381,16 @@ export class Agent {
           truncated: o.truncated,
         },
       });
+      // Emit tool-done for graph visualization (EventBus)
+      if (!o.errMsg && !o.blocked) {
+        let visArgs: Record<string, unknown> = {};
+        try { visArgs = JSON.parse(calls[i].arguments || '{}'); } catch {}
+        bus.emit('agent:tool-done', {
+          toolName: calls[i].name,
+          args: visArgs,
+          output: o.output,
+        });
+      }
       if (o.truncated && o.truncMsg) {
         this.sink({ kind: EventKind.Notice, level: 'info', text: o.truncMsg });
       }
@@ -431,6 +442,7 @@ export class Agent {
       }
 
       if (signal.aborted) throw new Error('aborted');
+      bus.emit('agent:tool-started', { toolName: call.name, args });
       result = await t.execute(args);
       // Re-check after execution — the tool may have been slow
       if (signal.aborted) throw new Error('aborted');

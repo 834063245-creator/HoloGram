@@ -6,14 +6,12 @@ import type { Agent, AgentEvent } from '../agent/agent';
 import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
-import { visualizeAgentTool } from './agent-visualizer';
 import { bus } from './events';
 import { loadSettings } from '../settings';
 import { invoke } from '../bridge';
 import type { Message } from '../provider/types';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
-import { dbg } from './debug';
 
 // ── Constants ──
 
@@ -1349,15 +1347,8 @@ export class ChatPanel {
       card.classList.add('tool-expanded');
     }
 
-    // Trigger star graph visualization from tool result
-    if (!tool.err && tool.output && this.starGraph) {
-      try {
-        let args: Record<string, unknown> = {};
-        try { args = JSON.parse(tool.args || '{}'); } catch { /* ignore */ }
-        dbg('Chat.handleToolResult', `tool="${tool.name}" output=${tool.output.length} chars`);
-        visualizeAgentTool(tool.name, args, tool.output, this.starGraph);
-      } catch { /* visualization failure is silent */ }
-    }
+    // Graph visualization is now handled by AgentVisualizer via EventBus
+    // (single entry point — eliminates the old triple-call bug)
   }
 
   // ── Usage ──

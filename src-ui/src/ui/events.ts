@@ -51,3 +51,7 @@ export const bus = new EventBus();
 
 // Known event names:
 //   navigate:node (nodeName: string) — focus a node in the star graph
+//   agent:tool-started ({ toolName: string, args: Record<string, unknown> }) — agent started a tool call
+//   agent:tool-done ({ toolName: string, args: Record<string, unknown>, output: string }) — agent tool call completed
+//   agent:thinking ({ text?: string }) — agent is reasoning / thinking
+//   agent:focus-changed ({ nodeNames: string[], toolName: string }) — agent's focus nodes changed

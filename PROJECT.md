@@ -5,7 +5,42 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
-> **最后更新：2026-06-13 · 架构重构第一步——修传输层（持久 MCP）**
+> **最后更新：2026-06-13 · 架构重构第二步——修整合层（Agent↔图双向联动）**
+
+---
+
+## 2026-06-13 架构重构第二步 — Agent↔图双向联动 ✅
+
+按 [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) 三步方案，第二步落地：
+
+**问题：** 三重 `visualizeAgentTool()` 调用 — main.ts exec()、main.ts exec2()、chat.ts handleToolResult() 各调一次。工具执行完成后图更新 3 次（浪费 + 不确定行为）。
+
+**改为：** EventBus 单入口模式
+```
+Agent 调工具 → EventBus.emit('agent:tool-done')
+                  ├─→ ChatPanel 渲染文本
+                  ├─→ AgentVisualizer 更新图（单一入口）
+                  └─→ AgentLens 更新透镜视图
+```
+
+**改了什么：**
+- **TS** `events.ts` — 文档化 4 个新事件：`agent:tool-started/done`、`agent:thinking`、`agent:focus-changed`
+- **TS** `agent.ts` — `executeBatch` 中 emit `agent:tool-done`（携带 toolName/args/output）；`executeOne` 中 emit `agent:tool-started`
+- **TS** `agent-visualizer.ts` — **重构**: `visualizeAgentTool()` 函数 → `AgentVisualizer` 类；订阅 EventBus 事件；追踪 visited nodes + trail（最近 20 步）；emit `agent:focus-changed`
+- **TS** `chat.ts` — 删除 `handleToolResult()` 中的 `visualizeAgentTool()` 调用（消除第三重）；清理无用 import
+- **TS** `main.ts` — 删除 `createExecutor`/`mcpExec` 中的 visualize 调用（消除第一、二重）；新增 `AgentVisualizer` 实例；模式切换时同步更新引用
+- **TS** `graph.ts` — 新增 `setAgentLens()`/`clearAgentLens()`（透镜：只亮访问过的节点）；新增 `updateAgentTrail()`/`_clearTrailLine()`（虚线轨迹）；`clearGraph()` 清理 lens/trail 状态
+- **TS** `agent-lens.ts` — **新建** — `AgentLens` 类：订阅 `agent:focus-changed`，累积 visited nodes，toggle 透镜开关
+
+**新增体验：**
+- **Agent 透镜**: 图上只显示 Agent 访问过的节点，其余降到 1% 透明度
+- **Agent 轨迹**: 渐变虚线串联 Agent 访问过的节点序列（最近 20 步）
+- **实时反馈**: Agent 调工具 → 图上对应节点高亮
+- **消除三重调用**: 每个工具只触发一次图更新
+
+**不动什么：** Rust、Python、工具执行逻辑、Provider
+
+**验证：** TypeScript `tsc --noEmit` ✅ 零错误 · Python `pytest tests/ -x -q` ✅ 820 passed
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **状态**: 🔨 施工中
 > - ✅ **第一步** — 修传输层 (持久 MCP) — **已完成** (2025-06-13)
-> - ⬜ 第二步 — 修整合层 (Agent↔图联动)
+> - ✅ **第二步** — 修整合层 (Agent↔图联动) — **已完成** (2025-06-13)
 > - ⬜ 第三步 — 图作为输入 (点击驱动 Agent)
 
 ## 问题诊断
@@ -159,6 +159,30 @@ Agent 调工具 → EventBus.emit('agent:tool-done', {...})
 - **消除双重调用**: 每个工具只触发一次图更新
 
 **验收:** Agent 分析时图实时响应; 透镜模式正常切换; 轨迹线正确绘制
+
+**实施记录 (2025-06-13):**
+
+| 文件 | 改动 | 状态 |
+|------|------|:----:|
+| `src-ui/src/ui/events.ts` | 文档化 4 个新事件: `agent:tool-started/done`、`agent:thinking`、`agent:focus-changed` | ✅ |
+| `src-ui/src/agent/agent.ts` | 导入 `bus`；`executeOne` 中 emit `agent:tool-started`；`executeBatch` 中 emit `agent:tool-done` | ✅ |
+| `src-ui/src/ui/agent-visualizer.ts` | **重构**: `visualizeAgentTool()` 函数 → `AgentVisualizer` 类；订阅 `agent:tool-done` EventBus 事件；追踪 visited nodes + trail；保留 `askAgent()` | ✅ |
+| `src-ui/src/ui/chat.ts` | 删除 `handleToolResult()` 中的 `visualizeAgentTool` 调用（消除第三重）；移除 `dbg`/`visualizeAgentTool` 无用 import | ✅ |
+| `src-ui/src/main.ts` | 删除 `createExecutor`/`mcpExec` 中的 visualize 调用（消除第一、二重）；新增 `AgentVisualizer` 实例；模式切换时 `setGraph()` 更新引用 | ✅ |
+| `src-ui/src/ui/graph.ts` | 新增 `setAgentLens()`/`clearAgentLens()` — 只亮访问过节点；新增 `updateAgentTrail()`/`_clearTrailLine()` — 虚线串联轨迹；`clearGraph()` 清理 lens/trail 状态 | ✅ |
+| `src-ui/src/ui/agent-lens.ts` | **新建** — `AgentLens` 类：订阅 `agent:focus-changed`，累积 visited nodes，toggle 透镜开关 | ✅ |
+
+**效果:**
+- 三重 `visualizeAgentTool()` 调用 → 单入口 `AgentVisualizer` (EventBus)
+- Agent 分析时图实时响应（透镜、轨迹、高亮）
+- 每个工具调用只触发一次图更新
+- 老代码路径零删除：`AgentVisualizer` 是加性替换
+
+**验证:**
+- TypeScript: `tsc --noEmit` ✅ 零错误
+- Python: 未触碰
+- Rust: 未触碰
+- 端到端待验证: `cargo tauri build` + 实际项目
 
 ---
 

@@ -24,7 +24,7 @@ import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { iconSvg } from './ui/icons';
-import { visualizeAgentTool } from './ui/agent-visualizer';
+import { AgentVisualizer, askAgent } from './ui/agent-visualizer';
 import { dbg } from './ui/debug';
 
 // ── Worker layout helper ──
@@ -97,6 +97,7 @@ let currentGraphData: any = null;
 let currentFileGraphData: any = null;
 let currentMode: VisualMode = 'standard';
 let starGraph: StarGraph = new StarGraph(graphEl, currentMode);
+let agentViz: AgentVisualizer | null = null;
 
 /** Case-insensitive path comparison (Windows drive letters may differ in case). */
 function isSamePath(a: string, b: string): boolean {
@@ -144,6 +145,7 @@ function setupModeSwitch(): void {
       starGraph.destroy();
       starGraph = new StarGraph(graphEl, currentMode);
       chatPanel.setStarGraph(starGraph);
+      agentViz?.setGraph(starGraph);
       const graphForMode = (currentMode === 'files' && currentFileGraphData)
         ? currentFileGraphData : currentGraphData;
       if (graphForMode) starGraph.render(graphForMode);
@@ -213,6 +215,7 @@ async function openProject(path?: string): Promise<void> {
         starGraph.destroy();
         starGraph = new StarGraph(graphEl, 'files');
         chatPanel.setStarGraph(starGraph);
+        agentViz?.setGraph(starGraph);
         starGraph.render(currentFileGraphData);
         statusText.textContent = `⚠️ ${nodeCount} 节点 — 已切换文件视图`;
       } else {
@@ -317,10 +320,10 @@ async function setupAgentInner(): Promise<void> {
 
   // ── Step 1: 修传输层 — MCP 优先，CLI 兜底 ──
   // Factory: CLI executor（合并原 exec/exec2 重复代码）
-  function createExecutor(graphData: any, sg: StarGraph): ToolExecutor {
+  function createExecutor(_graphData: any, _sg: StarGraph): ToolExecutor {
     return async (name, args) => {
       const result = await invoke<string>(name, args);
-      try { if (graphData) visualizeAgentTool(name, args, result, sg); } catch {}
+      // Visualization now handled by AgentVisualizer via EventBus (single entry)
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
   }
@@ -336,7 +339,7 @@ async function setupAgentInner(): Promise<void> {
       // MCP executor: calls mcp_call instead of direct invoke
       const mcpExec: ToolExecutor = async (name, args) => {
         const result = await invoke<string>('mcp_call', { toolName: name, args: JSON.stringify(args) });
-        try { visualizeAgentTool(name, args, result, starGraph); } catch {}
+        // Visualization now handled by AgentVisualizer via EventBus (single entry)
         return result;
       };
 
@@ -691,6 +694,9 @@ async function init(): Promise<void> {
 
   // Check panel
   checkPanel = new CheckPanel(document.body);
+
+  // Step 2: AgentVisualizer — single entry for agent→graph visualization
+  agentViz = new AgentVisualizer(starGraph);
 
   // ── P4: Timeline panel ──
   timelinePanel = new TimelinePanel(document.body);

@@ -323,6 +323,11 @@ export class StarGraph {
   private _fileOpacityOriginal = new Map<number, number>();
   private _agentHighlightIndices = new Set<number>();
 
+  // Step 2: Agent lens & trail
+  private _lensActive = false;
+  private _lensOriginalOpacities: Map<number, number> | null = null;
+  private _trailLine: THREE.LineSegments | null = null;
+
   // Blast
   private blastMode = false;
   private blastSource = -1;
@@ -1342,6 +1347,149 @@ export class StarGraph {
     this._agentHighlightIndices.clear();
   }
 
+  // ── Agent Lens (Step 2) — dim everything except visited nodes ──
+
+  /** Dim all nodes except those matching the given names to 1% opacity. */
+  setAgentLens(nodeNames: Set<string>): void {
+    if (!nodeNames || nodeNames.size === 0 || this.graphNodes.length === 0) {
+      this.clearAgentLens();
+      return;
+    }
+
+    // Build set of matched node indices
+    const lensIndices = new Set<number>();
+    const lowerNames = Array.from(nodeNames).map(n => n.trim().toLowerCase());
+
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const nodeName = (this.graphNodes[i].name || '').toLowerCase();
+      const shortName = nodeName.split('.').pop() || '';
+      const found = lowerNames.some(q =>
+        nodeName === q || nodeName.startsWith(q) || nodeName.includes(q) || shortName === q
+      );
+      if (found) lensIndices.add(i);
+    }
+
+    if (lensIndices.size === 0) return;
+
+    // Save original opacities for restoration
+    if (!this._lensOriginalOpacities) {
+      this._lensOriginalOpacities = new Map();
+    }
+
+    // Apply lens: visited nodes stay bright, others dim to 1%
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      const mat = this.nodeGlows[i].material as THREE.SpriteMaterial;
+      if (lensIndices.has(i)) {
+        mat.opacity = 0.88;
+        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      } else {
+        if (!this._lensOriginalOpacities.has(i)) {
+          this._lensOriginalOpacities.set(i, mat.opacity);
+        }
+        mat.opacity = 0.01;
+        if (this.mode !== 'full' && this.nodeCores[i]) this.nodeCores[i].visible = false;
+      }
+    }
+
+    // Dim all edges
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity = 0.005;
+    }
+
+    this._lensActive = true;
+  }
+
+  /** Restore normal rendering from agent lens mode. */
+  clearAgentLens(): void {
+    if (!this._lensActive && !this._lensOriginalOpacities) return;
+    this._lensActive = false;
+
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      const orig = this._lensOriginalOpacities?.get(i);
+      if (orig !== undefined) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = orig;
+      } else {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
+      }
+      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+    }
+
+    // Restore edge opacities
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity =
+        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
+    }
+
+    this._lensOriginalOpacities?.clear();
+    this._clearTrailLine();
+  }
+
+  // ── Agent Trail (Step 2) — dashed line through visited nodes ──
+
+  /**
+   * Draw a dashed line through the sequence of node names (max 20 steps).
+   * Most recent nodes are brighter. Earlier nodes fade out.
+   */
+  updateAgentTrail(nodeNames: string[]): void {
+    this._clearTrailLine();
+
+    if (!nodeNames || nodeNames.length < 2 || this.graphNodes.length === 0) return;
+
+    // Map names to indices (fuzzy match), skip consecutive duplicates
+    const indices: number[] = [];
+    for (const name of nodeNames) {
+      const idx = this._findNodeIndexByName(name);
+      if (idx >= 0) {
+        if (indices.length === 0 || indices[indices.length - 1] !== idx) {
+          indices.push(idx);
+        }
+      }
+    }
+
+    if (indices.length < 2) return;
+
+    const pos = this.nodePositions;
+    const verts: number[] = [];
+    const colors: number[] = [];
+
+    for (let k = 0; k < indices.length - 1; k++) {
+      const i = indices[k];
+      const j = indices[k + 1];
+      verts.push(
+        pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2],
+        pos[j * 3], pos[j * 3 + 1], pos[j * 3 + 2],
+      );
+      // Fade: earlier segments are dimmer, latest segment is brightest
+      const t = (k + 1) / (indices.length - 1); // 0..1, later = brighter
+      const bright = 0.2 + t * 0.7;
+      // Cyan trail
+      colors.push(0.2 * bright, bright, bright, 0.2 * bright, bright, bright);
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    this._trailLine = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }));
+    this.nodeGroup.add(this._trailLine);
+  }
+
+  /** Remove the existing trail line from the scene. */
+  private _clearTrailLine(): void {
+    if (this._trailLine) {
+      this.nodeGroup.remove(this._trailLine);
+      this._trailLine.geometry.dispose();
+      (this._trailLine.material as THREE.Material).dispose();
+      this._trailLine = null;
+    }
+  }
+
   /** Find a node's array index by name (fuzzy). Returns -1 if not found. */
   private _findNodeIndexByName(query: string): number {
     const q = query.trim().toLowerCase();
@@ -2180,6 +2328,10 @@ export class StarGraph {
     this._diagMsg = '';
     this.tooltipEl?.classList.remove('visible');
     this.detailCard?.classList.remove('visible');
+    // Step 2: Clear lens & trail state
+    this._lensActive = false;
+    this._lensOriginalOpacities?.clear();
+    this._clearTrailLine();
   }
 
   // ── Edges ────────────────────────────────────────────────
