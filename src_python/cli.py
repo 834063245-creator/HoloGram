@@ -39,7 +39,7 @@ def _safe_print(text: str, **kwargs) -> None:
 from .adapters import AdapterRegistry, PythonAdapter
 from .adapters.typescript_adapter import TypeScriptAdapter
 from .adapters.tree_sitter_adapter import TreeSitterAdapter
-from .core.graph import Graph
+from .core.graph import Graph, type_val
 from .core.merger import GraphMerger, CrossFileResolver
 from .core.community import CommunityDetector
 from .core.diff import GraphDiffer, GraphDiff
@@ -1008,48 +1008,59 @@ def cmd_search(args) -> int:
     # Try SQLite FTS5 first (倒排索引，MATCH <1ms，vs LIKE 全表扫)
     db_path = graph_path.replace('.json', '.db')
     nodes = []
+    db_used = False
     if os.path.exists(db_path):
-        import sqlite3
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            # FTS5 MATCH: escape special chars, split into OR terms, suffix * for prefix
-            safe = query.translate(str.maketrans({c: ' ' for c in r'"*^()[]{}:+~-=&|!<>'}))
-            terms = [f'"{t}"*' for t in safe.split() if t]
-            fts_query = " OR ".join(terms) if terms else f'"{safe}"*'
+        # Staleness check: if DB is older than JSON, skip and fall through to _load_graph
+        use_db = True
+        if os.path.exists(graph_path):
+            db_mtime = os.path.getmtime(db_path)
+            json_mtime = os.path.getmtime(graph_path)
+            if db_mtime < json_mtime - 2.0:
+                print(f"  SQLite DB older than JSON, falling back to in-memory search", file=sys.stderr)
+                use_db = False
+        if use_db:
+            import sqlite3
+            db_used = True
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
             try:
-                for row in conn.execute(
-                    "SELECT id, name, type, kind, location FROM nodes "
-                    "WHERE rowid IN (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?) "
-                    "ORDER BY degree DESC LIMIT ?",
-                    (fts_query, limit),
-                ):
-                    nodes.append({
-                        "id": row["id"],
-                        "name": row["name"],
-                        "type": row["type"],
-                        "kind": row["kind"],
-                        "location": row["location"],
-                    })
-            except Exception:
-                # FTS table might not exist; fallback to LIKE
-                pattern = f"%{query}%"
-                for row in conn.execute(
-                    "SELECT id, name, type, kind, location FROM nodes "
-                    "WHERE name LIKE ? OR id LIKE ? "
-                    "ORDER BY degree DESC LIMIT ?",
-                    (pattern, pattern, limit),
-                ):
-                    nodes.append({
-                        "id": row["id"],
-                        "name": row["name"],
-                        "type": row["type"],
-                        "kind": row["kind"],
-                        "location": row["location"],
-                    })
-        finally:
-            conn.close()
-    else:
+                # FTS5 MATCH: escape special chars, split into OR terms, suffix * for prefix
+                safe = query.translate(str.maketrans({c: ' ' for c in r'"*^()[]{}:+~-=&|!<>'}))
+                terms = [f'"{t}"*' for t in safe.split() if t]
+                fts_query = " OR ".join(terms) if terms else f'"{safe}"*'
+                try:
+                    for row in conn.execute(
+                        "SELECT id, name, type, kind, location FROM nodes "
+                        "WHERE rowid IN (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?) "
+                        "ORDER BY degree DESC LIMIT ?",
+                        (fts_query, limit),
+                    ):
+                        nodes.append({
+                            "id": row["id"],
+                            "name": row["name"],
+                            "type": row["type"],
+                            "kind": row["kind"],
+                            "location": row["location"],
+                        })
+                except Exception:
+                    # FTS table might not exist; fallback to LIKE
+                    pattern = f"%{query}%"
+                    for row in conn.execute(
+                        "SELECT id, name, type, kind, location FROM nodes "
+                        "WHERE name LIKE ? OR id LIKE ? "
+                        "ORDER BY degree DESC LIMIT ?",
+                        (pattern, pattern, limit),
+                    ):
+                        nodes.append({
+                            "id": row["id"],
+                            "name": row["name"],
+                            "type": row["type"],
+                            "kind": row["kind"],
+                            "location": row["location"],
+                        })
+            finally:
+                conn.close()
+    if not db_used:
         # Fallback: load full graph and search in memory
         graph = _load_graph(graph_path)
         if not graph:
@@ -1058,7 +1069,18 @@ def cmd_search(args) -> int:
         matched = []
         for n in graph.nodes.values():
             if ql in n.name.lower() or ql in n.id.lower():
-                matched.append((n, graph._deg.get(n.id, 0)))
+                # Score: exact prefix match > substring in name > substring in id
+                name_l = n.name.lower()
+                id_l = n.id.lower()
+                if name_l == ql or id_l == ql:
+                    score = 300
+                elif name_l.startswith(ql):
+                    score = 200
+                elif ql in name_l:
+                    score = 100
+                else:
+                    score = 50
+                matched.append((n, score))
         matched.sort(key=lambda x: -x[1])
         for n, _ in matched[:limit]:
             nodes.append({

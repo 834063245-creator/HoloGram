@@ -172,7 +172,7 @@ fn project_root() -> PathBuf {
 
 fn default_graph() -> String {
     project_root()
-        .join("hologram_full.json")
+        .join("hologram_graph.json")
         .to_string_lossy()
         .to_string()
 }
@@ -1173,7 +1173,7 @@ async fn write_constraints(project_path: String, content: String) -> Result<(), 
 // ═══════════════════════════════════════════════════════
 
 /// Load the graph JSON file and return it as a string.
-/// Tries: 1) explicit path, 2) default (hologram_full.json), 3) last project's hologram_graph.json.
+/// Tries: 1) explicit path, 2) default (hologram_graph.json), 3) last project's hologram_graph.json.
 #[tauri::command]
 async fn load_graph_json(path: Option<String>) -> Result<String, String> {
     // 1) explicit path
