@@ -2,25 +2,34 @@
 MCP Server：Agent 主动查询全息图的通道。
 实现 MCP (Model Context Protocol) 的 tool 语义。
 
-V1 工具（7 个）：
-  - hologram_neighbors(node_id)    → 一阶邻接（按边类型分组）
-  - hologram_impact(node_id, depth)→ BFS 波及分层
-  - hologram_path(from_id, to_id)  → 两点间所有路径
-  - hologram_history(node_id)      → 节点决策历史
-  - hologram_community(node_id)    → 所属社区信息
-  - hologram_delayed()             → 所有含时间延迟边的节点
-  - hologram_changes()             → 上次变更的回看标记
-
-V2 新增工具（5 个查询 + 1 个边界路由）：
-  - hologram_fragile(limit)        → 按 L4 密度排序的最脆弱模块
-  - hologram_cycle(mode)           → 数据流环列表
-  - hologram_thread_conflicts(node_id) → 线程 × 资源冲突矩阵
-  - hologram_coupling_report(module)   → 模块的 L1-L4 分布
-  - hologram_timeline(limit)       → 因果审计时间线查询
-  - hologram_blindspots(filter)    → 边界列表 + 上下文数据
-
-V3 新增工具（1 个）：
-  - hologram_preflight(files)      → 起飞前检查：impact + coupling + community
+工具清单（21 个 — 与 CLI 全量对齐）：
+  V1 查询 (7):
+    hologram_neighbors(node_id)    → 一阶邻接（按边类型分组）
+    hologram_impact(node_id, depth)→ BFS 波及分层
+    hologram_path(from_id, to_id)  → 两点间所有路径
+    hologram_history(node_id)      → 节点决策历史
+    hologram_community(node_id)    → 所属社区信息
+    hologram_delayed()             → 所有含时间延迟边的节点
+    hologram_changes()             → 上次变更的回看标记
+  V2 分析 (5):
+    hologram_fragile(limit)        → 按 L4 密度排序的最脆弱模块
+    hologram_cycle(mode)           → 数据流环列表
+    hologram_thread_conflicts(node_id) → 线程 × 资源冲突矩阵
+    hologram_coupling_report(module)   → 模块的 L1-L4 分布
+    hologram_timeline(limit)       → 因果审计时间线查询
+  V2 边界 (1):
+    hologram_blindspots(filter)    → 边界列表 + 上下文数据
+  V3 分析 (2):
+    hologram_preflight(files)      → 起飞前检查：impact + coupling + community
+    hologram_run_check(path)       → 全量约束校验
+  V3 趋势 (1):
+    hologram_run_health(path, days)→ 项目健康评分 + 趋势
+  通用查询 (5):
+    hologram_search(query)         → 模糊搜索节点
+    hologram_graph_summary()       → 图统计摘要
+    hologram_community_report(min) → 社区结构报告
+    hologram_diff(before_path)     → 与基线快照对比
+    hologram_analyze(path)         → 重新分析项目
 """
 
 from __future__ import annotations
@@ -70,6 +79,14 @@ class MCPServer:
             "hologram_blindspots": self._tool_blindspots,
             # V3 preflight
             "hologram_preflight": self._tool_preflight,
+            # V3+ parity
+            "hologram_search": self._tool_search,
+            "hologram_graph_summary": self._tool_graph_summary,
+            "hologram_community_report": self._tool_community_report,
+            "hologram_diff": self._tool_diff,
+            "hologram_analyze": self._tool_analyze,
+            "hologram_run_check": self._tool_run_check,
+            "hologram_run_health": self._tool_run_health,
         }
 
         self._tool_definitions = [
@@ -227,7 +244,140 @@ class MCPServer:
                     "required": ["files"],
                 },
             },
+            # ── V3+ parity tools (补齐 CLI 全量) ──
+            {
+                "name": "hologram_search",
+                "description": "Fuzzy search for nodes by name or ID. Returns matching symbols with their IDs, types, degrees, and locations. Use this as the FIRST step when looking for a function/class/module but don't know its exact name or ID.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Partial name or ID to search for"},
+                        "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "hologram_graph_summary",
+                "description": "Get a high-level summary of the current dependency graph: total nodes/edges, node type distribution, edge type distribution, density, community count, and coupling depth breakdown if available.",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "hologram_community_report",
+                "description": "Report on community/cluster structure in the codebase. Returns all communities above the minimum size threshold, sorted by size.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "min_size": {"type": "integer", "description": "Minimum community size to report (default 3)", "default": 3},
+                    },
+                },
+            },
+            {
+                "name": "hologram_diff",
+                "description": "Diff the current graph against a baseline snapshot. Returns added/removed/modified nodes and edges.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "before_path": {"type": "string", "description": "Path to the baseline graph JSON file"},
+                    },
+                    "required": ["before_path"],
+                },
+            },
+            {
+                "name": "hologram_analyze",
+                "description": "Re-analyze a project directory and reload the graph. Use when switching to a different project or refreshing after major changes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project root directory path"},
+                    },
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "hologram_run_check",
+                "description": "Run full constraint validation (V3) on the current project. Checks against constraints and returns violations found plus confirmation of rules that pass. Use for thorough project audits.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project root directory path"},
+                    },
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "hologram_run_health",
+                "description": "Project health overview (V3): aggregates timeline change history and coupling snapshot to compute a health score (0-100), trends, top changed files, and most fragile modules.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project root directory path"},
+                        "days": {"type": "integer", "description": "Days to look back (default 30)", "default": 30},
+                    },
+                    "required": ["path"],
+                },
+            },
         ]
+
+    @classmethod
+    def from_project(cls, root: str) -> "MCPServer":
+        """分析项目并创建 MCP Server — 一体化入口。
+
+        供 Rust mcp_manager 通过 `serve --project-root` 调用。
+        运行完整分析管线后返回就绪的 MCPServer 实例。
+        """
+        import sys
+        print(f"[MCP] 开始分析项目: {root}", file=sys.stderr)
+
+        from .adapters import AdapterRegistry, PythonAdapter
+        from .adapters.typescript_adapter import TypeScriptAdapter
+        from .adapters.tree_sitter_adapter import TreeSitterAdapter
+        from .pipeline import PipelineRunner
+        from .core.merger import CrossFileResolver
+        from .core.community import CommunityDetector
+
+        registry = AdapterRegistry()
+        registry.register(TreeSitterAdapter())
+        registry.register(PythonAdapter())
+        registry.register(TypeScriptAdapter())
+
+        runner = PipelineRunner(registry)
+        graph, report = runner.run(root)
+
+        # 跨文件关系解析
+        resolver = CrossFileResolver()
+        cross_added = resolver.resolve(graph)
+        if cross_added:
+            print(f"  Cross-file edges resolved: {cross_added}", file=sys.stderr)
+
+        # 社区发现
+        detector = CommunityDetector()
+        communities = detector.detect(graph)
+        if communities:
+            print(f"  Communities detected: {len(communities)}", file=sys.stderr)
+
+        # 耦合分析
+        try:
+            from .analysis.coupling import CouplingDepthAnalyzer
+            coupler = CouplingDepthAnalyzer()
+            sources = {}
+            for fp in report.files:
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        sources[fp] = f.read()
+                except (OSError, PermissionError):
+                    pass
+            for fp, src in sources.items():
+                coupler.pre_scan_file(fp, src)
+            cr = coupler.analyze(graph, sources)
+            graph.coupling_summary = cr
+            print(f"  coupling: L1={cr['total_l1']} L2={cr['total_l2']} L3={cr['total_l3']} L4={cr['total_l4']}", file=sys.stderr)
+        except Exception as exc:
+            print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
+
+        print(f"[MCP] 分析完成: {graph.node_count} 节点, {graph.edge_count} 边, {report.elapsed_sec:.1f}s", file=sys.stderr)
+
+        return cls(graph)
 
     # ── 辅助: 从 location 提取文件路径 ─────────────────────
 
@@ -710,6 +860,149 @@ class MCPServer:
             return report.to_dict()
         except Exception as e:
             return {"error": str(e), "risk_level": "unknown"}
+
+    # ── V3+ parity 工具实现 ─────────────────────────────────
+
+    def _tool_search(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """模糊搜索节点——Agent 不需要知道精确 node_id。"""
+        query = args.get("query", "")
+        limit = args.get("limit", 20)
+        ql = query.lower()
+        matched = []
+        for n in self.graph.nodes.values():
+            name_l = n.name.lower()
+            id_l = n.id.lower()
+            if ql in name_l or ql in id_l:
+                if name_l == ql or id_l == ql:
+                    score = 300
+                elif name_l.startswith(ql):
+                    score = 200
+                elif ql in name_l:
+                    score = 100
+                else:
+                    score = 50
+                matched.append((n, score))
+        matched.sort(key=lambda x: -x[1])
+        return {
+            "query": query,
+            "count": min(len(matched), limit),
+            "results": [
+                {
+                    "id": n.id,
+                    "name": n.name,
+                    "type": type_val(n.type),
+                    "kind": getattr(n, 'kind', '') or '',
+                    "location": getattr(n, 'location', '') or '',
+                }
+                for n, _ in matched[:limit]
+            ],
+        }
+
+    def _tool_graph_summary(self, _args: Dict[str, Any]) -> Dict[str, Any]:
+        """图统计摘要。"""
+        nodes = list(self.graph.nodes.values())
+        edges = list(self.graph.edges.values())
+        node_types: Dict[str, int] = {}
+        edge_types: Dict[str, int] = {}
+        for n in nodes:
+            nt = n.type.value if hasattr(n.type, 'value') else str(n.type)
+            node_types[nt] = node_types.get(nt, 0) + 1
+        for e in edges:
+            et = e.type.value if hasattr(e.type, 'value') else str(e.type)
+            edge_types[et] = edge_types.get(et, 0) + 1
+        n = len(nodes)
+        density = round((2 * len(edges)) / (n * (n - 1)), 6) if n > 1 else 0
+        coupling = getattr(self.graph, 'coupling_summary', None)
+        return {
+            "total_nodes": n,
+            "total_edges": len(edges),
+            "node_types": node_types,
+            "edge_types": edge_types,
+            "density": density,
+            "communities": getattr(self.graph, 'community_count', 0),
+            "coupling": coupling,
+            "top_node_kinds": sorted(node_types.items(), key=lambda x: x[1], reverse=True)[:10],
+        }
+
+    def _tool_community_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """社区结构报告。"""
+        min_size = args.get("min_size", 3)
+        communities = []
+        for c in self.graph.communities:
+            if len(c.node_ids) >= min_size:
+                communities.append(c.to_dict())
+        communities.sort(key=lambda c: len(c.get("node_ids", [])), reverse=True)
+        return {
+            "total_communities": len(communities),
+            "min_size_filter": min_size,
+            "communities": communities,
+        }
+
+    def _tool_diff(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """与基线快照对比。"""
+        before_path = args.get("before_path", "")
+        if not before_path:
+            return {"error": "before_path is required"}
+        try:
+            before = Graph.from_json(before_path)
+            from .core.diff import GraphDiffer
+            differ = GraphDiffer()
+            diff = differ.diff(before, self.graph)
+            return diff.to_dict()
+        except FileNotFoundError:
+            return {"error": f"Baseline graph not found: {before_path}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_analyze(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """重新分析项目并热加载图。"""
+        path = args.get("path", "")
+        if not path:
+            return {"error": "path is required"}
+        try:
+            server = MCPServer.from_project(path)
+            # Hot-reload: replace our graph and reset caches
+            self.graph = server.graph
+            self._coupling_result = None
+            self._cycle_result = None
+            self._boundaries = None
+            return {
+                "status": "ok",
+                "total_nodes": self.graph.node_count,
+                "total_edges": self.graph.edge_count,
+                "communities": self.graph.community_count,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_run_check(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """V3 约束校验。"""
+        path = args.get("path", "")
+        if not path:
+            return {"error": "path is required"}
+        try:
+            from .routing.preflight import run_preflight
+            all_files = sorted(set(
+                n.location.rsplit(":", 1)[0] if ":" in (n.location or "") else (n.location or "")
+                for n in self.graph.nodes.values() if n.location
+            ))
+            report = run_preflight(self.graph, all_files, project_root=path)
+            return report.to_dict()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_run_health(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """V3 健康趋势。"""
+        path = args.get("path", "")
+        days = args.get("days", 30)
+        if not path:
+            return {"error": "path is required"}
+        try:
+            from .routing.preflight import run_health
+            report = run_health(path, graph=self.graph, days=days)
+            return report.to_dict()
+        except Exception as e:
+            return {"error": str(e)}
 
     # ── JSON-RPC 协议 ───────────────────────────────────
 

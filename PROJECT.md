@@ -5,7 +5,29 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
-> **最后更新：2026-06-12 · 集成测试规格审查 + 5 项预修**
+> **最后更新：2026-06-13 · 架构重构第一步——修传输层（持久 MCP）**
+
+---
+
+## 2026-06-13 架构重构第一步 — 持久 MCP ✅
+
+按 [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) 三步方案，第一步落地：
+
+**改了什么：**
+- **Rust** `mcp_manager.rs` (新) — MCP 进程管理器：生命周期管理、JSON-RPC 通信、崩溃追踪（60s 内 3 次 → 永久降级）
+- **Rust** `main.rs` — 新增 `start_mcp_server`/`mcp_call`/`mcp_list_tools`/`stop_mcp_server` 4 个命令
+- **Python** `mcp_server.py` — 新增 `MCPServer.from_project(root)` 类方法（完整分析管线 → 返回就绪实例）
+- **Python** `cli.py` — `serve` 子命令新增 `--project-root` 参数
+- **TS** `tool.ts` — 新增 `createHologramToolsFromSchemas()` 工厂（从 MCP `tools/list` 动态生成 Tool）
+- **TS** `main.ts` — 合并 `exec`/`exec2` 为 `createExecutor()` 工厂；MCP 优先路径 + CLI 自动降级
+
+**设计原则：**
+- 老 CLI 路径一行未删，MCP 失败 → 自动 fallback
+- 每个工具调用从 500ms+（冷启动 Python）降到 <100ms（持久进程内存查询）
+- 进程崩溃自动重启，60s 内 3 次则永久降级并通知前端
+- Coding tools（文件/Shell/Git/Web）不走 MCP，直接用 CLI invoke
+
+**验证：** Rust `cargo check` ✅ · TypeScript `tsc --noEmit` ✅ · Python `pytest tests/ -x -q` ✅ 820 passed
 
 ---
 
@@ -222,17 +244,23 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 
 ---
 
-## Tauri 桥接层（src-tauri/src/main.rs）
+## Tauri 桥接层（src-tauri/src/main.rs + mcp_manager.rs）
 
-21 个 `#[tauri::command]`，全部透传 Python CLI：
+25 个 `#[tauri::command]`：
 
 ```
 hologram_analyze · hologram_neighbors · hologram_impact · hologram_path
 hologram_diff · hologram_fragile · hologram_cycle · hologram_coupling_report
 hologram_blindspots · hologram_thread_conflicts · hologram_timeline
 hologram_community_report · hologram_graph_summary
-load_graph_json · analyze_and_load · start_watching · stop_watching
+hologram_history · hologram_community · hologram_delayed · hologram_changes
+load_graph_json · load_binary_graph · analyze_and_load
+start_watching · stop_watching
+── 2026-06-13 新增 (Step 1: 持久 MCP) ──
+start_mcp_server · mcp_call · mcp_list_tools · stop_mcp_server
 ```
+
+新增 `mcp_manager.rs`：MCP 进程生命周期管理（启动/调用/崩溃恢复/永久降级），JSON-RPC 通信。
 
 文件监听：1秒 polling mtime 对比，检测到变更 → 增量分析 → emit `graph-updated` 事件 → 前端刷新星图。
 

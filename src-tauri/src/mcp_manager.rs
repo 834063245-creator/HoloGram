@@ -1,0 +1,290 @@
+// MCP Process Manager — 持久 MCP 进程生命周期管理
+// Step 1: 修传输层 — 从"每次起新进程"到"长生命周期 MCP"
+//
+// 设计：
+//   McpManager 掌管一个长期运行的 Python MCP Server 子进程。
+//   通过 stdin/stdout JSON-RPC 通信，避免每次工具调用都冷启动。
+//   崩溃追踪：60 秒内 3 次崩溃 → 永久降级，前端自动回退 CLI。
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Command, Stdio};
+use std::time::Instant;
+
+pub struct McpManager {
+    child: Option<Child>,
+    request_id: u64,
+    crash_count: u32,
+    crash_window_start: Option<Instant>,
+    pub degraded: bool,
+}
+
+impl McpManager {
+    pub fn new() -> Self {
+        Self {
+            child: None,
+            request_id: 0,
+            crash_count: 0,
+            crash_window_start: None,
+            degraded: false,
+        }
+    }
+
+    /// Spawn the Python MCP server, wait for the ready signal, then return
+    /// the tool list via tools/list.
+    pub fn start(&mut self, project_root: &str, python: &str) -> Result<String, String> {
+        if self.degraded {
+            return Err("MCP 已永久降级，请使用 CLI 模式".into());
+        }
+
+        // Kill any existing process
+        self.kill_inner();
+
+        let root = super::project_root();
+
+        #[cfg(windows)]
+        let child = {
+            use std::os::windows::process::CommandExt;
+            Command::new(python)
+                .creation_flags(super::NO_WINDOW)
+                .current_dir(&root)
+                .args(["-m", "src_python", "serve", "--project-root", project_root])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONUTF8", "1")
+                .spawn()
+                .map_err(|e| format!("无法启动 MCP Server: {e}"))?
+        };
+        #[cfg(not(windows))]
+        let child = {
+            Command::new(python)
+                .current_dir(&root)
+                .args(["-m", "src_python", "serve", "--project-root", project_root])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONUTF8", "1")
+                .spawn()
+                .map_err(|e| format!("无法启动 MCP Server: {e}"))?
+        };
+
+        self.child = Some(child);
+        self.request_id = 0;
+
+        // Wait for the ready signal from the server (analysis may take a while)
+        self.read_ready()?;
+
+        // Immediately fetch tool list so the frontend can build dynamic tools
+        let tools = self.send_request("tools/list", "{}")?;
+
+        // Reset crash tracking on successful start
+        self.crash_count = 0;
+        self.crash_window_start = None;
+
+        Ok(tools)
+    }
+
+    /// Send a tools/call request and return the result text.
+    /// On failure (broken pipe, process died), record the crash and return an error.
+    pub fn call(&mut self, tool_name: &str, args_json: &str) -> Result<String, String> {
+        if self.degraded {
+            return Err("MCP 已永久降级".into());
+        }
+
+        let child = self.child.as_mut().ok_or("MCP Server 未启动")?;
+
+        // Quick liveness check
+        if let Ok(Some(status)) = child.try_wait() {
+            let code = status.code().unwrap_or(-1);
+            eprintln!("[mcp] 进程已退出 (code={code})，触发崩溃计数");
+            self.record_crash();
+            return Err(format!("MCP 进程已退出 (exit code: {code})"));
+        }
+
+        // Build the JSON-RPC request with the arguments as inline JSON
+        let id = self.request_id;
+        self.request_id += 1;
+
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
+            id, tool_name, args_json
+        );
+
+        let result = self.send_raw(&request);
+
+        match result {
+            Ok(text) => Ok(text),
+            Err(e) => {
+                // Process probably died — record crash
+                eprintln!("[mcp] call 失败: {e}");
+                self.record_crash();
+                Err(e)
+            }
+        }
+    }
+
+    /// Request the tool list from the MCP server.
+    pub fn list_tools(&mut self) -> Result<String, String> {
+        if self.degraded {
+            return Err("MCP 已永久降级".into());
+        }
+        if self.child.is_none() {
+            return Err("MCP Server 未启动".into());
+        }
+        self.send_request("tools/list", "{}")
+    }
+
+    /// Stop the MCP server and reset state.
+    pub fn stop(&mut self) {
+        self.kill_inner();
+        self.degraded = false;
+        self.crash_count = 0;
+        self.crash_window_start = None;
+        self.request_id = 0;
+    }
+
+    // ── internals ──
+
+    fn kill_inner(&mut self) {
+        if let Some(ref mut child) = self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.child = None;
+    }
+
+    /// Read the JSON "ready" notification from stdout after spawning.
+    /// Blocks until the server finishes analysis and signals readiness.
+    fn read_ready(&mut self) -> Result<(), String> {
+        let child = self.child.as_mut().ok_or("子进程不存在")?;
+        let stdout = child.stdout.take().ok_or("stdout 不可用")?;
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("等待 MCP 就绪信号失败: {e}"))?;
+        // Put stdout back
+        child.stdout = Some(reader.into_inner());
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Err("MCP Server 启动失败：无就绪信号".into());
+        }
+        // Verify it's a valid JSON ready notification
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if val.get("method").and_then(|m| m.as_str()) == Some("ready") {
+                eprintln!("[mcp] 就绪信号已收到");
+                return Ok(());
+            }
+        }
+        // Not a ready signal — the server might have errored
+        Err(format!("MCP Server 异常启动输出: {trimmed}"))
+    }
+
+    /// Send a JSON-RPC request (method + params as JSON string) and extract
+    /// the text content from the response.
+    fn send_request(&mut self, method: &str, params_json: &str) -> Result<String, String> {
+        let id = self.request_id;
+        self.request_id += 1;
+
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#,
+            id, method, params_json
+        );
+
+        self.send_raw(&request)
+    }
+
+    /// Write a raw JSON-RPC line to stdin, read one line from stdout,
+    /// and extract the result text.
+    fn send_raw(&mut self, json_line: &str) -> Result<String, String> {
+        let child = self.child.as_mut().ok_or("MCP Server 未启动")?;
+
+        // Write request to stdin
+        {
+            let stdin = child.stdin.as_mut().ok_or("stdin 不可用")?;
+            writeln!(stdin, "{}", json_line)
+                .map_err(|e| format!("写入 stdin 失败: {e}"))?;
+            stdin
+                .flush()
+                .map_err(|e| format!("flush stdin 失败: {e}"))?;
+        }
+
+        // Read response from stdout (take, read, put back)
+        let response_line = {
+            let stdout = child.stdout.take().ok_or("stdout 不可用")?;
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .map_err(|e| format!("读取响应失败: {e}"))?;
+            child.stdout = Some(reader.into_inner());
+            line
+        };
+
+        let trimmed = response_line.trim();
+        if trimmed.is_empty() {
+            return Err("MCP 返回空响应".into());
+        }
+
+        // Parse JSON-RPC response
+        let resp: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| format!("JSON-RPC 解析失败: {e} — raw: {}", trimmed))?;
+
+        // Check for JSON-RPC error
+        if let Some(err) = resp.get("error") {
+            let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
+            return Err(format!("MCP 错误: {msg}"));
+        }
+
+        // Extract result content
+        let result = resp.get("result").ok_or("响应无 result 字段")?;
+
+        // For tools/list, return the full result as JSON
+        if let Some(content) = result.get("content") {
+            if let Some(items) = content.as_array() {
+                for item in items {
+                    if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            return Ok(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // tools/list returns {tools: [...]} directly, not wrapped in content
+        if let Some(_tools) = result.get("tools") {
+            return Ok(serde_json::to_string(result).unwrap_or_default());
+        }
+
+        // Fallback: return the entire result as a JSON string
+        Ok(serde_json::to_string(result).unwrap_or_default())
+    }
+
+    fn record_crash(&mut self) {
+        let now = Instant::now();
+        match self.crash_window_start {
+            Some(start) if now.duration_since(start) < std::time::Duration::from_secs(60) => {
+                self.crash_count += 1;
+                eprintln!(
+                    "[mcp] {} 秒内崩溃 {} 次",
+                    now.duration_since(start).as_secs(),
+                    self.crash_count
+                );
+                if self.crash_count >= 3 {
+                    self.degraded = true;
+                    self.kill_inner();
+                    eprintln!("[mcp] 60 秒内 3 次崩溃 — 永久降级至 CLI 模式");
+                }
+            }
+            _ => {
+                self.crash_window_start = Some(now);
+                self.crash_count = 1;
+                eprintln!("[mcp] 崩溃计数重置: 1/3 (窗口 60s)");
+            }
+        }
+    }
+}

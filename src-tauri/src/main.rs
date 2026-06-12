@@ -4,6 +4,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod mcp_manager;
+
+use mcp_manager::McpManager;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -19,7 +22,7 @@ use std::os::windows::process::CommandExt;
 
 /// CREATE_NO_WINDOW — suppress console popup on Windows
 #[cfg(windows)]
-const NO_WINDOW: u32 = 0x08000000;
+pub(crate) const NO_WINDOW: u32 = 0x08000000;
 
 // ═══════════════════════════════════════════════════════
 // Background job system — timeout + background + output + kill
@@ -174,7 +177,7 @@ fn python() -> String {
     "python".to_string()
 }
 
-fn project_root() -> PathBuf {
+pub(crate) fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or(PathBuf::from(".").as_path())
@@ -1715,6 +1718,39 @@ async fn git_init(path: String) -> Result<String, String> {
     run_git(&path, &["init"]).map(|s| s.trim().to_string())
 }
 
+static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(McpManager::new())));
+
+// ═══════════════════════════════════════════════════════
+// MCP Server 命令 — Step 1: 持久进程 + 自动工具发现
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn start_mcp_server(project_root: String) -> Result<String, String> {
+    let py = python();
+    let mut mgr = MCP_MANAGER.lock().unwrap();
+    mgr.start(&project_root, &py)
+}
+
+#[tauri::command]
+async fn mcp_call(tool_name: String, args: String) -> Result<String, String> {
+    let mut mgr = MCP_MANAGER.lock().unwrap();
+    mgr.call(&tool_name, &args)
+}
+
+#[tauri::command]
+async fn mcp_list_tools() -> Result<String, String> {
+    let mut mgr = MCP_MANAGER.lock().unwrap();
+    mgr.list_tools()
+}
+
+#[tauri::command]
+async fn stop_mcp_server() -> Result<String, String> {
+    let mut mgr = MCP_MANAGER.lock().unwrap();
+    mgr.stop();
+    Ok("MCP Server 已停止".into())
+}
+
 // ═══════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════
@@ -1737,6 +1773,10 @@ fn main() {
                         let _ = job.child.wait();
                     }
                     jobs.clear();
+                }
+                // Stop MCP server on exit
+                if let Ok(mut mgr) = MCP_MANAGER.lock() {
+                    mgr.stop();
                 }
             }
         })
@@ -1791,6 +1831,10 @@ fn main() {
             search_code,
             web_fetch,
             edit_file,
+            start_mcp_server,
+            mcp_call,
+            mcp_list_tools,
+            stop_mcp_server,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");

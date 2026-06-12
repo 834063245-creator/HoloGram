@@ -16,7 +16,7 @@ import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
-import { ToolRegistry, createHologramTools, createCodingTools, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createHologramTools, createHologramToolsFromSchemas, createCodingTools, type ToolExecutor } from './agent/tool';
 import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
@@ -315,27 +315,55 @@ async function setupAgentInner(): Promise<void> {
 
   const registry = new ToolRegistry();
 
-  // Shared executor — used by hologram tools and coding tools
-  const exec: ToolExecutor = async (name, args) => {
-    const result = await invoke<string>(name, args);
-    // 触发星图可视化（解析失败不影响对话）
-    try {
-      if (currentGraphData) visualizeAgentTool(name, args, result, starGraph);
-    } catch { /* 可视化失败静默跳过 */ }
-    // Tauri auto-deserializes JSON backend responses → JS objects. The OpenAI
-    // API requires message content to be a string; objects serialize as "[object
-    // Object]" and trigger a 400. Stringify non-string results proactively.
-    return typeof result === 'string' ? result : JSON.stringify(result);
-  };
+  // ── Step 1: 修传输层 — MCP 优先，CLI 兜底 ──
+  // Factory: CLI executor（合并原 exec/exec2 重复代码）
+  function createExecutor(graphData: any, sg: StarGraph): ToolExecutor {
+    return async (name, args) => {
+      const result = await invoke<string>(name, args);
+      try { if (graphData) visualizeAgentTool(name, args, result, sg); } catch {}
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    };
+  }
 
-  if (currentGraphData) {
+  // Try MCP for hologram tools — faster (persistent process, <100ms vs 500ms+ CLI)
+  let hologramViaMcp = false;
+  if (currentGraphData && currentPath) {
+    try {
+      const toolsJson = await invoke<string>('start_mcp_server', { projectRoot: currentPath });
+      const parsed = JSON.parse(toolsJson);
+      const schemas = (parsed.tools || []) as Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+
+      // MCP executor: calls mcp_call instead of direct invoke
+      const mcpExec: ToolExecutor = async (name, args) => {
+        const result = await invoke<string>('mcp_call', { toolName: name, args: JSON.stringify(args) });
+        try { visualizeAgentTool(name, args, result, starGraph); } catch {}
+        return result;
+      };
+
+      for (const tool of createHologramToolsFromSchemas(schemas, mcpExec)) {
+        registry.register(tool);
+      }
+      hologramViaMcp = true;
+      dbg('setupAgent', `MCP mode: ${schemas.length} tools`);
+    } catch (e) {
+      dbg('setupAgent', `MCP unavailable, CLI fallback: ${e}`);
+    }
+  }
+
+  // CLI fallback for hologram tools (MCP failed or no project path)
+  if (!hologramViaMcp && currentGraphData) {
+    const exec = createExecutor(currentGraphData, starGraph);
     for (const tool of createHologramTools(exec)) {
       registry.register(tool);
     }
   }
 
-  // Register coding tools (file I/O, shell, search, git, web) — always available
-  for (const tool of createCodingTools(exec)) {
+  // Coding tools (file I/O, shell, search, git, web) — always direct CLI invoke
+  const codingExec: ToolExecutor = async (name, args) => {
+    const result = await invoke<string>(name, args);
+    return typeof result === 'string' ? result : JSON.stringify(result);
+  };
+  for (const tool of createCodingTools(codingExec)) {
     registry.register(tool);
   }
 
@@ -388,11 +416,7 @@ async function setupAgentInner(): Promise<void> {
         ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
         : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
     const r = new ToolRegistry();
-    const exec2: ToolExecutor = async (name, args) => {
-      const result = await invoke<string>(name, args);
-      try { if (currentGraphData) visualizeAgentTool(name, args, result, starGraph); } catch {}
-      return typeof result === 'string' ? result : JSON.stringify(result);
-    };
+    const exec2 = createExecutor(currentGraphData, starGraph);
     if (currentGraphData) {
       for (const tool of createHologramTools(exec2)) r.register(tool);
     }

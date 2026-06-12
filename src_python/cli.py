@@ -410,7 +410,23 @@ def cmd_coupling_report(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    """以 stdio 模式启动 MCP Server。"""
+    """以 stdio 模式启动 MCP Server。
+
+    两种模式：
+      --project-root ROOT  → 分析项目 + 启动服务（Rust mcp_manager 用）
+      -g GRAPH             → 加载已有图文件 + 启动服务（手动调试用）
+    """
+    if getattr(args, 'project_root', None):
+        root = os.path.abspath(args.project_root)
+        from .mcp_server import MCPServer
+        server = MCPServer.from_project(root)
+        # Signal readiness to the parent Rust process before entering the loop
+        import json as _json
+        sys.stdout.write(_json.dumps({"jsonrpc": "2.0", "method": "ready", "params": {}}) + "\n")
+        sys.stdout.flush()
+        server.run_stdio()
+        return 0
+
     graph = _load_graph(args.graph)
     if graph is None:
         return 1
@@ -1177,6 +1193,7 @@ def main() -> None:
     # hologram serve
     p_serve = sub.add_parser("serve", help="Start MCP Server (stdio)")
     p_serve.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_serve.add_argument("--project-root", help="Project root to analyze before serving (Rust mcp_manager)")
     p_serve.set_defaults(func=cmd_serve)
 
     # ── V3 commands ──
