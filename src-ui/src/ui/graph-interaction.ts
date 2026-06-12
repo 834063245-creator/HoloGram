@@ -1,6 +1,6 @@
 // Graph Interaction — Step 3: 图作为 Agent 输入设备
 // 订阅图交互事件 (graph:node-clicked / graph:path-selected / graph:region-selected)
-// 自动生成 Agent 查询并发送到聊天面板。
+// 将交互翻译为 Agent 查询，但不自动发送 —— 通过 graph:show-prompt 弹出确认条。
 // 不改 Agent 循环，不改 Python 引擎。纯增量。
 
 import { bus } from './events';
@@ -39,11 +39,9 @@ export class GraphInteraction {
 
   private _onNodeClicked(data: NodeClickedData): void {
     dbg('graph-interaction', `node-clicked: "${data.nodeName}" (${data.nodeType})`);
-    // The existing detail card already provides a "问 Agent" button.
-    // This event is for future extensions (e.g. quick-action chips, analytics).
   }
 
-  // ── Path selected (Shift+click two nodes) → auto-query agent about the dependency chain ──
+  // ── Path selected (Shift+click two nodes) → highlight + show confirmation prompt ──
 
   private _onPathSelected(data: PathSelectedData): void {
     const pathStr = data.pathNames.length > 0
@@ -60,10 +58,13 @@ export class GraphInteraction {
       `3. 如果修改 \`${data.from.name}\`，对 \`${data.to.name}\` 的影响范围`,
     ].join('\n');
     dbg('graph-interaction', `path-selected: "${data.from.name}" → "${data.to.name}" (${data.pathLength} nodes)`);
-    bus.emit('agent:query', question);
+    bus.emit('graph:show-prompt', {
+      title: `路径: ${data.from.name} → ${data.to.name} (${data.pathLength} 跳)`,
+      question,
+    });
   }
 
-  // ── Region selected (Alt+drag box select) → auto-summarize the selected modules ──
+  // ── Region selected (Alt+drag box select) → highlight + show confirmation prompt ──
 
   private _onRegionSelected(data: RegionSelectedData): void {
     const maxShow = 12;
@@ -79,6 +80,9 @@ export class GraphInteraction {
       `3. 哪些是关键节点（扇入/扇出最高）？`,
     ].join('\n');
     dbg('graph-interaction', `region-selected: ${data.nodeCount} nodes`);
-    bus.emit('agent:query', question);
+    bus.emit('graph:show-prompt', {
+      title: `框选 ${data.nodeCount} 个节点`,
+      question,
+    });
   }
 }

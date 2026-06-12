@@ -412,6 +412,7 @@ export class StarGraph {
     this.setupDetailCard();
     this.setupPieMenu();
     this.setupSelectRect();
+    this.setupPromptBar();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
@@ -471,6 +472,7 @@ export class StarGraph {
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (this._promptBarEl?.style.display === 'flex') { this._hidePrompt(); return; }
         if (this._selecting) { this._selecting = false; this._hideSelectRect(); return; }
         if (this._shiftSourceIdx >= 0) { this._clearShiftPath(); return; }
         if (this.pieMenu?.classList.contains('visible')) { this.hidePieMenu(); e.stopImmediatePropagation(); return; }
@@ -926,6 +928,13 @@ export class StarGraph {
   private _selectEnd = new THREE.Vector2();
   private _selectRectEl!: HTMLDivElement;
 
+  // ── Step 3: Floating prompt bar (confirmation before asking Agent) ──
+  private _promptBarEl!: HTMLDivElement;
+  private _promptTitleEl!: HTMLSpanElement;
+  private _promptBtnEl!: HTMLButtonElement;
+  private _promptQuestion = '';
+  private _promptTimer: ReturnType<typeof setTimeout> | null = null;
+
   private setPathSource(idx: number): void {
     this._pathSource = idx;
     this._pathTarget = -1;
@@ -1200,6 +1209,75 @@ export class StarGraph {
       }
     }, 2500);
   }
+
+  // ── Step 3: Floating prompt bar ──────────────────────────
+
+  private setupPromptBar(): void {
+    this._promptBarEl = document.createElement('div');
+    this._promptBarEl.id = 'graph-prompt-bar';
+    this._promptBarEl.style.cssText =
+      'position:absolute;z-index:19;bottom:16px;left:50%;transform:translateX(-50%);' +
+      'display:none;align-items:center;gap:10px;padding:8px 16px;' +
+      'background:var(--panel-bg,rgba(6,12,24,0.92));' +
+      'border:1px solid var(--panel-edge,rgba(88,140,220,0.35));' +
+      'border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.5);' +
+      'font-size:13px;color:var(--starlight,#e6edf3);white-space:nowrap;' +
+      'transition:opacity 0.2s;';
+    this._promptTitleEl = document.createElement('span');
+    this._promptTitleEl.style.cssText = 'max-width:420px;overflow:hidden;text-overflow:ellipsis;';
+    this._promptBarEl.appendChild(this._promptTitleEl);
+    this._promptBtnEl = document.createElement('button');
+    this._promptBtnEl.textContent = '询问 Agent';
+    this._promptBtnEl.style.cssText =
+      'padding:4px 14px;font-size:12px;font-weight:600;border:none;border-radius:5px;' +
+      'background:rgba(80,150,240,0.3);color:#c8dfff;cursor:pointer;' +
+      'transition:background 0.15s;';
+    this._promptBtnEl.addEventListener('mouseenter', () => { this._promptBtnEl.style.background = 'rgba(80,150,240,0.55)'; });
+    this._promptBtnEl.addEventListener('mouseleave', () => { this._promptBtnEl.style.background = 'rgba(80,150,240,0.3)'; });
+    this._promptBtnEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this._promptQuestion) {
+        bus.emit('agent:query', this._promptQuestion);
+      }
+      this._hidePrompt();
+    });
+    this._promptBarEl.appendChild(this._promptBtnEl);
+    // Dismiss button
+    const dismissBtn = document.createElement('button');
+    dismissBtn.textContent = '✕';
+    dismissBtn.style.cssText =
+      'padding:2px 6px;font-size:12px;border:none;background:none;color:var(--text-muted,#6b7a8d);' +
+      'cursor:pointer;border-radius:3px;';
+    dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = '#e6edf3'; });
+    dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = 'var(--text-muted,#6b7a8d)'; });
+    dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); this._hidePrompt(); });
+    this._promptBarEl.appendChild(dismissBtn);
+    this.container.appendChild(this._promptBarEl);
+
+    // Subscribe to show-prompt events (from GraphInteraction)
+    bus.on('graph:show-prompt', this._showPrompt.bind(this));
+  }
+
+  private _showPrompt = (data: { title: string; question: string }): void => {
+    if (this._promptTimer) clearTimeout(this._promptTimer);
+    this._promptTitleEl.textContent = data.title;
+    this._promptQuestion = data.question;
+    this._promptBarEl.style.display = 'flex';
+    this._promptBarEl.style.opacity = '1';
+    // Auto-hide after 8s if user doesn't click
+    this._promptTimer = setTimeout(() => this._hidePrompt(), 8000);
+  };
+
+  private _hidePrompt = (): void => {
+    if (this._promptTimer) { clearTimeout(this._promptTimer); this._promptTimer = null; }
+    this._promptBarEl.style.opacity = '0';
+    setTimeout(() => {
+      if (this._promptBarEl.style.opacity === '0') {
+        this._promptBarEl.style.display = 'none';
+        this._promptQuestion = '';
+      }
+    }, 200);
+  };
 
   // ── Hover ────────────────────────────────────────────────
 
@@ -2521,6 +2599,7 @@ export class StarGraph {
     this.galaxyMeta = [];
     this._pathSource = -1; this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear();
     this._shiftSourceIdx = -1; this._selecting = false;
+    this._hidePrompt();
     for (const d of this.galaxyLabelDivs) d.remove();
     this.galaxyLabelDivs = [];
     this.neighborMap = []; this.edgeIndexOf = [];
@@ -2889,6 +2968,7 @@ export class StarGraph {
     for (const d of this.galaxyLabelDivs) d.remove(); this.galaxyLabelDivs = [];
     this.galaxyTitleEl?.remove(); this.pieMenu?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
     this._selectRectEl?.remove();
+    this._promptBarEl?.remove();
   }
 }
 
