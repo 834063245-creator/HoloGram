@@ -103,9 +103,12 @@ export class MemoryManager {
       if (incrementHit) {
         mf.hit_count = (mf.hit_count || 0) + 1;
         mf.raw = rebuildRaw(mf);
-        await invoke('write_file_content', {
+        // Fire-and-forget: don't let hit_count write failure destroy the read
+        invoke('write_file_content', {
           filePath: this.filePath(name),
           content: mf.raw,
+        }).catch((e: unknown) => {
+          console.warn(`[memory] hit_count write failed for "${name}":`, e);
         });
       }
 
@@ -248,6 +251,16 @@ export class MemoryManager {
       filePath: this.indexPath(),
       content: index,
     });
+
+    // Also delete/overwrite the actual .md file (not just delist from index)
+    try {
+      await invoke('write_file_content', {
+        filePath: this.filePath(name),
+        content: JSON.stringify({ deleted: true }),
+      });
+    } catch (e) {
+      console.warn(`[memory] failed to delete file for "${name}":`, e);
+    }
 
     // Bust prompt section cache
     this._promptSectionCache = null;

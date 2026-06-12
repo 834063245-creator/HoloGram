@@ -151,6 +151,7 @@ export class Agent {
 
   setSession(msgs: Message[]): void {
     this.session = msgs;
+    ++this.sessionGen;
   }
 
   getLastUsage(): Usage | undefined {
@@ -167,6 +168,7 @@ export class Agent {
       ? this.session[0]
       : null;
     this.session = sys ? [sys] : [];
+    ++this.sessionGen;
     this.cacheHitTotal = 0;
     this.cacheMissTotal = 0;
     this.lastUsage = undefined;
@@ -490,6 +492,7 @@ export class Agent {
   // ---- Context window management ----
 
   private compactRunning = false;
+  private sessionGen = 0;
 
   /** Manual compaction trigger (from /compact command). Returns summary text or error. */
   async compactNow(signal: AbortSignal): Promise<string> {
@@ -515,6 +518,7 @@ export class Agent {
         ...msgs.slice(start),
       ];
       this.session = compacted;
+      ++this.sessionGen;
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
@@ -539,6 +543,11 @@ export class Agent {
       return;
     }
     if (this.compactStuck) return;
+    if (this.compactRunning) {
+      this.sink({ kind: EventKind.Notice, level: 'info', text: '压缩已在运行中，跳过重复触发' });
+      return;
+    }
+    this.compactRunning = true;
 
     // Auto-compact: trigger summarization in background after this turn
     this.sink({
@@ -549,11 +558,13 @@ export class Agent {
 
     // Run compaction asynchronously (non-blocking for the turn)
     const msgs = this.session;
+    const genAtStart = ++this.sessionGen;
     const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
     const tailCount = Math.max(4, this.recentKeep);
     const start = Math.max(head + 4, msgs.length - tailCount);
     if (start - head < 4) {
       this.compactStuck = true;
+      this.compactRunning = false;
       this.sink({
         kind: EventKind.Notice,
         level: 'warn',
@@ -565,23 +576,28 @@ export class Agent {
     const region = msgs.slice(head, start);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region).then((summary) => {
-      if (!summary) return;
+      if (genAtStart !== this.sessionGen) return; // session replaced, discard
+      if (!summary) { this.compactRunning = false; return; }
       const compacted: Message[] = [
         ...msgs.slice(0, head),
         { role: 'user' as const, content: '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' + summary + '\n</compacted-context>' },
         ...msgs.slice(start),
       ];
       this.session = compacted;
+      ++this.sessionGen;
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
+      this.compactRunning = false;
       this.sink({
         kind: EventKind.Notice,
         level: 'info',
         text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
       });
     }).catch(() => {
+      if (genAtStart !== this.sessionGen) return; // session replaced, discard
       this.compactStuck = true;
+      this.compactRunning = false;
       this.sink({
         kind: EventKind.Notice,
         level: 'warn',

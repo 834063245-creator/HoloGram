@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import copy
+import logging
+import os as _os_module
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -13,6 +16,8 @@ from ..core.graph import Graph, Node, Edge
 from ..core.diff import GraphDiff
 from .discovery import discover_files
 from .cache import IncrementalCache
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineRunner:
@@ -168,10 +173,15 @@ class PipelineRunner:
                     ))
                 continue
 
+            # 文件存在但不可读（PermissionError 等）→ 跳过，不移除节点
+            if source == "":
+                continue
+
             # 分析文件（三阶段）
             try:
                 result = adapter.analyze(file_path, source, merged_graph)
-            except Exception:
+            except Exception as e:
+                logger.warning("Incremental analysis failed for %s: %s", file_path, e)
                 continue
 
             # Remove old nodes for this file, add new ones
@@ -203,8 +213,8 @@ class PipelineRunner:
             from ..core.community import CommunityDetector
             detector = CommunityDetector()
             detector.detect(merged_graph)
-        except Exception:
-            pass  # 社区发现失败不影响主流程
+        except Exception as e:
+            logger.warning("Community detection failed during incremental update: %s", e)
 
         return diff
 
@@ -212,8 +222,14 @@ class PipelineRunner:
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
-        except (PermissionError, OSError):
-            return None
+        except FileNotFoundError:
+            return None  # 文件被删除 — 调用方应移除图节点
+        except PermissionError:
+            logger.warning("Permission denied reading %s, skipping", path)
+            return ""  # 文件存在但不可读 — 调用方不应移除节点
+        except OSError as e:
+            logger.warning("OS error reading %s: %s", path, e)
+            return ""
 
 class PipelineReport:
     """流水线执行报告。"""

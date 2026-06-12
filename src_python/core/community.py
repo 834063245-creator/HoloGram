@@ -85,7 +85,8 @@ class CommunityDetector:
                 node_ids=node_ids,
             ))
 
-        graph.communities = communities
+        if communities:
+            graph.communities = communities
         return communities
 
     def _generate_label(self, graph: Graph, node_ids: Set[str]) -> str:

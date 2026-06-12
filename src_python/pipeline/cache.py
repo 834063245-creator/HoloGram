@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 from typing import Dict, Optional
 
 from ..core.graph import Graph
+
+logger = logging.getLogger(__name__)
 
 
 class IncrementalCache:
@@ -62,6 +65,10 @@ class IncrementalCache:
 
     def set(self, file_path: str, file_hash: str, graph: Graph) -> None:
         with self._lock:
+            # 如果已经在缓存中，直接更新，不需要逐出
+            if file_path in self._cache:
+                self._cache[file_path] = {"hash": file_hash, "graph": graph}
+                return
             if len(self._cache) >= self._max_size:
                 # Simple FIFO eviction: remove oldest entry (dict insertion order)
                 oldest = next(iter(self._cache))
@@ -93,20 +100,37 @@ class IncrementalCache:
                     "hash": entry["hash"],
                     "graph": Graph.from_dict(entry["graph"]),
                 }
-        except (json.JSONDecodeError, KeyError, OSError):
-            pass
+        except json.JSONDecodeError:
+            logger.warning("Pipeline cache JSON corrupt, deleting: %s", path)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        except (KeyError, OSError) as e:
+            logger.warning("Failed to load pipeline cache: %s", e)
 
     def save_to_disk(self) -> None:
         if not self._cache_dir:
             return
-        data = {}
-        for file_path, entry in self._cache.items():
-            data[file_path] = {
-                "hash": entry["hash"],
-                "graph": entry["graph"].to_dict(),
-            }
-        with open(self._cache_file_path(), "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        with self._lock:
+            data = {}
+            for file_path, entry in self._cache.items():
+                data[file_path] = {
+                    "hash": entry["hash"],
+                    "graph": entry["graph"].to_dict(),
+                }
+            target = self._cache_file_path()
+            tmp_path = target + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                os.replace(tmp_path, target)
+            except OSError as e:
+                logger.error("Failed to save pipeline cache: %s", e)
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     @property
     def size(self) -> int:

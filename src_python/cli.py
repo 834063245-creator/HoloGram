@@ -56,16 +56,17 @@ def _load_graph(graph_path: str) -> Optional[Graph]:
     db_path = graph_path.replace('.json', '.db')
     if os.path.exists(db_path):
         try:
-            # Staleness check: compare edge counts
             if os.path.exists(graph_path):
-                json_size = os.path.getsize(graph_path)
-                db_size = os.path.getsize(db_path)
-                # Quick heuristic: if JSON was modified after DB, DB may be stale
                 json_mtime = os.path.getmtime(graph_path)
                 db_mtime = os.path.getmtime(db_path)
                 if db_mtime < json_mtime - 2.0:  # DB older than JSON by 2+ seconds
-                    print("  SQLite DB older than JSON, falling back to JSON", file=sys.stderr)
-                    return Graph.from_json(graph_path)
+                    print("  SQLite DB older than JSON, regenerating...", file=sys.stderr)
+                    graph = Graph.from_json(graph_path)
+                    try:
+                        graph.to_sqlite(db_path)
+                    except Exception as exc:
+                        print(f"  DB regeneration failed ({exc}), using in-memory graph", file=sys.stderr)
+                    return graph
             return Graph.from_sqlite(db_path)
         except Exception as exc:
             print(f"  SQLite load failed ({exc}), falling back to JSON", file=sys.stderr)
@@ -254,8 +255,16 @@ def cmd_path(args) -> int:
 
 def cmd_diff(args) -> int:
     """比较两个图快照。"""
-    before = Graph.from_json(args.before)
-    after = Graph.from_json(args.after)
+    try:
+        before = Graph.from_json(args.before)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error loading before graph: {e}", file=sys.stderr)
+        return 1
+    try:
+        after = Graph.from_json(args.after)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error loading after graph: {e}", file=sys.stderr)
+        return 1
     differ = GraphDiffer()
     diff = differ.diff(before, after)
     if args.json:
@@ -439,7 +448,8 @@ def cmd_check(args) -> int:
         exts = {'.py', '.pyi', '.ts', '.tsx', '.js', '.jsx', '.mjs'}
         for dirpath, _, filenames in os.walk(root):
             # 跳过隐藏目录和 venv
-            if os.path.basename(dirpath).startswith('.') or 'venv' in dirpath or 'node_modules' in dirpath:
+            basename = os.path.basename(dirpath)
+            if basename.startswith('.') or basename == 'venv' or basename == 'node_modules':
                 continue
             for fn in filenames:
                 ext = os.path.splitext(fn)[1]
@@ -1010,14 +1020,19 @@ def cmd_search(args) -> int:
     nodes = []
     db_used = False
     if os.path.exists(db_path):
-        # Staleness check: if DB is older than JSON, skip and fall through to _load_graph
+        # Staleness check: if DB is older than JSON, regenerate from JSON
         use_db = True
         if os.path.exists(graph_path):
             db_mtime = os.path.getmtime(db_path)
             json_mtime = os.path.getmtime(graph_path)
             if db_mtime < json_mtime - 2.0:
-                print(f"  SQLite DB older than JSON, falling back to in-memory search", file=sys.stderr)
-                use_db = False
+                print(f"  SQLite DB older than JSON, regenerating...", file=sys.stderr)
+                try:
+                    graph = Graph.from_json(graph_path)
+                    graph.to_sqlite(db_path)
+                except Exception as exc:
+                    print(f"  DB regeneration failed ({exc}), falling back to in-memory search", file=sys.stderr)
+                    use_db = False
         if use_db:
             import sqlite3
             db_used = True

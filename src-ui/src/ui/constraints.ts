@@ -125,6 +125,9 @@ export class ConstraintsPanel {
   // ── Public API ──
 
   async load(projectPath: string): Promise<void> {
+    if (this.dirty && this.path !== projectPath) {
+      if (!confirm('约束配置有未保存的修改，切换项目将丢失修改。确定继续？')) return;
+    }
     this.path = projectPath;
     this.dirty = false;
     try {
@@ -365,12 +368,18 @@ export class ConstraintsPanel {
     this.content.querySelectorAll('input[data-threshold]').forEach(el => {
       const input = el as HTMLInputElement;
       const key = input.dataset['threshold']!;
-      this.data!.thresholds[key] = parseInt(input.value) || 0;
+      let val = parseInt(input.value, 10);
+      if (isNaN(val) || val < 0) val = 0;
+      if (val > 10000) val = 10000;
+      this.data!.thresholds[key] = val;
     });
   }
 
+  private saving = false;
+
   private async save(): Promise<void> {
-    if (!this.path || !this.data) return;
+    if (!this.path || !this.data || this.saving) return;
+    this.saving = true;
     this.readFormIntoData();
     const yaml = this.dataToYaml(this.data);
     try {
@@ -389,6 +398,14 @@ export class ConstraintsPanel {
       }
     } catch (err) {
       console.error('Failed to save constraints:', err);
+      // Flash red to indicate failure
+      const btn = this.content.querySelector('.cs-btn-save') as HTMLElement;
+      if (btn) {
+        btn.style.color = 'var(--error, #e05555)';
+        setTimeout(() => { btn.style.color = ''; }, 1500);
+      }
+    } finally {
+      this.saving = false;
     }
   }
 

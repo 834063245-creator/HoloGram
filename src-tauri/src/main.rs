@@ -38,13 +38,16 @@ static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
 fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
-    let (program, arg) = if cfg!(target_os = "windows") {
-        ("cmd", format!("/c {}", cmd))
+    let mut child = if cfg!(target_os = "windows") {
+        let mut c = silent_command("cmd");
+        c.arg("/c").arg(cmd);
+        c
     } else {
-        ("sh", format!("-c {}", cmd))
+        let mut c = silent_command("sh");
+        c.arg("-c").arg(cmd);
+        c
     };
-    let child = silent_command(program)
-        .arg(&arg)
+    let child = child
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -177,6 +180,24 @@ fn default_graph() -> String {
         .to_string()
 }
 
+/// 当前活跃工作区（由 analyze_and_load 在成功分析后设置）。
+/// 所有图查询命令优先使用活跃工作区的 hologram_graph.json，
+/// 未设置时 fallback 到项目根目录的全局文件。
+static ACTIVE_PROJECT: std::sync::LazyLock<Mutex<String>> =
+    std::sync::LazyLock::new(|| Mutex::new(String::new()));
+
+fn active_graph() -> String {
+    let proj = ACTIVE_PROJECT.lock().unwrap();
+    if !proj.is_empty() {
+        std::path::PathBuf::from(proj.as_str())
+            .join("hologram_graph.json")
+            .to_string_lossy()
+            .to_string()
+    } else {
+        default_graph()
+    }
+}
+
 /// Run a Python hologram CLI command and capture combined stdout+stderr.
 fn run_hologram(args: &[&str]) -> Result<String, String> {
     let root = project_root();
@@ -285,17 +306,26 @@ fn run_incremental_analysis(project_path: &str, changed_files: &[String]) -> Opt
         }
     }
 
-    let output = silent_command(&python())
+    let output = match silent_command(&python())
         .current_dir(&root)
         .args(&args)
         .output()
-        .ok()?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[hologram] incremental analysis spawn failed: {e}");
+            return None;
+        }
+    };
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         if !stdout.trim().is_empty() {
             return Some(stdout);
         }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("[hologram] incremental analysis failed: {}", stderr);
     }
     None
 }
@@ -307,19 +337,19 @@ fn run_incremental_analysis(project_path: &str, changed_files: &[String]) -> Opt
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    let graph_path = default_graph();
+    let graph_path = format!("{}/hologram_graph.json", target);
     run_hologram(&["analyze", &target, "-o", &graph_path])
 }
 
 #[tauri::command]
 async fn hologram_neighbors(node_id: String, _depth: Option<i32>) -> Result<String, String> {
-    let graph = default_graph();
+    let graph = active_graph();
     run_hologram(&["neighbors", &node_id, "-g", &graph])
 }
 
 #[tauri::command]
 async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<String, String> {
-    let graph = default_graph();
+    let graph = active_graph();
     let d = max_depth.unwrap_or(0);
     if d > 0 {
         run_hologram(&["impact", &node_id, "-d", &d.to_string(), "-g", &graph])
@@ -330,12 +360,12 @@ async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<Stri
 
 #[tauri::command]
 async fn hologram_path(from: String, to: String) -> Result<String, String> {
-    run_hologram(&["path", &from, &to, "-g", &default_graph()])
+    run_hologram(&["path", &from, &to, "-g", &active_graph()])
 }
 
 #[tauri::command]
 async fn hologram_diff(before_path: String, after_path: Option<String>) -> Result<String, String> {
-    let after = after_path.unwrap_or_else(default_graph);
+    let after = after_path.unwrap_or_else(|| active_graph());
     // Auto-create baseline snapshot if missing
     if !std::path::Path::new(&before_path).exists() {
         if let Err(e) = std::fs::copy(&after, &before_path) {
@@ -349,24 +379,24 @@ async fn hologram_diff(before_path: String, after_path: Option<String>) -> Resul
 #[tauri::command]
 async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
     let l = limit.unwrap_or(10);
-    run_hologram(&["fragile", "-l", &l.to_string(), "-g", &default_graph()])
+    run_hologram(&["fragile", "-l", &l.to_string(), "-g", &active_graph()])
 }
 
 #[tauri::command]
 async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
     let m = mode.unwrap_or_else(|| "all".into());
-    run_hologram(&["cycle", "-m", &m, "-g", &default_graph()])
+    run_hologram(&["cycle", "-m", &m, "-g", &active_graph()])
 }
 
 #[tauri::command]
 async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
     let l = limit.unwrap_or(20);
-    run_hologram(&["search", &query, "-g", &default_graph(), "-l", &l.to_string()])
+    run_hologram(&["search", &query, "-g", &active_graph(), "-l", &l.to_string()])
 }
 
 #[tauri::command]
 async fn hologram_coupling_report(module: String) -> Result<String, String> {
-    run_hologram(&["coupling-report", &module, "-g", &default_graph()])
+    run_hologram(&["coupling-report", &module, "-g", &active_graph()])
 }
 
 #[tauri::command]
@@ -384,7 +414,7 @@ results = find_blindspots(graph, min_confidence={})
 print(json.dumps(results, indent=2, ensure_ascii=False))
 "#,
         root.to_string_lossy(),
-        default_graph(),
+        active_graph(),
         t,
     );
     run_python_code(&code)
@@ -475,7 +505,7 @@ filtered = [c.to_dict() for c in communities if len(c.node_ids) >= {}]
 print(json.dumps(filtered, indent=2, ensure_ascii=False))
 "#,
         project_root().to_string_lossy(),
-        default_graph(),
+        active_graph(),
         min,
     );
     run_python_code(&code)
@@ -513,7 +543,7 @@ summary = {{
 print(json.dumps(summary, indent=2, ensure_ascii=False))
 "#,
         project_root().join("src_python").to_string_lossy(),
-        default_graph(),
+        active_graph(),
     );
     run_python_code(&code)
 }
@@ -571,22 +601,25 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 #[tauri::command]
 async fn hologram_history(node_id: String) -> Result<String, String> {
     let root = project_root();
-    let graph = default_graph();
+    let graph = active_graph();
+    // Safely escape node_id for Python string literal
+    let safe_id = serde_json::to_string(&node_id).unwrap_or_else(|_| format!(r#""{}""#, node_id));
     let code = format!(
         r#"
 import sys, json
 sys.path.insert(0, r"{root}")
 from core.graph import Graph
 graph = Graph.from_json(r"{graph}")
-node = graph.resolve_node("{node_id}")
+node_id = json.loads({safe_id})
+node = graph.resolve_node(node_id)
 if not node:
-    print(json.dumps({{"error": "Node not found", "query": "{node_id}"}}))
+    print(json.dumps({{"error": "Node not found", "query": node_id}}))
 else:
     incoming = graph.incoming_edges(node.id)
     outgoing = graph.outgoing_edges(node.id)
     result = {{
         "node": node.to_dict(),
-        "query": "{node_id}",
+        "query": node_id,
         "decision_history": node.properties.get("history", []) if node.properties else [],
         "dependency_count": len(incoming),
         "dependent_count": len(outgoing),
@@ -595,7 +628,7 @@ else:
 "#,
         root = root.join("src_python").to_string_lossy(),
         graph = graph,
-        node_id = node_id,
+        safe_id = safe_id,
     );
     run_python_code(&code)
 }
@@ -603,18 +636,20 @@ else:
 #[tauri::command]
 async fn hologram_community(node_id: String) -> Result<String, String> {
     let root = project_root();
-    let graph = default_graph();
+    let graph = active_graph();
+    let safe_id = serde_json::to_string(&node_id).unwrap_or_else(|_| format!(r#""{}""#, node_id));
     let code = format!(
         r#"
 import sys, json
 sys.path.insert(0, r"{root}")
 from core.graph import Graph
 graph = Graph.from_json(r"{graph}")
-node = graph.resolve_node("{node_id}")
+node_id = json.loads({safe_id})
+node = graph.resolve_node(node_id)
 if not node:
-    print(json.dumps({{"error": "Node not found", "query": "{node_id}"}}))
+    print(json.dumps({{"error": "Node not found", "query": node_id}}))
 elif not hasattr(node, 'community_id') or not node.community_id:
-    print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": "{node_id}", "community": None, "message": "Community detection not yet run"}}))
+    print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": node_id, "community": None, "message": "Community detection not yet run"}}))
 else:
     found = None
     for c in graph.communities:
@@ -625,16 +660,16 @@ else:
         print(json.dumps({{
             "node_id": node.id,
             "node_name": node.name,
-            "query": "{node_id}",
+            "query": node_id,
             "community": found.to_dict(),
             "sibling_nodes": [nid for nid in found.node_ids if nid != node.id],
         }}, indent=2, ensure_ascii=False))
     else:
-        print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": "{node_id}", "community": None}}))
+        print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": node_id, "community": None}}))
 "#,
         root = root.join("src_python").to_string_lossy(),
         graph = graph,
-        node_id = node_id,
+        safe_id = safe_id,
     );
     run_python_code(&code)
 }
@@ -642,7 +677,7 @@ else:
 #[tauri::command]
 async fn hologram_delayed() -> Result<String, String> {
     let root = project_root();
-    let graph = default_graph();
+    let graph = active_graph();
     let code = format!(
         r#"
 import sys, json
@@ -738,14 +773,17 @@ async fn exec_command(
     }
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(120_000)); // default 2 min
-    let (program, arg) = if cfg!(target_os = "windows") {
-        ("cmd", format!("/c {}", command))
-    } else {
-        ("sh", format!("-c {}", command))
-    };
 
-    let mut child = silent_command(program)
-        .arg(&arg)
+    let mut child = if cfg!(target_os = "windows") {
+        let mut c = silent_command("cmd");
+        c.arg("/c").arg(&command);
+        c
+    } else {
+        let mut c = silent_command("sh");
+        c.arg("-c").arg(&command);
+        c
+    };
+    let mut child = child
         .current_dir(&dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -759,12 +797,16 @@ async fn exec_command(
             Ok(Some(status)) => {
                 let stdout = if let Some(mut p) = child.stdout.take() {
                     let mut v = Vec::new();
-                    p.read_to_end(&mut v).ok();
+                    if let Err(e) = p.read_to_end(&mut v) {
+                        eprintln!("[hologram] read_to_end stdout failed: {e}");
+                    }
                     String::from_utf8_lossy(&v).to_string()
                 } else { String::new() };
                 let stderr = if let Some(mut p) = child.stderr.take() {
                     let mut v = Vec::new();
-                    p.read_to_end(&mut v).ok();
+                    if let Err(e) = p.read_to_end(&mut v) {
+                        eprintln!("[hologram] read_to_end stderr failed: {e}");
+                    }
                     String::from_utf8_lossy(&v).to_string()
                 } else { String::new() };
 
@@ -894,8 +936,13 @@ async fn write_file_content(file_path: String, content: String) -> Result<(), St
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("无法创建目录: {}", e))?;
     }
-    std::fs::write(&file_path, &content)
-        .map_err(|e| format!("无法写入文件 {}: {}", file_path, e))
+    // Atomic write: temp file then rename
+    let tmp_path = format!("{}.tmp", file_path);
+    std::fs::write(&tmp_path, &content)
+        .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
+    std::fs::rename(&tmp_path, &file_path)
+        .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1050,8 +1097,12 @@ async fn edit_file(
         content.replacen(&old_string, &new_string, 1)
     };
 
-    std::fs::write(&file_path, &new_content)
-        .map_err(|e| format!("无法写入文件 {}: {}", file_path, e))?;
+    // Atomic write: temp file then rename (prevents corruption on crash)
+    let tmp_path = format!("{}.tmp", file_path);
+    std::fs::write(&tmp_path, &new_content)
+        .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
+    std::fs::rename(&tmp_path, &file_path)
+        .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
 
     Ok(if replace_all {
         format!("已替换 {} 处匹配", count)
@@ -1164,8 +1215,12 @@ async fn read_constraints(project_path: String) -> Result<String, String> {
 #[tauri::command]
 async fn write_constraints(project_path: String, content: String) -> Result<(), String> {
     let yaml_path = std::path::PathBuf::from(&project_path).join("hologram.constraints.yaml");
-    std::fs::write(&yaml_path, &content)
-        .map_err(|e| format!("无法写入约束文件: {}", e))
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp_path, &content)
+        .map_err(|e| format!("无法写入临时文件: {}", e))?;
+    std::fs::rename(&tmp_path, &yaml_path)
+        .map_err(|e| format!("无法保存约束文件: {}", e))?;
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1173,7 +1228,8 @@ async fn write_constraints(project_path: String, content: String) -> Result<(), 
 // ═══════════════════════════════════════════════════════
 
 /// Load the graph JSON file and return it as a string.
-/// Tries: 1) explicit path, 2) default (hologram_graph.json), 3) last project's hologram_graph.json.
+/// Tries: 1) explicit path, 2) active project's hologram_graph.json,
+/// 3) global fallback, 4) last project's hologram_graph.json.
 #[tauri::command]
 async fn load_graph_json(path: Option<String>) -> Result<String, String> {
     // 1) explicit path
@@ -1185,8 +1241,8 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
         }
     }
 
-    // 2) default graph (written by analyze_and_load on every open)
-    let def = default_graph();
+    // 2) active workspace graph (falls back to global if no project active)
+    let def = active_graph();
     if let Ok(content) = std::fs::read_to_string(&def) {
         if !content.trim().is_empty() {
             return Ok(content);
@@ -1208,7 +1264,8 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
 }
 
 /// A3: Load graph from MessagePack binary (.hologram) — 10× faster for >10K nodes.
-/// Tries: 1) explicit path, 2) default .hologram, 3) last project .hologram.
+/// Tries: 1) explicit path, 2) active project .hologram, 3) global fallback .hologram,
+/// 4) last project .hologram.
 #[tauri::command]
 async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
     // 1) explicit path
@@ -1220,7 +1277,15 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         }
     }
 
-    // 2) default .hologram
+    // 2) active workspace .hologram
+    let active = active_graph().replace(".json", ".hologram");
+    if let Ok(bytes) = std::fs::read(&active) {
+        if !bytes.is_empty() {
+            return Ok(bytes);
+        }
+    }
+
+    // 3) global fallback .hologram
     let def = project_root().join("hologram_graph.hologram");
     if let Ok(bytes) = std::fs::read(&def) {
         if !bytes.is_empty() {
@@ -1228,7 +1293,7 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         }
     }
 
-    // 3) last project's .hologram
+    // 4) last project's .hologram
     let last_path_file = project_root().join(".last_project");
     if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
         let p = std::path::PathBuf::from(last_path.trim()).join("hologram_graph.hologram");
@@ -1288,9 +1353,11 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
     if is_graph_fresh(&cached_graph.to_string_lossy(), &path) {
         if let Ok(content) = std::fs::read_to_string(&cached_graph) {
             if !content.trim().is_empty() {
-                // Still update last-project tracking
-                let _ = std::fs::write(default_graph(), &content);
-                let _ = std::fs::write(project_root().join(".last_project"), &path);
+                // Set active project so all tool commands route to this workspace
+                *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+                if let Err(e) = std::fs::write(project_root().join(".last_project"), &path) {
+                    eprintln!("[hologram] failed to write .last_project: {e}");
+                }
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_title("全息观测站");
                 }
@@ -1332,13 +1399,13 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
         return Err(format!("分析完成但无输出。stderr:\n{}", stderr));
     }
 
-    // Persist to default graph for next startup (skip if >20MB — startup freeze guard)
-    if stdout.len() < 20 * 1024 * 1024 {
-        let _ = std::fs::write(default_graph(), &stdout);
-    }
-    // Also save the last project path to a simple config file
+    // Register as active workspace — all tool commands now route here
+    *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+    // Track last project for cold-start fallback
     let last_path_file = project_root().join(".last_project");
-    let _ = std::fs::write(&last_path_file, &path);
+    if let Err(e) = std::fs::write(&last_path_file, &path) {
+        eprintln!("[hologram] failed to write .last_project: {e}");
+    }
 
     Ok(stdout)
 }
@@ -1395,17 +1462,22 @@ async fn start_watching(
                 if let Some(json) = run_incremental_analysis(&path, &changed_files) {
                     last_mtimes = current_mtimes;
                     consecutive_failures = 0;
-                    let _ = app_handle.emit("graph-updated", json);
+                    if let Err(e) = app_handle.emit("graph-updated", json) {
+                        eprintln!("[hologram] emit graph-updated failed: {e}");
+                    }
                 } else {
                     consecutive_failures += 1;
                     // After 3 consecutive failures, update mtimes anyway to break the retry loop
                     // and notify the user that live updates are degraded
                     if consecutive_failures >= 3 {
                         last_mtimes = current_mtimes;
-                        let _ = app_handle.emit("graph-updated", format!(
+                        let msg = format!(
                             r#"{{"error":"分析失败 (已重试{}次)，实时更新已暂停。保存文件后将重新尝试。"}}"#,
                             consecutive_failures
-                        ));
+                        );
+                        if let Err(e) = app_handle.emit("graph-updated", msg) {
+                            eprintln!("[hologram] emit graph-updated error failed: {e}");
+                        }
                     }
                 }
             }
@@ -1615,6 +1687,18 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(watcher_state)
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                // Kill all orphaned background jobs on window close
+                if let Ok(mut jobs) = BG_JOBS.lock() {
+                    for (_, job) in jobs.iter_mut() {
+                        let _ = job.child.kill();
+                        let _ = job.child.wait();
+                    }
+                    jobs.clear();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             hologram_analyze,
             hologram_neighbors,
@@ -1668,4 +1752,68 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");
+}
+
+// ═══════════════════════════════════════════════════════
+// #[cfg(test)] — 路由测试辅助（集成测试无法访问 binary crate static）
+// ═══════════════════════════════════════════════════════
+
+#[cfg(test)]
+pub(crate) fn reset_active_project_for_test() {
+    ACTIVE_PROJECT.lock().unwrap().clear();
+}
+
+#[cfg(test)]
+pub(crate) fn set_active_project_for_test(path: &str) {
+    *ACTIVE_PROJECT.lock().unwrap() = path.to_string();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_graph_falls_back_to_default_when_empty() {
+        reset_active_project_for_test();
+        let result = active_graph();
+        let default = default_graph();
+        assert_eq!(result, default);
+    }
+
+    #[test]
+    fn active_graph_returns_workspace_path_when_set() {
+        set_active_project_for_test("D:/projects/foo");
+        let result = active_graph();
+        assert!(result.contains("D:/projects/foo"));
+        assert!(result.contains("hologram_graph.json"));
+        reset_active_project_for_test();
+    }
+
+    #[test]
+    fn active_graph_no_double_slash_when_trailing_slash() {
+        set_active_project_for_test("D:/projects/foo/");
+        let result = active_graph();
+        assert!(!result.contains("//"));
+        assert!(!result.contains("\\\\"));
+        reset_active_project_for_test();
+    }
+
+    #[test]
+    fn active_project_mutex_no_panic() {
+        use std::thread;
+        reset_active_project_for_test();
+
+        let h1 = thread::spawn(|| {
+            *ACTIVE_PROJECT.lock().unwrap() = "/a".to_string();
+        });
+        let h2 = thread::spawn(|| {
+            *ACTIVE_PROJECT.lock().unwrap() = "/b".to_string();
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let val = ACTIVE_PROJECT.lock().unwrap().clone();
+        assert!(val == "/a" || val == "/b");
+        reset_active_project_for_test();
+    }
 }

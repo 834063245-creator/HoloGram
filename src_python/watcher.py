@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -13,6 +14,8 @@ from typing import Callable, Optional, Set
 from .core.graph import Graph
 from .pipeline import PipelineRunner, IncrementalCache
 from .adapters.registry import AdapterRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class FileWatcher:
@@ -40,6 +43,7 @@ class FileWatcher:
         self._pending: Set[str] = set()
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
+        self._rebuild_lock = threading.Lock()
 
     @property
     def graph(self) -> Optional[Graph]:
@@ -140,8 +144,8 @@ class FileWatcher:
                 for cb in callbacks:
                     try:
                         cb(graph_ref)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning("Callback %s failed: %s", cb, exc)
             except Exception:
                 print("  Incremental failed, falling back to full rebuild", file=sys.stderr)
                 self._full_rebuild()
@@ -150,15 +154,21 @@ class FileWatcher:
 
     def _full_rebuild(self) -> None:
         """全量重建图。"""
-        graph, report = self._runner.run(self.root)
-        with self._lock:
-            self._graph = graph
-            callbacks = list(self._callbacks)
-        for cb in callbacks:
-            try:
-                cb(graph)
-            except Exception:
-                pass
+        if not self._rebuild_lock.acquire(blocking=False):
+            logger.warning("Rebuild already in progress, skipping")
+            return
+        try:
+            graph, report = self._runner.run(self.root)
+            with self._lock:
+                self._graph = graph
+                callbacks = list(self._callbacks)
+            for cb in callbacks:
+                try:
+                    cb(graph)
+                except Exception as exc:
+                    logger.warning("Callback %s failed: %s", cb, exc)
+        finally:
+            self._rebuild_lock.release()
 
     def _run_polling(self) -> None:
         """退化为轮询模式（无 watchdog 时）。"""

@@ -253,6 +253,20 @@ function doSearch(): void {
 // ── Agent setup ──
 
 async function setupAgent(): Promise<void> {
+  if (agentSetupRunning) { agentSetupPending = true; return; }
+  agentSetupRunning = true;
+  try {
+    await setupAgentInner();
+  } finally {
+    agentSetupRunning = false;
+    if (agentSetupPending) {
+      agentSetupPending = false;
+      await setupAgent();
+    }
+  }
+}
+
+async function setupAgentInner(): Promise<void> {
   const settings = loadSettings();
   const active = getActiveProvider(settings);
 
@@ -266,7 +280,7 @@ async function setupAgent(): Promise<void> {
   let memorySection = '';
   if (currentPath) {
     memoryManager = new MemoryManager(currentPath);
-    try { memorySection = await memoryManager.loadPromptSection(); } catch { /* ignore */ }
+    try { memorySection = await memoryManager.loadPromptSection(); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
   } else {
     memoryManager = null;
   }
@@ -579,28 +593,39 @@ ${memorySection.trim() || '暂无。'}`;
 let checkRunning = false;
 let checkPending = false;
 let checkTimer: ReturnType<typeof setTimeout> | null = null;
+let agentSetupRunning = false;
+let agentSetupPending = false;
 
 async function runCheck(): Promise<void> {
   if (!currentPath) return;
   if (checkRunning) { checkPending = true; return; }
+  // Cancel any pending deferred check (avoid double-run race)
+  if (checkTimer) { clearTimeout(checkTimer); checkTimer = null; }
 
   checkRunning = true;
+  checkPending = false;
   try {
     const json = await invoke<string>('hologram_run_check', { path: currentPath });
-    const result: CheckResult = JSON.parse(json);
-    checkPanel.update(result);
-    btnCheck.innerHTML = result.passed
-      ? `${iconSvg('check-circle')} 简报`
-      : `${iconSvg('alert')} 简报`;
+    try {
+      const result: CheckResult = JSON.parse(json);
+      checkPanel.update(result);
+      btnCheck.innerHTML = result.passed
+        ? `${iconSvg('check-circle')} 简报`
+        : `${iconSvg('alert')} 简报`;
+    } catch (parseErr) {
+      console.error('[runCheck] JSON parse failed:', parseErr, 'raw:', json.slice(0, 200));
+      statusText.textContent = '简报解析失败';
+    }
   } catch (err: any) {
     console.error('Check failed:', err);
+    statusText.textContent = '简报请求失败';
   } finally {
     checkRunning = false;
     // If a check was requested while we were running, run one more after a short delay
     if (checkPending) {
       checkPending = false;
       if (checkTimer) clearTimeout(checkTimer);
-      checkTimer = setTimeout(() => { checkTimer = null; runCheck(); }, 2000);
+      checkTimer = setTimeout(() => { checkTimer = null; if (!checkRunning) runCheck(); }, 2000);
     }
   }
 }
@@ -886,8 +911,10 @@ async function init(): Promise<void> {
   // Save sessions on app close
   window.addEventListener('beforeunload', () => {
     if (currentPath) {
-      // Synchronous save via sendBeacon-style — use invoke without awaiting
-      chatPanel.saveActiveSession(currentPath).catch(() => {});
+      chatPanel.saveActiveSession(currentPath).then(
+        () => console.log('[beforeunload] session saved'),
+        (e) => console.error('[beforeunload] session save failed:', e),
+      );
     }
   });
 
@@ -997,12 +1024,19 @@ async function init(): Promise<void> {
   }
 
   // Live updates from file watcher
-  listen<string>('graph-updated', (event) => {
+  listen<string>('graph-updated', async (event) => {
     try {
       const graph = JSON.parse(event.payload);
       const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
       if (nodeCount > 0) {
         currentGraphData = graph;
+        // Also refresh the file-level graph
+        if (currentPath) {
+          try {
+            const filesPath = currentPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
+            currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
+          } catch { /* file graph may not exist yet */ }
+        }
         if (nodeCount > 50000) {
           statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
         } else {

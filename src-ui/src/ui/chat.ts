@@ -69,6 +69,7 @@ export class ChatPanel {
   private lastUsageText = '';
   private projectPath = '';
   private onOpenSettings: (() => void) | null = null;
+  private footerClickCleanup: (() => void) | null = null;
 
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
   setAgentFactory(fn: () => Promise<Agent | null>): void { this.agentFactory = fn; }
@@ -186,19 +187,30 @@ export class ChatPanel {
     }
     // Abort if closing active running session
     if (idx === this.activeIdx && this.running) this.abort();
-    // Remove session
+    // Remove session — persist before mutating memory
     const s = this.sessions[idx];
     this.sessionMessages.delete(s.id);
-    this.sessions.splice(idx, 1);
-    // Adjust active index
-    if (this.activeIdx >= this.sessions.length) this.activeIdx = this.sessions.length - 1;
-    if (this.activeIdx < 0) this.activeIdx = 0;
-    this.renderSessionTabs();
-    this.restoreMessages();
-    this.updateFooter();
-    // Persist deletion immediately
+    // Persist deletion
     if (this.projectPath) {
-      this.saveActiveSession(this.projectPath).catch(() => {});
+      this.saveActiveSession(this.projectPath).then(() => {
+        this.sessions.splice(idx, 1);
+        if (this.activeIdx >= this.sessions.length) this.activeIdx = this.sessions.length - 1;
+        if (this.activeIdx < 0) this.activeIdx = 0;
+        this.renderSessionTabs();
+        this.restoreMessages();
+        this.updateFooter();
+      }).catch((e: unknown) => {
+        console.error('[chat] closeSession save failed:', e);
+        this.sessionMessages.set(s.id, []); // restore
+        this.addNotice('关闭会话失败', 'error');
+      });
+    } else {
+      this.sessions.splice(idx, 1);
+      if (this.activeIdx >= this.sessions.length) this.activeIdx = this.sessions.length - 1;
+      if (this.activeIdx < 0) this.activeIdx = 0;
+      this.renderSessionTabs();
+      this.restoreMessages();
+      this.updateFooter();
     }
   }
 
@@ -469,7 +481,11 @@ export class ChatPanel {
         filePath: this.sessionFile(projectPath, sessionId),
         content: JSON.stringify({ id: sessionId, deleted: true, label: '', messages: [], savedAt: '' }),
       });
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.error('[chat] deleteSessionFile failed:', e);
+      this.addNotice('删除会话文件失败', 'error');
+      return; // Don't close tab if write failed
+    }
     // If this session is open in a tab, close that tab
     const idx = this.sessions.findIndex(s => s.id === sessionId);
     if (idx >= 0) this.closeSession(idx);
@@ -675,6 +691,7 @@ export class ChatPanel {
       list.appendChild(loading);
 
       this.listSavedSessions(this.projectPath).then(sessions => {
+        if (!this.historyOpen) return; // panel closed while loading
         loading.remove();
         if (sessions.length === 0) {
           const empty = document.createElement('div');
@@ -701,9 +718,9 @@ export class ChatPanel {
               }
             },
           );
-          list.appendChild(entry);
+          if (this.historyOpen) list.appendChild(entry);
         }
-      }).catch(() => { loading.textContent = '加载失败'; });
+      }).catch(() => { if (this.historyOpen) loading.textContent = '加载失败'; });
     }
 
     this.historyPanel.appendChild(list);
@@ -1435,12 +1452,17 @@ export class ChatPanel {
       popup.classList.toggle('open');
     });
 
-    // Close popup on outside click
-    document.addEventListener('click', (e) => {
+    // Close popup on outside click (clean up previous listener to prevent zombie handlers)
+    if (this.footerClickCleanup) {
+      document.removeEventListener('click', this.footerClickCleanup as unknown as EventListener);
+    }
+    const handler = (e: MouseEvent) => {
       if (!popup.contains(e.target as Node) && e.target !== trigger) {
         popup.classList.remove('open');
       }
-    });
+    };
+    document.addEventListener('click', handler);
+    this.footerClickCleanup = handler as unknown as (() => void);
 
     // Popup items
     popup.querySelectorAll('.sp-item').forEach((item) => {

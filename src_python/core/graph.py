@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -94,7 +97,7 @@ class Node:
 
     @staticmethod
     def make_id() -> str:
-        return f"node_{uuid.uuid4().hex[:8]}"
+        return f"node_{uuid.uuid4().hex[:16]}"
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -130,7 +133,7 @@ class Edge:
 
     @staticmethod
     def make_id() -> str:
-        return f"edge_{uuid.uuid4().hex[:8]}"
+        return f"edge_{uuid.uuid4().hex[:16]}"
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -196,8 +199,16 @@ class Graph:
 
     def add_edge(self, edge: Edge) -> Optional[Edge]:
         if edge.id in self.edges:
+            logger.debug("Duplicate edge id: %s", edge.id)
             return None
         if edge.source not in self.nodes or edge.target not in self.nodes:
+            missing = []
+            if edge.source not in self.nodes:
+                missing.append(edge.source)
+            if edge.target not in self.nodes:
+                missing.append(edge.target)
+            logger.warning("Edge %s: dangling reference(s) %s (source=%s, target=%s)",
+                           edge.id, missing, edge.source, edge.target)
             return None
         self.edges[edge.id] = edge
         return edge
@@ -221,25 +232,62 @@ class Graph:
         """
         nodes_to_remove = self.find_nodes_by_location(file_path)
         removed_nodes = len(nodes_to_remove)
+        # 统计即将被移除的边（remove_node 会清理关联边）
+        node_ids = {n.id for n in nodes_to_remove}
+        removed_edges = sum(
+            1 for e in self.edges.values()
+            if e.source in node_ids or e.target in node_ids
+        )
         for node in nodes_to_remove:
             self.remove_node(node.id)
-        # remove_node 已经清理了关联边，这里统计一下
-        return (removed_nodes, 0)  # edge count tracked elsewhere if needed
+        return (removed_nodes, removed_edges)
 
     def replace_file(self, file_path: str, new_file_graph: Graph) -> tuple:
         """原子替换：移除旧节点 + 合并新图的节点和边。
 
         返回 (removed_nodes, added_nodes, added_edges)。
+        如果中途失败，回滚所有变更。
         """
-        removed_nodes, _ = self.remove_file(file_path)
-        added_nodes = 0
-        for node in new_file_graph.nodes.values():
-            self.add_node(node)
-            added_nodes += 1
-        added_edges = 0
-        for edge in new_file_graph.edges.values():
-            if self.add_edge(edge):
-                added_edges += 1
+        # 备份旧状态（仅此文件相关部分）
+        old_node_ids = {n.id for n in self.find_nodes_by_location(file_path)}
+        old_nodes_bak = {nid: self.nodes[nid] for nid in old_node_ids if nid in self.nodes}
+        old_edges_bak = {
+            eid: e for eid, e in self.edges.items()
+            if e.source in old_node_ids or e.target in old_node_ids
+        }
+        removed_nodes = len(old_node_ids)
+        removed_edges = len(old_edges_bak)
+
+        try:
+            # 移除旧节点/边
+            for nid in old_node_ids:
+                self.nodes.pop(nid, None)
+            self.edges = {
+                eid: e for eid, e in self.edges.items()
+                if e.source not in old_node_ids and e.target not in old_node_ids
+            }
+            # 加入新节点/边
+            added_nodes = 0
+            for node in new_file_graph.nodes.values():
+                if node.id not in self.nodes:
+                    self.nodes[node.id] = node
+                    added_nodes += 1
+                else:
+                    existing = self.nodes[node.id]
+                    existing.properties.update(node.properties)
+            added_edges = 0
+            for edge in new_file_graph.edges.values():
+                if self.add_edge(edge):
+                    added_edges += 1
+        except Exception:
+            # 回滚
+            self.nodes.update(old_nodes_bak)
+            self.edges.update(old_edges_bak)
+            logger.warning(
+                "replace_file %s failed, rolled back (%d nodes, %d edges restored)",
+                file_path, removed_nodes, removed_edges,
+            )
+            raise
         return (removed_nodes, added_nodes, added_edges)
 
     # -- 查询 --
@@ -464,10 +512,11 @@ class Graph:
     # -- 序列化 --
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        import datetime
+        d = {
             "meta": {
                 "source_root": self.source_root,
-                "generated_at": "",
+                "generated_at": datetime.datetime.now().isoformat(),
                 "version": "0.1.0",
                 "node_count": self.node_count,
                 "edge_count": self.edge_count,
@@ -477,22 +526,56 @@ class Graph:
             "edges": [e.to_dict() for e in self.edges.values()],
             "communities": [c.to_dict() for c in self.communities],
         }
+        # Include coupling summary if available (set after CouplingDepthAnalyzer runs)
+        if hasattr(self, 'coupling_summary') and self.coupling_summary:
+            d["meta"]["coupling"] = {
+                k: self.coupling_summary[k] for k in
+                ('total_l1', 'total_l2', 'total_l3', 'total_l4')
+                if k in self.coupling_summary
+            }
+        return d
 
     def to_json(self, file_path: str) -> None:
-        import datetime
         d = self.to_dict()
-        d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(d, f, indent=2, ensure_ascii=False)
+        target = os.path.abspath(file_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp_path = target + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, target)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     def to_msgpack(self, file_path: str) -> None:
         """A3: 写入 MessagePack 二进制文件，大项目加载快 10×。"""
-        import datetime
         import msgpack
         d = self.to_dict()
-        d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
-        with open(file_path, "wb") as f:
-            msgpack.pack(d, f)
+        target = os.path.abspath(file_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp_path = target + ".tmp"
+        try:
+            with open(tmp_path, "wb") as f:
+                msgpack.pack(d, f)
+            os.replace(tmp_path, target)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    @classmethod
+    def from_msgpack(cls, file_path: str) -> "Graph":
+        """A3: 从 MessagePack 二进制文件读取图。"""
+        import msgpack
+        with open(file_path, "rb") as f:
+            d = msgpack.unpack(f, raw=False)
+        return cls.from_dict(d)
 
     def to_sqlite(self, db_path: str) -> None:
         """A4: 写入 SQLite 数据库，Agent 工具查询不用解析整个 JSON。
@@ -501,139 +584,167 @@ class Graph:
         JSON 仍然是 master 数据源——DB 是查询加速层。
         """
         import sqlite3
-
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.executescript("""
-            DROP TABLE IF EXISTS nodes;
-            DROP TABLE IF EXISTS edges;
-            DROP TABLE IF EXISTS communities;
-
-            CREATE TABLE nodes (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                type TEXT NOT NULL,
-                kind TEXT NOT NULL DEFAULT '',
-                location TEXT NOT NULL DEFAULT '',
-                language TEXT NOT NULL DEFAULT '',
-                community_id TEXT DEFAULT '',
-                degree INTEGER NOT NULL DEFAULT 0,
-                l34_count INTEGER NOT NULL DEFAULT 0,
-                properties TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE TABLE edges (
-                id TEXT PRIMARY KEY,
-                source TEXT NOT NULL,
-                target TEXT NOT NULL,
-                type TEXT NOT NULL,
-                direction TEXT NOT NULL DEFAULT '',
-                coupling_depth INTEGER NOT NULL DEFAULT 0,
-                properties TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE TABLE communities (
-                id TEXT PRIMARY KEY,
-                level INTEGER NOT NULL DEFAULT 0,
-                label TEXT NOT NULL DEFAULT '',
-                parent_id TEXT DEFAULT '',
-                node_count INTEGER NOT NULL DEFAULT 0,
-                properties TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
-            CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
-            CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
-            CREATE INDEX IF NOT EXISTS idx_edges_depth ON edges(coupling_depth);
-            CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
-            CREATE INDEX IF NOT EXISTS idx_nodes_community ON nodes(community_id);
-            CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
-
-            -- FTS5 全文搜索（大项目 LIKE 全表扫 100ms+，MATCH 走倒排索引 <1ms）
-            DROP TABLE IF EXISTS nodes_fts;
-            CREATE VIRTUAL TABLE nodes_fts USING fts5(
-                name, id, kind, location,
-                tokenize='unicode61 remove_diacritics 1'
-            );
-        """)
-
         import json as _json
         import datetime as _dt
-        now = _dt.datetime.now().isoformat()
 
-        # Calculate degrees
-        deg: dict[str, int] = {}
-        for e in self.edges.values():
-            deg[e.source] = deg.get(e.source, 0) + 1
-            deg[e.target] = deg.get(e.target, 0) + 1
+        target = os.path.abspath(db_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
 
-        # Calculate L3/L4 counts (coupling depth >= 3)
-        l34: dict[str, int] = {}
-        for e in self.edges.values():
-            if e.coupling_depth >= 3:
-                l34[e.source] = l34.get(e.source, 0) + 1
-                l34[e.target] = l34.get(e.target, 0) + 1
+        # 写入临时 DB，完成后再原子 rename（避免半成品 DB）
+        tmp_path = target + ".tmp"
+        conn = None
+        try:
+            conn = sqlite3.connect(tmp_path)
+            conn.execute("BEGIN TRANSACTION")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.executescript("""
+                DROP TABLE IF EXISTS nodes;
+                DROP TABLE IF EXISTS edges;
+                DROP TABLE IF EXISTS communities;
 
-        # Insert nodes in batches
-        node_rows = []
-        for n in self.nodes.values():
-            node_rows.append((
-                n.id, n.name, type_val(n.type), getattr(n, 'kind', '') or '',
-                getattr(n, 'location', '') or '', getattr(n, 'language', '') or '',
-                getattr(n, 'community_id', '') or '',
-                deg.get(n.id, 0), l34.get(n.id, 0),
-                _json.dumps(getattr(n, 'properties', {}) or {}),
-            ))
-        conn.executemany(
-            "INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?,?)", node_rows,
-        )
+                CREATE TABLE nodes (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '',
+                    language TEXT NOT NULL DEFAULT '',
+                    community_id TEXT DEFAULT '',
+                    degree INTEGER NOT NULL DEFAULT 0,
+                    l34_count INTEGER NOT NULL DEFAULT 0,
+                    properties TEXT NOT NULL DEFAULT '{}'
+                );
 
-        # Populate FTS5 index (name, id, kind, location)
-        conn.executemany(
-            "INSERT INTO nodes_fts(name, id, kind, location) VALUES (?,?,?,?)",
-            [(n[1], n[0], n[3], n[4]) for n in node_rows],
-        )
+                CREATE TABLE edges (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    direction TEXT NOT NULL DEFAULT '',
+                    coupling_depth INTEGER NOT NULL DEFAULT 0,
+                    properties TEXT NOT NULL DEFAULT '{}'
+                );
 
-        # Insert edges in batches
-        edge_rows = []
-        for e in self.edges.values():
-            edge_rows.append((
-                e.id, e.source, e.target, type_val(e.type),
-                getattr(e, 'direction', '') or '',
-                e.coupling_depth,
-                _json.dumps(getattr(e, 'properties', {}) or {}),
-            ))
-        conn.executemany(
-            "INSERT INTO edges VALUES (?,?,?,?,?,?,?)", edge_rows,
-        )
+                CREATE TABLE communities (
+                    id TEXT PRIMARY KEY,
+                    level INTEGER NOT NULL DEFAULT 0,
+                    label TEXT NOT NULL DEFAULT '',
+                    parent_id TEXT DEFAULT '',
+                    node_count INTEGER NOT NULL DEFAULT 0,
+                    properties TEXT NOT NULL DEFAULT '{}'
+                );
 
-        # Insert communities
-        comm_rows = []
-        for c in self.communities:
-            comm_rows.append((
-                c.id, getattr(c, 'level', 0), getattr(c, 'label', '') or '',
-                getattr(c, 'parent_id', '') or '', len(c.node_ids),
-                _json.dumps(getattr(c, 'properties', {}) or {}),
-            ))
-        conn.executemany(
-            "INSERT INTO communities VALUES (?,?,?,?,?,?)", comm_rows,
-        )
+                CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
+                CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
+                CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
+                CREATE INDEX IF NOT EXISTS idx_edges_depth ON edges(coupling_depth);
+                CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
+                CREATE INDEX IF NOT EXISTS idx_nodes_community ON nodes(community_id);
+                CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
 
-        # Meta table
-        conn.execute("DROP TABLE IF EXISTS meta")
-        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-        conn.executemany("INSERT INTO meta VALUES (?,?)", [
-            ("source_root", self.source_root or ""),
-            ("node_count", str(self.node_count)),
-            ("edge_count", str(self.edge_count)),
-            ("community_count", str(self.community_count)),
-            ("generated_at", now),
-            ("version", "0.1.0"),
-        ])
+                -- FTS5 全文搜索（大项目 LIKE 全表扫 100ms+，MATCH 走倒排索引 <1ms）
+                DROP TABLE IF EXISTS nodes_fts;
+                CREATE VIRTUAL TABLE nodes_fts USING fts5(
+                    name, id, kind, location,
+                    tokenize='unicode61 remove_diacritics 1'
+                );
+            """)
 
-        conn.commit()
-        conn.close()
+            now = _dt.datetime.now().isoformat()
+
+            # Calculate degrees
+            deg: dict[str, int] = {}
+            for e in self.edges.values():
+                deg[e.source] = deg.get(e.source, 0) + 1
+                deg[e.target] = deg.get(e.target, 0) + 1
+
+            # Calculate L3/L4 counts (coupling depth >= 3)
+            l34: dict[str, int] = {}
+            for e in self.edges.values():
+                if e.coupling_depth >= 3:
+                    l34[e.source] = l34.get(e.source, 0) + 1
+                    l34[e.target] = l34.get(e.target, 0) + 1
+
+            # Insert nodes in batches
+            node_rows = []
+            for n in self.nodes.values():
+                node_rows.append((
+                    n.id, n.name, type_val(n.type), getattr(n, 'kind', '') or '',
+                    getattr(n, 'location', '') or '', getattr(n, 'language', '') or '',
+                    getattr(n, 'community_id', '') or '',
+                    deg.get(n.id, 0), l34.get(n.id, 0),
+                    _json.dumps(getattr(n, 'properties', {}) or {}),
+                ))
+            conn.executemany(
+                "INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?,?)", node_rows,
+            )
+
+            # Populate FTS5 index (name, id, kind, location)
+            conn.executemany(
+                "INSERT INTO nodes_fts(name, id, kind, location) VALUES (?,?,?,?)",
+                [(n[1], n[0], n[3], n[4]) for n in node_rows],
+            )
+
+            # Insert edges in batches
+            edge_rows = []
+            for e in self.edges.values():
+                edge_rows.append((
+                    e.id, e.source, e.target, type_val(e.type),
+                    getattr(e, 'direction', '') or '',
+                    e.coupling_depth,
+                    _json.dumps(getattr(e, 'properties', {}) or {}),
+                ))
+            conn.executemany(
+                "INSERT INTO edges VALUES (?,?,?,?,?,?,?)", edge_rows,
+            )
+
+            # Insert communities
+            comm_rows = []
+            for c in self.communities:
+                comm_rows.append((
+                    c.id, getattr(c, 'level', 0), getattr(c, 'label', '') or '',
+                    getattr(c, 'parent_id', '') or '', len(c.node_ids),
+                    _json.dumps(getattr(c, 'properties', {}) or {}),
+                ))
+            conn.executemany(
+                "INSERT INTO communities VALUES (?,?,?,?,?,?)", comm_rows,
+            )
+
+            # Meta table
+            conn.execute("DROP TABLE IF EXISTS meta")
+            conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+            conn.executemany("INSERT INTO meta VALUES (?,?)", [
+                ("source_root", self.source_root or ""),
+                ("node_count", str(self.node_count)),
+                ("edge_count", str(self.edge_count)),
+                ("community_count", str(self.community_count)),
+                ("generated_at", now),
+                ("version", "0.1.0"),
+            ])
+
+            conn.commit()
+            conn.close()
+            conn = None
+            # 原子替换：只有完整写入成功后才 swap
+            os.replace(tmp_path, target)
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            # 清理临时文件
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
 
     def to_file_graph(self) -> "Graph":
         """将符号级图聚合为文件级图。
@@ -799,12 +910,21 @@ class Graph:
                 parent_id=cd.get("parent_id"),
                 properties=cd.get("properties", {}),
             ))
+        # Restore coupling_summary from meta if present (round-trip safety)
+        coupling_meta = d.get("meta", {}).get("coupling")
+        if coupling_meta:
+            g.coupling_summary = dict(coupling_meta)
         return g
 
     @classmethod
     def from_json(cls, file_path: str) -> Graph:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return cls.from_dict(json.load(f))
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return cls.from_dict(json.load(f))
+        except FileNotFoundError:
+            raise FileNotFoundError(f"图文件不存在: {file_path}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"图文件 JSON 格式错误 ({file_path}): {e}") from e
 
     @staticmethod
     def from_nodes_and_edges(nodes: list, edges: list) -> Graph:
