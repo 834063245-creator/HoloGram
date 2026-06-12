@@ -124,8 +124,12 @@ class PipelineRunner:
             if on_progress:
                 on_progress(file_path, i + 1, len(files))
 
-        # Phase 3: 跨文件关系解析（已知限制：REFERENCE 边创建留给后续版本）
+        # Phase 3: 跨文件关系解析
         report.phase = "cross_file_resolution"
+        from ..core.merger import CrossFileResolver
+        resolver = CrossFileResolver()
+        cross_edges = resolver.resolve(merged_graph)
+        logger.info("Cross-file resolution: added %d edges", cross_edges)
 
         report.phase = "done"
         report.elapsed_sec = time.time() - t0
@@ -203,10 +207,9 @@ class PipelineRunner:
             file_graph = Graph.from_nodes_and_edges(result.nodes, result.edges)
             self.cache.set(file_path, file_hash, file_graph)
 
-        # 增量跨文件解析：只处理变化节点的关系
-        if changed_node_ids:
-            resolver = CrossFileResolver()
-            resolver.resolve_incremental(merged_graph, changed_node_ids)
+        # 跨文件解析：全量解析以确保与 run() 结果一致
+        resolver = CrossFileResolver()
+        resolver.resolve(merged_graph)
 
         # 增量社区发现：图结构变化后重新聚类
         try:

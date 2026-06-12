@@ -28,7 +28,7 @@ interface GraphJSON {
 }
 
 interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; }
-interface CommunityData { id: string; label: string; node_ids: string[]; }
+interface CommunityData { id: string; label: string; node_ids: string[]; level?: number; parent_id?: string | null; }
 
 export type VisualMode = 'standard' | 'full' | 'files';
 
