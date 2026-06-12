@@ -264,7 +264,8 @@ class TimelineStore:
         sql += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
 
-        rows = self._conn.execute(sql, params).fetchall()
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
         events = []
         for row in rows:
             events.append(TimelineEvent(
@@ -282,14 +283,15 @@ class TimelineStore:
 
     def stats(self) -> Dict[str, Any]:
         """返回时间轴统计。"""
-        total = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        by_type = {}
-        for row in self._conn.execute(
-            "SELECT event_type, COUNT(*) as cnt FROM events GROUP BY event_type"
-        ).fetchall():
-            by_type[row["event_type"]] = row["cnt"]
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            by_type = {}
+            for row in self._conn.execute(
+                "SELECT event_type, COUNT(*) as cnt FROM events GROUP BY event_type"
+            ).fetchall():
+                by_type[row["event_type"]] = row["cnt"]
 
-        latest = self._conn.execute(
+            latest = self._conn.execute(
             "SELECT timestamp, event_type, summary FROM events ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
 
@@ -316,17 +318,19 @@ class TimelineStore:
             return None
 
         now = datetime.datetime.now().isoformat()
-        self._conn.execute(
-            """INSERT OR REPLACE INTO file_snapshots (file_path, timestamp, mtime, size, hash)
-               VALUES (?, ?, ?, ?, ?)""",
-            (file_path, now, stat.st_mtime, stat.st_size, content_hash),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO file_snapshots (file_path, timestamp, mtime, size, hash)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (file_path, now, stat.st_mtime, stat.st_size, content_hash),
+            )
+            self._conn.commit()
         return content_hash
 
     def get_snapshot(self, file_path: str) -> Optional[Dict[str, Any]]:
         """获取文件最近一次快照。"""
-        row = self._conn.execute(
+        with self._lock:
+            row = self._conn.execute(
             "SELECT * FROM file_snapshots WHERE file_path = ? ORDER BY timestamp DESC LIMIT 1",
             (file_path,),
         ).fetchone()
