@@ -3,7 +3,7 @@
 > **状态**: 🔨 施工中
 > - ✅ **第一步** — 修传输层 (持久 MCP) — **已完成** (2025-06-13)
 > - ✅ **第二步** — 修整合层 (Agent↔图联动) — **已完成** (2025-06-13)
-> - ⬜ 第三步 — 图作为输入 (点击驱动 Agent)
+> - ✅ **第三步** — 图作为输入 (点击驱动 Agent) — **已完成** (2025-06-13)
 
 ## 问题诊断
 
@@ -186,7 +186,7 @@ Agent 调工具 → EventBus.emit('agent:tool-done', {...})
 
 ---
 
-### 第三步: 图作为输入 — 点击节点驱动 Agent
+### 第三步: 图作为输入 — 点击节点驱动 Agent ✅
 
 **改什么:** 只加 TypeScript,不改现有逻辑
 
@@ -210,6 +210,26 @@ Agent 调工具 → EventBus.emit('agent:tool-done', {...})
 3. 拖拽框选 → Agent 自动总结该区域
 
 **验收:** 点节点出现菜单; Agent 自动回答; 不影响现有图交互 (旋转/缩放)
+
+**实施记录 (2025-06-13):**
+
+| 文件 | 改动 | 状态 |
+|------|------|:----:|
+| `src-ui/src/ui/events.ts` | 新增 3 个图交互事件: `graph:node-clicked`、`graph:path-selected`、`graph:region-selected` | ✅ |
+| `src-ui/src/ui/graph.ts` | 导入 `bus`；新增 Shift+点击快速路径模式（首个=起点→第二个=终点→自动寻路→emit）；新增 Alt+拖拽矩形框选（投影检测框内节点→高亮→emit）；`onClick` 中 emit `graph:node-clicked`；Escape 清理 shift/select 状态；`clearGraph()` 重置交互状态 | ✅ |
+| `src-ui/src/ui/graph-interaction.ts` | **新建** — `GraphInteraction` 类：订阅 `graph:path-selected` → 自动生成依赖链分析查询；订阅 `graph:region-selected` → 自动生成区域架构总结查询；订阅 `graph:node-clicked` → 预留扩展点 | ✅ |
+| `src-ui/src/main.ts` | 导入 `GraphInteraction`；`init()` 中实例化（紧接 `AgentVisualizer`） | ✅ |
+
+**效果:**
+- 图从"只能看"变成"Agent 的输入设备"
+- 不改任何后端/工具/现有 UI（纯增量）
+- 不与 OrbitControls 旋转/缩放/平移冲突（Shift/Alt 均为未占用修饰键）
+
+**验证:**
+- TypeScript: `tsc --noEmit` ✅ 零错误
+- Python: 未触碰
+- Rust: 未触碰
+- 端到端待验证: `cargo tauri build` + 实际项目
 
 ---
 

@@ -9,6 +9,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { iconHtml } from './icons';
+import { bus } from './events';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -410,6 +411,7 @@ export class StarGraph {
     this.setupTooltip();
     this.setupDetailCard();
     this.setupPieMenu();
+    this.setupSelectRect();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
@@ -424,14 +426,40 @@ export class StarGraph {
     canvas.addEventListener('pointerdown', (e: PointerEvent) => {
       pointerDown.set(e.clientX, e.clientY);
       pointerDragged = false;
+      // Step 3: Alt+left-drag → rectangle selection
+      if (e.altKey && e.button === 0) {
+        this._selecting = true;
+        this._selectStart.set(e.clientX, e.clientY);
+        this._selectEnd.set(e.clientX, e.clientY);
+        this._showSelectRect();
+        e.preventDefault();
+        e.stopPropagation();
+      }
     });
     canvas.addEventListener('pointermove', (e: PointerEvent) => {
+      if (this._selecting) {
+        this._selectEnd.set(e.clientX, e.clientY);
+        this._updateSelectRect();
+        return;
+      }
       if (Math.abs(e.clientX - pointerDown.x) > 4 || Math.abs(e.clientY - pointerDown.y) > 4) {
         pointerDragged = true;
       }
     });
     canvas.addEventListener('pointerup', (e: PointerEvent) => {
+      // Step 3: Alt+drag selection complete
+      if (this._selecting) {
+        this._selecting = false;
+        this._hideSelectRect();
+        this._handleRegionSelect();
+        return;
+      }
       if (pointerDragged) return;
+      // Step 3: Shift+click → quick path mode
+      if (e.shiftKey) {
+        this._handleShiftClick(e);
+        return;
+      }
       // Ctrl+click or right-click → pie menu
       if (e.ctrlKey || e.button === 2) {
         this.onContextMenu(e);
@@ -443,6 +471,8 @@ export class StarGraph {
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (this._selecting) { this._selecting = false; this._hideSelectRect(); return; }
+        if (this._shiftSourceIdx >= 0) { this._clearShiftPath(); return; }
         if (this.pieMenu?.classList.contains('visible')) { this.hidePieMenu(); e.stopImmediatePropagation(); return; }
         if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
         if (this.blastMode) { this.exitBlastMode(); return; }
@@ -735,6 +765,18 @@ export class StarGraph {
     const idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
     else if (idx < 0) this.hideDetail();
+
+    // Step 3: Emit graph:node-clicked (for external interaction handlers)
+    if (idx >= 0 && idx < this.graphNodes.length) {
+      const node = this.graphNodes[idx];
+      bus.emit('graph:node-clicked', {
+        nodeName: node.name,
+        nodeType: (node.type || node.kind || 'symbol') as string,
+        nodeId: node.id,
+        degree: this.deg[idx] || 0,
+        location: node.location || '',
+      });
+    }
   }
 
   private showDetail(idx: number): void {
@@ -875,6 +917,15 @@ export class StarGraph {
   private _pathNodes = new Set<number>();
   private _pathEdges = new Set<number>();
 
+  // ── Step 3: Shift+click quick path mode ───────────────────
+  private _shiftSourceIdx = -1;
+
+  // ── Step 3: Alt+drag rectangle selection ──────────────────
+  private _selecting = false;
+  private _selectStart = new THREE.Vector2();
+  private _selectEnd = new THREE.Vector2();
+  private _selectRectEl!: HTMLDivElement;
+
   private setPathSource(idx: number): void {
     this._pathSource = idx;
     this._pathTarget = -1;
@@ -998,6 +1049,156 @@ export class StarGraph {
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     const st = document.getElementById('status-text');
     if (st && st.innerHTML?.includes('link')) st.innerHTML = '就绪';
+  }
+
+  // ── Step 3: Shift+click quick path mode ──────────────────
+
+  /** Get node index from a pointer event, or -1 if no node hit. */
+  private _hitNode(e: PointerEvent | MouseEvent): number {
+    if (this.nodeCores.length === 0) return -1;
+    const rect = this.container.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
+    return hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
+  }
+
+  private _handleShiftClick(e: PointerEvent): void {
+    const idx = this._hitNode(e);
+    if (idx < 0) {
+      // Shift+click on empty → cancel
+      this._clearShiftPath();
+      return;
+    }
+    if (this._shiftSourceIdx < 0) {
+      // First Shift+click → set source
+      this._shiftSourceIdx = idx;
+      const node = this.graphNodes[idx];
+      const st = document.getElementById('status-text');
+      if (st) st.innerHTML = `${iconHtml('link', 11)} 路径起点: ${node.name} · Shift+点击目标节点完成 · ESC 取消`;
+      // Briefly pulse the source node
+      if (this.nodeGlows[idx]) {
+        (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0x44ffdd);
+        (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.9;
+      }
+    } else if (idx === this._shiftSourceIdx) {
+      // Same node → cancel
+      this._clearShiftPath();
+    } else {
+      // Second Shift+click → find path & emit event
+      const srcIdx = this._shiftSourceIdx;
+      const srcNode = this.graphNodes[srcIdx];
+      const tgtNode = this.graphNodes[idx];
+      // Use existing path finding
+      this.setPathSource(srcIdx);
+      this.setPathTarget(idx);
+      const pathNames = Array.from(this._pathNodes)
+        .map(i => this.graphNodes[i]?.name || '')
+        .filter(Boolean);
+      // Emit event
+      bus.emit('graph:path-selected', {
+        from: { name: srcNode.name, id: srcNode.id, type: (srcNode.type || srcNode.kind || 'symbol') as string },
+        to: { name: tgtNode.name, id: tgtNode.id, type: (tgtNode.type || tgtNode.kind || 'symbol') as string },
+        pathLength: pathNames.length,
+        pathNames,
+      });
+      this._shiftSourceIdx = -1;
+    }
+  }
+
+  private _clearShiftPath(): void {
+    if (this._shiftSourceIdx >= 0 && this._shiftSourceIdx < this.nodeGlows.length) {
+      (this.nodeGlows[this._shiftSourceIdx].material as THREE.SpriteMaterial).color.set(
+        this.nodeGlowColors[this._shiftSourceIdx]);
+      (this.nodeGlows[this._shiftSourceIdx].material as THREE.SpriteMaterial).opacity = 0.55;
+    }
+    this._shiftSourceIdx = -1;
+    const st = document.getElementById('status-text');
+    if (st && st.innerHTML?.includes('link')) st.innerHTML = '就绪';
+  }
+
+  // ── Step 3: Alt+drag rectangle selection ─────────────────
+
+  private setupSelectRect(): void {
+    this._selectRectEl = document.createElement('div');
+    this._selectRectEl.id = 'graph-select-rect';
+    this._selectRectEl.style.cssText =
+      'position:absolute;z-index:18;pointer-events:none;display:none;' +
+      'border:1px solid rgba(100,180,255,0.7);' +
+      'background:rgba(60,140,240,0.08);' +
+      'box-shadow:inset 0 0 20px rgba(80,160,255,0.15);';
+    this.container.appendChild(this._selectRectEl);
+  }
+
+  private _showSelectRect(): void {
+    this._selectRectEl.style.display = '';
+    this._updateSelectRect();
+  }
+
+  private _updateSelectRect(): void {
+    const rect = this.container.getBoundingClientRect();
+    const x1 = Math.min(this._selectStart.x, this._selectEnd.x) - rect.left;
+    const y1 = Math.min(this._selectStart.y, this._selectEnd.y) - rect.top;
+    const x2 = Math.max(this._selectStart.x, this._selectEnd.x) - rect.left;
+    const y2 = Math.max(this._selectStart.y, this._selectEnd.y) - rect.top;
+    this._selectRectEl.style.left = `${x1}px`;
+    this._selectRectEl.style.top = `${y1}px`;
+    this._selectRectEl.style.width = `${x2 - x1}px`;
+    this._selectRectEl.style.height = `${y2 - y1}px`;
+  }
+
+  private _hideSelectRect(): void {
+    this._selectRectEl.style.display = 'none';
+  }
+
+  private _handleRegionSelect(): void {
+    const rect = this.container.getBoundingClientRect();
+    // Compute screen-space rectangle bounds
+    const sx1 = Math.min(this._selectStart.x, this._selectEnd.x) - rect.left;
+    const sy1 = Math.min(this._selectStart.y, this._selectEnd.y) - rect.top;
+    const sx2 = Math.max(this._selectStart.x, this._selectEnd.x) - rect.left;
+    const sy2 = Math.max(this._selectStart.y, this._selectEnd.y) - rect.top;
+    const minDim = 8;
+    if (sx2 - sx1 < minDim || sy2 - sy1 < minDim) return; // too small
+
+    const halfW = rect.width * 0.5;
+    const halfH = rect.height * 0.5;
+    const nodeNames: string[] = [];
+
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      if (!this.nodeCores[i]?.visible) continue;
+      // Project node position to screen space
+      this.tmpVec3.set(
+        this.nodePositions[i * 3],
+        this.nodePositions[i * 3 + 1],
+        this.nodePositions[i * 3 + 2],
+      );
+      this.tmpVec3.project(this.camera);
+      if (this.tmpVec3.z > 1) continue; // behind camera
+      const sx = this.tmpVec3.x * halfW + halfW;
+      const sy = -this.tmpVec3.y * halfH + halfH;
+      if (sx >= sx1 && sx <= sx2 && sy >= sy1 && sy <= sy2) {
+        nodeNames.push(this.graphNodes[i].name);
+      }
+    }
+
+    if (nodeNames.length === 0) return;
+
+    // Emit event
+    bus.emit('graph:region-selected', {
+      nodeNames,
+      nodeCount: nodeNames.length,
+    });
+
+    // Flash the selected nodes briefly
+    this.highlightNodeNames(nodeNames.slice(0, 30), '#60a0ff');
+    setTimeout(() => {
+      if (!this.blastMode && this._pathSource < 0 && !this._lensActive) {
+        this.clearAgentHighlight();
+      }
+    }, 2500);
   }
 
   // ── Hover ────────────────────────────────────────────────
@@ -2319,6 +2520,7 @@ export class StarGraph {
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = [];
     this._pathSource = -1; this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear();
+    this._shiftSourceIdx = -1; this._selecting = false;
     for (const d of this.galaxyLabelDivs) d.remove();
     this.galaxyLabelDivs = [];
     this.neighborMap = []; this.edgeIndexOf = [];
@@ -2686,6 +2888,7 @@ export class StarGraph {
     this.glowTex.dispose(); this.sphereGeo.dispose();
     for (const d of this.galaxyLabelDivs) d.remove(); this.galaxyLabelDivs = [];
     this.galaxyTitleEl?.remove(); this.pieMenu?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
+    this._selectRectEl?.remove();
   }
 }
 

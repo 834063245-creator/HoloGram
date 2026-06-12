@@ -5,7 +5,37 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
-> **最后更新：2026-06-13 · 架构重构第二步——修整合层（Agent↔图双向联动）**
+> **最后更新：2026-06-13 · 架构重构第三步——图作为输入（点击节点驱动 Agent）**
+
+---
+
+## 2026-06-13 架构重构第三步 — 图作为输入（点击节点驱动 Agent） ✅
+
+按 [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) 三步方案，第三步落地：
+
+**问题：** 交互单向 — 只能打字问 Agent。图上看到的关键节点没法直接让它分析。
+
+**改为：** 3D 图变成 Agent 的输入设备
+```
+Shift+点击节点 → BFS 寻路 → 高亮路径 → Agent 自动分析依赖链
+Alt+拖拽框选   → 收集框内节点 → 高亮 → Agent 自动总结区域
+普通点击       → emit graph:node-clicked（供扩展）
+```
+
+**改了什么：**
+- **TS** `events.ts` — 新增 3 个图交互事件: `graph:node-clicked`、`graph:path-selected`、`graph:region-selected`
+- **TS** `graph.ts` — 导入 `bus`；新增 Shift+点击快速路径模式；新增 Alt+拖拽矩形框选；`onClick` emit `graph:node-clicked`；Escape 清理交互状态
+- **TS** `graph-interaction.ts` — **新建** — `GraphInteraction` 类：订阅图交互事件 → 自动生成 Agent 查询
+- **TS** `main.ts` — 导入并实例化 `GraphInteraction`
+
+**新增体验：**
+- **Shift+点击路径**: 点击两个节点 → 自动 BFS 寻路 → 路径高亮 → Agent 自动分析依赖链架构风险
+- **Alt+拖拽框选**: 拖拽矩形框 → 收集框内节点 → 高亮 → Agent 自动总结区域模块关系
+- **零冲突**: Shift/Alt 均为 OrbitControls 未占用的修饰键，不影响旋转/缩放/平移
+
+**不动什么：** 所有后端、所有工具、所有现有 UI（纯增量）
+
+**验证：** TypeScript `tsc --noEmit` ✅ 零错误 · Python 未触碰 · Rust 未触碰
 
 ---
 

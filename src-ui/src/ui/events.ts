@@ -55,3 +55,8 @@ export const bus = new EventBus();
 //   agent:tool-done ({ toolName: string, args: Record<string, unknown>, output: string }) — agent tool call completed
 //   agent:thinking ({ text?: string }) — agent is reasoning / thinking
 //   agent:focus-changed ({ nodeNames: string[], toolName: string }) — agent's focus nodes changed
+//   agent:query (question: string) — send a question to Agent (opens chat + sends)
+//   // Step 3: 图作为输入 — 点击节点驱动 Agent
+//   graph:node-clicked ({ nodeName: string, nodeType: string, nodeId: string, degree: number, location: string }) — 点击节点
+//   graph:path-selected ({ from: {name,id,type}, to: {name,id,type}, pathLength: number, pathNames: string[] }) — Shift+点击路径
+//   graph:region-selected ({ nodeNames: string[], nodeCount: number }) — 拖拽框选区域

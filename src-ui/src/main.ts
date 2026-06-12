@@ -25,6 +25,7 @@ import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { iconSvg } from './ui/icons';
 import { AgentVisualizer, askAgent } from './ui/agent-visualizer';
+import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 
 // ── Worker layout helper ──
@@ -697,6 +698,9 @@ async function init(): Promise<void> {
 
   // Step 2: AgentVisualizer — single entry for agent→graph visualization
   agentViz = new AgentVisualizer(starGraph);
+
+  // Step 3: GraphInteraction — graph as Agent input device
+  new GraphInteraction();
 
   // ── P4: Timeline panel ──
   timelinePanel = new TimelinePanel(document.body);
