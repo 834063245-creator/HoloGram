@@ -171,7 +171,7 @@ async function openProject(path?: string): Promise<void> {
 
   // Save current sessions before switching workspace
   if (currentPath) {
-    try { await chatPanel.saveAllSessions(currentPath); } catch { /* ignore */ }
+    try { await chatPanel.saveActiveSession(currentPath); } catch { /* ignore */ }
     try { await invoke('stop_watching'); } catch { /* ignore */ }
   }
 
@@ -216,7 +216,7 @@ async function openProject(path?: string): Promise<void> {
     try { await setupAgent(); } catch (e) { console.error('[openProject] setupAgent failed:', e); }
     // Restore saved sessions for this project (must be AFTER setupAgent sets agentFactory)
     chatPanel.setProjectPath(folder);
-    chatPanel.loadAllSessions(folder).catch(() => {});
+    chatPanel.autoRestoreLastSession(folder).catch(() => {});
     // 文件树
     if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
     // 后台异步跑 check + watcher
@@ -296,7 +296,10 @@ async function setupAgent(): Promise<void> {
     try {
       if (currentGraphData) visualizeAgentTool(name, args, result, starGraph);
     } catch { /* 可视化失败静默跳过 */ }
-    return result;
+    // Tauri auto-deserializes JSON backend responses → JS objects. The OpenAI
+    // API requires message content to be a string; objects serialize as "[object
+    // Object]" and trigger a 400. Stringify non-string results proactively.
+    return typeof result === 'string' ? result : JSON.stringify(result);
   };
 
   if (currentGraphData) {
@@ -362,7 +365,7 @@ async function setupAgent(): Promise<void> {
     const exec2: ToolExecutor = async (name, args) => {
       const result = await invoke<string>(name, args);
       try { if (currentGraphData) visualizeAgentTool(name, args, result, starGraph); } catch {}
-      return result;
+      return typeof result === 'string' ? result : JSON.stringify(result);
     };
     if (currentGraphData) {
       for (const tool of createHologramTools(exec2)) r.register(tool);
@@ -674,7 +677,7 @@ async function init(): Promise<void> {
   // Auto-save chat sessions after each turn
   bus.on('chat:turn-done', () => {
     if (currentPath) {
-      chatPanel.saveAllSessions(currentPath).catch(() => {});
+      chatPanel.saveActiveSession(currentPath).catch(() => {});
     }
   });
 
@@ -871,7 +874,7 @@ async function init(): Promise<void> {
   settingsPanel.setOnSave(async () => {
     await setupAgent().catch(() => {});
     if (currentPath && agent) {
-      chatPanel.loadAllSessions(currentPath).catch(e => console.error('[settings] loadAllSessions failed:', e));
+      chatPanel.autoRestoreLastSession(currentPath).catch(e => console.error('[settings] autoRestoreLastSession failed:', e));
     }
   });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
@@ -884,7 +887,7 @@ async function init(): Promise<void> {
   window.addEventListener('beforeunload', () => {
     if (currentPath) {
       // Synchronous save via sendBeacon-style — use invoke without awaiting
-      chatPanel.saveAllSessions(currentPath).catch(() => {});
+      chatPanel.saveActiveSession(currentPath).catch(() => {});
     }
   });
 
@@ -1036,7 +1039,7 @@ async function init(): Promise<void> {
       try { await setupAgent(); } catch (e) { console.error('[init] setupAgent failed:', e); }
       // Restore saved sessions for the cached project (must be AFTER setupAgent sets agentFactory)
       chatPanel.setProjectPath(root);
-      chatPanel.loadAllSessions(root).catch(() => {});
+      chatPanel.autoRestoreLastSession(root).catch(() => {});
       runCheck();
       timelinePanel.setProjectPath(root || null);
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';

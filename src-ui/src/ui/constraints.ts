@@ -128,7 +128,7 @@ export class ConstraintsPanel {
     this.path = projectPath;
     this.dirty = false;
     try {
-      this.rawYaml = await invoke<string>('read_constraints', { project_path: projectPath });
+      this.rawYaml = await invoke<string>('read_constraints', { projectPath: projectPath });
       this.data = this.parseYamlSimple(this.rawYaml);
       this.renderForm();
     } catch (err) {
@@ -374,7 +374,7 @@ export class ConstraintsPanel {
     this.readFormIntoData();
     const yaml = this.dataToYaml(this.data);
     try {
-      await invoke('write_constraints', { project_path: this.path, content: yaml });
+      await invoke('write_constraints', { projectPath: this.path, content: yaml });
       this.rawYaml = yaml;
       this.dirty = false;
       // Flash save button green

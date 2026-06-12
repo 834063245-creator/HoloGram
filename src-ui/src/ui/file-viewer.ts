@@ -327,7 +327,7 @@ export class FileViewer {
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
 
     try {
-      const content = await invoke<string>('read_file_content', { file_path: filePath });
+      const content = await invoke<string>('read_file_content', { filePath: filePath });
 
       // Dispose temp loading model
       loadingModel.dispose();
@@ -377,7 +377,7 @@ export class FileViewer {
 
     const content = tab.model.getValue();
     try {
-      await invoke('write_file_content', { file_path: tab.filePath, content });
+      await invoke('write_file_content', { filePath: tab.filePath, content });
       tab.originalContent = content;
       tab.dirty = false;
       tab.error = '';

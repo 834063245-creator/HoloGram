@@ -89,6 +89,7 @@ function buildChatRequest(
           role: 'tool',
           content: m.content || '(no output)',
           tool_call_id: m.tool_call_id,
+          name: m.name,
         });
         break;
       case 'assistant': {

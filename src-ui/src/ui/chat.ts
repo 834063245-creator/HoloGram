@@ -198,7 +198,7 @@ export class ChatPanel {
     this.updateFooter();
     // Persist deletion immediately
     if (this.projectPath) {
-      this.saveAllSessions(this.projectPath).catch(() => {});
+      this.saveActiveSession(this.projectPath).catch(() => {});
     }
   }
 
@@ -298,143 +298,181 @@ export class ChatPanel {
     });
   }
 
-  // ── Session persistence ──
+  // ── Session persistence — one file per session ──
 
-  /** Save all sessions to project's .hologram/chat_sessions.json */
-  async saveAllSessions(projectPath: string): Promise<void> {
-    if (!projectPath || this.sessions.length === 0) {
-      dbg('Chat.saveAllSessions', `skip — projectPath="${projectPath}" sessions=${this.sessions.length}`);
-      return;
-    }
-    // Save current DOM state to sessionMessages cache before serializing
-    if (this.activeIdx >= 0) this.saveCurrentMessages();
-    const data = {
-      version: 2,
-      savedAt: new Date().toISOString(),
-      sessions: this.sessions.map((s) => ({
-        id: s.id,
-        label: s.label,
-        messages: s.agent.getSession(),
-      })),
-      activeIdx: this.activeIdx,
-      nextId: nextSessionId,
-    };
-    const json = JSON.stringify(data);
-    const filePath = `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`;
-    try {
-      await invoke('write_file_content', { file_path: filePath, content: json });
-      dbg('Chat.saveAllSessions', `✓ saved ${this.sessions.length} sessions (${json.length} bytes) → ${filePath}`);
-    } catch (e) {
-      console.error('[chat] 保存会话失败:', e);
-      dbg('Chat.saveAllSessions', `✗ FAILED: ${e}`);
-    }
+  private sessionsDir(projectPath: string): string {
+    return `${projectPath.replace(/\\/g, '/')}/.hologram/sessions`;
   }
 
-  /** Load sessions from project's .hologram/chat_sessions.json */
-  async loadAllSessions(projectPath: string): Promise<void> {
-    if (!this.agentFactory || !projectPath) {
-      dbg('Chat.loadAllSessions', `skip — factory=${!!this.agentFactory} projectPath="${projectPath}"`);
-      return;
+  private sessionFile(projectPath: string, id: number): string {
+    return `${this.sessionsDir(projectPath)}/${id}.json`;
+  }
+
+  private trackerFile(projectPath: string): string {
+    return `${this.sessionsDir(projectPath)}/_active.json`;
+  }
+
+  /** Save the active session to its own file. Updates _active.json tracker. */
+  async saveActiveSession(projectPath: string): Promise<void> {
+    if (!projectPath || this.activeIdx < 0) return;
+    const s = this.sessions[this.activeIdx];
+    if (!s) return;
+
+    this.saveCurrentMessages();
+
+    const data = {
+      id: s.id,
+      label: s.label,
+      savedAt: new Date().toISOString(),
+      messages: s.agent.getSession(),
+    };
+
+    try {
+      await invoke('write_file_content', {
+        filePath: this.sessionFile(projectPath, s.id),
+        content: JSON.stringify(data),
+      });
+    } catch (e) {
+      console.error('[chat] saveActiveSession 失败:', e);
     }
 
-    const filePath = `${projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`;
-    let json: string;
     try {
-      json = await invoke<string>('read_file_content', { file_path: filePath });
-    } catch (e) {
-      dbg('Chat.loadAllSessions', `file not found or read error: ${e}`);
+      await invoke('write_file_content', {
+        filePath: this.trackerFile(projectPath),
+        content: JSON.stringify({ lastId: s.id, nextId: nextSessionId }),
+      });
+    } catch { /* non-critical */ }
+  }
+
+  /** Restore the last active session on project open. */
+  async autoRestoreLastSession(projectPath: string): Promise<void> {
+    if (!this.agentFactory || !projectPath) return;
+
+    let lastId = 0;
+    try {
+      const raw = await invoke<string>('read_file_content', { filePath: this.trackerFile(projectPath) });
+      const t = JSON.parse(raw);
+      lastId = t.lastId || 0;
+      nextSessionId = Math.max(nextSessionId, t.nextId || 0);
+    } catch {
       return;
     }
+    if (!lastId) return;
 
     let data: any;
-    try { data = JSON.parse(json); } catch (e) {
-      this.addNotice(`会话文件解析失败: ${e}`, 'error');
+    try {
+      data = JSON.parse(await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, lastId) }));
+    } catch {
       return;
     }
-    if (!data.sessions || data.sessions.length === 0) return;
+    if (!data.messages || data.messages.length === 0) return;
 
-    // Rebuild sessions
-    const restored: ChatSession[] = [];
-    for (const saved of data.sessions) {
-      const agent = await this.agentFactory();
-      if (!agent) continue;
-      // Keep fresh system prompt, restore conversation
-      const freshSystem = agent.getSession().filter((m) => m.role === 'system');
-      const savedConv = (saved.messages as Message[]).filter((m) => m.role !== 'system');
-      agent.setSession([...freshSystem, ...savedConv]);
+    const agent = await this.agentFactory();
+    if (!agent) return;
 
-      // Auto-label: use first user message as session name
-      const firstUserMsg = savedConv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
-      const label = (saved.label && !saved.label.startsWith('会话 '))
-        ? saved.label
-        : firstUserMsg
-          ? firstUserMsg.content!.slice(0, 28) + (firstUserMsg.content!.length > 28 ? '…' : '')
-          : `会话 ${restored.length + 1}`;
+    const freshSys = agent.getSession().filter((m: Message) => m.role === 'system');
+    const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
+    agent.setSession([...freshSys, ...conv]);
 
-      restored.push({
-        id: saved.id,
-        label,
-        agent,
-      });
-    }
-    if (restored.length === 0) return;
-
-    // Save current messages before replacing
     if (this.activeIdx >= 0) this.saveCurrentMessages();
     this.flushReasoning();
     this.flushText();
     this.pendingToolCards.clear();
 
-    this.sessions = restored;
-    nextSessionId = Math.max(nextSessionId, data.nextId || 0);
-    this.activeIdx = Math.min(
-      Math.max(0, data.activeIdx ?? 0),
-      restored.length - 1,
-    );
+    const label = data.label && !data.label.startsWith('会话 ') ? data.label : '已恢复的会话';
+    // Replace ALL sessions — switch workspace = fresh start
+    this.sessionMessages.clear();
+    this.sessions = [{ id: data.id, label, agent }];
+    this.activeIdx = 0;
     this.renderSessionTabs();
     this.msgList.innerHTML = '';
 
-    // Render restored messages to DOM — this is the key fix
-    this.renderRestoredSession();
+    try { this.renderRestoredSession(); } catch (e) {
+      console.error('[chat] render 崩溃', e);
+    }
 
     this.lastUsageText = '';
     this.updateFooter();
   }
 
-  /** Load a single saved session from disk into a new tab. */
-  private async _loadSavedAsNewTab(saved: { id: number; label: string; messages: Message[] }): Promise<void> {
-    if (!this.agentFactory) {
-      this.addNotice('请先配置 API Key（设置 → Provider）', 'error');
-      return;
+  /** Scan sessions directory — no agent required. */
+  async listSavedSessions(projectPath: string): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
+    let entries: any[];
+    try {
+      entries = await invoke<any[]>('list_directory', { path: this.sessionsDir(projectPath) });
+    } catch {
+      return [];
     }
-    const agent = await this.agentFactory();
-    if (!agent) {
-      this.addNotice('无法创建 Agent 实例', 'error');
-      return;
-    }
-    const freshSystem = agent.getSession().filter((m) => m.role === 'system');
-    const savedConv = (saved.messages as Message[]).filter((m) => m.role !== 'system');
-    agent.setSession([...freshSystem, ...savedConv]);
 
-    const firstUserMsg = savedConv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
-    const label = (saved.label && !saved.label.startsWith('会话 '))
-      ? saved.label
-      : firstUserMsg
-        ? firstUserMsg.content!.slice(0, 28) + (firstUserMsg.content!.length > 28 ? '…' : '')
-        : `会话 ${this.sessions.length + 1}`;
+    const result: Array<{ id: number; label: string; msgCount: number; savedAt: string }> = [];
+    for (const e of entries) {
+      if (e.is_dir || !e.name.endsWith('.json') || e.name === '_active.json') continue;
+      const sid = parseInt(e.name.replace('.json', ''), 10);
+      if (isNaN(sid)) continue;
+
+      try {
+        const d = JSON.parse(await invoke<string>('read_file_content', { filePath: e.path }));
+        if (d.deleted) continue;
+        result.push({
+          id: d.id || sid,
+          label: d.label || `会话 ${sid}`,
+          msgCount: (d.messages as any[])?.filter((m: any) => m.role !== 'system').length || 0,
+          savedAt: d.savedAt || '',
+        });
+      } catch { /* skip unreadable */ }
+    }
+    result.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+    return result;
+  }
+
+  /** Load a saved session from disk into a new tab. */
+  async loadSessionFromDisk(projectPath: string, sessionId: number): Promise<void> {
+    if (!this.agentFactory) { this.addNotice('请先配置 API Key', 'error'); return; }
+
+    let data: any;
+    try {
+      data = JSON.parse(await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, sessionId) }));
+    } catch {
+      this.addNotice('会话文件读取失败', 'error');
+      return;
+    }
+
+    const agent = await this.agentFactory();
+    if (!agent) { this.addNotice('无法创建 Agent', 'error'); return; }
+
+    const freshSys = agent.getSession().filter((m: Message) => m.role === 'system');
+    const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
+    agent.setSession([...freshSys, ...conv]);
+
+    const firstUser = conv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
+    const label = (data.label && !data.label.startsWith('会话 '))
+      ? data.label
+      : firstUser ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '') : `会话 ${this.sessions.length + 1}`;
 
     if (this.activeIdx >= 0) this.saveCurrentMessages();
-    this.flushReasoning();
-    this.flushText();
-    this.pendingToolCards.clear();
+    this.flushReasoning(); this.flushText(); this.pendingToolCards.clear();
 
-    this.sessions.push({ id: saved.id, label, agent });
+    this.sessions.push({ id: data.id || sessionId, label, agent });
     this.activeIdx = this.sessions.length - 1;
     this.renderSessionTabs();
     this.renderRestoredSession();
     this.lastUsageText = '';
     this.updateFooter();
-    this.addNotice(`已加载历史会话: ${label}`, 'info');
+    this.addNotice(`已加载: ${label}`, 'info');
+  }
+
+  /** Mark a session file as deleted on disk. */
+  async deleteSessionFile(projectPath: string, sessionId: number): Promise<void> {
+    // Overwrite with deleted marker — listSavedSessions filters these out
+    try {
+      await invoke('write_file_content', {
+        filePath: this.sessionFile(projectPath, sessionId),
+        content: JSON.stringify({ id: sessionId, deleted: true, label: '', messages: [], savedAt: '' }),
+      });
+    } catch { /* ignore */ }
+    // If this session is open in a tab, close that tab
+    const idx = this.sessions.findIndex(s => s.id === sessionId);
+    if (idx >= 0) this.closeSession(idx);
   }
 
   /** Walk through active agent's session array and build DOM bubbles. */
@@ -581,16 +619,13 @@ export class ChatPanel {
     this.addNotice(`已恢复 ${this.sessions.length} 个会话`, 'info');
   }
 
-  // ── History panel — browse saved conversations ──
+  // ── History panel — browse saved conversation files ──
 
   private historyPanel: HTMLElement | null = null;
   private historyOpen = false;
 
   private toggleHistory(): void {
-    if (this.historyOpen) {
-      this.closeHistory();
-      return;
-    }
+    if (this.historyOpen) { this.closeHistory(); return; }
     this.openHistory();
   }
 
@@ -608,94 +643,83 @@ export class ChatPanel {
     const list = document.createElement('div');
     list.className = 'chat-history-list';
 
-    // Show current in-memory sessions
+    // In-memory sessions
     if (this.sessions.length > 0) {
-      const currentLabel = document.createElement('div');
-      currentLabel.className = 'chat-history-section';
-      currentLabel.textContent = `当前项目 (${this.sessions.length})`;
-      list.appendChild(currentLabel);
+      const hdr = document.createElement('div');
+      hdr.className = 'chat-history-section';
+      hdr.textContent = `当前打开 (${this.sessions.length})`;
+      list.appendChild(hdr);
 
       for (let i = 0; i < this.sessions.length; i++) {
         const s = this.sessions[i];
-        const entry = this.buildHistoryEntry(s.label, `消息: ${s.agent.getSession().filter(m => m.role !== 'system').length}`, () => {
-          if (i !== this.activeIdx) this.switchSession(i);
-          this.closeHistory();
-        }, i === this.activeIdx);
+        const entry = this.buildHistoryEntry(
+          s.label,
+          `消息: ${s.agent.getSession().filter(m => m.role !== 'system').length}`,
+          () => { if (i !== this.activeIdx) this.switchSession(i); this.closeHistory(); },
+          i === this.activeIdx,
+        );
         list.appendChild(entry);
       }
     }
 
-    // Show saved sessions from file (if different from current)
+    // Disk sessions — scanned from .hologram/sessions/
     if (this.projectPath) {
-      const savedLabel = document.createElement('div');
-      savedLabel.className = 'chat-history-section';
-      savedLabel.textContent = '已保存到磁盘';
-      list.appendChild(savedLabel);
+      const hdr = document.createElement('div');
+      hdr.className = 'chat-history-section';
+      hdr.textContent = '磁盘存档';
+      list.appendChild(hdr);
 
-      const loadingEntry = document.createElement('div');
-      loadingEntry.className = 'chat-history-entry';
-      loadingEntry.textContent = '加载中…';
-      list.appendChild(loadingEntry);
+      const loading = document.createElement('div');
+      loading.className = 'chat-history-entry';
+      loading.textContent = '加载中…';
+      list.appendChild(loading);
 
-      // Load saved file asynchronously
-      this.loadSavedHistoryList(list, loadingEntry);
+      this.listSavedSessions(this.projectPath).then(sessions => {
+        loading.remove();
+        if (sessions.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'chat-history-entry';
+          empty.textContent = '暂无存档';
+          list.appendChild(empty);
+          return;
+        }
+        for (const s of sessions) {
+          const already = this.sessions.findIndex(t => t.id === s.id);
+          const entry = this.buildHistoryEntry(
+            s.label,
+            `${s.msgCount} 条消息${s.savedAt ? ' · ' + new Date(s.savedAt).toLocaleString('zh-CN') : ''}`,
+            () => {
+              this.closeHistory();
+              if (already >= 0) { this.switchSession(already); }
+              else { this.loadSessionFromDisk(this.projectPath!, s.id); }
+            },
+            already >= 0 && already === this.activeIdx,
+            () => {
+              if (confirm(`删除会话 "${s.label}"？`)) {
+                this.deleteSessionFile(this.projectPath!, s.id);
+                entry.remove();
+              }
+            },
+          );
+          list.appendChild(entry);
+        }
+      }).catch(() => { loading.textContent = '加载失败'; });
     }
 
     this.historyPanel.appendChild(list);
 
-    // Click outside to close
-    const closeOverlay = document.createElement('div');
-    closeOverlay.className = 'chat-history-overlay';
-    closeOverlay.addEventListener('click', () => this.closeHistory());
-    this.historyPanel.appendChild(closeOverlay);
+    const overlay = document.createElement('div');
+    overlay.className = 'chat-history-overlay';
+    overlay.addEventListener('click', () => this.closeHistory());
+    this.historyPanel.appendChild(overlay);
 
     this.panel.appendChild(this.historyPanel);
     this.historyOpen = true;
   }
 
-  private async loadSavedHistoryList(list: HTMLElement, loadingEntry: HTMLElement): Promise<void> {
-    try {
-      const json = await invoke<string>('read_file_content', {
-        file_path: `${this.projectPath.replace(/\\/g, '/')}/.hologram/chat_sessions.json`,
-      });
-      const data = JSON.parse(json);
-      if (!data.sessions || data.sessions.length === 0) {
-        loadingEntry.textContent = '暂无保存的会话';
-        return;
-      }
-      loadingEntry.remove();
-
-      for (const saved of data.sessions) {
-        const firstMsg = (saved.messages as Message[]).find(
-          (m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>')
-        );
-        const preview = firstMsg?.content?.slice(0, 60) || '(空会话)';
-        const msgCount = (saved.messages as Message[]).filter((m: Message) => m.role !== 'system').length;
-        const time = data.savedAt ? new Date(data.savedAt).toLocaleString('zh-CN') : '';
-
-        const entry = this.buildHistoryEntry(
-          saved.label || firstMsg?.content?.slice(0, 20) || '会话',
-          `${msgCount} 条消息${time ? ' · ' + time : ''}`,
-          () => {
-            // Check if already loaded
-            const existing = this.sessions.findIndex(s => s.id === saved.id);
-            if (existing >= 0) {
-              this.switchSession(existing);
-              this.closeHistory();
-            } else {
-              this.closeHistory();
-              this._loadSavedAsNewTab(saved).catch((e) => {
-                this.addNotice(`加载会话失败: ${e}`, 'error');
-              });
-            }
-          },
-          false,
-        );
-        list.appendChild(entry);
-      }
-    } catch {
-      loadingEntry.textContent = '暂无保存的会话';
-    }
+  private closeHistory(): void {
+    if (this.historyPanel) { this.historyPanel.remove(); this.historyPanel = null; }
+    this.historyOpen = false;
   }
 
   private buildHistoryEntry(
@@ -703,6 +727,7 @@ export class ChatPanel {
     subtitle: string,
     onClick: () => void,
     active: boolean,
+    onDelete?: () => void,
   ): HTMLElement {
     const entry = document.createElement('div');
     entry.className = 'chat-history-entry' + (active ? ' active' : '');
@@ -714,15 +739,26 @@ export class ChatPanel {
     subEl.textContent = subtitle;
     entry.append(titleEl, subEl);
     entry.addEventListener('click', onClick);
-    return entry;
-  }
 
-  private closeHistory(): void {
-    if (this.historyPanel) {
-      this.historyPanel.remove();
-      this.historyPanel = null;
+    if (onDelete) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'chat-history-del';
+      delBtn.innerHTML = '×';
+      delBtn.title = '删除此会话';
+      Object.assign(delBtn.style, {
+        position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
+        width: '20px', height: '20px', padding: '0', fontSize: '14px',
+        background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
+        cursor: 'pointer', borderRadius: '3px', lineHeight: '1',
+      });
+      delBtn.addEventListener('mouseenter', () => { delBtn.style.color = '#e53e3e'; delBtn.style.background = 'rgba(229,62,62,0.1)'; });
+      delBtn.addEventListener('mouseleave', () => { delBtn.style.color = 'var(--text-muted)'; delBtn.style.background = 'none'; });
+      delBtn.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+      entry.appendChild(delBtn);
+      entry.style.position = 'relative';
     }
-    this.historyOpen = false;
+
+    return entry;
   }
 
   // ── Build DOM ──

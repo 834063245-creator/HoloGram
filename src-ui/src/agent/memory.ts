@@ -62,7 +62,7 @@ export class MemoryManager {
   /** Load the raw MEMORY.md text. */
   async loadIndexText(): Promise<string> {
     try {
-      return await invoke<string>('read_file_content', { file_path: this.indexPath() });
+      return await invoke<string>('read_file_content', { filePath: this.indexPath() });
     } catch {
       return '';
     }
@@ -97,14 +97,14 @@ export class MemoryManager {
    *  Set incrementHit to track recall frequency. */
   async read(name: string, incrementHit = false): Promise<MemoryFile | null> {
     try {
-      const raw = await invoke<string>('read_file_content', { file_path: this.filePath(name) });
+      const raw = await invoke<string>('read_file_content', { filePath: this.filePath(name) });
       const mf = parseFrontmatter(raw);
 
       if (incrementHit) {
         mf.hit_count = (mf.hit_count || 0) + 1;
         mf.raw = rebuildRaw(mf);
         await invoke('write_file_content', {
-          file_path: this.filePath(name),
+          filePath: this.filePath(name),
           content: mf.raw,
         });
       }
@@ -213,7 +213,7 @@ export class MemoryManager {
 
     // Write the memory file
     await invoke('write_file_content', {
-      file_path: this.filePath(name),
+      filePath: this.filePath(name),
       content: frontmatter,
     });
 
@@ -245,7 +245,7 @@ export class MemoryManager {
     if (index) index += '\n';
 
     await invoke('write_file_content', {
-      file_path: this.indexPath(),
+      filePath: this.indexPath(),
       content: index,
     });
 
@@ -277,7 +277,7 @@ export class MemoryManager {
     }
 
     await invoke('write_file_content', {
-      file_path: this.indexPath(),
+      filePath: this.indexPath(),
       content: index,
     });
   }
