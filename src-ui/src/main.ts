@@ -98,6 +98,11 @@ let currentFileGraphData: any = null;
 let currentMode: VisualMode = 'standard';
 let starGraph: StarGraph = new StarGraph(graphEl, currentMode);
 
+/** Case-insensitive path comparison (Windows drive letters may differ in case). */
+function isSamePath(a: string, b: string): boolean {
+  return a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase();
+}
+
 // Chat state
 let chatPanel: ChatPanel;
 let checkPanel: CheckPanel;
@@ -175,6 +180,13 @@ async function openProject(path?: string): Promise<void> {
     try { await invoke('stop_watching'); } catch { /* ignore */ }
   }
 
+  // Clear stale state BEFORE loading new project (prevents wrong-project data leaks)
+  currentGraphData = null;
+  currentFileGraphData = null;
+  currentPath = '';
+  // Register this workspace with the backend so all tool commands route here
+  await invoke('set_active_project', { path: folder }).catch(() => {});
+
   setLoading(true, folder);
   try {
     // Load graph: MsgPack first, fall back to Python analysis
@@ -203,10 +215,10 @@ async function openProject(path?: string): Promise<void> {
         chatPanel.setStarGraph(starGraph);
         starGraph.render(currentFileGraphData);
         statusText.textContent = `⚠️ ${nodeCount} 节点 — 已切换文件视图`;
-        showGraphView(folder);
       } else {
         statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
       }
+      showGraphView(folder);  // Always set currentPath so file tree / timeline use correct project
     } else {
       starGraph.render(graph);
       showGraphView(folder);
@@ -219,9 +231,9 @@ async function openProject(path?: string): Promise<void> {
     chatPanel.autoRestoreLastSession(folder).catch(() => {});
     // 文件树
     if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
-    // 后台异步跑 check + watcher
+    // 后台异步跑 check + watcher（必须 await watcher 启动，避免旧 watcher 竞态覆盖新数据）
     runCheck();
-    invoke('start_watching', { path: folder }).catch(() => {});
+    await invoke('start_watching', { path: folder }).catch(() => {});
   } catch (err: any) {
     statusText.textContent = `分析失败: ${err}`; setLoading(false); throw err;
   }
@@ -1027,6 +1039,12 @@ async function init(): Promise<void> {
   listen<string>('graph-updated', async (event) => {
     try {
       const graph = JSON.parse(event.payload);
+      // Guard: ignore watcher events from a previous project (race after workspace switch)
+      const eventRoot = graph.meta?.source_root || '';
+      if (currentPath && eventRoot && !isSamePath(eventRoot, currentPath)) {
+        console.warn('[graph-updated] ignoring stale event from', eventRoot, 'current is', currentPath);
+        return;
+      }
       const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
       if (nodeCount > 0) {
         currentGraphData = graph;

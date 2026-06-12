@@ -223,37 +223,26 @@ class TestMCPServer:
         assert content["changes"] == []
 
     def test_changes_with_timeline(self, server, tmp_path):
-        """有 timeline 文件时应返回最近变更信息。"""
-        import os, json as jmod
-        timeline_dir = tmp_path / ".hologram"
-        timeline_dir.mkdir()
-        timeline = {
-            "anchors": [
-                {
-                    "id": "d_001",
-                    "timestamp": "2026-06-08T14:32:00Z",
-                    "summary": "改了 handle_request，波及 5 节点",
-                    "action": "changed",
-                    "commitHash": "abc1234",
-                    "affectedNodeIds": ["n1", "n2"],
-                    "impactCount": 5,
-                    "delayedCount": 1,
-                    "snippet": "讨论后决定用方案 B"
-                },
-                {
-                    "id": "d_002",
-                    "timestamp": "2026-06-08T11:07:00Z",
-                    "summary": "加了 validate_session",
-                    "action": "added",
-                    "affectedNodeIds": ["n3"],
-                    "impactCount": 8,
-                    "delayedCount": 0,
-                },
-            ],
-            "lastUpdated": "2026-06-08T14:32:00Z"
-        }
-        with open(timeline_dir / "timeline.json", "w") as f:
-            jmod.dump(timeline, f)
+        """有 timeline 数据时应返回最近变更信息。"""
+        # Populate TimelineStore (SQLite) instead of the old timeline.json
+        from src_python.timeline import TimelineStore
+        store = TimelineStore(str(tmp_path))
+        store.record(
+            event_type="file_changed",
+            file="h.py",
+            changed_by="git commit abc1234",
+            related_nodes=["n1", "n2"],
+            summary="改了 handle_request，波及 5 节点",
+            properties={"snippet": "讨论后决定用方案 B"},
+        )
+        store.record(
+            event_type="file_changed",
+            file="h.py",
+            changed_by="git commit def5678",
+            related_nodes=["n3"],
+            summary="加了 validate_session",
+        )
+        store.close()
 
         req = self._req("tools/call", {
             "name": "hologram_changes",
@@ -262,9 +251,9 @@ class TestMCPServer:
         resp = server.handle_request(req)
         content = json.loads(resp["result"]["content"][0]["text"])
         assert "last_change" in content
-        assert content["last_change"]["summary"] == "改了 handle_request，波及 5 节点"
-        assert content["last_change"]["impact_count"] == 5
-        assert content["last_change"]["commit_hash"] == "abc1234"
+        assert content["last_change"]["summary"] == "加了 validate_session"
+        assert content["last_change"]["impact_count"] == 1
+        assert content["last_change"]["commit_hash"] == "def5678"
         assert content["timeline_anchor_count"] == 2
 
     # -- error handling --

@@ -132,45 +132,105 @@ function fibonacciSphere(n: number, radius: number): Float32Array {
 }
 
 // ── 3D Force-Directed Layout ─────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// Robustness-hardened: per-pair force caps, per-node velocity caps,
+// per-node displacement caps, every-iteration NaN sampling,
+// adaptive shell constraint, adaptive iteration budget.
+// Core aesthetic parameters (rep, att, damp, shellRadius formula)
+// are LOCKED — safety layers only, no tuning.
+// ═══════════════════════════════════════════════════════════════
 
 function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   if (n === 0) return new Float32Array(0);
-  const shellRadius = Math.cbrt(n) * 14, pos = fibonacciSphere(n, shellRadius);
+
+  // ── Core parameters (LOCKED) ──
+  const shellRadius = Math.cbrt(n) * 14;
+  const rep = 600, att = 0.018, damp = 0.72;
+  const pos = fibonacciSphere(n, shellRadius);
   const vel = new Float32Array(n * 3);
-  const rep = 600, att = 0.018, damp = 0.72, sp = 0.006;
-  const maxIter = Math.min(70, 20 + Math.floor(n / 4));
+
+  // ── Adaptive shell constraint — tighter for large graphs ──
+  const sp = 0.006 + (n > 2000 ? 0.008 : 0) + (n > 4000 ? 0.006 : 0); // 0.006 / 0.014 / 0.020
+
+  // ── Adaptive iteration budget — fewer for large graphs (O(n²) cost) ──
+  const maxIter = Math.min(60, Math.max(15, 60 - Math.floor(n / 800)));
+
+  // ── Safety caps (derived from shell, not tuned per-graph) ──
+  const REP_CAP = shellRadius * 8;         // per-pair repulsion
+  const ATT_CAP = shellRadius;             // per-pair attraction
+  const VEL_CAP = shellRadius * 0.25;      // per-node velocity before damping
+
   for (let iter = 0; iter < maxIter; iter++) {
+    // ── Repulsion (all pairs) ──
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
         const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
-        const f = rep / (dist * dist + 1);
+        const f = Math.min(rep / (dist * dist + 1), REP_CAP);
         vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
         vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
+    // ── Attraction (edges only) ──
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
-      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz)), f = dist * att;
+      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      const f = Math.min(dist * att, ATT_CAP);
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
     }
-    for (let i = 0; i < n; i++) { vel[i * 3] -= pos[i * 3] * 0.0004; vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004; vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004; }
+    // ── Origin attraction ──
+    for (let i = 0; i < n; i++) {
+      vel[i * 3] -= pos[i * 3] * 0.0004;
+      vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004;
+      vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004;
+    }
+    // ── Per-node velocity cap ──
+    for (let i = 0; i < n; i++) {
+      const vx = vel[i * 3], vy = vel[i * 3 + 1], vz = vel[i * 3 + 2];
+      const vm = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      if (vm > VEL_CAP) { const s = VEL_CAP / vm; vel[i * 3] = vx * s; vel[i * 3 + 1] = vy * s; vel[i * 3 + 2] = vz * s; }
+    }
+    // ── Damping + position update ──
     for (let i = 0; i < n * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+    // ── NaN detection (lightweight sampling every iter, full sweep every 5) ──
     if (iter % 5 === 0) {
+      // Full sweep
       let diverged = false;
       for (let i = 0; i < n * 3 && !diverged; i++) {
         if (!isFinite(pos[i]) || !isFinite(vel[i])) diverged = true;
       }
       if (diverged) {
-        console.warn(`[StarGraph] layout3D iter ${iter}/${maxIter}: NaN detected, resetting`);
+        const fresh = fibonacciSphere(n, shellRadius);
+        for (let i = 0; i < n * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
+      }
+    } else {
+      // Sampling sweep — check √n random nodes
+      const sample = Math.max(10, Math.floor(Math.sqrt(n)));
+      let diverged = false;
+      for (let k = 0; k < sample && !diverged; k++) {
+        const i = (k * 2654435761 + iter * 0x9e3779b9) % n; // cheap pseudo-random
+        const i3 = i * 3;
+        if (!isFinite(pos[i3]) || !isFinite(pos[i3 + 1]) || !isFinite(pos[i3 + 2]) ||
+            !isFinite(vel[i3]) || !isFinite(vel[i3 + 1]) || !isFinite(vel[i3 + 2])) {
+          diverged = true;
+        }
+      }
+      if (diverged) {
         const fresh = fibonacciSphere(n, shellRadius);
         for (let i = 0; i < n * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
       }
     }
+    // ── Shell constraint (adaptive strength) ──
     for (let i = 0; i < n; i++) {
-      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2], dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > 1) { const drift = (dist - shellRadius) * sp; pos[i * 3] -= (dx / dist) * drift; pos[i * 3 + 1] -= (dy / dist) * drift; pos[i * 3 + 2] -= (dz / dist) * drift; }
+      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2];
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > 1) {
+        const drift = (dist - shellRadius) * sp;
+        pos[i * 3] -= (dx / dist) * drift;
+        pos[i * 3 + 1] -= (dy / dist) * drift;
+        pos[i * 3 + 2] -= (dz / dist) * drift;
+      }
     }
   }
   return pos;
@@ -219,6 +279,9 @@ export class StarGraph {
   private edgeParticles!: THREE.Points;
   private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
   private nodeGlows2: THREE.Sprite[] = []; // second glow layer (full mode)
+
+  // Diagnostics
+  private _diagMsg = '';
 
   // Diff overlay (P4: 变更回看着色)
   private diffActive = false;
@@ -305,15 +368,15 @@ export class StarGraph {
     // ── Post-processing pipeline (full mode) ──
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(container.clientWidth, container.clientHeight),
-      mode === 'full' ? 1.4 : 0.8,  // strength
-      0.4,   // radius — soft bloom
-      0.2,   // threshold — bloom everything slightly bright
-    );
     if (mode === 'full') {
+      this.bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(container.clientWidth, container.clientHeight),
+        1.4,  // strength — intense for full mode
+        0.4,   // radius
+        0.2,   // threshold
+      );
       this.composer.addPass(this.bloomPass);
-    }
+    } // standard mode: no bloom — practical, clean, fast
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -1374,17 +1437,18 @@ export class StarGraph {
     this.foldMode = on;
     this.enteredGalaxyId = null;
     if (on) {
-      // Enable HDR tone mapping
+      // Enable HDR tone mapping (both modes)
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 1.1;
-      // Subtle bloom — only the brightest cores glow, not the whole cloud
+      // Full mode: subtle bloom for fold view
       if (this.mode === 'full') {
         if (this.composer.passes.indexOf(this.bloomPass) === -1) {
           this.composer.addPass(this.bloomPass);
         }
         this.bloomPass.strength = 0.7;
-        this.bloomPass.threshold = 0.55; // only very bright elements bloom
+        this.bloomPass.threshold = 0.55;
       }
+      // Standard mode: no bloom, nothing to adjust
       this.applyFoldOverlay();
       // Start cross-edge energy flow
       this.initCrossEdgeFlow();
@@ -1402,11 +1466,9 @@ export class StarGraph {
           this.composer.addPass(this.bloomPass);
         }
       } else {
+        // Standard mode: no bloom, just reset tone mapping
         this.renderer.toneMapping = THREE.NoToneMapping;
         this.renderer.toneMappingExposure = 1.0;
-        // Remove bloom for standard/minimal
-        const idx = this.composer.passes.indexOf(this.bloomPass);
-        if (idx !== -1) this.composer.removePass(this.bloomPass);
       }
     }
   }
@@ -1984,7 +2046,7 @@ export class StarGraph {
       const s = nodeIdx.get(e.source), t = nodeIdx.get(e.target);
       if (s !== undefined && t !== undefined && s !== t) {
         pairs.push([s, t]); deg[s]++; deg[t]++;
-        eData.push({ s, t, couplingDepth: (e.properties?.['coupling_depth'] as number) || 0, edgeType: e.type || '', direction: (e as any).direction || '' });
+        eData.push({ s, t, couplingDepth: ((e as any).coupling_depth as number) || 0, edgeType: e.type || '', direction: (e as any).direction || '' });
       }
     }
     this.deg = deg; this.edgeDataList = eData; this.maxDeg = Math.max(...deg, 1);
@@ -2044,16 +2106,26 @@ export class StarGraph {
     for (let i = 0; i < nodes.length; i++) { rawPos[i * 3] -= cx; rawPos[i * 3 + 1] -= cy; rawPos[i * 3 + 2] -= cz; }
     this.nodePositions = rawPos;
 
-    let maxR = 50;
+    // Percentile-based maxR — ignores top 5% outliers (isolated nodes pushed far out)
+    const dists: number[] = [];
     for (let i = 0; i < nodes.length; i++) {
       const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
-      if (isFinite(r2)) maxR = Math.max(maxR, Math.sqrt(r2));
+      if (isFinite(r2)) dists.push(Math.sqrt(r2));
     }
+    dists.sort((a, b) => a - b);
+    const shellR = Math.cbrt(nodes.length) * 14;
+    const p95 = dists[Math.floor(dists.length * 0.95)] || 50;
+    const absMax = dists[dists.length - 1] || 50;
+    const maxR = Math.min(Math.max(50, p95), shellR * 3);  // p95, capped at 3x shell radius
     const camDist = maxR * 2.6;
+    const isoCount = deg.filter(d => d === 0).length;
+    this._diagMsg = `shellR≈${shellR | 0} p95=${maxR | 0} absMax=${absMax | 0} cam=${camDist | 0} iso=${isoCount}/${nodes.length} NaNfix=${fixed}`;
     this.camera.position.set(camDist * 0.55, camDist * 0.45, camDist * 0.65);
     this.controls.target.set(0, 0, 0);
     this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
     this.camera.updateProjectionMatrix(); this.controls.update();
+
+    // (standard mode: no bloom — bloom is full-mode only)
 
     this.buildEdges(rawPos, eData);
     this.buildNodes(nodes, rawPos, deg);
@@ -2081,6 +2153,11 @@ export class StarGraph {
     if (this.foldMode) this.applyFoldOverlay();
 
     this.updateStatus(nodes.length, edges.length, graph.meta);
+    // Append layout diagnostics so user can report them (release build has no DevTools)
+    if (this._diagMsg) {
+      const st = document.getElementById('status-text');
+      if (st) st.textContent = (st.textContent || '') + ' | ' + this._diagMsg;
+    }
   }
 
   private clearGraph(): void {
@@ -2100,6 +2177,7 @@ export class StarGraph {
     this.hoveredIdx = -1; this.targetHoverScale = 0;
     this.focusActive = false; this.focusNodeIdx = -1; this.selectedIdx = -1;
     this.blastMode = false; this.blastSource = -1; this.blastDistances = []; this.l34Count = [];
+    this._diagMsg = '';
     this.tooltipEl?.classList.remove('visible');
     this.detailCard?.classList.remove('visible');
   }
@@ -2142,7 +2220,7 @@ export class StarGraph {
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const baseScale = 0.6 + (deg[i] / this.maxDeg) * 2.8;
       const glowOpacity = false ? 0 : 0.55;
-      const glowScaleMul = isFull ? 9 : 5.5;
+      const glowScaleMul = isFull ? 9 : 7.0;
 
       // Full mode: large soft outer glow first (behind everything)
       if (isFull) {
@@ -2318,12 +2396,12 @@ export class StarGraph {
       const s = 1 + this.hoverScale * 1.2;
       this.nodeCores[this.hoveredIdx].scale.setScalar(base * s);
       if (this.nodeGlows[this.hoveredIdx]) {
-        this.nodeGlows[this.hoveredIdx].scale.setScalar(base * (isFull ? 7 : 5.5) * s);
-        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.45;
+        this.nodeGlows[this.hoveredIdx].scale.setScalar(base * (isFull ? 7 : 7.0) * s);
+        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.30;
       }
       for (const ni of neighborSet) {
         if (ni !== this.hoveredIdx && ni < this.nodeGlows.length) {
-          (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.3;
+          (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.12;
         }
       }
     }
@@ -2386,7 +2464,7 @@ export class StarGraph {
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
           (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(c);
           const base = 0.6 + (this.deg[i] / this.maxDeg) * 2.8;
-          this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 5.5) * (d === 0 ? 2 : 1.2));
+          this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
           this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
         } else {
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12;

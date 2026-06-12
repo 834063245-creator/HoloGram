@@ -87,6 +87,12 @@ class CommunityDetector:
 
         if communities:
             graph.communities = communities
+            # Backfill community_id onto each Node so serialization is self-contained
+            for comm in communities:
+                for nid in comm.node_ids:
+                    node = graph.get_node(nid)
+                    if node is not None:
+                        node.community_id = comm.id
         return communities
 
     def _generate_label(self, graph: Graph, node_ids: Set[str]) -> str:

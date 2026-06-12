@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -173,6 +174,35 @@ class Community:
             "parent_id": self.parent_id,
             "properties": self.properties,
         }
+
+
+# ============================================================
+# JSON 序列化安全层
+# ============================================================
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """递归清理 JSON 序列化前的所有隐患。
+
+    - float('nan') / ±inf → None（JSON null）
+    - Enum 实例 → 其 .value 字符串
+    - 未知类型 → str(obj) 兜底
+    - dict/list/tuple 递归处理
+    """
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, Enum):
+        return obj.value
+    # 安全类型直通（str, int, bool, None, bytes）
+    if isinstance(obj, (str, int, bool, type(None))):
+        return obj
+    # 最后兜底：转字符串
+    return str(obj)
 
 
 # ============================================================
@@ -537,6 +567,7 @@ class Graph:
 
     def to_json(self, file_path: str) -> None:
         d = self.to_dict()
+        d = _sanitize_for_json(d)
         target = os.path.abspath(file_path)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp_path = target + ".tmp"

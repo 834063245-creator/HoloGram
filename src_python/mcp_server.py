@@ -401,41 +401,50 @@ class MCPServer:
 
     def _tool_changes(self, args: Dict[str, Any]) -> Dict[str, Any]:
         source_root = args.get("project_root") or getattr(self.graph, 'source_root', "")
-        timeline_path = os.path.join(source_root, ".hologram", "timeline.json") if source_root else ""
-
-        if not timeline_path or not os.path.exists(timeline_path):
+        if not source_root:
             return {
-                "message": "No timeline data available. Changes are recorded after git commit with snapshot comparison.",
+                "message": "No project root available. Changes are recorded after git commit with snapshot comparison.",
                 "changes": [],
             }
 
         try:
-            with open(timeline_path, "r") as f:
-                timeline = json.load(f)
-        except Exception:
-            return {"message": "Failed to read timeline", "changes": []}
+            try:
+                from src_python.timeline import TimelineStore
+            except ImportError:
+                from timeline import TimelineStore
+            store = TimelineStore(source_root)
+            # Query the most recent file_changed or commit event
+            rows = store.query(limit=1, event_type="file_changed")
+            if not rows:
+                rows = store.query(limit=1, event_type="commit")
+            if not rows:
+                store.close()
+                return {"message": "No timeline data available", "changes": []}
 
-        anchors = timeline.get("anchors", [])
-        last_change = None
-        for a in anchors:
-            if a.get("action") == "changed":
-                last_change = a
-                break
+            last = rows[0]
+            related = last.get("related_nodes", [])
+            total = len(store.query(limit=1000))
+            commit_hash = ""
+            cb = last.get("changed_by", "")
+            if cb.startswith("git commit "):
+                commit_hash = cb[len("git commit "):]
+            store.close()
 
-        if not last_change:
-            return {"message": "No recent changes found", "changes": []}
-
-        return {
-            "last_change": {
-                "timestamp": last_change.get("timestamp"),
-                "summary": last_change.get("summary"),
-                "impact_count": last_change.get("impactCount", 0),
-                "delayed_count": last_change.get("delayedCount", 0),
-                "affected_nodes": last_change.get("affectedNodeIds", []),
-                "commit_hash": last_change.get("commitHash"),
-            },
-            "timeline_anchor_count": len(anchors),
-        }
+            return {
+                "last_change": {
+                    "timestamp": last.get("timestamp"),
+                    "summary": last.get("summary"),
+                    "event_type": last.get("event_type"),
+                    "file": last.get("file"),
+                    "impact_count": len(related),
+                    "delayed_count": 0,
+                    "affected_nodes": related,
+                    "commit_hash": commit_hash,
+                },
+                "timeline_anchor_count": total,
+            }
+        except Exception as e:
+            return {"message": f"Failed to read timeline: {e}", "changes": []}
 
     # ── V2 分析工具实现 ────────────────────────────────────
 

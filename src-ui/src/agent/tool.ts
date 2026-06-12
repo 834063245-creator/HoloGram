@@ -335,13 +335,21 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'read_file_content',
       description: () =>
-        'Read the content of a file on disk. Returns the full text content. Use to inspect source code files when analyzing dependencies or investigating violations.',
+        'Read the content of a file on disk. Returns the full text content by default. Use offset and limit to read a specific range of lines (0-indexed). Use to inspect source code files when analyzing dependencies or investigating violations.',
       parameters: () => ({
         type: 'object',
         properties: {
           filePath: {
             type: 'string',
             description: 'Absolute path to the file to read',
+          },
+          offset: {
+            type: 'integer',
+            description: 'Line number to start reading from (0-indexed, default: 0)',
+          },
+          limit: {
+            type: 'integer',
+            description: 'Maximum number of lines to return (default: all lines)',
           },
         },
         required: ['filePath'],

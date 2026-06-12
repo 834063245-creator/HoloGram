@@ -40,7 +40,7 @@ static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32:
 fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
     let mut child = if cfg!(target_os = "windows") {
         let mut c = silent_command("cmd");
-        c.arg("/c").arg(cmd);
+        c.arg("/c").arg(cmd_escape(cmd));
         c
     } else {
         let mut c = silent_command("sh");
@@ -130,6 +130,14 @@ fn silent_command(program: &str) -> Command {
     cmd
 }
 
+/// Escape a command string for `cmd /c` on Windows.
+/// `cmd /c` strips the outermost double quotes, so we wrap the command
+/// and escape any inner `"` as `\"`. This prevents commands like
+/// `node -e "console.log('hello')"` from losing their nested quotes.
+fn cmd_escape(command: &str) -> String {
+    format!("\"{}\"", command.replace('"', "\\\""))
+}
+
 // ═══════════════════════════════════════════════════════
 // Python helpers
 // ═══════════════════════════════════════════════════════
@@ -185,6 +193,18 @@ fn default_graph() -> String {
 /// 未设置时 fallback 到项目根目录的全局文件。
 static ACTIVE_PROJECT: std::sync::LazyLock<Mutex<String>> =
     std::sync::LazyLock::new(|| Mutex::new(String::new()));
+
+/// Set the active workspace — all tool commands route queries to this project.
+/// Called from the frontend when opening a project (before loading its graph).
+#[tauri::command]
+fn set_active_project(path: String) -> Result<(), String> {
+    *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+    let last_path_file = project_root().join(".last_project");
+    if let Err(e) = std::fs::write(&last_path_file, &path) {
+        eprintln!("[hologram] failed to write .last_project: {e}");
+    }
+    Ok(())
+}
 
 fn active_graph() -> String {
     let proj = ACTIVE_PROJECT.lock().unwrap();
@@ -719,37 +739,41 @@ async fn hologram_changes() -> Result<String, String> {
     let root = project_root();
     let code = format!(
         r#"
-import sys, json, os
-sys.path.insert(0, r"{root}")
-source_root = os.environ.get("HOLOGRAM_PROJECT", "")
-timeline_path = os.path.join(source_root, ".hologram", "timeline.json") if source_root else ""
-if not timeline_path or not os.path.exists(timeline_path):
+import sys, json
+sys.path.insert(0, r"{py_src}")
+from timeline import TimelineStore
+store = TimelineStore(r"{project_root}")
+# Query the most recent file_changed or commit event
+rows = store.query(limit=1, event_type="file_changed")
+if not rows:
+    rows = store.query(limit=1, event_type="commit")
+if not rows:
     print(json.dumps({{"message": "No timeline data available", "changes": []}}))
 else:
-    with open(timeline_path, "r") as f:
-        timeline = json.load(f)
-    anchors = timeline.get("anchors", [])
-    last_change = None
-    for a in anchors:
-        if a.get("action") == "changed":
-            last_change = a
-            break
-    if not last_change:
-        print(json.dumps({{"message": "No recent changes found", "changes": []}}))
-    else:
-        print(json.dumps({{
-            "last_change": {{
-                "timestamp": last_change.get("timestamp"),
-                "summary": last_change.get("summary"),
-                "impact_count": last_change.get("impactCount", 0),
-                "delayed_count": last_change.get("delayedCount", 0),
-                "affected_nodes": last_change.get("affectedNodeIds", []),
-                "commit_hash": last_change.get("commitHash"),
-            }},
-            "timeline_anchor_count": len(anchors),
-        }}, indent=2, ensure_ascii=False))
+    last = rows[0]
+    related = last.get("related_nodes", [])
+    total = len(store.query(limit=1000))
+    commit_hash = ""
+    cb = last.get("changed_by", "")
+    if cb.startswith("git commit "):
+        commit_hash = cb[len("git commit "):]
+    print(json.dumps({{
+        "last_change": {{
+            "timestamp": last.get("timestamp"),
+            "summary": last.get("summary"),
+            "event_type": last.get("event_type"),
+            "file": last.get("file"),
+            "impact_count": len(related),
+            "delayed_count": 0,
+            "affected_nodes": related,
+            "commit_hash": commit_hash,
+        }},
+        "timeline_anchor_count": total,
+    }}, indent=2, ensure_ascii=False, default=str))
+store.close()
 "#,
-        root = root.join("src_python").to_string_lossy(),
+        py_src = root.join("src_python").to_string_lossy(),
+        project_root = root.to_string_lossy(),
     );
     run_python_code(&code)
 }
@@ -776,7 +800,7 @@ async fn exec_command(
 
     let mut child = if cfg!(target_os = "windows") {
         let mut c = silent_command("cmd");
-        c.arg("/c").arg(&command);
+        c.arg("/c").arg(cmd_escape(&command));
         c
     } else {
         let mut c = silent_command("sh");
@@ -925,9 +949,19 @@ async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-async fn read_file_content(file_path: String) -> Result<String, String> {
-    std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))
+async fn read_file_content(
+    file_path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<String, String> {
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
+    let lines: Vec<&str> = content.lines().collect();
+    let start = offset.unwrap_or(0).min(lines.len());
+    let end = limit
+        .map(|l| (start + l).min(lines.len()))
+        .unwrap_or(lines.len());
+    Ok(lines[start..end].join("\n"))
 }
 
 #[tauri::command]
@@ -968,7 +1002,11 @@ async fn search_code(
     } else {
         None
     };
-    let pattern_lower = if is_regex { String::new() } else { pattern.to_lowercase() };
+    let sub_patterns: Vec<String> = if is_regex {
+        Vec::new()
+    } else {
+        pattern.to_lowercase().split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
     let extensions: Vec<String> = file_types
         .unwrap_or_default()
         .split(',')
@@ -1031,7 +1069,8 @@ async fn search_code(
             let matched = if let Some(ref re) = regex {
                 re.is_match(line)
             } else {
-                line.to_lowercase().contains(&pattern_lower)
+                let line_lower = line.to_lowercase();
+                sub_patterns.iter().any(|p| line_lower.contains(p))
             };
             if matched {
                 results.push(serde_json::json!({
@@ -1232,13 +1271,14 @@ async fn write_constraints(project_path: String, content: String) -> Result<(), 
 /// 3) global fallback, 4) last project's hologram_graph.json.
 #[tauri::command]
 async fn load_graph_json(path: Option<String>) -> Result<String, String> {
-    // 1) explicit path
+    // 1) explicit path — must exist, no silent fallthrough to wrong project
     if let Some(ref p) = path {
-        if let Ok(content) = std::fs::read_to_string(p) {
-            if !content.trim().is_empty() {
-                return Ok(content);
-            }
+        let content = std::fs::read_to_string(p)
+            .map_err(|e| format!("Graph JSON not found at {}: {}", p, e))?;
+        if content.trim().is_empty() {
+            return Err(format!("Graph JSON file is empty: {}", p));
         }
+        return Ok(content);
     }
 
     // 2) active workspace graph (falls back to global if no project active)
@@ -1268,13 +1308,14 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
 /// 4) last project .hologram.
 #[tauri::command]
 async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
-    // 1) explicit path
+    // 1) explicit path — must exist, no silent fallthrough to wrong project
     if let Some(ref p) = path {
-        if let Ok(bytes) = std::fs::read(p) {
-            if !bytes.is_empty() {
-                return Ok(bytes);
-            }
+        let bytes = std::fs::read(p)
+            .map_err(|e| format!("Binary graph not found at {}: {}", p, e))?;
+        if bytes.is_empty() {
+            return Err(format!("Binary graph file is empty: {}", p));
         }
+        return Ok(bytes);
     }
 
     // 2) active workspace .hologram
@@ -1714,6 +1755,7 @@ fn main() {
             hologram_timeline,
             hologram_community_report,
             hologram_graph_summary,
+            set_active_project,
             load_graph_json,
             load_binary_graph,
             analyze_and_load,
