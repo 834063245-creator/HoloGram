@@ -12,6 +12,7 @@ import { loadSettings } from '../settings';
 import { invoke } from '../bridge';
 import type { Message } from '../provider/types';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 
 // ── Constants ──
@@ -573,7 +574,7 @@ export class ChatPanel {
           const textEl = document.createElement('div');
           textEl.className = 'msg-text msg-markdown';
           try {
-            const html = marked.parse(m.content) as string;
+            const html = DOMPurify.sanitize(marked.parse(m.content) as string);
             textEl.innerHTML = html;
             textEl.querySelectorAll('pre code').forEach((block) => {
               hljs.highlightElement(block as HTMLElement);
@@ -1702,10 +1703,6 @@ function computeCostStr(pricing: AgentEvent['pricing'], usage: AgentEvent['usage
     1_000_000;
   if (cost < 0.001) return '';
   return `${pricing.currency}${cost.toFixed(cost < 0.01 ? 4 : 3)}`;
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** Extract identifiers that look like code symbols from natural language text. */

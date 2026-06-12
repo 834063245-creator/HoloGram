@@ -470,7 +470,7 @@ export class StarGraph {
     });
     // Prevent browser context menu on canvas
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
-    window.addEventListener('keydown', (e: KeyboardEvent) => {
+    this._onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (this._promptBarEl?.style.display === 'flex') { this._hidePrompt(); return; }
         if (this._selecting) { this._selecting = false; this._hideSelectRect(); return; }
@@ -484,7 +484,8 @@ export class StarGraph {
         else if (this.hoveredIdx >= 0) { this.startBlastMode(this.hoveredIdx); }
         else if (this.selectedIdx >= 0) { this.startBlastMode(this.selectedIdx); }
       }
-    });
+    };
+    window.addEventListener('keydown', this._onKeyDown);
 
     this.onResize();
     window.addEventListener('resize', this.onResize);
@@ -921,6 +922,7 @@ export class StarGraph {
 
   // ── Step 3: Shift+click quick path mode ───────────────────
   private _shiftSourceIdx = -1;
+  private _onKeyDown?: (e: KeyboardEvent) => void;
 
   // ── Step 3: Alt+drag rectangle selection ──────────────────
   private _selecting = false;
@@ -1624,6 +1626,62 @@ export class StarGraph {
         edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
     }
     this._agentHighlightIndices.clear();
+  }
+
+  // ── P6: Hotspot highlighting — 复发热点着色 ──
+
+  private _hotspotFiles: Map<string, number> = new Map(); // filePath → recurrence count
+
+  /** Color nodes belonging to hotspot files with intensity proportional to L4 recurrence count. */
+  highlightHotspots(hotspots: Array<{ file: string; count: number }>): void {
+    this.clearHotspots();
+    if (!hotspots.length || this.graphNodes.length === 0) return;
+
+    // Build a map of filename → count
+    for (const hs of hotspots) {
+      const key = (hs.file || '').replace(/\\/g, '/').toLowerCase();
+      const prev = this._hotspotFiles.get(key) || 0;
+      this._hotspotFiles.set(key, Math.max(prev, hs.count));
+    }
+
+    // Apply coloring: intensity from 0.3 (count=2) to 1.0 (count≥8)
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const loc = (this.graphNodes[i].location || '').toLowerCase();
+      if (!loc) continue;
+      // Match any hotspot file path against node location
+      for (const [hsPath, count] of this._hotspotFiles) {
+        if (loc.includes(hsPath) || hsPath.includes(loc)) {
+          const intensity = Math.min(1, 0.3 + (count - 2) * 0.12);
+          // Tint glow toward fail/warn color
+          if (this.nodeGlows[i]) {
+            const r = 0.85, g = 0.2 + (1 - intensity) * 0.3, b = 0.2 + (1 - intensity) * 0.3;
+            (this.nodeGlows[i].material as THREE.SpriteMaterial).color.setRGB(r, g, b);
+            (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.35 + intensity * 0.55;
+          }
+          // Pulse larger glows for high-count hotspots
+          if (this.nodeGlows[i] && count >= 5) {
+            const s = 1.0 + (count - 4) * 0.12;
+            this.nodeGlows[i].scale.setScalar(s);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  clearHotspots(): void {
+    if (this._hotspotFiles.size === 0) return;
+    this._hotspotFiles.clear();
+    // Restore original glow colors and opacities
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      if (this.nodeGlows[i]) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(
+          this.nodeGlowColors[i] || 0x5588cc,
+        );
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
+        this.nodeGlows[i].scale.setScalar(1.0);
+      }
+    }
   }
 
   // ── Agent Lens (Step 2) — dim everything except visited nodes ──
@@ -2458,6 +2516,17 @@ export class StarGraph {
   // ── Render ───────────────────────────────────────────────
 
   render(graph: GraphJSON): void {
+    try {
+      this._renderImpl(graph);
+    } catch (e) {
+      console.error('[StarGraph] render crashed:', e);
+      // Attempt recovery: clear state, show minimal status
+      try { this.clearGraph(); } catch { /* best effort */ }
+      this.updateStatus(0, 0);
+    }
+  }
+
+  private _renderImpl(graph: GraphJSON): void {
     this.clearGraph();
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
@@ -2587,11 +2656,31 @@ export class StarGraph {
     }
   }
 
+  // ── end of _renderImpl; render() wrapper is above ──
+
   private clearGraph(): void {
-    while (this.nodeGroup.children.length) this.nodeGroup.remove(this.nodeGroup.children[0]);
-    while (this.edgeGroup.children.length) this.edgeGroup.remove(this.edgeGroup.children[0]);
-    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    // Dispose materials/geometries before removing to prevent GPU memory leak (audit HIGH fix)
+    const disposeGroup = (g: THREE.Group) => {
+      while (g.children.length) {
+        const child = g.children[0];
+        if ((child as THREE.Mesh).geometry) (child as THREE.Mesh).geometry.dispose();
+        const mat = (child as THREE.Mesh).material;
+        if (mat) {
+          if (Array.isArray(mat)) mat.forEach(m => (m as THREE.Material).dispose());
+          else (mat as THREE.Material).dispose();
+        }
+        g.remove(child);
+      }
+    };
+    disposeGroup(this.nodeGroup);
+    disposeGroup(this.edgeGroup);
+    disposeGroup(this.highlightEdgeGroup);
+    disposeGroup(this.commFoldGroup);
+    // Dispose stored references (prevent GPU leak across re-renders)
+    for (const core of this.nodeCores) { core.geometry?.dispose(); (core.material as THREE.Material)?.dispose(); }
+    for (const g of this.nodeGlows) { g.material && (g.material as THREE.Material).dispose(); }
+    for (const g of this.nodeGlows2) { g.material && (g.material as THREE.Material).dispose(); }
+    for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
     this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.edgeLineGroups = [];
@@ -2958,9 +3047,17 @@ export class StarGraph {
   destroy(): void {
     cancelAnimationFrame(this.animId);
     window.removeEventListener('resize', this.onResize);
+    // Remove window keydown listener (audit HIGH fix — prevent stale reference)
+    if (this._onKeyDown) window.removeEventListener('keydown', this._onKeyDown);
+    // Dispose all GPU resources
     for (const cloud of this.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
     for (const glow of this.galaxyGlows) (glow.material as THREE.Material).dispose();
     if (this.nebulaDust) { this.nebulaDust.geometry.dispose(); (this.nebulaDust.material as THREE.Material).dispose(); }
+    // Dispose InstancedMesh cores + glows
+    for (const core of this.nodeCores) { core.geometry?.dispose(); (core.material as THREE.Material)?.dispose(); }
+    for (const g of this.nodeGlows) { g.material && (g.material as THREE.Material).dispose(); g.geometry?.dispose(); }
+    for (const g of this.nodeGlows2) { g.material && (g.material as THREE.Material).dispose(); g.geometry?.dispose(); }
+    for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
     this.bloomPass?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();

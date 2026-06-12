@@ -19,7 +19,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 
 def _safe_print(text: str, **kwargs) -> None:
@@ -458,7 +458,6 @@ def cmd_check(args) -> int:
     # ── 快路径：源文件未变更 → 返回缓存结果 ──
     if not force and os.path.exists(graph_path) and os.path.exists(cache_path):
         graph_mtime = os.path.getmtime(graph_path)
-        cache_mtime = os.path.getmtime(cache_path)
         # 检查源文件是否有比图更新的
         src_newer = False
         exts = {'.py', '.pyi', '.ts', '.tsx', '.js', '.jsx', '.mjs'}

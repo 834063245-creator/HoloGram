@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType
+from ..core.graph import Graph
 from ..core.diff import GraphDiffer, GraphDiff
 from .signals import Signal
 from .constraints import ConstraintResult, ConstraintViolation

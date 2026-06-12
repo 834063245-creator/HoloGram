@@ -374,6 +374,102 @@ export class CheckPanel {
     el.append(lbl, val);
     return el;
   }
+
+  // ── P8: Gate check rendering ──
+
+  async loadAndRenderGate(path: string): Promise<void> {
+    try {
+      const { invoke } = await import('../bridge');
+      const json = await invoke<string>('hologram_gate_check', { path, moduleFile: null });
+      const data = JSON.parse(json) as GateData;
+      this.renderGate(data);
+    } catch (err) {
+      console.error('Gate check failed:', err);
+    }
+  }
+
+  private renderGate(data: GateData): void {
+    if (!data || !data.modules || data.modules.length === 0) return;
+
+    // Remove existing gate section if any
+    const existing = this.content.querySelector('.check-gate');
+    if (existing) existing.remove();
+
+    const gateSec = ce('div', 'check-section check-gate');
+    const gateTitle = ce('div', 'check-section-title');
+    gateTitle.innerHTML = `${iconHtml('block', 11)} 门禁评估 (${data.total_evaluated} 模块)`;
+    gateSec.appendChild(gateTitle);
+
+    // Risk summary
+    const summaryRow = ce('div', 'check-gate-summary');
+    if (data.high_risk > 0) {
+      const hi = ce('span', 'check-gate-badge check-gate-high');
+      hi.textContent = `⚠ ${data.high_risk} 高风险`;
+      summaryRow.appendChild(hi);
+    }
+    if (data.medium_risk > 0) {
+      const mi = ce('span', 'check-gate-badge check-gate-mid');
+      mi.textContent = `⚡ ${data.medium_risk} 中风险`;
+      summaryRow.appendChild(mi);
+    }
+    const lo = ce('span', 'check-gate-badge check-gate-low');
+    lo.textContent = `✓ ${data.low_risk} 低风险`;
+    summaryRow.appendChild(lo);
+    gateSec.appendChild(summaryRow);
+
+    // Show high/medium risk modules with details
+    for (const m of data.modules) {
+      if (m.risk === 'low') continue; // Skip low risk
+      const item = ce('div', `check-gate-item check-gate-${m.risk}`);
+      const head = ce('div', 'check-gate-item-head');
+      const riskBadge = ce('span', `check-gate-risk check-gate-risk-${m.risk}`);
+      riskBadge.textContent = m.risk === 'high' ? '高' : '中';
+      head.appendChild(riskBadge);
+      const nameEl = ce('span', 'check-gate-name');
+      nameEl.textContent = m.name;
+      head.appendChild(nameEl);
+      const stats = ce('span', 'check-gate-stats');
+      stats.textContent = `扇入${m.fan_in} 扇出${m.fan_out} L4×${m.coupling_l4}`;
+      head.appendChild(stats);
+      item.appendChild(head);
+
+      if (m.recommendations && m.recommendations.length > 0) {
+        for (const rec of m.recommendations) {
+          const recEl = ce('div', 'check-gate-rec');
+          recEl.textContent = rec;
+          item.appendChild(recEl);
+        }
+      }
+      gateSec.appendChild(item);
+    }
+
+    this.content.appendChild(gateSec);
+  }
+}
+
+// ── Gate data types ──
+
+interface GateModule {
+  file: string;
+  name: string;
+  node_count: number;
+  fan_in: number;
+  fan_out: number;
+  coupling_l1: number;
+  coupling_l2: number;
+  coupling_l3: number;
+  coupling_l4: number;
+  risk: 'high' | 'medium' | 'low';
+  recommendations: string[];
+}
+
+interface GateData {
+  modules: GateModule[];
+  total_evaluated: number;
+  high_risk: number;
+  medium_risk: number;
+  low_risk: number;
+  error?: string;
 }
 
 // ── Helpers ──

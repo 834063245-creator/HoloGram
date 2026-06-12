@@ -229,6 +229,12 @@ const icons: Record<string, IconDef> = {
     label: '重新生成',
     path: '<path d="M4 4 A6 6 0 0 1 13 2"/><polyline points="4,4 7.5,4 7.5,1"/><circle cx="13" cy="12" r="4"/><polyline points="10.5,12 12.5,10 14.5,12"/>',
   },
+
+  // ── P6: Hotspots ──
+  fire: {
+    label: '热点',
+    path: '<path d="M9 2 C6 6 4 8 4 11.5 A5 5 0 0 0 9 16.5 A5 5 0 0 0 14 11.5 C14 8 12 6 9 2 Z"/>',
+  },
 };
 
 /**

@@ -1528,6 +1528,39 @@
       font-size: 10px; color: var(--pass); padding: 2px 8px;
     }
 
+    /* P8: Gate check section */
+    .check-gate-summary { display: flex; gap: 6px; margin-bottom: 6px; }
+    .check-gate-badge {
+      font-size: 9px; padding: 1px 6px; border-radius: 3px;
+    }
+    .check-gate-high { background: rgba(217,68,68,0.12); color: var(--fail); }
+    .check-gate-mid { background: rgba(214,150,34,0.12); color: var(--warn); }
+    .check-gate-low { background: rgba(61,165,93,0.1); color: var(--pass); }
+    .check-gate-item {
+      padding: 4px 6px; margin-bottom: 3px; border-radius: 3px;
+      border-left: 2px solid transparent;
+      background: rgba(0,0,0,0.08);
+    }
+    .check-gate-high { border-left-color: var(--fail); }
+    .check-gate-mid { border-left-color: var(--warn); }
+    .check-gate-item-head {
+      display: flex; align-items: center; gap: 6px; font-size: 10px;
+    }
+    .check-gate-risk {
+      font-size: 8px; padding: 0 4px; border-radius: 2px; font-weight: 600;
+    }
+    .check-gate-risk-high { background: rgba(217,68,68,0.15); color: var(--fail); }
+    .check-gate-risk-mid { background: rgba(214,150,34,0.15); color: var(--warn); }
+    .check-gate-name {
+      font-family: var(--font-mono); color: var(--starlight-dim);
+      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .check-gate-stats { font-size: 8px; color: var(--text-muted); }
+    .check-gate-rec {
+      font-size: 9px; color: var(--text-muted); padding-left: 26px; margin-top: 2px;
+      line-height: 1.3;
+    }
+
     /* ═══════════════════════════════════════════════════════════════
        TERMINAL — system console, bottom panel (multi-tab)
        ═══════════════════════════════════════════════════════════════ */
@@ -1650,6 +1683,11 @@
       background: var(--signal); opacity: 0.5;
       border: 1px solid rgba(80, 130, 210, 0.3);
     }
+    .tl-dot-pass { background: var(--pass); opacity: 0.7; border-color: rgba(61,165,93,0.5); }
+    .tl-dot-fail { background: var(--fail); opacity: 0.8; border-color: rgba(217,68,68,0.5); animation: tl-pulse-fail 2s ease-in-out infinite; }
+    @keyframes tl-pulse-fail { 0%, 100% { box-shadow: 0 0 0 0 rgba(217,68,68,0.4); } 50% { box-shadow: 0 0 6px 2px rgba(217,68,68,0.2); } }
+    .tl-event-check { border-left: 2px solid transparent; padding-left: 8px; }
+    .tl-event-fail { border-left-color: rgba(217,68,68,0.3); }
     .tl-event-body { flex: 1; min-width: 0; }
     .tl-event-header {
       display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
@@ -1688,6 +1726,12 @@
       transition: color var(--snap);
     }
     .tl-event-node-link:hover { color: var(--signal-bright); text-decoration: underline; }
+    .tl-check-badge {
+      font-size: 9px; padding: 1px 5px; border-radius: 3px;
+      margin-left: 4px; vertical-align: middle;
+    }
+    .tl-check-badge-pass { background: rgba(61,165,93,0.15); color: var(--pass); }
+    .tl-check-badge-fail { background: rgba(217,68,68,0.15); color: var(--fail); }
     .tl-event-clickable {
       cursor: pointer; border-radius: 3px;
       transition: background 0.15s;
@@ -1695,6 +1739,195 @@
     .tl-event-clickable:hover {
       background: rgba(40, 60, 100, 0.12);
     }
+
+    /* ═══════════════════════════════════════════════════════════════
+       P6: HOTSPOTS PANEL — 复发热点检测
+       ═══════════════════════════════════════════════════════════════ */
+    #hotspots-panel {
+      position: fixed; left: 0; top: 50%; transform: translateY(-50%) translateX(-100%);
+      width: 280px; max-width: 90vw; max-height: 70vh;
+      z-index: 17;
+      background: var(--panel-bg, rgba(4, 12, 28, 0.92));
+      backdrop-filter: var(--blur, blur(14px));
+      -webkit-backdrop-filter: var(--blur, blur(14px));
+      border-right: 1px solid var(--panel-edge, rgba(54, 82, 128, 0.28));
+      border-radius: 0 6px 6px 0;
+      display: flex; flex-direction: column;
+      transition: transform var(--glide, 0.25s cubic-bezier(0.4,0,0.2,1));
+    }
+    #hotspots-panel.hs-open { transform: translateY(-50%) translateX(0); }
+    .hs-tab {
+      position: absolute; right: -52px; top: 50%; transform: translateY(-50%) rotate(-90deg);
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 10px;
+      background: var(--panel-bg, rgba(4, 12, 28, 0.92));
+      backdrop-filter: var(--blur, blur(14px));
+      border: 1px solid var(--panel-edge, rgba(54, 82, 128, 0.28));
+      border-bottom: none; border-radius: 4px 4px 0 0;
+      cursor: pointer; z-index: 18; user-select: none;
+      transition: color var(--snap, 0.15s);
+    }
+    .hs-tab:hover { box-shadow: 0 0 8px rgba(240, 170, 50, 0.2); }
+    .hs-tab-status { display: flex; align-items: center; }
+    .hs-tab-label { font-size: 11px; font-weight: 400; letter-spacing: 0.5px; }
+    .hs-tab-arrow { display: flex; align-items: center; }
+    .hs-content { flex: 1; overflow-y: auto; padding: 8px 10px; }
+    .hs-header {
+      font-size: 12px; font-weight: 600; color: var(--sol, #f0b848);
+      margin-bottom: 6px; letter-spacing: 0.3px;
+    }
+    .hs-subtitle {
+      font-size: 9px; font-weight: 400; color: var(--text-muted, rgba(120,145,170,0.5));
+      margin-left: 4px;
+    }
+    .hs-empty {
+      font-size: 11px; color: var(--text-muted); padding: 12px 0; line-height: 1.5;
+    }
+    .hs-item {
+      padding: 5px 6px; margin-bottom: 3px;
+      border-radius: 4px; cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: background 0.12s, border-color 0.12s;
+      position: relative;
+    }
+    .hs-item:hover { background: rgba(240, 170, 50, 0.06); border-left-color: rgba(240, 170, 50, 0.3); }
+    .hs-file-row { display: flex; align-items: center; gap: 6px; }
+    .hs-count {
+      font-size: 11px; font-weight: 600; min-width: 22px;
+      color: var(--sol, #f0b848);
+    }
+    .hs-count-warn { color: var(--warn, #d69622); }
+    .hs-count-critical { color: var(--fail, #d94444); }
+    .hs-file {
+      font-size: 11px; font-family: var(--font-mono, 'Cascadia Code', monospace);
+      color: var(--starlight-dim, rgba(180,205,240,0.7));
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+    }
+    .hs-line { font-size: 9px; color: var(--text-muted); }
+    .hs-desc {
+      font-size: 9px; margin-top: 2px; padding-left: 28px;
+      line-height: 1.3; color: var(--starlight-dim);
+    }
+    .hs-sev-high { color: var(--fail, #d94444); }
+    .hs-sev-mid { color: var(--warn, #d69622); }
+    .hs-sev-low { color: var(--text-muted); }
+    .hs-time {
+      font-size: 8px; color: var(--text-muted); padding-left: 28px; margin-top: 1px;
+    }
+    .hs-ask-btn {
+      position: absolute; right: 4px; top: 4px;
+      width: 20px; height: 20px; padding: 0;
+      background: transparent; border: none; border-radius: 3px;
+      cursor: pointer; opacity: 0; transition: opacity 0.12s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .hs-item:hover .hs-ask-btn { opacity: 0.7; }
+    .hs-ask-btn:hover { opacity: 1 !important; background: rgba(104, 168, 255, 0.1); }
+
+    /* ═══════════════════════════════════════════════════════════════
+       P7: CONFLICT PANEL — 多工作区冲突预演
+       ═══════════════════════════════════════════════════════════════ */
+    #conflict-panel {
+      position: fixed; right: 0; top: var(--toolbar-h); bottom: var(--status-h);
+      width: 340px; max-width: 90vw;
+      z-index: 19;
+      background: var(--panel-bg, rgba(4, 12, 28, 0.92));
+      backdrop-filter: var(--blur, blur(14px));
+      -webkit-backdrop-filter: var(--blur, blur(14px));
+      border-left: 1px solid var(--panel-edge, rgba(54, 82, 128, 0.28));
+      display: flex; flex-direction: column;
+      transform: translateX(100%);
+      transition: transform var(--glide, 0.25s cubic-bezier(0.4,0,0.2,1));
+    }
+    #conflict-panel.cf-open { transform: translateX(0); }
+    .cf-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 12px; font-size: 12px; font-weight: 600;
+      color: var(--starlight); border-bottom: 1px solid var(--panel-edge);
+      flex-shrink: 0;
+    }
+    .cf-close-btn {
+      width: 22px; height: 22px; padding: 0; cursor: pointer;
+      background: none; border: none; color: var(--text-muted);
+      font-size: 12px; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      transition: color var(--snap);
+    }
+    .cf-close-btn:hover { color: var(--starlight); }
+    .cf-content { flex: 1; overflow-y: auto; padding: 10px 12px; }
+    .cf-section { margin-bottom: 10px; }
+    .cf-label { font-size: 10px; color: var(--text-muted); margin-bottom: 3px; }
+    .cf-input {
+      width: 100%; box-sizing: border-box; padding: 5px 8px;
+      font-size: 11px; font-family: var(--font-mono);
+      background: rgba(0,0,0,0.25); color: var(--starlight-dim);
+      border: 1px solid var(--panel-edge); border-radius: 4px;
+      outline: none;
+    }
+    .cf-input:focus { border-color: var(--signal); }
+    .cf-analyze-btn {
+      display: block; width: 100%; padding: 6px; margin-top: 6px;
+      font-size: 11px; border: 1px solid var(--panel-edge); border-radius: 4px;
+      background: rgba(104, 168, 255, 0.08); color: var(--signal);
+      cursor: pointer; transition: background 0.12s;
+    }
+    .cf-analyze-btn:hover { background: rgba(104, 168, 255, 0.16); }
+    .cf-error { font-size: 10px; color: var(--fail); margin-top: 6px; }
+    .cf-spinner { font-size: 10px; color: var(--text-muted); margin-top: 6px; font-style: italic; }
+    .cf-back-row { margin-bottom: 8px; }
+    .cf-back-btn {
+      font-size: 10px; background: none; border: none; color: var(--signal);
+      cursor: pointer; padding: 2px 0;
+    }
+    .cf-back-btn:hover { text-decoration: underline; }
+    .cf-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .cf-summary-item {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 4px 10px; border-radius: 4px;
+      background: rgba(0,0,0,0.15); border: 1px solid var(--panel-edge);
+      min-width: 50px;
+    }
+    .cf-summary-num { font-size: 14px; font-weight: 600; color: var(--starlight); }
+    .cf-summary-label { font-size: 8px; color: var(--text-muted); }
+    .cf-summary-high { border-color: rgba(217,68,68,0.4); }
+    .cf-summary-high .cf-summary-num { color: var(--fail); }
+    .cf-summary-mid { border-color: rgba(240,168,72,0.4); }
+    .cf-summary-mid .cf-summary-num { color: var(--sol); }
+    .cf-empty {
+      font-size: 11px; color: var(--text-muted); padding: 12px 0; line-height: 1.5;
+    }
+    .cf-node-list { display: flex; flex-direction: column; gap: 4px; }
+    .cf-node {
+      padding: 6px 8px; border-radius: 4px; cursor: pointer;
+      background: rgba(0,0,0,0.1); border: 1px solid var(--panel-edge);
+      transition: background 0.12s; position: relative;
+    }
+    .cf-node:hover { background: rgba(40, 60, 100, 0.1); }
+    .cf-risk-high { border-left: 2px solid var(--fail); }
+    .cf-risk-mid { border-left: 2px solid var(--sol); }
+    .cf-risk-low { border-left: 2px solid var(--pass); }
+    .cf-node-header { display: flex; align-items: center; gap: 6px; }
+    .cf-node-risk {
+      font-size: 8px; padding: 1px 4px; border-radius: 2px; font-weight: 600;
+    }
+    .cf-node-risk.cf-risk-high { background: rgba(217,68,68,0.12); color: var(--fail); }
+    .cf-node-risk.cf-risk-mid { background: rgba(240,168,72,0.12); color: var(--sol); }
+    .cf-node-risk.cf-risk-low { background: rgba(61,165,93,0.12); color: var(--pass); }
+    .cf-node-name {
+      font-size: 11px; font-family: var(--font-mono); color: var(--starlight-dim);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+    }
+    .cf-node-file { font-size: 8px; color: var(--text-muted); }
+    .cf-node-meta { display: flex; gap: 12px; margin-top: 3px; font-size: 9px; color: var(--text-muted); }
+    .cf-ask-btn {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      width: 22px; height: 22px; padding: 0;
+      background: transparent; border: none; border-radius: 3px;
+      cursor: pointer; opacity: 0; transition: opacity 0.12s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .cf-node:hover .cf-ask-btn { opacity: 0.7; }
+    .cf-ask-btn:hover { opacity: 1 !important; background: rgba(104, 168, 255, 0.1); }
 
     /* ═══════════════════════════════════════════════════════════════
        GIT PANEL — source control, left edge
@@ -2466,6 +2699,7 @@
     <span class="sep"></span>
     <button id="btn-diff" data-icon="diff" title="变更回看着色 (Ctrl+D)">变更</button>
     <button id="btn-timeline" data-icon="timeline" title="决策时间轴">时间轴</button>
+    <button id="btn-conflict" data-icon="link" title="工作区冲突预演">冲突</button>
     <button id="btn-constraints" data-icon="constraints" title="约束配置">约束</button>
     <button id="btn-terminal" data-icon="terminal" title="终端 (Ctrl+`)">终端</button>
     <span class="sep"></span>
@@ -2500,6 +2734,7 @@
     <button class="dock-tab" data-panel="explorer" data-icon="folder-closed">资源</button>
     <button class="dock-tab" data-panel="timeline" data-icon="timeline">时间轴</button>
     <button class="dock-tab" data-panel="git" data-icon="git-branch">Git</button>
+    <button class="dock-tab" data-panel="hotspots" data-icon="fire">热点</button>
   </div>
   <div id="right-tabs" style="">
     <button class="dock-tab" data-panel="chat" data-icon="chat">对话</button>

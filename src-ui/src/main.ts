@@ -11,6 +11,8 @@ import { FileViewer } from './ui/file-viewer';
 import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
+import { HotspotsPanel } from './ui/hotspots';
+import { ConflictPanel } from './ui/conflict';
 import { SettingsPanel } from './ui/settings-panel';
 import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
@@ -24,7 +26,7 @@ import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { iconSvg } from './ui/icons';
-import { AgentVisualizer, askAgent } from './ui/agent-visualizer';
+import { AgentVisualizer } from './ui/agent-visualizer';
 import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 
@@ -90,6 +92,7 @@ const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
 const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
 const btnTimeline = document.getElementById('btn-timeline') as HTMLButtonElement;
 const btnConstraints = document.getElementById('btn-constraints') as HTMLButtonElement;
+const btnConflict = document.getElementById('btn-conflict') as HTMLButtonElement;
 const btnTerminal = document.getElementById('btn-terminal') as HTMLButtonElement;
 
 // ── State ──
@@ -109,6 +112,8 @@ function isSamePath(a: string, b: string): boolean {
 let chatPanel: ChatPanel;
 let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
+let hotspotsPanel: HotspotsPanel;
+let conflictPanel: ConflictPanel;
 let agent: Agent | null = null;
 let diffActive = false;
 let memoryManager: MemoryManager | null = null;
@@ -147,6 +152,7 @@ function setupModeSwitch(): void {
       starGraph = new StarGraph(graphEl, currentMode);
       chatPanel.setStarGraph(starGraph);
       agentViz?.setGraph(starGraph);
+      hotspotsPanel.setGraph(starGraph);
       const graphForMode = (currentMode === 'files' && currentFileGraphData)
         ? currentFileGraphData : currentGraphData;
       if (graphForMode) starGraph.render(graphForMode);
@@ -255,6 +261,7 @@ function showGraphView(path: string): void {
   btnOpen.disabled = false; btnOpen.innerHTML = `${iconSvg('folder-open')} 打开文件夹`;
   tbPath.textContent = path;
   timelinePanel.setProjectPath(path);
+  hotspotsPanel.setProjectPath(path);
   TerminalPanel.get().setCwd(path);
   // Refresh file tree if it's already open (workspace switch)
   const ft = FileTreePanel.get();
@@ -652,6 +659,7 @@ async function runCheck(): Promise<void> {
     try {
       const result: CheckResult = JSON.parse(json);
       checkPanel.update(result);
+      checkPanel.loadAndRenderGate(currentPath!).catch(() => {});
       btnCheck.innerHTML = result.passed
         ? `${iconSvg('check-circle')} 简报`
         : `${iconSvg('alert')} 简报`;
@@ -707,6 +715,14 @@ async function init(): Promise<void> {
 
   // ── P4: Timeline panel ──
   timelinePanel = new TimelinePanel(document.body);
+
+  // ── P6: Hotspots panel ──
+  hotspotsPanel = new HotspotsPanel(document.body);
+  hotspotsPanel.setGraph(starGraph);
+
+  // ── P7: Conflict panel ──
+  conflictPanel = new ConflictPanel(document.body);
+  conflictPanel.setGraph(starGraph);
 
   // Timeline → check: view historical briefing
   bus.on('check:history', ({ checkData, timestamp }: { checkData: CheckResult; timestamp: string }) => {
@@ -788,7 +804,7 @@ async function init(): Promise<void> {
     // Hide edge tabs when their side's panel is open (avoid overlap)
     // Left-edge panels: file tree, timeline, git only (NOT check/terminal — those are bottom)
     const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
-      || GitPanel.get().isOpen();
+      || GitPanel.get().isOpen() || hotspotsPanel.isOpen();
     const hideRight = chatPanel.isOpen() || ConstraintsPanel.get().isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
@@ -796,7 +812,8 @@ async function init(): Promise<void> {
       const p = (t as HTMLElement).dataset['panel'];
       const active = (p === 'explorer' && FileTreePanel.get().isOpen())
         || (p === 'timeline' && timelinePanel.isOpen())
-        || (p === 'git' && GitPanel.get().isOpen());
+        || (p === 'git' && GitPanel.get().isOpen())
+        || (p === 'hotspots' && hotspotsPanel.isOpen());
       t.classList.toggle('active', !!active);
     });
     rightTabs.querySelectorAll('.dock-tab').forEach(t => {
@@ -821,6 +838,7 @@ async function init(): Promise<void> {
       if (except !== 'explorer' && FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
       if (except !== 'timeline' && timelinePanel.isOpen()) timelinePanel.close();
       if (except !== 'git' && GitPanel.get().isOpen()) GitPanel.get().close();
+      if (except !== 'hotspots' && hotspotsPanel.isOpen()) hotspotsPanel.close();
     };
 
     if (p === 'explorer') {
@@ -837,6 +855,10 @@ async function init(): Promise<void> {
       closeLeftSiblings('git');
       if (currentPath) GitPanel.get().load(currentPath);
       else GitPanel.get().toggle();
+    } else if (p === 'hotspots') {
+      closeLeftSiblings('hotspots');
+      if (currentPath) hotspotsPanel.setProjectPath(currentPath);
+      hotspotsPanel.toggle();
     }
     updateTabs();
   });
@@ -848,10 +870,12 @@ async function init(): Promise<void> {
     const p = tab.dataset['panel'];
     if (p === 'chat') {
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+      if (conflictPanel.isOpen()) conflictPanel.close();
       chatPanel.toggle();
     } else if (p === 'constraints') {
       if (currentPath) ConstraintsPanel.get().load(currentPath);
       if (chatPanel.isOpen()) chatPanel.close();
+      if (conflictPanel.isOpen()) conflictPanel.close();
       ConstraintsPanel.get().toggle();
     }
     updateTabs();
@@ -926,6 +950,7 @@ async function init(): Promise<void> {
     if (currentPath) timelinePanel.setProjectPath(currentPath);
     if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
     if (GitPanel.get().isOpen()) GitPanel.get().close();
+    if (hotspotsPanel.isOpen()) hotspotsPanel.close();
     timelinePanel.toggle();
     updateTabs();
   });
@@ -935,6 +960,12 @@ async function init(): Promise<void> {
     if (currentPath) ConstraintsPanel.get().load(currentPath);
     if (chatPanel.isOpen()) chatPanel.close();
     ConstraintsPanel.get().toggle();
+    updateTabs();
+  });
+
+  // ── P7: Conflict button ──
+  btnConflict.addEventListener('click', () => {
+    conflictPanel.toggle();
     updateTabs();
   });
 
@@ -983,6 +1014,7 @@ async function init(): Promise<void> {
     if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+      if (conflictPanel.isOpen()) conflictPanel.close();
       chatPanel.toggle();
       updateTabs();
     }
@@ -1046,6 +1078,7 @@ async function init(): Promise<void> {
     if (!ft.isOpen()) {
       if (timelinePanel.isOpen()) timelinePanel.close();
       if (GitPanel.get().isOpen()) GitPanel.get().close();
+      if (hotspotsPanel.isOpen()) hotspotsPanel.close();
     }
     ft.toggle();
     btnExplorer.classList.toggle('active', ft.isOpen());
@@ -1066,6 +1099,8 @@ async function init(): Promise<void> {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
       else if (timelinePanel.isOpen()) { timelinePanel.close(); updateTabs(); }
       else if (GitPanel.get().isOpen()) { GitPanel.get().close(); updateTabs(); }
+      else if (hotspotsPanel.isOpen()) { hotspotsPanel.close(); updateTabs(); }
+      else if (conflictPanel.isOpen()) { conflictPanel.close(); updateTabs(); }
       else if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); updateTabs(); }
       else if (FileViewer.get().isOpen) FileViewer.get().close();
       else starGraph.clearAgentHighlight();
@@ -1108,6 +1143,7 @@ async function init(): Promise<void> {
         setupAgent().catch(() => {});
         runCheck();
         timelinePanel.setProjectPath(currentPath);
+        hotspotsPanel.setProjectPath(currentPath);
       }
     } catch { /* ignore */ }
   });
@@ -1136,6 +1172,7 @@ async function init(): Promise<void> {
       chatPanel.autoRestoreLastSession(root).catch(() => {});
       runCheck();
       timelinePanel.setProjectPath(root || null);
+      hotspotsPanel.setProjectPath(root || null);
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       if (root) { try { await invoke('start_watching', { path: root }); } catch { /* ignore */ } }
       return;

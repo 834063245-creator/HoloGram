@@ -47,7 +47,7 @@ fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
         c
     } else {
         let mut c = silent_command("sh");
-        c.arg("-c").arg(cmd);
+        c.arg("-c").arg(sh_escape(cmd));
         c
     };
     let child = child
@@ -139,6 +139,12 @@ fn silent_command(program: &str) -> Command {
 /// `node -e "console.log('hello')"` from losing their nested quotes.
 fn cmd_escape(command: &str) -> String {
     format!("\"{}\"", command.replace('"', "\\\""))
+}
+
+/// Safe shell quoting for `sh -c` on Unix — uses single-quote wrapping
+/// with embedded single quotes escaped as '\'' (end quote, escaped quote, start quote).
+fn sh_escape(command: &str) -> String {
+    format!("'{}'", command.replace('\'', "'\\''"))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -782,6 +788,394 @@ store.close()
 }
 
 // ═══════════════════════════════════════════════════════
+// P6: Hotspots — 复发热点检测（L4 复发计数）
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_hotspots(
+    days: Option<i32>,
+    min_count: Option<i32>,
+) -> Result<String, String> {
+    let root = project_root();
+    let d = days.unwrap_or(30);
+    let mc = min_count.unwrap_or(2);
+    let code = format!(
+        r#"
+import sys, json, sqlite3, os
+db_path = os.path.join(r"{project_root}", ".hologram", "timeline.db")
+if not os.path.exists(db_path):
+    print(json.dumps({{"hotspots": [], "total_events": 0, "message": "No timeline data yet"}}))
+else:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    # Query check events from the last N days
+    rows = conn.execute(
+        "SELECT * FROM events WHERE event_type IN ('commit_violation','commit_clean') "
+        "AND timestamp >= datetime('now', '-{days} days') "
+        "ORDER BY timestamp DESC"
+    ).fetchall()
+    # Aggregate L4 violations per file
+    file_counts = {{}}
+    file_details = {{}}
+    for row in rows:
+        try:
+            props = json.loads(row["properties"] or "{{}}")
+        except:
+            continue
+        violations = props.get("violations", {{}})
+        l4_list = violations.get("l4_violations", [])
+        if not isinstance(l4_list, list):
+            continue
+        for v in l4_list:
+            sig = v.get("signal", {{}}) if isinstance(v, dict) else {{}}
+            fp = sig.get("file_path", "") or v.get("file_path", "")
+            if not fp:
+                continue
+            if fp not in file_counts:
+                file_counts[fp] = 0
+                file_details[fp] = []
+            file_counts[fp] += 1
+            file_details[fp].append({{
+                "description": sig.get("description", ""),
+                "level": sig.get("level", 4),
+                "line": sig.get("line", 0),
+                "timestamp": row["timestamp"],
+            }})
+    conn.close()
+    # Filter by min_count, sort by count desc
+    hotspots = [
+        {{
+            "file": fp,
+            "count": cnt,
+            "last_details": file_details[fp][-1],
+            "recent_timestamps": [d["timestamp"] for d in file_details[fp][-5:]],
+        }}
+        for fp, cnt in sorted(file_counts.items(), key=lambda x: -x[1])
+        if cnt >= {min_count}
+    ]
+    result = {{
+        "hotspots": hotspots,
+        "total_check_events": len(rows),
+        "days": {days},
+        "min_count": {min_count},
+    }}
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+"#,
+        project_root = root.to_string_lossy(),
+        days = d,
+        min_count = mc,
+    );
+    run_python_code(&code)
+}
+
+// ═══════════════════════════════════════════════════════
+// P7: Workspace Conflict — 多工作区冲突预演
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_workspace_conflict(
+    path_a: String,
+    path_b: String,
+) -> Result<String, String> {
+    let root = project_root();
+    let code = format!(
+        r#"
+import sys, json, os
+sys.path.insert(0, r"{py_src}")
+from core.graph import Graph
+
+result = {{"workspace_a": {{}}, "workspace_b": {{}}, "overlapping_nodes": [], "shared_files": [], "risk_summary": {{"high": 0, "medium": 0, "low": 0}}}}
+
+# Load both workspace graphs
+a_path = os.path.join(r"{path_a}", "hologram_graph.json")
+b_path = os.path.join(r"{path_b}", "hologram_graph.json")
+
+if not os.path.exists(a_path):
+    print(json.dumps({{"error": "Workspace A graph not found", "path": a_path}}))
+    sys.exit(0)
+if not os.path.exists(b_path):
+    print(json.dumps({{"error": "Workspace B graph not found", "path": b_path}}))
+    sys.exit(0)
+
+ga = Graph.from_json(a_path)
+gb = Graph.from_json(b_path)
+
+# Collect node info: node name → location (for overlap detection)
+def node_info(g):
+    info = {{}}
+    for nid, node in g.nodes.items():
+        loc = node.location or ""
+        f = loc.rsplit(":", 1)[0] if ":" in loc else loc
+        info[nid] = {{
+            "id": nid,
+            "name": node.name,
+            "location": loc,
+            "file": f,
+            "type": str(node.type) if hasattr(node, 'type') else "unknown",
+        }}
+    return info
+
+a_info = node_info(ga)
+b_info = node_info(gb)
+
+# BFS downstream impact for a node
+def downstream(node_id, g, max_depth=3):
+    visited = set()
+    queue = [(node_id, 0)]
+    while queue:
+        nid, depth = queue.pop(0)
+        if nid in visited or depth > max_depth:
+            continue
+        visited.add(nid)
+        for edge in g.outgoing_edges(nid):
+            if edge.target not in visited:
+                queue.append((edge.target, depth + 1))
+    return visited
+
+# Find changed files baselines (diff analysis via file-level comparison)
+# Simplification: compare node sets by file
+a_files = set()
+b_files = set()
+for info in a_info.values():
+    if info["file"]:
+        a_files.add(info["file"])
+for info in b_info.values():
+    if info["file"]:
+        b_files.add(info["file"])
+
+shared = a_files & b_files
+result["shared_files"] = sorted(shared)
+
+# For each shared file, find nodes and analyze coupling
+a_nodes_by_file = {{}}
+b_nodes_by_file = {{}}
+for nid, info in a_info.items():
+    f = info["file"]
+    if f not in a_nodes_by_file:
+        a_nodes_by_file[f] = []
+    a_nodes_by_file[f].append(nid)
+for nid, info in b_info.items():
+    f = info["file"]
+    if f not in b_nodes_by_file:
+        b_nodes_by_file[f] = []
+    b_nodes_by_file[f].append(nid)
+
+# Analyze overlapping nodes in shared files
+overlapping = []
+for f in shared:
+    a_node_ids = a_nodes_by_file.get(f, [])
+    b_node_ids = b_nodes_by_file.get(f, [])
+    if not a_node_ids or not b_node_ids:
+        continue
+    # Impact analysis
+    a_impact_union = set()
+    for nid in a_node_ids:
+        a_impact_union |= downstream(nid, ga, 3)
+    b_impact_union = set()
+    for nid in b_node_ids:
+        b_impact_union |= downstream(nid, gb, 3)
+
+    # Nodes present in both workspaces (same file, potentially same symbol)
+    for anid in a_node_ids:
+        a_node = a_info.get(anid)
+        if not a_node:
+            continue
+        a_name = a_node["name"]
+        # Find matching node in B by name
+        for bnid in b_node_ids:
+            b_node = b_info.get(bnid)
+            if not b_node:
+                continue
+            if b_node["name"] == a_name:
+                # Calculate conflict risk
+                a_ds = len(downstream(anid, ga, 2))
+                b_ds = len(downstream(bnid, gb, 2))
+                a_us = len(ga.incoming_edges(anid))
+                b_us = len(gb.incoming_edges(bnid))
+                ds_change = abs(a_ds - b_ds)
+                us_change = abs(a_us - b_us)
+                risk = "low"
+                if ds_change > 5 or us_change > 3:
+                    risk = "high"
+                elif ds_change > 2 or us_change > 1:
+                    risk = "medium"
+                overlapping.append({{
+                    "node_name": a_name,
+                    "node_id": anid,
+                    "location": a_node["location"],
+                    "file": f,
+                    "a_impact": {{"depth": a_ds, "upstream_count": a_us, "downstream_count": a_ds}},
+                    "b_impact": {{"depth": b_ds, "upstream_count": b_us, "downstream_count": b_ds}},
+                    "conflict_risk": risk,
+                }})
+                break
+
+# Sort by risk
+risk_order = {{"high": 0, "medium": 1, "low": 2}}
+overlapping.sort(key=lambda x: risk_order.get(x["conflict_risk"], 2))
+
+# Risk summary
+for ov in overlapping:
+    risk = ov["conflict_risk"]
+    result["risk_summary"][risk] = result["risk_summary"].get(risk, 0) + 1
+
+# Workspace info
+result["workspace_a"] = {{
+    "path": r"{path_a}",
+    "node_count": len(ga.nodes),
+    "edge_count": len(ga.edges),
+    "file_count": len(a_files),
+}}
+result["workspace_b"] = {{
+    "path": r"{path_b}",
+    "node_count": len(gb.nodes),
+    "edge_count": len(gb.edges),
+    "file_count": len(b_files),
+}}
+result["overlapping_nodes"] = overlapping[:50]  # Cap at 50
+
+print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+"#,
+        py_src = root.join("src_python").to_string_lossy(),
+        path_a = path_a.replace("\\", "\\\\"),
+        path_b = path_b.replace("\\", "\\\\"),
+    );
+    run_python_code(&code)
+}
+
+// ═══════════════════════════════════════════════════════
+// P8: Gate Check — 门禁模式（新模块 fan-in/fan-out/耦合评估）
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn hologram_gate_check(
+    path: String,
+    module_file: Option<String>,
+) -> Result<String, String> {
+    let root = project_root();
+    let graph_path = format!("{}/hologram_graph.json", path);
+    let mf = module_file.unwrap_or_default();
+
+    let code = format!(
+        r#"
+import sys, json, os
+sys.path.insert(0, r"{py_src}")
+from core.graph import Graph
+
+graph_path = r"{graph_path}"
+if not os.path.exists(graph_path):
+    print(json.dumps({{"error": "Graph not found", "path": graph_path}}))
+    sys.exit(0)
+
+g = Graph.from_json(graph_path)
+
+# Determine which modules/files to evaluate
+target_files = []
+if r"{module_file}":
+    target_files = [r"{module_file}"]
+else:
+    # Find "new" modules — those with no coupling history in any community
+    import glob as _glob
+    all_py = _glob.glob(os.path.join(r"{path}", "**", "*.py"), recursive=True)
+    # Consider files with fewer than 3 edges as potentially "new"
+    for fp in all_py:
+        rel = os.path.relpath(fp, r"{path}").replace("\\", "/")
+        # Skip hidden/venv
+        if any(part.startswith('.') or part == 'venv' or part == 'node_modules' or part == '__pycache__'
+               for part in rel.split('/')):
+            continue
+        target_files.append(rel)
+
+# Limit to manageable size
+if len(target_files) > 20:
+    target_files = target_files[:20]
+
+results = []
+for tf in target_files:
+    # Collect all nodes in this file
+    file_nodes = []
+    for nid, node in g.nodes.items():
+        loc = node.location or ""
+        f = loc.rsplit(":", 1)[0] if ":" in loc else loc
+        f_norm = f.replace("\\", "/")
+        tf_norm = tf.replace("\\", "/")
+        if f_norm.endswith(tf_norm) or tf_norm.endswith(f_norm):
+            file_nodes.append(nid)
+
+    if not file_nodes:
+        continue
+
+    # Aggregate: fan-in, fan-out, coupling levels
+    total_fan_in = 0
+    total_fan_out = 0
+    coupling_levels = {{1: 0, 2: 0, 3: 0, 4: 0}}
+    for nid in file_nodes:
+        incoming = g.incoming_edges(nid)
+        outgoing = g.outgoing_edges(nid)
+        total_fan_in += len(incoming)
+        total_fan_out += len(outgoing)
+        for edge in incoming + outgoing:
+            depth = getattr(edge, 'coupling_depth', 0)
+            if depth in coupling_levels:
+                coupling_levels[depth] += 1
+
+    fn = tf.replace("\\", "/").split("/")[-1] if "/" in tf else tf
+
+    # Risk assessment
+    l4_count = coupling_levels.get(4, 0)
+    l3_count = coupling_levels.get(3, 0)
+    risk = "low"
+    if l4_count > 3 or (total_fan_out > 20 and total_fan_in > 15):
+        risk = "high"
+    elif l4_count > 1 or total_fan_in + total_fan_out > 20:
+        risk = "medium"
+
+    recommendations = []
+    if l4_count > 0:
+        recommendations.append(f"发现 {{l4_count}} 处 L4 封装穿透，建议检查 import 可见性")
+    if total_fan_out > 15:
+        recommendations.append(f"扇出偏高 ({{total_fan_out}})，考虑拆分模块")
+    if total_fan_in > 10:
+        recommendations.append(f"扇入偏高 ({{total_fan_in}})，此模块是潜在枢纽")
+    if not recommendations:
+        recommendations.append("模块结构合理，无需操作")
+
+    results.append({{
+        "file": tf,
+        "name": fn,
+        "node_count": len(file_nodes),
+        "fan_in": total_fan_in,
+        "fan_out": total_fan_out,
+        "coupling_l1": coupling_levels.get(1, 0),
+        "coupling_l2": coupling_levels.get(2, 0),
+        "coupling_l3": coupling_levels.get(3, 0),
+        "coupling_l4": coupling_levels.get(4, 0),
+        "risk": risk,
+        "recommendations": recommendations,
+    }})
+
+# Sort by risk
+risk_order = {{"high": 0, "medium": 1, "low": 2}}
+results.sort(key=lambda x: risk_order.get(x["risk"], 2))
+
+output = {{
+    "modules": results,
+    "total_evaluated": len(results),
+    "high_risk": sum(1 for r in results if r["risk"] == "high"),
+    "medium_risk": sum(1 for r in results if r["risk"] == "medium"),
+    "low_risk": sum(1 for r in results if r["risk"] == "low"),
+}}
+print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
+"#,
+        py_src = root.join("src_python").to_string_lossy(),
+        graph_path = graph_path.replace("\\", "\\\\"),
+        module_file = mf.replace("\\", "\\\\"),
+        path = path.replace("\\", "\\\\"),
+    );
+    run_python_code(&code)
+}
+
+// ═══════════════════════════════════════════════════════
 // P4: Terminal — execute shell commands
 // ═══════════════════════════════════════════════════════
 
@@ -807,7 +1201,7 @@ async fn exec_command(
         c
     } else {
         let mut c = silent_command("sh");
-        c.arg("-c").arg(&command);
+        c.arg("-c").arg(sh_escape(&command));
         c
     };
     let mut child = child
@@ -1213,18 +1607,18 @@ async fn web_fetch(url: String) -> Result<String, String> {
     let result = if content_type.contains("html") {
         let mut s = text;
         // Remove scripts, styles, comments
-        s = regex::Regex::new(r"(?si)<script[^>]*>.*?</script>").unwrap().replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"(?si)<style[^>]*>.*?</style>").unwrap().replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"(?s)<!--.*?-->").unwrap().replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?si)<script[^>]*>.*?</script>").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?si)<style[^>]*>.*?</style>").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?s)<!--.*?-->").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
         // Remove all remaining tags
-        s = regex::Regex::new(r"<[^>]*>").unwrap().replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"<[^>]*>").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
         // Decode common entities
         s = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
              .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
              .replace("&#x27;", "'").replace("&nbsp;", " ");
         // Collapse whitespace
-        s = regex::Regex::new(r"[ \t]+").unwrap().replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"\n{3,}").unwrap().replace_all(&s, "\n\n").to_string();
+        s = regex::Regex::new(r"[ \t]+").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"\n{3,}").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, "\n\n").to_string();
         s.trim().to_string()
     } else {
         text
@@ -1806,6 +2200,9 @@ fn main() {
             hologram_community,
             hologram_delayed,
             hologram_changes,
+            hologram_hotspots,
+            hologram_workspace_conflict,
+            hologram_gate_check,
             start_watching,
             stop_watching,
             list_directory,

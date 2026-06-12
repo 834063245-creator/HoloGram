@@ -19,7 +19,7 @@ import ast
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, SymbolKind, file_from_location, type_val
 

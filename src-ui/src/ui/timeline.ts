@@ -29,6 +29,9 @@ const TYPE_ICONS: Record<string, string> = {
   commit: iconHtml('bookmark', 10),
   blindspot_detected: iconHtml('alert', 10),
   user_action: iconHtml('user', 10),
+  commit_violation: iconHtml('alert', 10),
+  commit_clean: iconHtml('check-circle', 10),
+  check: iconHtml('chart', 10),
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -37,6 +40,9 @@ const TYPE_LABELS: Record<string, string> = {
   commit: 'Commit',
   blindspot_detected: '边界检测',
   user_action: '用户操作',
+  commit_violation: '变更风险',
+  commit_clean: '变更通过',
+  check: '简报',
 };
 
 export class TimelinePanel {
@@ -177,8 +183,11 @@ export class TimelinePanel {
         html += `<div class="tl-time-divider"><span>${ts}</span></div>`;
       }
 
-      html += `<div class="tl-event" data-event-id="${ev.id}" data-tl-file="${escapeHtml(ev.file || '')}" data-tl-summary="${escapeHtml(ev.summary || '')}" data-tl-type="${escapeHtml(label)}">`;
-      html += `<div class="tl-event-dot"></div>`;
+      const isCheckEvent = ev.event_type === 'commit_violation' || ev.event_type === 'commit_clean' || ev.event_type === 'check';
+      const hasViolations = ev.properties && ev.properties['violations'];
+      const checkPassed = ev.properties && ev.properties['passed'] !== false;
+      html += `<div class="tl-event${isCheckEvent ? ' tl-event-check' : ''}${isCheckEvent && !checkPassed ? ' tl-event-fail' : ''}" data-event-id="${ev.id}" data-tl-file="${escapeHtml(ev.file || '')}" data-tl-summary="${escapeHtml(ev.summary || '')}" data-tl-type="${escapeHtml(label)}">`;
+      html += `<div class="tl-event-dot${isCheckEvent ? (checkPassed ? ' tl-dot-pass' : ' tl-dot-fail') : ''}"></div>`;
       html += `<div class="tl-event-body">`;
       html += `<div class="tl-event-header">`;
       html += `<span class="tl-event-icon">${icon}</span>`;
@@ -186,7 +195,7 @@ export class TimelinePanel {
       if (file) html += `<span class="tl-event-file">${escapeHtml(file)}</span>`;
       html += `<button class="tl-ask-btn" title="问 Agent 关于这次变更">${iconHtml('agent', 10)}</button>`;
       html += `</div>`;
-      if (ev.summary) html += `<div class="tl-event-summary">${escapeHtml(ev.summary)}</div>`;
+      if (ev.summary) html += `<div class="tl-event-summary">${escapeHtml(ev.summary)}${isCheckEvent ? ` <span class="tl-check-badge ${checkPassed ? 'tl-check-badge-pass' : 'tl-check-badge-fail'}">${checkPassed ? '✓ 通过' : '✗ 未通过'}</span>` : ''}</div>`;
       if (ev.changed_by) html += `<div class="tl-event-meta">${escapeHtml(ev.changed_by)}</div>`;
       if (ev.related_nodes && ev.related_nodes.length > 0) {
         const nodes = ev.related_nodes.slice(0, 3).map(n => {
