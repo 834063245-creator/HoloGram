@@ -181,19 +181,17 @@ class TestGraphRoundtrip:
 
     def test_json_roundtrip(self):
         g = _make_minimal_graph()
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as f:
-            g.to_json(f.name)
-            json_path = f.name
-
+        d = tempfile.mkdtemp()
+        json_path = os.path.join(d, "test_graph.json")
         try:
+            g.to_json(json_path)
             g2 = Graph.from_json(json_path)
             assert g2.node_count == g.node_count
             assert g2.edge_count == g.edge_count
             assert g2.source_root == g.source_root
         finally:
-            os.unlink(json_path)
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_type_fields_survive_string_roundtrip(self):
         """从 JSON 加载的 graph，其 node.type 在后续 to_dict 中必须输出字符串。"""
@@ -208,7 +206,7 @@ class TestGraphRoundtrip:
             assert d2["type"] in ("symbol", "medium", "temporal")
 
     def test_coupling_summary_preserved(self):
-        """Graph 上的 coupling_summary 若存在，不应影响序列化。"""
+        """Graph 上的 coupling_summary 经 to_dict → from_dict 往返后存活。"""
         g = _make_minimal_graph()
         g.coupling_summary = {
             "total_l1": 5, "total_l2": 3, "total_l3": 2, "total_l4": 1,
@@ -216,9 +214,11 @@ class TestGraphRoundtrip:
         }
         d = g.to_dict()
         g2 = Graph.from_dict(d)
-        # from_dict 不恢复 coupling_summary（它是 transient）
-        # 但也不应崩溃
         assert g2.node_count == g.node_count
+        # coupling_summary survives the round-trip
+        assert hasattr(g2, 'coupling_summary')
+        assert g2.coupling_summary["total_l1"] == 5
+        assert g2.coupling_summary["total_l4"] == 1
 
     def test_random_graph_100_roundtrips(self):
         """100 个随机合法图，每个过三趟往返。"""
@@ -298,3 +298,149 @@ class TestFieldCompleteness:
             f"to_dict missing fields: {missing}. "
             f"Did you add a field to Edge without updating to_dict?"
         )
+
+
+# ============================================================
+# 2.5.2: JSON → Graph → SQLite → Graph → JSON 往返
+# ============================================================
+
+class TestSQLiteRoundtrip:
+    """SQLite 加速层不丢失数据。"""
+
+    def test_json_to_sqlite_to_json_roundtrip(self):
+        """2.5.2: Graph → SQLite → Graph → JSON 往返，node/edge 数一致。"""
+        g = _make_minimal_graph()
+        g.coupling_summary = {
+            "total_l1": 5, "total_l2": 3, "total_l3": 2, "total_l4": 1,
+            "module_reports": {},
+        }
+
+        d = tempfile.mkdtemp()
+        try:
+            json_path = os.path.join(d, "test.json")
+            g.to_json(json_path)
+            db_path = os.path.join(d, "test.db")
+            g.to_sqlite(db_path)
+            from_sqlite = Graph.from_sqlite(db_path)
+
+            assert from_sqlite.node_count == g.node_count, \
+                f"SQLite roundtrip node count: {from_sqlite.node_count} != {g.node_count}"
+            assert from_sqlite.edge_count == g.edge_count, \
+                f"SQLite roundtrip edge count: {from_sqlite.edge_count} != {g.edge_count}"
+            assert from_sqlite.community_count == g.community_count, \
+                f"SQLite roundtrip community count: {from_sqlite.community_count} != {g.community_count}"
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_sqlite_roundtrip_preserves_node_names(self):
+        g = _make_minimal_graph()
+        d = tempfile.mkdtemp()
+        try:
+            db_path = os.path.join(d, "test.db")
+            g.to_sqlite(db_path)
+            from_sqlite = Graph.from_sqlite(db_path)
+            original_names = {n.name for n in g.nodes.values()}
+            restored_names = {n.name for n in from_sqlite.nodes.values()}
+            assert original_names == restored_names, \
+                f"Names differ: {original_names} != {restored_names}"
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
+
+# ============================================================
+# 2.5.3: JSON → Graph → MessagePack → Graph → JSON 往返
+# ============================================================
+
+class TestMessagePackRoundtrip:
+    """MessagePack 二进制格式不丢失数据。"""
+
+    def test_msgpack_roundtrip_node_edge_count(self):
+        """2.5.3: Graph → MsgPack → Graph → JSON 往返，node/edge 一致。"""
+        g = _make_minimal_graph()
+        g.coupling_summary = {
+            "total_l1": 10, "total_l2": 5, "total_l3": 3, "total_l4": 2,
+            "module_reports": {},
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".hologram", delete=False) as f:
+            mp_path = f.name
+
+        try:
+            g.to_msgpack(mp_path)
+            from_mp = Graph.from_msgpack(mp_path)
+
+            assert from_mp.node_count == g.node_count, \
+                f"MsgPack node count: {from_mp.node_count} != {g.node_count}"
+            assert from_mp.edge_count == g.edge_count, \
+                f"MsgPack edge count: {from_mp.edge_count} != {g.edge_count}"
+
+            # Full dict comparison
+            d_orig = g.to_dict()
+            d_mp = from_mp.to_dict()
+            assert d_orig["meta"]["node_count"] == d_mp["meta"]["node_count"]
+            assert d_orig["meta"]["edge_count"] == d_mp["meta"]["edge_count"]
+            assert d_orig["meta"]["community_count"] == d_mp["meta"]["community_count"]
+        finally:
+            os.unlink(mp_path)
+
+    def test_msgpack_roundtrip_preserves_coupling(self):
+        """2.5.3: MsgPack 往返后 coupling_summary 存活。"""
+        g = _make_minimal_graph()
+        g.coupling_summary = {
+            "total_l1": 50, "total_l2": 30, "total_l3": 10, "total_l4": 5,
+            "module_reports": {"test": {"l1": 1}},
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".hologram", delete=False) as f:
+            mp_path = f.name
+
+        try:
+            g.to_msgpack(mp_path)
+            from_mp = Graph.from_msgpack(mp_path)
+
+            d_orig = g.to_dict()
+            d_mp = from_mp.to_dict()
+
+            coupling_orig = d_orig["meta"].get("coupling", {})
+            coupling_mp = d_mp["meta"].get("coupling", {})
+            assert coupling_mp == coupling_orig, \
+                f"Coupling mismatch: {coupling_mp} != {coupling_orig}"
+        finally:
+            os.unlink(mp_path)
+
+
+# ============================================================
+# 2.5.4: to_dict() 总是包含 coupling_summary（如果图有的话）
+# ============================================================
+
+class TestCouplingSummaryInToDict:
+    """to_dict() 回归防护——不丢 coupling。"""
+
+    def test_to_dict_includes_coupling_when_set(self):
+        """2.5.4: graph.coupling_summary 设置后，to_dict() 的 meta 必须含 coupling。"""
+        g = _make_minimal_graph()
+        g.coupling_summary = {
+            "total_l1": 100, "total_l2": 50, "total_l3": 25, "total_l4": 10,
+            "module_reports": {},
+        }
+
+        d = g.to_dict()
+        assert "coupling" in d["meta"], "to_dict() MUST include coupling in meta"
+        assert d["meta"]["coupling"]["total_l1"] == 100
+        assert d["meta"]["coupling"]["total_l2"] == 50
+        assert d["meta"]["coupling"]["total_l3"] == 25
+        assert d["meta"]["coupling"]["total_l4"] == 10
+        assert isinstance(d["meta"]["coupling"]["total_l1"], int)
+        assert isinstance(d["meta"]["coupling"]["total_l4"], int)
+
+    def test_to_dict_no_coupling_when_not_set(self):
+        """coupling_summary 未设置时，meta 不应含 coupling 键。"""
+        g = _make_minimal_graph()
+        # Ensure no coupling_summary
+        if hasattr(g, 'coupling_summary'):
+            del g.coupling_summary
+        d = g.to_dict()
+        assert "coupling" not in d["meta"], \
+            "meta should NOT have coupling when coupling_summary not set"

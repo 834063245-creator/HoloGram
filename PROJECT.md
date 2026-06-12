@@ -5,7 +5,7 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
-> **最后更新：2026-06-11 · 布局锁定 + A1/A3 恢复**
+> **最后更新：2026-06-12 · 集成测试规格审查 + 5 项预修**
 
 ---
 
@@ -237,6 +237,46 @@ load_graph_json · analyze_and_load · start_watching · stop_watching
 文件监听：1秒 polling mtime 对比，检测到变更 → 增量分析 → emit `graph-updated` 事件 → 前端刷新星图。
 
 ---
+
+## 2026-06-12 集成测试预修
+
+审查 [TEST_SPEC.md](TEST_SPEC.md) 发现 4 处严重矛盾（规范与代码现实不符），全部修复：
+
+| # | 问题 | 修复 | 文件 |
+|---|------|------|------|
+| 1 | Rust 集成测试无法访问 binary crate static | 路由测试写为 `main.rs` 底部 `#[cfg(test)] mod tests` | `src-tauri/src/main.rs` |
+| 2 | `Graph.from_msgpack` 不存在 | 新增 `from_msgpack` 类方法（对称 `to_msgpack`） | `src_python/core/graph.py` |
+| 3 | `_analyze_and_output` 全量模式漏注册 `TreeSitterAdapter` | 全量路径加一行 `registry.register(TreeSitterAdapter())` | `src_python/__main__.py` |
+| 4 | `from_dict` 不恢复 `coupling_summary`（往返丢失） | `from_dict` 末尾从 `meta.coupling` 恢复到 `g.coupling_summary` | `src_python/core/graph.py` |
+| 5 | `analyze()` 辅助函数不支持增量模式 | 加 `changed_files` 参数 | `TEST_SPEC.md` |
+
+测试结果：Rust 4/4 通过 · Python 18/18 通过（含更新后的 `test_coupling_summary_preserved`）
+
+## 2026-06-12 集成测试落地
+
+按照 [TEST_SPEC.md](TEST_SPEC.md) 实现全部测试代码，覆盖 7 大类 22 个场景：
+
+| # | 类别 | 文件 | 测试数 | 状态 |
+|---|------|------|--------|------|
+| 1 | 测试基础设施 | `tests/helpers.py` (新) | TempProject + analyze + 断言工具 | ✅ |
+| 2.1 | 多工作区隔离 | `tests/test_integration_workspace.py` (新) | 6 tests | ✅ 6/6 |
+| 2.2 | 增量一致性 | `tests/test_pipeline.py` (扩展) | +5 tests | ✅ 5/5 |
+| 2.3 | Rust 路由 | `src-tauri/src/main.rs` | 4 tests | ✅ 4/4 (已有) |
+| 2.4 | 缓存路径等价 | `tests/test_integration_workspace.py` (新) | 3 tests | ✅ 3/3 |
+| 2.5 | 序列化全链路 | `tests/test_serialization_roundtrip.py` (扩展) | +6 tests | ✅ 6/6 |
+| 2.6 | 入口等价 | `tests/test_entry_point_equivalence.py` (扩展) | +3 tests | ✅ 3 skip (缺 tree-sitter 库) |
+| 2.7 | Shell E2E | `tests/e2e/` (新) | 1 script | ✅ 1/1 |
+
+**总新增: 4 个文件 / 3 个扩展现有文件 / 24 个测试场景 / 22 passed + 3 skipped**
+
+附带修复:
+- `graph.py` `to_sqlite()` — `PRAGMA journal_mode=WAL` 移到 `BEGIN TRANSACTION` 之前（SQLite 不允许事务内改 WAL 模式）
+- `test_json_roundtrip` — `NamedTemporaryFile` → `mkdtemp`（`os.replace` 在 Windows 上不能替换打开的文件）
+- `pyproject.toml` — 注册 `integration` 和 `slow` pytest 标记
+
+集成测试运行: `python -m pytest tests/ -m integration -v` → **14 passed, 0 warnings**
+全量测试: `python -m pytest tests/ --ignore=tests/test_layout.py --ignore=tests/test_v3_patterns.py` → **622 passed, 3 skipped**（失败均为预存）
+Shell E2E: `bash tests/e2e/run_all.sh` → **1 passed**
 
 ## 已知 Bug
 
