@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX fragment — uninstall cleanup prompt
+  卸载时弹窗询问用户是否删除用户数据（API Key、设置等）
+
+  CustomAction "CleanupUserDataPrompt":
+    - 仅在卸载时触发 (REMOVE="ALL")
+    - 通过 PowerShell + WScript.Shell Popup 弹窗
+    - 用户选"是" → 删除 %LOCALAPPDATA%\com.hologram.app
+    - 用户选"否" → 保留数据
+    - Return="ignore": 清理失败不阻止卸载
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <CustomAction
+            Id="CleanupUserDataPrompt"
+            Impersonate="yes"
+            Execute="deferred"
+            Return="ignore"
+            ExeCommand='powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand JAB3ACAAPQAgAE4AZQB3AC0ATwBiAGoAZQBjAHQAIAAtAEMAbwBtAE8AYgBqAGUAYwB0ACAAVwBTAGMAcgBpAHAAdAAuAFMAaABlAGwAbAAKACQAcgAgAD0AIAAkAHcALgBQAG8AcAB1AHAAKAAnAHhTfY8OVC9mJlQMVPZlIFJklih1N2JwZW5jH/8KAAoABVPsYiAAQQBQAEkAIABLAGUAeQABML6Lbn9JewIwCgC5cPtRIgAvZiIAIFJklgz/uXD7USIAJlQiAN1PWXUCMAoACgAI/w1OcV/NVHmY7naHZfZOCf8nACwAIAAwACwAIAAnAGhRb2DCiUtt2XogAHhTfY8nACwAIAA0ACsAMwAyACkACgBpAGYAIAAoACQAcgAgAC0AZQBxACAANgApACAAewAKACAAIAAgACAAJABwAGEAdABoACAAPQAgACQAZQBuAHYAOgBMAE8AQwBBAEwAQQBQAFAARABBAFQAQQAgACsAIAAiAFwAYwBvAG0ALgBoAG8AbABvAGcAcgBhAG0ALgBhAHAAcAAiAAoAIAAgACAAIABSAGUAbQBvAHYAZQAtAEkAdABlAG0AIAAtAFAAYQB0AGgAIAAkAHAAYQB0AGgAIAAtAFIAZQBjAHUAcgBzAGUAIAAtAEYAbwByAGMAZQAgAC0ARQByAHIAbwByAEEAYwB0AGkAbwBuACAAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAKAH0A'
+        />
+
+        <InstallExecuteSequence>
+            <!-- Only prompt during full uninstall, not during upgrade -->
+            <Custom Action="CleanupUserDataPrompt" After="RemoveFiles"><![CDATA[REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE]]></Custom>
+        </InstallExecuteSequence>
+    </Fragment>
+</Wix>

@@ -72,3 +72,8 @@ docs_archive/
 
 # Will rewrite when ready to publish
 README.md
+
+# Generated docs — not for source control
+AGENT_MEMORY_SYSTEM.txt
+src-tauri/python/
+scripts/python-3.14.4-embed-amd64.zip
