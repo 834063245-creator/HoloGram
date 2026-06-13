@@ -22,6 +22,26 @@ class PythonAdapter(LanguageAdapter):
     language = "python"
     file_extensions = [".py"]
 
+    # ── Parse-once cache ─────────────────────────────────────
+
+    def analyze(self, file_path: str, source: str, graph: Optional[Graph] = None) -> AdapterResult:
+        """Override base to parse AST once, reuse across all three phases."""
+        try:
+            self._cached_ast = ast.parse(source, filename=file_path)
+        except SyntaxError:
+            self._cached_ast = None  # let extractors handle error reporting
+        try:
+            return super().analyze(file_path, source, graph)
+        finally:
+            self._cached_ast = None
+
+    def _get_ast(self, file_path: str, source: str):
+        """Return cached AST if available (inside analyze()), else parse."""
+        cached = getattr(self, '_cached_ast', None)
+        if cached is not None:
+            return cached
+        return ast.parse(source, filename=file_path)
+
     # --------------------------------------------------------
     # Phase 1: 符号提取 + 结构边
     # --------------------------------------------------------
@@ -30,7 +50,7 @@ class PythonAdapter(LanguageAdapter):
         result = AdapterResult(file_path=file_path)
 
         try:
-            tree = ast.parse(source, filename=file_path)
+            tree = self._get_ast(file_path, source)
         except SyntaxError as e:
             result.errors.append(f"Syntax error in {file_path}: {e}")
             return result
@@ -64,7 +84,7 @@ class PythonAdapter(LanguageAdapter):
         result = AdapterResult(file_path=file_path)
 
         try:
-            tree = ast.parse(source, filename=file_path)
+            tree = self._get_ast(file_path, source)
         except SyntaxError:
             return result
 

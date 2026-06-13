@@ -115,14 +115,15 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     print(f"  coupling analysis...", file=sys.stderr)
     try:
         coupler = CouplingDepthAnalyzer()
-        # Collect file sources for AST-based detection
-        sources = {}
+        # Reuse sources from pipeline runner; only re-read cache-hit files
+        sources = dict(report.sources) if hasattr(report, 'sources') else {}
         for fp in report.files:
-            try:
-                with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                    sources[fp] = f.read()
-            except (OSError, PermissionError):
-                pass
+            if fp not in sources:
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        sources[fp] = f.read()
+                except (OSError, PermissionError):
+                    pass
         for fp, src in sources.items():
             coupler.pre_scan_file(fp, src)
         cr = coupler.analyze(graph, sources)

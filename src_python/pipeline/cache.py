@@ -28,7 +28,8 @@ class IncrementalCache:
       }
     """
 
-    def __init__(self, cache_dir: Optional[str] = None, max_size: int = 500):
+    def __init__(self, cache_dir: Optional[str] = None, max_size: int = 0):
+        """max_size=0 means unlimited (safe — per-file graphs are small)."""
         self._cache: Dict[str, Dict] = {}
         self._cache_dir = cache_dir
         self._max_size = max_size
@@ -77,7 +78,7 @@ class IncrementalCache:
             if file_path in self._cache:
                 self._cache[file_path] = {"hash": file_hash, "graph": graph}
                 return
-            if len(self._cache) >= self._max_size:
+            if self._max_size > 0 and len(self._cache) >= self._max_size:
                 # Simple FIFO eviction: remove oldest entry (dict insertion order)
                 oldest = next(iter(self._cache))
                 self._cache.pop(oldest)

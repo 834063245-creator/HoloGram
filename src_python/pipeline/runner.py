@@ -8,6 +8,7 @@ import copy
 import logging
 import os as _os_module
 import time
+from multiprocessing import Pool, cpu_count
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..adapters.base import LanguageAdapter, AdapterResult
@@ -16,6 +17,7 @@ from ..core.graph import Graph, Node, Edge
 from ..core.diff import GraphDiff
 from .discovery import discover_files
 from .cache import IncrementalCache
+from .worker import analyze_file
 
 logger = logging.getLogger(__name__)
 
@@ -56,23 +58,29 @@ class PipelineRunner:
             report.elapsed_sec = time.time() - t0
             return Graph(source_root=root), report
 
-        # Phase 2: 逐文件分析（三阶段）
+        # Phase 2: 逐文件分析（并行）
         report.phase = "analysis"
         merged_graph = Graph(source_root=root)
         file_graphs: Dict[str, Graph] = {}
 
-        for i, file_path in enumerate(files):
+        # ── 2a: 分离缓存命中 / 未命中 ──
+        cache_misses: List[Tuple[str, str, str]] = []  # (file_path, source, adapter_key)
+        skipped = 0
+
+        for file_path in files:
             adapter = self.registry.find(file_path)
             if not adapter:
                 report.skipped_files += 1
                 continue
+            skipped += 1
 
             source = self._read_file(file_path)
             if source is None:
                 report.error_files += 1
                 continue
 
-            # 增量检查 — 原子获取避免 TOCTOU
+            report.sources[file_path] = source
+
             file_hash = self.cache.hash_source(source)
             entry = self.cache.get_entry(file_path)
             if entry and entry[0] == file_hash and entry[1] is not None:
@@ -81,48 +89,80 @@ class PipelineRunner:
                 merged_graph.merge(cached)
                 report.cached_files += 1
                 if on_progress:
-                    on_progress(file_path, i + 1, len(files))
+                    on_progress(file_path, skipped, len(files))
                 continue
 
-            try:
-                result = adapter.analyze(file_path, source, merged_graph)
-            except Exception as exc:
+            # Derive adapter key for the worker
+            ext = _os_module.path.splitext(file_path)[1].lower()
+            if ext == '.py':
+                adapter_key = 'python'
+            elif ext in ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'):
+                adapter_key = 'typescript'
+            else:
+                adapter_key = 'treesitter'
+            cache_misses.append((file_path, source, adapter_key))
+
+        # ── 2b: 并行分析未命中文件 ──
+        # ── 2b: 并行分析未命中文件 ──
+        if cache_misses:
+            # For ≤2 files, serial is faster (no pool overhead).
+            n_workers = min(cpu_count() or 4, len(cache_misses))
+            if n_workers <= 1 or len(cache_misses) <= 2:
+                # Serial fallback — uses registry adapters (keeps mock path for tests)
+                logger.info("Serial analysis: %d files", len(cache_misses))
+                worker_results = []
+                for fp, src, _key in cache_misses:
+                    ad = self.registry.find(fp)
+                    try:
+                        r = ad.analyze(fp, src)
+                        worker_results.append((fp, list(r.nodes), list(r.edges), list(r.errors), list(r.warnings)))
+                    except Exception as exc:
+                        worker_results.append((fp, [], [], [str(exc)], []))
+            else:
+                import multiprocessing as _mp_module
+                try:
+                    _ctx = _mp_module.get_context('spawn')
+                except (AttributeError, ValueError):
+                    _ctx = _mp_module
+                logger.info("Parallel analysis: %d files on %d workers", len(cache_misses), n_workers)
+                with _ctx.Pool(processes=n_workers) as pool:
+                    worker_results = pool.starmap(analyze_file, cache_misses)
+        else:
+            worker_results = []
+
+        # ── 2c: 收集结果、合并、缓存 ──
+        processed = skipped
+        for file_path, nodes, edges, errs, warns in worker_results:
+            processed += 1
+            if errs:
+                report.errors.extend(f"{file_path}: {e}" for e in errs)
+            if warns:
+                report.warnings.extend(f"{file_path}: {w}" for w in warns)
+
+            if not nodes and not edges and errs:
                 report.error_files += 1
-                report.errors.append(f"{file_path}: {exc}")
                 if on_progress:
-                    on_progress(file_path, i + 1, len(files))
+                    on_progress(file_path, processed, len(files))
                 continue
 
-            # 将结果加入图
             file_graph = Graph(source_root=root)
-            for node in result.nodes:
+            for node in nodes:
                 file_graph.add_node(node)
-            for edge in result.edges:
+            for edge in edges:
                 file_graph.add_edge(edge)
 
             file_graphs[file_path] = file_graph
             merged_graph.merge(file_graph)
 
-            # 缓存
+            file_hash = self.cache.hash_source(report.sources.get(file_path, ""))
             self.cache.set(file_path, file_hash, file_graph)
 
             report.processed_files += 1
-            report.total_nodes_emitted += len(result.nodes)
-            report.total_edges_emitted += len(result.edges)
-
-            if result.warnings:
-                report.warnings.extend(
-                    f"{file_path}: {w}" for w in result.warnings
-                )
-            if result.errors:
-                report.errors.extend(
-                    f"{file_path}: {e}" for e in result.errors
-                )
-                if not result.nodes and not result.edges:
-                    report.error_files += 1
+            report.total_nodes_emitted += len(nodes)
+            report.total_edges_emitted += len(edges)
 
             if on_progress:
-                on_progress(file_path, i + 1, len(files))
+                on_progress(file_path, processed, len(files))
 
         # Phase 3: 跨文件关系解析
         report.phase = "cross_file_resolution"
@@ -249,6 +289,7 @@ class PipelineReport:
         self.errors: List[str] = []
         self.warnings: List[str] = []
         self.files: List[str] = []
+        self.sources: Dict[str, str] = {}  # file_path → source text (avoid re-reading during coupling)
         self.elapsed_sec: float = 0.0
 
     def to_dict(self) -> Dict:

@@ -11,6 +11,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { iconHtml } from './icons';
 import { bus } from './events';
 import { t, getLang, setLang } from '../i18n';
+import { gpuLayout } from './gpu-layout';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -551,6 +552,11 @@ export class StarGraph {
     this.onResize();
     window.addEventListener('resize', this.onResize);
     this.animate();
+
+    // Kick off WebGPU compute pipeline init (non-blocking)
+    gpuLayout.init().then(ready => {
+      if (ready) console.log('[StarGraph] GPU layout ready');
+    });
   }
 
   // ── Cross-edge energy flow (fold mode) ──────────────────
@@ -2717,9 +2723,9 @@ export class StarGraph {
 
   // ── Render ───────────────────────────────────────────────
 
-  render(graph: GraphJSON): void {
+  async render(graph: GraphJSON): Promise<void> {
     try {
-      this._renderImpl(graph);
+      await this._renderImpl(graph);
     } catch (e) {
       console.error('[StarGraph] render crashed:', e);
       // Attempt recovery: clear state, show minimal status
@@ -2728,7 +2734,7 @@ export class StarGraph {
     }
   }
 
-  private _renderImpl(graph: GraphJSON): void {
+  private async _renderImpl(graph: GraphJSON): Promise<void> {
     this.clearGraph();
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
@@ -2809,8 +2815,35 @@ export class StarGraph {
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
-    // JS-side force-directed layout (shell-constrained Fibonacci sphere)
-    let rawPos = layout3D(nodes.length, pairs);
+    // ── Force-directed layout: GPU compute (WebGPU) → CPU fallback ──
+    // Core params are locked — identical to the JS layout3D function.
+    const shellRadius = Math.cbrt(nodes.length) * 14;
+    const sp = 0.006 + (nodes.length > 2000 ? 0.008 : 0) + (nodes.length > 4000 ? 0.006 : 0);
+    const maxIter = Math.min(60, Math.max(15, 60 - Math.floor(nodes.length / 800)));
+    let layoutSource = 'CPU';
+
+    let rawPos: Float32Array;
+    if (gpuLayout.ready) {
+      const initPos = fibonacciSphere(nodes.length, shellRadius);
+      const gpuResult = await gpuLayout.compute(nodes.length, pairs, initPos, {
+        n: nodes.length,
+        rep: 600, att: 0.018, damp: 0.72,
+        REP_CAP: shellRadius * 8,
+        ATT_CAP: shellRadius,
+        VEL_CAP: shellRadius * 0.25,
+        shellRadius, sp,
+        originStr: 0.0004,
+      }, maxIter);
+      if (gpuResult) {
+        rawPos = gpuResult;
+        layoutSource = 'GPU';
+      } else {
+        rawPos = layout3D(nodes.length, pairs);
+        layoutSource = 'CPU(fallback)';
+      }
+    } else {
+      rawPos = layout3D(nodes.length, pairs);
+    }
     // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
@@ -2839,7 +2872,7 @@ export class StarGraph {
     const maxR = Math.min(Math.max(50, p95), shellR * 3);  // p95, capped at 3x shell radius
     const camDist = maxR * 2.6;
     const isoCount = deg.filter(d => d === 0).length;
-    this._diagMsg = `shellR≈${shellR | 0} p95=${maxR | 0} absMax=${absMax | 0} cam=${camDist | 0} iso=${isoCount}/${nodes.length} NaNfix=${fixed}`;
+    this._diagMsg = `${layoutSource} shellR≈${shellR | 0} p95=${maxR | 0} absMax=${absMax | 0} cam=${camDist | 0} iso=${isoCount}/${nodes.length} NaNfix=${fixed}`;
     this.camera.position.set(camDist * 0.55, camDist * 0.45, camDist * 0.65);
     this.controls.target.set(0, 0, 0);
     this._initCamPos.copy(this.camera.position);

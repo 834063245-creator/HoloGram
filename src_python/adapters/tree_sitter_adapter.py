@@ -482,28 +482,57 @@ class TreeSitterAdapter(LanguageAdapter):
         """检查文件扩展名是否可处理。"""
         return self._grammars.find_language(file_path) is not None
 
-    def extract_symbols(self, file_path: str, source: str) -> AdapterResult:
+    # ── Parse-once cache ────────────────────────────────────
+
+    def analyze(self, file_path: str, source: str, graph=None) -> AdapterResult:
+        """Override base to parse source once, reuse tree across all three phases."""
+        import tree_sitter
+        lang_name = self._grammars.find_language(file_path)
+        if lang_name:
+            try:
+                ts_lang = self._grammars.load(lang_name)
+            except Exception:
+                self._cached_ts = None
+            else:
+                parser = tree_sitter.Parser()
+                parser.language = ts_lang
+                self._cached_ts = parser.parse(source.encode("utf-8"))
+                self._cached_ts_lang = lang_name
+        else:
+            self._cached_ts = None
+        try:
+            return super().analyze(file_path, source, graph)
+        finally:
+            self._cached_ts = None
+            self._cached_ts_lang = None
+
+    def _get_ts_tree(self, file_path: str, source: str):
+        """Return cached tree-sitter tree + lang_name if available, else parse."""
+        cached = getattr(self, '_cached_ts', None)
+        if cached is not None:
+            return cached, getattr(self, '_cached_ts_lang', None)
+        # Standalone call — parse from scratch
+        import tree_sitter
         lang_name = self._grammars.find_language(file_path)
         if not lang_name:
-            return AdapterResult(
-                file_path=file_path,
-                errors=[f"No tree-sitter grammar for: {file_path}"],
-            )
-
+            return None, None
         try:
             ts_lang = self._grammars.load(lang_name)
-        except Exception as e:
-            return AdapterResult(file_path=file_path, errors=[str(e)])
-
-        config = LANGUAGE_CONFIGS.get(lang_name, LanguageConfig())
-        result = AdapterResult(file_path=file_path)
-
-        # 解析
-        import tree_sitter
+        except Exception:
+            return None, None
         parser = tree_sitter.Parser()
         parser.language = ts_lang
         tree = parser.parse(source.encode("utf-8"))
+        return tree, lang_name
+
+    def extract_symbols(self, file_path: str, source: str) -> AdapterResult:
+        tree, lang_name = self._get_ts_tree(file_path, source)
+        if tree is None or not lang_name:
+            return AdapterResult(file_path=file_path,
+                errors=[f"No tree-sitter grammar for: {file_path}"])
         root = tree.root_node
+        config = LANGUAGE_CONFIGS.get(lang_name, LanguageConfig())
+        result = AdapterResult(file_path=file_path)
 
         if root.has_error:
             # 记录但不阻断：部分语法错误仍可提取部分符号
@@ -520,20 +549,11 @@ class TreeSitterAdapter(LanguageAdapter):
         return result
 
     def extract_media(self, file_path: str, source: str, graph: Graph) -> AdapterResult:
-        lang_name = self._grammars.find_language(file_path)
-        if not lang_name:
+        tree, lang_name = self._get_ts_tree(file_path, source)
+        if tree is None:
             return AdapterResult(file_path=file_path)
-
-        try:
-            ts_lang = self._grammars.load(lang_name)
-        except Exception as e:
-            return AdapterResult(file_path=file_path, errors=[str(e)])
-
-        result = AdapterResult(file_path=file_path)
-        parser = tree_sitter.Parser()
-        parser.language = ts_lang
-        tree = parser.parse(source.encode("utf-8"))
         root = tree.root_node
+        result = AdapterResult(file_path=file_path)
 
         extractor = _MediaExtractor(file_path, source, graph, lang_name)
         extractor.walk(root)
@@ -545,20 +565,11 @@ class TreeSitterAdapter(LanguageAdapter):
         return result
 
     def extract_temporal(self, file_path: str, source: str, graph: Graph) -> AdapterResult:
-        lang_name = self._grammars.find_language(file_path)
-        if not lang_name:
+        tree, lang_name = self._get_ts_tree(file_path, source)
+        if tree is None:
             return AdapterResult(file_path=file_path)
-
-        try:
-            ts_lang = self._grammars.load(lang_name)
-        except Exception as e:
-            return AdapterResult(file_path=file_path, errors=[str(e)])
-
-        result = AdapterResult(file_path=file_path)
-        parser = tree_sitter.Parser()
-        parser.language = ts_lang
-        tree = parser.parse(source.encode("utf-8"))
         root = tree.root_node
+        result = AdapterResult(file_path=file_path)
 
         extractor = _TemporalExtractor(file_path, source, graph, lang_name)
         extractor.walk(root)

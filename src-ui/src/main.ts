@@ -240,8 +240,8 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
       currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
     } catch { currentFileGraphData = null; }
 
-    // Layout3D is O(n²) — 1500 nodes ≈ 3-8s, 2000 → 15s+ blocker. Hard cap at 1500.
-    const LAYOUT_CAP = 5000;
+    // Layout now GPU-accelerated — no main-thread freeze. 软上限。
+    const LAYOUT_CAP = 40000;
     if (nodeCount > LAYOUT_CAP) {
       if (currentFileGraphData) {
         currentMode = 'files';
@@ -1388,7 +1388,7 @@ async function init(): Promise<void> {
         currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
       } catch { currentFileGraphData = null; }
 
-      const LAYOUT_CAP = 5000;
+      const LAYOUT_CAP = 40000;
       if (nodeCount > LAYOUT_CAP) {
         if (currentFileGraphData) {
           currentMode = 'files';

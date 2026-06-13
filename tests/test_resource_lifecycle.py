@@ -133,7 +133,7 @@ class TestIncrementalCacheEviction:
 
     def test_default_max_size(self):
         c = IncrementalCache()
-        assert c._max_size == 500
+        assert c._max_size == 0  # default now unlimited (was 500)
 
     def test_no_eviction_below_max(self):
         c = IncrementalCache(max_size=10)
