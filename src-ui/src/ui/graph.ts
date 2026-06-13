@@ -62,10 +62,10 @@ function edgeColorByType(edgeType: string, direction: string, crossFile = false)
   if (edgeType === 'temporal' || edgeType === 'TEMPORAL') {
     return new THREE.Color(0xffaa55);
   }
-  // Cross-file edges: distinct colors
+  // Cross-file edges: distinct colors (bright and visible)
   if (crossFile) {
-    if (direction === 'inherit') return new THREE.Color(0xcc66ff); // purple for inheritance
-    if (direction === 'call') return new THREE.Color(0x66ccff); // cyan for cross-file calls
+    if (direction === 'inherit') return new THREE.Color(0xff66ff); // bright magenta for inheritance
+    if (direction === 'call') return new THREE.Color(0x66ffff); // bright cyan for cross-file calls
   }
   return new THREE.Color(0x6699cc);
 }
@@ -338,7 +338,9 @@ export class StarGraph {
   private blastMode = false;
   private blastSource = -1;
   private blastDistances: number[] = [];
-  private blastMaxDist = 8;
+  private blastMaxDist = 3; // Reduced from 8 to 3 for more focused impact analysis
+  private blastEdgeType: string = 'all'; // 'all', 'structural', 'data', 'temporal'
+  private blastDirection: string = 'both'; // 'both', 'outbound', 'inbound'
 
   // ── Community / Galaxy fold overlay ──────────────────────
   private foldMode = false;
@@ -714,7 +716,22 @@ export class StarGraph {
       '<div class="dc-name"></div><div class="dc-meta"></div><div class="dc-divider"></div>' +
       '<div class="dc-coupling"></div><div class="dc-divider"></div>' +
       '<div class="dc-location"></div>' +
-      `<div class="dc-actions"><button class="dc-open-btn">${iconHtml('file', 11)} 打开</button><button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button><button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button><button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button></div>`;
+      `<div class="dc-actions"><button class="dc-open-btn">${iconHtml('file', 11)} 打开</button><button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button><button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button><button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button></div>` +
+      '<div class="dc-blast-filters" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid #333;">' +
+      '<div style="font-size:11px;color:#888;margin-bottom:4px;">边类型过滤:</div>' +
+      '<div class="dc-blast-type-btns" style="display:flex;gap:4px;flex-wrap:wrap;">' +
+      '<button class="dc-blast-type-btn" data-type="all" style="padding:2px 6px;font-size:10px;background:#444;border:1px solid #666;border-radius:3px;cursor:pointer;">全部</button>' +
+      '<button class="dc-blast-type-btn" data-type="structural" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">结构</button>' +
+      '<button class="dc-blast-type-btn" data-type="data" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">数据</button>' +
+      '<button class="dc-blast-type-btn" data-type="temporal" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">时间</button>' +
+      '</div>' +
+      '<div style="font-size:11px;color:#888;margin-top:6px;margin-bottom:4px;">方向过滤:</div>' +
+      '<div class="dc-blast-dir-btns" style="display:flex;gap:4px;flex-wrap:wrap;">' +
+      '<button class="dc-blast-dir-btn" data-dir="both" style="padding:2px 6px;font-size:10px;background:#444;border:1px solid #666;border-radius:3px;cursor:pointer;">双向</button>' +
+      '<button class="dc-blast-dir-btn" data-dir="outbound" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">出向</button>' +
+      '<button class="dc-blast-dir-btn" data-dir="inbound" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">入向</button>' +
+      '</div>' +
+      '</div>';
     this.container.appendChild(this.detailCard);
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
@@ -724,6 +741,36 @@ export class StarGraph {
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) this.startBlastMode(this.selectedIdx);
+    });
+    // Blast filter: show/hide filters panel when blast mode is active
+    this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('contextmenu', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const panel = this.detailCard.querySelector('.dc-blast-filters') as HTMLElement;
+      if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    });
+    // Blast filter: edge type buttons
+    this.detailCard.querySelectorAll('.dc-blast-type-btn').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        this.blastEdgeType = (btn as HTMLElement).dataset.type || 'all';
+        this.detailCard.querySelectorAll('.dc-blast-type-btn').forEach(b => {
+          (b as HTMLElement).style.background = b === btn ? '#444' : '#333';
+          (b as HTMLElement).style.borderColor = b === btn ? '#666' : '#555';
+        });
+        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
+      });
+    });
+    // Blast filter: direction buttons
+    this.detailCard.querySelectorAll('.dc-blast-dir-btn').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        this.blastDirection = (btn as HTMLElement).dataset.dir || 'both';
+        this.detailCard.querySelectorAll('.dc-blast-dir-btn').forEach(b => {
+          (b as HTMLElement).style.background = b === btn ? '#444' : '#333';
+          (b as HTMLElement).style.borderColor = b === btn ? '#666' : '#555';
+        });
+        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
+      });
     });
     this.detailCard.querySelector('.dc-open-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
@@ -1426,27 +1473,51 @@ export class StarGraph {
     if (this.blastSource < 0) return;
     this.blastDistances[this.blastSource] = 0;
     const queue = [this.blastSource];
+    console.log(`[DEBUG] computeBlastDistances: source=${this.blastSource}, maxDist=${this.blastMaxDist}, edgeType=${this.blastEdgeType}, direction=${this.blastDirection}`);
     while (queue.length > 0) {
       const u = queue.shift()!, du = this.blastDistances[u];
       if (du >= this.blastMaxDist) continue;
+      // Filter neighbors based on edge type and direction
       for (const v of this.neighborMap[u] || []) {
-        if (this.blastDistances[v] === -1) { this.blastDistances[v] = du + 1; queue.push(v); }
+        if (this.blastDistances[v] === -1) {
+          // Check if ANY edge between u and v passes the filter
+          const passesFilter = this.edgeIndexOf[u].some(ei => {
+            const d = this.edgeDataList[ei];
+            if ((d.s !== u || d.t !== v) && (d.s !== v || d.t !== u)) return false;
+            if (this.blastEdgeType !== 'all' && d.edgeType !== this.blastEdgeType) return false;
+            if (this.blastDirection === 'outbound' && d.s !== u) return false;
+            if (this.blastDirection === 'inbound' && d.t !== u) return false;
+            return true;
+          });
+          if (passesFilter) { this.blastDistances[v] = du + 1; queue.push(v); }
+        }
       }
     }
+    const reached = this.blastDistances.filter(d => d >= 0).length;
+    console.log(`[DEBUG] computeBlastDistances: reached ${reached} nodes`);
   }
 
   private buildBlastEdges(): void {
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     if (!this.blastMode) return;
     const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
+    console.log(`[DEBUG] buildBlastEdges: edgeType=${this.blastEdgeType}, direction=${this.blastDirection}`);
+    let edgeCount = 0;
     for (const d of this.edgeDataList) {
       const ds = this.blastDistances[d.s], dt = this.blastDistances[d.t];
       if (ds < 0 || dt < 0) continue;
+      // Apply edge type filter
+      if (this.blastEdgeType !== 'all' && d.edgeType !== this.blastEdgeType) continue;
+      // Apply direction filter
+      if (this.blastDirection === 'outbound' && d.s !== this.blastSource && ds > dt) continue;
+      if (this.blastDirection === 'inbound' && d.t !== this.blastSource && dt > ds) continue;
       verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
       const minD = Math.min(ds, dt);
       const c = minD === 0 ? new THREE.Color(0xffffff) : minD === 1 ? new THREE.Color(0xff6644) : minD <= 3 ? new THREE.Color(0xffaa44) : new THREE.Color(0xffdd88);
       colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+      edgeCount++;
     }
+    console.log(`[DEBUG] buildBlastEdges: rendered ${edgeCount} edges`);
     if (verts.length === 0) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
@@ -1467,6 +1538,26 @@ export class StarGraph {
     }
     const st = document.getElementById('status-text');
     if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
+  }
+
+  private updateBlastNodeColors(): void {
+    if (!this.blastMode) return;
+    const isFull = this.mode === 'full';
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      const d = this.blastDistances[i];
+      if (d >= 0) {
+        const c = new THREE.Color();
+        if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(c);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
+        (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(c);
+        const base = 0.6 + (this.deg[i] / this.maxDeg) * 2.8;
+        this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
+        this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
+      } else {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12;
+      }
+    }
   }
 
   // ── Focus ────────────────────────────────────────────────
@@ -2115,6 +2206,7 @@ export class StarGraph {
 
     // Show sub-communities (Level 1+) if they exist
     const subCommunities = this.communities.filter(c => c.parent_id === galaxyId && c.level === 1);
+    console.log(`[DEBUG] _showConstellation: galaxyId=${galaxyId}, total communities=${this.communities.length}, subCommunities found=${subCommunities.length}`);
     if (subCommunities.length > 0) {
       const subColors = [0x66aaff, 0xff66aa, 0x66ffaa, 0xffaa66, 0xaa66ff]; // Distinct colors for sub-communities
       subCommunities.forEach((subComm, idx) => {
@@ -2124,10 +2216,11 @@ export class StarGraph {
           const nodeIdx = this.graphNodes.findIndex(n => n.id === nid);
           if (nodeIdx >= 0) subMembers.push(nodeIdx);
         }
-        // Highlight sub-community nodes with distinct color
+        console.log(`[DEBUG] Sub-community ${subComm.id}: ${subMembers.length} members, color=0x${subColors[idx % subColors.length].toString(16)}`);
+        // Highlight sub-community nodes with distinct color (override full mode white)
         for (const mi of subMembers) {
           if (this.nodeCores[mi]) {
-            (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(isFull ? 0xffffff : subColor);
+            (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(subColor);
           }
           if (this.nodeGlows[mi]) {
             (this.nodeGlows[mi].material as THREE.SpriteMaterial).color.set(subColor);
@@ -2582,6 +2675,9 @@ export class StarGraph {
         eData.push({ s, t, couplingDepth: ((e as any).coupling_depth as number) || 0, edgeType: e.type || '', direction: (e as any).direction || '', crossFile });
       }
     }
+    // Debug: count cross-file edges
+    const crossFileCount = eData.filter(e => e.crossFile).length;
+    console.log(`[DEBUG] Total edges: ${eData.length}, cross-file edges: ${crossFileCount}`);
     this.deg = deg; this.edgeDataList = eData; this.maxDeg = Math.max(...deg, 1);
 
     this.neighborMap = Array.from({ length: nodes.length }, () => []);
@@ -2595,6 +2691,13 @@ export class StarGraph {
     // ── Parse communities & build node→community index ──────
     this.communities = ((graph as any).communities || []) as CommunityData[];
     this.nodeCommMap.clear();
+    // Debug: log community data
+    const level0Comms = this.communities.filter(c => !c.level || c.level === 0);
+    const level1Comms = this.communities.filter(c => c.level === 1);
+    console.log(`[DEBUG] Total communities: ${this.communities.length}, Level 0: ${level0Comms.length}, Level 1: ${level1Comms.length}`);
+    if (level1Comms.length > 0) {
+      console.log(`[DEBUG] Level 1 communities:`, level1Comms.map(c => ({ id: c.id, parent_id: c.parent_id, node_count: c.node_ids.length })));
+    }
     // Only use Level 0 communities for initial galaxy view
     const level0Communities = this.communities.filter(c => !c.level || c.level === 0);
     for (const comm of level0Communities) {
@@ -2748,10 +2851,10 @@ export class StarGraph {
   private buildEdges(pos: Float32Array, data: EdgeData[]): void {
     if (data.length === 0) return;
     const key = (d: EdgeData) => `${d.edgeType}:${d.direction}:${d.couplingDepth}:${d.crossFile ? 1 : 0}`;
-    const groups = new Map<string, { verts: number[]; colors: number[]; depth: number }>();
+    const groups = new Map<string, { verts: number[]; colors: number[]; depth: number; crossFile: boolean }>();
     for (const d of data) {
       const k = key(d);
-      if (!groups.has(k)) { const c = edgeColorByType(d.edgeType, d.direction, d.crossFile); groups.set(k, { verts: [], colors: [], depth: d.couplingDepth }); }
+      if (!groups.has(k)) { const c = edgeColorByType(d.edgeType, d.direction, d.crossFile); groups.set(k, { verts: [], colors: [], depth: d.couplingDepth, crossFile: d.crossFile }); }
       const g = groups.get(k)!;
       g.verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
       const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
@@ -2764,7 +2867,10 @@ export class StarGraph {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
         geo.setAttribute('color', new THREE.Float32BufferAttribute(cl, 3));
-        const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: edgeOpacityByDepth(g.depth, this.mode), depthWrite: false, blending: g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending });
+        // Cross-file edges: high opacity + additive blending for visibility
+        const opacity = g.crossFile ? 0.9 : edgeOpacityByDepth(g.depth, this.mode);
+        const blending = g.crossFile ? THREE.AdditiveBlending : (g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending);
+        const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity, depthWrite: false, blending });
         const lines = new THREE.LineSegments(geo, mat);
         this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
       }

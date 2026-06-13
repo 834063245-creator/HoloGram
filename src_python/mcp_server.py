@@ -345,10 +345,8 @@ class MCPServer:
         graph, report = runner.run(root)
 
         # 跨文件关系解析
-        resolver = CrossFileResolver()
-        cross_added = resolver.resolve(graph)
-        if cross_added:
-            print(f"  Cross-file edges resolved: {cross_added}", file=sys.stderr)
+        # 注意：runner.run() 已经调用了 resolve()，这里不再重复调用
+        # 但保留这段代码以兼容旧版本或手动调用场景
 
         # 社区发现
         detector = CommunityDetector()
