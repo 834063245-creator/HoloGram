@@ -2371,6 +2371,64 @@ async fn git_init(path: String) -> Result<String, String> {
     run_git(&path, &["init"]).map(|s| s.trim().to_string())
 }
 
+// ── IDE-level Git operations ──
+
+#[tauri::command]
+async fn git_list_branches(path: String) -> Result<String, String> {
+    let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
+    let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    // Find current branch (marked with *)
+    let current_out = run_git(&path, &["branch", "--show-current"])?;
+    let current = current_out.trim().to_string();
+    serde_json::to_string(&serde_json::json!({ "branches": branches, "current": current }))
+        .map_err(|e| format!("JSON 序列化失败: {}", e))
+}
+
+#[tauri::command]
+async fn git_checkout(path: String, branch: String) -> Result<String, String> {
+    run_git(&path, &["checkout", &branch])
+}
+
+#[tauri::command]
+async fn git_create_branch(path: String, name: String) -> Result<String, String> {
+    run_git(&path, &["checkout", "-b", &name])
+}
+
+#[tauri::command]
+async fn git_stash_push(path: String) -> Result<String, String> {
+    run_git(&path, &["stash", "push", "-m", "HoloGram"])
+}
+
+#[tauri::command]
+async fn git_stash_pop(path: String) -> Result<String, String> {
+    run_git(&path, &["stash", "pop"])
+}
+
+#[tauri::command]
+async fn git_stash_list(path: String) -> Result<String, String> {
+    run_git(&path, &["stash", "list"])
+}
+
+#[tauri::command]
+async fn git_discard(path: String, file: String) -> Result<String, String> {
+    run_git(&path, &["checkout", "--", &file])
+}
+
+#[tauri::command]
+async fn git_blame(path: String, file: String) -> Result<String, String> {
+    run_git(&path, &["blame", "--line-porcelain", &file])
+}
+
+#[tauri::command]
+async fn git_file_at_head(path: String, file: String) -> Result<String, String> {
+    run_git(&path, &["show", &format!("HEAD:{}", file)])
+}
+
+#[tauri::command]
+async fn git_show(path: String, commit: String) -> Result<String, String> {
+    run_git(&path, &["show", "--stat", "--format=", &commit])
+}
+
 static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(McpManager::new())));
 
@@ -2490,6 +2548,16 @@ fn main() {
             git_pull,
             git_log,
             git_init,
+            git_list_branches,
+            git_checkout,
+            git_create_branch,
+            git_stash_push,
+            git_stash_pop,
+            git_stash_list,
+            git_discard,
+            git_blame,
+            git_file_at_head,
+            git_show,
             search_code,
             web_fetch,
             edit_file,

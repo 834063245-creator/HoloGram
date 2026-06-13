@@ -6,6 +6,7 @@ import { invoke } from '../bridge';
 import { iconSvg } from './icons';
 import { bus } from './events';
 import { FileViewer } from './file-viewer';
+import { showContextMenu, type ContextMenuItem } from './context-menu';
 
 // ── Types ──
 
@@ -101,7 +102,7 @@ export class GitPanel {
 
     // ── Branch bar ──
     html += '<div class="git-branch-bar">';
-    html += `<span class="git-branch-name">${iconSvg('git-branch', 12)} ${escHtml(branch)}</span>`;
+    html += `<button class="git-branch-btn" ${this.loading ? 'disabled' : ''}>${iconSvg('git-branch', 12)} ${escHtml(branch)} ▾</button>`;
     if (ahead > 0 || behind > 0) {
       html += '<span class="git-sync">';
       if (ahead > 0) html += `<span class="git-ahead">↑${ahead}</span>`;
@@ -109,6 +110,8 @@ export class GitPanel {
       html += '</span>';
     }
     html += '<span class="git-spacer"></span>';
+    html += `<button class="git-btn git-stash-btn" ${this.loading ? 'disabled' : ''} title="暂存工作区">${iconSvg('save', 10)}</button>`;
+    html += `<button class="git-btn git-unstash-btn" ${this.loading ? 'disabled' : ''} title="恢复暂存">${iconSvg('download', 10)}</button>`;
     html += `<button class="git-btn git-pull-btn" ${this.loading ? 'disabled' : ''}>${iconSvg('download', 10)} 拉取</button>`;
     html += `<button class="git-btn git-push-btn" ${this.loading ? 'disabled' : ''}>${iconSvg('upload', 10)} 推送</button>`;
     html += '</div>';
@@ -177,7 +180,23 @@ export class GitPanel {
     this.content.innerHTML = html;
 
     // ── Wire events ──
-    // File rows — click to view diff, stage/unstage buttons
+
+    // Branch dropdown
+    const branchBtn = this.content.querySelector('.git-branch-btn');
+    if (branchBtn) {
+      branchBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this.showBranchMenu(branchBtn as HTMLElement);
+      });
+    }
+
+    // Stash buttons
+    const stashBtn = this.content.querySelector('.git-stash-btn');
+    const unstashBtn = this.content.querySelector('.git-unstash-btn');
+    if (stashBtn) stashBtn.addEventListener('click', async () => { await invoke('git_stash_push', { path: this.projectPath }); this.refresh(); });
+    if (unstashBtn) unstashBtn.addEventListener('click', async () => { await invoke('git_stash_pop', { path: this.projectPath }); this.refresh(); });
+
+    // File rows — click to view diff, stage/unstage buttons, context menu
     this.content.querySelectorAll('.git-file-row').forEach((row) => {
       const el = row as HTMLElement;
       const path = el.dataset['filepath'] || '';
@@ -197,6 +216,18 @@ export class GitPanel {
           await this.toggleStage(path, staged);
         });
       }
+      // Right-click context menu
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        showContextMenu(e, [
+          { label: '打开文件', action: () => FileViewer.get().open(path) },
+          { label: '放弃更改', action: async () => { await invoke('git_discard', { path: this.projectPath, file: path }); this.refresh(); } },
+          { label: 'Git Blame', action: async () => {
+            const blame = await invoke<string>('git_blame', { path: this.projectPath, file: path });
+            FileViewer.get().openDiff(path, blame);
+          }},
+        ]);
+      });
     });
 
     // Stage all
@@ -304,12 +335,52 @@ export class GitPanel {
   // ── Actions ────────────────────────────────────────────
 
   private async viewDiff(filePath: string, staged: boolean): Promise<void> {
-    const cmd = staged ? 'git_diff_staged' : 'git_diff_unstaged';
     try {
-      const diff = await invoke<string>(cmd, { path: this.projectPath, file: filePath });
-      FileViewer.get().openDiff(filePath, diff);
+      // Use side-by-side diff: HEAD content vs current/staged content
+      const headContent = await invoke<string>('git_file_at_head', { path: this.projectPath, file: filePath }).catch(() => '');
+      if (staged) {
+        // Staged diff: HEAD vs staged (git show :file)
+        const stagedContent = await invoke<string>('exec_command', {
+          command: `git show :${filePath}`,
+          cwd: this.projectPath,
+        }).catch(() => '');
+        FileViewer.get().openInlineDiff(filePath, headContent, stagedContent);
+      } else {
+        // Unstaged diff: HEAD vs working tree
+        const currentContent = await invoke<string>('read_file_content', { filePath: `${this.projectPath}/${filePath}` }).catch(() => '');
+        FileViewer.get().openInlineDiff(filePath, headContent, currentContent);
+      }
     } catch (err: any) {
       this.showError(`获取差异失败: ${err}`);
+    }
+  }
+
+  private async showBranchMenu(anchor: HTMLElement): Promise<void> {
+    try {
+      const data = await invoke<string>('git_list_branches', { path: this.projectPath });
+      const { branches, current } = JSON.parse(data) as { branches: string[]; current: string };
+      const items: ContextMenuItem[] = branches.map(b => ({
+        label: b === current ? `● ${b}` : `  ${b}`,
+        action: b === current ? () => {} : async () => {
+          await invoke('git_checkout', { path: this.projectPath, branch: b });
+          this.refresh();
+        },
+      }));
+      // Add "New Branch" at the bottom
+      items.push(
+        { label: '──────────────', action: () => {}, disabled: true },
+        { label: '+ 新建分支…', action: async () => {
+          const name = prompt('新分支名:');
+          if (name) {
+            await invoke('git_create_branch', { path: this.projectPath, name });
+            this.refresh();
+          }
+        }},
+      );
+      const rect = anchor.getBoundingClientRect();
+      showContextMenu(new MouseEvent('contextmenu', { clientX: rect.left, clientY: rect.bottom + 4 }), items);
+    } catch (err: any) {
+      this.showError(`获取分支列表失败: ${err}`);
     }
   }
 
