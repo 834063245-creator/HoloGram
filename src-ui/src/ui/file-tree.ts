@@ -106,8 +106,8 @@ export class FileTreePanel {
       ]);
     });
 
-    this.setupFilter();
     this.el.appendChild(this.treeEl);
+    this.setupFilter();
 
     document.body.appendChild(this.el);
   }
