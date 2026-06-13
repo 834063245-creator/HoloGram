@@ -488,6 +488,7 @@ export class StarGraph {
         this._selectStart.set(e.clientX, e.clientY);
         this._selectEnd.set(e.clientX, e.clientY);
         this._showSelectRect();
+        this.controls.enabled = false;
         e.preventDefault();
         e.stopPropagation();
       }
@@ -507,6 +508,7 @@ export class StarGraph {
       if (this._selecting) {
         this._selecting = false;
         this._hideSelectRect();
+        this.controls.enabled = true;
         this._handleRegionSelect();
         return;
       }
@@ -533,7 +535,7 @@ export class StarGraph {
       if (e.key === 'Escape') {
         if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return; }
         if (this._promptBarEl?.style.display === 'flex') { this._hidePrompt(); return; }
-        if (this._selecting) { this._selecting = false; this._hideSelectRect(); return; }
+        if (this._selecting) { this._selecting = false; this._hideSelectRect(); this.controls.enabled = true; return; }
         if (this._shiftSourceIdx >= 0) { this._clearShiftPath(); return; }
         if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
         if (this.blastMode) { this.exitBlastMode(); return; }
