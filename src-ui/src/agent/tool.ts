@@ -446,6 +446,23 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       readOnly: () => true,
       execute: (args) => exec('hologram_search', args),
     },
+    {
+      name: () => 'hologram_rename',
+      description: () =>
+        'Safely rename a symbol (function, class, method, variable) across the entire codebase. Uses the dependency graph to find ALL references — not text grep — so comments and string literals are never false positives. Updates all files atomically with rollback. Always run with dry_run=true first to preview changes before executing.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          old_name: { type: 'string', description: 'Current name of the symbol to rename' },
+          new_name: { type: 'string', description: 'New name for the symbol' },
+          dry_run: { type: 'boolean', description: 'If true, preview changes without modifying files (default: true)', default: true },
+          node_id: { type: 'string', description: 'Optional node ID for disambiguation when multiple symbols share the same name' },
+        },
+        required: ['old_name', 'new_name'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('hologram_rename', args),
+    },
   ];
 }
 

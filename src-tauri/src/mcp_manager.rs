@@ -157,30 +157,56 @@ impl McpManager {
 
     /// Read the JSON "ready" notification from stdout after spawning.
     /// Blocks until the server finishes analysis and signals readiness.
+    /// Timeout: 120 seconds (large projects may take a long time to analyze).
     fn read_ready(&mut self) -> Result<(), String> {
         let child = self.child.as_mut().ok_or("子进程不存在")?;
         let stdout = child.stdout.take().ok_or("stdout 不可用")?;
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|e| format!("等待 MCP 就绪信号失败: {e}"))?;
-        // Put stdout back
-        child.stdout = Some(reader.into_inner());
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Err("MCP Server 启动失败：无就绪信号".into());
-        }
-        // Verify it's a valid JSON ready notification
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if val.get("method").and_then(|m| m.as_str()) == Some("ready") {
-                eprintln!("[mcp] 就绪信号已收到");
-                return Ok(());
+        // Spawn a thread to read the ready line with a timeout
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(_) => {
+                    let _ = tx.send(Ok((reader.into_inner(), line)));
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(format!("读取 MCP 就绪信号失败: {e}")));
+                }
+            }
+        });
+
+        // Wait with timeout (120 seconds for large projects)
+        match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+            Ok(Ok((stdout_back, line))) => {
+                // Put stdout back
+                if let Some(ref mut child) = self.child {
+                    child.stdout = Some(stdout_back);
+                }
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    return Err("MCP Server 启动失败：无就绪信号".into());
+                }
+                // Verify it's a valid JSON ready notification
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if val.get("method").and_then(|m| m.as_str()) == Some("ready") {
+                        eprintln!("[mcp] 就绪信号已收到");
+                        return Ok(());
+                    }
+                }
+                // Not a ready signal — the server might have errored
+                Err(format!("MCP Server 异常启动输出: {trimmed}"))
+            }
+            Ok(Err(e)) => Err(e),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                self.kill_inner();
+                Err("MCP Server 启动超时（120秒），项目分析可能耗时过长".into())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("MCP Server 读取线程异常断开".into())
             }
         }
-        // Not a ready signal — the server might have errored
-        Err(format!("MCP Server 异常启动输出: {trimmed}"))
     }
 
     /// Send a JSON-RPC request (method + params as JSON string) and extract

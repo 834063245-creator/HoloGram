@@ -80,15 +80,15 @@ class ConstraintConfig:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> ConstraintConfig:
-        routing = {**DEFAULT_CONSTRAINTS["routing"], **d.get("routing", {})}
-        thresholds = {**DEFAULT_CONSTRAINTS["thresholds"], **d.get("thresholds", {})}
+        routing = {**DEFAULT_CONSTRAINTS["routing"], **(d.get("routing") or {})}
+        thresholds = {**DEFAULT_CONSTRAINTS["thresholds"], **(d.get("thresholds") or {})}
         # 兼容两种格式：嵌套 {allowlist: {modules: [...], files: [...]}} 或扁平 {allowlist_modules: [...], ...}
-        allowlist = d.get("allowlist", {}) or {}
+        allowlist = d.get("allowlist") or {}
         if not allowlist and "allowlist_modules" in d:
-            allowlist = {"modules": d.get("allowlist_modules", []), "files": d.get("allowlist_files", [])}
-        denylist = d.get("denylist", {}) or {}
+            allowlist = {"modules": d.get("allowlist_modules") or [], "files": d.get("allowlist_files") or []}
+        denylist = d.get("denylist") or {}
         if not denylist and "denylist_keywords" in d:
-            denylist = {"keywords": d.get("denylist_keywords", [])}
+            denylist = {"keywords": d.get("denylist_keywords") or []}
         return cls(
             routing=routing,
             thresholds=thresholds,

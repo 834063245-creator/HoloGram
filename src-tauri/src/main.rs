@@ -584,6 +584,46 @@ print(json.dumps(summary, indent=2, ensure_ascii=False))
     run_python_code(&code)
 }
 
+#[tauri::command]
+async fn hologram_rename(
+    old_name: String,
+    new_name: String,
+    dry_run: Option<bool>,
+    node_id: Option<String>,
+) -> Result<String, String> {
+    let root = project_root();
+    let graph = active_graph();
+    let is_dry = dry_run.unwrap_or(true);
+    let nid = node_id.as_deref().unwrap_or("");
+    let code = format!(
+        r#"
+import sys, json
+sys.path.insert(0, r"{py_src}")
+from core.rename import preview_rename, execute_rename
+from core.graph import Graph
+graph = Graph.from_json(r"{graph}")
+dry = {is_dry}
+old = r"{old_name}"
+new = r"{new_name}"
+nid = r"{nid}" or None
+proj = r"{proj}"
+if dry:
+    result = preview_rename(graph, old, new, node_id=nid)
+else:
+    result = execute_rename(graph, old, new, project_root=proj, node_id=nid)
+print(json.dumps(result, indent=2, ensure_ascii=False))
+"#,
+        py_src = root.join("src_python").to_string_lossy(),
+        graph = graph,
+        is_dry = if is_dry { "True" } else { "False" },
+        old_name = old_name.replace("\\", "\\\\"),
+        new_name = new_name.replace("\\", "\\\\"),
+        nid = nid.replace("\\", "\\\\"),
+        proj = root.to_string_lossy(),
+    );
+    run_python_code(&code)
+}
+
 // ═══════════════════════════════════════════════════════
 // V3: Check — constraint validation + change summary
 // ═══════════════════════════════════════════════════════
@@ -2324,6 +2364,7 @@ fn main() {
             hologram_timeline,
             hologram_community_report,
             hologram_graph_summary,
+            hologram_rename,
             set_active_project,
             get_active_project,
             load_graph_json,

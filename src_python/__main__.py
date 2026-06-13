@@ -142,6 +142,16 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     except Exception as exc:
         print(f"  community detection skipped: {exc}", file=sys.stderr)
 
+    # Layout precomputation (A2: igraph FR/DrL + Z-axis community layers)
+    print(f"  layout precomputation...", file=sys.stderr)
+    try:
+        from .pipeline.layout import compute_layout
+        n_positioned = compute_layout(graph)
+        if n_positioned:
+            print(f"  layout: {n_positioned} nodes positioned", file=sys.stderr)
+    except Exception as exc:
+        print(f"  layout skipped: {exc}", file=sys.stderr)
+
     # Output — always save to disk first (enables incremental cache reuse)
     save_path = output_path or os.path.join(root, "hologram_graph.json")
     graph.to_json(save_path)

@@ -60,6 +60,10 @@ class MCPServer:
         self._cycle_result: Optional[Dict[str, Any]] = None
         self._boundaries: Optional[List[Dict[str, Any]]] = None
 
+        # 防重入锁：防止 _tool_analyze 被并发调用导致全量分析重复执行
+        import threading
+        self._analyze_lock = threading.Lock()
+
         self._tools = {
             # V1 tools
             "hologram_neighbors": self._tool_neighbors,
@@ -973,10 +977,13 @@ class MCPServer:
             return {"error": str(e)}
 
     def _tool_analyze(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """重新分析项目并热加载图。"""
+        """重新分析项目并热加载图。防重入保护防止并发全量分析。"""
         path = args.get("path", "")
         if not path:
             return {"error": "path is required"}
+        # 防重入：如果已经有分析在进行，返回等待状态
+        if not self._analyze_lock.acquire(blocking=False):
+            return {"error": "分析正在进行中，请稍后重试", "status": "in_progress"}
         try:
             server = MCPServer.from_project(path)
             # Hot-reload: replace our graph and reset caches
@@ -992,6 +999,8 @@ class MCPServer:
             }
         except Exception as e:
             return {"error": str(e)}
+        finally:
+            self._analyze_lock.release()
 
     def _tool_run_check(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """V3 全量约束校验 — 与 CLI cmd_check 行为对齐。

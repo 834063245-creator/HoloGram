@@ -14,12 +14,16 @@ keywords = ["code-analysis", "dependency-graph", "topology", "visualization"]
 
 dependencies = [
     "networkx>=3.0",
+    "igraph>=0.11",
+    "leidenalg>=0.10",
+    "msgpack>=1.0",
+    "PyYAML>=6.0",
+    "tree-sitter>=0.22",
 ]
 
 [project.optional-dependencies]
 full = [
-    "networkx>=3.0",
-    "leidenalg>=0.10",
+    "hologram",
     "watchdog>=4.0",
 ]
 

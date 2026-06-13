@@ -2665,7 +2665,23 @@ export class StarGraph {
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
-    const rawPos = layout3D(nodes.length, pairs);
+    // A2: Precomputed layout — check if all nodes have position field
+    let rawPos: Float32Array;
+    const hasPositions = nodes.every((n: any) => Array.isArray(n.position) && n.position.length === 3);
+    if (hasPositions) {
+      // Use precomputed coordinates from Python igraph layout engine
+      rawPos = new Float32Array(nodes.length * 3);
+      for (let i = 0; i < nodes.length; i++) {
+        const p = (nodes[i] as any).position;
+        rawPos[i * 3] = p[0];
+        rawPos[i * 3 + 1] = p[1];
+        rawPos[i * 3 + 2] = p[2];
+      }
+      console.log(`[StarGraph] Using precomputed layout: ${nodes.length} nodes`);
+    } else {
+      // Fallback: JS-side force-directed layout
+      rawPos = layout3D(nodes.length, pairs);
+    }
     // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
