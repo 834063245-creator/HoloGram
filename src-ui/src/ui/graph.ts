@@ -62,11 +62,10 @@ function edgeColorByType(edgeType: string, direction: string, crossFile = false)
   if (edgeType === 'temporal' || edgeType === 'TEMPORAL') {
     return new THREE.Color(0xffaa55);
   }
-  // Cross-file edges: distinct colors (bright and visible)
-  if (crossFile) {
-    if (direction === 'inherit') return new THREE.Color(0xff66ff); // bright magenta for inheritance
-    if (direction === 'call') return new THREE.Color(0x66ffff); // bright cyan for cross-file calls
-  }
+  // Cross-file inherit edges: subtle magenta, rare enough to not clutter
+  if (crossFile && direction === 'inherit') return new THREE.Color(0xff66ff);
+  // Cross-file call edges use the default L1 blue (0x6699cc) — same as same-file edges,
+  // to avoid cyan noise drowning the graph
   return new THREE.Color(0x6699cc);
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
@@ -2867,9 +2866,8 @@ export class StarGraph {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
         geo.setAttribute('color', new THREE.Float32BufferAttribute(cl, 3));
-        // Cross-file edges: high opacity + additive blending for visibility
-        const opacity = g.crossFile ? 0.9 : edgeOpacityByDepth(g.depth, this.mode);
-        const blending = g.crossFile ? THREE.AdditiveBlending : (g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending);
+        const opacity = edgeOpacityByDepth(g.depth, this.mode);
+        const blending = g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending;
         const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity, depthWrite: false, blending });
         const lines = new THREE.LineSegments(geo, mat);
         this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
