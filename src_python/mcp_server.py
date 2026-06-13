@@ -397,6 +397,15 @@ class MCPServer:
         except Exception as exc:
             print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
 
+        # 布局预计算（igraph FR/DrL + Z 轴社区分层）
+        try:
+            from .pipeline.layout import compute_layout
+            n = compute_layout(graph)
+            if n:
+                print(f"  layout: {n} nodes positioned", file=sys.stderr)
+        except Exception as exc:
+            print(f"  layout skipped: {exc}", file=sys.stderr)
+
         print(f"[MCP] 分析完成: {graph.node_count} 节点, {graph.edge_count} 边, {report.elapsed_sec:.1f}s", file=sys.stderr)
 
         return cls(graph)

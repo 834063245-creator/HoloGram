@@ -88,8 +88,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         if output_json:
             sys.stdout.write(safe_json_dumps(_sanitize_for_json(graph.to_dict()), indent=2, ensure_ascii=False))
         else:
-            graph.to_json(graph_path)
-            print(f"  saved: {graph_path}", file=sys.stderr)
+            print(f"  saved: {save_path}", file=sys.stderr)
 
         return graph
 
@@ -181,9 +180,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         # JSON to stdout — to_dict() now includes generated_at + coupling_summary
         sys.stdout.write(safe_json_dumps(_sanitize_for_json(graph.to_dict()), indent=2, ensure_ascii=False))
     else:
-        path = output_path or os.path.join(root, "hologram_graph.json")
-        graph.to_json(path)
-        print(f"  saved: {path}", file=sys.stderr)
+        print(f"  saved: {save_path}", file=sys.stderr)
 
     if report.errors:
         for e in report.errors[:5]:

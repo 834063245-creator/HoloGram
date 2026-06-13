@@ -142,6 +142,15 @@ def cmd_analyze(args) -> int:
     except Exception as exc:
         print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
 
+    # 布局预计算（igraph FR/DrL + Z 轴社区分层）
+    try:
+        from .pipeline.layout import compute_layout
+        n = compute_layout(graph)
+        if n:
+            print(f"  layout: {n} nodes positioned", file=sys.stderr)
+    except Exception as exc:
+        print(f"  layout skipped: {exc}", file=sys.stderr)
+
     # 输出
     graph.to_json(output)
     # A3: 同时输出 MessagePack（大项目加载快 10×）

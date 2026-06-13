@@ -62,3 +62,13 @@ prototype.html
 
 # Internal project docs (not for public repo)
 PROJECT.md
+ARCHITECTURE_PLAN.md
+CLAUDE.md
+COMPARISON_REPORT.md
+CSS_MIGRATION.md
+STARGRAPH_SPEC.md
+TEST_SPEC.md
+docs_archive/
+
+# Will rewrite when ready to publish
+README.md

@@ -460,6 +460,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
         },
         required: ['old_name', 'new_name'],
       }),
+      // TODO: 支持动态 readOnly (dry_run=true 时只读); 当前接口签名 readOnly(): boolean 不支持参数
       readOnly: () => false,
       execute: (args) => exec('hologram_rename', args),
     },

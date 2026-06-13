@@ -147,6 +147,13 @@ fn sh_escape(command: &str) -> String {
     format!("'{}'", command.replace('\'', "'\\''"))
 }
 
+/// JSON-encode a string for safe embedding in Python `json.loads(...)`.
+/// Avoids Python injection via raw-string termination — r-strings cannot
+/// contain literal `"`, and `json.loads` handles all escaping robustly.
+fn py_json(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+}
+
 // ═══════════════════════════════════════════════════════
 // Python helpers
 // ═══════════════════════════════════════════════════════
@@ -234,59 +241,93 @@ fn active_graph() -> String {
     }
 }
 
-/// Run a Python hologram CLI command and capture combined stdout+stderr.
+/// Run a Python hologram CLI command with timeout (120s) and capture stdout+stderr.
 fn run_hologram(args: &[&str]) -> Result<String, String> {
     let root = project_root();
-    let output = silent_command(&python())
+    let timeout = std::time::Duration::from_secs(120);
+    let mut child = silent_command(&python())
         .current_dir(&root)
         .args(["-m", "src_python"])
         .args(args)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Failed to spawn Python: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    let mut result = String::new();
-    if !stderr.is_empty() {
-        result.push_str(&stderr);
-        result.push('\n');
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = read_pipe(child.stdout.take());
+                let stderr = read_pipe(child.stderr.take());
+                let mut result = String::new();
+                if !stderr.is_empty() { result.push_str(&stderr); result.push('\n'); }
+                if !stdout.is_empty() { result.push_str(&stdout); }
+                if !status.success() {
+                    return Err(if result.is_empty() {
+                        format!("Command failed with exit code {}", status)
+                    } else { result });
+                }
+                return Ok(if result.is_empty() { "(no output)".into() } else { result });
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    child.kill().ok();
+                    let _ = child.wait();
+                    return Err("Python 命令超时 (120s)，已强制终止".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Failed to wait on Python process: {e}")),
+        }
     }
-    if !stdout.is_empty() {
-        result.push_str(&stdout);
-    }
-
-    if !output.status.success() {
-        return Err(if result.is_empty() {
-            format!("Command failed with exit code {}", output.status)
-        } else {
-            result
-        });
-    }
-
-    Ok(if result.is_empty() {
-        "(no output)".into()
-    } else {
-        result
-    })
 }
 
-/// Run inline Python code and return output.
+/// Run inline Python code with timeout (120s) and return output.
 fn run_python_code(code: &str) -> Result<String, String> {
     let root = project_root();
-    let output = silent_command(&python())
+    let timeout = std::time::Duration::from_secs(120);
+    let mut child = silent_command(&python())
         .current_dir(&root)
         .args(["-c", code])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Failed to spawn Python: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        return Err(format!("{}{}", stderr, stdout));
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = read_pipe(child.stdout.take());
+                let stderr = read_pipe(child.stderr.take());
+                if !status.success() {
+                    return Err(format!("{}{}", stderr, stdout));
+                }
+                return Ok(format!("{}{}", stdout, stderr));
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    child.kill().ok();
+                    let _ = child.wait();
+                    return Err("Python 代码执行超时 (120s)，已强制终止".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Failed to wait on Python process: {e}")),
+        }
     }
-    Ok(format!("{}{}", stdout, stderr))
+}
+
+/// Read all bytes from a pipe into a lossy UTF-8 String.
+fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
+    if let Some(mut p) = pipe {
+        let mut v = Vec::new();
+        let _ = p.read_to_end(&mut v);
+        String::from_utf8_lossy(&v).to_string()
+    } else {
+        String::new()
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -598,28 +639,28 @@ async fn hologram_rename(
     let code = format!(
         r#"
 import sys, json
-sys.path.insert(0, r"{py_src}")
+sys.path.insert(0, json.loads({py_src}))
 from core.rename import preview_rename, execute_rename
 from core.graph import Graph
-graph = Graph.from_json(r"{graph}")
+graph = Graph.from_json(json.loads({graph}))
 dry = {is_dry}
-old = r"{old_name}"
-new = r"{new_name}"
-nid = r"{nid}" or None
-proj = r"{proj}"
+old = json.loads({old_name})
+new = json.loads({new_name})
+nid = json.loads({nid}) or None
+proj = json.loads({proj})
 if dry:
     result = preview_rename(graph, old, new, node_id=nid)
 else:
     result = execute_rename(graph, old, new, project_root=proj, node_id=nid)
 print(json.dumps(result, indent=2, ensure_ascii=False))
 "#,
-        py_src = root.join("src_python").to_string_lossy(),
-        graph = graph,
+        py_src = py_json(&root.join("src_python").to_string_lossy()),
+        graph = py_json(&graph),
         is_dry = if is_dry { "True" } else { "False" },
-        old_name = old_name.replace("\\", "\\\\"),
-        new_name = new_name.replace("\\", "\\\\"),
-        nid = nid.replace("\\", "\\\\"),
-        proj = root.to_string_lossy(),
+        old_name = py_json(&old_name),
+        new_name = py_json(&new_name),
+        nid = py_json(nid),
+        proj = py_json(&root.to_string_lossy()),
     );
     run_python_code(&code)
 }
@@ -966,14 +1007,14 @@ async fn hologram_workspace_conflict(
     let code = format!(
         r#"
 import sys, json, os
-sys.path.insert(0, r"{py_src}")
+sys.path.insert(0, json.loads({py_src_ws}))
 from core.graph import Graph
 
 result = {{"workspace_a": {{}}, "workspace_b": {{}}, "overlapping_nodes": [], "shared_files": [], "risk_summary": {{"high": 0, "medium": 0, "low": 0}}}}
 
 # Load both workspace graphs
-a_path = os.path.join(r"{path_a}", "hologram_graph.json")
-b_path = os.path.join(r"{path_b}", "hologram_graph.json")
+a_path = os.path.join(json.loads({path_a_ws}), "hologram_graph.json")
+b_path = os.path.join(json.loads({path_b_ws}), "hologram_graph.json")
 
 if not os.path.exists(a_path):
     print(json.dumps({{"error": "Workspace A graph not found", "path": a_path}}))
@@ -1106,13 +1147,13 @@ for ov in overlapping:
 
 # Workspace info
 result["workspace_a"] = {{
-    "path": r"{path_a}",
+    "path": json.loads({path_ws_a2}),
     "node_count": len(ga.nodes),
     "edge_count": len(ga.edges),
     "file_count": len(a_files),
 }}
 result["workspace_b"] = {{
-    "path": r"{path_b}",
+    "path": json.loads({path_ws_b2}),
     "node_count": len(gb.nodes),
     "edge_count": len(gb.edges),
     "file_count": len(b_files),
@@ -1121,9 +1162,11 @@ result["overlapping_nodes"] = overlapping[:50]  # Cap at 50
 
 print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
 "#,
-        py_src = root.join("src_python").to_string_lossy(),
-        path_a = path_a.replace("\\", "\\\\"),
-        path_b = path_b.replace("\\", "\\\\"),
+        py_src_ws = py_json(&root.join("src_python").to_string_lossy()),
+        path_a_ws = py_json(&path_a),
+        path_b_ws = py_json(&path_b),
+        path_ws_a2 = py_json(&path_a),
+        path_ws_b2 = py_json(&path_b),
     );
     run_python_code(&code)
 }
@@ -1144,10 +1187,10 @@ async fn hologram_gate_check(
     let code = format!(
         r#"
 import sys, json, os
-sys.path.insert(0, r"{py_src}")
+sys.path.insert(0, json.loads({py_src_gate}))
 from core.graph import Graph
 
-graph_path = r"{graph_path}"
+graph_path = json.loads({graph_path_gate})
 if not os.path.exists(graph_path):
     print(json.dumps({{"error": "Graph not found", "path": graph_path}}))
     sys.exit(0)
@@ -1156,15 +1199,17 @@ g = Graph.from_json(graph_path)
 
 # Determine which modules/files to evaluate
 target_files = []
-if r"{module_file}":
-    target_files = [r"{module_file}"]
+mf_val = json.loads({module_file_gate})
+path_val = json.loads({path_gate})
+if mf_val:
+    target_files = [mf_val]
 else:
     # Find "new" modules — those with no coupling history in any community
     import glob as _glob
-    all_py = _glob.glob(os.path.join(r"{path}", "**", "*.py"), recursive=True)
+    all_py = _glob.glob(os.path.join(path_val, "**", "*.py"), recursive=True)
     # Consider files with fewer than 3 edges as potentially "new"
     for fp in all_py:
-        rel = os.path.relpath(fp, r"{path}").replace("\\", "/")
+        rel = os.path.relpath(fp, path_val).replace("\\", "/")
         # Skip hidden/venv
         if any(part.startswith('.') or part == 'venv' or part == 'node_modules' or part == '__pycache__'
                for part in rel.split('/')):
@@ -1252,10 +1297,10 @@ output = {{
 }}
 print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
 "#,
-        py_src = root.join("src_python").to_string_lossy(),
-        graph_path = graph_path.replace("\\", "\\\\"),
-        module_file = mf.replace("\\", "\\\\"),
-        path = path.replace("\\", "\\\\"),
+        py_src_gate = py_json(&root.join("src_python").to_string_lossy()),
+        graph_path_gate = py_json(&graph_path),
+        module_file_gate = py_json(&mf),
+        path_gate = py_json(&path),
     );
     run_python_code(&code)
 }
