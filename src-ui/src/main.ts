@@ -193,6 +193,11 @@ async function openProject(path?: string): Promise<void> {
   currentGraphData = null;
   currentFileGraphData = null;
   currentPath = '';
+  // Reset check state so new workspace gets a fresh run (prevent stale check panel + race skip)
+  checkRunning = false;
+  checkPending = false;
+  if (checkTimer) { clearTimeout(checkTimer); checkTimer = null; }
+  checkPanel.update({ passed: true, timestamp: '', changed_files: [], total_changed_files: 0, l5_violations: [], l4_violations: [], l3_violations: [], l2_violations: [], passed_checks: [], blast_radius: 0, cross_community_edges: 0, new_cycles: 0, new_thread_conflicts: 0, api_signature_changes: 0 });
   // Register this workspace with the backend so all tool commands route here
   await invoke('set_active_project', { path: folder }).catch(() => {});
 

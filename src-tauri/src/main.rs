@@ -1705,22 +1705,38 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
         return Ok(content);
     }
 
-    // 2) active workspace graph (falls back to global if no project active)
-    let def = active_graph();
-    if let Ok(content) = std::fs::read_to_string(&def) {
-        if !content.trim().is_empty() {
-            return Ok(content);
-        }
-    }
-
-    // 3) last project's hologram_graph.json
-    let last_path_file = project_root().join(".last_project");
-    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
-        let p = std::path::PathBuf::from(last_path.trim()).join("hologram_graph.json");
+    // 2) active workspace graph (only if ACTIVE_PROJECT is explicitly set)
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    if !proj.is_empty() {
+        let p = std::path::PathBuf::from(&proj).join("hologram_graph.json");
         if let Ok(content) = std::fs::read_to_string(&p) {
             if !content.trim().is_empty() {
                 return Ok(content);
             }
+        }
+    }
+
+    // 3) last project's hologram_graph.json (user's previous workspace)
+    let last_path_file = project_root().join(".last_project");
+    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
+        let trim = last_path.trim();
+        if !trim.is_empty() {
+            let p = std::path::PathBuf::from(trim).join("hologram_graph.json");
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                if !content.trim().is_empty() {
+                    // Restore ACTIVE_PROJECT so tool commands route correctly
+                    *ACTIVE_PROJECT.lock().unwrap() = trim.to_string();
+                    return Ok(content);
+                }
+            }
+        }
+    }
+
+    // 4) global fallback — project root's own graph (HoloGramHG itself)
+    let def = default_graph();
+    if let Ok(content) = std::fs::read_to_string(&def) {
+        if !content.trim().is_empty() {
+            return Ok(content);
         }
     }
 
@@ -1742,30 +1758,38 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         return Ok(bytes);
     }
 
-    // 2) active workspace .hologram
-    let active = active_graph().replace(".json", ".hologram");
-    if let Ok(bytes) = std::fs::read(&active) {
-        if !bytes.is_empty() {
-            return Ok(bytes);
-        }
-    }
-
-    // 3) global fallback .hologram
-    let def = project_root().join("hologram_graph.hologram");
-    if let Ok(bytes) = std::fs::read(&def) {
-        if !bytes.is_empty() {
-            return Ok(bytes);
-        }
-    }
-
-    // 4) last project's .hologram
-    let last_path_file = project_root().join(".last_project");
-    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
-        let p = std::path::PathBuf::from(last_path.trim()).join("hologram_graph.hologram");
+    // 2) active workspace .hologram (only if ACTIVE_PROJECT is explicitly set)
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    if !proj.is_empty() {
+        let p = std::path::PathBuf::from(&proj).join("hologram_graph.hologram");
         if let Ok(bytes) = std::fs::read(&p) {
             if !bytes.is_empty() {
                 return Ok(bytes);
             }
+        }
+    }
+
+    // 3) last project's .hologram (user's previous workspace)
+    let last_path_file = project_root().join(".last_project");
+    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
+        let trim = last_path.trim();
+        if !trim.is_empty() {
+            let p = std::path::PathBuf::from(trim).join("hologram_graph.hologram");
+            if let Ok(bytes) = std::fs::read(&p) {
+                if !bytes.is_empty() {
+                    // Restore ACTIVE_PROJECT so tool commands route correctly
+                    *ACTIVE_PROJECT.lock().unwrap() = trim.to_string();
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+
+    // 4) global fallback — project root's own .hologram (HoloGramHG itself)
+    let def = project_root().join("hologram_graph.hologram");
+    if let Ok(bytes) = std::fs::read(&def) {
+        if !bytes.is_empty() {
+            return Ok(bytes);
         }
     }
 
