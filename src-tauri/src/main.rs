@@ -1750,6 +1750,15 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
 async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
     // 1) explicit path — must exist, no silent fallthrough to wrong project
     if let Some(ref p) = path {
+        // If corresponding .json is newer, reject so frontend loads fresh JSON instead
+        let json_path = p.replace(".hologram", ".json");
+        if let (Ok(h_meta), Ok(j_meta)) = (std::fs::metadata(p), std::fs::metadata(&json_path)) {
+            if let (Ok(h_time), Ok(j_time)) = (h_meta.modified(), j_meta.modified()) {
+                if j_time > h_time {
+                    return Err("JSON is newer — loading JSON instead".into());
+                }
+            }
+        }
         let bytes = std::fs::read(p)
             .map_err(|e| format!("Binary graph not found at {}: {}", p, e))?;
         if bytes.is_empty() {
@@ -1758,13 +1767,26 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         return Ok(bytes);
     }
 
+    // helper: refuse stale .hologram when .json is newer
+    fn holo_fresh(holo_path: &std::path::Path) -> bool {
+        let json_path = holo_path.to_string_lossy().replace(".hologram", ".json");
+        if let (Ok(h_meta), Ok(j_meta)) = (std::fs::metadata(holo_path), std::fs::metadata(&json_path)) {
+            if let (Ok(h_time), Ok(j_time)) = (h_meta.modified(), j_meta.modified()) {
+                return h_time >= j_time;
+            }
+        }
+        true // can't compare — assume fresh
+    }
+
     // 2) active workspace .hologram (only if ACTIVE_PROJECT is explicitly set)
     let proj = ACTIVE_PROJECT.lock().unwrap().clone();
     if !proj.is_empty() {
         let p = std::path::PathBuf::from(&proj).join("hologram_graph.hologram");
-        if let Ok(bytes) = std::fs::read(&p) {
-            if !bytes.is_empty() {
-                return Ok(bytes);
+        if p.exists() && holo_fresh(&p) {
+            if let Ok(bytes) = std::fs::read(&p) {
+                if !bytes.is_empty() {
+                    return Ok(bytes);
+                }
             }
         }
     }
@@ -1775,11 +1797,13 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         let trim = last_path.trim();
         if !trim.is_empty() {
             let p = std::path::PathBuf::from(trim).join("hologram_graph.hologram");
-            if let Ok(bytes) = std::fs::read(&p) {
-                if !bytes.is_empty() {
-                    // Restore ACTIVE_PROJECT so tool commands route correctly
-                    *ACTIVE_PROJECT.lock().unwrap() = trim.to_string();
-                    return Ok(bytes);
+            if p.exists() && holo_fresh(&p) {
+                if let Ok(bytes) = std::fs::read(&p) {
+                    if !bytes.is_empty() {
+                        // Restore ACTIVE_PROJECT so tool commands route correctly
+                        *ACTIVE_PROJECT.lock().unwrap() = trim.to_string();
+                        return Ok(bytes);
+                    }
                 }
             }
         }
@@ -1787,9 +1811,11 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
 
     // 4) global fallback — project root's own .hologram (HoloGramHG itself)
     let def = project_root().join("hologram_graph.hologram");
-    if let Ok(bytes) = std::fs::read(&def) {
-        if !bytes.is_empty() {
-            return Ok(bytes);
+    if def.exists() && holo_fresh(&def) {
+        if let Ok(bytes) = std::fs::read(&def) {
+            if !bytes.is_empty() {
+                return Ok(bytes);
+            }
         }
     }
 
