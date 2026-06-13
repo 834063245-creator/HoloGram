@@ -19,11 +19,11 @@ import { EventKind } from './src/agent/agent';
 // 配置
 // ══════════════════════════════════════
 
-const API_KEY = process.env.DEEPSEEK_API_KEY || 'sk-your-deepseek-key';
+const API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const MODEL = 'deepseek-chat';
-const PROJECT_ROOT = 'd:/HoloGramHG';
-const PYTHON = 'python';
-const GRAPH_FILE = `${PROJECT_ROOT}/hologram_full.json`;
+const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
+const PYTHON = process.env.PYTHON_PATH || 'python';
+const GRAPH_FILE = process.env.GRAPH_FILE || `${PROJECT_ROOT}/hologram_full.json`;
 
 // ══════════════════════════════════════
 // Tool Executor — 通过 Python CLI 执行

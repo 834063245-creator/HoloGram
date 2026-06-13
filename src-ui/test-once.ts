@@ -8,10 +8,10 @@ import type { AgentEvent } from './src/agent/agent';
 import { ToolRegistry, createHologramTools } from './src/agent/tool';
 import { createOpenAIProvider } from './src/provider/openai';
 
-const API_KEY = process.env.DEEPSEEK_API_KEY || 'REDACTED_API_KEY';
-const PROJECT_ROOT = 'd:/HoloGramHG';
-const PYTHON = 'python';
-const GRAPH_FILE = `${PROJECT_ROOT}/hologram_full.json`;
+const API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
+const PYTHON = process.env.PYTHON_PATH || 'python';
+const GRAPH_FILE = process.env.GRAPH_FILE || `${PROJECT_ROOT}/hologram_full.json`;
 
 async function pythonExec(toolName: string, args: Record<string, unknown>): Promise<string> {
   try {

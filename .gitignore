@@ -43,3 +43,19 @@ hologram_graph.json
 hologram_before.json
 hologram_full.json
 chat_sessions.json
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code IDE
+.claude/
+
+# Root-level artifacts (real package.json is in src-ui/)
+/package.json
+/package-lock.json
+
+# One-off debug scripts
+test_debug.py
+prototype.html
