@@ -1243,24 +1243,31 @@ export class StarGraph {
     this._promptBarEl = document.createElement('div');
     this._promptBarEl.id = 'graph-prompt-bar';
     this._promptBarEl.style.cssText =
-      'position:absolute;z-index:19;bottom:16px;left:50%;transform:translateX(-50%);' +
-      'display:none;align-items:center;gap:10px;padding:8px 16px;' +
-      'background:var(--panel-bg,rgba(6,12,24,0.92));' +
-      'border:1px solid var(--panel-edge,rgba(88,140,220,0.35));' +
-      'border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.5);' +
-      'font-size:13px;color:var(--starlight,#e6edf3);white-space:nowrap;' +
-      'transition:opacity 0.2s;';
+      'position:absolute;z-index:19;top:12px;left:50%;transform:translateX(-50%);' +
+      'display:none;align-items:center;gap:10px;padding:7px 16px;' +
+      'background:var(--panel-bg,rgba(4,12,28,0.94));' +
+      'backdrop-filter:var(--blur,blur(14px));-webkit-backdrop-filter:var(--blur,blur(14px));' +
+      'border:1px solid var(--signal-glow,rgba(80,140,240,0.25));' +
+      'border-radius:8px;box-shadow:0 2px 20px rgba(80,140,240,0.08);' +
+      'font-family:var(--font-mono);font-size:12px;color:var(--starlight-dim,#c3daf8);white-space:nowrap;' +
+      'transition:opacity 0.2s ease;';
     this._promptTitleEl = document.createElement('span');
     this._promptTitleEl.style.cssText = 'max-width:420px;overflow:hidden;text-overflow:ellipsis;';
     this._promptBarEl.appendChild(this._promptTitleEl);
     this._promptBtnEl = document.createElement('button');
-    this._promptBtnEl.textContent = '询问 Agent';
+    this._promptBtnEl.textContent = 'Ask Agent';
     this._promptBtnEl.style.cssText =
-      'padding:4px 14px;font-size:12px;font-weight:600;border:none;border-radius:5px;' +
-      'background:rgba(80,150,240,0.3);color:#c8dfff;cursor:pointer;' +
-      'transition:background 0.15s;';
-    this._promptBtnEl.addEventListener('mouseenter', () => { this._promptBtnEl.style.background = 'rgba(80,150,240,0.55)'; });
-    this._promptBtnEl.addEventListener('mouseleave', () => { this._promptBtnEl.style.background = 'rgba(80,150,240,0.3)'; });
+      'padding:4px 14px;font-size:11px;font-weight:600;font-family:var(--font-mono);border:none;border-radius:5px;' +
+      'background:rgba(80,150,240,0.18);color:var(--signal,#68a8ff);cursor:pointer;' +
+      'letter-spacing:0.5px;transition:background 0.15s,box-shadow 0.15s;';
+    this._promptBtnEl.addEventListener('mouseenter', () => {
+      this._promptBtnEl.style.background = 'rgba(80,150,240,0.35)';
+      this._promptBtnEl.style.boxShadow = '0 0 12px rgba(80,150,240,0.2)';
+    });
+    this._promptBtnEl.addEventListener('mouseleave', () => {
+      this._promptBtnEl.style.background = 'rgba(80,150,240,0.18)';
+      this._promptBtnEl.style.boxShadow = 'none';
+    });
     this._promptBtnEl.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this._promptQuestion) {
@@ -1271,12 +1278,12 @@ export class StarGraph {
     this._promptBarEl.appendChild(this._promptBtnEl);
     // Dismiss button
     const dismissBtn = document.createElement('button');
-    dismissBtn.textContent = '✕';
+    dismissBtn.innerHTML = iconHtml('close', 12);
     dismissBtn.style.cssText =
-      'padding:2px 6px;font-size:12px;border:none;background:none;color:var(--text-muted,#6b7a8d);' +
-      'cursor:pointer;border-radius:3px;';
-    dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = '#e6edf3'; });
-    dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = 'var(--text-muted,#6b7a8d)'; });
+      'padding:3px 6px;border:none;background:none;color:var(--text-muted,rgba(120,145,170,0.5));' +
+      'cursor:pointer;border-radius:4px;line-height:0;transition:color 0.15s;';
+    dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = 'var(--starlight-dim,#c3daf8)'; });
+    dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = 'var(--text-muted,rgba(120,145,170,0.5))'; });
     dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); this._hidePrompt(); });
     this._promptBarEl.appendChild(dismissBtn);
     this.container.appendChild(this._promptBarEl);
