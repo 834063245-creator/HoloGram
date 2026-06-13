@@ -85,8 +85,8 @@ def _run_full_analysis(project_root):
     runner = PipelineRunner(reg)
     graph, report = runner.run(str(project_root))
 
-    resolver = CrossFileResolver()
-    cross_added = resolver.resolve(graph)
+    # runner.run() 已经调用了 resolve()，无需再次调用
+    cross_added = 0  # 兼容旧代码
 
     try:
         from src_python.analysis.coupling import CouplingDepthAnalyzer
@@ -286,42 +286,35 @@ class TestCrossFileResolverSymmetry:
         runner = PipelineRunner(reg)
         graph, _ = runner.run(str(multi_file_project))
 
-        resolver = CrossFileResolver()
-        added = resolver.resolve(graph)
-        assert added > 0, "resolve() should create cross-file edges"
-
-        # 所有 inherit 边必须在图中
+        # runner.run() 已经调用了 resolve()，直接检查图中是否存在 inherit 边
         inherit_edges = [
             e for e in graph.edges.values()
             if getattr(e, "direction", "") == "inherit"
         ]
-        assert inherit_edges, "No inherit edges found after resolve()"
+        assert inherit_edges, "No inherit edges found after pipeline run"
 
     def test_both_create_call_edges(self, multi_file_project):
         reg = _build_registry()
         runner = PipelineRunner(reg)
         graph, _ = runner.run(str(multi_file_project))
 
-        resolver = CrossFileResolver()
-        cross_added = resolver.resolve(graph)
-
-        # resolve() 也应创建 calls — 这是 H2 修复的核心
-        # 检查存在跨文件 CALL 边（Engine.process → format_output）
+        # runner.run() 已经调用了 resolve()，直接检查图中是否存在跨文件 CALL 边
         has_call = False
         for e in graph.edges.values():
             if getattr(e, "direction", "") == "call":
                 src = graph.get_node(e.source)
                 tgt = graph.get_node(e.target)
                 if src and tgt:
-                    # 检查 source 和 target 在不同文件中（跨文件）
-                    src_file = src.location.split(":")[0] if src.location else ""
-                    tgt_file = tgt.location.split(":")[0] if tgt.location else ""
-                    if src_file != tgt_file:
+                    # 兼容 Windows 路径：先去掉行号后缀，再比较文件路径
+                    import re
+                    src_file = re.sub(r':\d+$', '', src.location) if src.location else ""
+                    tgt_file = re.sub(r':\d+$', '', tgt.location) if tgt.location else ""
+                    if src_file and tgt_file and src_file != tgt_file:
                         has_call = True
                         break
 
-        assert has_call or cross_added > 0, (
-            "No cross-file call edges found. "
+        assert has_call, (
+            "No cross-file call edges found after pipeline run. "
             "resolve() must create CALL edges (was the H2 bug)."
         )
 

@@ -27,7 +27,7 @@ interface GraphJSON {
   meta?: Record<string, unknown>;
 }
 
-interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; }
+interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; crossFile: boolean; }
 interface CommunityData { id: string; label: string; node_ids: string[]; level?: number; parent_id?: string | null; }
 
 export type VisualMode = 'standard' | 'full' | 'files';
@@ -55,12 +55,17 @@ const GLOW_COLORS: Record<string, number> = {
   thread: 0x8855cc, timer: 0x7744bb, trigger: 0x7744bb,
 };
 
-function edgeColorByType(edgeType: string, direction: string): THREE.Color {
+function edgeColorByType(edgeType: string, direction: string, crossFile = false): THREE.Color {
   if (edgeType === 'data' || edgeType === 'DATA') {
     return direction === 'write' ? new THREE.Color(0xff7777) : new THREE.Color(0x66dd66);
   }
   if (edgeType === 'temporal' || edgeType === 'TEMPORAL') {
     return new THREE.Color(0xffaa55);
+  }
+  // Cross-file edges: distinct colors
+  if (crossFile) {
+    if (direction === 'inherit') return new THREE.Color(0xcc66ff); // purple for inheritance
+    if (direction === 'call') return new THREE.Color(0x66ccff); // cyan for cross-file calls
   }
   return new THREE.Color(0x6699cc);
 }
@@ -1358,7 +1363,7 @@ export class StarGraph {
     for (const ei of edges) {
       const d = this.edgeDataList[ei];
       verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      const c = edgeColorByType(d.edgeType, d.direction), bright = this.mode === 'full' ? 2.5 : 1.6;
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile), bright = this.mode === 'full' ? 2.5 : 1.6;
       colors.push(Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright), Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright));
     }
     const geo = new THREE.BufferGeometry();
@@ -2107,6 +2112,29 @@ export class StarGraph {
         depthWrite: false, blending: THREE.AdditiveBlending,
       })));
     }
+
+    // Show sub-communities (Level 1+) if they exist
+    const subCommunities = this.communities.filter(c => c.parent_id === galaxyId && c.level === 1);
+    if (subCommunities.length > 0) {
+      const subColors = [0x66aaff, 0xff66aa, 0x66ffaa, 0xffaa66, 0xaa66ff]; // Distinct colors for sub-communities
+      subCommunities.forEach((subComm, idx) => {
+        const subColor = new THREE.Color(subColors[idx % subColors.length]);
+        const subMembers: number[] = [];
+        for (const nid of subComm.node_ids) {
+          const nodeIdx = this.graphNodes.findIndex(n => n.id === nid);
+          if (nodeIdx >= 0) subMembers.push(nodeIdx);
+        }
+        // Highlight sub-community nodes with distinct color
+        for (const mi of subMembers) {
+          if (this.nodeCores[mi]) {
+            (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(isFull ? 0xffffff : subColor);
+          }
+          if (this.nodeGlows[mi]) {
+            (this.nodeGlows[mi].material as THREE.SpriteMaterial).color.set(subColor);
+          }
+        }
+      });
+    }
   }
 
   /** Enter a galaxy: hide clouds, reveal its constellation. */
@@ -2373,7 +2401,7 @@ export class StarGraph {
       verts.push(
         gs ? gs.centroid.x : pos[d.s * 3], gs ? gs.centroid.y : pos[d.s * 3 + 1], gs ? gs.centroid.z : pos[d.s * 3 + 2],
         gt ? gt.centroid.x : pos[d.t * 3], gt ? gt.centroid.y : pos[d.t * 3 + 1], gt ? gt.centroid.z : pos[d.t * 3 + 2]);
-      const c = edgeColorByType(d.edgeType, d.direction);
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
       colors.push(c.r * 1.6, c.g * 1.6, c.b * 1.6, c.r * 1.6, c.g * 1.6, c.b * 1.6);
     }
     if (verts.length === 0) return;
@@ -2538,11 +2566,20 @@ export class StarGraph {
     const eData: EdgeData[] = [];
     const deg = new Array<number>(nodes.length).fill(0);
     for (let i = 0; i < nodes.length; i++) nodeIdx.set(nodes[i].id, i);
+    // Extract file path from node location (e.g. "src/foo.py:10" → "src/foo.py")
+    const nodeFile = new Map<number, string>();
+    for (let i = 0; i < nodes.length; i++) {
+      const loc = nodes[i].location || '';
+      // Strip line number suffix (e.g. ":10")
+      const filePath = loc.replace(/:\d+$/, '');
+      nodeFile.set(i, filePath);
+    }
     for (const e of edges) {
       const s = nodeIdx.get(e.source), t = nodeIdx.get(e.target);
       if (s !== undefined && t !== undefined && s !== t) {
         pairs.push([s, t]); deg[s]++; deg[t]++;
-        eData.push({ s, t, couplingDepth: ((e as any).coupling_depth as number) || 0, edgeType: e.type || '', direction: (e as any).direction || '' });
+        const crossFile = nodeFile.get(s) !== nodeFile.get(t);
+        eData.push({ s, t, couplingDepth: ((e as any).coupling_depth as number) || 0, edgeType: e.type || '', direction: (e as any).direction || '', crossFile });
       }
     }
     this.deg = deg; this.edgeDataList = eData; this.maxDeg = Math.max(...deg, 1);
@@ -2558,7 +2595,9 @@ export class StarGraph {
     // ── Parse communities & build node→community index ──────
     this.communities = ((graph as any).communities || []) as CommunityData[];
     this.nodeCommMap.clear();
-    for (const comm of this.communities) {
+    // Only use Level 0 communities for initial galaxy view
+    const level0Communities = this.communities.filter(c => !c.level || c.level === 0);
+    for (const comm of level0Communities) {
       for (const nid of comm.node_ids) {
         const idx = nodeIdx.get(nid);
         if (idx !== undefined) this.nodeCommMap.set(idx, comm.id);
@@ -2568,7 +2607,7 @@ export class StarGraph {
     // Only keep communities above minimum size — single-node communities are noise
     this.galaxyMeta = [];
     let skippedSingletons = 0;
-    for (const comm of this.communities) {
+    for (const comm of level0Communities) {
       const members: number[] = [];
       for (const nid of comm.node_ids) {
         const idx = nodeIdx.get(nid);
@@ -2708,14 +2747,14 @@ export class StarGraph {
 
   private buildEdges(pos: Float32Array, data: EdgeData[]): void {
     if (data.length === 0) return;
-    const key = (d: EdgeData) => `${d.edgeType}:${d.direction}:${d.couplingDepth}`;
+    const key = (d: EdgeData) => `${d.edgeType}:${d.direction}:${d.couplingDepth}:${d.crossFile ? 1 : 0}`;
     const groups = new Map<string, { verts: number[]; colors: number[]; depth: number }>();
     for (const d of data) {
       const k = key(d);
-      if (!groups.has(k)) { const c = edgeColorByType(d.edgeType, d.direction); groups.set(k, { verts: [], colors: [], depth: d.couplingDepth }); }
+      if (!groups.has(k)) { const c = edgeColorByType(d.edgeType, d.direction, d.crossFile); groups.set(k, { verts: [], colors: [], depth: d.couplingDepth }); }
       const g = groups.get(k)!;
       g.verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      const c = edgeColorByType(d.edgeType, d.direction);
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
       g.colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
     }
     for (const [, g] of groups) {
@@ -2841,7 +2880,7 @@ export class StarGraph {
       pPos[i * 3 + 2] = pos[d.s * 3 + 2] + (pos[d.t * 3 + 2] - pos[d.s * 3 + 2]) * t;
 
       // Subtle color: match edge type, occasional gentle warm accent
-      const c = edgeColorByType(d.edgeType, d.direction);
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
       const bright = 0.6 + Math.random() * 0.6;
       pCol[i * 3] = Math.min(1, c.r * bright);
       pCol[i * 3 + 1] = Math.min(1, c.g * bright);
