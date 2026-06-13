@@ -6,6 +6,10 @@ import { invoke } from '../bridge';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
+import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, listenForDiagnostics } from './lsp-client';
+
+// LSP session cache: language -> session_id (shared across all FileViewer instances)
+const lspSessions = new Map<string, number>();
 
 // -- Monaco worker config for Vite ESM --
 self.MonacoEnvironment = {
@@ -229,6 +233,9 @@ export class FileViewer {
     // Ctrl+S → save
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => this.saveActiveTab());
 
+    // LSP diagnostics listener
+    listenForDiagnostics(this.editor, monaco);
+
     // Editor context menu actions
     this.editor.addAction({
       id: 'format-document', label: '格式化文档',
@@ -387,7 +394,26 @@ export class FileViewer {
       model.onDidChangeContent(() => {
         newTab.dirty = model.getValue() !== newTab.originalContent;
         this.renderTabs();
+        // LSP: notify document change
+        const sid = lspSessions.get(language);
+        if (sid) didChange(sid, uri.toString(), model.getValue());
       });
+
+      // LSP: start server and register providers for this language
+      if (!lspSessions.has(language)) {
+        startLsp(language, `file:///${filePath}`).then(sid => {
+          if (sid !== null) {
+            lspSessions.set(language, sid);
+            registerCompletionProvider(language, sid, monaco);
+            registerHoverProvider(language, sid, monaco);
+            registerDefinitionProvider(language, sid, monaco);
+            didOpen(sid, uri.toString(), language, content);
+          }
+        });
+      } else {
+        const sid = lspSessions.get(language)!;
+        didOpen(sid, uri.toString(), language, content);
+      }
 
       this.tabs.push(newTab);
       this.activeIdx = this.tabs.length - 1;

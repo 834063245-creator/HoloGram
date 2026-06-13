@@ -6,9 +6,11 @@
 
 mod mcp_manager;
 mod pty_manager;
+mod lsp_manager;
 
 use mcp_manager::McpManager;
 use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
+use lsp_manager::{lsp_start, lsp_request, lsp_stop};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -2572,6 +2574,10 @@ fn main() {
             pty_write,
             pty_resize,
             pty_kill,
+            // LSP
+            lsp_start,
+            lsp_request,
+            lsp_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");
