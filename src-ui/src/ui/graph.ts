@@ -2167,10 +2167,11 @@ export class StarGraph {
     this.galaxyClouds = []; this.galaxyGlows = [];
   }
 
-  /** Reveal one galaxy as a constellation: member nodes glow + internal edges bright. */
-  private _showConstellation(galaxyId: string): void {
+  /** Reveal one galaxy as a constellation: member nodes glow + internal edges bright.
+   * Returns count of sub-communities found. */
+  private _showConstellation(galaxyId: string): number {
     const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-    if (!gm) return;
+    if (!gm) return 0;
     const isFull = this.mode === 'full';
     const cc = new THREE.Color(StarGraph.CONSTELLATION_COLOR);
     for (const mi of gm.memberIndices) {
@@ -2204,8 +2205,14 @@ export class StarGraph {
     }
 
     // Show sub-communities (Level 1+) if they exist
-    const subCommunities = this.communities.filter(c => c.parent_id === galaxyId && c.level === 1);
-    console.log(`[DEBUG] _showConstellation: galaxyId=${galaxyId}, total communities=${this.communities.length}, subCommunities found=${subCommunities.length}`);
+    // Match any community whose parent_id matches this galaxy
+    const subCommunities = this.communities.filter(c => {
+      if (!c.parent_id || c.parent_id !== galaxyId) return false;
+      // level may be number or string from JSON round-trip; cast robustly
+      const lvl = Number(c.level);
+      return !isNaN(lvl) && lvl >= 1;
+    });
+    let subCount = 0;
     if (subCommunities.length > 0) {
       const subColors = [0x66aaff, 0xff66aa, 0x66ffaa, 0xffaa66, 0xaa66ff]; // Distinct colors for sub-communities
       subCommunities.forEach((subComm, idx) => {
@@ -2215,7 +2222,7 @@ export class StarGraph {
           const nodeIdx = this.graphNodes.findIndex(n => n.id === nid);
           if (nodeIdx >= 0) subMembers.push(nodeIdx);
         }
-        console.log(`[DEBUG] Sub-community ${subComm.id}: ${subMembers.length} members, color=0x${subColors[idx % subColors.length].toString(16)}`);
+        if (subMembers.length > 0) subCount++;
         // Highlight sub-community nodes with distinct color (override full mode white)
         for (const mi of subMembers) {
           if (this.nodeCores[mi]) {
@@ -2227,6 +2234,7 @@ export class StarGraph {
         }
       });
     }
+    return subCount;
   }
 
   /** Enter a galaxy: hide clouds, reveal its constellation. */
@@ -2238,7 +2246,7 @@ export class StarGraph {
     // Clear fold group (clouds), re-apply for constellation view
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     this.galaxyClouds = []; this.galaxyGlows = [];
-    this._showConstellation(galaxyId);
+    const subCount = this._showConstellation(galaxyId);
     // Set up independent camera orbit around the constellation centroid
     const gm = this.galaxyMeta.find(g => g.id === galaxyId);
     if (gm) {
@@ -2269,7 +2277,8 @@ export class StarGraph {
     // Show fixed HUD title
     this.showGalaxyTitle(gm);
     const st = document.getElementById('status-text');
-    if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+    const subInfo = subCount > 0 ? ` · ${subCount} 子社区` : '';
+    if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点${subInfo} · ESC 退回`;
   }
 
   /** When flying to constellation, controls look at centroid, not at camera target. */
