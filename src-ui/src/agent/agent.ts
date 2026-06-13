@@ -464,7 +464,7 @@ export class Agent {
       errMsg = firstLine(e.message || String(e));
     }
 
-    const { body, truncMsg } = truncateToolOutput(result);
+    const { body, truncMsg } = truncateToolOutput(result, call.name);
     return {
       output: body,
       errMsg: errMsg || undefined,
@@ -733,16 +733,40 @@ function batchStormSignature(
   return { sig: parts.join('\x00'), ok: true };
 }
 
-function truncateToolOutput(s: string): { body: string; truncMsg?: string } {
+function truncateToolOutput(s: string, toolName?: string): { body: string; truncMsg?: string } {
   if (s.length <= MAX_TOOL_OUTPUT_BYTES) return { body: s };
   const keep = Math.floor(MAX_TOOL_OUTPUT_BYTES / 2);
   const head = snapToRune(s, 0, keep);
   const tail = snapToRune(s, s.length - keep, s.length);
   const omitted = s.length - head.length - tail.length;
+  const hint = truncationHint(toolName || '');
   return {
-    body: `${head}\n\n…[truncated ${omitted} of ${s.length} bytes — rerun with narrower args to see the middle]…\n\n${tail}`,
-    truncMsg: `tool output truncated: ${omitted} of ${s.length} bytes elided`,
+    body: `${head}\n\n…[截断 ${omitted} / ${s.length} 字节]…\n💡 ${hint}\n\n${tail}`,
+    truncMsg: `tool output truncated: ${omitted} of ${s.length} bytes elided (${toolName || 'unknown'})`,
   };
+}
+
+function truncationHint(toolName: string): string {
+  switch (toolName) {
+    case 'read_file_content':
+      return '此工具支持 offset/limit 分页。用 offset 翻到下一段，或缩小 limit 范围。';
+    case 'search_code':
+      return '用 maxResults 参数减少返回条数，或用更精确的 pattern + fileTypes 过滤。';
+    case 'run_shell':
+      return '用更精确的命令（管道过滤如 | head -n 100），或 runInBackground + bash_output 分批读取。';
+    case 'list_directory':
+      return '缩小 path 到具体子目录。';
+    case 'git_diff':
+      return '用 file 参数指定单个文件，或 staged 只看暂存区变更。';
+    case 'hologram_analyze':
+      return 'analyze 输出大是正常的。用 hologram_graph_summary 看概览，再按需查具体节点。';
+    case 'git_log':
+      return '用 count 参数减少返回的提交数量。';
+    case 'hologram_timeline':
+      return '用 limit 参数缩小结果数，或用 module 参数过滤特定模块。';
+    default:
+      return '用更窄的参数重新调用，或换用更精确的工具获取子集。';
+  }
 }
 
 function snapToRune(s: string, lo: number, hi: number): string {

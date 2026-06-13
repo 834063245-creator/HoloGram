@@ -8,13 +8,13 @@ const DEFAULT_MAX_TOKENS = 32768;
 export interface OpenAIConfig {
   name?: string;
   apiKey: string;
-  baseUrl: string; // e.g. "https://api.deepseek.com" or "https://api.openai.com"
+  baseUrl: string; // e.g. "https://api.deepseek.com/v1" or "https://api.openai.com/v1"
   model: string;
 }
 
 export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   const name = cfg.name || 'openai';
-  const baseUrl = cfg.baseUrl.replace(/\/$/, '');
+  const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // user controls v1 prefix in baseUrl
   const { model, apiKey } = cfg;
 
   return {
@@ -171,7 +171,7 @@ async function sendWithRetry(
 
     let resp: Response;
     try {
-      resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+      resp = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

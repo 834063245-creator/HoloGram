@@ -179,7 +179,7 @@ export class SettingsPanel {
             <label class="sp-label">Base URL</label>
             <input type="text" class="sp-input" data-field="baseUrl"
                    value="${escapeAttr(active.baseUrl)}"
-                   placeholder="https://api.deepseek.com">
+                   placeholder="https://api.deepseek.com/v1">
           </div>
           ${isAnthropic ? `
           <div class="sp-field">

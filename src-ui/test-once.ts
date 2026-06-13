@@ -142,7 +142,7 @@ async function main() {
   const provider = createOpenAIProvider({
     name: 'deepseek',
     apiKey: API_KEY,
-    baseUrl: 'https://api.deepseek.com',
+    baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
   });
 

@@ -753,7 +753,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'run_shell',
       description: () =>
-        'Execute a shell command and return stdout + stderr. Default timeout 2 min. For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress and bash_kill to stop. Commands run in the project directory by default.',
+        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress and bash_kill to stop. Commands run in the project directory by default.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -767,8 +767,8 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           },
           timeoutMs: {
             type: 'integer',
-            description: 'Timeout in milliseconds (default: 120000 = 2 min, max: 600000 = 10 min)',
-            default: 120000,
+            description: 'Timeout in milliseconds (default: 300000 = 5 min, max: 600000 = 10 min)',
+            default: 300000,
           },
           runInBackground: {
             type: 'boolean',

@@ -39,7 +39,7 @@ const DEFAULTS: AppSettings = {
       kind: 'openai',
       name: 'deepseek',
       apiKey: '',
-      baseUrl: 'https://api.deepseek.com',
+      baseUrl: 'https://api.deepseek.com/v1',
       model: 'deepseek-chat',
     },
     {
