@@ -215,6 +215,13 @@ fn set_active_project(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Return the currently active workspace path (empty string if none set).
+/// Used by the frontend as a fallback when graph meta.source_root is missing on cold start.
+#[tauri::command]
+fn get_active_project() -> Result<String, String> {
+    Ok(ACTIVE_PROJECT.lock().unwrap().clone())
+}
+
 fn active_graph() -> String {
     let proj = ACTIVE_PROJECT.lock().unwrap();
     if !proj.is_empty() {
@@ -594,6 +601,17 @@ async fn hologram_run_check(path: String) -> Result<String, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // ── Debug: log raw output to help diagnose "简报解析失败" ──
+    let debug_log = project_root().join("_check_debug.log");
+    let _ = std::fs::write(&debug_log, format!(
+        "=== CHECK DEBUG {} ===\npath: {}\nexit: {}\n--- STDOUT ---\n{}\n--- STDERR ---\n{}\n=== END ===\n",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        path,
+        output.status,
+        stdout,
+        stderr,
+    ));
 
     // cmd_check returns exit code 1 when violations found — that's NOT a system error,
     // the JSON output in stdout still encodes the full pass/fail/violations result.
@@ -1859,13 +1877,41 @@ fn is_graph_fresh(graph_path: &str, project_path: &str) -> bool {
     true // fresh — no source file newer than graph
 }
 
+/// Generate hologram_graph_files.json from an existing hologram_graph.json.
+/// Fast (~0.1s) — only loads the graph and runs to_file_graph(), no re-analysis.
+fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
+    let graph_path = format!("{}/hologram_graph.json", project_path);
+    let code = format!(
+        "from src_python.core.graph import Graph\n\
+         g = Graph.from_json({:?})\n\
+         fg = g.to_file_graph()\n\
+         fg.to_json({:?})\n\
+         print('ok')\n",
+        graph_path,
+        format!("{}/hologram_graph_files.json", project_path),
+    );
+    let root = project_root();
+    let output = silent_command(&python())
+        .current_dir(&root)
+        .args(["-c", &code])
+        .output()
+        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("file-graph generation failed: {}", stderr));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 /// Analyze a folder and return the graph JSON. Uses incremental cache.
 /// Fast path: if cached graph is up-to-date, returns it instantly (no Python).
+/// Set `force` to true to skip the fast-path cache and always re-analyze.
 #[tauri::command]
-async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String, String> {
+async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHandle) -> Result<String, String> {
+    let force = force.unwrap_or(false);
     // ── Fast path: cached graph still fresh ──
     let cached_graph = std::path::PathBuf::from(&path).join("hologram_graph.json");
-    if is_graph_fresh(&cached_graph.to_string_lossy(), &path) {
+    if !force && is_graph_fresh(&cached_graph.to_string_lossy(), &path) {
         if let Ok(content) = std::fs::read_to_string(&cached_graph) {
             if !content.trim().is_empty() {
                 // Set active project so all tool commands route to this workspace
@@ -1875,6 +1921,11 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
                 }
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_title("全息观测站");
+                }
+                // Ensure file-level graph exists (may be missing after cache deletion)
+                let files_path = format!("{}/hologram_graph_files.json", path);
+                if !std::path::Path::new(&files_path).exists() {
+                    let _ = regenerate_file_graph(&path);
                 }
                 return Ok(content);
             }
@@ -1916,6 +1967,13 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
 
     // Register as active workspace — all tool commands now route here
     *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+
+    // ── Ensure file-level graph exists (may be missing if cached .hologram was loaded) ──
+    let files_path = format!("{}/hologram_graph_files.json", path);
+    if !std::path::Path::new(&files_path).exists() {
+        let _ = regenerate_file_graph(&path);
+    }
+
     // Track last project for cold-start fallback
     let last_path_file = project_root().join(".last_project");
     if let Err(e) = std::fs::write(&last_path_file, &path) {
@@ -2267,6 +2325,7 @@ fn main() {
             hologram_community_report,
             hologram_graph_summary,
             set_active_project,
+            get_active_project,
             load_graph_json,
             load_binary_graph,
             analyze_and_load,

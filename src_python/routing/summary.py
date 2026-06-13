@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph
+from ..core.graph import Graph, file_from_location
 from ..core.diff import GraphDiffer, GraphDiff
 from .signals import Signal
 from .constraints import ConstraintResult, ConstraintViolation
@@ -423,7 +423,7 @@ class ChangeSummaryGenerator:
         # 筛选涉及变更文件的线程
         relevant_threads = []
         for t in threads:
-            t_file = t.get("location", "").split(":")[0] if t.get("location") else ""
+            t_file = file_from_location(t.get("location") or "")
             if any(cf in t_file for cf in changed_files):
                 relevant_threads.append(t)
 
@@ -501,7 +501,7 @@ class ChangeSummaryGenerator:
             for nid in comm.node_ids:
                 node = graph.get_node(nid)
                 if node:
-                    loc_file = node.location.rsplit(":", 1)[0] if ":" in node.location else node.location
+                    loc_file = file_from_location(node.location) if node.location else node.location
                     if loc_file in changed_files:
                         if loc_file not in file_communities:
                             file_communities[loc_file] = []

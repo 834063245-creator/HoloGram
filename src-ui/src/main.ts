@@ -21,6 +21,7 @@ import { Agent } from './agent/agent';
 import { ToolRegistry, createHologramTools, createHologramToolsFromSchemas, createCodingTools, type ToolExecutor } from './agent/tool';
 import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
+import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
@@ -88,6 +89,7 @@ const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButton
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
 const btnFold = document.getElementById('btn-fold') as HTMLButtonElement;
+const btnResetCam = document.getElementById('btn-reset-cam') as HTMLButtonElement;
 const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
 const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
 const btnTimeline = document.getElementById('btn-timeline') as HTMLButtonElement;
@@ -179,7 +181,7 @@ async function pickFolder(): Promise<string | null> {
 
 // ── Open & Analyze ──
 
-async function openProject(path?: string): Promise<void> {
+async function openProject(path?: string, forceReanalyze = false): Promise<void> {
   const folder = path || (await pickFolder());
   if (!folder) return;
 
@@ -210,7 +212,7 @@ async function openProject(path?: string): Promise<void> {
       const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
       graph = decode(bytes) as any;
     } catch {
-      const json = await invoke<string>('analyze_and_load', { path: folder });
+      const json = await invoke<string>('analyze_and_load', { path: folder, force: forceReanalyze });
       graph = JSON.parse(json);
     }
     currentGraphData = graph;
@@ -422,10 +424,23 @@ async function setupAgentInner(): Promise<void> {
     contextWindow: agentOpts.contextWindow,
     gate,
   }, chatPanel.sink);
+
+  // ── PreToolUse hooks: enrich tool results with graph context ──
+  if (currentGraphData) {
+    const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(currentGraphData);
+    const ctx = createGraphContext(fileIndex, fanIn, fanOut);
+    const hooks = new HookRegistry();
+    hooks.register(createGraphContextHook(ctx));
+    agent.setHooks(hooks);
+  }
+
   chatPanel.setAgent(agent);
 
   // Set factory for creating new sessions
   const mm = memoryManager; // capture for closure
+  const hookCtx = currentGraphData
+    ? (() => { const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(currentGraphData); return createGraphContext(fileIndex, fanIn, fanOut); })()
+    : null;
   chatPanel.setAgentFactory(async () => {
     const s = loadSettings();
     const act = getActiveProvider(s);
@@ -457,13 +472,20 @@ async function setupAgentInner(): Promise<void> {
       showApprovalDialog(toolName, desc, args),
     );
     gate2.onRemember = gate.onRemember;
-    return new Agent(p, r, buildSystemPrompt(memSection), {
+    const newAgent = new Agent(p, r, buildSystemPrompt(memSection), {
       pricing: pr,
       temperature: aOpts.temperature,
       maxSteps: aOpts.maxSteps,
       contextWindow: aOpts.contextWindow,
       gate: gate2,
     }, chatPanel.sink);
+    // Wire hooks for new sessions too
+    if (hookCtx) {
+      const hooks = new HookRegistry();
+      hooks.register(createGraphContextHook(hookCtx));
+      newAgent.setHooks(hooks);
+    }
+    return newAgent;
   });
 }
 
@@ -702,6 +724,56 @@ function setupIcons(): void {
 // ── Init ──
 
 async function init(): Promise<void> {
+  // ── 毙掉 Tauri WebView 的所有浏览器原生快捷键 ──
+  // capture 阶段拦截，preventDefault 阻止浏览器默认行为，不阻止事件继续冒泡
+  (() => {
+    const isEditing = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
+    };
+
+    // 应用自己的快捷键（允许通过，不做拦截）
+    const APP_CTRL_KEYS = new Set(['l', 'd', 'e']); // Chat / Diff / Explorer
+    const APP_CTRL_KEYS_EXTRA = new Set(['`', ',']); // Terminal / Settings
+
+    window.addEventListener('keydown', (e) => {
+      const key = e.key.toLowerCase();
+      const mod = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      const alt = e.altKey;
+
+      // ── 在输入框/文本区中：只拦截浏览器级危险快捷键 ──
+      if (isEditing()) {
+        // 标准编辑键永远放行
+        if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'z', 'y', 'a']).has(key)) return;
+        // 输入框中拦截：浏览器刷新/保存/打印/打开/新建等
+        if (mod && !alt && ['r', 'p', 's', 'u', 'o', 'n'].includes(key)) { e.preventDefault(); return; }
+        if (key === 'f5' || key === 'f12') { e.preventDefault(); return; }
+        if (alt && (key === 'arrowleft' || key === 'arrowright')) { e.preventDefault(); return; }
+        return;
+      }
+
+      // ── 非输入区：拦截所有浏览器原生快捷键 ──
+
+      // 应用自己的快捷键 → 放行
+      if (mod && !shift && !alt && APP_CTRL_KEYS.has(key)) return;
+      if (mod && !shift && !alt && APP_CTRL_KEYS_EXTRA.has(key)) return;
+      if (!mod && !alt && !shift && (key === 'f' || key === 'escape' || key === 'b')) return;
+
+      // F 功能键（全部毙掉）
+      if (['f1', 'f3', 'f4', 'f5', 'f6', 'f7', 'f10', 'f11', 'f12'].includes(key)) {
+        e.preventDefault(); return;
+      }
+      // Ctrl 组合键 → 全毙（已知白名单已放过）
+      if (mod && !alt) { e.preventDefault(); return; }
+      // Alt 组合键 → 全毙（阻止 Alt+←→ 前进后退导航、Alt+D 地址栏等）
+      if (alt) { e.preventDefault(); return; }
+      // Backspace 回退导航（浏览器老旧行为，WebView2 可能残留）
+      if (key === 'backspace') { e.preventDefault(); return; }
+    }, { capture: true });
+  })();
+
   setupIcons();
   setupModeSwitch();
 
@@ -1067,7 +1139,7 @@ async function init(): Promise<void> {
     statusText.textContent = '重新分析中…';
     try {
       await invoke('stop_watching');
-      await openProject(currentPath);
+      await openProject(currentPath, true);
     } catch (e: any) {
       statusText.textContent = `重分析失败: ${e}`;
     } finally {
@@ -1095,10 +1167,17 @@ async function init(): Promise<void> {
 
   // Fold toggle
   btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });
+  btnResetCam.addEventListener('click', () => { starGraph.resetCamera(); });
   window.addEventListener('keydown', (e) => {
     if (isEditing()) return;
     if ((e.key === 'f' || e.key === 'F')) {
       starGraph.toggleFold(); updateFoldBtn();
+    }
+    if ((e.key === 'r' || e.key === 'R')) {
+      starGraph.resetCamera();
+    }
+    if (e.key === '?') {
+      toggleShortcuts();
     }
     if (e.key === 'Escape') {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
@@ -1117,7 +1196,45 @@ async function init(): Promise<void> {
       : `${iconSvg('fold')} 折叠`;
   }
 
-  // Live updates from file watcher
+  // ── Shortcuts overlay toggle ──
+  const shortcutsOverlay = document.getElementById('shortcuts-overlay')!;
+  function toggleShortcuts(): void {
+    const visible = shortcutsOverlay.style.display !== 'none';
+    shortcutsOverlay.style.display = visible ? 'none' : '';
+    if (!visible) {
+      // Auto-hide after 12s of no hover
+      clearTimeout((shortcutsOverlay as any)._hideTimer);
+      (shortcutsOverlay as any)._hideTimer = setTimeout(() => {
+        if (shortcutsOverlay.style.display !== 'none') {
+          shortcutsOverlay.style.display = 'none';
+        }
+      }, 12000);
+    }
+  }
+  // Reset auto-hide timer on mouse enter
+  shortcutsOverlay.addEventListener('mouseenter', () => {
+    clearTimeout((shortcutsOverlay as any)._hideTimer);
+  });
+  shortcutsOverlay.addEventListener('mouseleave', () => {
+    (shortcutsOverlay as any)._hideTimer = setTimeout(() => {
+      if (shortcutsOverlay.style.display !== 'none') {
+        shortcutsOverlay.style.display = 'none';
+      }
+    }, 12000);
+  });
+  // Close button inside overlay
+  shortcutsOverlay.querySelector('.so-close')?.addEventListener('click', () => {
+    shortcutsOverlay.style.display = 'none';
+  });
+  // Toolbar shortcut button
+  const btnShortcuts = document.getElementById('btn-shortcuts') as HTMLButtonElement;
+  btnShortcuts.addEventListener('click', () => toggleShortcuts());
+
+  // Live updates from file watcher — debounced to avoid jank during Agent runs
+  let _lastGraphUpdate = 0;
+  let _pendingRender: ReturnType<typeof setTimeout> | null = null;
+  const GRAPH_UPDATE_DEBOUNCE_MS = 2500; // accumulate file changes over 2.5s before re-render
+
   listen<string>('graph-updated', async (event) => {
     try {
       const graph = JSON.parse(event.payload);
@@ -1129,6 +1246,7 @@ async function init(): Promise<void> {
       }
       const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
       if (nodeCount > 0) {
+        // Always update the in-memory graph data — Agent tools read from this
         currentGraphData = graph;
         // Also refresh the file-level graph
         if (currentPath) {
@@ -1137,21 +1255,42 @@ async function init(): Promise<void> {
             currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
           } catch { /* file graph may not exist yet */ }
         }
-        if (nodeCount > 50000) {
-          statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
-        } else {
-          starGraph.render(graph);
-          statusText.textContent = `已更新 (${nodeCount} 节点)`;
-          setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
+
+        // Debounce the 3D re-render — skip if we just rendered recently
+        const now = Date.now();
+        if (now - _lastGraphUpdate < GRAPH_UPDATE_DEBOUNCE_MS) {
+          // Schedule a deferred render; if another update arrives, the timer resets
+          if (_pendingRender) clearTimeout(_pendingRender);
+          _pendingRender = setTimeout(() => {
+            _pendingRender = null;
+            if (currentGraphData) _doGraphUpdate(currentGraphData);
+          }, GRAPH_UPDATE_DEBOUNCE_MS - (now - _lastGraphUpdate));
+          return;
         }
-        if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
-        setupAgent().catch(() => {});
-        runCheck();
-        timelinePanel.setProjectPath(currentPath);
-        hotspotsPanel.setProjectPath(currentPath);
+        if (_pendingRender) { clearTimeout(_pendingRender); _pendingRender = null; }
+        _doGraphUpdate(graph);
       }
     } catch { /* ignore */ }
   });
+
+  function _doGraphUpdate(graph: any): void {
+    _lastGraphUpdate = Date.now();
+    const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
+    if (nodeCount > 50000) {
+      statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
+    } else {
+      starGraph.render(graph);
+      statusText.textContent = `已更新 (${nodeCount} 节点)`;
+      setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
+    }
+    if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
+    // NOTE: Agent does NOT need re-init on incremental updates — its tools read
+    // currentGraphData which is already refreshed. Re-initializing would kill MCP
+    // connections and disrupt active conversations.
+    runCheck();
+    timelinePanel.setProjectPath(currentPath);
+    hotspotsPanel.setProjectPath(currentPath);
+  }
 
   // Try cached graph (A3: msgpack first, JSON fallback)
   try {
@@ -1165,7 +1304,26 @@ async function init(): Promise<void> {
     }
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
     if (nodeCount > 0) {
-      const root = graph.meta?.source_root || '';
+      let root: string = graph.meta?.source_root || '';
+      // Fallback: if meta.source_root is missing, try the Rust backend's ACTIVE_PROJECT
+      if (!root) {
+        try { root = await invoke<string>('get_active_project'); } catch { /* ignore */ }
+      }
+      if (!root) {
+        // No path available — can't run check or watcher, but graph still renders
+        currentGraphData = graph;
+        starGraph.render(graph);
+        statusText.textContent = '⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目';
+        return;
+      }
+
+      // ── Match openProject(): reset state, register workspace, then run check ──
+      checkRunning = false;
+      checkPending = false;
+      if (checkTimer) { clearTimeout(checkTimer); checkTimer = null; }
+      checkPanel.update({ passed: true, timestamp: '', changed_files: [], total_changed_files: 0, l5_violations: [], l4_violations: [], l3_violations: [], l2_violations: [], passed_checks: [], blast_radius: 0, cross_community_edges: 0, new_cycles: 0, new_thread_conflicts: 0, api_signature_changes: 0 });
+      await invoke('set_active_project', { path: root }).catch(() => {});
+
       currentGraphData = graph;
       starGraph.render(graph);
       showGraphView(root);
@@ -1179,7 +1337,7 @@ async function init(): Promise<void> {
       timelinePanel.setProjectPath(root || null);
       hotspotsPanel.setProjectPath(root || null);
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
-      if (root) { try { await invoke('start_watching', { path: root }); } catch { /* ignore */ } }
+      try { await invoke('start_watching', { path: root }); } catch { /* ignore */ }
       return;
     }
   } catch { /* no cache */ }

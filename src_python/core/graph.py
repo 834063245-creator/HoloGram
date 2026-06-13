@@ -793,7 +793,7 @@ class Graph:
             loc = (n.location or "").strip()
             if not loc:
                 continue
-            fp = loc.split(":")[0]  # strip line number
+            fp = file_from_location(loc)
             if fp not in file_nodes:
                 nid = f"file_{len(file_nodes)}"
                 g.add_node(Node(
@@ -814,8 +814,8 @@ class Graph:
             tgt_loc = (self.nodes.get(e.target) or None)
             if not src_loc or not tgt_loc:
                 continue
-            sfp = (src_loc.location or "").split(":")[0]
-            tfp = (tgt_loc.location or "").split(":")[0]
+            sfp = file_from_location(src_loc.location or "")
+            tfp = file_from_location(tgt_loc.location or "")
             if not sfp or not tfp or sfp == tfp:
                 continue
             sid = file_nodes.get(sfp)
@@ -988,3 +988,36 @@ def file_from_location(loc: str) -> str:
     if len(parts) == 2 and parts[1].strip().isdigit():
         return parts[0]
     return loc
+
+
+def safe_json_dumps(obj: Any, **kwargs) -> str:
+    """json.dumps 的安全包装：NaN/Infinity → null。
+
+    Python 的 json.dumps 默认把 float('nan')/float('inf') 输出为
+    NaN/Infinity 字面量，这在 JSON 规范 (RFC 8259) 中非法，
+    JavaScript 的 JSON.parse 会直接抛异常。
+
+    先尝试 allow_nan=False 快速路径；遇到 ValueError 则递归清理后重试。
+    """
+    import json as _json
+    import math as _math
+
+    # Fast path — most data has no NaN/Infinity
+    try:
+        return _json.dumps(obj, allow_nan=False, **kwargs)
+    except (ValueError, TypeError):
+        pass
+
+    # Slow path — recursively replace NaN/Infinity with None → null
+    def _sanitize(o: Any) -> Any:
+        if isinstance(o, float) and (_math.isnan(o) or _math.isinf(o)):
+            return None
+        if isinstance(o, dict):
+            return {k: _sanitize(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [_sanitize(v) for v in o]
+        if isinstance(o, set):
+            return [_sanitize(v) for v in o]
+        return o
+
+    return _json.dumps(_sanitize(obj), **kwargs)

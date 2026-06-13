@@ -39,7 +39,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from .core.graph import Graph, EdgeType, file_from_location, type_val
+from .core.graph import Graph, EdgeType, file_from_location, type_val, safe_json_dumps
 
 
 class MCPServer:
@@ -87,6 +87,7 @@ class MCPServer:
             "hologram_analyze": self._tool_analyze,
             "hologram_run_check": self._tool_run_check,
             "hologram_run_health": self._tool_run_health,
+            "hologram_rename": self._tool_rename,
         }
 
         self._tool_definitions = [
@@ -315,6 +316,25 @@ class MCPServer:
                         "days": {"type": "integer", "description": "Days to look back (default 30)", "default": 30},
                     },
                     "required": ["path"],
+                },
+            },
+            {
+                "name": "hologram_rename",
+                "description": (
+                    "Safely rename a symbol (function, class, method, variable) across the entire codebase. "
+                    "Uses the dependency graph to find ALL references — not text grep — so comments and "
+                    "string literals are never false positives. Updates all files atomically with rollback. "
+                    "Always run with dry_run=true first to preview changes before executing."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "old_name": {"type": "string", "description": "Current name of the symbol to rename"},
+                        "new_name": {"type": "string", "description": "New name for the symbol"},
+                        "dry_run": {"type": "boolean", "description": "Preview only, do not modify files (default: false)", "default": False},
+                        "node_id": {"type": "string", "description": "Optional: specific node ID to rename when multiple symbols share the same name"},
+                    },
+                    "required": ["old_name", "new_name"],
                 },
             },
         ]
@@ -1006,15 +1026,15 @@ class MCPServer:
             for mn in diff_result.modified_nodes:
                 node = after_graph.get_node(mn.node_id)
                 if node and node.location:
-                    f = node.location.rsplit(":", 1)[0] if ":" in (node.location or "") else node.location
+                    f = file_from_location(node.location) if node.location else node.location
                     changed_file_set.add(f)
             for n in diff_result.added_nodes:
                 if n.location:
-                    f = n.location.rsplit(":", 1)[0] if ":" in (n.location or "") else n.location
+                    f = file_from_location(n.location) if n.location else n.location
                     changed_file_set.add(f)
             for n in diff_result.removed_nodes:
                 if n.location:
-                    f = n.location.rsplit(":", 1)[0] if ":" in (n.location or "") else n.location
+                    f = file_from_location(n.location) if n.location else n.location
                     changed_file_set.add(f)
             changed_files = sorted(changed_file_set)
 
@@ -1069,6 +1089,30 @@ class MCPServer:
         except Exception as e:
             return {"error": str(e)}
 
+    def _tool_rename(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """安全重命名符号。"""
+        old_name = args.get("old_name", "")
+        new_name = args.get("new_name", "")
+        dry_run = args.get("dry_run", False)
+        node_id = args.get("node_id", None)
+
+        if not old_name or not new_name:
+            return {"error": "old_name and new_name are required"}
+
+        from .core.rename import preview_rename, execute_rename
+
+        project_root = getattr(self.graph, 'source_root', '') or os.getcwd()
+
+        if dry_run:
+            return preview_rename(self.graph, old_name, new_name, node_id)
+        else:
+            result = execute_rename(self.graph, old_name, new_name, project_root, node_id)
+            # 清除缓存 —— 图已变更
+            self._coupling_result = None
+            self._cycle_result = None
+            self._boundaries = None
+            return result
+
     # ── JSON-RPC 协议 ───────────────────────────────────
 
     def handle_request(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1093,7 +1137,7 @@ class MCPServer:
             try:
                 result = self._tools[tool_name](tool_args)
                 return self._response(req_id, {
-                    "content": [{"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}],
+                    "content": [{"type": "text", "text": safe_json_dumps(result, indent=2, ensure_ascii=False)}],
                 })
             except Exception as exc:
                 return self._error(req_id, -32000, str(exc))
@@ -1113,7 +1157,7 @@ class MCPServer:
 
             response = self.handle_request(request)
             if response is not None:
-                sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+                sys.stdout.write(safe_json_dumps(response, ensure_ascii=False) + "\n")
                 sys.stdout.flush()
 
     @staticmethod

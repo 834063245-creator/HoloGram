@@ -2657,6 +2657,62 @@
     }
     .sp-btn-ok { color: var(--pass) !important; }
 
+    /* ═══════════════════════════════════════════════════════════════
+       SHORTCUTS HUD — barely-there text, brightens on hover, no box
+       ═══════════════════════════════════════════════════════════════ */
+    #shortcuts-overlay {
+      position: fixed;
+      top: calc(var(--toolbar-h) + 28px);
+      left: 24px;
+      z-index: 20;
+      pointer-events: auto;
+      user-select: none;
+      opacity: 0.2;
+      transition: opacity 0.5s ease;
+    }
+    #shortcuts-overlay:hover { opacity: 0.92; }
+    #shortcuts-overlay .so-close { display: none; }
+    #shortcuts-overlay .so-title { display: none; }
+
+    #shortcuts-overlay .so-grid {
+      display: flex;
+      gap: 48px;
+      align-items: flex-start;
+    }
+    #shortcuts-overlay .so-group {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    #shortcuts-overlay .so-group-title {
+      font-family: var(--font-hud); font-size: 7px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.8px;
+      color: rgba(120, 170, 225, 0.5);
+      margin-bottom: 2px;
+    }
+    #shortcuts-overlay .so-row {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; line-height: 1.7;
+    }
+    #shortcuts-overlay .so-keys {
+      display: flex; align-items: center; gap: 3px;
+      flex-shrink: 0; min-width: 60px; justify-content: flex-end;
+    }
+    #shortcuts-overlay .so-keys kbd {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 18px; height: 18px; padding: 0 4px;
+      font-family: var(--font-mono); font-size: 9px; font-weight: 500;
+      color: rgba(210, 230, 255, 0.7);
+      background: rgba(40, 70, 115, 0.35);
+      border: 1px solid rgba(70, 105, 160, 0.2);
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+    #shortcuts-overlay .so-desc {
+      color: rgba(200, 222, 248, 0.6);
+      white-space: nowrap;
+    }
+    #shortcuts-overlay .so-sep { width: 1px; background: rgba(60,90,140,0.12); align-self: stretch; }
+
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -2688,6 +2744,7 @@
     </div>
     <span class="sep"></span>
     <button id="btn-fold" data-icon="fold" title="折叠/展开社区星系 (F)">折叠</button>
+    <button id="btn-reset-cam" data-icon="reset-cam" title="重置摄像机视角 (R)">复位</button>
     <span class="sep"></span>
     <span class="brand" data-icon="brand">全息观测站</span>
     <span class="sep"></span>
@@ -2710,6 +2767,8 @@
       <input id="search-input" type="text" placeholder="SEARCH SYMBOL…" autocomplete="off" spellcheck="false" />
       <button id="search-btn" data-icon="search"></button>
     </div>
+    <span class="sep"></span>
+    <button id="btn-shortcuts" data-icon="info" title="快捷键 (?)">快捷键</button>
     <span id="tb-path"></span>
   </div>
 
@@ -2726,6 +2785,49 @@
        GRAPH — Three.js canvas lives here
        ═══════════════════════════════════════════════════════════════ -->
   <div id="graph"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       SHORTCUTS HUD — press ? to toggle, hover to brighten
+       ═══════════════════════════════════════════════════════════════ -->
+  <div id="shortcuts-overlay" style="display:none">
+    <div class="so-grid">
+      <div class="so-group">
+        <div class="so-group-title">全局</div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>L</kbd></span><span class="so-desc">对话</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span><span class="so-desc">变更着色</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>`</kbd></span><span class="so-desc">终端</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>,</kbd></span><span class="so-desc">设置</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>E</kbd></span><span class="so-desc">浏览器</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>?</kbd></span><span class="so-desc">快捷键面板</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Esc</kbd></span><span class="so-desc">退出/关闭</span></div>
+      </div>
+      <span class="so-sep"></span>
+      <div class="so-group">
+        <div class="so-group-title">星图交互</div>
+        <div class="so-row"><span class="so-keys"><kbd>R</kbd></span><span class="so-desc">复位视角</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>B</kbd></span><span class="so-desc">波及分析</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>F</kbd></span><span class="so-desc">折叠星系</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Alt</kbd>+<kbd>拖拽</kbd></span><span class="so-desc">框选节点</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Shift</kbd>+<kbd>点击</kbd></span><span class="so-desc">快速路径</span></div>
+      </div>
+      <span class="so-sep"></span>
+      <div class="so-group">
+        <div class="so-group-title">对话</div>
+        <div class="so-row"><span class="so-keys"><kbd>Enter</kbd></span><span class="so-desc">发送</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Shift</kbd><kbd>↵</kbd></span><span class="so-desc">换行</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>/new</kbd></span><span class="so-desc">新会话</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>/compact</kbd></span><span class="so-desc">压缩上下文</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>/memory</kbd></span><span class="so-desc">查看记忆</span></div>
+      </div>
+      <span class="so-sep"></span>
+      <div class="so-group">
+        <div class="so-group-title">其它</div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>S</kbd></span><span class="so-desc">保存文件</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>↵</kbd></span><span class="so-desc">Git 提交</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>↑</kbd><kbd>↓</kbd></span><span class="so-desc">终端历史</span></div>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══════════════════════════════════════════════════════════════
        DOCK TABS

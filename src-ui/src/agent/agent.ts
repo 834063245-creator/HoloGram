@@ -10,6 +10,7 @@ import type {
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import type { Tool, ToolRegistry } from './tool';
 import type { PermissionGate } from './permission';
+import type { HookRegistry } from './hooks';
 import { bus } from '../ui/events';
 
 // ---- Event types ----
@@ -106,6 +107,9 @@ export class Agent {
   // Permission gate (optional — nil means allow all)
   private gate: PermissionGate | null = null;
 
+  // PreToolUse hooks — enrich tool results with graph context
+  private hooks: HookRegistry | null = null;
+
   // Storm breaker — detect repetitive failing tool calls
   private stormSig = '';
   private stormCount = 0;
@@ -143,6 +147,8 @@ export class Agent {
       this.session.push({ role: 'system', content: systemPrompt });
     }
   }
+
+  setHooks(hooks: HookRegistry): void { this.hooks = hooks; }
 
   // ---- Public API ----
 
@@ -444,6 +450,12 @@ export class Agent {
       if (signal.aborted) throw new Error('aborted');
       bus.emit('agent:tool-started', { toolName: call.name, args });
       result = await t.execute(args);
+      // ── PreToolUse hooks: enrich result with graph context ──
+      if (this.hooks && !errMsg) {
+        try {
+          result = await this.hooks.apply(call.name, args, result);
+        } catch { /* hook failure silently degrades */ }
+      }
       // Re-check after execution — the tool may have been slow
       if (signal.aborted) throw new Error('aborted');
     } catch (e: any) {

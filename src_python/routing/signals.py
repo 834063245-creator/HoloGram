@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, type_val
+from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, type_val, file_from_location
 from ..core.diff import GraphDiffer, GraphDiff
 from .patterns import PatternMatcher, PatternMatch, FileChange
 
@@ -185,7 +185,7 @@ class SignalGenerator:
                         signal_type="l5_api_contract_kind",
                         category="公开 API 类型变更",
                         description=f"节点 {node.name} 类型变更: {old_kind} → {new_kind}",
-                        file_path=node.location.rsplit(":", 1)[0] if ":" in node.location else node.location,
+                        file_path=file_from_location(node.location) if node.location else node.location,
                         affected_nodes=[node.name],
                         confidence="确定",
                     ))
@@ -498,7 +498,7 @@ class SignalGenerator:
 
         # 检测线程新增
         for t in threads:
-            t_file = t.get("location", "").split(":")[0] if t.get("location") else ""
+            t_file = file_from_location(t.get("location") or "")
             if t_file in file_changes:
                 signals.append(Signal(
                     level=3,
@@ -560,7 +560,7 @@ class SignalGenerator:
                     src_node = after_graph.get_node(e.source)
                     if src_node is None:
                         continue
-                    src_file = src_node.location.rsplit(":", 1)[0] if ":" in src_node.location else src_node.location
+                    src_file = file_from_location(src_node.location) if src_node.location else src_node.location
                     if src_file in file_changes:
                         signals.append(Signal(
                             level=3,
@@ -796,7 +796,7 @@ class SignalGenerator:
                     for node in found_nodes:
                         incoming = after_graph.incoming_edges(node.id)
                         ref_count = len(set(
-                            after_graph.get_node(e.source).location.split(":")[0]  # type: ignore[union-attr]
+                            file_from_location(after_graph.get_node(e.source).location)  # type: ignore[union-attr]
                             for e in incoming
                             if after_graph.get_node(e.source)
                         ))

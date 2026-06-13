@@ -15,7 +15,7 @@ import json
 from .adapters import AdapterRegistry, PythonAdapter
 from .adapters.tree_sitter_adapter import TreeSitterAdapter
 from .adapters.typescript_adapter import TypeScriptAdapter
-from .core.graph import Graph, _sanitize_for_json
+from .core.graph import Graph, _sanitize_for_json, safe_json_dumps
 from .core.merger import GraphMerger, CrossFileResolver
 from .core.community import CommunityDetector
 from .core.diff import GraphDiffer
@@ -86,7 +86,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
 
         # Output — to_dict() now includes generated_at + coupling_summary
         if output_json:
-            json.dump(_sanitize_for_json(graph.to_dict()), sys.stdout, indent=2, ensure_ascii=False)
+            sys.stdout.write(safe_json_dumps(_sanitize_for_json(graph.to_dict()), indent=2, ensure_ascii=False))
         else:
             graph.to_json(graph_path)
             print(f"  saved: {graph_path}", file=sys.stderr)
@@ -169,7 +169,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
 
     if output_json:
         # JSON to stdout — to_dict() now includes generated_at + coupling_summary
-        json.dump(_sanitize_for_json(graph.to_dict()), sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write(safe_json_dumps(_sanitize_for_json(graph.to_dict()), indent=2, ensure_ascii=False))
     else:
         path = output_path or os.path.join(root, "hologram_graph.json")
         graph.to_json(path)

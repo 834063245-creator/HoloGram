@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph, Node, NodeType
+from ..core.graph import Graph, Node, NodeType, file_from_location
 
 
 # ============================================================
@@ -340,7 +340,7 @@ class ThreadInterleaveAnalyzer:
             rname = f"global:{gs['name']}"
             if rname not in resources:
                 resources[rname] = {"type": "global_var", "threads": [], "files": []}
-            resources[rname]["files"].append(gs["location"].split(":")[0] if gs.get("location") else "")
+            resources[rname]["files"].append(file_from_location(gs.get("location") or ""))
 
         # 2. 数据文件路径 → 共享资源
         path_files: Dict[str, Set[str]] = {}
@@ -348,14 +348,14 @@ class ThreadInterleaveAnalyzer:
             path = dp["path"]
             if path not in path_files:
                 path_files[path] = set()
-            path_files[path].add(dp["location"].split(":")[0] if dp.get("location") else "")
+            path_files[path].add(file_from_location(dp.get("location") or ""))
 
         # 只在多个线程的文件中出现的路径才算共享
         for path, files in path_files.items():
             # 收集所有可能写入此路径的线程
             related_threads = []
             for t in self.all_threads:
-                t_file = t["location"].split(":")[0] if t.get("location") else ""
+                t_file = file_from_location(t.get("location") or "")
                 if t_file in files:
                     related_threads.append({
                         "name": t.get("target", t.get("type", "?")),
@@ -380,10 +380,10 @@ class ThreadInterleaveAnalyzer:
             if rname not in resources:
                 continue
 
-            gs_file = gs["location"].split(":")[0] if gs.get("location") else ""
+            gs_file = file_from_location(gs.get("location") or "")
             related_threads = []
             for t in self.all_threads:
-                t_file = t["location"].split(":")[0] if t.get("location") else ""
+                t_file = file_from_location(t.get("location") or "")
                 if t_file == gs_file:
                     related_threads.append({
                         "name": t.get("target", t.get("type", "?")),
@@ -400,14 +400,14 @@ class ThreadInterleaveAnalyzer:
             # 检查锁保护
             count_lock_entries_for_this = 0
             for l in self.all_locks:
-                l_file = l["location"].split(":")[0] if l.get("location") else ""
+                l_file = file_from_location(l.get("location") or "")
                 if l_file == gs_file:
                     count_lock_entries_for_this += 1
 
             if count_lock_entries_for_this > 0:
                 resources[rname]["lock_detected"] = True
                 lock_names = [l["type"] for l in self.all_locks
-                             if l.get("location", "").split(":")[0] == gs_file]
+                             if file_from_location(l.get("location") or "") == gs_file]
                 resources[rname]["locks_nearby"] = lock_names
 
         # 统计

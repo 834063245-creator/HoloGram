@@ -49,7 +49,7 @@ def _safe_print(text: str, **kwargs) -> None:
 from .adapters import AdapterRegistry, PythonAdapter
 from .adapters.typescript_adapter import TypeScriptAdapter
 from .adapters.tree_sitter_adapter import TreeSitterAdapter
-from .core.graph import Graph, type_val
+from .core.graph import Graph, type_val, file_from_location, safe_json_dumps
 from .core.merger import GraphMerger, CrossFileResolver
 from .core.community import CommunityDetector
 from .core.diff import GraphDiffer, GraphDiff
@@ -587,7 +587,7 @@ def cmd_check(args) -> int:
             "api_signature_changes": 0,
             "is_first_scan": True,
         }
-        json_output = json.dumps(summary_dict, ensure_ascii=False)
+        json_output = safe_json_dumps(summary_dict, ensure_ascii=False)
         if args.json:
             _safe_print(json_output)
         else:
@@ -612,21 +612,21 @@ def cmd_check(args) -> int:
         for mn in diff.modified_nodes:
             node = after_graph.get_node(mn.node_id)
             if node and node.location:
-                f = node.location.rsplit(":", 1)[0] if ":" in node.location else node.location
+                f = file_from_location(node.location) if node.location else node.location
                 changed_file_set.add(f)
         for n in diff.added_nodes:
             if n.location:
-                f = n.location.rsplit(":", 1)[0] if ":" in n.location else n.location
+                f = file_from_location(n.location) if n.location else n.location
                 changed_file_set.add(f)
         for n in diff.removed_nodes:
             if n.location:
-                f = n.location.rsplit(":", 1)[0] if ":" in n.location else n.location
+                f = file_from_location(n.location) if n.location else n.location
                 changed_file_set.add(f)
         changed_files = sorted(changed_file_set)
 
     if not changed_files:
         if args.json:
-            _safe_print(json.dumps({"passed": True, "message": "No changes detected"}, ensure_ascii=False))
+            _safe_print(safe_json_dumps({"passed": True, "message": "No changes detected"}, ensure_ascii=False))
         else:
             _safe_print("No changes detected — passed.")
         return 0
@@ -662,7 +662,7 @@ def cmd_check(args) -> int:
 
     # Step 9: 输出
     import datetime as _dt
-    json_output = json.dumps(check_result, indent=2, ensure_ascii=False)
+    json_output = safe_json_dumps(check_result, indent=2, ensure_ascii=False)
     if args.json:
         _safe_print(json_output)
     elif check_result["passed"]:
@@ -831,7 +831,7 @@ def cmd_preflight(args) -> int:
     if not changed_files:
         # 如果没指定文件，检查所有文件
         changed_files = sorted(set(
-            node.location.rsplit(":", 1)[0] if ":" in (node.location or "") else (node.location or "")
+            file_from_location(node.location) if node.location else node.location
             for node in graph.nodes.values()
             if node.location
         ))
