@@ -89,6 +89,8 @@ const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButton
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
 const btnFold = document.getElementById('btn-fold') as HTMLButtonElement;
+const btnColorMode = document.getElementById('btn-color-mode') as HTMLButtonElement;
+const btnScaleMode = document.getElementById('btn-scale-mode') as HTMLButtonElement;
 const btnResetCam = document.getElementById('btn-reset-cam') as HTMLButtonElement;
 const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
 const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
@@ -1164,6 +1166,25 @@ async function init(): Promise<void> {
 
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+
+  // Color mode cycle
+  const colorModeOrder: Array<'type' | 'community' | 'coupling'> = ['type', 'community', 'coupling'];
+  let colorModeIdx = 0;
+  btnColorMode.addEventListener('click', () => {
+    colorModeIdx = (colorModeIdx + 1) % 3;
+    const label = starGraph.recolorByMode(colorModeOrder[colorModeIdx]);
+    btnColorMode.innerHTML = `${iconSvg('chart')} ${label}`;
+    btnColorMode.title = `着色模式: ${label}`;
+  });
+
+  // Scale mode toggle
+  let scaleByCoupling = false;
+  btnScaleMode.addEventListener('click', () => {
+    scaleByCoupling = !scaleByCoupling;
+    const label = starGraph.rescaleByMode(scaleByCoupling ? 'coupling' : 'degree');
+    btnScaleMode.innerHTML = `${iconSvg('blast')} ${label}`;
+    btnScaleMode.title = `节点大小: ${label}`;
+  });
 
   // Fold toggle
   btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });
