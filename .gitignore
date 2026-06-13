@@ -59,3 +59,6 @@ chat_sessions.json
 # One-off debug scripts
 test_debug.py
 prototype.html
+
+# Internal project docs (not for public repo)
+PROJECT.md
