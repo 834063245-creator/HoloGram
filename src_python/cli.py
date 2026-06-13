@@ -552,6 +552,12 @@ def cmd_check(args) -> int:
 
     # 保存新图
     after_graph.to_json(graph_path)
+    # 同步更新 MsgPack（前端优先加载 .hologram，不同步会导致读到旧数据）
+    msgpack_path = graph_path.replace('.json', '.hologram')
+    try:
+        after_graph.to_msgpack(msgpack_path)
+    except Exception:
+        pass
     print(f"Graph saved: {graph_path} ({after_graph.node_count} nodes, "
           f"{after_graph.edge_count} edges)", file=sys.stderr)
 
@@ -821,6 +827,10 @@ def cmd_incremental(args) -> int:
 
     # 保存图
     graph.to_json(graph_path)
+    try:
+        graph.to_msgpack(graph_path.replace('.json', '.hologram'))
+    except Exception:
+        pass
 
     # 输出 diff JSON
     print(json.dumps({
