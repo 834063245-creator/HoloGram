@@ -525,9 +525,18 @@ def run_full_check(
     cycle_result = None
     thread_result = None
 
+    # 从 file_changes 提取源码（优先于磁盘读取，性能更好）
+    coupling_sources: Optional[Dict[str, str]] = None
+    if file_changes:
+        coupling_sources = {}
+        for fp, fc in file_changes.items():
+            src = getattr(fc, 'new_source', None) or (fc.get('new_source') if isinstance(fc, dict) else None)
+            if src:
+                coupling_sources[fp] = src
+
     try:
         from ..analysis.coupling import coupling_depth_report
-        coupling_result = coupling_depth_report(after_graph)
+        coupling_result = coupling_depth_report(after_graph, coupling_sources)
         print(f"  Coupling analysis: {coupling_result.get('total_l4', 0)} L4 violations", file=sys.stderr)
     except Exception as e:
         logger.warning("耦合分析不可用: %s", e, exc_info=True)

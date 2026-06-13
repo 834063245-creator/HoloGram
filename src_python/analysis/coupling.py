@@ -453,10 +453,35 @@ class CouplingDepthAnalyzer:
         self._data_paths_cache[file_path] = _detect_data_paths_python(file_path, source)
 
 
+def _auto_pre_scan(analyzer: CouplingDepthAnalyzer, graph: Graph) -> None:
+    """当调用方未提供 sources 时，从磁盘自动读取源文件进行预扫描。"""
+    unique_files: set = set()
+    for node in graph.nodes.values():
+        fp = file_from_location(node.location or "")
+        if fp:
+            unique_files.add(fp)
+
+    source_root = graph.source_root or ""
+    for fp in unique_files:
+        try:
+            full_path = os.path.join(source_root, fp) if source_root else fp
+            full_path = os.path.abspath(full_path)
+            if os.path.isfile(full_path):
+                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                    analyzer.pre_scan_file(fp, f.read())
+        except (OSError, UnicodeDecodeError):
+            pass
+
+
 def coupling_depth_report(graph: Graph, file_sources: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """便捷函数：对图运行耦合深度分析并返回报告。"""
+    """便捷函数：对图运行耦合深度分析并返回报告。
+
+    当 file_sources 为 None 时，自动从磁盘读取图节点涉及的源文件。
+    """
     analyzer = CouplingDepthAnalyzer()
     if file_sources:
         for fp, src in file_sources.items():
             analyzer.pre_scan_file(fp, src)
+    else:
+        _auto_pre_scan(analyzer, graph)
     return analyzer.analyze(graph, file_sources)

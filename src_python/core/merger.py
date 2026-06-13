@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Tuple
 
-from .graph import Graph, Node, Edge, NodeType, EdgeType, type_val
+from .graph import Graph, Node, Edge, NodeType, EdgeType, type_val, file_from_location
 
 
 class GraphMerger:
@@ -99,6 +99,37 @@ class CrossFileResolver:
       - 继承匹配 → 建立 INHERIT 边
     """
 
+    @staticmethod
+    def _pick_best(candidates: List[Node], qualified_name: str, caller_node: Node) -> Optional[Node]:
+        """从同名候选中选出最佳匹配。优先 import 路径 → 同文件 → 第一个。"""
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # 如果有全限定名，提取模块路径进行匹配
+        module_path = ""
+        if "." in qualified_name:
+            module_path = qualified_name.rsplit(".", 1)[0]  # "os.path.join" → "os.path"
+
+        if module_path:
+            module_segments = module_path.replace(".", "/")
+            for c in candidates:
+                c_file = file_from_location(c.location or "")
+                if module_segments in c_file:
+                    return c
+
+        # Fallback: 优先同文件
+        caller_file = file_from_location(caller_node.location or "")
+        if caller_file:
+            for c in candidates:
+                c_file = file_from_location(c.location or "")
+                if caller_file == c_file:
+                    return c
+
+        # 最后 fallback：第一个
+        return candidates[0]
+
     def resolve(self, graph: Graph) -> int:
         """
         在图内解析跨文件关系。返回新增边数。
@@ -134,41 +165,41 @@ class CrossFileResolver:
             bases: List[str] = node.properties.get("bases", [])
             for base_name in bases:
                 short = base_name.split(".")[-1]
-                for target in name_index.get(short, []):
-                    if target.id != node.id:
-                        edge_key = (node.id, target.id, "structural", "inherit")
-                        if edge_key not in existing_edges:
-                            edge = Edge(
-                                id=Edge.make_id(),
-                                type=EdgeType.STRUCTURAL,
-                                direction="inherit",
-                                source=node.id,
-                                target=target.id,
-                            )
-                            if graph.add_edge(edge):
-                                added += 1
-                                existing_edges.add(edge_key)
-                        break   # 只匹配第一个同名
+                candidates = [t for t in name_index.get(short, []) if t.id != node.id]
+                best = self._pick_best(candidates, base_name, node)
+                if best:
+                    edge_key = (node.id, best.id, "structural", "inherit")
+                    if edge_key not in existing_edges:
+                        edge = Edge(
+                            id=Edge.make_id(),
+                            type=EdgeType.STRUCTURAL,
+                            direction="inherit",
+                            source=node.id,
+                            target=best.id,
+                        )
+                        if graph.add_edge(edge):
+                            added += 1
+                            existing_edges.add(edge_key)
 
             # 处理 calls（调用关系）
             calls: List[str] = node.properties.get("calls", [])
             for call_name in calls:
                 short = call_name.split(".")[-1]
-                for target in name_index.get(short, []):
-                    if target.id != node.id:
-                        edge_key = (node.id, target.id, "structural", "call")
-                        if edge_key not in existing_edges:
-                            edge = Edge(
-                                id=Edge.make_id(),
-                                type=EdgeType.STRUCTURAL,
-                                direction="call",
-                                source=node.id,
-                                target=target.id,
-                            )
-                            if graph.add_edge(edge):
-                                added += 1
-                                existing_edges.add(edge_key)
-                        break
+                candidates = [t for t in name_index.get(short, []) if t.id != node.id]
+                best = self._pick_best(candidates, call_name, node)
+                if best:
+                    edge_key = (node.id, best.id, "structural", "call")
+                    if edge_key not in existing_edges:
+                        edge = Edge(
+                            id=Edge.make_id(),
+                            type=EdgeType.STRUCTURAL,
+                            direction="call",
+                            source=node.id,
+                            target=best.id,
+                        )
+                        if graph.add_edge(edge):
+                            added += 1
+                            existing_edges.add(edge_key)
 
         return added
 

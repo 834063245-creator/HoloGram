@@ -159,9 +159,9 @@ def detect_fast(graph: Graph, seed: int = 42) -> List[Community]:
         else:
             nx_g.add_edge(edge.source, edge.target, weight=w)
 
-    # Label Propagation
-    from networkx.algorithms.community import label_propagation_communities
-    raw = list(label_propagation_communities(nx_g))
+    # Louvain (deterministic with seed; label_propagation doesn't accept seed)
+    from networkx.algorithms.community import louvain_communities
+    raw = louvain_communities(nx_g, seed=seed)
 
     # 构建 Community 对象
     communities = []

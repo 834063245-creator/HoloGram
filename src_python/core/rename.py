@@ -234,14 +234,14 @@ def execute_rename(
             (def_line, old_name, new_name, "definition")
         )
 
-    # 引用替换：标记整个文件需要替换（引用行可能不在调用点，而在函数定义行）
+    # 引用替换：标记文件需要替换（行号用于定义文件内的自身引用定位）
     for ref_node in plan.reference_nodes:
         ref_fp = file_from_location(ref_node.location or "")
         if not ref_fp:
             continue
         if ref_fp not in file_edits:
             file_edits[ref_fp] = []
-        # reference 标记：whole-file replace，不限于单行
+        # reference_file 标记触发全文件替换，但对 Python 用 tokenize 保护字符串/注释
         file_edits[ref_fp].append(
             (0, old_name, new_name, "reference_file")
         )
@@ -383,11 +383,14 @@ def _apply_edits(
     has_whole_file = any(tag == "reference_file" for _, _, _, tag in edits)
 
     if has_whole_file:
-        # 全文标识符边界替换（用于引用文件）
-        new_content, _count = ident_re.subn(new_name, content)
+        # 全文替换，但对 Python 用 tokenize 保护注释/字符串
+        if file_path.endswith(".py"):
+            new_content = _py_safe_ident_replace(content, old_name, new_name)
+        else:
+            new_content = ident_re.sub(new_name, content)
         return new_content
 
-    # 行级精确替换
+    # 行级精确替换（定义行 + 同文件内引用）
     for line_no, _old, _new, tag in edits:
         if line_no < 1 or line_no > len(lines):
             continue
@@ -406,5 +409,39 @@ def _apply_edits(
             if count > 0:
                 lines[idx] = new_line
                 changed_lines.add(idx)
+
+    return "\n".join(lines)
+
+
+def _py_safe_ident_replace(content: str, old_name: str, new_name: str) -> str:
+    """对 Python 文件做标识符替换，跳过字符串字面量和注释。
+
+    使用 tokenize 模块识别 NAME token，仅替换匹配 old_name 的标识符。
+    字符串和注释内的同名文本不会被替换。
+    """
+    import io
+    import tokenize as _tk
+
+    replacements: list = []  # (start_line, start_col, end_line, end_col)
+    try:
+        tokens = _tk.generate_tokens(io.StringIO(content).readline)
+        for tok in tokens:
+            if tok.type == _tk.NAME and tok.string == old_name:
+                # tok.start = (line, col), tok.end = (line, col)
+                replacements.append((tok.start[0], tok.start[1], tok.end[0], tok.end[1]))
+    except _tk.TokenError:
+        # 语法不完整的文件，回退到 regex
+        ident_re = re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(old_name) + r'(?![a-zA-Z0-9_])')
+        return ident_re.sub(new_name, content)
+
+    if not replacements:
+        return content
+
+    # 从后往前替换，保持位置有效
+    lines = content.split("\n")
+    for sline, scol, eline, ecol in sorted(replacements, reverse=True):
+        if sline == eline:
+            line = lines[sline - 1]
+            lines[sline - 1] = line[:scol] + new_name + line[ecol:]
 
     return "\n".join(lines)

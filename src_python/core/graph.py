@@ -104,6 +104,7 @@ class Node:
         d = asdict(self)
         # 兼容：type 可能已是字符串（从 JSON 反序列化后）
         d["type"] = self.type.value if isinstance(self.type, NodeType) else self.type
+        d["kind"] = self.kind.value if hasattr(self.kind, 'value') else self.kind
         return d
 
     def __hash__(self) -> int:
@@ -515,19 +516,24 @@ class Graph:
 
     # -- 合并 --
 
+    @staticmethod
+    def _kind_str(kind: Any) -> str:
+        """Normalize kind to string for dedup keys (handles Enum from JSON round-trip)."""
+        return kind.value if hasattr(kind, 'value') else str(kind)
+
     def merge(self, other: Graph) -> int:
         """
-        将另一个图合并到当前图中。基于 location + name 去重。
+        将另一个图合并到当前图中。基于 location + name + kind 去重。
         返回新增节点数。
         """
         loc_map: Dict[str, Node] = {}
         for n in self.nodes.values():
-            key = f"{n.location}::{n.name}"
+            key = f"{n.location}::{n.name}::{self._kind_str(n.kind)}"
             loc_map[key] = n
 
         added = 0
         for node in other.nodes.values():
-            key = f"{node.location}::{node.name}"
+            key = f"{node.location}::{node.name}::{self._kind_str(node.kind)}"
             if key not in loc_map:
                 self.add_node(node)
                 loc_map[key] = node
@@ -556,13 +562,9 @@ class Graph:
             "edges": [e.to_dict() for e in self.edges.values()],
             "communities": [c.to_dict() for c in self.communities],
         }
-        # Include coupling summary if available (set after CouplingDepthAnalyzer runs)
+        # Include full coupling summary if available (set after CouplingDepthAnalyzer runs)
         if hasattr(self, 'coupling_summary') and self.coupling_summary:
-            d["meta"]["coupling"] = {
-                k: self.coupling_summary[k] for k in
-                ('total_l1', 'total_l2', 'total_l3', 'total_l4')
-                if k in self.coupling_summary
-            }
+            d["meta"]["coupling"] = dict(self.coupling_summary)
         return d
 
     def to_json(self, file_path: str) -> None:
