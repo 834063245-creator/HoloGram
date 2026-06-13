@@ -105,7 +105,7 @@ export class TerminalPanel {
     // xterm
     const term = new Terminal({
       cursorBlink: true, fontSize: 12,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
       theme: {
         background: '#040810', foreground: '#c9d1d9', cursor: '#7eb8ff',
         selectionBackground: 'rgba(88, 120, 180, 0.3)',

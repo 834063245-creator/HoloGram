@@ -199,7 +199,7 @@ export class FileViewer {
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       fontSize: 13,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
       lineNumbers: 'on',
       renderWhitespace: 'selection',
       tabSize: 4,
