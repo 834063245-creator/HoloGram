@@ -10,7 +10,8 @@ venv/
 
 # Node / Frontend
 node_modules/
-dist/
+dist/*
+!src-ui/dist/.gitkeep
 
 # Rust / Tauri
 target/
