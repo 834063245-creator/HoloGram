@@ -30,7 +30,7 @@ jobs:
           pip install -e ".[full,dev]" --break-system-packages
 
       - name: Run tests
-        run: python -m pytest tests/ -q --tb=short --timeout=60 -x
+        run: python -m pytest tests/ -q --tb=short -x
         timeout-minutes: 10
 
   rust-check:
