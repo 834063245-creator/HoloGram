@@ -58,7 +58,6 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
-    "hologram",
     "watchdog>=4.0",
 ]
 
