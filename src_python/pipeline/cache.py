@@ -35,8 +35,12 @@ class IncrementalCache:
         self._max_size = max_size
         self._lock = threading.Lock()
         if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-            self._load_from_disk()
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+            except OSError:
+                logger.warning("Cannot create cache directory: %s", cache_dir)
+            else:
+                self._load_from_disk()
 
     @staticmethod
     def hash_source(source: str) -> str:
