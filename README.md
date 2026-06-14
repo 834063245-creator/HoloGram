@@ -25,11 +25,19 @@
 HoloGram 不是又一个静态依赖图工具。三件事让它不同：
 
 - **跨语言统一 IR** — 14 门语言的符号、数据、时序全部映射到同一张图。TypeScript 调用 Python？照样追踪。
-- **LLM 原生集成** — Agent 不是外挂聊天框。你点击节点它分析节点，你选路径它查路径，它调用的每个工具实时高亮到 3D 视图中。你和代码库对话，不是和命令行对话。
-- **图即上下文** — Agent 不读源文件，读的是预分析好的图。一次 `hologram_impact auth --depth 2` 返回几十行 JSON 就把上千行源码的依赖关系查清了。图的存储和查询都是为 LLM 优化的——SQLite FTS5 毫秒级检索，耦合深度提前算好（L1–L4），Agent 不用重推导。同样的分析任务，token 消耗远低于全量喂代码。
+- **原生 Agent** — Agent 和图是同一个系统的两层，不是外挂聊天框。Agent 的 30+ 工具直接查预分析好的图数据库，不是喂源文件让 LLM 猜。详见下方。
 - **自举** — HoloGram 分析自己的代码库，用自己的图 debug 自己。
 
 也支持纯 CLI 模式，可接入 CI 流水线。
+
+### 原生 Agent
+
+HoloGram 不是"在 IDE 里嵌个聊天框"。Agent 和图是同一个系统的两层——**图是 Agent 的眼睛，Agent 是图的嘴**。
+
+- **30+ 原生工具** — 不是靠喂代码让 LLM 猜。每个工具直接查图数据库：`neighbors` 查邻居、`impact` 追踪波及范围、`coupling-report` 出耦合报告、`blindspots` 标记边界盲点、`cycle` 检测数据流环、`fragile` 列出脆弱依赖、`community` 看社区归属、`history` 追踪节点变更记录。还有代码搜索、文件读写、Shell 执行、Git 全套操作。
+- **图即上下文** — Agent 不读源文件，读的是预分析好的图。耦合深度（L1–L4）提前算好，SQLite FTS5 毫秒级检索。一次工具调用返回几十行 JSON 就把上千行源码的依赖关系查清。同样的分析任务，token 消耗远低于全量喂代码。
+- **双向实时联动** — 单击节点问 Agent 这个模块；Shift+点击两个节点让 Agent 分析最短依赖路径；Alt+拖框圈选区域批量分析。反过来，Agent 每调用一个工具，3D 视图中受影响的节点实时高亮，路径粒子沿边流动。**不是看图，是和代码库对话。**
+- **权限分级** — Shell 执行、Git push、文件写入等危险操作需人工确认。支持 Anthropic 和 OpenAI 兼容接口，API key 本地存储，不上传任何分析数据。
 
 ---
 
@@ -59,13 +67,9 @@ Python 走标准库 `ast` 精确解析，JavaScript / TypeScript / Go / Rust / J
 - **V2 深层诊断** — 耦合深度四级分类（L1 公开 API → L4 封装穿透）、数据流环检测（Johnson 算法，区分纯代码/数据持久/LLM 涉入三类环）、线程冲突矩阵（N×M 线程×资源，R/W/RW 访问模式）、边界盲点标记（L4 穿透 + 无锁并发 + LLM 反馈环）。
 - **V3 变更路由** — 五级破坏信号（L5 不可逆数据库迁移/API 契约断裂 → L1 仅可见文档变更），可配置 YAML 阈值 + 白名单/黑名单，自动生成人类可读的变更影响摘要。
 
-**🤖 内置 LLM Agent**
+**🤖 原生 Agent**
+30+ 工具直接查图数据库，双向实时联动 3D 视图。详见上方"原生 Agent"段落。
 
-聊天面板内置 Agent，支持 Anthropic 和 OpenAI 兼容接口。Agent 持有 30+ 工具：依赖图查询（neighbors / impact / path / coupling-report / blindspots / cycle / fragile / community / history）、代码搜索（正则 + 全文）、文件读写、Shell 执行、Git 操作（status / diff / stage / commit / push / pull）。权限分级，危险操作需人工确认。
-
-**🔗 图 ↔ Agent 双向实时联动**
-
-Agent 和图是同一层的东西。单击节点，"问 Agent 这个模块"；Shift+点击两个节点，Agent 自动分析最短依赖路径；Alt+拖框圈选区域，Agent 批量分析。反过来，Agent 每调用一个工具，3D 视图中受影响的节点实时高亮，路径粒子沿边流动。**不是看图，是和代码库对话。**
 
 **⚡ 增量实时更新**
 
