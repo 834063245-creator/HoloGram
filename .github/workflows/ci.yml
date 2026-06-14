@@ -21,6 +21,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: pip-${{ runner.os }}-${{ matrix.python-version }}-
+
       - name: Install system deps (igraph)
         run: sudo apt-get update && sudo apt-get install -y libigraph-dev
 
@@ -31,7 +38,7 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -q --tb=short -x
-        timeout-minutes: 10
+        timeout-minutes: 5
 
   rust-check:
     runs-on: ubuntu-latest
@@ -40,6 +47,16 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
       - name: Install system deps (Tauri)
         run: |
