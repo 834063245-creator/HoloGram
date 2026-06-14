@@ -25,6 +25,11 @@ target/
 .DS_Store
 Thumbs.db
 
+# Generated graph data (local paths — DO NOT commit)
+hologram_graph.hologram
+hologram_graph_files.json
+*.hologram
+
 # Binaries
 *.dll
 *.exe
@@ -59,6 +64,7 @@ chat_sessions.json
 # One-off debug scripts
 test_debug.py
 prototype.html
+preflight/
 
 # Internal project docs (not for public repo)
 PROJECT.md
@@ -68,10 +74,13 @@ COMPARISON_REPORT.md
 CSS_MIGRATION.md
 STARGRAPH_SPEC.md
 TEST_SPEC.md
+CODE_AUDIT_CHECKLIST.md
+FRONTEND_AUDIT_CHECKLIST.md
 docs_archive/
 
-# Will rewrite when ready to publish
-README.md
+# One-off internal scripts (not for public repo)
+src-ui/test-once.ts
+src-ui/test-agent.ts
 
 # Generated docs — not for source control
 AGENT_MEMORY_SYSTEM.txt

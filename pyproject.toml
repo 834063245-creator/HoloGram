@@ -5,12 +5,47 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hologram"
 version = "0.1.0"
-description = "代码全息观测站 — 系统无关的代码库交互式依赖拓扑图生成器"
+description = "HoloGram — 代码全息观测站：语言无关的交互式代码依赖拓扑图生成器"
 requires-python = ">=3.10"
-authors = [{ name = "Hologram Team" }]
+authors = [{ name = "HoloGram Team" }]
 license = { text = "MIT" }
 readme = "README.md"
-keywords = ["code-analysis", "dependency-graph", "topology", "visualization"]
+keywords = [
+    "code-analysis",
+    "dependency-graph",
+    "topology",
+    "visualization",
+    "static-analysis",
+    "tree-sitter",
+    "llm",
+    "agent",
+    "tauri",
+    "three-js",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications",
+    "Natural Language :: Chinese (Simplified)",
+    "Natural Language :: English",
+]
+
+[project.urls]
+Homepage = "https://github.com/HoloGramHG/HoloGram"
+Documentation = "https://github.com/HoloGramHG/HoloGram/blob/main/README.md"
+Repository = "https://github.com/HoloGramHG/HoloGram"
+Issues = "https://github.com/HoloGramHG/HoloGram/issues"
+Discussions = "https://github.com/HoloGramHG/HoloGram/discussions"
 
 dependencies = [
     "networkx>=3.0",
