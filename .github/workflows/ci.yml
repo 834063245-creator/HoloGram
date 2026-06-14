@@ -41,6 +41,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Create dummy python dir (Tauri resources require it)
+        run: mkdir -p src-tauri/python
+
       - name: Install system deps (Tauri)
         run: |
           sudo apt-get update

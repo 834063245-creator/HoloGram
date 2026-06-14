@@ -40,13 +40,6 @@ classifiers = [
     "Natural Language :: English",
 ]
 
-[project.urls]
-Homepage = "https://github.com/834063245-creator/HoloGram"
-Documentation = "https://github.com/834063245-creator/HoloGram/blob/main/README.md"
-Repository = "https://github.com/834063245-creator/HoloGram"
-Issues = "https://github.com/834063245-creator/HoloGram/issues"
-Discussions = "https://github.com/834063245-creator/HoloGram/discussions"
-
 dependencies = [
     "networkx>=3.0",
     "igraph>=0.10,<0.11",
@@ -55,6 +48,13 @@ dependencies = [
     "PyYAML>=6.0",
     "tree-sitter>=0.22",
 ]
+
+[project.urls]
+Homepage = "https://github.com/834063245-creator/HoloGram"
+Documentation = "https://github.com/834063245-creator/HoloGram/blob/main/README.md"
+Repository = "https://github.com/834063245-creator/HoloGram"
+Issues = "https://github.com/834063245-creator/HoloGram/issues"
+Discussions = "https://github.com/834063245-creator/HoloGram/discussions"
 
 [project.optional-dependencies]
 full = [
