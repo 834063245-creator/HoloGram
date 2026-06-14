@@ -2459,6 +2459,152 @@ for idx, fp in enumerate(sorted(all_files)):
                     "coupling_depth": 1,
                 }})
 
+# ── Step 3.5: Community detection (Label Propagation, pure Python) ──
+import random
+random.seed(42)
+
+adj = {{n['id']: [] for n in nodes}}
+for e in edges:
+    s, t = e['source'], e['target']
+    adj[s].append(t)
+    adj[t].append(s)
+
+labels = {{n['id']: i for i, n in enumerate(nodes)}}
+nids = list(labels.keys())
+for _ in range(100):
+    changed = False
+    random.shuffle(nids)
+    for nid in nids:
+        neighbors = adj.get(nid, [])
+        if not neighbors:
+            continue
+        counts = {{}}
+        for nb in neighbors:
+            nl = labels[nb]
+            counts[nl] = counts.get(nl, 0) + 1
+        best = max(counts, key=counts.get)
+        if labels[nid] != best:
+            labels[nid] = best
+            changed = True
+    if not changed:
+        break
+
+groups = {{}}
+for nid, lbl in labels.items():
+    groups.setdefault(lbl, []).append(nid)
+
+min_size = 3
+valid_groups = [(lbl, ms) for lbl, ms in groups.items() if len(ms) >= min_size]
+valid_groups.sort(key=lambda x: -len(x[1]))
+
+nodes_by_id = {{n['id']: n for n in nodes}}
+communities = []
+for ci, (lbl, member_ids) in enumerate(valid_groups):
+    cid = "community_{{:04d}}".format(ci)
+    for nid in member_ids:
+        if nid in nodes_by_id:
+            nodes_by_id[nid]['community_id'] = cid
+    degrees = [(nid, len(adj.get(nid, []))) for nid in member_ids]
+    degrees.sort(key=lambda x: -x[1])
+    top_names = []
+    for nid, _ in degrees[:2]:
+        node = nodes_by_id.get(nid)
+        if node:
+            name = node['name']
+            if '.' in name:
+                name = name.rsplit('.', 1)[0]
+            top_names.append(name)
+    c_label = '/'.join(top_names[:2]) if top_names else 'unknown'
+    communities.append({{
+        'id': cid,
+        'level': 0,
+        'label': c_label,
+        'node_ids': member_ids,
+        'parent_id': None,
+        'properties': {{'size': len(member_ids)}},
+    }})
+
+sys.stderr.write("HOLO:PHASE:community:{{}} file-communities\n".format(len(communities)))
+sys.stderr.flush()
+
+# ── Step 3.6: Recursive sub-communities (Level 1+) for large clusters ──
+def _recursive_label_prop(member_ids, adj, nodes_by_id, level, parent_id, min_size):
+    """Run label propagation on a subset of nodes, producing sub-communities."""
+    if len(member_ids) < 12:
+        return []
+    sub_adj = {{}}
+    id_set = set(member_ids)
+    for nid in member_ids:
+        sub_adj[nid] = [nb for nb in adj.get(nid, []) if nb in id_set]
+
+    sub_labels = {{nid: i for i, nid in enumerate(member_ids)}}
+    sub_nids = list(sub_labels.keys())
+    for _ in range(50):
+        changed = False
+        random.shuffle(sub_nids)
+        for nid in sub_nids:
+            neighbors = sub_adj.get(nid, [])
+            if not neighbors:
+                continue
+            counts = {{}}
+            for nb in neighbors:
+                nl = sub_labels[nb]
+                counts[nl] = counts.get(nl, 0) + 1
+            best = max(counts, key=counts.get)
+            if sub_labels[nid] != best:
+                sub_labels[nid] = best
+                changed = True
+        if not changed:
+            break
+
+    sub_groups = {{}}
+    for nid, lbl in sub_labels.items():
+        sub_groups.setdefault(lbl, []).append(nid)
+
+    result = []
+    sub_ci = 0
+    for lbl, ms in sorted(sub_groups.items(), key=lambda x: -len(x[1])):
+        if len(ms) < min_size:
+            continue
+        scid = "{{}}_{{:03d}}_{{:03d}}".format(parent_id, level, sub_ci)
+        sub_ci += 1
+        for nid in ms:
+            if nid in nodes_by_id:
+                nodes_by_id[nid]['community_id'] = scid
+        degrees = [(nid, len(adj.get(nid, []))) for nid in ms]
+        degrees.sort(key=lambda x: -x[1])
+        top_names = []
+        for nid, _ in degrees[:2]:
+            node = nodes_by_id.get(nid)
+            if node:
+                name = node['name']
+                if '.' in name:
+                    name = name.rsplit('.', 1)[0]
+                top_names.append(name)
+        sc_label = '/'.join(top_names[:2]) if top_names else 'sub'
+        result.append({{
+            'id': scid,
+            'level': level,
+            'label': sc_label,
+            'node_ids': ms,
+            'parent_id': parent_id,
+            'properties': {{'size': len(ms)}},
+        }})
+        # Recurse deeper for very large sub-communities
+        if len(ms) >= 20 and level < 2:
+            result.extend(_recursive_label_prop(ms, adj, nodes_by_id, level + 1, scid, 5))
+    return result
+
+# Run sub-community detection on each Level 0 community
+sub_communities = []
+for comm in communities:
+    subs = _recursive_label_prop(comm['node_ids'], adj, nodes_by_id, level=1, parent_id=comm['id'], min_size=4)
+    sub_communities.extend(subs)
+communities.extend(sub_communities)
+
+sys.stderr.write("HOLO:PHASE:community:{{}} L0 + {{}} L1+ sub-communities\n".format(len(communities) - len(sub_communities), len(sub_communities)))
+sys.stderr.flush()
+
 # ── Step 4: Write output ──
 result = {{
     "meta": {{
@@ -2467,12 +2613,12 @@ result = {{
         "version": "0.1.0",
         "node_count": len(nodes),
         "edge_count": len(edges),
-        "community_count": 0,
+        "community_count": len(communities),
         "lightweight": True,
     }},
     "nodes": nodes,
     "edges": edges,
-    "communities": [],
+    "communities": communities,
 }}
 
 for fname in ["hologram_graph.json", "hologram_graph_files.json"]:

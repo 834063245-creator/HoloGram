@@ -376,8 +376,11 @@ export class StarGraph {
   // ── Community / Galaxy fold overlay ──────────────────────
   private foldMode = false;
   private enteredGalaxyId: string | null = null;             // null=universe, string=inside a galaxy
+  private enteredSubCommunityId: string | null = null;       // null=whole galaxy, string=drilled into sub-community
+  private _drillStack: string[] = [];                        // multi-level sub-community drill path (top = current)
   private communities: CommunityData[] = [];
   private nodeCommMap = new Map<number, string>();           // nodeIdx → communityId
+  private _subCommByNodeIdx = new Map<number, string>();     // nodeIdx → subCommunityId (inside constellation)
   private commFoldGroup = new THREE.Group();                 // galaxy clouds + constellation edges
   // Galaxy cloud data (computed after layout)
   private galaxyMeta: { id: string; label: string; centroid: THREE.Vector3; memberIndices: number[] }[] = [];
@@ -525,7 +528,8 @@ export class StarGraph {
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     // Double-click → focus subgraph
     canvas.addEventListener('dblclick', (e: MouseEvent) => {
-      if (this._selecting || this.foldMode) return;
+      if (this._selecting) return;
+      if (this.foldMode && !this.enteredGalaxyId) return;
       const idx = this._hitNode(e);
       if (idx >= 0) {
         e.preventDefault(); e.stopPropagation();
@@ -539,6 +543,10 @@ export class StarGraph {
         if (this._selecting) { this._selecting = false; this._hideSelectRect(); this.controls.enabled = true; return; }
         if (this._shiftSourceIdx >= 0) { this._clearShiftPath(); return; }
         if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
+        if (this.enteredSubCommunityId) { this.exitSubCommunity(); return; }
+        if (this.enteredGalaxyId) { this.exitGalaxy(); return; }
+        // In universe fold view: ESC exits fold mode
+        if (this.foldMode) { this.setFoldMode(false); return; }
         if (this.blastMode) { this.exitBlastMode(); return; }
       }
       if (e.key === 'b' || e.key === 'B') {
@@ -862,23 +870,47 @@ export class StarGraph {
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
-    // In universe fold view: click galaxies to enter them
-    if (this.foldMode && !this.enteredGalaxyId) {
+
+    // Helper: intersect galaxy core sprites and return the community id
+    const hitCloudId = (): string | null => {
       const coreSprites = this.galaxyGlows.filter((_, i) => i % 2 === 1);
-      const galaxyHits = this.raycaster.intersectObjects(coreSprites);
-      if (galaxyHits.length > 0) {
-        const gIdx = galaxyHits[0].object.userData['galaxyIndex'] as number | undefined;
-        if (gIdx !== undefined && gIdx < this.galaxyMeta.length) {
-          this.enterGalaxy(this.galaxyMeta[gIdx].id);
-        }
+      const hits = this.raycaster.intersectObjects(coreSprites);
+      if (hits.length > 0) {
+        return (hits[0].object.userData['galaxyId'] as string) || null;
       }
+      return null;
+    };
+
+    // In universe view: click galaxy cloud → enterGalaxy
+    if (this.foldMode && !this.enteredGalaxyId) {
+      const cid = hitCloudId();
+      if (cid) { this.enterGalaxy(cid); }
       return;
     }
-    // Only intersect visible nodes
+
+    // Inside a galaxy or sub-community: dispatch based on whether we're in cloud or constellation view
+    if (this.foldMode && this.enteredGalaxyId) {
+      // Current parent is the deepest sub-community, or the galaxy itself
+      const activeParentId = this._drillStack.length > 0
+        ? this._drillStack[this._drillStack.length - 1]
+        : this.enteredGalaxyId;
+
+      // Check if current parent has sub-communities (→ cloud view) or not (→ constellation view)
+      if (this._hasVisibleSubCommunities(activeParentId)) {
+        // Cloud view: click sub-cloud → enterSubCommunity
+        const cid = hitCloudId();
+        if (cid) { this.enterSubCommunity(cid); }
+        return;
+      }
+    }
+
+    // Only intersect visible nodes (constellation or standard view)
     const visibleCores = this.nodeCores.filter(c => c.visible);
     const hits = this.raycaster.intersectObjects(visibleCores);
     const idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
+
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
+    else if (idx < 0) this.hideDetail();
     else if (idx < 0) this.hideDetail();
 
     // Step 3: Emit graph:node-clicked (for external interaction handlers)
@@ -1337,10 +1369,11 @@ export class StarGraph {
 
   private updateHover(): void {
     if (this.nodeCores.length === 0) return;
-    // In universe fold view: hover galaxies to show tooltip + highlight
-    if (this.foldMode && !this.enteredGalaxyId) {
+    // Cloud hover: any level where clouds are visible (universe, sub-clouds, sub-sub-clouds)
+    const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0
+      && !this.nodeCores.some(c => c.visible); // no visible nodes = cloud view
+    if (cloudViewActive) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
-      // Galaxy hover detection — only test core sprites (small & precise)
       this.raycaster.setFromCamera(this.mouse, this.camera);
       const coreSprites = this.galaxyGlows.filter((_, i) => i % 2 === 1);
       const galaxyHits = this.raycaster.intersectObjects(coreSprites);
@@ -1351,9 +1384,10 @@ export class StarGraph {
           this.hoveredGalaxyIdx = gIdx;
           const gm = this.galaxyMeta[gIdx];
           const shortName = (gm.label || gm.id).split('/')[0].replace(/_/g, ' ');
-          this.tooltipEl.querySelector('.tt-name')!.textContent = `🌌 ${shortName}`;
+          const isSub = !!this.enteredGalaxyId; // inside a galaxy = sub-cloud hover
+          this.tooltipEl.querySelector('.tt-name')!.textContent = `${isSub ? '📁' : '🌌'} ${shortName}`;
           this.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
-          this.tooltipEl.querySelector('.tt-loc')!.textContent = '点击进入查看内部连线';
+          this.tooltipEl.querySelector('.tt-loc')!.textContent = isSub ? '点击钻入子社区' : '点击进入查看内部连线';
           this.tmpVec3.copy(gm.centroid);
           this.tmpVec3.project(this.camera);
           if (this.tmpVec3.z <= 1) {
@@ -2237,9 +2271,23 @@ export class StarGraph {
       (lines.material as THREE.LineBasicMaterial).opacity = edgeOpacityByDepth(depth, this.mode);
     }
     if (this.edgeParticles) this.edgeParticles.visible = true;
-    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    this._disposeFoldChildren();
     this.clearCrossEdgeFlow();
     this.galaxyClouds = []; this.galaxyGlows = [];
+  }
+
+  /** Dispose all children of commFoldGroup, releasing GPU resources. */
+  private _disposeFoldChildren(): void {
+    while (this.commFoldGroup.children.length) {
+      const child = this.commFoldGroup.children[0];
+      if ((child as any).geometry) (child as any).geometry.dispose();
+      const mat = (child as any).material;
+      if (mat) {
+        if (Array.isArray(mat)) mat.forEach((m: THREE.Material) => m.dispose());
+        else (mat as THREE.Material).dispose();
+      }
+      this.commFoldGroup.remove(child);
+    }
   }
 
   /** Reveal one galaxy as a constellation: member nodes glow + internal edges bright.
@@ -2288,6 +2336,7 @@ export class StarGraph {
       return !isNaN(lvl) && lvl >= 1;
     });
     let subCount = 0;
+    this._subCommByNodeIdx.clear();
     if (subCommunities.length > 0) {
       const subColors = [0x66aaff, 0xff66aa, 0x66ffaa, 0xffaa66, 0xaa66ff]; // Distinct colors for sub-communities
       subCommunities.forEach((subComm, idx) => {
@@ -2295,7 +2344,10 @@ export class StarGraph {
         const subMembers: number[] = [];
         for (const nid of subComm.node_ids) {
           const nodeIdx = this.graphNodes.findIndex(n => n.id === nid);
-          if (nodeIdx >= 0) subMembers.push(nodeIdx);
+          if (nodeIdx >= 0) {
+            subMembers.push(nodeIdx);
+            this._subCommByNodeIdx.set(nodeIdx, subComm.id);
+          }
         }
         if (subMembers.length > 0) subCount++;
         // Highlight sub-community nodes with distinct color (override full mode white)
@@ -2318,42 +2370,124 @@ export class StarGraph {
   enterGalaxy(galaxyId: string): void {
     if (!this.foldMode || this.enteredGalaxyId === galaxyId) return;
     this.enteredGalaxyId = galaxyId;
-    // Clear fold group (clouds), re-apply for constellation view
-    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    this.enteredSubCommunityId = null;
+    this._drillStack = []; // Reset sub-community drill path
+    // Dismiss any lingering galaxy hover tooltip
+    this.hoveredGalaxyIdx = -1;
+    this.container.style.cursor = '';
+    this.tooltipEl?.classList.remove('visible');
+    // Clear fold group
+    this._disposeFoldChildren();
     this.galaxyClouds = []; this.galaxyGlows = [];
-    const subCount = this._showConstellation(galaxyId);
-    // Set up independent camera orbit around the constellation centroid
-    const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-    if (gm) {
-      // Compute cluster bounding radius
-      let clusterRadius = 30;
-      for (const mi of gm.memberIndices) {
-        const dx = this.nodePositions[mi * 3] - gm.centroid.x;
-        const dy = this.nodePositions[mi * 3 + 1] - gm.centroid.y;
-        const dz = this.nodePositions[mi * 3 + 2] - gm.centroid.z;
-        clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+
+    // Find sub-communities of this galaxy
+    const subCommunities = this.communities.filter(c => {
+      if (!c.parent_id || c.parent_id !== galaxyId) return false;
+      const lvl = Number(c.level);
+      return !isNaN(lvl) && lvl >= 1;
+    });
+
+    if (subCommunities.length > 0) {
+      // Has sub-communities → show sub-community clouds (drill deeper)
+      this._showSubCommunityClouds(subCommunities);
+      const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+      this.showGalaxyTitle(gm);
+      const st = document.getElementById('status-text');
+      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
+    } else {
+      // Leaf galaxy → show constellation (all member nodes)
+      this._showConstellation(galaxyId);
+      const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+      // Set up independent camera orbit around the constellation centroid
+      if (gm) {
+        let clusterRadius = 30;
+        for (const mi of gm.memberIndices) {
+          const dx = this.nodePositions[mi * 3] - gm.centroid.x;
+          const dy = this.nodePositions[mi * 3 + 1] - gm.centroid.y;
+          const dz = this.nodePositions[mi * 3 + 2] - gm.centroid.z;
+          clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        }
+        const viewDist = clusterRadius * 3.2;
+        const camPos = gm.centroid.clone().add(
+          new THREE.Vector3(viewDist * 0.55, viewDist * 0.4, viewDist * 0.7));
+        this.focusTarget.copy(camPos);
+        this.focusStartCam.copy(this.camera.position);
+        this.focusStartLook.copy(this.controls.target);
+        this._constellationLookTarget = gm.centroid.clone();
+        this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
+        this.controls.target.copy(gm.centroid);
+        this.controls.enablePan = true;
+        this.controls.minDistance = clusterRadius * 1.5;
+        this.controls.maxDistance = clusterRadius * 8;
       }
-      const viewDist = clusterRadius * 3.2;
-      // Camera position: offset from centroid to frame the cluster
-      const camPos = gm.centroid.clone().add(
-        new THREE.Vector3(viewDist * 0.55, viewDist * 0.4, viewDist * 0.7));
-      // Animate camera + controls target to constellation space
-      this.focusTarget.copy(camPos);
+      this.showGalaxyTitle(gm);
+      const st = document.getElementById('status-text');
+      if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+    }
+  }
+
+  /** Render sub-community clouds — clickable "mini galaxies" inside a parent galaxy. */
+  private _showSubCommunityClouds(subCommunities: CommunityData[]): void {
+    // Build temporary galaxyMeta entries for sub-community clouds
+    const subMeta: { id: string; label: string; centroid: THREE.Vector3; memberIndices: number[] }[] = [];
+    for (const sc of subCommunities) {
+      const memberIndices: number[] = [];
+      let sx = 0, sy = 0, sz = 0;
+      for (const nid of sc.node_ids) {
+        const idx = this.graphNodes.findIndex(n => n.id === nid);
+        if (idx >= 0) {
+          memberIndices.push(idx);
+          sx += this.nodePositions[idx * 3];
+          sy += this.nodePositions[idx * 3 + 1];
+          sz += this.nodePositions[idx * 3 + 2];
+        }
+      }
+      if (memberIndices.length === 0) continue;
+      subMeta.push({
+        id: sc.id,
+        label: sc.label,
+        centroid: new THREE.Vector3(sx / memberIndices.length, sy / memberIndices.length, sz / memberIndices.length),
+        memberIndices,
+      });
+    }
+    // Hide all nodes
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+      if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+    }
+    // Save original galaxyMeta if not already saved, then swap for cloud rendering
+    if (!this._savedGalaxyMeta) this._savedGalaxyMeta = this.galaxyMeta;
+    this.galaxyMeta = subMeta;
+    this.buildGalaxyClouds();
+    // Tighten hover targets for sub-community clouds (core sprites are oversized by default)
+    for (let i = 0; i < this.galaxyGlows.length; i++) {
+      this.galaxyGlows[i].scale.multiplyScalar(i % 2 === 1 ? 0.4 : 0.35);
+    }
+    for (const cloud of this.galaxyClouds) {
+      cloud.scale.multiplyScalar(0.6);
+    }
+
+    // Frame camera on all sub-community centroids
+    if (subMeta.length > 0) {
+      let cx = 0, cy = 0, cz = 0;
+      for (const sm of subMeta) { cx += sm.centroid.x; cy += sm.centroid.y; cz += sm.centroid.z; }
+      cx /= subMeta.length; cy /= subMeta.length; cz /= subMeta.length;
+      let maxR = 30;
+      for (const sm of subMeta) {
+        const dx = sm.centroid.x - cx, dy = sm.centroid.y - cy, dz = sm.centroid.z - cz;
+        maxR = Math.max(maxR, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      }
+      const centroid = new THREE.Vector3(cx, cy, cz);
+      const viewDist = Math.max(maxR * 3.0, 120);
+      this.focusTarget.copy(centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)));
       this.focusStartCam.copy(this.camera.position);
       this.focusStartLook.copy(this.controls.target);
-      this._constellationLookTarget = gm.centroid.clone();
+      this._constellationLookTarget = centroid.clone();
       this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
-      // Independent orbit: target = centroid, no pan, bounded zoom
-      this.controls.target.copy(gm.centroid);
-      this.controls.enablePan = true;
-      this.controls.minDistance = clusterRadius * 1.5;
-      this.controls.maxDistance = clusterRadius * 8;
+      this.controls.target.copy(centroid);
+      this.controls.minDistance = maxR * 1.5;
+      this.controls.maxDistance = maxR * 12;
     }
-    // Show fixed HUD title
-    this.showGalaxyTitle(gm);
-    const st = document.getElementById('status-text');
-    const subInfo = subCount > 0 ? ` · ${subCount} 子社区` : '';
-    if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点${subInfo} · ESC 退回`;
   }
 
   /** When flying to constellation, controls look at centroid, not at camera target. */
@@ -2397,25 +2531,215 @@ export class StarGraph {
     setTimeout(() => { label.style.opacity = '0'; setTimeout(() => label.remove(), 300); }, 1800);
   }
 
+  /** Check if a community has visible sub-communities (Level 1+ with enough members). */
+  private _hasVisibleSubCommunities(parentId: string): boolean {
+    return this.communities.some(c => {
+      if (!c.parent_id || c.parent_id !== parentId) return false;
+      const lvl = Number(c.level);
+      return !isNaN(lvl) && lvl >= 1 && c.node_ids.length >= 4;
+    });
+  }
+
   /** Exit galaxy back to universe view. */
   exitGalaxy(): void {
     if (!this.foldMode || !this.enteredGalaxyId) return;
     this.enteredGalaxyId = null;
+    this.enteredSubCommunityId = null;
+    this._drillStack = [];
     this.hideGalaxyTitle();
     // Restore free controls
     this.controls.enablePan = true;
     this.controls.minDistance = 15;
     this.controls.maxDistance = 4000;
-    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
-    // Re-hide all nodes
+    this._disposeFoldChildren();
+    // Re-hide all nodes AND restore their original kind-based colors
+    const isFull = this.mode === 'full';
     for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
-      if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+      const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
+      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
+      const glowColor = GLOW_COLORS[kind] || 0x4488cc;
+      if (this.nodeCores[i]) { this.nodeCores[i].visible = false; (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor); }
+      if (this.nodeGlows[i]) { this.nodeGlows[i].visible = false; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
     }
+    // Restore original galaxyMeta
+    if (this._savedGalaxyMeta) { this.galaxyMeta = this._savedGalaxyMeta; this._savedGalaxyMeta = null; }
     this.buildGalaxyClouds();
     const st = document.getElementById('status-text');
     if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
+  }
+
+  /** Stash for original galaxyMeta when drilling into sub-cloud view. */
+  private _savedGalaxyMeta: typeof this.galaxyMeta | null = null;
+
+  /** Drill into a sub-community — show sub-clouds if it has children, or constellation if leaf. */
+  enterSubCommunity(subCommId: string): void {
+    if (!this.foldMode || !this.enteredGalaxyId || this.enteredSubCommunityId === subCommId) return;
+    const subComm = this.communities.find(c => c.id === subCommId);
+    if (!subComm) return;
+    this._drillStack.push(subCommId);
+    this.enteredSubCommunityId = subCommId;
+    // Dismiss any lingering cloud hover tooltip
+    this.hoveredGalaxyIdx = -1;
+    this.container.style.cursor = '';
+    this.tooltipEl?.classList.remove('visible');
+    this._disposeFoldChildren();
+    this.galaxyClouds = []; this.galaxyGlows = [];
+
+    // Check for deeper sub-communities
+    const deeperSubs = this.communities.filter(c => {
+      if (!c.parent_id || c.parent_id !== subCommId) return false;
+      const lvl = Number(c.level);
+      return !isNaN(lvl) && lvl >= 2;
+    });
+
+    if (deeperSubs.length > 0) {
+      // Has deeper sub-communities → show them as clouds
+      this._showSubCommunityClouds(deeperSubs);
+      const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
+      this.showGalaxyTitle({ id: subCommId, label: subComm.label });
+      const st = document.getElementById('status-text');
+      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
+    } else {
+      // Leaf sub-community → show constellation (nodes with edges)
+      // Hide all nodes first
+      for (let i = 0; i < this.graphNodes.length; i++) {
+        if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+        if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+      }
+      // Show only sub-community members
+      const shownIndices: number[] = [];
+      for (const nid of subComm.node_ids) {
+        const idx = this.graphNodes.findIndex(n => n.id === nid);
+        if (idx >= 0) {
+          shownIndices.push(idx);
+          if (this.nodeCores[idx]) {
+            this.nodeCores[idx].visible = true;
+            (this.nodeCores[idx].material as THREE.MeshBasicMaterial).color.set(0xffaa44);
+          }
+          if (this.nodeGlows[idx]) {
+            this.nodeGlows[idx].visible = true;
+            (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0xffaa44);
+            (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.7;
+          }
+        }
+      }
+      this._buildSubCommunityEdges(subComm.node_ids);
+      // Camera frame
+      let sx = 0, sy = 0, sz = 0;
+      for (const mi of shownIndices) {
+        sx += this.nodePositions[mi * 3]; sy += this.nodePositions[mi * 3 + 1]; sz += this.nodePositions[mi * 3 + 2];
+      }
+      const centroid = new THREE.Vector3(sx / shownIndices.length, sy / shownIndices.length, sz / shownIndices.length);
+      let clusterRadius = 30;
+      for (const mi of shownIndices) {
+        const dx = this.nodePositions[mi * 3] - centroid.x;
+        const dy = this.nodePositions[mi * 3 + 1] - centroid.y;
+        const dz = this.nodePositions[mi * 3 + 2] - centroid.z;
+        clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      }
+      const viewDist = clusterRadius * 3.5;
+      this.focusTarget.copy(centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)));
+      this.focusStartCam.copy(this.camera.position);
+      this.focusStartLook.copy(this.controls.target);
+      this._constellationLookTarget = centroid.clone();
+      this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
+      this.controls.target.copy(centroid);
+      this.controls.minDistance = clusterRadius * 1.5;
+      this.controls.maxDistance = clusterRadius * 8;
+      const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
+      this.showGalaxyTitle({ id: subCommId, label: subComm.label });
+      const st = document.getElementById('status-text');
+      if (st) st.innerHTML = `${iconHtml('focus', 12)} 子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`;
+    }
+  }
+
+  /** Exit sub-community: pop drill stack, restore parent's view. */
+  exitSubCommunity(): void {
+    if (!this.foldMode || this._drillStack.length === 0) return;
+    // Pop current sub-community from stack
+    this._drillStack.pop();
+    this._disposeFoldChildren();
+    this.galaxyClouds = []; this.galaxyGlows = [];
+
+    if (this._drillStack.length > 0) {
+      // Still inside a sub-community chain — restore that sub-community's view
+      const parentSubId = this._drillStack[this._drillStack.length - 1];
+      this.enteredSubCommunityId = parentSubId;
+      const parentSub = this.communities.find(c => c.id === parentSubId);
+      if (!parentSub) return;
+      // Check if this parent has deeper sub-communities
+      if (this._hasVisibleSubCommunities(parentSubId)) {
+        const deeperSubs = this.communities.filter(c => c.parent_id === parentSubId && Number(c.level) >= 2);
+        this._showSubCommunityClouds(deeperSubs);
+        const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
+        this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
+        const st = document.getElementById('status-text');
+        if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
+      } else {
+        // Leaf — show constellation for this sub-community
+        for (let i = 0; i < this.graphNodes.length; i++) {
+          if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+          if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+        }
+        const shownIndices: number[] = [];
+        for (const nid of parentSub.node_ids) {
+          const idx = this.graphNodes.findIndex(n => n.id === nid);
+          if (idx >= 0) {
+            shownIndices.push(idx);
+            if (this.nodeCores[idx]) { this.nodeCores[idx].visible = true; (this.nodeCores[idx].material as THREE.MeshBasicMaterial).color.set(0xffaa44); }
+            if (this.nodeGlows[idx]) { this.nodeGlows[idx].visible = true; (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0xffaa44); (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.7; }
+          }
+        }
+        this._buildSubCommunityEdges(parentSub.node_ids);
+        const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
+        this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
+        const st = document.getElementById('status-text');
+        if (st) st.innerHTML = `${iconHtml('focus', 12)} 子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`;
+      }
+    } else {
+      // Back at galaxy level — restore galaxy's view
+      this.enteredSubCommunityId = null;
+      const galaxyId = this.enteredGalaxyId;
+      if (!galaxyId) return;
+      if (this._hasVisibleSubCommunities(galaxyId)) {
+        const subCommunities = this.communities.filter(c => c.parent_id === galaxyId && Number(c.level) >= 1);
+        this._showSubCommunityClouds(subCommunities);
+        const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+        this.showGalaxyTitle(gm);
+        const st = document.getElementById('status-text');
+        if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
+      } else {
+        this._showConstellation(galaxyId);
+        const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+        this.showGalaxyTitle(gm);
+        const st = document.getElementById('status-text');
+        if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+      }
+    }
+  }
+
+  /** Build internal edges for a sub-community's member nodes. */
+  private _buildSubCommunityEdges(nodeIds: string[]): void {
+    const memberSet = new Set(nodeIds);
+    const pos = this.nodePositions;
+    const verts: number[] = [], colors: number[] = [];
+    const cc = new THREE.Color(0xffaa44);
+    for (const d of this.edgeDataList) {
+      const nidS = this.graphNodes[d.s]?.id, nidT = this.graphNodes[d.t]?.id;
+      if (!nidS || !nidT) continue;
+      if (!memberSet.has(nidS) || !memberSet.has(nidT)) continue;
+      verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
+      colors.push(cc.r, cc.g, cc.b, cc.r, cc.g, cc.b);
+    }
+    if (verts.length === 0) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.5,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })));
   }
 
   // ── Galaxy clouds (universe view) ────────────────────────
@@ -2574,11 +2898,13 @@ export class StarGraph {
       if (seen.has(key)) continue; seen.add(key);
       const gs = sc ? this.galaxyMeta.find(g => g.id === sc) : null;
       const gt = tc ? this.galaxyMeta.find(g => g.id === tc) : null;
+      // Skip edges where either end belongs to a community too small to have a galaxy cloud
+      if (!gs || !gt) continue;
       verts.push(
-        gs ? gs.centroid.x : pos[d.s * 3], gs ? gs.centroid.y : pos[d.s * 3 + 1], gs ? gs.centroid.z : pos[d.s * 3 + 2],
-        gt ? gt.centroid.x : pos[d.t * 3], gt ? gt.centroid.y : pos[d.t * 3 + 1], gt ? gt.centroid.z : pos[d.t * 3 + 2]);
+        gs.centroid.x, gs.centroid.y, gs.centroid.z,
+        gt.centroid.x, gt.centroid.y, gt.centroid.z);
       const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-      colors.push(c.r * 1.6, c.g * 1.6, c.b * 1.6, c.r * 1.6, c.g * 1.6, c.b * 1.6);
+      colors.push(c.r * 1.2, c.g * 1.2, c.b * 1.2, c.r * 1.2, c.g * 1.2, c.b * 1.2);
     }
     if (verts.length === 0) return;
     const geo = new THREE.BufferGeometry();
@@ -3041,6 +3367,11 @@ export class StarGraph {
     this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.nodeCoreColors = []; this.colorMode = 'type'; this.edgeLineGroups = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = [];
+    this.foldMode = false; this.enteredGalaxyId = null; this.enteredSubCommunityId = null;
+    this._drillStack = [];
+    this._subCommByNodeIdx.clear();
+    this._savedGalaxyMeta = null;
+    this.hideGalaxyTitle();
     this._pathSource = -1; this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear();
     this._shiftSourceIdx = -1; this._selecting = false;
     this._hidePrompt();
