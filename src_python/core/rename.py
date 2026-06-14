@@ -360,7 +360,7 @@ def execute_rename(
 
 def _apply_edits(
     content: str,
-    edits: List[Tuple[int, int, str, str, str]],  # (line, old, new, context_tag)
+    edits: List[Tuple[int, str, str, str]],  # (line, old, new, context_tag)
     file_path: str,
     old_name: str,
     new_name: str,

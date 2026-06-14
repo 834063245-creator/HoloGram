@@ -17,13 +17,12 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 import networkx as nx
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, type_val
+from ..core.graph import Graph, type_val
 
 
 # ============================================================

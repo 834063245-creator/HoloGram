@@ -897,7 +897,6 @@ class Graph:
         # Communities
         for row in conn.execute("SELECT * FROM communities"):
             props = _json.loads(row["properties"]) if row["properties"] else {}
-            node_ids_raw = row["node_count"]
             # Reconstruct node_ids from nodes table
             node_ids = set()
             for nr in conn.execute(

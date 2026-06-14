@@ -130,7 +130,6 @@ class FileWatcher:
         if graph_ref is not None and graph_ref.node_count > 0:
             try:
                 diff = self._runner.run_incremental(self.root, files, graph_ref)
-                from .core.diff import GraphDiff
                 changes = (len(diff.added_nodes) + len(diff.removed_nodes) +
                            len(diff.added_edges) + len(diff.removed_edges))
                 print(f"  Incremental update: {len(diff.added_nodes)} added nodes, "

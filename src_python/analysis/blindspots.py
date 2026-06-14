@@ -79,9 +79,9 @@ class Boundary:
             f"涉及节点: {', '.join(self.related_nodes)}" if self.related_nodes else "",
             f"程序层确定性: {self.certainty}",
             f"程序层不确定: {self.uncertainty}",
-            f"--- 上下文数据 ---",
+            "--- 上下文数据 ---",
             _json.dumps(self.context, indent=2, ensure_ascii=False),
-            f"====================",
+            "====================",
         ]
         return "\n".join(lines)
 

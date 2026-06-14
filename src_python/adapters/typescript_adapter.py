@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 from .base import LanguageAdapter, AdapterResult
 from ..core.graph import (
     Graph, Node, Edge,
     NodeType, EdgeType,
     SymbolKind, MediumKind, TemporalKind,
-    StructuralDirection, DataDirection, TemporalDirection,
+    StructuralDirection, TemporalDirection,
 )
 
 

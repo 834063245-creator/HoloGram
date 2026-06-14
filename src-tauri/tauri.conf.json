@@ -6,7 +6,7 @@
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "npm run dev --prefix D:\\HoloGramHG\\src-ui",
-    "beforeBuildCommand": "bash D:\\HoloGramHG\\scripts\\prebuild.sh"
+    "beforeBuildCommand": "bash scripts/prebuild.sh"
   },
   "app": {
     "windows": [

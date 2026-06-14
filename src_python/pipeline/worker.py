@@ -6,7 +6,7 @@ Module-level function so multiprocessing can pickle it on Windows.
 from __future__ import annotations
 
 import os as _os
-from typing import Any, List, Tuple
+from typing import Tuple
 
 
 # Return type: (file_path, nodes, edges, errors, warnings)

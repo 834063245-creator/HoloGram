@@ -11,10 +11,13 @@ Tree-sitter 通用适配器：用 tree-sitter AST 替代手写 AST Visitor。
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import tree_sitter
 
 from .base import LanguageAdapter, AdapterResult
-from .tree_sitter_grammars import GrammarManager, LANGUAGE_REPOS
+from .tree_sitter_grammars import GrammarManager
 from ..core.graph import (
     Graph, Node, Edge, NodeType, EdgeType,
     SymbolKind, MediumKind, TemporalKind,

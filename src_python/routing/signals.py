@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, type_val, file_from_location
-from ..core.diff import GraphDiffer, GraphDiff
-from .patterns import PatternMatcher, PatternMatch, FileChange
+from ..core.graph import Graph, type_val, file_from_location
+from ..core.diff import GraphDiffer
+from .patterns import PatternMatcher, FileChange
 
 
 # ============================================================
@@ -197,12 +197,7 @@ class SignalGenerator:
             )
             for sc in sig_changes:
                 if sc.pattern_name in ("required_param_added", "param_removed", "param_type_changed"):
-                    # 检查此函数是否为公开 API（通过 coupling_result）
-                    is_public = True  # 保守：默认认为是公开的
-                    if coupling_result:
-                        edge_classifications = coupling_result.get("edge_classifications", {})
-                        # 如果有耦合数据且函数不在 L1 边中，可能不是公开 API
-                        # 但保守策略：签名变更一律标记
+                    # 保守策略：签名变更一律标记为公开 API
 
                     signals.append(Signal(
                         level=5,
@@ -406,7 +401,6 @@ class SignalGenerator:
             return signals
 
         # coupling_result 包含 edge_classifications 和 module_reports
-        edge_classifications = coupling_result.get("edge_classifications", {})
         module_reports = coupling_result.get("module_reports", [])
 
         # 从 module_reports 中提取 L4 违规
@@ -586,9 +580,6 @@ class SignalGenerator:
             if not fc.old_source or not fc.new_source:
                 continue
 
-            old_funcs = set(self.matcher.extract_function_defs(fc.old_source).keys())
-            new_funcs = set(self.matcher.extract_function_defs(fc.new_source).keys())
-
             # 检测 async 函数的新增
             for source in [fc.new_source]:
                 if not source:
@@ -714,7 +705,6 @@ class SignalGenerator:
                     cmap[nid] = comm.id
             return cmap
 
-        before_map = _get_community_map(before_graph)
         after_map = _get_community_map(after_graph)
 
         differ = GraphDiffer()

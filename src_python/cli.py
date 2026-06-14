@@ -46,14 +46,14 @@ def _safe_print(text: str, **kwargs) -> None:
             safe = text.encode('ascii', errors='replace').decode('ascii')
             print(safe, **kwargs)
 
-from .adapters import AdapterRegistry, PythonAdapter
-from .adapters.typescript_adapter import TypeScriptAdapter
-from .adapters.tree_sitter_adapter import TreeSitterAdapter
-from .core.graph import Graph, type_val, file_from_location, safe_json_dumps
-from .core.merger import GraphMerger, CrossFileResolver
-from .core.community import CommunityDetector
-from .core.diff import GraphDiffer, GraphDiff
-from .pipeline import PipelineRunner, IncrementalCache
+from .adapters import AdapterRegistry, PythonAdapter  # noqa: E402
+from .adapters.typescript_adapter import TypeScriptAdapter  # noqa: E402
+from .adapters.tree_sitter_adapter import TreeSitterAdapter  # noqa: E402
+from .core.graph import Graph, type_val, file_from_location, safe_json_dumps  # noqa: E402
+from .core.merger import CrossFileResolver  # noqa: E402
+from .core.community import CommunityDetector  # noqa: E402
+from .core.diff import GraphDiffer, GraphDiff  # noqa: E402
+from .pipeline import PipelineRunner  # noqa: E402
 
 
 def _load_graph(graph_path: str) -> Optional[Graph]:
@@ -225,7 +225,7 @@ def cmd_impact(args) -> int:
             if len(nodes) > 5:
                 print(f"    ... and {len(nodes) - 5} more")
 
-    total = sum(len(l["nodes"]) for l in layers) - 1
+    total = sum(len(layer["nodes"]) for layer in layers) - 1
     print(f"\nTotal affected: {total} nodes across {len(layers) - 1} layers")
     return 0
 
@@ -403,14 +403,14 @@ def cmd_coupling_report(args) -> int:
     print(f"  Fragility Score: {found['fragility_score']:.3f}")
 
     if found.get("l4_violations"):
-        print(f"\n  L4 Violations:")
+        print("\n  L4 Violations:")
         for v in found["l4_violations"][:10]:
             print(f"    Line {v.get('line')}: {v.get('access')} — {v.get('context')}")
         if len(found["l4_violations"]) > 10:
             print(f"    ... and {len(found['l4_violations']) - 10} more")
 
     if found.get("l3_shared_resources"):
-        print(f"\n  L3 Shared Resources:")
+        print("\n  L3 Shared Resources:")
         for res in found["l3_shared_resources"][:10]:
             print(f"    - {res}")
         if len(found["l3_shared_resources"]) > 10:
@@ -459,7 +459,6 @@ def cmd_check(args) -> int:
 
     快路径：如果源文件未变更且有缓存的 check 结果，直接返回。
     """
-    import time
     root = os.path.abspath(args.root)
     graph_path = args.graph or os.path.join(root, "hologram_graph.json")
     cache_path = os.path.join(root, ".hologram", "last_check.json")
@@ -1058,7 +1057,7 @@ def cmd_search(args) -> int:
             db_mtime = os.path.getmtime(db_path)
             json_mtime = os.path.getmtime(graph_path)
             if db_mtime < json_mtime - 2.0:
-                print(f"  SQLite DB older than JSON, regenerating...", file=sys.stderr)
+                print("  SQLite DB older than JSON, regenerating...", file=sys.stderr)
                 try:
                     graph = Graph.from_json(graph_path)
                     graph.to_sqlite(db_path)

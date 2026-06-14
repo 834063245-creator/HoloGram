@@ -20,9 +20,9 @@ import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
-from ..core.graph import Graph, Node, NodeType, file_from_location
+from ..core.graph import file_from_location
 
 
 # ============================================================
@@ -399,15 +399,15 @@ class ThreadInterleaveAnalyzer:
 
             # 检查锁保护
             count_lock_entries_for_this = 0
-            for l in self.all_locks:
-                l_file = file_from_location(l.get("location") or "")
+            for lock_entry in self.all_locks:
+                l_file = file_from_location(lock_entry.get("location") or "")
                 if l_file == gs_file:
                     count_lock_entries_for_this += 1
 
             if count_lock_entries_for_this > 0:
                 resources[rname]["lock_detected"] = True
-                lock_names = [l["type"] for l in self.all_locks
-                             if file_from_location(l.get("location") or "") == gs_file]
+                lock_names = [lock_entry["type"] for lock_entry in self.all_locks
+                             if file_from_location(lock_entry.get("location") or "") == gs_file]
                 resources[rname]["locks_nearby"] = lock_names
 
         # 统计

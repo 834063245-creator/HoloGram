@@ -497,7 +497,6 @@ class PatternMatcher:
         if not old_source or not new_source:
             return []
 
-        old_classes = self.extract_class_defs(old_source)
         new_classes = self.extract_class_defs(new_source)
 
         matches = []

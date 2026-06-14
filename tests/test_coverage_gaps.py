@@ -94,26 +94,27 @@ class TestCommunityDetectorGaps:
         label = _generate_label(g, {"n1"})
         assert label == "SoloFunction"
 
-    def test_build_hierarchy_returns_empty_for_small_graph(self, detector):
-        """小图层级构建应返回空。"""
-        import networkx as nx
-        nx_g = nx.Graph()
-        nx_g.add_node("a")
-        result = detector._build_hierarchy(Graph(), nx_g, level=0)
-        assert result == {}
+    def test_recurse_subcommunity_small_parent_returns_zero(self, detector):
+        """_recurse_subcommunity 在父社区 < 3 节点时返回 0。"""
+        g = Graph()
+        g.add_node(Node("n1", NodeType.SYMBOL, "a", "a.py:1", "python", "function"))
+        g.add_node(Node("n2", NodeType.SYMBOL, "b", "b.py:1", "python", "function"))
+        parent = Community(id="parent", level=0, label="small", node_ids={"n1", "n2"})
+        result = detector._recurse_subcommunity(g, parent, [], 0, level=0)
+        assert result == 0
 
-    def test_build_hierarchy_max_level_reached(self, detector):
-        """超过 max_levels 应返回空。"""
-        import networkx as nx
-        nx_g = nx.Graph()
-        nx_g.add_node("a")
-        nx_g.add_node("b")
-        nx_g.add_node("c")
-        nx_g.add_edge("a", "b")
-        nx_g.add_edge("b", "c")
-        # max_levels=1, 当前 level=1 → 应返回空
-        result = detector._build_hierarchy(Graph(), nx_g, level=1)
-        assert result == {}
+    def test_recurse_subcommunity_max_level_reached_returns_zero(self, detector):
+        """_recurse_subcommunity 在 level >= max_levels 时返回 0。"""
+        g = Graph()
+        g.add_node(Node("n1", NodeType.SYMBOL, "a", "a.py:1", "python", "function"))
+        g.add_node(Node("n2", NodeType.SYMBOL, "b", "b.py:1", "python", "function"))
+        g.add_node(Node("n3", NodeType.SYMBOL, "c", "c.py:1", "python", "function"))
+        g.add_edge(Edge("e1", EdgeType.STRUCTURAL, "call", "n1", "n2"))
+        g.add_edge(Edge("e2", EdgeType.STRUCTURAL, "call", "n2", "n3"))
+        parent = Community(id="parent", level=0, label="big", node_ids={"n1", "n2", "n3"})
+        # max_levels=1, current level=1 → 应返回 0
+        result = detector._recurse_subcommunity(g, parent, [], 0, level=1)
+        assert result == 0
 
     def test_community_not_assigned_when_no_detection(self):
         """未运行社区发现的图上的节点 community_id 应为 None。"""

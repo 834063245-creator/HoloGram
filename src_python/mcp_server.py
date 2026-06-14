@@ -39,7 +39,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from .core.graph import Graph, EdgeType, file_from_location, type_val, safe_json_dumps
+from .core.graph import Graph, file_from_location, type_val, safe_json_dumps
 
 
 class MCPServer:
@@ -357,7 +357,6 @@ class MCPServer:
         from .adapters.typescript_adapter import TypeScriptAdapter
         from .adapters.tree_sitter_adapter import TreeSitterAdapter
         from .pipeline import PipelineRunner
-        from .core.merger import CrossFileResolver
 
         registry = AdapterRegistry()
         registry.register(TreeSitterAdapter())
@@ -510,7 +509,7 @@ class MCPServer:
         node_id = self._get_node_id(args)
         depth = args.get("depth", 3)
         layers = self.graph.impact_bfs(node_id, depth)
-        total_affected = sum(len(l["nodes"]) for l in layers) - 1
+        total_affected = sum(len(layer["nodes"]) for layer in layers) - 1
 
         delayed_nodes = []
         for layer in layers:
@@ -733,7 +732,6 @@ class MCPServer:
             threads_info = []
             incoming = self.graph.incoming_edges(medium.id)
             has_write = False
-            has_lock = False
 
             for edge in incoming:
                 src_node = self.graph.get_node(edge.source)

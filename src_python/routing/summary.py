@@ -16,12 +16,12 @@ from __future__ import annotations
 import datetime
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 from ..core.graph import Graph, file_from_location
-from ..core.diff import GraphDiffer, GraphDiff
+from ..core.diff import GraphDiffer
 from .signals import Signal
-from .constraints import ConstraintResult, ConstraintViolation
+from .constraints import ConstraintResult
 
 
 # ============================================================
@@ -747,7 +747,7 @@ class ChangeSummaryGenerator:
                     ) if recent else False
                     lines.append(_box(f"    Last {min(3, len(recent))} changes: all passed, no rollbacks"
                                     if all_routed else
-                                    f"    First time being routed to human"))
+                                    "    First time being routed to human"))
 
         # V1: Community Associations
         ca = sections.get("community_associations", {})

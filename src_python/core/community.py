@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
-from .graph import Graph, Node, Community
+from .graph import Graph, Community
 
 try:
     import leidenalg as la

@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, SymbolKind, file_from_location, type_val
+from ..core.graph import Graph, Edge, file_from_location, type_val
 
 
 # ============================================================
@@ -377,7 +377,6 @@ class CouplingDepthAnalyzer:
 
     def _classify_edge(self, edge: Edge, graph: Graph) -> int:
         """对单条边进行 L1-L4 分类。"""
-        edge_dir = getattr(edge, 'direction', '')
         edge_props = getattr(edge, 'properties', {}) or {}
         edge_type_str = type_val(edge.type)
 

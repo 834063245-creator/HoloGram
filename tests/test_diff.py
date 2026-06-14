@@ -55,6 +55,24 @@ class TestGraphDiffer:
         diff = differ.diff(g1, g2)
         assert len(diff.modified_nodes) >= 1
 
+    def test_modified_node_property_removed(self, differ):
+        """属性被删除也应该被检测到（旧代码只遍历 new 侧会漏掉）。"""
+        g1 = Graph()
+        n1 = Node("n1", NodeType.SYMBOL, "f", "f.py:1", "python", "function",
+                  properties={"a": 1, "b": 2})
+        g1.add_node(n1)
+
+        g2 = Graph()
+        n2 = Node("n2", NodeType.SYMBOL, "f", "f.py:1", "python", "function",
+                  properties={"a": 1})
+        g2.add_node(n2)
+
+        diff = differ.diff(g1, g2)
+        assert len(diff.modified_nodes) == 1
+        mn = diff.modified_nodes[0]
+        assert "b" in mn.changed_properties
+        assert mn.changed_properties["b"] == (2, None)
+
     def test_total_changes(self, differ):
         g1 = Graph()
         n1 = Node("n1", NodeType.SYMBOL, "f1", "f.py:1", "python", "function")

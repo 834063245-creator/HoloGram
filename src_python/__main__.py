@@ -9,10 +9,7 @@ python -m src_python 入口。
 
 import os
 import sys
-import datetime
-import json
 import threading
-import time as _time
 
 
 def _heartbeat(label: str, interval: float = 2.0):
@@ -30,16 +27,14 @@ def _heartbeat(label: str, interval: float = 2.0):
     t.start()
     return stop
 
-
-from .adapters import AdapterRegistry, PythonAdapter
-from .adapters.tree_sitter_adapter import TreeSitterAdapter
-from .adapters.typescript_adapter import TypeScriptAdapter
-from .core.graph import Graph, _sanitize_for_json, safe_json_dumps
-from .core.merger import GraphMerger, CrossFileResolver
-from .core.community import CommunityDetector
-from .core.diff import GraphDiffer
-from .pipeline import PipelineRunner, IncrementalCache
-from .analysis.coupling import CouplingDepthAnalyzer
+# 以下导入在工具函数之后（避免启动时加载重型模块）
+from .adapters import AdapterRegistry, PythonAdapter  # noqa: E402
+from .adapters.tree_sitter_adapter import TreeSitterAdapter  # noqa: E402
+from .adapters.typescript_adapter import TypeScriptAdapter  # noqa: E402
+from .core.graph import Graph, _sanitize_for_json, safe_json_dumps  # noqa: E402
+from .core.merger import CrossFileResolver  # noqa: E402
+from .pipeline import PipelineRunner, IncrementalCache  # noqa: E402
+from .analysis.coupling import CouplingDepthAnalyzer  # noqa: E402
 
 
 def _analyze_and_output(root: str, output_json: bool = False, output_path: str = "",
@@ -129,7 +124,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     print(f"[{report.elapsed_sec:.2f}s] {graph.node_count} nodes / {graph.edge_count} edges  (cached: {report.cached_files})", file=sys.stderr)
 
     # Cross-file resolution
-    print(f"  resolving cross-file references...", file=sys.stderr)
+    print("  resolving cross-file references...", file=sys.stderr)
     print("HOLO:PHASE:cross_file:解析跨文件引用", file=sys.stderr, flush=True)
     resolver = CrossFileResolver()
     cross_added = resolver.resolve(graph)
@@ -137,7 +132,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         print(f"  cross-file edges: {cross_added}", file=sys.stderr)
 
     # Coupling depth analysis — classify every structural edge L1-L4
-    print(f"  coupling analysis...", file=sys.stderr)
+    print("  coupling analysis...", file=sys.stderr)
     print("HOLO:PHASE:coupling:耦合深度分析", file=sys.stderr, flush=True)
     _coupling_hb = _heartbeat("耦合深度分析")
     try:
@@ -163,7 +158,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     # Community detection (graceful degradation)
     # Use detect_fast (Label Propagation / Louvain, O(n+m)) instead of
     # CommunityDetector (recursive Leiden) — 10-100x faster on large graphs.
-    print(f"  community detection...", file=sys.stderr)
+    print("  community detection...", file=sys.stderr)
     print("HOLO:PHASE:community:社区聚类", file=sys.stderr, flush=True)
     _comm_hb = _heartbeat("社区聚类")
     try:

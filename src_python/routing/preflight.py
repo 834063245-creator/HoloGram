@@ -359,7 +359,6 @@ def run_health(
         }
 
         l4 = report.coupling_distribution["l4"]
-        l3 = report.coupling_distribution["l3"]
         total_coupling = sum(report.coupling_distribution.values())
 
         if total_coupling > 0:

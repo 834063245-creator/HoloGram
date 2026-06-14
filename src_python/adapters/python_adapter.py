@@ -8,7 +8,7 @@ from __future__ import annotations
 import ast
 import os
 import threading
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .base import LanguageAdapter, AdapterResult
 from ..core.graph import (

@@ -1492,22 +1492,23 @@ class TestWatcherGaps:
 # ================================================================
 
 class TestCommunityMoreGaps:
-    """补 community.py _build_hierarchy 路径。"""
+    """补 community.py _recurse_subcommunity 路径（原 _build_hierarchy 已重构）。"""
 
-    def test_build_hierarchy_level_0_with_enough_nodes(self):
-        """_build_hierarchy level=0 with >=3 nodes → should build。"""
-        import networkx as nx
-        nx_g = nx.Graph()
-        nx_g.add_nodes_from(["a", "b", "c"])
-        nx_g.add_edge("a", "b")
-        nx_g.add_edge("b", "c")
+    def test_recurse_subcommunity_with_enough_nodes(self):
+        """_recurse_subcommunity level=0 with >=3 nodes → 应生成子社区。"""
+        g = Graph(source_root="/test")
+        g.add_node(Node("n1", NodeType.SYMBOL, "a", "a.py:1", "python", "function"))
+        g.add_node(Node("n2", NodeType.SYMBOL, "b", "b.py:1", "python", "function"))
+        g.add_node(Node("n3", NodeType.SYMBOL, "c", "c.py:1", "python", "function"))
+        g.add_edge(Edge("e1", EdgeType.STRUCTURAL, "call", "n1", "n2"))
+        g.add_edge(Edge("e2", EdgeType.STRUCTURAL, "call", "n2", "n3"))
 
+        parent = Community(id="parent", level=0, label="big", node_ids={"n1", "n2", "n3"})
         detector = CommunityDetector(max_levels=2)
-        result = detector._build_hierarchy(Graph(source_root="/test"), nx_g, level=0)
-        # 应返回非空结果（运行 Louvain）
-        assert isinstance(result, dict)
-        if result:
-            assert any(len(v) > 0 for v in result.values())
+        result = detector._recurse_subcommunity(g, parent, [], 0, level=0)
+        # 应返回整数 (子社区数量)
+        assert isinstance(result, int)
+        assert result >= 0
 
     def test_community_detector_with_seed(self):
         """不同 seed 应可接受。"""

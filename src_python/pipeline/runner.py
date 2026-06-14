@@ -4,16 +4,14 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 import os as _os_module
 import time
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
 from typing import Callable, Dict, List, Optional, Tuple
 
-from ..adapters.base import LanguageAdapter, AdapterResult
 from ..adapters.registry import AdapterRegistry
-from ..core.graph import Graph, Node, Edge
+from ..core.graph import Graph, Node
 from ..core.diff import GraphDiff
 from .discovery import discover_files
 from .cache import IncrementalCache
@@ -102,7 +100,6 @@ class PipelineRunner:
                 adapter_key = 'treesitter'
             cache_misses.append((file_path, source, adapter_key))
 
-        # ── 2b: 并行分析未命中文件 ──
         # ── 2b: 并行分析未命中文件 ──
         if cache_misses:
             # For ≤2 files, serial is faster (no pool overhead).

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List
 
 from .graph import Graph, Node, Edge, type_val
 
@@ -58,9 +58,6 @@ class GraphDiffer:
     def diff(before: Graph, after: Graph) -> GraphDiff:
         result = GraphDiff()
 
-        before_ids = set(before.nodes.keys())
-        after_ids = set(after.nodes.keys())
-
         # 基于 location::name 去重键来匹配节点
         def _loc_key(n: Node) -> str:
             return f"{n.location}::{n.name}"
@@ -87,9 +84,12 @@ class GraphDiffer:
             if old_n.kind != new_n.kind:
                 changed["kind"] = (old_n.kind, new_n.kind)
             if old_n.properties != new_n.properties:
-                for pk, pv in new_n.properties.items():
-                    if old_n.properties.get(pk) != pv:
-                        changed[pk] = (old_n.properties.get(pk), pv)
+                all_keys = set(old_n.properties.keys()) | set(new_n.properties.keys())
+                for pk in all_keys:
+                    ov = old_n.properties.get(pk)
+                    nv = new_n.properties.get(pk)
+                    if ov != nv:
+                        changed[pk] = (ov, nv)
             if changed:
                 result.modified_nodes.append(ModifiedNode(
                     node_id=new_n.id,
