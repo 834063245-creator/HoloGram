@@ -49,7 +49,7 @@ Discussions = "https://github.com/834063245-creator/HoloGram/discussions"
 
 dependencies = [
     "networkx>=3.0",
-    "igraph>=0.11",
+    "igraph>=0.10",
     "leidenalg>=0.10",
     "msgpack>=1.0",
     "PyYAML>=6.0",
