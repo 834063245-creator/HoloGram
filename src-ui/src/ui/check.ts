@@ -155,8 +155,8 @@ export class CheckPanel {
     // Update tab status indicator
     this.headerStatus.className = r.passed ? 'check-tab-status check-pass' : 'check-tab-status check-fail';
 
-    const totalV = r.l5_violations.length + r.l4_violations.length +
-                   r.l3_violations.length + r.l2_violations.length;
+    const totalV = (r.l5_violations?.length || 0) + (r.l4_violations?.length || 0) +
+                   (r.l3_violations?.length || 0) + (r.l2_violations?.length || 0);
 
     this.content.innerHTML = '';
 
@@ -216,20 +216,20 @@ export class CheckPanel {
       vSec.appendChild(vTitle);
 
       // L5 - Irreversible
-      if (r.l5_violations.length > 0) {
-        vSec.appendChild(this.renderViolationGroup('L5 不可逆', 'l5', r.l5_violations));
+      if ((r.l5_violations?.length || 0) > 0) {
+        vSec.appendChild(this.renderViolationGroup('L5 不可逆', 'l5', r.l5_violations || []));
       }
       // L4 - Silent
-      if (r.l4_violations.length > 0) {
-        vSec.appendChild(this.renderViolationGroup('L4 静默', 'l4', r.l4_violations));
+      if ((r.l4_violations?.length || 0) > 0) {
+        vSec.appendChild(this.renderViolationGroup('L4 静默', 'l4', r.l4_violations || []));
       }
       // L3 - Delayed
-      if (r.l3_violations.length > 0) {
-        vSec.appendChild(this.renderViolationGroup('L3 延迟', 'l3', r.l3_violations));
+      if ((r.l3_violations?.length || 0) > 0) {
+        vSec.appendChild(this.renderViolationGroup('L3 延迟', 'l3', r.l3_violations || []));
       }
       // L2 - Blast
-      if (r.l2_violations.length > 0) {
-        vSec.appendChild(this.renderViolationGroup('L2 波及', 'l2', r.l2_violations));
+      if ((r.l2_violations?.length || 0) > 0) {
+        vSec.appendChild(this.renderViolationGroup('L2 波及', 'l2', r.l2_violations || []));
       }
 
       this.content.appendChild(vSec);

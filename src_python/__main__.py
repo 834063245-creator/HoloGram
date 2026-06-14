@@ -11,6 +11,25 @@ import os
 import sys
 import datetime
 import json
+import threading
+import time as _time
+
+
+def _heartbeat(label: str, interval: float = 2.0):
+    """后台心跳：每 interval 秒输出一条 HOLO:HEARTBEAT 消息，防止状态栏卡死。"""
+    stop = threading.Event()
+    def _run():
+        elapsed = 0.0
+        while not stop.is_set():
+            stop.wait(interval)
+            if stop.is_set():
+                break
+            elapsed += interval
+            print(f"HOLO:HEARTBEAT:{label}:{elapsed:.0f}s", file=sys.stderr, flush=True)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return stop
+
 
 from .adapters import AdapterRegistry, PythonAdapter
 from .adapters.tree_sitter_adapter import TreeSitterAdapter
@@ -98,14 +117,20 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     registry.register(PythonAdapter())
     registry.register(TypeScriptAdapter())
 
+    def _progress(file_path: str, current: int, total: int) -> None:
+        print(f"  [{current}/{total}] {file_path}", file=sys.stderr)
+        print(f"HOLO:PROGRESS:{current}:{total}:{file_path}", file=sys.stderr, flush=True)
+
     print(f"  scanning {root}...", file=sys.stderr)
+    print("HOLO:PHASE:analysis:分析源码", file=sys.stderr, flush=True)
     runner = PipelineRunner(registry, cache)
-    graph, report = runner.run(root, on_progress=lambda f, i, t: print(f"  [{i}/{t}] {f}", file=sys.stderr))
+    graph, report = runner.run(root, on_progress=_progress)
     cache.save_to_disk()
     print(f"[{report.elapsed_sec:.2f}s] {graph.node_count} nodes / {graph.edge_count} edges  (cached: {report.cached_files})", file=sys.stderr)
 
     # Cross-file resolution
     print(f"  resolving cross-file references...", file=sys.stderr)
+    print("HOLO:PHASE:cross_file:解析跨文件引用", file=sys.stderr, flush=True)
     resolver = CrossFileResolver()
     cross_added = resolver.resolve(graph)
     if cross_added:
@@ -113,6 +138,8 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
 
     # Coupling depth analysis — classify every structural edge L1-L4
     print(f"  coupling analysis...", file=sys.stderr)
+    print("HOLO:PHASE:coupling:耦合深度分析", file=sys.stderr, flush=True)
+    _coupling_hb = _heartbeat("耦合深度分析")
     try:
         coupler = CouplingDepthAnalyzer()
         # Reuse sources from pipeline runner; only re-read cache-hit files
@@ -131,18 +158,33 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         print(f"  coupling: L1={cr['total_l1']} L2={cr['total_l2']} L3={cr['total_l3']} L4={cr['total_l4']}", file=sys.stderr)
     except Exception as exc:
         print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
+    _coupling_hb.set()
 
     # Community detection (graceful degradation)
+    # Use detect_fast (Label Propagation / Louvain, O(n+m)) instead of
+    # CommunityDetector (recursive Leiden) — 10-100x faster on large graphs.
     print(f"  community detection...", file=sys.stderr)
+    print("HOLO:PHASE:community:社区聚类", file=sys.stderr, flush=True)
+    _comm_hb = _heartbeat("社区聚类")
     try:
-        detector = CommunityDetector()
-        communities = detector.detect(graph)
+        from .core.community import detect_fast
+        communities = detect_fast(graph)
         if communities:
+            graph.communities = communities
+            for node in graph.nodes.values():
+                node.community_id = None
+            for comm in communities:
+                for nid in comm.node_ids:
+                    n = graph.get_node(nid)
+                    if n is not None:
+                        n.community_id = comm.id
             print(f"  communities: {len(communities)}", file=sys.stderr)
     except Exception as exc:
         print(f"  community detection skipped: {exc}", file=sys.stderr)
+    _comm_hb.set()
 
     # Output — always save to disk first (enables incremental cache reuse)
+    print("HOLO:PHASE:saving:保存图数据", file=sys.stderr, flush=True)
     save_path = output_path or os.path.join(root, "hologram_graph.json")
     graph.to_json(save_path)
     # A3: 同时输出 MessagePack（二进制格式，大项目加载快 10×）
@@ -169,6 +211,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
 
     if output_json:
         # JSON to stdout — to_dict() now includes generated_at + coupling_summary
+        print("HOLO:PHASE:serializing:序列化JSON", file=sys.stderr, flush=True)
         sys.stdout.write(safe_json_dumps(_sanitize_for_json(graph.to_dict()), indent=2, ensure_ascii=False))
     else:
         print(f"  saved: {save_path}", file=sys.stderr)

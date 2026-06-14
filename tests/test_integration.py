@@ -624,12 +624,14 @@ def process(items):
             sys.stdout = old_stdout
 
         assert result in (0, 1)
-        # JSON 输出应可解析
+        # JSON 输出应可解析 — 匹配前端 CheckResult 接口（扁平结构）
         try:
             data = json.loads(output)
             assert "passed" in data
             assert "changed_files" in data
-            assert "summary" in data
+            assert "l5_violations" in data
+            assert "l4_violations" in data
+            assert "blast_radius" in data
         except json.JSONDecodeError:
             pytest.fail(f"check --json 输出不是合法 JSON: {output[:200]}")
 

@@ -135,6 +135,7 @@ fn silent_command(program: &str) -> Command {
     let root = project_root();
     cmd.env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONPATH", root.to_string_lossy().to_string());
     cmd
 }
@@ -2097,13 +2098,66 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
         .spawn()
         .map_err(|e| format!("无法启动 Python:\n  Python: {python}\n  错误: {e}"))?;
 
+    // ── Stream stderr: parse progress lines, accumulate rest ──
+    let stderr_pipe = child.stderr.take().expect("stderr piped");
+    let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf2 = stderr_buf.clone();
+    let app2 = app.clone();
+
+    let reader_handle = thread::spawn(move || {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stderr_pipe);
+        for line_result in reader.lines() {
+            let Ok(line) = line_result else { break };
+            // Accumulate raw bytes for error reporting
+            stderr_buf2.lock().unwrap().extend_from_slice(line.as_bytes());
+            stderr_buf2.lock().unwrap().push(b'\n');
+
+            if let Some(rest) = line.strip_prefix("HOLO:PROGRESS:") {
+                let parts: Vec<&str> = rest.splitn(3, ':').collect();
+                if parts.len() >= 3 {
+                    let current: u32 = parts[0].parse().unwrap_or(0);
+                    let total: u32 = parts[1].parse().unwrap_or(0);
+                    let file = parts[2].to_string();
+                    let payload = serde_json::json!({
+                        "current": current, "total": total, "file": file
+                    });
+                    let _ = app2.emit("analyze-progress", payload);
+                }
+            } else if let Some(rest) = line.strip_prefix("HOLO:PHASE:") {
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                if !parts.is_empty() {
+                    let phase = parts[0].to_string();
+                    let message = if parts.len() > 1 { parts[1].to_string() } else { String::new() };
+                    let payload = serde_json::json!({
+                        "phase": phase, "message": message
+                    });
+                    let _ = app2.emit("analyze-phase", payload);
+                }
+            } else if let Some(rest) = line.strip_prefix("HOLO:HEARTBEAT:") {
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                if !parts.is_empty() {
+                    let label = parts[0].to_string();
+                    let elapsed = if parts.len() > 1 { parts[1].to_string() } else { String::new() };
+                    let payload = serde_json::json!({
+                        "label": label, "elapsed": elapsed
+                    });
+                    let _ = app2.emit("analyze-heartbeat", payload);
+                }
+            }
+        }
+    });
+
     let analyze_timeout = std::time::Duration::from_secs(600);
     let start = std::time::Instant::now();
     let (stdout, stderr) = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let stdout = read_pipe(child.stdout.take());
-                let stderr = read_pipe(child.stderr.take());
+                // Wait for reader thread to finish draining stderr
+                let _ = reader_handle.join();
+                let stderr_bytes = stderr_buf.lock().unwrap().clone();
+                let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
                 if !status.success() {
                     return Err(format!(
                         "分析失败 (exit code {}):\n--- stderr ---\n{}\n--- stdout ---\n{}",
@@ -2118,6 +2172,7 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
                 if start.elapsed() >= analyze_timeout {
                     child.kill().ok();
                     let _ = child.wait();
+                    let _ = reader_handle.join();
                     return Err("项目分析超时 (600s)，项目过大或 Python 引擎卡死。已强制终止。".into());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2150,6 +2205,427 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
     }
 
     Ok(stdout)
+}
+
+// ═══════════════════════════════════════════════════════
+// Large Project Fast Path — skip full analysis, generate file graph only
+// ═══════════════════════════════════════════════════════
+
+/// Quick pre-scan: count source files & estimate project size.
+/// Returns JSON {file_count, total_bytes, is_large} — is_large=true means
+/// the project should skip full tree-sitter analysis and use file view.
+#[tauri::command]
+async fn estimate_project_size(path: String) -> Result<String, String> {
+    let root = std::path::PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err(format!("不是有效目录: {}", path));
+    }
+
+    let skip_dirs: std::collections::HashSet<&str> = [
+        ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
+        "node_modules", ".venv", "venv", ".hologram", "dist", "build", "target",
+        ".next", ".nuxt", ".cache", "egg-info", ".eggs",
+    ].iter().cloned().collect();
+
+    let source_exts: std::collections::HashSet<&str> = [
+        "py", "pyi", "ts", "tsx", "js", "jsx", "mjs",
+        "go", "rs", "java", "c", "cpp", "cc", "cxx", "h", "hpp", "hh",
+        "rb", "cs", "kt", "kts", "swift", "php", "lua",
+    ].iter().cloned().collect();
+
+    let mut file_count = 0u64;
+    let mut total_bytes = 0u64;
+
+    for entry in walkdir::WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !skip_dirs.contains(name.as_ref())
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let ext = entry.path().extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if source_exts.contains(ext) {
+            file_count += 1;
+            if let Ok(meta) = entry.metadata() {
+                total_bytes += meta.len();
+            }
+        }
+    }
+
+    // Threshold: >500 source files → skip full analysis, use file view
+    let is_large = file_count > 500;
+
+    Ok(serde_json::json!({
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "is_large": is_large,
+    }).to_string())
+}
+
+/// Generate a lightweight file-level dependency graph via AST import scanning.
+/// Skips full tree-sitter analysis. Handles Python (ast), JS/TS (regex), Go/Rust (regex).
+/// Writes both hologram_graph.json and hologram_graph_files.json into the project dir.
+/// Fast: ~5-30s even for Django-sized projects, vs 600s+ timeout for full analysis.
+#[tauri::command]
+async fn generate_lightweight_graph(path: String) -> Result<String, String> {
+    let root = project_root();
+    let code = format!(
+        r#"
+import sys, json, os, ast, re
+
+project_root = {}
+
+source_exts = {{
+    '.py', '.pyi', '.ts', '.tsx', '.js', '.jsx', '.mjs',
+    '.go', '.rs', '.java', '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh',
+    '.rb', '.cs', '.kt', '.kts', '.swift', '.php', '.lua',
+}}
+
+skip_dirs = {{
+    '.git', '.hg', '.svn', '__pycache__', '.pytest_cache', '.mypy_cache',
+    'node_modules', '.venv', 'venv', '.hologram', 'dist', 'build', 'target',
+    '.next', '.nuxt', '.cache', 'egg-info', '.eggs',
+}}
+
+LANG_MAP = {{
+    '.py': 'python', '.pyi': 'python',
+    '.ts': 'typescript', '.tsx': 'typescript',
+    '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript',
+    '.go': 'go', '.rs': 'rust', '.java': 'java',
+    '.c': 'c', '.cpp': 'c++', '.cc': 'c++', '.cxx': 'c++',
+    '.h': 'c', '.hpp': 'c++', '.hh': 'c++',
+    '.rb': 'ruby', '.cs': 'csharp',
+    '.kt': 'kotlin', '.kts': 'kotlin',
+    '.swift': 'swift', '.php': 'php', '.lua': 'lua',
+}}
+
+def detect_lang(fp):
+    return LANG_MAP.get(os.path.splitext(fp)[1].lower(), 'unknown')
+
+# ── Import extractors per language ──
+
+def extract_py(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            tree = ast.parse(f.read(), filename=filepath)
+    except Exception:
+        return set()
+    imps = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imps.add(alias.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imps.add(node.module.split('.')[0])
+    return imps
+
+def extract_js_ts(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except Exception:
+        return set()
+    imps = set()
+    for m in re.finditer(r"""(?:from\s+['"]|import\s+['"]|require\s*\(\s*['"])([^'"]+)['"]""", content):
+        mod = m.group(1)
+        # Relative imports: keep as-is for resolution; external: take top-level pkg
+        imps.add(mod if mod.startswith('.') else mod.split('/')[0])
+    return imps
+
+def extract_go(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except Exception:
+        return set()
+    return set(m.group(1).split('/')[-1] for m in re.finditer(r'"([^"]+)"', content))
+
+def extract_rust(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except Exception:
+        return set()
+    return set(m.group(1).split('::')[0] for m in re.finditer(r'use\s+([a-zA-Z_][\w:]*)', content))
+
+EXTRACTORS = {{
+    'python': extract_py,
+    'typescript': extract_js_ts,
+    'javascript': extract_js_ts,
+    'go': extract_go,
+    'rust': extract_rust,
+}}
+
+def extract_imports(fp):
+    lang = detect_lang(fp)
+    fn = EXTRACTORS.get(lang)
+    return fn(fp) if fn else set()
+
+# ── Step 1: Collect source files ──
+all_files = []
+for dirpath, dirnames, filenames in os.walk(project_root):
+    dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith('.')]
+    for fn in filenames:
+        ext = os.path.splitext(fn)[1].lower()
+        if ext in source_exts:
+            all_files.append(os.path.join(dirpath, fn))
+
+sys.stderr.write("HOLO:PHASE:scan:{{}} files found\n".format(len(all_files)))
+sys.stderr.flush()
+
+# ── Step 2: Build file nodes ──
+nodes = []
+node_index = {{}}  # key → node_id (multiple keys per file for fuzzy matching)
+
+for i, fp in enumerate(sorted(all_files)):
+    nid = "file_{{}}".format(i)
+    nodes.append({{
+        "id": nid,
+        "type": "symbol",
+        "name": os.path.basename(fp),
+        "location": fp,
+        "language": detect_lang(fp),
+        "kind": "file",
+        "community_id": None,
+        "position": None,
+        "properties": {{"path": fp}},
+    }})
+    # Index by absolute normpath, relative path, and basename-no-ext
+    nfp = os.path.normpath(fp)
+    node_index[nfp] = nid
+    rel = os.path.relpath(fp, project_root).replace('\\', '/')
+    node_index[rel] = nid
+    base_no_ext = os.path.splitext(os.path.basename(fp))[0]
+    # Don't overwrite an existing nid for the same basename (ambiguous imports)
+    if base_no_ext not in node_index:
+        node_index[base_no_ext] = nid
+
+# ── Step 3: Extract imports & build edges ──
+edges = []
+edge_keys = set()
+
+for idx, fp in enumerate(sorted(all_files)):
+    if idx % 50 == 0:
+        sys.stderr.write("HOLO:PROGRESS:{{}}:{{}}:{{}}\n".format(idx, len(all_files), os.path.basename(fp)))
+        sys.stderr.flush()
+
+    src_id = node_index.get(os.path.normpath(fp))
+    if not src_id:
+        continue
+
+    imports = extract_imports(fp)
+    src_dir = os.path.dirname(fp)
+
+    for imp in imports:
+        target_id = None
+
+        # 1) Direct match: import name == file basename without extension
+        if imp in node_index:
+            target_id = node_index[imp]
+
+        # 2) Relative import: './foo' / '../foo' → resolve against src_dir
+        if not target_id and imp.startswith('.'):
+            for ext in ('.py', '.ts', '.js', '.go', '.rs'):
+                resolved = os.path.normpath(os.path.join(src_dir, imp + ext))
+                if resolved in node_index:
+                    target_id = node_index[resolved]
+                    break
+            # Also try /index.py, /index.ts etc.
+            if not target_id:
+                for ext in ('.py', '.ts', '.js'):
+                    resolved = os.path.normpath(os.path.join(src_dir, imp, 'index' + ext))
+                    if resolved in node_index:
+                        target_id = node_index[resolved]
+                        break
+
+        if target_id and target_id != src_id:
+            key = (src_id, target_id)
+            if key not in edge_keys:
+                edge_keys.add(key)
+                edges.append({{
+                    "id": "fe_{{}}".format(len(edges)),
+                    "type": "structural",
+                    "direction": "import",
+                    "source": src_id,
+                    "target": target_id,
+                    "coupling_depth": 1,
+                }})
+
+# ── Step 4: Write output ──
+result = {{
+    "meta": {{
+        "source_root": project_root,
+        "generated_at": __import__('datetime').datetime.now().isoformat(),
+        "version": "0.1.0",
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "community_count": 0,
+        "lightweight": True,
+    }},
+    "nodes": nodes,
+    "edges": edges,
+    "communities": [],
+}}
+
+for fname in ["hologram_graph.json", "hologram_graph_files.json"]:
+    out = os.path.join(project_root, fname)
+    tmp = out + ".tmp"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, out)
+
+print(json.dumps({{"ok": True, "file_count": len(nodes), "edge_count": len(edges)}}))
+"#,
+        py_json(&path),
+    );
+
+    let timeout = std::time::Duration::from_secs(120);
+    let mut child = silent_command(&python())
+        .current_dir(&root)
+        .args(["-c", &code])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
+
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = read_pipe(child.stdout.take());
+                let stderr = read_pipe(child.stderr.take());
+                if !status.success() {
+                    return Err(format!("文件图生成失败 (exit {}):\n{}", status, stderr));
+                }
+                if stdout.trim().is_empty() {
+                    return Err(format!("文件图生成无输出。stderr:\n{}", stderr));
+                }
+                return Ok(stdout);
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    child.kill().ok();
+                    let _ = child.wait();
+                    return Err("文件图生成超时 (120s)".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("分析进程异常: {e}")),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// Background Analysis — run full graph analysis without blocking the UI
+// ═══════════════════════════════════════════════════════
+
+/// Kick off full symbol-level analysis as a background job.
+/// Spawns Python directly (no cmd /c wrapper) so env vars propagate correctly.
+/// The frontend shows file view immediately while this runs.
+/// On completion, emits "analysis-complete" or "analysis-failed" event.
+/// The resulting hologram_graph.json overwrites the lightweight file graph,
+/// so all MCP tools get full symbol-level data once the job finishes.
+#[tauri::command]
+async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    let root = project_root();
+    let python = python();
+    let graph_path = format!("{}/hologram_graph.json", path);
+
+    // Spawn Python directly — bypass spawn_bg to avoid cmd /c wrapper
+    let child = silent_command(&python)
+        .current_dir(&root)
+        .args(["-m", "src_python", "analyze", &path, "-o", &graph_path])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法启动后台分析进程: {e}"))?;
+
+    let job_id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let job = BgJob {
+        child,
+        stdout_buf: Vec::new(),
+        stderr_buf: Vec::new(),
+        start_time: std::time::Instant::now(),
+    };
+    BG_JOBS.lock().unwrap().insert(job_id, job);
+
+    // Monitor the job in a background thread — poll every 10s
+    let app2 = app.clone();
+    let path2 = path.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            // Drain output without removing the job
+            let (done, success, stderr_snippet) = {
+                let mut jobs = BG_JOBS.lock().unwrap();
+                let Some(job) = jobs.get_mut(&job_id) else {
+                    // Job was cleaned up externally — exit monitoring
+                    break;
+                };
+                // Drain stdout/stderr into buffers
+                if let Some(stdout) = &mut job.child.stdout {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        use std::io::Read;
+                        match stdout.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => job.stdout_buf.extend_from_slice(&buf[..n]),
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(_) => break,
+                        }
+                    }
+                }
+                if let Some(stderr) = &mut job.child.stderr {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        use std::io::Read;
+                        match stderr.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => job.stderr_buf.extend_from_slice(&buf[..n]),
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(_) => break,
+                        }
+                    }
+                }
+                let status = job.child.try_wait();
+                let done = matches!(status, Ok(Some(_)));
+                let success = matches!(status, Ok(Some(s)) if s.success());
+                let stderr_snip = String::from_utf8_lossy(&job.stderr_buf)
+                    .chars().take(500).collect::<String>();
+                (done, success, stderr_snip)
+            };
+
+            if done {
+                if success {
+                    *ACTIVE_PROJECT.lock().unwrap() = path2.clone();
+                    let _ = std::fs::write(project_root().join(".last_project"), &path2);
+                    // Clean up job entry
+                    BG_JOBS.lock().unwrap().remove(&job_id);
+                    let _ = app2.emit("analysis-complete", serde_json::json!({
+                        "path": path2,
+                        "graph_path": graph_path,
+                    }));
+                } else {
+                    BG_JOBS.lock().unwrap().remove(&job_id);
+                    let _ = app2.emit("analysis-failed", serde_json::json!({
+                        "path": path2,
+                        "error": stderr_snippet,
+                    }));
+                }
+                break;
+            }
+        }
+    });
+
+    Ok(serde_json::json!({"job_id": job_id, "status": "started"}).to_string())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2557,6 +3033,9 @@ fn main() {
             load_graph_json,
             load_binary_graph,
             analyze_and_load,
+            analyze_in_background,
+            estimate_project_size,
+            generate_lightweight_graph,
             hologram_run_check,
             hologram_run_preflight,
             hologram_run_health,

@@ -495,6 +495,13 @@ def cmd_check(args) -> int:
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     cached = f.read()
                 if args.json:
+                    # 兼容旧缓存格式：如果缓存是外层包装 dict，提取 summary
+                    try:
+                        data = json.loads(cached)
+                        if isinstance(data, dict) and "summary" in data:
+                            cached = json.dumps(data["summary"], ensure_ascii=False)
+                    except Exception:
+                        pass
                     _safe_print(cached)
                 else:
                     try:
@@ -506,9 +513,16 @@ def cmd_check(args) -> int:
             except Exception:
                 pass  # 缓存损坏，继续完整分析
 
-    # Step 1: 加载旧图（如果存在）
+    # Step 1: 加载旧图 — 优先使用上一次 check 保存的快照
+    # hologram_before.json 是上一次 check 结束时保存的基线，不受 watcher 增量分析影响
+    before_snapshot_path = os.path.join(root, "hologram_before.json")
     before_graph = None
-    if os.path.exists(graph_path):
+    if os.path.exists(before_snapshot_path):
+        try:
+            before_graph = Graph.from_json(before_snapshot_path)
+        except Exception as e:
+            print(f"Warning: could not load before snapshot: {e}", file=sys.stderr)
+    if before_graph is None and os.path.exists(graph_path):
         try:
             before_graph = Graph.from_json(graph_path)
         except Exception as e:
@@ -546,15 +560,6 @@ def cmd_check(args) -> int:
     if communities:
         print(f"  Communities: {len(communities)}", file=sys.stderr)
 
-    # 备份旧图 → 供 diff 按钮做"变更前"基线
-    before_snapshot_path = os.path.join(root, "hologram_before.json")
-    if os.path.exists(graph_path):
-        try:
-            import shutil
-            shutil.copy2(graph_path, before_snapshot_path)
-        except Exception:
-            pass
-
     # 保存新图
     after_graph.to_json(graph_path)
     # 同步更新 MsgPack（前端优先加载 .hologram，不同步会导致读到旧数据）
@@ -565,6 +570,13 @@ def cmd_check(args) -> int:
         pass
     print(f"Graph saved: {graph_path} ({after_graph.node_count} nodes, "
           f"{after_graph.edge_count} edges)", file=sys.stderr)
+
+    # 保存基线快照 — 供下次 check 的 before_graph 和前端 diff 按钮使用
+    import shutil
+    try:
+        shutil.copy2(graph_path, before_snapshot_path)
+    except Exception:
+        pass
 
     # 首次扫描：无旧图 → 跳过变更检测，不生成简报
     # 简报系统设计为增量变更场景，首次索引把所有文件当"变更"无意义
@@ -625,8 +637,24 @@ def cmd_check(args) -> int:
         changed_files = sorted(changed_file_set)
 
     if not changed_files:
+        import datetime as _dt_nochg
         if args.json:
-            _safe_print(safe_json_dumps({"passed": True, "message": "No changes detected"}, ensure_ascii=False))
+            _safe_print(safe_json_dumps({
+                "passed": True,
+                "timestamp": _dt_nochg.datetime.now().isoformat(),
+                "changed_files": [],
+                "total_changed_files": 0,
+                "l5_violations": [],
+                "l4_violations": [],
+                "l3_violations": [],
+                "l2_violations": [],
+                "passed_checks": [],
+                "blast_radius": 0,
+                "cross_community_edges": 0,
+                "new_cycles": 0,
+                "new_thread_conflicts": 0,
+                "api_signature_changes": 0,
+            }, ensure_ascii=False))
         else:
             _safe_print("No changes detected — passed.")
         return 0
@@ -660,9 +688,10 @@ def cmd_check(args) -> int:
         project_root=root,
     )
 
-    # Step 9: 输出
+    # Step 9: 输出 — 使用 summary 字段（匹配前端 CheckResult 接口，含 l5/l4/l3/l2_violations 等扁平字段）
     import datetime as _dt
-    json_output = safe_json_dumps(check_result, indent=2, ensure_ascii=False)
+    output_data = check_result.get("summary", check_result) if isinstance(check_result, dict) else check_result
+    json_output = safe_json_dumps(output_data, indent=2, ensure_ascii=False)
     if args.json:
         _safe_print(json_output)
     elif check_result["passed"]:
@@ -709,8 +738,8 @@ def cmd_check(args) -> int:
                 summary=check_result["one_line"],
                 properties={
                     "passed": check_result["passed"],
-                    "violations": check_result,
-                    "signals_count": len(signals),
+                    "violations": check_result.get("summary", check_result),
+                    "signals_count": check_result.get("signals_count", 0),
                 },
             )
     except Exception:

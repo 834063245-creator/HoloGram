@@ -2882,6 +2882,7 @@ export class StarGraph {
 
     // (standard mode: no bloom — bloom is full-mode only)
 
+    // ── Build scene geometry (all invisible initially for progressive reveal) ──
     this.buildEdges(rawPos, eData);
     this.buildNodes(nodes, rawPos, deg);
     this.buildLabels(nodes, deg);
@@ -2894,6 +2895,9 @@ export class StarGraph {
     if (this.mode === 'full') {
       this.initTwinkleData(nodes.length);
     }
+
+    // ── Progressive reveal: nodes materialize in batches from center outward ──
+    this._startProgressiveReveal(nodes.length);
 
     // ── Compute galaxy centroids from layout ─────────────────
     for (const gm of this.galaxyMeta) {
@@ -2918,7 +2922,98 @@ export class StarGraph {
 
   // ── end of _renderImpl; render() wrapper is above ──
 
+  // ── Progressive reveal: materialize nodes in batches ────────
+  private _revealRevealed = true; // false during animation
+  private _revealCancelled = false;
+
+  private _startProgressiveReveal(nodeCount: number): void {
+    this._revealCancelled = false;
+    const BATCH_SIZE = Math.max(50, Math.floor(nodeCount / 40)); // ~40 frames total, min 50 per batch
+    const totalNodes = this.nodeCores.length;
+    const totalEdgeGroups = this.edgeLineGroups.length;
+
+    // Save target opacities, then set everything invisible
+    const coreTargetOpacities: number[] = [];
+    const glowTargetOpacities: number[] = [];
+    const glow2TargetOpacities: number[] = [];
+    const edgeTargetOpacities: number[] = [];
+
+    for (const core of this.nodeCores) {
+      const mat = core.material as THREE.MeshBasicMaterial;
+      coreTargetOpacities.push(mat.opacity);
+      mat.transparent = true;
+      mat.opacity = 0;
+    }
+    for (const glow of this.nodeGlows) {
+      const mat = glow.material as THREE.SpriteMaterial;
+      glowTargetOpacities.push(mat.opacity);
+      mat.opacity = 0;
+    }
+    for (const glow2 of this.nodeGlows2) {
+      const mat = glow2.material as THREE.SpriteMaterial;
+      glow2TargetOpacities.push(mat.opacity);
+      mat.opacity = 0;
+    }
+    for (const lines of this.edgeLineGroups) {
+      const mat = lines.material as THREE.LineBasicMaterial;
+      edgeTargetOpacities.push(mat.opacity);
+      mat.opacity = 0;
+    }
+    // Hide labels during reveal
+    this.labelsContainer.style.opacity = '0';
+
+    this._revealRevealed = false;
+    let revealedNodes = 0;
+    let revealedEdges = 0;
+    const edgeRevealBatch = Math.max(1, Math.ceil(totalEdgeGroups / 10)); // edges reveal in ~10 frames
+
+    const revealFrame = () => {
+      if (this._revealCancelled) return; // clearGraph was called — stop
+      // Reveal a batch of nodes
+      const nodeEnd = Math.min(revealedNodes + BATCH_SIZE, totalNodes);
+      for (let i = revealedNodes; i < nodeEnd; i++) {
+        const core = this.nodeCores[i];
+        if (core) {
+          const mat = core.material as THREE.MeshBasicMaterial;
+          mat.opacity = coreTargetOpacities[i];
+        }
+        const glow = this.nodeGlows[i];
+        if (glow) {
+          (glow.material as THREE.SpriteMaterial).opacity = glowTargetOpacities[i];
+        }
+        // nodeGlows2 is indexed by totalNodes (only exists in full mode)
+        if (i < this.nodeGlows2.length) {
+          (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = glow2TargetOpacities[i];
+        }
+      }
+      revealedNodes = nodeEnd;
+
+      // Reveal edges faster (they're fewer visual groups)
+      const edgeEnd = Math.min(revealedEdges + edgeRevealBatch, totalEdgeGroups);
+      for (let i = revealedEdges; i < edgeEnd; i++) {
+        const lines = this.edgeLineGroups[i];
+        if (lines) {
+          (lines.material as THREE.LineBasicMaterial).opacity = edgeTargetOpacities[i];
+        }
+      }
+      revealedEdges = edgeEnd;
+
+      // Check if done
+      if (revealedNodes >= totalNodes && revealedEdges >= totalEdgeGroups) {
+        this._revealRevealed = true;
+        // Fade in labels
+        this.labelsContainer.style.transition = 'opacity 0.4s ease-in';
+        this.labelsContainer.style.opacity = '1';
+        setTimeout(() => { this.labelsContainer.style.transition = ''; }, 500);
+        return;
+      }
+      requestAnimationFrame(revealFrame);
+    };
+    requestAnimationFrame(revealFrame);
+  }
+
   private clearGraph(): void {
+    this._revealCancelled = true; // cancel any in-flight progressive reveal
     // Dispose materials/geometries before removing to prevent GPU memory leak (audit HIGH fix)
     const disposeGroup = (g: THREE.Group) => {
       while (g.children.length) {

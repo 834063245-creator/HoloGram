@@ -221,37 +221,96 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
   await invoke('set_active_project', { path: folder }).catch(() => {});
 
   setLoading(true, folder);
+
+  // ── Progress listeners for streaming analysis ──
+  let currentPhase = '';
+  const unlistenProgress = await listen<{ current: number; total: number; file: string }>(
+    'analyze-progress',
+    (e) => {
+      const { current, total, file } = e.payload;
+      const basename = file.replace(/.*[/\\]/, '');
+      statusText.textContent = `${currentPhase ? currentPhase + ' — ' : ''}[${current}/${total}] ${basename}`;
+    },
+  );
+  const unlistenPhase = await listen<{ phase: string; message: string }>(
+    'analyze-phase',
+    (e) => {
+      currentPhase = e.payload.message || e.payload.phase;
+      statusText.textContent = currentPhase;
+    },
+  );
+  const unlistenHeartbeat = await listen<{ label: string; elapsed: string }>(
+    'analyze-heartbeat',
+    (e) => {
+      const { label, elapsed } = e.payload;
+      statusText.textContent = `${label} (${elapsed}...)`;
+    },
+  );
+
   try {
-    // Load graph: MsgPack first, fall back to Python analysis
-    let graph: any;
+    // ═══════════════════════════════════════════════════════
+    // 双管线：大项目走文件图 + 后台符号分析；小项目走同步全量分析
+    // ═══════════════════════════════════════════════════════
+
+    // ── Phase 0: 预扫描（始终执行）──
+    let isLargeProject = false;
     try {
-      const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
-      const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
-      graph = decode(bytes) as any;
-    } catch {
-      const json = await invoke<string>('analyze_and_load', { path: folder, force: forceReanalyze });
-      graph = JSON.parse(json);
+      const estJson = await invoke<string>('estimate_project_size', { path: folder });
+      const est = JSON.parse(estJson);
+      if (est.is_large) {
+        isLargeProject = true;
+        statusText.textContent = `大项目 (${est.file_count} 源文件)，生成文件视图…`;
+        await invoke<string>('generate_lightweight_graph', { path: folder });
+      }
+    } catch (e) { console.warn('[openProject] pre-scan failed, falling through:', e); }
+
+    // ── Phase 1: 加载图 ──
+    let graph: any;
+    if (isLargeProject) {
+      // 大项目管线：直接加载文件图，永不调用 analyze_and_load
+      const graphPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
+      graph = JSON.parse(await invoke<string>('read_file_content', { filePath: graphPath }));
+    } else {
+      // 小项目管线：MsgPack 缓存优先，未命中则同步全量分析
+      try {
+        const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
+        const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
+        graph = decode(bytes) as any;
+      } catch {
+        const json = await invoke<string>('analyze_and_load', { path: folder, force: forceReanalyze });
+        graph = JSON.parse(json);
+      }
     }
     currentGraphData = graph;
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
-    // Auto-load file-level graph for large projects
+
+    // 加载文件图
     try {
       const filesPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
       currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
     } catch { currentFileGraphData = null; }
 
-    // Layout now GPU-accelerated — no main-thread freeze. 软上限。
+    // ── Phase 2: 渲染 ──
     const LAYOUT_CAP = 40000;
-    if (nodeCount > LAYOUT_CAP) {
-      if (currentFileGraphData) {
+    if (isLargeProject || nodeCount > LAYOUT_CAP) {
+      const fileData = currentFileGraphData || (isLargeProject ? graph : null);
+      if (fileData) {
         currentMode = 'files';
         starGraph.destroy();
         starGraph = new StarGraph(graphEl, 'files');
         chatPanel.setStarGraph(starGraph);
         agentViz?.setGraph(starGraph);
-        starGraph.render(currentFileGraphData);
-        statusText.textContent = `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
+        starGraph.render(fileData);
+        statusText.textContent = isLargeProject
+          ? `📁 文件视图 (${(fileData.nodes && (Array.isArray(fileData.nodes) ? fileData.nodes.length : Object.keys(fileData.nodes).length)) || '?'} 文件 · 大项目模式)`
+          : `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
         setModeButtonsEnabled(false);
+        // ── 后台全量符号分析：首次打开 + 重分析都走这条 ──
+        if (isLargeProject) {
+          invoke('analyze_in_background', { path: folder }).catch(e =>
+            console.warn('[openProject] background analysis start failed:', e),
+          );
+        }
       } else {
         statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限且文件图缺失，使用 Agent 查询`;
       }
@@ -262,6 +321,8 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
       setModeButtonsEnabled(true);
     }
     setLoading(false); // 图已就绪，不等 Agent
+    // Clean up progress listeners
+    unlistenProgress(); unlistenPhase(); unlistenHeartbeat(); currentPhase = '';
     // Agent 初始化（异步，不阻塞图的显示）
     try { await setupAgent(); } catch (e) { console.error('[openProject] setupAgent failed:', e); }
     // Restore saved sessions for this project (must be AFTER setupAgent sets agentFactory)
@@ -273,6 +334,7 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
     runCheck();
     await invoke('start_watching', { path: folder }).catch(() => {});
   } catch (err: any) {
+    unlistenProgress(); unlistenPhase(); unlistenHeartbeat(); currentPhase = '';
     statusText.textContent = `分析失败: ${err}`; setLoading(false); throw err;
   }
 }
@@ -1330,8 +1392,50 @@ async function init(): Promise<void> {
     } catch { /* ignore */ }
   });
 
+  // ── 后台全量分析完成事件：更新符号图数据，Agent 工具立即可用 ──
+  listen<{ path: string; graph_path: string }>('analysis-complete', async (event) => {
+    const { path: projPath } = event.payload;
+    // Only update if still on the same project
+    if (!currentPath || !isSamePath(currentPath, projPath)) return;
+    try {
+      const graphPath = projPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
+      const raw = await invoke<string>('read_file_content', { filePath: graphPath });
+      const fullGraph = JSON.parse(raw);
+      const nc = Array.isArray(fullGraph.nodes) ? fullGraph.nodes.length : Object.keys(fullGraph.nodes || {}).length;
+      // Update data for tools (Agent reads currentGraphData)
+      currentGraphData = fullGraph;
+      // Regenerate file graph for completeness
+      try {
+        const filesPath = projPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
+        currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
+      } catch { /* file graph will be regenerated by watcher */ }
+      statusText.textContent = `✅ 符号图分析完成 (${nc} 节点) — Agent 工具已就绪`;
+      setTimeout(() => { if (statusText.textContent?.startsWith('✅ 符号图')) statusText.textContent = '📁 文件视图 · 大项目模式'; }, 5000);
+    } catch (e) {
+      console.error('[analysis-complete] failed to reload graph:', e);
+    }
+  });
+
+  listen<{ path: string; error: string }>('analysis-failed', (event) => {
+    const { path: projPath, error } = event.payload;
+    if (!currentPath || !isSamePath(currentPath, projPath)) return;
+    const short = (error || '未知错误').slice(0, 80);
+    statusText.textContent = `⚠️ 后台分析失败: ${short}`;
+    console.error('[analysis-failed]', error);
+  });
+
   function _doGraphUpdate(graph: any): void {
     _lastGraphUpdate = Date.now();
+
+    // ── 文件视图模式：不渲染全量符号图，保持锁定 ──
+    if (currentMode === 'files') {
+      statusText.textContent = '📁 项目文件已变更 · 文件视图保持';
+      setTimeout(() => { if (statusText.textContent?.startsWith('📁 项目')) statusText.textContent = '就绪'; }, 3000);
+      // Still run check but don't disrupt the view
+      runCheck();
+      return;
+    }
+
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
     if (nodeCount > 50000) {
       statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
@@ -1341,6 +1445,10 @@ async function init(): Promise<void> {
       setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
     }
     if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
+    // ── 超4万节点自动锁定模式按钮 ──
+    if (nodeCount > 40000) {
+      setModeButtonsEnabled(false);
+    }
     // NOTE: Agent does NOT need re-init on incremental updates — its tools read
     // currentGraphData which is already refreshed. Re-initializing would kill MCP
     // connections and disrupt active conversations.
@@ -1382,6 +1490,7 @@ async function init(): Promise<void> {
       await invoke('set_active_project', { path: root }).catch(() => {});
 
       currentGraphData = graph;
+      const isLightweight = graph.meta?.lightweight === true;
       // Auto-load file-level graph for large projects
       try {
         const filesPath = root.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
@@ -1389,15 +1498,18 @@ async function init(): Promise<void> {
       } catch { currentFileGraphData = null; }
 
       const LAYOUT_CAP = 40000;
-      if (nodeCount > LAYOUT_CAP) {
-        if (currentFileGraphData) {
+      if (isLightweight || nodeCount > LAYOUT_CAP) {
+        const fileData = currentFileGraphData || (isLightweight ? graph : null);
+        if (fileData) {
           currentMode = 'files';
           starGraph.destroy();
           starGraph = new StarGraph(graphEl, 'files');
           chatPanel.setStarGraph(starGraph);
           agentViz?.setGraph(starGraph);
-          starGraph.render(currentFileGraphData);
-          statusText.textContent = `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
+          starGraph.render(fileData);
+          statusText.textContent = isLightweight
+            ? `📁 文件视图 (${nodeCount} 文件 · 大项目模式)`
+            : `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
           setModeButtonsEnabled(false);
         } else {
           statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限且文件图缺失，使用 Agent 查询`;
