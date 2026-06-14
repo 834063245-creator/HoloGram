@@ -55,7 +55,7 @@ echo "[5/5] 安装依赖..."
 # verify
 echo ""
 echo "=== 验证 ==="
-"$PYTHON_DIR/python.exe" -c "import networkx; import igraph; import leidenalg; import msgpack; import yaml; import tree_sitter; print('所有依赖 OK')"
+"$PYTHON_DIR/python.exe" -c "import networkx; import igraph; import leidenalg; import msgpack; import yaml; import tree_sitter; print('All deps OK')"
 
 # initial sync of src_python
 echo ""
