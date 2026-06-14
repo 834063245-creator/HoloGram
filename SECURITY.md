@@ -12,8 +12,11 @@ HoloGram is in early development (0.x). Security patches will be released for th
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, send an email to **[INSERT SECURITY CONTACT EMAIL]** with:
+Use GitHub's private vulnerability reporting instead:
 
+👉 **[Report a vulnerability](https://github.com/HoloGramHG/HoloGram/security/advisories/new)**
+
+Include:
 - A clear description of the issue
 - Steps to reproduce
 - Affected versions
