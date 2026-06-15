@@ -36,13 +36,13 @@ jobs:
         run: cd src-ui && npm ci
 
       - name: Build Engine
-        run: cd engine && cargo build --release
+        run: cd engine; cargo build --release
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli
 
       - name: Build (Tauri)
-        run: cargo tauri build
+        run: cd src-tauri; cargo tauri build
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
