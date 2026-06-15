@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use hologram_engine::analysis::{coupling::compute_coupling, fragile_nodes, detect_cycles, coupling_report, graph_summary,
     classify_cycles, thread_conflict_report, find_blindspots};
 use hologram_engine::community::detect_communities;
@@ -5,17 +7,53 @@ use hologram_engine::graph::{CrossFileResolver, query, Graph, EdgeKind};
 use hologram_engine::routing::preflight::run_full_check;
 use hologram_engine::timeline::TimelineStore;
 use hologram_engine::pipeline::runner::analyze_project;
+use hologram_engine::mcp::{self, McpServer};
 use serde_json::{self, json};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-static CACHED_GRAPH: std::sync::LazyLock<Mutex<Option<Graph>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ── MCP serve mode ──
+    if let Some(project_root) = mcp::parse_serve_args() {
+        eprintln!("[engine] MCP serve mode — project: {}", project_root);
+        let root = PathBuf::from(&project_root);
+        if !root.exists() {
+            eprintln!("[engine] ERROR: project root not found: {}", project_root);
+            std::process::exit(1);
+        }
+        // Auto-analyze on startup
+        eprintln!("[engine] analyzing project...");
+        let mut result = analyze_project(&root);
+        CrossFileResolver::resolve(&mut result.graph);
+        compute_coupling(&mut result.graph);
+        detect_communities(&result.graph, 42);
+        let node_count = result.graph.node_count();
+        let edge_count = result.graph.edge_count();
+        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
+            *cache = Some(result.graph);
+        }
+        // Signal ready to parent process (McpManager reads this)
+        let ready = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "ready",
+            "params": {
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "elapsed_secs": result.elapsed_secs
+            }
+        });
+        println!("{}", serde_json::to_string(&ready).unwrap_or_default());
+        eprintln!("[engine] analysis complete: {} nodes, {} edges, {:.1}s",
+            node_count, edge_count, result.elapsed_secs);
+
+        let server = McpServer::new(&root);
+        server.run_stdio();
+        return Ok(());
+    }
+
+    // ── TCP RPC server mode (default) ──
     let listener = TcpListener::bind("127.0.0.1:9777").await?;
     println!("[engine] listening on 127.0.0.1:9777");
 
@@ -143,7 +181,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
 
     // Cache for subsequent queries
     let graph_clone = result.graph.clone();
-    if let Ok(mut cache) = CACHED_GRAPH.lock() {
+    if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
         *cache = Some(graph_clone);
     }
     println!(
@@ -198,7 +236,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
 fn handle_check(project_path: &str) -> Vec<u8> {
     // Auto-analyze if no cached graph
     {
-        let cache = CACHED_GRAPH.lock().unwrap();
+        let cache = mcp::CACHED_GRAPH.lock().unwrap();
         if cache.is_none() {
             drop(cache);
             let root = PathBuf::from(project_path);
@@ -206,12 +244,12 @@ fn handle_check(project_path: &str) -> Vec<u8> {
                 let mut result = analyze_project(&root);
                 compute_coupling(&mut result.graph);
                 let communities = detect_communities(&result.graph, 42);
-                if let Ok(mut c) = CACHED_GRAPH.lock() { *c = Some(result.graph.clone()); }
+                if let Ok(mut c) = mcp::CACHED_GRAPH.lock() { *c = Some(result.graph.clone()); }
             }
         }
     }
 
-    let cache = CACHED_GRAPH.lock().unwrap();
+    let cache = mcp::CACHED_GRAPH.lock().unwrap();
     let after = match cache.as_ref() {
         Some(g) => g,
         None => return b"{\"error\":\"project not found\"}".to_vec(),
@@ -224,7 +262,7 @@ fn handle_check(project_path: &str) -> Vec<u8> {
 
 fn handle_simple(prefix: &str, request: &str, f: fn(&Graph, &str) -> serde_json::Value) -> Vec<u8> {
     let arg = request.strip_prefix(prefix).unwrap_or("");
-    let cache = CACHED_GRAPH.lock().unwrap();
+    let cache = mcp::CACHED_GRAPH.lock().unwrap();
     match cache.as_ref() {
         Some(g) => serde_json::to_vec(&f(g, arg)).unwrap_or_default(),
         None => b"{\"error\":\"no graph loaded\"}".to_vec(),
@@ -233,7 +271,7 @@ fn handle_simple(prefix: &str, request: &str, f: fn(&Graph, &str) -> serde_json:
 
 fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
     let args = request.strip_prefix(prefix).unwrap_or("");
-    let cache = CACHED_GRAPH.lock().unwrap();
+    let cache = mcp::CACHED_GRAPH.lock().unwrap();
     let graph = match cache.as_ref() {
         Some(g) => g,
         None => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),

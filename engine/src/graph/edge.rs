@@ -53,6 +53,12 @@ pub struct Edge {
     /// Direction: "forward" | "backward"
     #[serde(default = "default_direction")]
     pub direction: String,
+    /// Temporal delay in seconds (for temporal edges)
+    #[serde(default)]
+    pub temporal_delay_sec: Option<f64>,
+    /// Medium node ID (for data edges via intermediary)
+    #[serde(default)]
+    pub medium_node_id: Option<String>,
 }
 
 fn default_direction() -> String {
@@ -74,6 +80,8 @@ impl Edge {
             coupling_depth: 0,
             cross_file: false,
             direction: "forward".into(),
+            temporal_delay_sec: None,
+            medium_node_id: None,
         }
     }
 }

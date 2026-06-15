@@ -1,13 +1,18 @@
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use super::{Edge, Node};
 
 /// The dependency graph — the central data structure.
 /// Mirrors the Python `Graph` class, with the O(V×E) bug fixed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Graph {
+    #[serde(default)]
     pub nodes: HashMap<String, Node>,
+    #[serde(default)]
     pub edges: HashMap<String, Edge>,
+    #[serde(default)]
     pub meta: serde_json::Value,
 }
 
@@ -18,6 +23,34 @@ impl Graph {
             edges: HashMap::new(),
             meta: serde_json::Value::Object(Default::default()),
         }
+    }
+
+    /// Load a Graph from a Python-format JSON file (nodes/edges as arrays).
+    pub fn from_json_file(path: &str) -> Result<Self, String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Cannot read {}: {}", path, e))?;
+        let val: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON: {}", e))?;
+
+        let mut g = Graph::new();
+        if let Some(meta) = val.get("meta") {
+            g.meta = meta.clone();
+        }
+        if let Some(nodes) = val.get("nodes").and_then(|v| v.as_array()) {
+            for n in nodes {
+                if let Ok(node) = serde_json::from_value::<Node>(n.clone()) {
+                    g.nodes.insert(node.id.clone(), node);
+                }
+            }
+        }
+        if let Some(edges) = val.get("edges").and_then(|v| v.as_array()) {
+            for e in edges {
+                if let Ok(edge) = serde_json::from_value::<Edge>(e.clone()) {
+                    g.edges.insert(edge.id.clone(), edge);
+                }
+            }
+        }
+        Ok(g)
     }
 
     // ── Node operations ──

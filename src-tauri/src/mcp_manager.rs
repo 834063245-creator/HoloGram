@@ -1,8 +1,8 @@
 // MCP Process Manager — 持久 MCP 进程生命周期管理
-// Step 1: 修传输层 — 从"每次起新进程"到"长生命周期 MCP"
+// Step 2: Rust 引擎替代 Python — engine.exe serve 替换 python -m src_python serve
 //
 // 设计：
-//   McpManager 掌管一个长期运行的 Python MCP Server 子进程。
+//   McpManager 掌管一个长期运行的 Rust Engine MCP Server 子进程。
 //   通过 stdin/stdout JSON-RPC 通信，避免每次工具调用都冷启动。
 //   崩溃追踪：60 秒内 3 次崩溃 → 永久降级，前端自动回退 CLI。
 
@@ -29,9 +29,9 @@ impl McpManager {
         }
     }
 
-    /// Spawn the Python MCP server, wait for the ready signal, then return
+    /// Spawn the Rust engine MCP server, wait for the ready signal, then return
     /// the tool list via tools/list.
-    pub fn start(&mut self, project_root: &str, python: &str) -> Result<String, String> {
+    pub fn start(&mut self, project_root: &str, engine_path: &str) -> Result<String, String> {
         if self.degraded {
             return Err("MCP 已永久降级，请使用 CLI 模式".into());
         }
@@ -44,30 +44,24 @@ impl McpManager {
         #[cfg(windows)]
         let child = {
             use std::os::windows::process::CommandExt;
-            Command::new(python)
+            Command::new(engine_path)
                 .creation_flags(super::NO_WINDOW)
                 .current_dir(&root)
-                .args(["-m", "src_python", "serve", "--project-root", project_root])
+                .args(["serve", "--project-root", project_root])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
-                .env("PYTHONIOENCODING", "utf-8")
-                .env("PYTHONUTF8", "1")
-                .env("PYTHONPATH", root.to_string_lossy().to_string())
                 .spawn()
                 .map_err(|e| format!("无法启动 MCP Server: {e}"))?
         };
         #[cfg(not(windows))]
         let child = {
-            Command::new(python)
+            Command::new(engine_path)
                 .current_dir(&root)
-                .args(["-m", "src_python", "serve", "--project-root", project_root])
+                .args(["serve", "--project-root", project_root])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
-                .env("PYTHONIOENCODING", "utf-8")
-                .env("PYTHONUTF8", "1")
-                .env("PYTHONPATH", root.to_string_lossy().to_string())
                 .spawn()
                 .map_err(|e| format!("无法启动 MCP Server: {e}"))?
         };

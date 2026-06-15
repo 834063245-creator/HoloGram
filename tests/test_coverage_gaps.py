@@ -185,8 +185,12 @@ class TestGraphDifferGaps:
         g2.add_node(Node("n1", NodeType.SYMBOL, "f", "f.py:1", "python", "class"))  # kind changed
 
         diff = GraphDiffer.diff(g1, g2)
-        assert len(diff.modified_nodes) == 1
-        assert diff.modified_nodes[0].changed_properties.get("kind") == ("function", "class")
+        # kind included in dedup key → kind change is remove+add, not modified
+        assert len(diff.modified_nodes) == 0
+        assert len(diff.added_nodes) == 1
+        assert len(diff.removed_nodes) == 1
+        assert diff.added_nodes[0].kind == "class"
+        assert diff.removed_nodes[0].kind == "function"
 
     def test_is_empty_true(self):
         g = Graph()
