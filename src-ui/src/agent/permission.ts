@@ -173,7 +173,7 @@ export class PermissionGate {
           reason: '此工具被权限策略拒绝。请选择其他方式。',
         };
       case 'ask':
-        if (!this.approve) return { allow: true }; // non-interactive: allow
+        if (!this.approve) return { allow: false, reason: '审批通道未就绪，已拒绝。' }; // v4: fail-closed
         const result = await this.approve(toolName, toolDescription, args);
         if (!result.allow) {
           return {
