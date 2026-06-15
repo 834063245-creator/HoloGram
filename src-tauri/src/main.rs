@@ -7,10 +7,19 @@
 mod mcp_manager;
 mod pty_manager;
 mod lsp_manager;
+mod unity_manager;
+mod engine_client;
+mod sandbox;
+mod audit;
+mod credential;
 
 use mcp_manager::McpManager;
 use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
 use lsp_manager::{lsp_start, lsp_request, lsp_stop};
+use unity_manager::UnityManager;
+use engine_client::EngineClient;
+use sandbox::Sandbox;
+use audit::{AuditEntry, AuditLogger, now_iso};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -242,6 +251,10 @@ static ACTIVE_PROJECT: std::sync::LazyLock<Mutex<String>> =
 #[tauri::command]
 fn set_active_project(path: String) -> Result<(), String> {
     *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+    // v4: init sandbox for this project
+    let project_path = std::path::Path::new(&path);
+    *SANDBOX.lock().unwrap() = Some(Sandbox::new(project_path));
+    *AUDIT_LOGGER.lock().unwrap() = Some(AuditLogger::new(project_path));
     let last_path_file = project_root().join(".last_project");
     if let Err(e) = std::fs::write(&last_path_file, &path) {
         eprintln!("[hologram] failed to write .last_project: {e}");
@@ -441,114 +454,58 @@ fn run_incremental_analysis(project_path: &str, changed_files: &[String]) -> Opt
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    let graph_path = format!("{}/hologram_graph.json", target);
-    run_hologram(&["analyze", &target, "-o", &graph_path])
+    EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", target))
 }
 
 #[tauri::command]
 async fn hologram_neighbors(node_id: String, _depth: Option<i32>) -> Result<String, String> {
-    let graph = active_graph();
-    run_hologram(&["neighbors", &node_id, "-g", &graph])
+    EngineClient::new("127.0.0.1:9777").send(&format!("neighbors:{}:2", node_id))
 }
 
 #[tauri::command]
 async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<String, String> {
-    let graph = active_graph();
-    let d = max_depth.unwrap_or(0);
-    if d > 0 {
-        run_hologram(&["impact", &node_id, "-d", &d.to_string(), "-g", &graph])
-    } else {
-        run_hologram(&["impact", &node_id, "-g", &graph])
-    }
+    let d = max_depth.unwrap_or(3);
+    EngineClient::new("127.0.0.1:9777").send(&format!("impact:{}:{}", node_id, d))
 }
 
 #[tauri::command]
 async fn hologram_path(from: String, to: String) -> Result<String, String> {
-    run_hologram(&["path", &from, &to, "-g", &active_graph()])
+    EngineClient::new("127.0.0.1:9777").send(&format!("path:{}:{}", from, to))
 }
 
 #[tauri::command]
 async fn hologram_diff(before_path: String, after_path: Option<String>) -> Result<String, String> {
-    let after = after_path.unwrap_or_else(|| active_graph());
-    // Auto-create baseline snapshot if missing
-    if !std::path::Path::new(&before_path).exists() {
-        if let Err(e) = std::fs::copy(&after, &before_path) {
-            return Err(format!("无法创建变更基线: {}", e));
-        }
-        return Ok(r#"{"is_empty":true,"added_nodes":[],"removed_nodes":[],"modified_nodes":[]}"#.to_string());
-    }
-    run_hologram(&["diff", &before_path, &after, "--json"])
+    EngineClient::new("127.0.0.1:9777").send("diff:")
 }
 
 #[tauri::command]
 async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
-    let l = limit.unwrap_or(10);
-    run_hologram(&["fragile", "-l", &l.to_string(), "-g", &active_graph()])
+    EngineClient::new("127.0.0.1:9777").send(&format!("fragile:{}", limit.unwrap_or(10)))
 }
 
 #[tauri::command]
 async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
-    let m = mode.unwrap_or_else(|| "all".into());
-    run_hologram(&["cycle", "-m", &m, "-g", &active_graph()])
+    EngineClient::new("127.0.0.1:9777").send("cycle:")
 }
 
 #[tauri::command]
 async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
-    let l = limit.unwrap_or(20);
-    run_hologram(&["search", &query, "-g", &active_graph(), "-l", &l.to_string()])
+    EngineClient::new("127.0.0.1:9777").send(&format!("search:{}", query))
 }
 
 #[tauri::command]
 async fn hologram_coupling_report(module: String) -> Result<String, String> {
-    run_hologram(&["coupling-report", &module, "-g", &active_graph()])
+    EngineClient::new("127.0.0.1:9777").send(&format!("coupling_report:{}", module))
 }
 
 #[tauri::command]
 async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
-    let t = threshold.unwrap_or(0.5);
-    let root = project_root();
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{}")
-from src_python.analysis.blindspots import find_blindspots
-from src_python.core.graph import Graph
-graph = Graph.from_json(r"{}")
-results = find_blindspots(graph, min_confidence={})
-print(json.dumps(results, indent=2, ensure_ascii=False))
-"#,
-        root.to_string_lossy(),
-        active_graph(),
-        t,
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("blindspots:")
 }
 
 #[tauri::command]
 async fn hologram_thread_conflicts(_severity: Option<String>) -> Result<String, String> {
-    let root = project_root();
-    let code = format!(
-        r#"
-import sys, json, os
-sys.path.insert(0, r"{}")
-from src_python.analysis.threading import thread_conflict_report
-sources = {{}}
-sp = r"{}"
-for dirpath, _, filenames in os.walk(sp):
-    for fn in filenames:
-        if fn.endswith('.py'):
-            fp = os.path.join(dirpath, fn)
-            try:
-                with open(fp, 'r', encoding='utf-8', errors='replace') as f:
-                    sources[fp] = f.read()
-            except: pass
-result = thread_conflict_report(sources, language="python")
-print(json.dumps(result, indent=2, ensure_ascii=False))
-"#,
-        root.to_string_lossy(),
-        root.join("src_python").to_string_lossy(),
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("thread:")
 }
 
 #[tauri::command]
@@ -557,36 +514,26 @@ async fn hologram_timeline(
     limit: Option<i32>,
     module: Option<String>,
 ) -> Result<String, String> {
-    let root = project_root();
-    let lim = limit.unwrap_or(50);
-    let since_clause = since
-        .map(|s| format!(" AND timestamp >= '{}'", s))
-        .unwrap_or_default();
-    let module_clause = module
-        .map(|m| format!(" AND file LIKE '%{}%'", m))
-        .unwrap_or_default();
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{}")
-from timeline import TimelineStore
-store = TimelineStore(r"{}")
-rows = store.query(
-    f"SELECT * FROM timeline WHERE 1=1 {{}} {{}} ORDER BY timestamp DESC LIMIT {{}}",
-    '{}',
-    '{}',
-    {}
-)
-print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
-store.close()
-"#,
-        root.join("src_python").to_string_lossy(),
-        root.to_string_lossy(),
-        since_clause,
-        module_clause,
-        lim,
-    );
-    run_python_code(&code)
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
+    let db = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
+    let lim = limit.unwrap_or(60);
+    let mut sql = "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?".to_string();
+    let mut stmt = db.prepare(&sql).map_err(|e| format!("查询失败: {}", e))?;
+    let events: Vec<serde_json::Value> = stmt.query_map(rusqlite::params![lim], |row| {
+        let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "timestamp": row.get::<_, String>(1)?,
+            "event_type": row.get::<_, String>(2)?,
+            "file": row.get::<_, String>(3).unwrap_or_default(),
+            "summary": row.get::<_, String>(4).unwrap_or_default(),
+            "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
+        }))
+    }).map_err(|e| format!("读取失败: {}", e))?
+    .filter_map(|r| r.ok()).collect();
+    Ok(serde_json::json!({"events": events}).to_string())
 }
 
 #[tauri::command]
@@ -594,62 +541,12 @@ async fn hologram_community_report(
     resolution: Option<f64>,
     min_size: Option<i32>,
 ) -> Result<String, String> {
-    let _ = resolution;
-    let min = min_size.unwrap_or(3);
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{}")
-from src_python.core.graph import Graph
-from src_python.core.community import CommunityDetector
-graph = Graph.from_json(r"{}")
-detector = CommunityDetector()
-communities = detector.detect(graph)
-filtered = [c.to_dict() for c in communities if len(c.node_ids) >= {}]
-print(json.dumps(filtered, indent=2, ensure_ascii=False))
-"#,
-        project_root().to_string_lossy(),
-        active_graph(),
-        min,
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("community_report:")
 }
 
 #[tauri::command]
 async fn hologram_graph_summary() -> Result<String, String> {
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{}")
-from core.graph import Graph
-graph = Graph.from_json(r"{}")
-nodes = list(graph.nodes.values())
-edges = list(graph.edges.values())
-node_types = {{}}
-edge_types = {{}}
-for n in nodes:
-    nt = n.type.value if hasattr(n.type, 'value') else str(n.type)
-    node_types[nt] = node_types.get(nt, 0) + 1
-for e in edges:
-    et = e.type.value if hasattr(e.type, 'value') else str(e.type)
-    edge_types[et] = edge_types.get(et, 0) + 1
-n = len(nodes)
-density = round((2 * len(edges)) / (n * (n - 1)), 6) if n > 1 else 0
-summary = {{
-    "total_nodes": n,
-    "total_edges": len(edges),
-    "node_types": node_types,
-    "edge_types": edge_types,
-    "density": density,
-    "communities": getattr(graph, 'community_count', 0),
-    "top_node_kinds": sorted(node_types.items(), key=lambda x: x[1], reverse=True)[:10],
-}}
-print(json.dumps(summary, indent=2, ensure_ascii=False))
-"#,
-        project_root().join("src_python").to_string_lossy(),
-        active_graph(),
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("graph_summary:")
 }
 
 #[tauri::command]
@@ -659,37 +556,7 @@ async fn hologram_rename(
     dry_run: Option<bool>,
     node_id: Option<String>,
 ) -> Result<String, String> {
-    let root = project_root();
-    let graph = active_graph();
-    let is_dry = dry_run.unwrap_or(true);
-    let nid = node_id.as_deref().unwrap_or("");
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, json.loads({py_src}))
-from core.rename import preview_rename, execute_rename
-from core.graph import Graph
-graph = Graph.from_json(json.loads({graph}))
-dry = {is_dry}
-old = json.loads({old_name})
-new = json.loads({new_name})
-nid = json.loads({nid}) or None
-proj = json.loads({proj})
-if dry:
-    result = preview_rename(graph, old, new, node_id=nid)
-else:
-    result = execute_rename(graph, old, new, project_root=proj, node_id=nid)
-print(json.dumps(result, indent=2, ensure_ascii=False))
-"#,
-        py_src = py_json(&root.join("src_python").to_string_lossy()),
-        graph = py_json(&graph),
-        is_dry = if is_dry { "True" } else { "False" },
-        old_name = py_json(&old_name),
-        new_name = py_json(&new_name),
-        nid = py_json(nid),
-        proj = py_json(&root.to_string_lossy()),
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("rename:")
 }
 
 // ═══════════════════════════════════════════════════════
@@ -698,46 +565,7 @@ print(json.dumps(result, indent=2, ensure_ascii=False))
 
 #[tauri::command]
 async fn hologram_run_check(path: String) -> Result<String, String> {
-    let graph_path = format!("{}/hologram_graph.json", path);
-    let root = project_root();
-    let output = silent_command(&python())
-        .current_dir(&root)
-        .args(["-m", "src_python"])
-        .args(["check", &path, "--json", "-g", &graph_path])
-        .output()
-        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    // ── Debug: log raw output to help diagnose "简报解析失败" ──
-    let debug_log = project_root().join("_check_debug.log");
-    let _ = std::fs::write(&debug_log, format!(
-        "=== CHECK DEBUG {} ===\npath: {}\nexit: {}\n--- STDOUT ---\n{}\n--- STDERR ---\n{}\n=== END ===\n",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-        path,
-        output.status,
-        stdout,
-        stderr,
-    ));
-
-    // cmd_check returns exit code 1 when violations found — that's NOT a system error,
-    // the JSON output in stdout still encodes the full pass/fail/violations result.
-    if !stdout.trim().is_empty() {
-        return Ok(stdout);
-    }
-
-    // Truly empty output: stderr might have the error detail
-    if !output.status.success() {
-        return Err(if stderr.is_empty() {
-            format!("Check failed with exit code {}", output.status)
-        } else {
-            stderr
-        });
-    }
-
-    // Exit code 0 but no output: return a synthetic pass
-    Ok("{\"passed\": true, \"message\": \"No output\"}".into())
+    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -746,23 +574,7 @@ async fn hologram_run_check(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<String, String> {
-    let graph_path = format!("{}/hologram_graph.json", path);
-    let mut args: Vec<&str> = vec!["preflight", &path, "--json", "-g", &graph_path];
-    if !files.is_empty() {
-        args.push("--files");
-        // We need to collect the file strings into the args vec
-        // Use a different approach: build args as Vec<String> and then convert
-    }
-    // Build args with owned strings
-    let mut owned_args: Vec<String> = vec![
-        "preflight".into(), path.clone(), "--json".into(), "-g".into(), graph_path,
-    ];
-    if !files.is_empty() {
-        owned_args.push("--files".into());
-        owned_args.extend(files);
-    }
-    let str_args: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
-    run_hologram(&str_args)
+    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -771,9 +583,7 @@ async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<Stri
 
 #[tauri::command]
 async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
-    let graph_path = format!("{}/hologram_graph.json", path);
-    let d = days.unwrap_or(30);
-    run_hologram(&["health", &path, "--json", "-g", &graph_path, "--days", &d.to_string()])
+    EngineClient::new("127.0.0.1:9777").send("check:")
 }
 
 // ═══════════════════════════════════════════════════════
@@ -782,162 +592,36 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 
 #[tauri::command]
 async fn hologram_history(node_id: String) -> Result<String, String> {
-    let root = project_root();
-    let graph = active_graph();
-    // Safely escape node_id for Python string literal
-    let safe_id = serde_json::to_string(&node_id).unwrap_or_else(|_| format!(r#""{}""#, node_id));
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{root}")
-from core.graph import Graph
-graph = Graph.from_json(r"{graph}")
-node_id = json.loads({safe_id})
-node = graph.resolve_node(node_id)
-if not node:
-    print(json.dumps({{"error": "Node not found", "query": node_id}}))
-else:
-    incoming = graph.incoming_edges(node.id)
-    outgoing = graph.outgoing_edges(node.id)
-    result = {{
-        "node": node.to_dict(),
-        "query": node_id,
-        "decision_history": node.properties.get("history", []) if node.properties else [],
-        "dependency_count": len(incoming),
-        "dependent_count": len(outgoing),
-    }}
-    print(json.dumps(result, indent=2, ensure_ascii=False))
-"#,
-        root = root.join("src_python").to_string_lossy(),
-        graph = graph,
-        safe_id = safe_id,
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("history:")
 }
 
 #[tauri::command]
 async fn hologram_community(node_id: String) -> Result<String, String> {
-    let root = project_root();
-    let graph = active_graph();
-    let safe_id = serde_json::to_string(&node_id).unwrap_or_else(|_| format!(r#""{}""#, node_id));
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{root}")
-from core.graph import Graph
-graph = Graph.from_json(r"{graph}")
-node_id = json.loads({safe_id})
-node = graph.resolve_node(node_id)
-if not node:
-    print(json.dumps({{"error": "Node not found", "query": node_id}}))
-elif not hasattr(node, 'community_id') or not node.community_id:
-    print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": node_id, "community": None, "message": "Community detection not yet run"}}))
-else:
-    found = None
-    for c in graph.communities:
-        if c.id == node.community_id:
-            found = c
-            break
-    if found:
-        print(json.dumps({{
-            "node_id": node.id,
-            "node_name": node.name,
-            "query": node_id,
-            "community": found.to_dict(),
-            "sibling_nodes": [nid for nid in found.node_ids if nid != node.id],
-        }}, indent=2, ensure_ascii=False))
-    else:
-        print(json.dumps({{"node_id": node.id, "node_name": node.name, "query": node_id, "community": None}}))
-"#,
-        root = root.join("src_python").to_string_lossy(),
-        graph = graph,
-        safe_id = safe_id,
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("community:")
 }
 
 #[tauri::command]
 async fn hologram_delayed() -> Result<String, String> {
-    let root = project_root();
-    let graph = active_graph();
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{root}")
-from core.graph import Graph, EdgeType
-graph = Graph.from_json(r"{graph}")
-delayed = []
-for edge in graph.edges.values():
-    delay = getattr(edge, 'temporal_delay_sec', None)
-    edge_type = edge.type.value if isinstance(edge.type, EdgeType) else str(edge.type)
-    if delay is not None and edge_type == 'temporal':
-        src = graph.get_node(edge.source)
-        tgt = graph.get_node(edge.target)
-        delayed.append({{
-            "source": src.to_dict() if src else {{"id": edge.source}},
-            "target": tgt.to_dict() if tgt else {{"id": edge.target}},
-            "delay_sec": delay,
-            "edge_direction": getattr(edge, 'direction', 'unknown'),
-        }})
-realtime = [d for d in delayed if d["delay_sec"] is None or d["delay_sec"] == 0]
-periodic = [d for d in delayed if d["delay_sec"] and d["delay_sec"] > 0]
-result = {{
-    "total_delayed_edges": len(delayed),
-    "realtime_count": len(realtime),
-    "periodic_count": len(periodic),
-    "realtime": realtime[:20],
-    "periodic": periodic[:20],
-}}
-print(json.dumps(result, indent=2, ensure_ascii=False))
-"#,
-        root = root.join("src_python").to_string_lossy(),
-        graph = graph,
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("delayed:")
 }
 
 #[tauri::command]
 async fn hologram_changes() -> Result<String, String> {
-    let root = project_root();
-    let code = format!(
-        r#"
-import sys, json
-sys.path.insert(0, r"{py_src}")
-from timeline import TimelineStore
-store = TimelineStore(r"{project_root}")
-# Query the most recent file_changed or commit event
-rows = store.query(limit=1, event_type="file_changed")
-if not rows:
-    rows = store.query(limit=1, event_type="commit")
-if not rows:
-    print(json.dumps({{"message": "No timeline data available", "changes": []}}))
-else:
-    last = rows[0]
-    related = last.get("related_nodes", [])
-    total = len(store.query(limit=1000))
-    commit_hash = ""
-    cb = last.get("changed_by", "")
-    if cb.startswith("git commit "):
-        commit_hash = cb[len("git commit "):]
-    print(json.dumps({{
-        "last_change": {{
-            "timestamp": last.get("timestamp"),
-            "summary": last.get("summary"),
-            "event_type": last.get("event_type"),
-            "file": last.get("file"),
-            "impact_count": len(related),
-            "delayed_count": 0,
-            "affected_nodes": related,
-            "commit_hash": commit_hash,
-        }},
-        "timeline_anchor_count": total,
-    }}, indent=2, ensure_ascii=False, default=str))
-store.close()
-"#,
-        py_src = root.join("src_python").to_string_lossy(),
-        project_root = root.to_string_lossy(),
-    );
-    run_python_code(&code)
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
+    let db = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("无法打开时间轴: {}", e))?;
+    let mut stmt = db.prepare("SELECT timestamp, event_type, summary FROM events ORDER BY id DESC LIMIT 10")
+        .map_err(|e| format!("查询失败: {}", e))?;
+    let changes: Vec<serde_json::Value> = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "timestamp": row.get::<_, String>(0)?,
+            "event_type": row.get::<_, String>(1)?,
+            "summary": row.get::<_, String>(2).unwrap_or_default(),
+        }))
+    }).map_err(|e| format!("读取: {}", e))?
+    .filter_map(|r| r.ok()).collect();
+    Ok(serde_json::json!({"changes": changes}).to_string())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -949,76 +633,7 @@ async fn hologram_hotspots(
     days: Option<i32>,
     min_count: Option<i32>,
 ) -> Result<String, String> {
-    let root = project_root();
-    let d = days.unwrap_or(30);
-    let mc = min_count.unwrap_or(2);
-    let code = format!(
-        r#"
-import sys, json, sqlite3, os
-db_path = os.path.join(r"{project_root}", ".hologram", "timeline.db")
-if not os.path.exists(db_path):
-    print(json.dumps({{"hotspots": [], "total_events": 0, "message": "No timeline data yet"}}))
-else:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    # Query check events from the last N days
-    rows = conn.execute(
-        "SELECT * FROM events WHERE event_type IN ('commit_violation','commit_clean') "
-        "AND timestamp >= datetime('now', '-{days} days') "
-        "ORDER BY timestamp DESC"
-    ).fetchall()
-    # Aggregate L4 violations per file
-    file_counts = {{}}
-    file_details = {{}}
-    for row in rows:
-        try:
-            props = json.loads(row["properties"] or "{{}}")
-        except:
-            continue
-        violations = props.get("violations", {{}})
-        l4_list = violations.get("l4_violations", [])
-        if not isinstance(l4_list, list):
-            continue
-        for v in l4_list:
-            sig = v.get("signal", {{}}) if isinstance(v, dict) else {{}}
-            fp = sig.get("file_path", "") or v.get("file_path", "")
-            if not fp:
-                continue
-            if fp not in file_counts:
-                file_counts[fp] = 0
-                file_details[fp] = []
-            file_counts[fp] += 1
-            file_details[fp].append({{
-                "description": sig.get("description", ""),
-                "level": sig.get("level", 4),
-                "line": sig.get("line", 0),
-                "timestamp": row["timestamp"],
-            }})
-    conn.close()
-    # Filter by min_count, sort by count desc
-    hotspots = [
-        {{
-            "file": fp,
-            "count": cnt,
-            "last_details": file_details[fp][-1],
-            "recent_timestamps": [d["timestamp"] for d in file_details[fp][-5:]],
-        }}
-        for fp, cnt in sorted(file_counts.items(), key=lambda x: -x[1])
-        if cnt >= {min_count}
-    ]
-    result = {{
-        "hotspots": hotspots,
-        "total_check_events": len(rows),
-        "days": {days},
-        "min_count": {min_count},
-    }}
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-"#,
-        project_root = root.to_string_lossy(),
-        days = d,
-        min_count = mc,
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("timeline:")
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1030,172 +645,7 @@ async fn hologram_workspace_conflict(
     path_a: String,
     path_b: String,
 ) -> Result<String, String> {
-    let root = project_root();
-    let code = format!(
-        r#"
-import sys, json, os
-sys.path.insert(0, json.loads({py_src_ws}))
-from core.graph import Graph
-
-result = {{"workspace_a": {{}}, "workspace_b": {{}}, "overlapping_nodes": [], "shared_files": [], "risk_summary": {{"high": 0, "medium": 0, "low": 0}}}}
-
-# Load both workspace graphs
-a_path = os.path.join(json.loads({path_a_ws}), "hologram_graph.json")
-b_path = os.path.join(json.loads({path_b_ws}), "hologram_graph.json")
-
-if not os.path.exists(a_path):
-    print(json.dumps({{"error": "Workspace A graph not found", "path": a_path}}))
-    sys.exit(0)
-if not os.path.exists(b_path):
-    print(json.dumps({{"error": "Workspace B graph not found", "path": b_path}}))
-    sys.exit(0)
-
-ga = Graph.from_json(a_path)
-gb = Graph.from_json(b_path)
-
-# Collect node info: node name → location (for overlap detection)
-def node_info(g):
-    info = {{}}
-    for nid, node in g.nodes.items():
-        loc = node.location or ""
-        f = loc.rsplit(":", 1)[0] if ":" in loc else loc
-        info[nid] = {{
-            "id": nid,
-            "name": node.name,
-            "location": loc,
-            "file": f,
-            "type": str(node.type) if hasattr(node, 'type') else "unknown",
-        }}
-    return info
-
-a_info = node_info(ga)
-b_info = node_info(gb)
-
-# BFS downstream impact for a node
-def downstream(node_id, g, max_depth=3):
-    visited = set()
-    queue = [(node_id, 0)]
-    while queue:
-        nid, depth = queue.pop(0)
-        if nid in visited or depth > max_depth:
-            continue
-        visited.add(nid)
-        for edge in g.outgoing_edges(nid):
-            if edge.target not in visited:
-                queue.append((edge.target, depth + 1))
-    return visited
-
-# Find changed files baselines (diff analysis via file-level comparison)
-# Simplification: compare node sets by file
-a_files = set()
-b_files = set()
-for info in a_info.values():
-    if info["file"]:
-        a_files.add(info["file"])
-for info in b_info.values():
-    if info["file"]:
-        b_files.add(info["file"])
-
-shared = a_files & b_files
-result["shared_files"] = sorted(shared)
-
-# For each shared file, find nodes and analyze coupling
-a_nodes_by_file = {{}}
-b_nodes_by_file = {{}}
-for nid, info in a_info.items():
-    f = info["file"]
-    if f not in a_nodes_by_file:
-        a_nodes_by_file[f] = []
-    a_nodes_by_file[f].append(nid)
-for nid, info in b_info.items():
-    f = info["file"]
-    if f not in b_nodes_by_file:
-        b_nodes_by_file[f] = []
-    b_nodes_by_file[f].append(nid)
-
-# Analyze overlapping nodes in shared files
-overlapping = []
-for f in shared:
-    a_node_ids = a_nodes_by_file.get(f, [])
-    b_node_ids = b_nodes_by_file.get(f, [])
-    if not a_node_ids or not b_node_ids:
-        continue
-    # Impact analysis
-    a_impact_union = set()
-    for nid in a_node_ids:
-        a_impact_union |= downstream(nid, ga, 3)
-    b_impact_union = set()
-    for nid in b_node_ids:
-        b_impact_union |= downstream(nid, gb, 3)
-
-    # Nodes present in both workspaces (same file, potentially same symbol)
-    for anid in a_node_ids:
-        a_node = a_info.get(anid)
-        if not a_node:
-            continue
-        a_name = a_node["name"]
-        # Find matching node in B by name
-        for bnid in b_node_ids:
-            b_node = b_info.get(bnid)
-            if not b_node:
-                continue
-            if b_node["name"] == a_name:
-                # Calculate conflict risk
-                a_ds = len(downstream(anid, ga, 2))
-                b_ds = len(downstream(bnid, gb, 2))
-                a_us = len(ga.incoming_edges(anid))
-                b_us = len(gb.incoming_edges(bnid))
-                ds_change = abs(a_ds - b_ds)
-                us_change = abs(a_us - b_us)
-                risk = "low"
-                if ds_change > 5 or us_change > 3:
-                    risk = "high"
-                elif ds_change > 2 or us_change > 1:
-                    risk = "medium"
-                overlapping.append({{
-                    "node_name": a_name,
-                    "node_id": anid,
-                    "location": a_node["location"],
-                    "file": f,
-                    "a_impact": {{"depth": a_ds, "upstream_count": a_us, "downstream_count": a_ds}},
-                    "b_impact": {{"depth": b_ds, "upstream_count": b_us, "downstream_count": b_ds}},
-                    "conflict_risk": risk,
-                }})
-                break
-
-# Sort by risk
-risk_order = {{"high": 0, "medium": 1, "low": 2}}
-overlapping.sort(key=lambda x: risk_order.get(x["conflict_risk"], 2))
-
-# Risk summary
-for ov in overlapping:
-    risk = ov["conflict_risk"]
-    result["risk_summary"][risk] = result["risk_summary"].get(risk, 0) + 1
-
-# Workspace info
-result["workspace_a"] = {{
-    "path": json.loads({path_ws_a2}),
-    "node_count": len(ga.nodes),
-    "edge_count": len(ga.edges),
-    "file_count": len(a_files),
-}}
-result["workspace_b"] = {{
-    "path": json.loads({path_ws_b2}),
-    "node_count": len(gb.nodes),
-    "edge_count": len(gb.edges),
-    "file_count": len(b_files),
-}}
-result["overlapping_nodes"] = overlapping[:50]  # Cap at 50
-
-print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-"#,
-        py_src_ws = py_json(&root.join("src_python").to_string_lossy()),
-        path_a_ws = py_json(&path_a),
-        path_b_ws = py_json(&path_b),
-        path_ws_a2 = py_json(&path_a),
-        path_ws_b2 = py_json(&path_b),
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("timeline:")
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1207,129 +657,7 @@ async fn hologram_gate_check(
     path: String,
     module_file: Option<String>,
 ) -> Result<String, String> {
-    let root = project_root();
-    let graph_path = format!("{}/hologram_graph.json", path);
-    let mf = module_file.unwrap_or_default();
-
-    let code = format!(
-        r#"
-import sys, json, os
-sys.path.insert(0, json.loads({py_src_gate}))
-from core.graph import Graph
-
-graph_path = json.loads({graph_path_gate})
-if not os.path.exists(graph_path):
-    print(json.dumps({{"error": "Graph not found", "path": graph_path}}))
-    sys.exit(0)
-
-g = Graph.from_json(graph_path)
-
-# Determine which modules/files to evaluate
-target_files = []
-mf_val = json.loads({module_file_gate})
-path_val = json.loads({path_gate})
-if mf_val:
-    target_files = [mf_val]
-else:
-    # Find "new" modules — those with no coupling history in any community
-    import glob as _glob
-    all_py = _glob.glob(os.path.join(path_val, "**", "*.py"), recursive=True)
-    # Consider files with fewer than 3 edges as potentially "new"
-    for fp in all_py:
-        rel = os.path.relpath(fp, path_val).replace("\\", "/")
-        # Skip hidden/venv
-        if any(part.startswith('.') or part == 'venv' or part == 'node_modules' or part == '__pycache__'
-               for part in rel.split('/')):
-            continue
-        target_files.append(rel)
-
-# Limit to manageable size
-if len(target_files) > 20:
-    target_files = target_files[:20]
-
-results = []
-for tf in target_files:
-    # Collect all nodes in this file
-    file_nodes = []
-    for nid, node in g.nodes.items():
-        loc = node.location or ""
-        f = loc.rsplit(":", 1)[0] if ":" in loc else loc
-        f_norm = f.replace("\\", "/")
-        tf_norm = tf.replace("\\", "/")
-        if f_norm.endswith(tf_norm) or tf_norm.endswith(f_norm):
-            file_nodes.append(nid)
-
-    if not file_nodes:
-        continue
-
-    # Aggregate: fan-in, fan-out, coupling levels
-    total_fan_in = 0
-    total_fan_out = 0
-    coupling_levels = {{1: 0, 2: 0, 3: 0, 4: 0}}
-    for nid in file_nodes:
-        incoming = g.incoming_edges(nid)
-        outgoing = g.outgoing_edges(nid)
-        total_fan_in += len(incoming)
-        total_fan_out += len(outgoing)
-        for edge in incoming + outgoing:
-            depth = getattr(edge, 'coupling_depth', 0)
-            if depth in coupling_levels:
-                coupling_levels[depth] += 1
-
-    fn = tf.replace("\\", "/").split("/")[-1] if "/" in tf else tf
-
-    # Risk assessment
-    l4_count = coupling_levels.get(4, 0)
-    l3_count = coupling_levels.get(3, 0)
-    risk = "low"
-    if l4_count > 3 or (total_fan_out > 20 and total_fan_in > 15):
-        risk = "high"
-    elif l4_count > 1 or total_fan_in + total_fan_out > 20:
-        risk = "medium"
-
-    recommendations = []
-    if l4_count > 0:
-        recommendations.append(f"发现 {{l4_count}} 处 L4 封装穿透，建议检查 import 可见性")
-    if total_fan_out > 15:
-        recommendations.append(f"扇出偏高 ({{total_fan_out}})，考虑拆分模块")
-    if total_fan_in > 10:
-        recommendations.append(f"扇入偏高 ({{total_fan_in}})，此模块是潜在枢纽")
-    if not recommendations:
-        recommendations.append("模块结构合理，无需操作")
-
-    results.append({{
-        "file": tf,
-        "name": fn,
-        "node_count": len(file_nodes),
-        "fan_in": total_fan_in,
-        "fan_out": total_fan_out,
-        "coupling_l1": coupling_levels.get(1, 0),
-        "coupling_l2": coupling_levels.get(2, 0),
-        "coupling_l3": coupling_levels.get(3, 0),
-        "coupling_l4": coupling_levels.get(4, 0),
-        "risk": risk,
-        "recommendations": recommendations,
-    }})
-
-# Sort by risk
-risk_order = {{"high": 0, "medium": 1, "low": 2}}
-results.sort(key=lambda x: risk_order.get(x["risk"], 2))
-
-output = {{
-    "modules": results,
-    "total_evaluated": len(results),
-    "high_risk": sum(1 for r in results if r["risk"] == "high"),
-    "medium_risk": sum(1 for r in results if r["risk"] == "medium"),
-    "low_risk": sum(1 for r in results if r["risk"] == "low"),
-}}
-print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
-"#,
-        py_src_gate = py_json(&root.join("src_python").to_string_lossy()),
-        graph_path_gate = py_json(&graph_path),
-        module_file_gate = py_json(&mf),
-        path_gate = py_json(&path),
-    );
-    run_python_code(&code)
+    EngineClient::new("127.0.0.1:9777").send("check:")
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1508,7 +836,8 @@ async fn read_file_content(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<String, String> {
-    let content = std::fs::read_to_string(&file_path)
+    let real_path = check_sandbox_read(&file_path)?;
+    let content = std::fs::read_to_string(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     let lines: Vec<&str> = content.lines().collect();
     let start = offset.unwrap_or(0).min(lines.len());
@@ -1520,16 +849,18 @@ async fn read_file_content(
 
 #[tauri::command]
 async fn write_file_content(file_path: String, content: String) -> Result<(), String> {
-    if let Some(parent) = std::path::Path::new(&file_path).parent() {
+    let real_path = check_sandbox_write(&file_path)?;
+    let rp = real_path.to_string_lossy().to_string();
+    if let Some(parent) = real_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("无法创建目录: {}", e))?;
     }
     // Atomic write: temp file then rename
-    let tmp_path = format!("{}.tmp", file_path);
+    let tmp_path = format!("{}.tmp", rp);
     std::fs::write(&tmp_path, &content)
         .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
-    std::fs::rename(&tmp_path, &file_path)
-        .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
+    std::fs::rename(&tmp_path, &rp)
+        .map_err(|e| format!("无法保存文件 {}: {}", rp, e))?;
     Ok(())
 }
 
@@ -1545,13 +876,13 @@ async fn create_directory(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn delete_file_or_dir(path: String) -> Result<(), String> {
-    let p = std::path::Path::new(&path);
-    if !p.exists() { return Err(format!("路径不存在: {}", path)); }
-    if p.is_dir() {
-        std::fs::remove_dir_all(p)
+    let real = check_sandbox_write(&path)?; // delete = write-level lock
+    if !real.exists() { return Err(format!("路径不存在: {}", path)); }
+    if real.is_dir() {
+        std::fs::remove_dir_all(&real)
             .map_err(|e| format!("无法删除目录 {}: {}", path, e))
     } else {
-        std::fs::remove_file(p)
+        std::fs::remove_file(&real)
             .map_err(|e| format!("无法删除文件 {}: {}", path, e))
     }
 }
@@ -1564,11 +895,12 @@ async fn rename_file_or_dir(from: String, to: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn move_file(source: String, dest_dir: String) -> Result<(), String> {
-    let src = std::path::Path::new(&source);
-    let name = src.file_name()
+    let src_real = check_sandbox_read(&source)?;
+    let dest_real = check_sandbox_write(&dest_dir)?;
+    let name = src_real.file_name()
         .ok_or_else(|| format!("无效路径: {}", source))?;
-    let dest = std::path::Path::new(&dest_dir).join(name);
-    std::fs::rename(src, &dest)
+    let dest = dest_real.join(name);
+    std::fs::rename(&src_real, &dest)
         .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))
 }
 
@@ -1748,6 +1080,11 @@ async fn edit_file(
 // ═══════════════════════════════════════════════════════
 
 fn is_private_ip(host: &str) -> bool {
+    // Hostname checks (DNS names that resolve to local/private)
+    let host_lower = host.to_lowercase();
+    if host_lower == "localhost" || host_lower.ends_with(".local") || host_lower.ends_with(".internal") {
+        return true;
+    }
     use std::net::IpAddr;
     let ip: IpAddr = match host.parse() {
         Ok(ip) => ip,
@@ -1759,7 +1096,6 @@ fn is_private_ip(host: &str) -> bool {
             v4.is_private() || v4.is_link_local()
         }
         IpAddr::V6(v6) => {
-            // Check for link-local (fe80::/10)
             let segs = v6.segments();
             segs[0] & 0xffc0 == 0xfe80
         }
@@ -3133,6 +2469,198 @@ async fn stop_mcp_server() -> Result<String, String> {
 // Main
 // ═══════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════
+// v4 Phase 4: Unity event server — listens on :9776
+// ═══════════════════════════════════════════════════════
+
+use std::net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream};
+use std::io::Write;
+
+fn start_unity_event_server(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let listener = match StdTcpListener::bind("127.0.0.1:9776") {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[unity-events] bind failed: {}", e);
+                return;
+            }
+        };
+        println!("[unity-events] listening on 127.0.0.1:9776");
+
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut s) => {
+                    handle_unity_connection(&mut s, &app);
+                }
+                Err(e) => eprintln!("[unity-events] accept error: {}", e),
+            }
+        }
+    });
+}
+
+fn handle_unity_connection(stream: &mut StdTcpStream, app: &tauri::AppHandle) {
+    let mut buf = vec![0u8; 8192];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break, // connection closed
+            Ok(n) => {
+                let msg = String::from_utf8_lossy(&buf[..n]);
+                println!("[unity-events] received: {}", msg.trim());
+
+                // Parse simple key:value format
+                let parts: Vec<&str> = msg.trim().splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    let event = parts[0];
+                    let payload = parts[1];
+                    // Emit to frontend
+                    let _ = app.emit("unity-event", serde_json::json!({
+                        "event": event,
+                        "payload": payload
+                    }));
+                }
+            }
+            Err(e) => {
+                eprintln!("[unity-events] read error: {}", e);
+                break;
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// v4 Phase 0: Unity process manager
+// ═══════════════════════════════════════════════════════
+
+static UNITY_MANAGER: std::sync::LazyLock<UnityManager> =
+    std::sync::LazyLock::new(|| UnityManager::new(UnityManager::default_exe_path()));
+
+static SANDBOX: std::sync::LazyLock<Mutex<Option<Sandbox>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+static AUDIT_LOGGER: std::sync::LazyLock<Mutex<Option<AuditLogger>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+fn check_sandbox_read(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let sandbox = SANDBOX.lock().unwrap();
+    let sandbox = sandbox.as_ref().ok_or("沙箱未初始化，请先打开项目")?;
+    let path = std::path::Path::new(file_path);
+    match sandbox.resolve_read(path) {
+        sandbox::SandboxResult::Allowed(real) => Ok(real),
+        sandbox::SandboxResult::Denied(reason) => {
+            audit_deny("read", file_path, &reason);
+            Err(format!("读取被拒绝: {}", reason))
+        }
+    }
+}
+
+fn check_sandbox_write(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let sandbox = SANDBOX.lock().unwrap();
+    let sandbox = sandbox.as_ref().ok_or("沙箱未初始化，请先打开项目")?;
+    let path = std::path::Path::new(file_path);
+    match sandbox.resolve_write(path) {
+        sandbox::SandboxResult::Allowed(real) => {
+            audit_allow("write", file_path);
+            Ok(real)
+        }
+        sandbox::SandboxResult::Denied(reason) => {
+            audit_deny("write", file_path, &reason);
+            Err(format!("写入被拒绝: {}", reason))
+        }
+    }
+}
+
+fn audit_allow(tool: &str, path: &str) {
+    if let Ok(logger) = AUDIT_LOGGER.lock() {
+        if let Some(ref logger) = *logger {
+            logger.log(&AuditEntry {
+                timestamp: now_iso(),
+                tool: tool.to_string(),
+                target_path: path.to_string(),
+                action: "allowed".to_string(),
+                reason: String::new(),
+            });
+        }
+    }
+}
+
+fn audit_deny(tool: &str, path: &str, reason: &str) {
+    if let Ok(logger) = AUDIT_LOGGER.lock() {
+        if let Some(ref logger) = *logger {
+            logger.log(&AuditEntry {
+                timestamp: now_iso(),
+                tool: tool.to_string(),
+                target_path: path.to_string(),
+                action: "denied".to_string(),
+                reason: reason.to_string(),
+            });
+        }
+    }
+}
+
+#[tauri::command]
+fn start_unity() -> Result<String, String> {
+    match UNITY_MANAGER.start() {
+        Ok(true) => Ok("Unity started".into()),
+        Ok(false) => Ok("Unity already running".into()),
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+fn stop_unity() -> Result<String, String> {
+    UNITY_MANAGER.stop().map(|_| "Unity stopped".into())
+}
+
+#[tauri::command]
+fn unity_status() -> Result<String, String> {
+    Ok(if UNITY_MANAGER.is_running() { "running" } else { "stopped" }.into())
+}
+
+#[tauri::command]
+fn engine_get_graph() -> Result<String, String> {
+    let client = EngineClient::new("127.0.0.1:9777");
+    client.send("get_graph")
+}
+
+#[tauri::command]
+fn engine_neighbors(node_id: String, depth: usize) -> Result<String, String> {
+    let client = EngineClient::new("127.0.0.1:9777");
+    client.send(&format!("neighbors:{}:{}", node_id, depth))
+}
+
+#[tauri::command]
+fn engine_path(from_id: String, to_id: String) -> Result<String, String> {
+    let client = EngineClient::new("127.0.0.1:9777");
+    client.send(&format!("path:{}:{}", from_id, to_id))
+}
+
+#[tauri::command]
+fn engine_search(query: String) -> Result<String, String> {
+    let client = EngineClient::new("127.0.0.1:9777");
+    client.send(&format!("search:{}", query))
+}
+
+#[tauri::command]
+fn engine_impact(node_id: String, max_depth: usize) -> Result<String, String> {
+    let client = EngineClient::new("127.0.0.1:9777");
+    client.send(&format!("impact:{}:{}", node_id, max_depth))
+}
+
+#[tauri::command]
+fn credential_store(provider: String, key: String) -> Result<(), String> {
+    credential::store_api_key(&provider, &key)
+}
+
+#[tauri::command]
+fn credential_get(provider: String) -> Result<Option<String>, String> {
+    credential::get_api_key(&provider)
+}
+
+#[tauri::command]
+fn credential_clear() -> Result<(), String> {
+    credential::clear_credentials()
+}
+
 fn main() {
     let watcher_state = Arc::new(WatcherState {
         running: AtomicBool::new(false),
@@ -3156,6 +2684,8 @@ fn main() {
                 if let Ok(mut mgr) = MCP_MANAGER.lock() {
                     mgr.stop();
                 }
+                // Stop Unity on exit
+                let _ = UNITY_MANAGER.stop();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -3244,7 +2774,24 @@ fn main() {
             lsp_start,
             lsp_request,
             lsp_stop,
+            // v4 Phase 0 — Unity + Engine IPC
+            start_unity,
+            stop_unity,
+            unity_status,
+            engine_get_graph,
+            engine_neighbors,
+            engine_path,
+            engine_search,
+            engine_impact,
+            credential_store,
+            credential_get,
+            credential_clear,
         ])
+        .setup(|app| {
+            // v4 Phase 4: server for Unity events
+            start_unity_event_server(app.handle().clone());
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error running hologram");
 }

@@ -248,38 +248,16 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
   );
 
   try {
-    // ═══════════════════════════════════════════════════════
-    // 双管线：大项目走文件图 + 后台符号分析；小项目走同步全量分析
-    // ═══════════════════════════════════════════════════════
-
-    // ── Phase 0: 预扫描（始终执行）──
-    let isLargeProject = false;
-    try {
-      const estJson = await invoke<string>('estimate_project_size', { path: folder });
-      const est = JSON.parse(estJson);
-      if (est.is_large) {
-        isLargeProject = true;
-        statusText.textContent = `大项目 (${est.file_count} 源文件)，生成文件视图…`;
-        await invoke<string>('generate_lightweight_graph', { path: folder });
-      }
-    } catch (e) { console.warn('[openProject] pre-scan failed, falling through:', e); }
-
-    // ── Phase 1: 加载图 ──
+    // ── 加载图：MsgPack 缓存优先，未命中则走引擎 RPC ──
     let graph: any;
-    if (isLargeProject) {
-      // 大项目管线：直接加载文件图，永不调用 analyze_and_load
-      const graphPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
-      graph = JSON.parse(await invoke<string>('read_file_content', { filePath: graphPath }));
-    } else {
-      // 小项目管线：MsgPack 缓存优先，未命中则同步全量分析
-      try {
-        const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
-        const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
-        graph = decode(bytes) as any;
-      } catch {
-        const json = await invoke<string>('analyze_and_load', { path: folder, force: forceReanalyze });
-        graph = JSON.parse(json);
-      }
+    try {
+      const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
+      const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
+      graph = decode(bytes) as any;
+    } catch {
+      // Fallback: call engine analyze via RPC
+      const json = await invoke<string>('hologram_analyze', { path: folder });
+      graph = JSON.parse(json);
     }
     currentGraphData = graph;
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
@@ -290,43 +268,12 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
       currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
     } catch { currentFileGraphData = null; }
 
-    // ── Phase 2: 渲染 ──
-    const LAYOUT_CAP = 40000;
-    if (isLargeProject || nodeCount > LAYOUT_CAP) {
-      const fileData = currentFileGraphData || (isLargeProject ? graph : null);
-      if (fileData) {
-        currentMode = 'files';
-        starGraph.destroy();
-        starGraph = new StarGraph(graphEl, 'files');
-        chatPanel.setStarGraph(starGraph);
-        agentViz?.setGraph(starGraph);
-        await starGraph.render(fileData);
-        // 文件视图默认走银河折叠 — 社区即星团
-        if (starGraph.communityCount > 0) {
-          starGraph.setFoldMode(true);
-        }
-        const fc = (fileData.nodes && (Array.isArray(fileData.nodes) ? fileData.nodes.length : Object.keys(fileData.nodes).length)) || '?';
-        statusText.textContent = isLargeProject
-          ? `📁 文件视图 · ${fc} 文件 · ${starGraph.communityCount} 星团 · 大项目模式`
-          : `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
-        setModeButtonsEnabled(false);
-        // ── 后台全量符号分析：首次打开 + 重分析都走这条 ──
-        if (isLargeProject) {
-          invoke('analyze_in_background', { path: folder }).catch(e =>
-            console.warn('[openProject] background analysis start failed:', e),
-          );
-        }
-      } else {
-        statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限且文件图缺失，使用 Agent 查询`;
-      }
-      showGraphView(folder);
-    } else {
-      starGraph.render(graph);
-      showGraphView(folder);
-      setModeButtonsEnabled(true);
-    }
-    setLoading(false); // 图已就绪，不等 Agent
-    // Clean up progress listeners
+    // ── 渲染 ──
+    starGraph.render(graph);
+    showGraphView(folder);
+    setModeButtonsEnabled(true);
+    statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
+    setLoading(false);
     unlistenProgress(); unlistenPhase(); unlistenHeartbeat(); currentPhase = '';
     // Agent 初始化（异步，不阻塞图的显示）
     try { await setupAgent(); } catch (e) { console.error('[openProject] setupAgent failed:', e); }
@@ -814,6 +761,28 @@ function setupIcons(): void {
 async function init(): Promise<void> {
   // Init language from saved settings
   setLang(loadSettings().display.language);
+
+  // v4 Phase 4: listen for Unity events
+  const { listen } = await import('@tauri-apps/api/event');
+  const { bus: eventBus } = await import('./ui/events');
+  const { FileViewer } = await import('./ui/file-viewer');
+  await listen('unity-event', (event: any) => {
+    const { event: evt, payload } = event.payload;
+    console.log('[Unity]', evt, payload);
+    if (evt === 'node_double_clicked') {
+      const parts = (payload as string).split('|');
+      if (parts.length > 1 && parts[1]) {
+        eventBus.emit('navigate:file', parts[1]);
+      }
+    }
+    if (evt === 'path_selected') {
+      const parts = (payload as string).split('|');
+      if (parts.length === 2) {
+        chatPanel.open();
+        chatPanel.ask(`分析从 ${parts[0]} 到 ${parts[1]} 的依赖路径。请分析这条依赖链的架构合理性、风险点、以及如果修改起点的潜在影响范围。`);
+      }
+    }
+  });
 
   // ── 毙掉 Tauri WebView 的所有浏览器原生快捷键 ──
   // capture 阶段拦截，preventDefault 阻止浏览器默认行为，不阻止事件继续冒泡
@@ -1434,25 +1403,11 @@ async function init(): Promise<void> {
   function _doGraphUpdate(graph: any): void {
     _lastGraphUpdate = Date.now();
 
-    // ── 文件视图模式：不渲染全量符号图，保持锁定 ──
-    if (currentMode === 'files') {
-      statusText.textContent = '📁 项目文件已变更 · 文件视图保持';
-      setTimeout(() => { if (statusText.textContent?.startsWith('📁 项目')) statusText.textContent = '就绪'; }, 3000);
-      // Still run check but don't disrupt the view
-      runCheck();
-      return;
-    }
-
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
-    if (nodeCount > 50000) {
-      statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
-    } else {
-      starGraph.render(graph);
-      statusText.textContent = `已更新 (${nodeCount} 节点)`;
-      setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
-    }
+    starGraph.render(graph);
+    statusText.textContent = `已更新 (${nodeCount} 节点)`;
+    setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
     if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
-    // ── 超4万节点自动锁定模式按钮 ──
     if (nodeCount > 40000) {
       setModeButtonsEnabled(false);
     }
@@ -1504,27 +1459,9 @@ async function init(): Promise<void> {
         currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
       } catch { currentFileGraphData = null; }
 
-      const LAYOUT_CAP = 40000;
-      if (isLightweight || nodeCount > LAYOUT_CAP) {
-        const fileData = currentFileGraphData || (isLightweight ? graph : null);
-        if (fileData) {
-          currentMode = 'files';
-          starGraph.destroy();
-          starGraph = new StarGraph(graphEl, 'files');
-          chatPanel.setStarGraph(starGraph);
-          agentViz?.setGraph(starGraph);
-          starGraph.render(fileData);
-          statusText.textContent = isLightweight
-            ? `📁 文件视图 (${nodeCount} 文件 · 大项目模式)`
-            : `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
-          setModeButtonsEnabled(false);
-        } else {
-          statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限且文件图缺失，使用 Agent 查询`;
-        }
-      } else {
-        starGraph.render(graph);
-        setModeButtonsEnabled(true);
-      }
+      starGraph.render(graph);
+      setModeButtonsEnabled(true);
+      statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
       showGraphView(root);
       setLoading(false);
       // Agent 初始化（异步，不阻塞图的显示）
