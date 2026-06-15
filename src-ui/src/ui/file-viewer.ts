@@ -7,6 +7,7 @@ import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
 import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
+import { FileTranslator } from './file-translator';
 
 // LSP session cache: language -> session_id (shared across all FileViewer instances)
 const lspSessions = new Map<string, number>();
@@ -55,6 +56,7 @@ export class FileViewer {
   private diffEditor!: monaco.editor.IStandaloneDiffEditor;
   private resizeHandle!: HTMLElement;
   private windowCloseBtn!: HTMLElement;
+  private translator!: FileTranslator;
 
   private tabs: TabData[] = [];
   private activeIdx = -1;
@@ -80,6 +82,10 @@ export class FileViewer {
     };
     this.buildDOM();
     this.initEditor();
+    this.translator = new FileTranslator(this.el, () => {
+      this.editor.layout();
+      if (this.diffEditor) this.diffEditor.layout();
+    }, () => this.editor);
   }
 
   private buildDOM(): void {
@@ -163,8 +169,30 @@ export class FileViewer {
       }
     });
 
+    // "Translate" button — translate current file
+    const translateBtn = document.createElement('button');
+    translateBtn.className = 'fv-translate-btn';
+    translateBtn.innerHTML = '🔮';
+    translateBtn.title = '翻译当前文件';
+    Object.assign(translateBtn.style, {
+      width: '22px', height: '22px', padding: '0', flexShrink: '0',
+      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
+      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      transition: 'color var(--snap, 0.12s)',
+    });
+    translateBtn.addEventListener('mouseenter', () => { translateBtn.style.color = 'var(--nebula, #a088e0)'; });
+    translateBtn.addEventListener('mouseleave', () => { translateBtn.style.color = 'var(--text-muted, #4a5568)'; });
+    translateBtn.addEventListener('click', () => {
+      const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+      if (tab && !tab.diffModels) {
+        this.translator.translateFile(tab.filePath);
+      }
+    });
+
     this.header.appendChild(this.tabBar);
     this.header.appendChild(askBtn);
+    this.header.appendChild(translateBtn);
     this.header.appendChild(this.windowCloseBtn);
 
     // Editor container
@@ -250,6 +278,24 @@ export class FileViewer {
         if (tab?.filePath) navigator.clipboard.writeText(tab.filePath);
       },
     });
+    this.editor.addAction({
+      id: 'translate-selection',
+      label: '🔮 翻译选中',
+      contextMenuGroupId: '9_cutcopypaste',
+      contextMenuOrder: 4,
+      run: () => {
+        const selection = this.editor.getSelection();
+        if (!selection || selection.isEmpty()) return;
+        const selectedText = this.editor.getModel()?.getValueInRange(selection);
+        if (selectedText?.trim()) {
+          this.translator.translateSelection(
+            selectedText,
+            selection.startLineNumber,
+            selection.endLineNumber,
+          );
+        }
+      },
+    });
   }
 
   // ── Tab rendering ──
@@ -301,6 +347,8 @@ export class FileViewer {
 
   private switchTab(idx: number): void {
     if (idx < 0 || idx >= this.tabs.length) return;
+    // Detach translator panel from old tab (keep API running, hide panel)
+    this.translator.detach();
     this.activeIdx = idx;
     const tab = this.tabs[idx];
     if (tab.diffModels) {
@@ -319,6 +367,11 @@ export class FileViewer {
   private async closeTab(idx: number): Promise<void> {
     if (idx < 0 || idx >= this.tabs.length) return;
     const tab = this.tabs[idx];
+
+    // If closing the tab that's currently being translated, destroy the translator
+    if (this.translator.isTranslatingFile(tab.filePath)) {
+      this.translator.destroy();
+    }
 
     // Check unsaved changes
     if (tab.dirty) {
@@ -538,6 +591,8 @@ export class FileViewer {
   }
 
   closeAll(): void {
+    // Destroy translator before disposing models (needs access to tab info)
+    this.translator.destroy();
     this.state.open = false;
     // Dispose all models
     for (const tab of this.tabs) {
