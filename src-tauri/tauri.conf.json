@@ -1,7 +1,7 @@
 {
   "productName": "全息观测站",
   "identifier": "com.hologram.hg",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
