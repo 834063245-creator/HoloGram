@@ -23,7 +23,10 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     let start = Instant::now();
 
     // Step 1: Discovery
-    let files = discover_files(root, &["py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts"]);
+    let files = discover_files(root, &[
+        "py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
+        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua"
+    ]);
     println!("[pipeline] discovered {} Python files", files.len());
 
     // Step 2: Parallel parse
