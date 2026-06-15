@@ -1,8 +1,23 @@
 # HoloGram v4.0 施工方案
 
-> 生成：2026-06-15
+> 生成：2026-06-15 · **竣工：2026-06-16**
 > 性质：完整重做——新 Rust 分析引擎 + Unity 3D 前端 + IPC 通信层 + Tauri 壳保留
 > v3.0 作用：可执行规格书 + 验收测试集（633 测试 / 55 命令 / 14 MCP 工具）
+
+---
+
+## 竣工状态总览
+
+| 模块 | 状态 | 关键数据 |
+|---|---|---|
+| Rust 引擎 `engine/` | ✅ 已交付 | 44 文件, 28 tests, 29 RPC, Django 3,031 文件 4.1s, 14 语言 |
+| Python 引擎退役 | ✅ | 21 命令换线, `run_hologram`/`run_python_code` 死代码 |
+| 引擎自启动 | ✅ | Tauri .setup() 自动 spawn |
+| Unity 3D 星图 | 🏃 原型 | GPU Instancing + Burst + 交互对齐, 独立窗口运行 |
+| 安全沙箱 | ✅ | 8 层 (sandbox/audit/CSP/SSRF/DPAPI/fail-closed) |
+| IPC 通信 | ✅ | Unity ↔ Tauri ↔ Agent 全链路 |
+| 前端面板 | ✅ | 简报/时间轴/约束等走引擎 RPC |
+| `cargo tauri build` | ⏳ 未做 | 需 Unity standalone 导出后统一打包 |
 
 ---
 
