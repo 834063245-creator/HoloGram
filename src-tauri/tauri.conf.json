@@ -22,7 +22,7 @@
   "bundle": {
     "active": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
-    "resources": [],
+    "resources": ["../engine/target/release/hologram-engine.exe"],
     "windows": {
       "wix": {
         "language": "zh-CN",

@@ -166,9 +166,13 @@ fn engine_binary() -> String {
             return p;
         }
     }
+    let root = project_root();
     let paths = [
-        project_root().join("engine/target/release/hologram-engine.exe"),
-        project_root().join("engine/target/debug/hologram-engine.exe"),
+        // Bundled resource: engine.exe placed next to the app binary
+        root.join("hologram-engine.exe"),
+        // Dev layout: engine built in engine/target/
+        root.join("engine/target/release/hologram-engine.exe"),
+        root.join("engine/target/debug/hologram-engine.exe"),
     ];
     for p in &paths {
         if p.exists() {

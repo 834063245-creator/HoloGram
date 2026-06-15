@@ -28,16 +28,18 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: 'src-tauri -> target'
+          workspaces: |
+            src-tauri -> target
+            engine -> target
 
       - name: Install frontend dependencies
         run: cd src-ui && npm ci
 
+      - name: Build Engine
+        run: cd engine && cargo build --release
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli
-
-      - name: Setup embedded Python
-        run: bash scripts/setup-embedded-python.sh
 
       - name: Build (Tauri)
         run: cargo tauri build
