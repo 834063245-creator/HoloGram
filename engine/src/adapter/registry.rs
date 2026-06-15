@@ -1,6 +1,7 @@
 use crate::adapter::traits::LanguageAdapter;
 use crate::adapter::python::PythonAdapter;
 use crate::adapter::typescript::TypeScriptAdapter;
+use crate::adapter::tree_sitter::TreeSitterAdapter;
 use std::collections::HashMap;
 
 pub struct AdapterRegistry {
@@ -13,6 +14,7 @@ impl AdapterRegistry {
         let mut registry = Self { adapters: Vec::new(), ext_index: HashMap::new() };
         registry.register(PythonAdapter::new());
         registry.register(TypeScriptAdapter::new());
+        registry.register(TreeSitterAdapter::new());
         registry
     }
 
