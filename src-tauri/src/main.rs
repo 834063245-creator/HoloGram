@@ -1862,7 +1862,9 @@ async fn git_file_at_head(path: String, file: String) -> Result<String, String> 
 
 #[tauri::command]
 async fn git_show(path: String, commit: String) -> Result<String, String> {
-    run_git(&path, &["show", "--stat", "--format=", &commit])
+    let output = run_git(&path, &["show", "--name-only", "--format=", &commit])?;
+    let files: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
+    serde_json::to_string(&files).map_err(|e| e.to_string())
 }
 
 static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
