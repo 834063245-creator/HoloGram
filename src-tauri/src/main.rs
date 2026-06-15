@@ -365,17 +365,26 @@ async fn hologram_thread_conflicts(_severity: Option<String>) -> Result<String, 
 
 #[tauri::command]
 async fn hologram_timeline(
+    path: Option<String>,
     since: Option<String>,
     limit: Option<i32>,
     module: Option<String>,
 ) -> Result<String, String> {
-    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    // Resolve project path
+    let proj = path
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| ACTIVE_PROJECT.lock().unwrap().clone());
+    if proj.is_empty() {
+        return Err("未设置活跃工作区".into());
+    }
     let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
     let db = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
     let lim = limit.unwrap_or(60);
-    let mut sql = "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?".to_string();
-    let mut stmt = db.prepare(&sql).map_err(|e| format!("查询失败: {}", e))?;
+
+    // Simple query — dynamic WHERE will be re-added when filters have real values
+    let sql = "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?";
+    let mut stmt = db.prepare(sql).map_err(|e| format!("查询失败: {}", e))?;
     let events: Vec<serde_json::Value> = stmt.query_map(rusqlite::params![lim], |row| {
         let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
         Ok(serde_json::json!({
@@ -512,7 +521,7 @@ async fn hologram_gate_check(
     path: String,
     module_file: Option<String>,
 ) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("check:")
+    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
 }
 
 // ═══════════════════════════════════════════════════════

@@ -1,11 +1,87 @@
 // LSP Client — bridges Monaco editor to language servers via Tauri IPC.
-// Phase A: Python (pyright) only. Phase B: rust-analyzer, gopls, tsserver.
+// Phase A: Python (pyright), Rust (rust-analyzer), Go (gopls), TS/JS (tsserver).
+//
+// Response flow:
+//   lsp_request (non-notification) → Rust waits for JSON-RPC response →
+//     extracts `result` field → returns to caller.
+//   Notifications (didOpen/didChange) → fire-and-forget.
+//   Server-push notifications (publishDiagnostics) → lsp-message event.
 
 import { invoke, listen } from '../bridge';
-import type { editor, languages, IDisposable } from 'monaco-editor';
+import type { editor, languages, IRange, IDisposable } from 'monaco-editor';
 
 let lspSessions = new Map<string, number>(); // language -> session_id
 let completionProviders: IDisposable[] = [];
+
+// ── LSP → Monaco CompletionItemKind mapping ──
+// LSP enum values differ from Monaco/VS Code numbering.
+const LSP_TO_MONACO_KIND: Record<number, number> = {
+  1: 18,  // Text
+  2: 0,   // Method
+  3: 1,   // Function
+  4: 2,   // Constructor
+  5: 3,   // Field
+  6: 4,   // Variable
+  7: 5,   // Class
+  8: 7,   // Interface
+  9: 8,   // Module
+  10: 9,  // Property
+  11: 12, // Unit
+  12: 13, // Value
+  13: 15, // Enum
+  14: 17, // Keyword
+  15: 27, // Snippet
+  16: 19, // Color
+  17: 20, // File
+  18: 21, // Reference
+  19: 23, // Folder
+  20: 16, // EnumMember
+  21: 14, // Constant
+  22: 6,  // Struct
+  23: 10, // Event
+  24: 11, // Operator
+  25: 24, // TypeParameter
+};
+
+function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): languages.CompletionItem {
+  const kind: languages.CompletionItemKind | undefined =
+    item.kind != null ? (LSP_TO_MONACO_KIND[item.kind] ?? item.kind) : undefined;
+
+  // Convert LSP textEdit to Monaco insertText + range
+  let insertText: string | undefined;
+  let range: IRange | { insert: IRange; replace: IRange } | undefined;
+  if (item.textEdit) {
+    const te = item.textEdit;
+    insertText = te.newText;
+    if (te.range) {
+      const r = te.range;
+      range = new monaco.Range(
+        r.start.line + 1, r.start.character + 1,
+        r.end.line + 1, r.end.character + 1,
+      );
+    }
+  }
+
+  // Convert LSP documentation to Monaco markdown
+  let documentation: string | undefined;
+  if (typeof item.documentation === 'string') {
+    documentation = item.documentation;
+  } else if (item.documentation?.value) {
+    documentation = item.documentation.value;
+  }
+
+  return {
+    label: item.label || item.insertText || '',
+    kind,
+    detail: item.detail,
+    documentation,
+    sortText: item.sortText,
+    filterText: item.filterText,
+    insertText: insertText ?? item.insertText ?? item.label,
+    range,
+    ...(item.additionalTextEdits || item.command ? {} : {}),
+  } as languages.CompletionItem;
+}
 
 export async function startLsp(language: string, rootUri: string): Promise<number | null> {
   if (lspSessions.has(language)) return lspSessions.get(language)!;
@@ -42,7 +118,7 @@ export function didChange(sessionId: number, uri: string, text: string): void {
   }).catch(() => {});
 }
 
-/** Register Monaco completion provider backed by LSP. */
+/** Register Monaco completion provider backed by LSP (synchronous response). */
 export function registerCompletionProvider(
   lang: string,
   sessionId: number,
@@ -59,10 +135,20 @@ export function registerCompletionProvider(
             position: { line: position.lineNumber - 1, character: position.column - 1 },
           },
         });
-        // LSP completion response may come asynchronously via lsp-message event
-        // For now, return empty and rely on async delivery
+        // result is the JSON-RPC `result` field — either CompletionItem[] or CompletionList
+        if (!result) return { suggestions: [] };
+
+        const items: any[] = Array.isArray(result) ? result : (result.items || []);
+        const isIncomplete = !Array.isArray(result) ? result.isIncomplete : undefined;
+
+        return {
+          suggestions: items.map((item: any) => mapCompletionItem(item, monaco)),
+          incomplete: isIncomplete,
+        };
+      } catch (e) {
+        console.warn('[LSP] completion error:', e);
         return { suggestions: [] };
-      } catch { return { suggestions: [] }; }
+      }
     },
   });
   completionProviders.push(provider);
@@ -85,13 +171,30 @@ export function registerHoverProvider(
             position: { line: position.lineNumber - 1, character: position.column - 1 },
           },
         });
+        // result is the LSP Hover result: { contents: ..., range: ... }
         if (result?.contents) {
-          const contents = typeof result.contents === 'string'
-            ? result.contents
-            : result.contents.value || JSON.stringify(result.contents);
-          return { contents: [{ value: contents }] };
+          let value: string;
+          if (typeof result.contents === 'string') {
+            value = result.contents;
+          } else if (result.contents.value) {
+            value = result.contents.value;
+          } else if (Array.isArray(result.contents)) {
+            // MarkupContent[]
+            value = result.contents
+              .map((c: any) => c.value || '')
+              .join('\n\n---\n\n');
+          } else {
+            value = JSON.stringify(result.contents);
+          }
+          const hoverRange = result.range ? new monaco.Range(
+            result.range.start.line + 1, result.range.start.character + 1,
+            result.range.end.line + 1, result.range.end.character + 1,
+          ) : undefined;
+          return { contents: [{ value }], range: hoverRange };
         }
-      } catch {}
+      } catch (e) {
+        console.warn('[LSP] hover error:', e);
+      }
       return null;
     },
   });
@@ -114,17 +217,67 @@ export function registerDefinitionProvider(
             position: { line: position.lineNumber - 1, character: position.column - 1 },
           },
         });
-        if (result?.uri) {
-          const loc: languages.Location = {
-            uri: monaco.Uri.parse(result.uri),
-            range: result.range ? new monaco.Range(
-              result.range.start.line + 1, result.range.start.character + 1,
-              result.range.end.line + 1, result.range.end.character + 1,
+        // LSP definition result: Location | Location[] | null
+        if (!result) return null;
+
+        const locations: any[] = Array.isArray(result) ? result : [result];
+        const links: languages.Location[] = [];
+        for (const loc of locations) {
+          if (!loc?.uri) continue;
+          const range = loc.range;
+          links.push({
+            uri: monaco.Uri.parse(loc.uri),
+            range: range ? new monaco.Range(
+              range.start.line + 1, range.start.character + 1,
+              range.end.line + 1, range.end.character + 1,
             ) : new monaco.Range(1, 1, 1, 1),
-          };
-          return [loc];
+          });
         }
-      } catch {}
+        return links.length > 0 ? links : null;
+      } catch (e) {
+        console.warn('[LSP] definition error:', e);
+      }
+      return null;
+    },
+  });
+}
+
+/** Register Monaco references provider backed by LSP. */
+export function registerReferencesProvider(
+  lang: string,
+  sessionId: number,
+  monaco: typeof import('monaco-editor'),
+): void {
+  monaco.languages.registerReferenceProvider(lang, {
+    provideReferences: async (model, position, _context) => {
+      try {
+        const result = await invoke<any>('lsp_request', {
+          sessionId,
+          method: 'textDocument/references',
+          params: {
+            textDocument: { uri: model.uri.toString() },
+            position: { line: position.lineNumber - 1, character: position.column - 1 },
+            context: { includeDeclaration: true },
+          },
+        });
+        if (!result || !Array.isArray(result)) return null;
+
+        const locations: languages.Location[] = [];
+        for (const loc of result) {
+          if (!loc?.uri) continue;
+          const range = loc.range;
+          locations.push({
+            uri: monaco.Uri.parse(loc.uri),
+            range: range ? new monaco.Range(
+              range.start.line + 1, range.start.character + 1,
+              range.end.line + 1, range.end.character + 1,
+            ) : new monaco.Range(1, 1, 1, 1),
+          });
+        }
+        return locations.length > 0 ? locations : null;
+      } catch (e) {
+        console.warn('[LSP] references error:', e);
+      }
       return null;
     },
   });

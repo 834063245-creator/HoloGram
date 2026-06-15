@@ -6,7 +6,7 @@ import { invoke } from '../bridge';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
-import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, listenForDiagnostics } from './lsp-client';
+import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 
 // LSP session cache: language -> session_id (shared across all FileViewer instances)
 const lspSessions = new Map<string, number>();
@@ -407,6 +407,7 @@ export class FileViewer {
             registerCompletionProvider(language, sid, monaco);
             registerHoverProvider(language, sid, monaco);
             registerDefinitionProvider(language, sid, monaco);
+            registerReferencesProvider(language, sid, monaco);
             didOpen(sid, uri.toString(), language, content);
           }
         });

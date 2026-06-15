@@ -111,9 +111,12 @@ export class TimelinePanel {
   // ── Public API ──
 
   setProjectPath(path: string | null): void {
+    // Same path — don't reset events or re-fetch
+    if (this.path === path && path !== null) return;
+    const pathChanged = this.path !== path;
     this.path = path;
-    this.events = [];
     if (path) {
+      if (pathChanged) this.events = [];
       this.refresh();
       // Auto-refresh every 30s
       if (this.refreshInterval) clearInterval(this.refreshInterval);
@@ -128,6 +131,7 @@ export class TimelinePanel {
 
     try {
       const json = await invoke<string>('hologram_timeline', {
+        path: this.path,
         limit: 60,
         module: null as unknown as string,
         since: null as unknown as string,
@@ -148,7 +152,8 @@ export class TimelinePanel {
     this.openState = !this.openState;
     if (this.openState) {
       this.panel.classList.add('tl-open');
-      this.render();
+      // If a refresh is in flight, skip rendering — refresh() will call render() when done
+      if (!this.loading) this.render();
     } else {
       this.panel.classList.remove('tl-open');
     }
@@ -163,7 +168,11 @@ export class TimelinePanel {
 
   private render(): void {
     if (this.events.length === 0) {
-      this.content.innerHTML = `<div class="tl-empty">暂无时间轴事件。开始编辑代码后，事件会自动记录。</div>`;
+      if (this.loading) {
+        this.content.innerHTML = `<div class="tl-empty"><span class="tl-spinner"></span> 加载中…</div>`;
+      } else {
+        this.content.innerHTML = `<div class="tl-empty">暂无时间轴事件。开始编辑代码后，事件会自动记录。</div>`;
+      }
       return;
     }
 

@@ -19,6 +19,7 @@ regex = "1"
 url = "2"
 portable-pty = "0.8"
 chrono = "0.4"
+tokio = { version = "1", features = ["sync", "time"] }
 libloading = "0.8"
 rusqlite = { version = "0.31", features = ["bundled"] }
 
