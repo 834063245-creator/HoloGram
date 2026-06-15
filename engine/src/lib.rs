@@ -7,3 +7,4 @@ pub mod routing;
 pub mod rpc;
 pub mod serialization;
 pub mod timeline;
+pub mod mcp;

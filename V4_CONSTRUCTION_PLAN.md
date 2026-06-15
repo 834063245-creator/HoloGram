@@ -10,8 +10,10 @@
 
 | 模块 | 状态 | 关键数据 |
 |---|---|---|
-| Rust 引擎 `engine/` | ✅ 已交付 | 44 文件, 28 tests, 29 RPC, Django 3,031 文件 4.1s, 14 语言 |
-| Python 引擎退役 | ✅ | 21 命令换线, `run_hologram`/`run_python_code` 死代码 |
+| Rust 引擎 `engine/` | ✅ 已交付 | 45 文件, 28 tests, 29 RPC, Django 3,031 文件 4.1s, 14 语言 |
+| Python 引擎退役 | ✅ **全量完成** | MCP 协议层 + 全部分析命令已迁移 |
+| MCP Server | ✅ | `engine/src/mcp.rs` 替代 `src_python/mcp_server.py`，21 工具 |
+| Tauri 命令层 | ✅ | `analyze_and_load` / `generate_lightweight_graph` / `analyze_in_background` 全部切 Rust |
 | 引擎自启动 | ✅ | Tauri .setup() 自动 spawn |
 | Unity 3D 星图 | 🏃 原型 | GPU Instancing + Burst + 交互对齐, 独立窗口运行 |
 | 安全沙箱 | ✅ | 8 层 (sandbox/audit/CSP/SSRF/DPAPI/fail-closed) |

@@ -1,5 +1,5 @@
 // HoloGram Tauri Backend
-// 桥接层：Agent (TypeScript) → Tauri commands → Python engine
+// 桥接层：Agent (TypeScript) → Tauri commands → Rust engine
 // 不做分析逻辑，只做进程管理和文本转发
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -29,7 +29,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
-// Windows: hide console windows for Python subprocesses
+// Windows: hide console windows for subprocesses
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -133,19 +133,13 @@ fn kill_bg(id: u32) -> Result<String, String> {
     Ok(format!("[任务已终止]\n{stdout}{stderr}"))
 }
 
-/// Build a Command that won't flash a console window on Windows
-/// and forces UTF-8 output from Python subprocesses.
+/// Build a Command that won't flash a console window on Windows.
 fn silent_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         cmd.creation_flags(NO_WINDOW);
     }
-    let root = project_root();
-    cmd.env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("PYTHONPATH", root.to_string_lossy().to_string());
     cmd
 }
 
@@ -163,56 +157,27 @@ fn sh_escape(command: &str) -> String {
     format!("'{}'", command.replace('\'', "'\\''"))
 }
 
-/// JSON-encode a string for safe embedding in Python `json.loads(...)`.
-/// Avoids Python injection via raw-string termination — r-strings cannot
-/// contain literal `"`, and `json.loads` handles all escaping robustly.
-fn py_json(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
-}
 
-// ═══════════════════════════════════════════════════════
-// Python helpers
-// ═══════════════════════════════════════════════════════
-
-/// Find the Python executable with required dependencies.
-/// Checks: 1) HOLOGRAM_PYTHON env var  2) bundled python next to exe  3) sibling venv  4) system PATH
-fn python() -> String {
-    // 1) Explicit override via environment variable
-    if let Ok(p) = std::env::var("HOLOGRAM_PYTHON") {
+/// Find the Rust engine executable.
+/// Checks: 1) HOLOGRAM_ENGINE env var  2) engine/target/release  3) engine/target/debug
+fn engine_binary() -> String {
+    if let Ok(p) = std::env::var("HOLOGRAM_ENGINE") {
         if std::path::Path::new(&p).exists() {
             return p;
         }
     }
-    // 2) Bundled Python next to exe (production install)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let bundled = dir.join("python").join("python.exe");
-            if bundled.exists() {
-                return bundled.to_string_lossy().to_string();
-            }
+    let paths = [
+        project_root().join("engine/target/release/hologram-engine.exe"),
+        project_root().join("engine/target/debug/hologram-engine.exe"),
+    ];
+    for p in &paths {
+        if p.exists() {
+            return p.to_string_lossy().to_string();
         }
     }
-    // 3) Project-local venv (check both Windows and Unix layout)
-    let venv_dir = project_root().join(".venv");
-    for sub in &["Scripts", "bin"] {
-        let py = venv_dir.join(sub).join("python.exe");
-        if py.exists() { return py.to_string_lossy().to_string(); }
-        let py3 = venv_dir.join(sub).join("python3");
-        if py3.exists() { return py3.to_string_lossy().to_string(); }
-        let py_n = venv_dir.join(sub).join("python");
-        if py_n.exists() { return py_n.to_string_lossy().to_string(); }
-    }
-    // 3) System PATH fallbacks
-    for name in &["python3", "python"] {
-        if silent_command(name)
-            .arg("--version")
-            .output()
-            .is_ok()
-        {
-            return name.to_string();
-        }
-    }
-    "python".to_string()
+    // Fallback: default debug path
+    project_root().join("engine/target/debug/hologram-engine.exe")
+        .to_string_lossy().to_string()
 }
 
 pub(crate) fn project_root() -> PathBuf {
@@ -281,95 +246,6 @@ fn active_graph() -> String {
     }
 }
 
-/// Run a Python hologram CLI command with timeout (600s) and capture stdout+stderr.
-fn run_hologram(args: &[&str]) -> Result<String, String> {
-    let root = project_root();
-    let timeout = std::time::Duration::from_secs(600);
-    let mut child = silent_command(&python())
-        .current_dir(&root)
-        .args(["-m", "src_python"])
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = read_pipe(child.stdout.take());
-                let stderr = read_pipe(child.stderr.take());
-                let mut result = String::new();
-                if !stderr.is_empty() { result.push_str(&stderr); result.push('\n'); }
-                if !stdout.is_empty() { result.push_str(&stdout); }
-                if !status.success() {
-                    return Err(if result.is_empty() {
-                        format!("Command failed with exit code {}", status)
-                    } else { result });
-                }
-                return Ok(if result.is_empty() { "(no output)".into() } else { result });
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    child.kill().ok();
-                    let _ = child.wait();
-                    return Err("Python 命令超时 (600s)，已强制终止".into());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("Failed to wait on Python process: {e}")),
-        }
-    }
-}
-
-/// Run inline Python code with timeout (300s) and return output.
-fn run_python_code(code: &str) -> Result<String, String> {
-    let root = project_root();
-    let timeout = std::time::Duration::from_secs(300);
-    let mut child = silent_command(&python())
-        .current_dir(&root)
-        .args(["-c", code])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = read_pipe(child.stdout.take());
-                let stderr = read_pipe(child.stderr.take());
-                if !status.success() {
-                    return Err(format!("{}{}", stderr, stdout));
-                }
-                return Ok(format!("{}{}", stdout, stderr));
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    child.kill().ok();
-                    let _ = child.wait();
-                    return Err("Python 代码执行超时 (300s)，已强制终止".into());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("Failed to wait on Python process: {e}")),
-        }
-    }
-}
-
-/// Read all bytes from a pipe into a lossy UTF-8 String.
-fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
-    if let Some(mut p) = pipe {
-        let mut v = Vec::new();
-        let _ = p.read_to_end(&mut v);
-        String::from_utf8_lossy(&v).to_string()
-    } else {
-        String::new()
-    }
-}
-
 // ═══════════════════════════════════════════════════════
 // Watcher State
 // ═══════════════════════════════════════════════════════
@@ -407,44 +283,23 @@ fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
     map
 }
 
-/// Run incremental analysis for a project, return JSON.
-/// If changed_files is non-empty, only those files are re-analyzed (incremental patch).
-fn run_incremental_analysis(project_path: &str, changed_files: &[String]) -> Option<String> {
-    let root = project_root();
-    let mut args: Vec<String> = vec![
-        "-m".into(), "src_python".into(),
-        project_path.into(),
-        "--format".into(), "json".into(),
-    ];
-    if !changed_files.is_empty() {
-        args.push("--files".into());
-        for f in changed_files {
-            args.push(f.clone());
+/// Run analysis via Rust Engine for a project, return JSON.
+/// Rust engine is fast enough (~4s for Django) that incremental mode is unnecessary.
+fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
+    match EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", project_path)) {
+        Ok(json) => {
+            if json.trim().is_empty() || json.contains("\"error\"") {
+                eprintln!("[hologram] engine analysis error: {}", json);
+                None
+            } else {
+                Some(json)
+            }
         }
-    }
-
-    let output = match silent_command(&python())
-        .current_dir(&root)
-        .args(&args)
-        .output()
-    {
-        Ok(o) => o,
         Err(e) => {
-            eprintln!("[hologram] incremental analysis spawn failed: {e}");
-            return None;
+            eprintln!("[hologram] engine analysis failed: {e}");
+            None
         }
-    };
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if !stdout.trim().is_empty() {
-            return Some(stdout);
-        }
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("[hologram] incremental analysis failed: {}", stderr);
     }
-    None
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1365,29 +1220,78 @@ fn is_graph_fresh(graph_path: &str, project_path: &str) -> bool {
 }
 
 /// Generate hologram_graph_files.json from an existing hologram_graph.json.
-/// Fast (~0.1s) — only loads the graph and runs to_file_graph(), no re-analysis.
+/// Pure Rust — no Python dependency. Groups nodes by file, aggregates edge counts.
 fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
     let graph_path = format!("{}/hologram_graph.json", project_path);
-    let code = format!(
-        "from src_python.core.graph import Graph\n\
-         g = Graph.from_json({:?})\n\
-         fg = g.to_file_graph()\n\
-         fg.to_json({:?})\n\
-         print('ok')\n",
-        graph_path,
-        format!("{}/hologram_graph_files.json", project_path),
-    );
-    let root = project_root();
-    let output = silent_command(&python())
-        .current_dir(&root)
-        .args(["-c", &code])
-        .output()
-        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("file-graph generation failed: {}", stderr));
+    let files_path = format!("{}/hologram_graph_files.json", project_path);
+
+    let content = std::fs::read_to_string(&graph_path)
+        .map_err(|e| format!("Cannot read graph: {}", e))?;
+    let g: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Invalid graph JSON: {}", e))?;
+
+    // Group nodes by file
+    let mut file_nodes: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    if let Some(nodes) = g.get("nodes").and_then(|v| v.as_array()) {
+        for n in nodes {
+            let loc = n.get("location").and_then(|v| v.as_str()).unwrap_or("");
+            // Extract file path from "file.py:123" or "file.py"
+            let file = loc.split(':').next().unwrap_or("").to_string();
+            if !file.is_empty() {
+                if let Some(id) = n.get("id").and_then(|v| v.as_str()) {
+                    file_nodes.entry(file).or_default().push(id.to_string());
+                }
+            }
+        }
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+
+    // Count edges per file pair
+    let mut file_edges: std::collections::HashMap<(String, String), u32> = std::collections::HashMap::new();
+    if let Some(edges) = g.get("edges").and_then(|v| v.as_array()) {
+        for e in edges {
+            let src = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let tgt = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
+            // Find which file each node belongs to
+            let src_file = find_node_file(&g, src);
+            let tgt_file = find_node_file(&g, tgt);
+            if !src_file.is_empty() && !tgt_file.is_empty() && src_file != tgt_file {
+                *file_edges.entry((src_file, tgt_file)).or_default() += 1;
+            }
+        }
+    }
+
+    let file_graph: serde_json::Value = serde_json::json!({
+        "nodes": file_nodes.iter().map(|(f, ids)| serde_json::json!({
+            "id": f,
+            "name": f.split('/').last().unwrap_or(f),
+            "type": "file",
+            "location": f,
+            "symbol_count": ids.len(),
+        })).collect::<Vec<_>>(),
+        "edges": file_edges.iter().map(|((s, t), count)| serde_json::json!({
+            "source": s,
+            "target": t,
+            "type": "structural",
+            "weight": count,
+        })).collect::<Vec<_>>(),
+        "meta": g.get("meta").cloned().unwrap_or(serde_json::json!({})),
+    });
+
+    std::fs::write(&files_path, serde_json::to_string_pretty(&file_graph).unwrap_or_default())
+        .map_err(|e| format!("Cannot write file graph: {}", e))?;
+    Ok("ok".to_string())
+}
+
+fn find_node_file(g: &serde_json::Value, node_id: &str) -> String {
+    if let Some(nodes) = g.get("nodes").and_then(|v| v.as_array()) {
+        for n in nodes {
+            if n.get("id").and_then(|v| v.as_str()) == Some(node_id) {
+                let loc = n.get("location").and_then(|v| v.as_str()).unwrap_or("");
+                return loc.split(':').next().unwrap_or("").to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 /// Analyze a folder and return the graph JSON. Uses incremental cache.
@@ -1423,112 +1327,50 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
         let _ = window.set_title("全息观测站 — 分析中...");
     }
 
-    let root = project_root();
-    let python = python();
+    // Emit phase event
+    let _ = app.emit("analyze-phase", serde_json::json!({
+        "phase": "analysis", "message": "Rust 引擎分析中..."
+    }));
 
-    let mut child = silent_command(&python)
-        .current_dir(&root)
-        .args(["-m", "src_python", &path, "--format", "json"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("无法启动 Python:\n  Python: {python}\n  错误: {e}"))?;
-
-    // ── Stream stderr: parse progress lines, accumulate rest ──
-    let stderr_pipe = child.stderr.take().expect("stderr piped");
-    let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf2 = stderr_buf.clone();
-    let app2 = app.clone();
-
-    let reader_handle = thread::spawn(move || {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(stderr_pipe);
-        for line_result in reader.lines() {
-            let Ok(line) = line_result else { break };
-            // Accumulate raw bytes for error reporting
-            stderr_buf2.lock().unwrap().extend_from_slice(line.as_bytes());
-            stderr_buf2.lock().unwrap().push(b'\n');
-
-            if let Some(rest) = line.strip_prefix("HOLO:PROGRESS:") {
-                let parts: Vec<&str> = rest.splitn(3, ':').collect();
-                if parts.len() >= 3 {
-                    let current: u32 = parts[0].parse().unwrap_or(0);
-                    let total: u32 = parts[1].parse().unwrap_or(0);
-                    let file = parts[2].to_string();
-                    let payload = serde_json::json!({
-                        "current": current, "total": total, "file": file
-                    });
-                    let _ = app2.emit("analyze-progress", payload);
-                }
-            } else if let Some(rest) = line.strip_prefix("HOLO:PHASE:") {
-                let parts: Vec<&str> = rest.splitn(2, ':').collect();
-                if !parts.is_empty() {
-                    let phase = parts[0].to_string();
-                    let message = if parts.len() > 1 { parts[1].to_string() } else { String::new() };
-                    let payload = serde_json::json!({
-                        "phase": phase, "message": message
-                    });
-                    let _ = app2.emit("analyze-phase", payload);
-                }
-            } else if let Some(rest) = line.strip_prefix("HOLO:HEARTBEAT:") {
-                let parts: Vec<&str> = rest.splitn(2, ':').collect();
-                if !parts.is_empty() {
-                    let label = parts[0].to_string();
-                    let elapsed = if parts.len() > 1 { parts[1].to_string() } else { String::new() };
-                    let payload = serde_json::json!({
-                        "label": label, "elapsed": elapsed
-                    });
-                    let _ = app2.emit("analyze-heartbeat", payload);
-                }
-            }
-        }
-    });
-
-    let analyze_timeout = std::time::Duration::from_secs(600);
-    let start = std::time::Instant::now();
-    let (stdout, stderr) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = read_pipe(child.stdout.take());
-                // Wait for reader thread to finish draining stderr
-                let _ = reader_handle.join();
-                let stderr_bytes = stderr_buf.lock().unwrap().clone();
-                let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
-                if !status.success() {
-                    return Err(format!(
-                        "分析失败 (exit code {}):\n--- stderr ---\n{}\n--- stdout ---\n{}",
-                        status,
-                        stderr,
-                        if stdout.len() > 500 { format!("{}...", &stdout[..500]) } else { stdout }
-                    ));
-                }
-                break (stdout, stderr);
-            }
-            Ok(None) => {
-                if start.elapsed() >= analyze_timeout {
-                    child.kill().ok();
-                    let _ = child.wait();
-                    let _ = reader_handle.join();
-                    return Err("项目分析超时 (600s)，项目过大或 Python 引擎卡死。已强制终止。".into());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("分析进程异常: {e}")),
-        }
-    };
+    // ── Run analysis via Rust Engine (TCP :9777) ──
+    let stdout = EngineClient::new("127.0.0.1:9777")
+        .send(&format!("analyze:{}", path))
+        .map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站");
     }
 
-    if stdout.trim().is_empty() {
-        return Err(format!("分析完成但无输出。stderr:\n{}", stderr));
+    if stdout.trim().is_empty() || stdout.contains("\"error\"") {
+        return Err(format!("分析失败: {}", stdout));
     }
+
+    // Wrap Rust engine output with standard meta format (compatible with Python engine output)
+    let engine_json: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("引擎返回格式异常: {}", e))?;
+    let wrapped = serde_json::json!({
+        "meta": {
+            "source_root": path,
+            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "version": "0.1.0",
+            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
+            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
+        },
+        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
+        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
+        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
+    });
+    let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
+
+    // Save graph JSON to disk
+    let graph_path = format!("{}/hologram_graph.json", path);
+    std::fs::write(&graph_path, &graph_json)
+        .map_err(|e| format!("保存图文件失败: {}", e))?;
 
     // Register as active workspace — all tool commands now route here
     *ACTIVE_PROJECT.lock().unwrap() = path.clone();
 
-    // ── Ensure file-level graph exists (may be missing if cached .hologram was loaded) ──
+    // ── Ensure file-level graph exists ──
     let files_path = format!("{}/hologram_graph_files.json", path);
     if !std::path::Path::new(&files_path).exists() {
         let _ = regenerate_file_graph(&path);
@@ -1540,7 +1382,7 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
         eprintln!("[hologram] failed to write .last_project: {e}");
     }
 
-    Ok(stdout)
+    Ok(graph_json)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1611,398 +1453,42 @@ async fn estimate_project_size(path: String) -> Result<String, String> {
 /// Fast: ~5-30s even for Django-sized projects, vs 600s+ timeout for full analysis.
 #[tauri::command]
 async fn generate_lightweight_graph(path: String) -> Result<String, String> {
-    let root = project_root();
-    let code = format!(
-        r#"
-import sys, json, os, ast, re
+    // Rust engine full analysis replaces Python lightweight graph (faster: 4s vs 10-30s)
+    let stdout = EngineClient::new("127.0.0.1:9777")
+        .send(&format!("analyze:{}", path))
+        .map_err(|e| format!("引擎分析失败: {}", e))?;
 
-project_root = {}
-
-source_exts = {{
-    '.py', '.pyi', '.ts', '.tsx', '.js', '.jsx', '.mjs',
-    '.go', '.rs', '.java', '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh',
-    '.rb', '.cs', '.kt', '.kts', '.swift', '.php', '.lua',
-}}
-
-skip_dirs = {{
-    '.git', '.hg', '.svn', '__pycache__', '.pytest_cache', '.mypy_cache',
-    'node_modules', '.venv', 'venv', '.hologram', 'dist', 'build', 'target',
-    '.next', '.nuxt', '.cache', 'egg-info', '.eggs',
-}}
-
-LANG_MAP = {{
-    '.py': 'python', '.pyi': 'python',
-    '.ts': 'typescript', '.tsx': 'typescript',
-    '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript',
-    '.go': 'go', '.rs': 'rust', '.java': 'java',
-    '.c': 'c', '.cpp': 'c++', '.cc': 'c++', '.cxx': 'c++',
-    '.h': 'c', '.hpp': 'c++', '.hh': 'c++',
-    '.rb': 'ruby', '.cs': 'csharp',
-    '.kt': 'kotlin', '.kts': 'kotlin',
-    '.swift': 'swift', '.php': 'php', '.lua': 'lua',
-}}
-
-def detect_lang(fp):
-    return LANG_MAP.get(os.path.splitext(fp)[1].lower(), 'unknown')
-
-# ── Import extractors per language ──
-
-def extract_py(filepath):
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            tree = ast.parse(f.read(), filename=filepath)
-    except Exception:
-        return set()
-    imps = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imps.add(alias.name.split('.')[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imps.add(node.module.split('.')[0])
-    return imps
-
-def extract_js_ts(filepath):
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
-    except Exception:
-        return set()
-    imps = set()
-    for m in re.finditer(r"""(?:from\s+['"]|import\s+['"]|require\s*\(\s*['"])([^'"]+)['"]""", content):
-        mod = m.group(1)
-        # Relative imports: keep as-is for resolution; external: take top-level pkg
-        imps.add(mod if mod.startswith('.') else mod.split('/')[0])
-    return imps
-
-def extract_go(filepath):
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
-    except Exception:
-        return set()
-    return set(m.group(1).split('/')[-1] for m in re.finditer(r'"([^"]+)"', content))
-
-def extract_rust(filepath):
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
-    except Exception:
-        return set()
-    return set(m.group(1).split('::')[0] for m in re.finditer(r'use\s+([a-zA-Z_][\w:]*)', content))
-
-EXTRACTORS = {{
-    'python': extract_py,
-    'typescript': extract_js_ts,
-    'javascript': extract_js_ts,
-    'go': extract_go,
-    'rust': extract_rust,
-}}
-
-def extract_imports(fp):
-    lang = detect_lang(fp)
-    fn = EXTRACTORS.get(lang)
-    return fn(fp) if fn else set()
-
-# ── Step 1: Collect source files ──
-all_files = []
-for dirpath, dirnames, filenames in os.walk(project_root):
-    dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith('.')]
-    for fn in filenames:
-        ext = os.path.splitext(fn)[1].lower()
-        if ext in source_exts:
-            all_files.append(os.path.join(dirpath, fn))
-
-sys.stderr.write("HOLO:PHASE:scan:{{}} files found\n".format(len(all_files)))
-sys.stderr.flush()
-
-# ── Step 2: Build file nodes ──
-nodes = []
-node_index = {{}}  # key → node_id (multiple keys per file for fuzzy matching)
-
-for i, fp in enumerate(sorted(all_files)):
-    nid = "file_{{}}".format(i)
-    nodes.append({{
-        "id": nid,
-        "type": "symbol",
-        "name": os.path.basename(fp),
-        "location": fp,
-        "language": detect_lang(fp),
-        "kind": "file",
-        "community_id": None,
-        "position": None,
-        "properties": {{"path": fp}},
-    }})
-    # Index by absolute normpath, relative path, and basename-no-ext
-    nfp = os.path.normpath(fp)
-    node_index[nfp] = nid
-    rel = os.path.relpath(fp, project_root).replace('\\', '/')
-    node_index[rel] = nid
-    base_no_ext = os.path.splitext(os.path.basename(fp))[0]
-    # Don't overwrite an existing nid for the same basename (ambiguous imports)
-    if base_no_ext not in node_index:
-        node_index[base_no_ext] = nid
-
-# ── Step 3: Extract imports & build edges ──
-edges = []
-edge_keys = set()
-
-for idx, fp in enumerate(sorted(all_files)):
-    if idx % 50 == 0:
-        sys.stderr.write("HOLO:PROGRESS:{{}}:{{}}:{{}}\n".format(idx, len(all_files), os.path.basename(fp)))
-        sys.stderr.flush()
-
-    src_id = node_index.get(os.path.normpath(fp))
-    if not src_id:
-        continue
-
-    imports = extract_imports(fp)
-    src_dir = os.path.dirname(fp)
-
-    for imp in imports:
-        target_id = None
-
-        # 1) Direct match: import name == file basename without extension
-        if imp in node_index:
-            target_id = node_index[imp]
-
-        # 2) Relative import: './foo' / '../foo' → resolve against src_dir
-        if not target_id and imp.startswith('.'):
-            for ext in ('.py', '.ts', '.js', '.go', '.rs'):
-                resolved = os.path.normpath(os.path.join(src_dir, imp + ext))
-                if resolved in node_index:
-                    target_id = node_index[resolved]
-                    break
-            # Also try /index.py, /index.ts etc.
-            if not target_id:
-                for ext in ('.py', '.ts', '.js'):
-                    resolved = os.path.normpath(os.path.join(src_dir, imp, 'index' + ext))
-                    if resolved in node_index:
-                        target_id = node_index[resolved]
-                        break
-
-        if target_id and target_id != src_id:
-            key = (src_id, target_id)
-            if key not in edge_keys:
-                edge_keys.add(key)
-                edges.append({{
-                    "id": "fe_{{}}".format(len(edges)),
-                    "type": "structural",
-                    "direction": "import",
-                    "source": src_id,
-                    "target": target_id,
-                    "coupling_depth": 1,
-                }})
-
-# ── Step 3.5: Community detection (Label Propagation, pure Python) ──
-import random
-random.seed(42)
-
-adj = {{n['id']: [] for n in nodes}}
-for e in edges:
-    s, t = e['source'], e['target']
-    adj[s].append(t)
-    adj[t].append(s)
-
-labels = {{n['id']: i for i, n in enumerate(nodes)}}
-nids = list(labels.keys())
-for _ in range(100):
-    changed = False
-    random.shuffle(nids)
-    for nid in nids:
-        neighbors = adj.get(nid, [])
-        if not neighbors:
-            continue
-        counts = {{}}
-        for nb in neighbors:
-            nl = labels[nb]
-            counts[nl] = counts.get(nl, 0) + 1
-        best = max(counts, key=counts.get)
-        if labels[nid] != best:
-            labels[nid] = best
-            changed = True
-    if not changed:
-        break
-
-groups = {{}}
-for nid, lbl in labels.items():
-    groups.setdefault(lbl, []).append(nid)
-
-min_size = 3
-valid_groups = [(lbl, ms) for lbl, ms in groups.items() if len(ms) >= min_size]
-valid_groups.sort(key=lambda x: -len(x[1]))
-
-nodes_by_id = {{n['id']: n for n in nodes}}
-communities = []
-for ci, (lbl, member_ids) in enumerate(valid_groups):
-    cid = "community_{{:04d}}".format(ci)
-    for nid in member_ids:
-        if nid in nodes_by_id:
-            nodes_by_id[nid]['community_id'] = cid
-    degrees = [(nid, len(adj.get(nid, []))) for nid in member_ids]
-    degrees.sort(key=lambda x: -x[1])
-    top_names = []
-    for nid, _ in degrees[:2]:
-        node = nodes_by_id.get(nid)
-        if node:
-            name = node['name']
-            if '.' in name:
-                name = name.rsplit('.', 1)[0]
-            top_names.append(name)
-    c_label = '/'.join(top_names[:2]) if top_names else 'unknown'
-    communities.append({{
-        'id': cid,
-        'level': 0,
-        'label': c_label,
-        'node_ids': member_ids,
-        'parent_id': None,
-        'properties': {{'size': len(member_ids)}},
-    }})
-
-sys.stderr.write("HOLO:PHASE:community:{{}} file-communities\n".format(len(communities)))
-sys.stderr.flush()
-
-# ── Step 3.6: Recursive sub-communities (Level 1+) for large clusters ──
-def _recursive_label_prop(member_ids, adj, nodes_by_id, level, parent_id, min_size):
-    """Run label propagation on a subset of nodes, producing sub-communities."""
-    if len(member_ids) < 12:
-        return []
-    sub_adj = {{}}
-    id_set = set(member_ids)
-    for nid in member_ids:
-        sub_adj[nid] = [nb for nb in adj.get(nid, []) if nb in id_set]
-
-    sub_labels = {{nid: i for i, nid in enumerate(member_ids)}}
-    sub_nids = list(sub_labels.keys())
-    for _ in range(50):
-        changed = False
-        random.shuffle(sub_nids)
-        for nid in sub_nids:
-            neighbors = sub_adj.get(nid, [])
-            if not neighbors:
-                continue
-            counts = {{}}
-            for nb in neighbors:
-                nl = sub_labels[nb]
-                counts[nl] = counts.get(nl, 0) + 1
-            best = max(counts, key=counts.get)
-            if sub_labels[nid] != best:
-                sub_labels[nid] = best
-                changed = True
-        if not changed:
-            break
-
-    sub_groups = {{}}
-    for nid, lbl in sub_labels.items():
-        sub_groups.setdefault(lbl, []).append(nid)
-
-    result = []
-    sub_ci = 0
-    for lbl, ms in sorted(sub_groups.items(), key=lambda x: -len(x[1])):
-        if len(ms) < min_size:
-            continue
-        scid = "{{}}_{{:03d}}_{{:03d}}".format(parent_id, level, sub_ci)
-        sub_ci += 1
-        for nid in ms:
-            if nid in nodes_by_id:
-                nodes_by_id[nid]['community_id'] = scid
-        degrees = [(nid, len(adj.get(nid, []))) for nid in ms]
-        degrees.sort(key=lambda x: -x[1])
-        top_names = []
-        for nid, _ in degrees[:2]:
-            node = nodes_by_id.get(nid)
-            if node:
-                name = node['name']
-                if '.' in name:
-                    name = name.rsplit('.', 1)[0]
-                top_names.append(name)
-        sc_label = '/'.join(top_names[:2]) if top_names else 'sub'
-        result.append({{
-            'id': scid,
-            'level': level,
-            'label': sc_label,
-            'node_ids': ms,
-            'parent_id': parent_id,
-            'properties': {{'size': len(ms)}},
-        }})
-        # Recurse deeper for very large sub-communities
-        if len(ms) >= 20 and level < 2:
-            result.extend(_recursive_label_prop(ms, adj, nodes_by_id, level + 1, scid, 5))
-    return result
-
-# Run sub-community detection on each Level 0 community
-sub_communities = []
-for comm in communities:
-    subs = _recursive_label_prop(comm['node_ids'], adj, nodes_by_id, level=1, parent_id=comm['id'], min_size=4)
-    sub_communities.extend(subs)
-communities.extend(sub_communities)
-
-sys.stderr.write("HOLO:PHASE:community:{{}} L0 + {{}} L1+ sub-communities\n".format(len(communities) - len(sub_communities), len(sub_communities)))
-sys.stderr.flush()
-
-# ── Step 4: Write output ──
-result = {{
-    "meta": {{
-        "source_root": project_root,
-        "generated_at": __import__('datetime').datetime.now().isoformat(),
-        "version": "0.1.0",
-        "node_count": len(nodes),
-        "edge_count": len(edges),
-        "community_count": len(communities),
-        "lightweight": True,
-    }},
-    "nodes": nodes,
-    "edges": edges,
-    "communities": communities,
-}}
-
-for fname in ["hologram_graph.json", "hologram_graph_files.json"]:
-    out = os.path.join(project_root, fname)
-    tmp = out + ".tmp"
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, out)
-
-print(json.dumps({{"ok": True, "file_count": len(nodes), "edge_count": len(edges)}}))
-"#,
-        py_json(&path),
-    );
-
-    let timeout = std::time::Duration::from_secs(120);
-    let mut child = silent_command(&python())
-        .current_dir(&root)
-        .args(["-c", &code])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = read_pipe(child.stdout.take());
-                let stderr = read_pipe(child.stderr.take());
-                if !status.success() {
-                    return Err(format!("文件图生成失败 (exit {}):\n{}", status, stderr));
-                }
-                if stdout.trim().is_empty() {
-                    return Err(format!("文件图生成无输出。stderr:\n{}", stderr));
-                }
-                return Ok(stdout);
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    child.kill().ok();
-                    let _ = child.wait();
-                    return Err("文件图生成超时 (120s)".into());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("分析进程异常: {e}")),
-        }
+    if stdout.trim().is_empty() || stdout.contains("\"error\"") {
+        return Err(format!("分析失败: {}", stdout));
     }
+
+    let engine_json: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("引擎返回格式异常: {}", e))?;
+    let wrapped = serde_json::json!({
+        "meta": {
+            "source_root": path,
+            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "version": "0.1.0",
+            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
+            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
+        },
+        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
+        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
+        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
+    });
+
+    let graph_path = format!("{}/hologram_graph.json", path);
+    let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
+    std::fs::write(&graph_path, &graph_json)
+        .map_err(|e| format!("保存文件失败: {}", e))?;
+
+    let _ = regenerate_file_graph(&path);
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "file_count": engine_json.get("node_count"),
+        "edge_count": engine_json.get("edge_count"),
+    })).unwrap_or_default())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2017,97 +1503,44 @@ print(json.dumps({{"ok": True, "file_count": len(nodes), "edge_count": len(edges
 /// so all MCP tools get full symbol-level data once the job finishes.
 #[tauri::command]
 async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<String, String> {
-    let root = project_root();
-    let python = python();
-    let graph_path = format!("{}/hologram_graph.json", path);
-
-    // Spawn Python directly — bypass spawn_bg to avoid cmd /c wrapper
-    let child = silent_command(&python)
-        .current_dir(&root)
-        .args(["-m", "src_python", "analyze", &path, "-o", &graph_path])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("无法启动后台分析进程: {e}"))?;
-
-    let job_id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let job = BgJob {
-        child,
-        stdout_buf: Vec::new(),
-        stderr_buf: Vec::new(),
-        start_time: std::time::Instant::now(),
-    };
-    BG_JOBS.lock().unwrap().insert(job_id, job);
-
-    // Monitor the job in a background thread — poll every 10s
+    // Rust engine background analysis — fast enough to run synchronously via EngineClient
     let app2 = app.clone();
     let path2 = path.clone();
     std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            // Drain output without removing the job
-            let (done, success, stderr_snippet) = {
-                let mut jobs = BG_JOBS.lock().unwrap();
-                let Some(job) = jobs.get_mut(&job_id) else {
-                    // Job was cleaned up externally — exit monitoring
-                    break;
-                };
-                // Drain stdout/stderr into buffers
-                if let Some(stdout) = &mut job.child.stdout {
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        use std::io::Read;
-                        match stdout.read(&mut buf) {
-                            Ok(0) => break,
-                            Ok(n) => job.stdout_buf.extend_from_slice(&buf[..n]),
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(_) => break,
-                        }
-                    }
+        match EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", path2)) {
+            Ok(stdout) if !stdout.trim().is_empty() && !stdout.contains("\"error\"") => {
+                // Save graph to disk
+                let graph_path = format!("{}/hologram_graph.json", path2);
+                if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    let wrapped = serde_json::json!({
+                        "meta": {
+                            "source_root": path2,
+                            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+                            "version": "0.1.0",
+                            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
+                            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
+                        },
+                        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
+                        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
+                        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
+                    });
+                    let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
                 }
-                if let Some(stderr) = &mut job.child.stderr {
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        use std::io::Read;
-                        match stderr.read(&mut buf) {
-                            Ok(0) => break,
-                            Ok(n) => job.stderr_buf.extend_from_slice(&buf[..n]),
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(_) => break,
-                        }
-                    }
-                }
-                let status = job.child.try_wait();
-                let done = matches!(status, Ok(Some(_)));
-                let success = matches!(status, Ok(Some(s)) if s.success());
-                let stderr_snip = String::from_utf8_lossy(&job.stderr_buf)
-                    .chars().take(500).collect::<String>();
-                (done, success, stderr_snip)
-            };
-
-            if done {
-                if success {
+                {
                     *ACTIVE_PROJECT.lock().unwrap() = path2.clone();
                     let _ = std::fs::write(project_root().join(".last_project"), &path2);
-                    // Clean up job entry
-                    BG_JOBS.lock().unwrap().remove(&job_id);
-                    let _ = app2.emit("analysis-complete", serde_json::json!({
-                        "path": path2,
-                        "graph_path": graph_path,
-                    }));
-                } else {
-                    BG_JOBS.lock().unwrap().remove(&job_id);
-                    let _ = app2.emit("analysis-failed", serde_json::json!({
-                        "path": path2,
-                        "error": stderr_snippet,
-                    }));
                 }
-                break;
+                let _ = app2.emit("analysis-complete", serde_json::json!({"path": path2}));
+            }
+            Ok(stdout) => {
+                let _ = app2.emit("analysis-failed", serde_json::json!({"path": path2, "error": stdout}));
+            }
+            Err(e) => {
+                let _ = app2.emit("analysis-failed", serde_json::json!({"path": path2, "error": e}));
             }
         }
     });
-
-    Ok(serde_json::json!({"job_id": job_id, "status": "started"}).to_string())
+    Ok(serde_json::json!({"job_id": 1, "status": "started"}).to_string())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2159,7 +1592,7 @@ async fn start_watching(
             }
 
             if !changed_files.is_empty() {
-                if let Some(json) = run_incremental_analysis(&path, &changed_files) {
+                if let Some(json) = run_engine_analysis(&path, &changed_files) {
                     last_mtimes = current_mtimes;
                     consecutive_failures = 0;
                     if let Err(e) = app_handle.emit("graph-updated", json) {
@@ -2441,9 +1874,9 @@ static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
 
 #[tauri::command]
 async fn start_mcp_server(project_root: String) -> Result<String, String> {
-    let py = python();
+    let engine = engine_binary();
     let mut mgr = MCP_MANAGER.lock().unwrap();
-    mgr.start(&project_root, &py)
+    mgr.start(&project_root, &engine)
 }
 
 #[tauri::command]
@@ -2474,7 +1907,6 @@ async fn stop_mcp_server() -> Result<String, String> {
 // ═══════════════════════════════════════════════════════
 
 use std::net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream};
-use std::io::Write;
 
 fn start_unity_event_server(app: tauri::AppHandle) {
     std::thread::spawn(move || {
@@ -2542,27 +1974,24 @@ static AUDIT_LOGGER: std::sync::LazyLock<Mutex<Option<AuditLogger>>> =
 
 fn start_engine() {
     std::thread::spawn(|| {
-        // Try release first, then debug
-        let paths = [
-            project_root().join("engine/target/release/hologram-engine.exe"),
-            project_root().join("engine/target/debug/hologram-engine.exe"),
-        ];
-        for path in &paths {
-            if path.exists() {
-                match std::process::Command::new(path)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
-                    Ok(_child) => {
-                        println!("[engine] auto-started: {}", path.display());
-                        return;
-                    }
-                    Err(e) => eprintln!("[engine] failed to start {}: {}", path.display(), e),
-                }
-            }
+        let path = engine_binary();
+        let p = std::path::Path::new(&path);
+        if !p.exists() {
+            eprintln!("[engine] binary not found at {} — run 'cd engine && cargo build --release'", path);
+            return;
         }
-        eprintln!("[engine] binary not found — run 'cd engine && cargo build --release'");
+        let mut cmd = std::process::Command::new(&path);
+        cmd.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(NO_WINDOW);
+        }
+        match cmd.spawn() {
+            Ok(_child) => println!("[engine] auto-started: {}", path),
+            Err(e) => eprintln!("[engine] failed to start {}: {}", path, e),
+        }
     });
 }
 
