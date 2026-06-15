@@ -67,6 +67,10 @@ const icons: Record<string, IconDef> = {
     label: '时间轴',
     path: '<circle cx="5" cy="5" r="2"/><polyline points="5,7 5,13 8,12"/><line x1="5" y1="3" x2="13" y2="9"/><circle cx="13" cy="10" r="2"/>',
   },
+  settings: {
+    label: '设置',
+    path: '<circle cx="9" cy="9" r="4.5"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><line x1="9" y1="2" x2="9" y2="4.5"/><line x1="9" y1="13.5" x2="9" y2="16"/><line x1="2" y1="9" x2="4.5" y2="9"/><line x1="13.5" y1="9" x2="16" y2="9"/><line x1="4.05" y1="4.05" x2="5.82" y2="5.82"/><line x1="12.18" y1="12.18" x2="13.95" y2="13.95"/><line x1="13.95" y1="4.05" x2="12.18" y2="5.82"/><line x1="5.82" y1="12.18" x2="4.05" y2="13.95"/>',
+  },
   constraints: {
     label: '约束',
     path: '<circle cx="9" cy="4" r="2.5"/><line x1="5" y1="5.8" x2="13" y2="12.2"/><circle cx="5" cy="13" r="2.5"/><circle cx="13" cy="13" r="2.5"/>',

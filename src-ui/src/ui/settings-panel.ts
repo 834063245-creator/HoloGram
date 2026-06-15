@@ -95,7 +95,7 @@ export class SettingsPanel {
 
     this.panel.innerHTML = `
       <div class="sp-header">
-        <span class="sp-title">${iconHtml('constraints', 13)} 设置</span>
+        <span class="sp-title">${iconHtml('settings', 13)} 设置</span>
         <button class="sp-close-btn">${iconHtml('close', 14)}</button>
       </div>
 

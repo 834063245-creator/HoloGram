@@ -342,7 +342,7 @@ export class StarGraph {
   private focusProgress = 0;
   private focusNodeIdx = -1;
 
-  // Focus subgraph (double-click drill-down)
+  // Focus subgraph (detail-card button triggered)
   private focusSubgraphActive = false;
   private focusSubgraphIdx = -1;
   private focusSubgraphVisibleIndices = new Set<number>();
@@ -527,16 +527,6 @@ export class StarGraph {
     });
     // Prevent browser context menu on canvas
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
-    // Double-click → focus subgraph
-    canvas.addEventListener('dblclick', (e: MouseEvent) => {
-      if (this._selecting) return;
-      if (this.foldMode && !this.enteredGalaxyId) return;
-      const idx = this._hitNode(e);
-      if (idx >= 0) {
-        e.preventDefault(); e.stopPropagation();
-        this.enterFocusSubgraph(idx);
-      }
-    });
     this._onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return; }
@@ -805,7 +795,7 @@ export class StarGraph {
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) { this.hideDetail(); this.enterFocusSubgraph(this.selectedIdx); }
+      if (this.selectedIdx >= 0) { const idx = this.selectedIdx; this.hideDetail(); this.enterFocusSubgraph(idx); }
     });
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
@@ -3492,7 +3482,7 @@ export class StarGraph {
     this.container.appendChild(this.legendEl);
   }
 
-  // ── Focus subgraph (double-click drill-down) ────────────
+  // ── Focus subgraph (detail-card button triggered) ────────────
 
   private buildFocusBanner(): void {
     this.focusSubgraphBanner = document.createElement('div');
