@@ -21,8 +21,8 @@ impl PythonAdapter {
 }
 
 impl LanguageAdapter for PythonAdapter {
-    fn extensions(&self) -> &[&str] {
-        &["py", "pyi", "pyx"]
+    fn extensions(&self) -> Vec<String> {
+        vec!["py".into(), "pyi".into(), "pyx".into()]
     }
 
     fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {

@@ -19,8 +19,8 @@ impl TypeScriptAdapter {
 }
 
 impl LanguageAdapter for TypeScriptAdapter {
-    fn extensions(&self) -> &[&str] {
-        &["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"]
+    fn extensions(&self) -> Vec<String> {
+        vec!["js".into(), "jsx".into(), "ts".into(), "tsx".into(), "mjs".into(), "cjs".into(), "mts".into(), "cts".into()]
     }
 
     fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {
