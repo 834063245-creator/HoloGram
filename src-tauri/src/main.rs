@@ -2540,6 +2540,32 @@ static SANDBOX: std::sync::LazyLock<Mutex<Option<Sandbox>>> =
 static AUDIT_LOGGER: std::sync::LazyLock<Mutex<Option<AuditLogger>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+fn start_engine() {
+    std::thread::spawn(|| {
+        // Try release first, then debug
+        let paths = [
+            project_root().join("engine/target/release/hologram-engine.exe"),
+            project_root().join("engine/target/debug/hologram-engine.exe"),
+        ];
+        for path in &paths {
+            if path.exists() {
+                match std::process::Command::new(path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(_child) => {
+                        println!("[engine] auto-started: {}", path.display());
+                        return;
+                    }
+                    Err(e) => eprintln!("[engine] failed to start {}: {}", path.display(), e),
+                }
+            }
+        }
+        eprintln!("[engine] binary not found — run 'cd engine && cargo build --release'");
+    });
+}
+
 fn check_sandbox_read(file_path: &str) -> Result<std::path::PathBuf, String> {
     let sandbox = SANDBOX.lock().unwrap();
     let sandbox = sandbox.as_ref().ok_or("沙箱未初始化，请先打开项目")?;
@@ -2790,6 +2816,8 @@ fn main() {
         .setup(|app| {
             // v4 Phase 4: server for Unity events
             start_unity_event_server(app.handle().clone());
+            // v4: auto-start Rust engine
+            start_engine();
             Ok(())
         })
         .run(tauri::generate_context!())
