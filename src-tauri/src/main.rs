@@ -336,6 +336,8 @@ async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
             if let Err(e) = std::fs::write(&graph_path, &graph_json) {
                 eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
             }
+            // Remove stale binary cache so cold start doesn't read old Python .hologram
+            let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", target));
         }
     }
 
@@ -1227,7 +1229,9 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         return Ok(bytes);
     }
 
-    // helper: refuse stale .hologram when .json is newer
+    // helper: refuse stale .hologram when .json is newer or missing.
+    // .hologram is a legacy Python-engine binary cache; we never write it from Rust.
+    // If .json doesn't exist, .hologram is orphaned and must be treated as stale.
     fn holo_fresh(holo_path: &std::path::Path) -> bool {
         let json_path = holo_path.to_string_lossy().replace(".hologram", ".json");
         if let (Ok(h_meta), Ok(j_meta)) = (std::fs::metadata(holo_path), std::fs::metadata(&json_path)) {
@@ -1235,7 +1239,7 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
                 return h_time >= j_time;
             }
         }
-        true // can't compare — assume fresh
+        false // .json missing → .hologram is orphaned legacy cache, skip it
     }
 
     // 2) active workspace .hologram (only if ACTIVE_PROJECT is explicitly set)
@@ -1467,6 +1471,9 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
     std::fs::write(&graph_path, &graph_json)
         .map_err(|e| format!("保存图文件失败: {}", e))?;
 
+    // Remove stale binary cache so cold start doesn't read old Python .hologram
+    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
+
     // Register as active workspace — all tool commands now route here
     *ACTIVE_PROJECT.lock().unwrap() = path.clone();
 
@@ -1625,6 +1632,8 @@ async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<St
                         "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
                     });
                     let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
+                    // Remove stale binary cache so cold start doesn't read old Python .hologram
+                    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path2));
                 }
                 {
                     *ACTIVE_PROJECT.lock().unwrap() = path2.clone();
