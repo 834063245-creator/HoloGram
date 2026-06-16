@@ -68,21 +68,19 @@ export class FileTreePanel {
 
     // Refresh button
     const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'ft-header-btn';
     refreshBtn.innerHTML = iconSvg('refresh', 12);
-    Object.assign(refreshBtn.style, {
-      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',
-      padding: '2px', display: 'flex',
-    });
     refreshBtn.title = '刷新';
-    refreshBtn.addEventListener('click', () => this.refresh());
+    refreshBtn.addEventListener('click', () => {
+      refreshBtn.style.transform = 'rotate(180deg)';
+      setTimeout(() => { refreshBtn.style.transform = ''; }, 300);
+      this.refresh();
+    });
 
     // Close button
     const closeBtn = document.createElement('button');
+    closeBtn.className = 'ft-header-btn';
     closeBtn.innerHTML = iconSvg('close', 12);
-    Object.assign(closeBtn.style, {
-      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',
-      padding: '2px', display: 'flex',
-    });
     closeBtn.title = '关闭';
     closeBtn.addEventListener('click', () => this.close());
 
@@ -108,6 +106,14 @@ export class FileTreePanel {
 
     this.el.appendChild(this.treeEl);
     this.setupFilter();
+
+    // ── Auto-refresh on workspace file changes (debounced) ──
+    let refreshTimer: ReturnType<typeof setTimeout>;
+    bus.on('workspace:files-changed', () => {
+      if (!this.open || !this.rootPath) return;
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => this.refresh(), 1500);
+    });
 
     document.body.appendChild(this.el);
   }

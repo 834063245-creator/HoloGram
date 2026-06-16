@@ -2443,6 +2443,22 @@
       padding: 8px 12px; flex-shrink: 0;
       border-bottom: 1px solid var(--panel-edge, rgba(48, 60, 80, 0.3));
       font-size: 11px; font-family: var(--font-mono, monospace);
+    }
+    .ft-header-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); padding: 4px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      transition: background var(--snap), color var(--snap), transform var(--snap);
+    }
+    .ft-header-btn:hover {
+      background: rgba(60, 100, 170, 0.25);
+      color: var(--starlight, #e6edf3);
+    }
+    .ft-header-btn:active {
+      background: rgba(60, 100, 170, 0.4);
+      transform: scale(0.92);
+    }
       color: var(--text-muted);
     }
     .ft-tree {

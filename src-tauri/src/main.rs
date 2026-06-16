@@ -382,8 +382,8 @@ async fn hologram_path(from: String, to: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_diff(_before_path: String, _after_path: Option<String>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("diff:")
+async fn hologram_diff(before_path: String, _after_path: Option<String>) -> Result<String, String> {
+    EngineClient::new("127.0.0.1:9777").send(&format!("diff:{}", before_path))
 }
 
 #[tauri::command]
