@@ -67,8 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[engine] received: {}", request.trim());
 
         let response = if request.starts_with("check:") {
-    let path = request.trim().strip_prefix("check:").unwrap_or(".").trim();
-    handle_check(path)
+    handle_check(request.trim())
 } else if request.starts_with("thread") {
     handle_simple("thread", request.trim(), |g, _| thread_conflict_report(g, &[]))
 } else if request.starts_with("blindspots") {
@@ -239,8 +238,16 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     .unwrap_or_default()
 }
 
-fn handle_check(project_path: &str) -> Vec<u8> {
-    let root = PathBuf::from(project_path);
+fn handle_check(request: &str) -> Vec<u8> {
+    // Parse "check:<path>" or "check:<path>\n<json_files>"
+    let body = request.strip_prefix("check:").unwrap_or(".");
+    let (path, changed_files): (&str, Vec<String>) = if let Some((p, files_json)) = body.split_once('\n') {
+        let files: Vec<String> = serde_json::from_str(files_json.trim()).unwrap_or_default();
+        (p.trim(), files)
+    } else {
+        (body.trim(), vec![])
+    };
+    let root = PathBuf::from(path);
     let hologram_dir = root.join(".hologram");
     let baseline_path = hologram_dir.join("baseline.json");
 
@@ -274,8 +281,7 @@ fn handle_check(project_path: &str) -> Vec<u8> {
         hologram_engine::graph::Graph::default()
     };
 
-    let changed_files: Vec<String> = vec![];
-    let result = run_full_check(&before, after, &changed_files, project_path);
+    let result = run_full_check(&before, after, &changed_files, path);
 
     // Save current graph as new baseline for next check
     let _ = std::fs::create_dir_all(&hologram_dir);

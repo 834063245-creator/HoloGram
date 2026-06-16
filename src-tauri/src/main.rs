@@ -386,21 +386,42 @@ async fn hologram_timeline(
         .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
     let lim = limit.unwrap_or(60);
 
-    // Simple query — dynamic WHERE will be re-added when filters have real values
-    let sql = "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?";
+    // Build query with optional since filter
+    let has_since = since.as_ref().filter(|s| !s.is_empty()).is_some();
+    let sql = if has_since {
+        "SELECT id, timestamp, event_type, file, summary, properties FROM events WHERE timestamp >= ?1 ORDER BY id DESC LIMIT ?2"
+    } else {
+        "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?1"
+    };
     let mut stmt = db.prepare(sql).map_err(|e| format!("查询失败: {}", e))?;
-    let events: Vec<serde_json::Value> = stmt.query_map(rusqlite::params![lim], |row| {
-        let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
-        Ok(serde_json::json!({
-            "id": row.get::<_, i64>(0)?,
-            "timestamp": row.get::<_, String>(1)?,
-            "event_type": row.get::<_, String>(2)?,
-            "file": row.get::<_, String>(3).unwrap_or_default(),
-            "summary": row.get::<_, String>(4).unwrap_or_default(),
-            "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
-        }))
-    }).map_err(|e| format!("读取失败: {}", e))?
-    .filter_map(|r| r.ok()).collect();
+    let events: Vec<serde_json::Value> = if has_since {
+        let since_val = since.as_deref().unwrap_or("");
+        stmt.query_map(rusqlite::params![since_val, lim], |row| {
+            let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "timestamp": row.get::<_, String>(1)?,
+                "event_type": row.get::<_, String>(2)?,
+                "file": row.get::<_, String>(3).unwrap_or_default(),
+                "summary": row.get::<_, String>(4).unwrap_or_default(),
+                "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
+            }))
+        }).map_err(|e| format!("读取失败: {}", e))?
+        .filter_map(|r| r.ok()).collect()
+    } else {
+        stmt.query_map(rusqlite::params![lim], |row| {
+            let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "timestamp": row.get::<_, String>(1)?,
+                "event_type": row.get::<_, String>(2)?,
+                "file": row.get::<_, String>(3).unwrap_or_default(),
+                "summary": row.get::<_, String>(4).unwrap_or_default(),
+                "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
+            }))
+        }).map_err(|e| format!("读取失败: {}", e))?
+        .filter_map(|r| r.ok()).collect()
+    };
     Ok(serde_json::json!({"events": events}).to_string())
 }
 
@@ -442,7 +463,8 @@ async fn hologram_run_check(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
+    let files_json = serde_json::to_string(&files).unwrap_or_default();
+    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}\n{}", path, files_json))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -451,7 +473,7 @@ async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<Stri
 
 #[tauri::command]
 async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("check:")
+    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
 }
 
 // ═══════════════════════════════════════════════════════

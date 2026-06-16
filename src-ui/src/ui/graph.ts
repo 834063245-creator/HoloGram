@@ -3412,6 +3412,7 @@ export class StarGraph {
         const blending = g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending;
         const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity, depthWrite: false, blending });
         const lines = new THREE.LineSegments(geo, mat);
+        lines.userData['edgeDepth'] = g.depth;
         this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
       }
     }
