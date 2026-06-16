@@ -1238,6 +1238,18 @@
       border-color: rgba(60, 100, 180, 0.3);
     }
 
+    /* Streaming pending — unclosed code fence tail, kept raw */
+    .streaming-pending {
+      white-space: pre-wrap;
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      color: rgba(200, 220, 248, 0.5);
+      background: rgba(8, 16, 28, 0.3);
+      border-left: 2px solid rgba(60, 100, 170, 0.3);
+      padding: 4px 8px; margin: 4px 0;
+      display: block;
+    }
+
     /* Typing cursor */
     .msg-text.streaming::after {
       content: '▍';

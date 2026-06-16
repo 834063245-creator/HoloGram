@@ -14,8 +14,9 @@ export interface Tool {
   parameters(): Record<string, unknown>;
   /** Whether this tool is read-only (safe to parallelize) */
   readOnly(): boolean;
-  /** Execute the tool with raw JSON arguments. Returns the result string. */
-  execute(args: Record<string, unknown>): Promise<string>;
+  /** Execute the tool with raw JSON arguments. Returns the result string.
+   *  onProgress is an optional callback for streaming partial output during execution. */
+  execute(args: Record<string, unknown>, onProgress?: (chunk: string) => void): Promise<string>;
 }
 
 // ---- Tool Registry ----
@@ -49,8 +50,9 @@ export class ToolRegistry {
 
 // ---- Hologram 工具定义 (13 tools → Python engine) ----
 
-/** Tool executor: invokes Tauri commands → Python engine. Override for non-Tauri env. */
-export type ToolExecutor = (toolName: string, args: Record<string, unknown>) => Promise<string>;
+/** Tool executor: invokes Tauri commands → Python engine. Override for non-Tauri env.
+ *  onProgress is an optional callback for streaming partial output during execution. */
+export type ToolExecutor = (toolName: string, args: Record<string, unknown>, onProgress?: (chunk: string) => void) => Promise<string>;
 
 export function createHologramTools(exec: ToolExecutor): Tool[] {
   return [

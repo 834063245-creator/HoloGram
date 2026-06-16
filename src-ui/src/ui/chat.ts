@@ -1162,6 +1162,10 @@ export class ChatPanel {
         this.handleToolDispatch(ev.tool!);
         break;
 
+      case EventKind.ToolProgress:
+        this.handleToolProgress(ev.tool!);
+        break;
+
       case EventKind.ToolResult:
         this.handleToolResult(ev.tool!);
         break;
@@ -1211,28 +1215,75 @@ export class ChatPanel {
   }
 
   // ── Text (streaming → assistant bubble) ──
+  // Incremental markdown rendering: parse safe portions, keep unclosed blocks raw.
 
-  private appendText(text: string, isFinal: boolean): void {
+  private _streamTextBuf = '';
+  private _streamRenderScheduled = false;
+
+  private appendText(text: string, _isFinal: boolean): void {
     this.ensureAssistantBubble();
+    this._streamTextBuf += text;
+
     if (!this.currentTextEl) {
       this.currentTextEl = document.createElement('div');
-      this.currentTextEl.className = 'msg-text streaming';
+      this.currentTextEl.className = 'msg-text msg-markdown streaming';
       this.currentBubble!.appendChild(this.currentTextEl);
     }
-    this.currentTextEl.textContent += text;
-    if (isFinal) {
-      // make links clickable
-      this.autoLink(this.currentTextEl);
+
+    // Throttle re-renders: at most once per animation frame
+    if (!this._streamRenderScheduled) {
+      this._streamRenderScheduled = true;
+      requestAnimationFrame(() => {
+        this._streamRenderScheduled = false;
+        this._renderStreamingMarkdown();
+      });
     }
     this.scrollBottom();
   }
 
+  private _renderStreamingMarkdown(): void {
+    if (!this.currentTextEl || !this._streamTextBuf) return; // already flushed
+    const raw = this._streamTextBuf;
+
+    // Detect odd number of ``` — means the last code fence hasn't been closed
+    const fenceCount = (raw.match(/(?:^|\n)```/gm) || []).length;
+    let safe = raw, pending = '';
+
+    if (fenceCount % 2 === 1) {
+      // Split at the last ``` — everything before it is safe to render
+      const lastFence = raw.lastIndexOf('\n```');
+      const idx = lastFence >= 0 ? lastFence : raw.lastIndexOf('```');
+      if (idx >= 0) {
+        safe = raw.slice(0, idx);
+        pending = raw.slice(idx);
+      } else {
+        safe = '';
+        pending = raw;
+      }
+    }
+
+    // Render safe portion as markdown, append pending as plain escaped text
+    let html = safe ? (DOMPurify.sanitize(marked.parse(safe) as string)) : '';
+    if (pending) {
+      html += `<span class="streaming-pending">${escapeHtml(pending)}</span>`;
+    }
+
+    this.currentTextEl.innerHTML = html;
+    // Syntax highlighting deferred to flushText (expensive, skip during streaming)
+  }
+
   private flushText(): void {
-    // 移除流式光标
     if (this.currentTextEl) {
       this.currentTextEl.classList.remove('streaming');
+      // Final render: full markdown + syntax highlight
+      const raw = this._streamTextBuf;
+      const html = DOMPurify.sanitize(marked.parse(raw) as string);
+      this.currentTextEl.innerHTML = html;
+      this.currentTextEl.querySelectorAll('pre code').forEach((block) => {
+        hljs.highlightElement(block as HTMLElement);
+      });
     }
-    // 添加消息操作按钮（复制等）
+    this._streamTextBuf = '';
     if (this.currentBubble) {
       this.addMessageActions(this.currentBubble);
     }
@@ -1240,25 +1291,24 @@ export class ChatPanel {
     this.currentBubble = null;
   }
 
-  // ── Markdown rendering (final only, not during streaming) ──
+  // ── Markdown rendering (final only, via EventKind.Message) ──
 
   private renderMarkdownText(text: string): void {
     this.ensureAssistantBubble();
-    // Replace streaming text element with markdown-rendered content
+    // Replace streaming text element with final rendered version
     if (this.currentTextEl) {
       this.currentTextEl.remove();
     }
     const el = document.createElement('div');
     el.className = 'msg-text msg-markdown';
-    // Render markdown (sanitized for XSS)
     const html = DOMPurify.sanitize(marked.parse(text) as string);
     el.innerHTML = html;
-    // Syntax-highlight code blocks
     el.querySelectorAll('pre code').forEach((block) => {
       hljs.highlightElement(block as HTMLElement);
     });
     this.currentBubble!.appendChild(el);
     this.currentTextEl = el;
+    this._streamTextBuf = '';
     this.scrollBottom();
   }
 
@@ -1349,6 +1399,20 @@ export class ChatPanel {
     card.append(header, resultEl);
     this.currentBubble!.appendChild(card);
     this.pendingToolCards.set(tool.id, card);
+    this.scrollBottom();
+  }
+
+  private handleToolProgress(tool: AgentEvent['tool']): void {
+    if (!tool) return;
+    const card = this.pendingToolCards.get(tool.id);
+    if (!card) return;
+
+    const resultEl = card.querySelector('.msg-tool-result') as HTMLElement;
+    if (resultEl && tool.output) {
+      resultEl.textContent += tool.output;
+      // Auto-expand so user sees the streaming output
+      card.classList.add('tool-expanded');
+    }
     this.scrollBottom();
   }
 
@@ -1700,6 +1764,10 @@ export class ChatPanel {
 }
 
 // ── Static helpers ──
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 function truncateArgs(args: string, max = 60): string {
   if (args.length <= max) return args;
