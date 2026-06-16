@@ -259,6 +259,16 @@ const icons: Record<string, IconDef> = {
     label: '热点',
     path: '<path d="M9 2 C6 6 4 8 4 11.5 A5 5 0 0 0 9 16.5 A5 5 0 0 0 14 11.5 C14 8 12 6 9 2 Z"/>',
   },
+
+  // ── Permissions ──
+  shield: {
+    label: '权限',
+    path: '<path d="M9 2 L4 4.5 L4 10 C4 13.5 6.5 16.5 9 17 C11.5 16.5 14 13.5 14 10 L14 4.5 Z"/>',
+  },
+  trash: {
+    label: '删除',
+    path: '<polyline points="4,6 5,6 14,6"/><path d="M6,6 L6,15 L12,15 L12,6"/><line x1="8" y1="9" x2="8" y2="12"/><line x1="10" y1="9" x2="10" y2="12"/>',
+  },
 };
 
 /**

@@ -53,11 +53,32 @@ static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
 
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
+/// Cached bash availability on Windows — detected once, avoids blocking every shell call.
+static HAS_BASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn has_bash() -> bool {
+    *HAS_BASH.get_or_init(|| {
+        std::process::Command::new("bash")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
 fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
     let mut child = if cfg!(target_os = "windows") {
-        let mut c = silent_command("cmd");
-        c.arg("/c").arg(cmd_escape(cmd));
-        c
+        if has_bash() {
+            let mut c = silent_command("bash");
+            c.arg("-c").arg(cmd);
+            c
+        } else {
+            let mut c = silent_command("cmd");
+            c.arg("/c").arg(cmd_escape(cmd));
+            c
+        }
     } else {
         let mut c = silent_command("sh");
         c.arg("-c").arg(sh_escape(cmd));
@@ -622,17 +643,8 @@ async fn exec_command(
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000)); // default 5 min
 
     let mut child = if cfg!(target_os = "windows") {
-        // Prefer Git Bash (supports Unix commands like ls, grep, python),
-        // fall back to cmd.exe if bash is not on PATH.
-        let use_bash = std::process::Command::new("bash")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if use_bash {
+        // Cached bash detection — avoids blocking the async runtime on every call
+        if has_bash() {
             let mut c = silent_command("bash");
             c.arg("-c").arg(&command);
             c

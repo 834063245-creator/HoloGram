@@ -11,7 +11,7 @@ import { bus } from './events';
 
 const PANEL_ID = 'settings-panel';
 
-type Tab = 'provider' | 'agent' | 'display';
+type Tab = 'provider' | 'agent' | 'display' | 'permissions';
 
 export class SettingsPanel {
   private overlay!: HTMLElement;
@@ -110,6 +110,9 @@ export class SettingsPanel {
         <button class="sp-tab ${this.activeTab === 'display' ? 'active' : ''}" data-tab="display">
           ${iconHtml('mode-standard', 11)} 显示
         </button>
+        <button class="sp-tab ${this.activeTab === 'permissions' ? 'active' : ''}" data-tab="permissions">
+          ${iconHtml('shield', 11)} 权限
+        </button>
       </div>
 
       <!-- Content -->
@@ -117,6 +120,7 @@ export class SettingsPanel {
         ${this.renderProviderTab(active)}
         ${this.renderAgentTab(s.agent)}
         ${this.renderDisplayTab(s.display.defaultViewMode, s.display.language)}
+        ${this.renderPermissionsTab()}
       </div>
 
       <!-- Footer -->
@@ -214,9 +218,9 @@ export class SettingsPanel {
             </div>
           </div>
           <div class="sp-field">
-            <label class="sp-label">最大工具轮次</label>
+            <label class="sp-label">最大工具轮次 <span class="sp-hint-sub">安全上限，正常对话不会触及</span></label>
             <input type="number" class="sp-input sp-input-num" data-field="maxSteps"
-                   value="${agent.maxSteps || 10}" min="1" max="50">
+                   value="${agent.maxSteps || 50}" min="1" max="200">
           </div>
           <div class="sp-field">
             <label class="sp-label">上下文窗口（0=不限制）</label>
@@ -276,6 +280,88 @@ export class SettingsPanel {
       </div>`;
   }
 
+  private renderPermissionsTab(): string {
+    const perms = this.workingSettings.permissions || { allow: [], deny: [] };
+    const defaultMode = perms.defaultMode || 'ask';
+    const allow = perms.allow || [];
+    const deny = perms.deny || [];
+
+    // Build rule rows
+    let allowRows = '';
+    for (let i = 0; i < allow.length; i++) {
+      const parsed = parseRuleString(allow[i]);
+      allowRows += `
+        <div class="sp-perm-row">
+          <span class="sp-perm-icon sp-perm-allow">${iconHtml('check-circle', 12)}</span>
+          <span class="sp-perm-tool">${escapeHtml(parsed.tool)}</span>
+          <span class="sp-perm-subject">${escapeHtml(parsed.subject || '*')}</span>
+          <button class="sp-perm-del" data-list="allow" data-idx="${i}" title="删除">${iconHtml('trash', 12)}</button>
+        </div>`;
+    }
+    let denyRows = '';
+    for (let i = 0; i < deny.length; i++) {
+      const parsed = parseRuleString(deny[i]);
+      denyRows += `
+        <div class="sp-perm-row">
+          <span class="sp-perm-icon sp-perm-deny">${iconHtml('block', 12)}</span>
+          <span class="sp-perm-tool">${escapeHtml(parsed.tool)}</span>
+          <span class="sp-perm-subject">${escapeHtml(parsed.subject || '*')}</span>
+          <button class="sp-perm-del" data-list="deny" data-idx="${i}" title="删除">${iconHtml('trash', 12)}</button>
+        </div>`;
+    }
+
+    const emptyMsg = (!allow.length && !deny.length)
+      ? '<div class="sp-perm-empty">暂无规则。Agent 运行中通过"记住"按钮添加，或手动添加。</div>'
+      : '';
+
+    const dm = defaultMode;
+    const modeRadios = ['allow', 'ask', 'deny'].map(m => {
+      const checked = m === dm ? 'checked' : '';
+      const labels: Record<string, string> = { allow: '宽松 — 未列出的工具直接放行', ask: '询问 — 未列出的工具弹窗确认', deny: '严格 — 未列出的工具全部拒绝' };
+      return `<label class="sp-radio sp-perm-mode-radio">
+        <input type="radio" name="permDefaultMode" value="${m}" ${checked}>
+        <span class="sp-radio-label">${labels[m]}</span>
+      </label>`;
+    }).join('');
+
+    return `
+      <div class="sp-tab-content" data-tab="permissions" style="${this.activeTab === 'permissions' ? '' : 'display:none'}">
+        <div class="sp-section">
+          <div class="sp-section-title">默认模式 — 未匹配规则的工具体验</div>
+          <div class="sp-radio-group sp-perm-mode-group">${modeRadios}</div>
+        </div>
+
+        <div class="sp-section">
+          <div class="sp-section-title">规则列表</div>
+          <div class="sp-perm-list">
+            <div class="sp-perm-header">
+              <span class="sp-perm-th"></span>
+              <span class="sp-perm-th">工具</span>
+              <span class="sp-perm-th">范围</span>
+              <span class="sp-perm-th"></span>
+            </div>
+            ${allowRows}${denyRows}${emptyMsg}
+          </div>
+        </div>
+
+        <div class="sp-section">
+          <div class="sp-section-title">添加规则</div>
+          <div class="sp-perm-add-row">
+            <input type="text" class="sp-input sp-perm-add-tool" placeholder="工具名 (如 Bash, Write)" style="flex:1">
+            <select class="sp-select sp-perm-add-mode" style="width:90px">
+              <option value="allow">允许</option>
+              <option value="deny">拒绝</option>
+            </select>
+            <input type="text" class="sp-input sp-perm-add-subject" placeholder="范围 (可选, 如 *.env)" style="flex:1.2">
+            <button class="sp-btn sp-btn-add-rule">${iconHtml('plus', 11)} 添加</button>
+          </div>
+          <div class="sp-hint">
+            范围留空 = 匹配该工具的所有调用。支持通配符 <code>*</code>，如 <code>*.env</code> <code>src/**</code>。
+          </div>
+        </div>
+      </div>`;
+  }
+
   // ── Events ──
 
   private wireEvents(): void {
@@ -328,6 +414,65 @@ export class SettingsPanel {
         if (label) label.textContent = val.toFixed(1);
       });
     }
+
+    // ── Permission events ──
+    this.wirePermissionEvents();
+  }
+
+  private wirePermissionEvents(): void {
+    // Delete rule button (use event delegation — they get recreated on render)
+    this.panel.querySelectorAll('.sp-perm-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const list = (btn as HTMLElement).dataset['list'] as 'allow' | 'deny';
+        const idx = parseInt((btn as HTMLElement).dataset['idx'] || '');
+        if (!list || isNaN(idx)) return;
+        const perms = this.workingSettings.permissions || { allow: [], deny: [] };
+        const arr = perms[list] || [];
+        arr.splice(idx, 1);
+        perms[list] = arr;
+        this.workingSettings.permissions = perms;
+        this.dirty = true;
+        this.render();
+        this.wireEvents();
+      });
+    });
+
+    // Add rule button
+    this.panel.querySelector('.sp-btn-add-rule')?.addEventListener('click', () => {
+      const toolEl = this.panel.querySelector('.sp-perm-add-tool') as HTMLInputElement;
+      const modeEl = this.panel.querySelector('.sp-perm-add-mode') as HTMLSelectElement;
+      const subjectEl = this.panel.querySelector('.sp-perm-add-subject') as HTMLInputElement;
+      const tool = toolEl?.value.trim();
+      if (!tool) return;
+      const mode = modeEl?.value || 'allow';
+      const subject = subjectEl?.value.trim() || '';
+      const ruleStr = subject ? `${tool}(${subject})` : tool;
+
+      const perms = this.workingSettings.permissions || { allow: [], deny: [] };
+      if (!perms[mode as 'allow' | 'deny']) perms[mode as 'allow' | 'deny'] = [];
+      const arr = perms[mode as 'allow' | 'deny']!;
+      if (!arr.includes(ruleStr)) arr.push(ruleStr);
+      // Remove from opposite list to avoid conflicts
+      const opposite = mode === 'allow' ? 'deny' : 'allow';
+      if (perms[opposite]) {
+        perms[opposite] = perms[opposite]!.filter(r => r !== ruleStr);
+      }
+      this.workingSettings.permissions = perms;
+      this.dirty = true;
+      this.render();
+      this.wireEvents();
+    });
+
+    // Default mode radio
+    this.panel.querySelectorAll('input[name="permDefaultMode"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const val = (radio as HTMLInputElement).value as 'allow' | 'ask' | 'deny';
+        const perms = this.workingSettings.permissions || { allow: [], deny: [] };
+        perms.defaultMode = val;
+        this.workingSettings.permissions = perms;
+        this.dirty = true;
+      });
+    });
   }
 
   private switchTab(tab: Tab): void {
@@ -410,4 +555,18 @@ export class SettingsPanel {
 
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Parse "tool" or "tool(subject)" into { tool, subject } */
+function parseRuleString(raw: string): { tool: string; subject: string } {
+  const trimmed = raw.trim();
+  const i = trimmed.indexOf('(');
+  if (i >= 0 && trimmed.endsWith(')')) {
+    return { tool: trimmed.slice(0, i).trim(), subject: trimmed.slice(i + 1, -1) };
+  }
+  return { tool: trimmed, subject: '' };
 }

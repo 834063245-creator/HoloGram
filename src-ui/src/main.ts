@@ -435,7 +435,8 @@ async function setupAgentInner(): Promise<void> {
   const agentOpts = settings.agent || {};
 
   // ── Permission gate ──
-  const perm = new PermissionPolicy('ask');
+  const defaultMode = settings.permissions?.defaultMode || 'ask';
+  const perm = new PermissionPolicy(defaultMode);
   if (settings.permissions) {
     perm.importRules(settings.permissions);
   }
@@ -568,6 +569,7 @@ function buildSystemPrompt(memorySection = ''): string {
 ### 日常查询
 | 用户问 | 用这个工具 |
 |--------|----------|
+| "分析 / 重新分析这个项目" | \`hologram_analyze\` — 跑全量分析，生成完整依赖图 |
 | 找 "auth" / "parse" / "config" 相关的东西 | \`hologram_search\` — 模糊搜索节点（不用知道精确 ID） |
 | "XXX 是什么？连了哪些东西？" | \`hologram_neighbors\` 查邻居 |
 | "改 XXX 会炸吗？" | \`hologram_impact\` 追踪波及范围 |
@@ -608,6 +610,7 @@ function buildSystemPrompt(memorySection = ''): string {
 |--------|----------|
 | "帮我写个新文件" | \`write_file\` — 创建或覆盖整个文件 |
 | "帮我改 XX 文件的某处" | \`edit_file\` — 精确字符串替换（推荐：安全、省 token） |
+| "把 XXX 重命名为 YYY" | \`hologram_rename\` — 基于依赖图的全局重命名（先用 dry_run=true 预览） |
 | "跑一下测试/build/安装依赖" | \`run_shell\` — 执行 shell 命令（支持超时 + 后台运行） |
 | "后台任务怎么样了/停了它" | \`bash_output\` / \`bash_kill\` — 查看/终止后台任务 |
 | "Git 状态/提交/推送/拉取" | \`git_status\` / \`git_commit\` / \`git_push\` / \`git_pull\` |

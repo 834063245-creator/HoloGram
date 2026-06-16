@@ -84,7 +84,7 @@ export interface AgentOptions {
   gate?: PermissionGate;
 }
 
-const DEFAULT_MAX_STEPS = 10;
+const DEFAULT_MAX_STEPS = 50;
 const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
 const STORM_BREAK_THRESHOLD = 3;
 

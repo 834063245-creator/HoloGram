@@ -27,7 +27,7 @@ export interface AppSettings {
   projectPath: string;
   agent: AgentSettings;
   display: DisplaySettings;
-  permissions?: { allow?: string[]; deny?: string[] };
+  permissions?: { defaultMode?: 'allow' | 'ask' | 'deny'; allow?: string[]; deny?: string[] };
 }
 
 const STORAGE_KEY = 'hologram_settings';
@@ -54,7 +54,7 @@ const DEFAULTS: AppSettings = {
   projectPath: '.',
   agent: {
     temperature: 0.7,
-    maxSteps: 10,
+    maxSteps: 50,
     contextWindow: 0,
   },
   display: {

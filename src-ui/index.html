@@ -2700,6 +2700,78 @@
     }
     .sp-hint a:hover { color: var(--signal); }
 
+    /* ── Permissions Tab ── */
+    .sp-perm-mode-group { gap: 4px; }
+    .sp-perm-mode-radio { padding: 5px 10px; }
+    .sp-perm-list {
+      display: flex; flex-direction: column;
+      max-height: 200px; overflow-y: auto;
+      border: 1px solid rgba(40, 60, 100, 0.15);
+      border-radius: 3px;
+    }
+    .sp-perm-header, .sp-perm-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 8px; font-size: 9px;
+    }
+    .sp-perm-header {
+      color: rgba(105, 145, 200, 0.35);
+      border-bottom: 1px solid rgba(40, 60, 100, 0.12);
+      font-weight: 600; font-size: 8px; letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 4px 8px;
+    }
+    .sp-perm-row {
+      border-bottom: 1px solid rgba(40, 60, 100, 0.06);
+      transition: background var(--snap);
+    }
+    .sp-perm-row:hover { background: rgba(15, 25, 42, 0.35); }
+    .sp-perm-row:last-child { border-bottom: none; }
+    .sp-perm-th:nth-child(1), .sp-perm-icon { width: 16px; flex-shrink: 0; }
+    .sp-perm-th:nth-child(2), .sp-perm-tool {
+      flex: 1; font-family: var(--font-mono); font-size: 9px;
+      color: var(--starlight-dim);
+    }
+    .sp-perm-th:nth-child(3), .sp-perm-subject {
+      flex: 1.2; font-family: var(--font-mono); font-size: 9px;
+      color: rgba(145, 185, 230, 0.45);
+    }
+    .sp-perm-th:nth-child(4), .sp-perm-row .sp-perm-del { width: 24px; flex-shrink: 0; }
+    .sp-perm-allow { color: var(--pass); }
+    .sp-perm-deny { color: var(--fail); }
+    .sp-perm-del {
+      background: none; border: none; cursor: pointer; padding: 2px;
+      color: rgba(145, 180, 225, 0.2); border-radius: 2px;
+      transition: all var(--snap);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .sp-perm-del:hover { color: var(--fail); background: rgba(220, 60, 60, 0.08); }
+    .sp-perm-empty {
+      padding: 16px 12px; text-align: center;
+      font-size: 9px; color: rgba(105, 145, 200, 0.3);
+      line-height: 1.5;
+    }
+    .sp-perm-add-row {
+      display: flex; gap: 6px; align-items: center;
+    }
+    .sp-btn-add-rule {
+      background: rgba(25, 45, 80, 0.4); color: var(--signal);
+      border: 1px solid rgba(60, 100, 170, 0.2);
+      font-size: 8px; padding: 6px 12px; white-space: nowrap;
+    }
+    .sp-btn-add-rule:hover {
+      background: rgba(35, 60, 110, 0.5);
+      box-shadow: 0 0 8px rgba(50, 100, 180, 0.1);
+    }
+    .sp-hint-sub {
+      font-weight: 400; font-size: 8px; color: rgba(105, 145, 200, 0.3);
+      margin-left: 4px;
+    }
+    .sp-hint code {
+      font-family: var(--font-mono); font-size: 8px;
+      background: rgba(15, 25, 42, 0.5); padding: 1px 4px; border-radius: 2px;
+      color: rgba(145, 200, 255, 0.5);
+    }
+
     /* Footer */
     .sp-footer {
       display: flex; justify-content: flex-end; gap: 8px;
