@@ -1426,6 +1426,8 @@ async function init(): Promise<void> {
     runCheck();
     timelinePanel.setProjectPath(currentPath);
     hotspotsPanel.setProjectPath(currentPath);
+    // Notify file tree to refresh (debounced in FileTreePanel)
+    bus.emit('workspace:files-changed', {});
   }
 
   // Try cached graph (A3: msgpack first, JSON fallback)

@@ -670,24 +670,40 @@ impl McpServer {
         if before_path.is_empty() {
             return McpServer::error_response(id, -32602, "before_path is required");
         }
-        // Load baseline graph from Python-format JSON file
-        let before = match Graph::from_json_file(before_path) {
-            Ok(g) => g,
-            Err(e) => return McpServer::error_response(id, -32000, &e),
-        };
         self.with_graph(id, |after| {
+            // Try to load baseline — auto-create if missing
+            let before = match Graph::from_json_file(before_path) {
+                Ok(g) => g,
+                Err(_) => {
+                    // Baseline doesn't exist yet — save current as baseline
+                    let graph_json = serde_json::to_string_pretty(after).unwrap_or_default();
+                    if let Err(e) = std::fs::write(before_path, &graph_json) {
+                        return json!({"error": format!("无法创建基线: {}", e)});
+                    }
+                    return json!({
+                        "is_empty": true,
+                        "message": "已创建变更基线，再次运行即可比较差异",
+                        "baseline_path": before_path,
+                    });
+                }
+            };
             let diff = after.diff(&before);
+            let added_nodes: Vec<_> = diff.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
+            let removed_nodes: Vec<_> = diff.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
+            let modified_nodes: Vec<_> = diff.modified_nodes.iter().map(|(old, new)| json!({
+                "node_id": new.id,
+                "name": new.name,
+                "old_kind": old.kind.as_str(),
+                "new_kind": new.kind.as_str(),
+            })).collect();
+            let is_empty = added_nodes.is_empty() && removed_nodes.is_empty() && modified_nodes.is_empty();
             json!({
-                "added_nodes": diff.added_nodes.len(),
-                "removed_nodes": diff.removed_nodes.len(),
+                "is_empty": is_empty,
+                "added_nodes": added_nodes,
+                "removed_nodes": removed_nodes,
+                "modified_nodes": modified_nodes,
                 "added_edges": diff.added_edges.len(),
                 "removed_edges": diff.removed_edges.len(),
-                "modified_nodes": diff.modified_nodes.iter().map(|(old, new)| json!({
-                    "node_id": new.id,
-                    "name": new.name,
-                    "old_kind": old.kind.as_str(),
-                    "new_kind": new.kind.as_str(),
-                })).collect::<Vec<_>>(),
             })
         })
     }

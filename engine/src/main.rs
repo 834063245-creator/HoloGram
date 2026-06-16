@@ -110,11 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!(found.map(|c| c.iter().take(50).collect::<Vec<_>>()))
             })
         } else if request.starts_with("diff:") {
-            handle_simple("diff:", request.trim(), |g, _a| {
-                let before = Graph::new(); // placeholder: load from file
-                let d = g.diff(&before);
-                json!({"added":d.added_nodes.len(),"removed":d.removed_nodes.len(),"modified":d.modified_nodes.len()})
-            })
+            let baseline_path = request.trim().strip_prefix("diff:").unwrap_or("").trim().to_string();
+            handle_diff(&baseline_path)
         } else if request.starts_with("history:") {
             handle_simple("history:", request.trim(), |g, a| {
                 g.get_node(a).map(|n| json!({"id":n.id,"name":n.name,"type":n.kind.as_str(),"out_degree":n.out_degree,"in_degree":n.in_degree}))
@@ -301,6 +298,54 @@ fn handle_simple(prefix: &str, request: &str, f: fn(&Graph, &str) -> serde_json:
     match cache.as_ref() {
         Some(g) => serde_json::to_vec(&f(g, arg)).unwrap_or_default(),
         None => b"{\"error\":\"no graph loaded\"}".to_vec(),
+    }
+}
+
+fn handle_diff(baseline_path: &str) -> Vec<u8> {
+    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
+    let current = match cache.as_ref() {
+        Some(g) => g,
+        None => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
+    };
+
+    let baseline_path = if baseline_path.is_empty() {
+        "hologram_before.json".to_string()
+    } else {
+        baseline_path.to_string()
+    };
+
+    // Try to load baseline
+    match Graph::from_json_file(&baseline_path) {
+        Ok(baseline) => {
+            let d = current.diff(&baseline);
+            let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
+            let removed_nodes: Vec<_> = d.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
+            let modified_nodes: Vec<_> = d.modified_nodes.iter().map(|(old, new)| json!({
+                "node_id": new.id, "name": new.name,
+                "old_kind": old.kind.as_str(), "new_kind": new.kind.as_str(),
+            })).collect();
+            let is_empty = added_nodes.is_empty() && removed_nodes.is_empty() && modified_nodes.is_empty();
+            serde_json::to_vec(&json!({
+                "is_empty": is_empty,
+                "added_nodes": added_nodes,
+                "removed_nodes": removed_nodes,
+                "modified_nodes": modified_nodes,
+                "added_edges": d.added_edges.len(),
+                "removed_edges": d.removed_edges.len(),
+            })).unwrap_or_default()
+        }
+        Err(_) => {
+            // Baseline doesn't exist yet — save current graph as baseline
+            let graph_json = serde_json::to_string_pretty(current).unwrap_or_default();
+            if let Err(e) = std::fs::write(&baseline_path, &graph_json) {
+                return serde_json::to_vec(&json!({"error": format!("无法创建基线: {}", e)})).unwrap_or_default();
+            }
+            serde_json::to_vec(&json!({
+                "is_empty": true,
+                "message": "已创建变更基线，再次点击变更即可比较差异",
+                "baseline_path": baseline_path,
+            })).unwrap_or_default()
+        }
     }
 }
 
