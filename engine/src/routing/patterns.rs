@@ -62,3 +62,81 @@ impl PatternMatcher {
     pub fn matches_sort_filter_function(&self, name: &str) -> bool { self.sort_filter_funcs.iter().any(|r| r.is_match(name)) }
     pub fn matches_rhythm_variable(&self, name: &str) -> bool { self.rhythm_vars.iter().any(|r| r.is_match(name)) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_migration_file_detection() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.is_migration_file("migrations/0001_init.py"));
+        assert!(matcher.is_migration_file("alembic/versions/abc.py"));
+        assert!(matcher.is_migration_file("001_init.sql"));
+        assert!(!matcher.is_migration_file("src/main.py"));
+    }
+
+    #[test]
+    fn test_serialization_file_detection() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.is_serialization_file("schema.proto"));
+        assert!(matcher.is_serialization_file("data.fbs"));
+        assert!(!matcher.is_serialization_file("main.rs"));
+    }
+
+    #[test]
+    fn test_config_file_detection() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.is_config_file("config.yaml"));
+        assert!(matcher.is_config_file("settings.toml"));
+        assert!(matcher.is_config_file(".env"));
+        assert!(matcher.is_config_file("settings.py"));
+        assert!(!matcher.is_config_file("main.py"));
+    }
+
+    #[test]
+    fn test_doc_or_test_detection() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.is_doc_or_test_file("test_main.py"));
+        assert!(matcher.is_doc_or_test_file("main_test.rs"));
+        assert!(matcher.is_doc_or_test_file("tests/unit.py"));
+        assert!(matcher.is_doc_or_test_file("readme.md"));
+        assert!(matcher.is_doc_or_test_file("diagram.png"));
+        assert!(!matcher.is_doc_or_test_file("src/handler.py"));
+    }
+
+    #[test]
+    fn test_threshold_variable() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.matches_threshold_variable("timeout_secs"));
+        assert!(matcher.matches_threshold_variable("MAX_RETRIES"));
+        assert!(matcher.matches_threshold_variable("rate_limit"));
+        assert!(!matcher.matches_threshold_variable("user_name"));
+    }
+
+    #[test]
+    fn test_llm_prompt_variable() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.matches_llm_prompt_variable("system_prompt"));
+        assert!(matcher.matches_llm_prompt_variable("few_shot_examples"));
+        assert!(!matcher.matches_llm_prompt_variable("file_path"));
+    }
+
+    #[test]
+    fn test_sort_filter_function() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.matches_sort_filter_function("sort_by_date"));
+        assert!(matcher.matches_sort_filter_function("filter_results"));
+        assert!(matcher.matches_sort_filter_function("priority_queue"));
+        assert!(!matcher.matches_sort_filter_function("add_numbers"));
+    }
+
+    #[test]
+    fn test_rhythm_variable() {
+        let matcher = PatternMatcher::new();
+        assert!(matcher.matches_rhythm_variable("cron_expression"));
+        assert!(matcher.matches_rhythm_variable("schedule_task"));
+        assert!(matcher.matches_rhythm_variable("tick_interval"));
+        assert!(!matcher.matches_rhythm_variable("random_value"));
+    }
+}

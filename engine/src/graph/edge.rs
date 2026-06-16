@@ -85,3 +85,93 @@ impl Edge {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edge_new_defaults() {
+        let e = Edge::new("e1", "a", "b", EdgeKind::Calls);
+        assert_eq!(e.id, "e1");
+        assert_eq!(e.source, "a");
+        assert_eq!(e.target, "b");
+        assert!(matches!(e.kind, EdgeKind::Calls));
+        assert_eq!(e.coupling_depth, 0);
+        assert!(!e.cross_file);
+        assert_eq!(e.direction, "forward");
+        assert!(e.temporal_delay_sec.is_none());
+        assert!(e.medium_node_id.is_none());
+    }
+
+    #[test]
+    fn test_edge_kind_as_str() {
+        assert_eq!(EdgeKind::Imports.as_str(), "imports");
+        assert_eq!(EdgeKind::Calls.as_str(), "calls");
+        assert_eq!(EdgeKind::Inherits.as_str(), "inherits");
+        assert_eq!(EdgeKind::Defines.as_str(), "defines");
+        assert_eq!(EdgeKind::Reads.as_str(), "reads");
+        assert_eq!(EdgeKind::Writes.as_str(), "writes");
+        assert_eq!(EdgeKind::Shares.as_str(), "shares");
+        assert_eq!(EdgeKind::Triggers.as_str(), "triggers");
+        assert_eq!(EdgeKind::Awaits.as_str(), "awaits");
+        assert_eq!(EdgeKind::Sequences.as_str(), "sequences");
+    }
+
+    #[test]
+    fn test_all_edge_kinds_covered() {
+        // All 10 edge kinds should have distinct string representations
+        let all = [
+            EdgeKind::Imports, EdgeKind::Calls, EdgeKind::Inherits,
+            EdgeKind::Defines, EdgeKind::Reads, EdgeKind::Writes,
+            EdgeKind::Shares, EdgeKind::Triggers, EdgeKind::Awaits,
+            EdgeKind::Sequences,
+        ];
+        let strs: Vec<&str> = all.iter().map(|k| k.as_str()).collect();
+        // All unique
+        let mut sorted = strs.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 10, "all edge kinds must have unique strings");
+    }
+
+    #[test]
+    fn test_edge_with_coupling_depth() {
+        let mut e = Edge::new("e1", "a", "b", EdgeKind::Writes);
+        e.coupling_depth = 4;
+        assert_eq!(e.coupling_depth, 4);
+    }
+
+    #[test]
+    fn test_edge_cross_file() {
+        let mut e = Edge::new("e1", "a", "b", EdgeKind::Imports);
+        e.cross_file = true;
+        assert!(e.cross_file);
+    }
+
+    #[test]
+    fn test_edge_temporal_delay() {
+        let mut e = Edge::new("e1", "a", "b", EdgeKind::Triggers);
+        e.temporal_delay_sec = Some(0.5);
+        assert_eq!(e.temporal_delay_sec, Some(0.5));
+    }
+
+    #[test]
+    fn test_edge_serde_roundtrip() {
+        let mut e = Edge::new("e1", "src/a.rs", "src/b.rs", EdgeKind::Imports);
+        e.coupling_depth = 2;
+        e.cross_file = true;
+        e.temporal_delay_sec = Some(1.5);
+        e.medium_node_id = Some("medium_1".into());
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "e1");
+        assert_eq!(back.source, "src/a.rs");
+        assert_eq!(back.target, "src/b.rs");
+        assert!(matches!(back.kind, EdgeKind::Imports));
+        assert_eq!(back.coupling_depth, 2);
+        assert!(back.cross_file);
+        assert_eq!(back.temporal_delay_sec, Some(1.5));
+        assert_eq!(back.medium_node_id.as_deref(), Some("medium_1"));
+    }
+}

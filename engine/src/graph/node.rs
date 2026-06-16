@@ -67,3 +67,86 @@ impl Node {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_new_defaults() {
+        let n = Node::new("n1", "main", NodeKind::Symbol);
+        assert_eq!(n.id, "n1");
+        assert_eq!(n.name, "main");
+        assert!(matches!(n.kind, NodeKind::Symbol));
+        assert!(n.location.is_none());
+        assert_eq!(n.out_degree, 0);
+        assert_eq!(n.in_degree, 0);
+        assert!(n.position.is_none());
+        assert!(n.community_id.is_none());
+    }
+
+    #[test]
+    fn test_node_with_location() {
+        let mut n = Node::new("n1", "main", NodeKind::Symbol);
+        n.location = Some("src/main.rs".into());
+        assert_eq!(n.location.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn test_node_kind_as_str() {
+        assert_eq!(NodeKind::Symbol.as_str(), "symbol");
+        assert_eq!(NodeKind::Medium.as_str(), "medium");
+        assert_eq!(NodeKind::Temporal.as_str(), "temporal");
+    }
+
+    #[test]
+    fn test_loc_key_with_location() {
+        let mut n = Node::new("n1", "handle_request", NodeKind::Symbol);
+        n.location = Some("src/handlers.py".into());
+        assert_eq!(n.loc_key(), "src/handlers.py::handle_request::symbol");
+    }
+
+    #[test]
+    fn test_loc_key_without_location() {
+        let n = Node::new("n1", "global_var", NodeKind::Symbol);
+        assert_eq!(n.loc_key(), "::global_var::symbol");
+    }
+
+    #[test]
+    fn test_loc_key_different_kinds() {
+        let mut sym = Node::new("s1", "db", NodeKind::Medium);
+        sym.location = Some("store.rs".into());
+        assert_eq!(sym.loc_key(), "store.rs::db::medium");
+
+        let mut tmp = Node::new("t1", "timer", NodeKind::Temporal);
+        tmp.location = Some("scheduler.rs".into());
+        assert_eq!(tmp.loc_key(), "scheduler.rs::timer::temporal");
+    }
+
+    #[test]
+    fn test_loc_key_deduplication_same_loc_name_kind() {
+        let mut a = Node::new("id_a", "fn", NodeKind::Symbol);
+        a.location = Some("lib.rs".into());
+        let mut b = Node::new("id_b", "fn", NodeKind::Symbol);
+        b.location = Some("lib.rs".into());
+        assert_eq!(a.loc_key(), b.loc_key(), "same loc+name+kind should produce same key");
+    }
+
+    #[test]
+    fn test_node_serde_roundtrip() {
+        let mut n = Node::new("n1", "test_fn", NodeKind::Symbol);
+        n.location = Some("src/test.rs:42".into());
+        n.out_degree = 3;
+        n.in_degree = 1;
+        n.community_id = Some(0);
+        let json = serde_json::to_string(&n).unwrap();
+        let back: Node = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "n1");
+        assert_eq!(back.name, "test_fn");
+        assert!(matches!(back.kind, NodeKind::Symbol));
+        assert_eq!(back.location.as_deref(), Some("src/test.rs:42"));
+        assert_eq!(back.out_degree, 3);
+        assert_eq!(back.in_degree, 1);
+        assert_eq!(back.community_id, Some(0));
+    }
+}

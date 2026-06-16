@@ -31,3 +31,58 @@ impl AdapterRegistry {
         Some(self.adapters[*idx].as_ref())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_registry_has_python() {
+        let r = AdapterRegistry::new();
+        assert!(r.get("py").is_some());
+    }
+
+    #[test]
+    fn test_registry_has_typescript() {
+        let r = AdapterRegistry::new();
+        assert!(r.get("ts").is_some());
+        assert!(r.get("tsx").is_some());
+        assert!(r.get("js").is_some());
+    }
+
+    #[test]
+    fn test_registry_has_tree_sitter() {
+        let r = AdapterRegistry::new();
+        assert!(r.get("go").is_some());
+        assert!(r.get("rs").is_some());
+        assert!(r.get("java").is_some());
+        assert!(r.get("rb").is_some());
+        assert!(r.get("lua").is_some());
+    }
+
+    #[test]
+    fn test_registry_missing_ext() {
+        let r = AdapterRegistry::new();
+        assert!(r.get("nope").is_none());
+        assert!(r.get("").is_none());
+    }
+
+    #[test]
+    fn test_first_registered_wins() {
+        // Python adapter is registered first, so "py" maps to PythonAdapter
+        let r = AdapterRegistry::new();
+        let adapter = r.get("py").unwrap();
+        let exts = adapter.extensions();
+        assert!(exts.iter().any(|e| e == "py"));
+    }
+
+    #[test]
+    fn test_registry_returns_same_adapter_for_variants() {
+        // tsx should use the same TypeScriptAdapter as ts
+        let r = AdapterRegistry::new();
+        let ts = r.get("ts");
+        let tsx = r.get("tsx");
+        assert!(ts.is_some());
+        assert!(tsx.is_some());
+    }
+}

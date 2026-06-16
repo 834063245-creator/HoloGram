@@ -107,3 +107,83 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
     }
     (nodes, edges)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_adapter_extensions() {
+        let a = TreeSitterAdapter::new();
+        let exts = a.extensions();
+        assert!(exts.contains(&"go".to_string()));
+        assert!(exts.contains(&"rs".to_string()));
+        assert!(exts.contains(&"java".to_string()));
+        assert!(exts.contains(&"cpp".to_string()));
+        assert!(exts.contains(&"rb".to_string()));
+        assert!(exts.contains(&"lua".to_string()));
+    }
+
+    #[test]
+    fn test_analyze_go_function() {
+        let a = TreeSitterAdapter;
+        let src = r#"
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hello")
+}
+"#;
+        let (nodes, edges) = a.analyze("main.go", src);
+        // Should find at least the module node + main function
+        assert!(nodes.len() >= 2, "expected module + at least one function");
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"main"), "should find main function");
+    }
+
+    #[test]
+    fn test_analyze_rust_function() {
+        let a = TreeSitterAdapter;
+        let src = r#"
+fn hello() {
+    println!("hello");
+}
+
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+"#;
+        let (nodes, edges) = a.analyze("main.rs", src);
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"hello"));
+        assert!(names.contains(&"add"));
+    }
+
+    #[test]
+    fn test_analyze_unknown_extension() {
+        let a = TreeSitterAdapter;
+        let (nodes, _edges) = a.analyze("main.xyz", "content");
+        assert!(nodes.is_empty(), "unknown extension should return empty");
+    }
+
+    #[test]
+    fn test_analyze_empty_source() {
+        let a = TreeSitterAdapter;
+        let (nodes, edges) = a.analyze("main.go", "");
+        // Should have the module node at minimum
+        assert!(nodes.len() >= 1, "should have at least module node");
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_analyze_modules_have_unique_ids() {
+        let a = TreeSitterAdapter;
+        let (nodes1, _) = a.analyze("src/a.go", "package a");
+        let (nodes2, _) = a.analyze("src/b.go", "package b");
+        let id1 = &nodes1[0].id;
+        let id2 = &nodes2[0].id;
+        assert_ne!(id1, id2, "different files should have different module IDs");
+    }
+}
