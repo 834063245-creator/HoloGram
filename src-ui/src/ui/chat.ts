@@ -88,16 +88,16 @@ export class ChatPanel {
       if (e.target === this.inputArea) return;
       if (e.key === 'Escape') {
         e.preventDefault();
-        resolveApproval(this.activePermId, { allow: false, remember: false });
-        this.activePermId = null;
+        e.stopPropagation();
+        this.resolvePermCard({ allow: false, remember: false });
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        resolveApproval(this.activePermId, { allow: true, remember: false });
-        this.activePermId = null;
+        e.stopPropagation();
+        this.resolvePermCard({ allow: true, remember: false });
       } else if (e.key === 'y' && e.ctrlKey) {
         e.preventDefault();
-        resolveApproval(this.activePermId, { allow: true, remember: true });
-        this.activePermId = null;
+        e.stopPropagation();
+        this.resolvePermCard({ allow: true, remember: true });
       }
     });
   }
@@ -149,6 +149,10 @@ export class ChatPanel {
     this.openState = false;
     this.panel.classList.remove('chat-open');
     if (this.running) this.abort();
+    // Dismiss any pending permission card (keyboard shortcut guard)
+    if (this.activePermId) {
+      this.resolvePermCard({ allow: false, remember: false });
+    }
     bus.emit('panel:toggle');
   }
 
@@ -1380,6 +1384,20 @@ export class ChatPanel {
 
   /** Currently active permission request ID (for keyboard shortcuts). */
   private activePermId: string | null = null;
+  /** Currently active permission card buttons (for DOM update on keyboard resolve). */
+  private activePermBtns: HTMLElement | null = null;
+
+  /** Unified resolve — called by both button clicks and keyboard shortcuts. */
+  private resolvePermCard(result: { allow: boolean; remember: boolean }): void {
+    if (!this.activePermId) return;
+    const id = this.activePermId;
+    this.activePermId = null;
+    resolveApproval(id, result);
+    if (this.activePermBtns) {
+      this.activePermBtns.innerHTML = `<span class="msg-perm-result">${result.allow ? (result.remember ? '✓ 已始终允许' : '✓ 已允许') : '✗ 已拒绝'}</span>`;
+      this.activePermBtns = null;
+    }
+  }
 
   private renderPermissionCard(req: { id: string; toolName: string; description: string; args: Record<string, unknown> }): void {
     // Auto-open the chat panel if closed (otherwise user can't see the prompt)
@@ -1409,19 +1427,13 @@ export class ChatPanel {
     // Button row
     const btns = document.createElement('div');
     btns.className = 'msg-perm-btns';
-
-    const resolve = (result: { allow: boolean; remember: boolean }) => {
-      if (this.activePermId !== req.id) return; // already resolved (e.g. via keyboard)
-      this.activePermId = null;
-      resolveApproval(req.id, result);
-      btns.innerHTML = `<span class="msg-perm-result">${result.allow ? (result.remember ? '✓ 已始终允许' : '✓ 已允许') : '✗ 已拒绝'}</span>`;
-    };
+    this.activePermBtns = btns;
 
     const makeBtn = (label: string, hint: string, cls: string, result: { allow: boolean; remember: boolean }) => {
       const btn = document.createElement('button');
       btn.className = `msg-perm-btn ${cls}`;
       btn.innerHTML = `${label} <kbd>${hint}</kbd>`;
-      btn.addEventListener('click', (e) => { e.stopPropagation(); resolve(result); });
+      btn.addEventListener('click', (e) => { e.stopPropagation(); this.resolvePermCard(result); });
       return btn;
     };
 
