@@ -55,6 +55,9 @@
   <img src="assets/screenshots/08-detail-card.png" width="32%" />&nbsp;
   <img src="assets/screenshots/09-git-panel.png" width="32%" />
 </p>
+<p align="center">
+  <img src="assets/screenshots/10-translator.png" width="48%" />
+</p>
 
 ---
 
