@@ -172,7 +172,7 @@ export class FileViewer {
     // "Translate" button — translate current file
     const translateBtn = document.createElement('button');
     translateBtn.className = 'fv-translate-btn';
-    translateBtn.innerHTML = '🔮';
+    translateBtn.innerHTML = iconHtml('translate', 14);
     translateBtn.title = '翻译当前文件';
     Object.assign(translateBtn.style, {
       width: '22px', height: '22px', padding: '0', flexShrink: '0',
@@ -280,7 +280,7 @@ export class FileViewer {
     });
     this.editor.addAction({
       id: 'translate-selection',
-      label: '🔮 翻译选中',
+      label: '✦ 翻译选中',
       contextMenuGroupId: '9_cutcopypaste',
       contextMenuOrder: 4,
       run: () => {

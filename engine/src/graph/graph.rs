@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Edge, Node};
 
 /// The dependency graph — the central data structure.
 /// Mirrors the Python `Graph` class, with the O(V×E) bug fixed.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Graph {
     #[serde(default)]
     pub nodes: HashMap<String, Node>,

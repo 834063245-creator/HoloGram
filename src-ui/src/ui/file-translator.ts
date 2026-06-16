@@ -219,7 +219,7 @@ export class FileTranslator {
     this.loadingArea.style.display = 'none';
     const loadIcon = document.createElement('div');
     loadIcon.className = 'ft-loading-icon';
-    loadIcon.textContent = '🔮';
+    loadIcon.innerHTML = iconHtml('translate', 32);
     this.loadingText = document.createElement('div');
     this.loadingText.className = 'ft-loading-text';
     this.loadingWait = document.createElement('div');

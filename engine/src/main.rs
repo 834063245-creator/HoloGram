@@ -184,6 +184,12 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
         *cache = Some(graph_clone);
     }
+
+    // Record timeline event
+    if let Ok(store) = TimelineStore::open(&root) {
+        store.record("analyze", None, &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.graph.node_count(), result.graph.edge_count(), result.elapsed_secs));
+    }
+
     println!(
         "[engine] communities: {} found in {:.2}s",
         communities.len(),
@@ -234,16 +240,19 @@ fn handle_analyze(path: &str) -> Vec<u8> {
 }
 
 fn handle_check(project_path: &str) -> Vec<u8> {
+    let root = PathBuf::from(project_path);
+    let hologram_dir = root.join(".hologram");
+    let baseline_path = hologram_dir.join("baseline.json");
+
     // Auto-analyze if no cached graph
     {
         let cache = mcp::CACHED_GRAPH.lock().unwrap();
         if cache.is_none() {
             drop(cache);
-            let root = PathBuf::from(project_path);
             if root.exists() {
                 let mut result = analyze_project(&root);
                 compute_coupling(&mut result.graph);
-                let communities = detect_communities(&result.graph, 42);
+                detect_communities(&result.graph, 42);
                 if let Ok(mut c) = mcp::CACHED_GRAPH.lock() { *c = Some(result.graph.clone()); }
             }
         }
@@ -254,9 +263,37 @@ fn handle_check(project_path: &str) -> Vec<u8> {
         Some(g) => g,
         None => return b"{\"error\":\"project not found\"}".to_vec(),
     };
-    let before = after.clone();
+
+    // Load previous baseline — first run has no baseline, use empty graph
+    let before: hologram_engine::graph::Graph = if baseline_path.exists() {
+        std::fs::read_to_string(&baseline_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        hologram_engine::graph::Graph::default()
+    };
+
     let changed_files: Vec<String> = vec![];
     let result = run_full_check(&before, after, &changed_files, project_path);
+
+    // Save current graph as new baseline for next check
+    let _ = std::fs::create_dir_all(&hologram_dir);
+    if let Ok(json) = serde_json::to_string_pretty(after) {
+        let _ = std::fs::write(&baseline_path, json);
+    }
+
+    // Record timeline event
+    if let Ok(store) = TimelineStore::open(&root) {
+        let passed = result["passed"].as_bool().unwrap_or(true);
+        let violation_count = result["violation_count"].as_u64().unwrap_or(0);
+        if passed {
+            store.record("check_pass", None, &format!("简报通过（{} 违规）", violation_count));
+        } else {
+            store.record("check_fail", None, &format!("简报未通过：{} 条违规", violation_count));
+        }
+    }
+
     serde_json::to_vec(&result).unwrap_or_default()
 }
 

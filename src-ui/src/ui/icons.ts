@@ -165,6 +165,10 @@ const icons: Record<string, IconDef> = {
     label: 'AI Agent',
     path: '<rect x="2" y="3" width="14" height="9" rx="2"/><circle cx="6.5" cy="7.5" r="1"/><circle cx="11.5" cy="7.5" r="1"/><line x1="9" y1="10" x2="9" y2="13"/><line x1="5" y1="13" x2="13" y2="13"/>',
   },
+  translate: {
+    label: '代码翻译',
+    path: '<path d="M9 2 L11.2 7.5 L17 9 L11.2 10.5 L9 16 L6.8 10.5 L1 9 L6.8 7.5 Z"/>',
+  },
   blast: {
     label: '波及分析',
     path: '<circle cx="9" cy="9" r="3"/><line x1="9" y1="2" x2="9" y2="5"/><line x1="9" y1="12" x2="9" y2="15"/><line x1="2" y1="9" x2="5" y2="9"/><line x1="12" y1="9" x2="15" y2="9"/><line x1="4" y1="4" x2="6.2" y2="6.2"/><line x1="11.8" y1="11.8" x2="14" y2="14"/><line x1="14" y1="4" x2="11.8" y2="6.2"/><line x1="6.2" y1="11.8" x2="4" y2="14"/>',
