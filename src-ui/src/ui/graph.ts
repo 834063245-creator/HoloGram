@@ -408,6 +408,10 @@ export class StarGraph {
   // Animation
   private pulseTime = 0;
   private tmpVec3 = new THREE.Vector3();
+  // Idle detection — throttle expensive per-frame work when nothing changes
+  private _idleCounter = 0;
+  private _lastCamPos = new THREE.Vector3();
+  private _lastCamTarget = new THREE.Vector3();
 
   constructor(container: HTMLElement, mode: VisualMode = 'standard') {
     this.container = container;
@@ -3757,7 +3761,21 @@ export class StarGraph {
       return;
     }
 
-    this.updateHover(); this.updateFocus();
+    // ── Idle detection: throttle expensive work when scene is static ──
+    const camMoved = this.camera.position.distanceToSquared(this._lastCamPos) > 0.0001
+                  || this.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
+    const mouseOnCanvas = this.mouse.x > -999;
+    const isActive = camMoved || mouseOnCanvas || this.hoveredIdx >= 0
+                  || this.focusProgress > 0 || this.blastMode
+                  || (this._pathSource >= 0) || this._selecting;
+    if (isActive) { this._idleCounter = 0; } else { this._idleCounter++; }
+    this._lastCamPos.copy(this.camera.position);
+    this._lastCamTarget.copy(this.controls.target);
+    const IDLE = this._idleCounter > 60; // ~1s of no activity
+
+    if (!IDLE || this._idleCounter % 4 === 0) {
+      this.updateHover(); this.updateFocus();
+    }
 
     // Hover effects
     this.hoverScale += (this.targetHoverScale - this.hoverScale) * 0.18;
@@ -3813,6 +3831,8 @@ export class StarGraph {
     }
 
     this.pulseTime += 0.03 * (isFull ? 1.5 : 1);
+    // Per-node glow loop — skip when idle to save CPU (cosmetic only, imperceptible at 10fps vs 60fps)
+    if (!IDLE || this._idleCounter % 6 === 0) {
     const inPathMode = this._pathSource >= 0;
     const galTime = performance.now() * 0.001; // galaxy time for color cycling
     for (let i = 0; i < this.nodeGlows.length; i++) {
@@ -3875,8 +3895,11 @@ export class StarGraph {
         }
       }
     }
+    } // end IDLE-guarded per-node glow loop
 
-    this.updateTooltip(); this.updateLabels();
+    if (!IDLE || this._idleCounter % 3 === 0) {
+      this.updateTooltip(); this.updateLabels();
+    }
     this.controls.update();
     this.composer.render();
   }

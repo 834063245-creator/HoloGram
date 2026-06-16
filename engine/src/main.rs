@@ -65,84 +65,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut socket, addr) = listener.accept().await?;
         debug!(%addr, "client connected");
 
-        let mut buf = vec![0u8; 4096];
-        let n = socket.read(&mut buf).await?;
-        let request = String::from_utf8_lossy(&buf[..n]);
-        debug!(request_len = request.len(), "received request");
+        // Spawn each connection into its own task so the accept loop never blocks.
+        // Keep-alive: loop to handle multiple requests per connection.
+        // Heavy CPU work (analyze, check) is offloaded to spawn_blocking.
+        tokio::spawn(async move {
+            loop {
+            let mut buf = vec![0u8; 4096];
+            let n = match socket.read(&mut buf).await {
+                Ok(0) => { debug!(%addr, "client disconnected"); return; }
+                Ok(n) => n,
+                Err(e) => { debug!(%addr, "read error: {}", e); return; }
+            };
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let req_owned = request.to_string();
+            debug!(request_len = req_owned.len(), "received request");
 
-        let response = if request.starts_with("check:") {
-    handle_check(request.trim())
-} else if request.starts_with("thread") {
-    handle_simple("thread", request.trim(), |g, _| thread_conflict_report(g, &[]))
-} else if request.starts_with("blindspots") {
-    handle_simple("blindspots", request.trim(), |g, _| {
-        let c = coupling_report(g, "");
-        let cycles = detect_cycles(g);
-        let conflicts = thread_conflict_report(g, &[]);
-        find_blindspots(c["L4"].as_u64().unwrap_or(0) as usize, cycles.len(), conflicts["conflict_count"].as_u64().unwrap_or(0) as usize)
-    })
-} else if request.starts_with("timeline") {
-    handle_simple("timeline", request.trim(), |_g, a| {
-        let path = std::path::Path::new(a);
-        let store = TimelineStore::open(path).ok();
-        json!(store.map(|s| s.query(50)).unwrap_or_default())
-    })
-} else if request.starts_with("analyze:") {
-            let path = request.trim().strip_prefix("analyze:").unwrap_or(".").trim();
-            handle_analyze(path)
-        } else if request.starts_with("fragile:") {
-            handle_simple("fragile:", request.trim(), |g, a| json!(fragile_nodes(g, a.parse().unwrap_or(10))))
-        } else if request.starts_with("cycle") {
-            handle_simple("cycle", request.trim(), |g, _| json!(detect_cycles(g)))
-        } else if request.starts_with("coupling_report:") {
-            handle_simple("coupling_report:", request.trim(), |g, a| coupling_report(g, a))
-        } else if request.starts_with("graph_summary") {
-            handle_simple("graph_summary", request.trim(), |g, _| graph_summary(g))
-        } else if request.starts_with("community_report") {
-            handle_simple("community_report", request.trim(), |g, _| {
-                let communities = detect_communities(g, 42);
-                json!(communities.iter().enumerate().map(|(i,c)| json!({"id":format!("comm_{}",i),"size":c.len(),"node_ids":c})).collect::<Vec<_>>())
-            })
-        } else if request.starts_with("community:") {
-            handle_simple("community:", request.trim(), |g, a| {
-                let communities = detect_communities(g, 42);
-                let found = communities.iter().find(|c| c.contains(&a.to_string()));
-                json!(found.map(|c| c.iter().take(50).collect::<Vec<_>>()))
-            })
-        } else if request.starts_with("diff:") {
-            let baseline_path = request.trim().strip_prefix("diff:").unwrap_or("").trim().to_string();
-            handle_diff(&baseline_path)
-        } else if request.starts_with("history:") {
-            handle_simple("history:", request.trim(), |g, a| {
-                g.get_node(a).map(|n| json!({"id":n.id,"name":n.name,"type":n.kind.as_str(),"out_degree":n.out_degree,"in_degree":n.in_degree}))
-                    .unwrap_or(json!({"error":"not found"}))
-            })
-        } else if request.starts_with("delayed") {
-            handle_simple("delayed", request.trim(), |g, _| {
-                let delayed: Vec<_> = g.edges.values().filter(|e| matches!(e.kind, EdgeKind::Triggers|EdgeKind::Awaits|EdgeKind::Sequences))
-                    .map(|e| json!({"source":e.source,"target":e.target,"type":e.kind.as_str()}))
-                    .collect();
-                json!(delayed)
-            })
-        } else if request.starts_with("neighbors:") {
-            handle_query(request.trim(), "neighbors:")
-        } else if request.starts_with("path:") {
-            handle_query(request.trim(), "path:")
-        } else if request.starts_with("search:") {
-            handle_query(request.trim(), "search:")
-        } else if request.starts_with("impact:") {
-            handle_query(request.trim(), "impact:")
-        } else if request.contains("get_graph") {
-            handle_get_graph()
-        } else if request.contains("ping") {
-            b"{\"ok\":true}".to_vec()
-        } else {
-            b"{\"error\":\"unknown command\"}".to_vec()
-        };
+            let response = if req_owned.starts_with("check:") {
+                let req = req_owned.clone();
+                tokio::task::spawn_blocking(move || handle_check(req.trim()))
+                    .await.unwrap_or_else(|_| b"{\"error\":\"check panicked\"}".to_vec())
+            } else if req_owned.starts_with("thread") {
+                handle_simple("thread", req_owned.trim(), |g, _| thread_conflict_report(g, &[]))
+            } else if req_owned.starts_with("blindspots") {
+                handle_simple("blindspots", req_owned.trim(), |g, _| {
+                    let c = coupling_report(g, "");
+                    let cycles = detect_cycles(g);
+                    let conflicts = thread_conflict_report(g, &[]);
+                    find_blindspots(c["L4"].as_u64().unwrap_or(0) as usize, cycles.len(), conflicts["conflict_count"].as_u64().unwrap_or(0) as usize)
+                })
+            } else if req_owned.starts_with("timeline") {
+                handle_simple("timeline", req_owned.trim(), |_g, a| {
+                    let path = std::path::Path::new(a);
+                    let store = TimelineStore::open(path).ok();
+                    json!(store.map(|s| s.query(50)).unwrap_or_default())
+                })
+            } else if req_owned.starts_with("analyze:") {
+                let path = req_owned.trim().strip_prefix("analyze:").unwrap_or(".").trim().to_string();
+                tokio::task::spawn_blocking(move || handle_analyze(&path))
+                    .await.unwrap_or_else(|_| b"{\"error\":\"analyze panicked\"}".to_vec())
+            } else if req_owned.starts_with("fragile:") {
+                handle_simple("fragile:", req_owned.trim(), |g, a| json!(fragile_nodes(g, a.parse().unwrap_or(10))))
+            } else if req_owned.starts_with("cycle") {
+                handle_simple("cycle", req_owned.trim(), |g, _| json!(detect_cycles(g)))
+            } else if req_owned.starts_with("coupling_report:") {
+                handle_simple("coupling_report:", req_owned.trim(), |g, a| coupling_report(g, a))
+            } else if req_owned.starts_with("graph_summary") {
+                handle_simple("graph_summary", req_owned.trim(), |g, _| graph_summary(g))
+            } else if req_owned.starts_with("community_report") {
+                handle_simple("community_report", req_owned.trim(), |g, _| {
+                    let communities = detect_communities(g, 42);
+                    json!(communities.iter().enumerate().map(|(i,c)| json!({"id":format!("comm_{}",i),"size":c.len(),"node_ids":c})).collect::<Vec<_>>())
+                })
+            } else if req_owned.starts_with("community:") {
+                handle_simple("community:", req_owned.trim(), |g, a| {
+                    let communities = detect_communities(g, 42);
+                    let found = communities.iter().find(|c| c.contains(&a.to_string()));
+                    json!(found.map(|c| c.iter().take(50).collect::<Vec<_>>()))
+                })
+            } else if req_owned.starts_with("diff:") {
+                let baseline_path = req_owned.trim().strip_prefix("diff:").unwrap_or("").trim().to_string();
+                handle_diff(&baseline_path)
+            } else if req_owned.starts_with("history:") {
+                handle_simple("history:", req_owned.trim(), |g, a| {
+                    g.get_node(a).map(|n| json!({"id":n.id,"name":n.name,"type":n.kind.as_str(),"out_degree":n.out_degree,"in_degree":n.in_degree}))
+                        .unwrap_or(json!({"error":"not found"}))
+                })
+            } else if req_owned.starts_with("delayed") {
+                handle_simple("delayed", req_owned.trim(), |g, _| {
+                    let delayed: Vec<_> = g.edges.values().filter(|e| matches!(e.kind, EdgeKind::Triggers|EdgeKind::Awaits|EdgeKind::Sequences))
+                        .map(|e| json!({"source":e.source,"target":e.target,"type":e.kind.as_str()}))
+                        .collect();
+                    json!(delayed)
+                })
+            } else if req_owned.starts_with("neighbors:") {
+                handle_query(req_owned.trim(), "neighbors:")
+            } else if req_owned.starts_with("path:") {
+                handle_query(req_owned.trim(), "path:")
+            } else if req_owned.starts_with("search:") {
+                handle_query(req_owned.trim(), "search:")
+            } else if req_owned.starts_with("impact:") {
+                handle_query(req_owned.trim(), "impact:")
+            } else if req_owned.contains("get_graph") {
+                handle_get_graph()
+            } else if req_owned.contains("ping") {
+                b"{\"ok\":true}".to_vec()
+            } else {
+                b"{\"error\":\"unknown command\"}".to_vec()
+            };
 
-        let framed = frame_response(&response);
-        socket.write_all(&framed).await?;
-        debug!(bytes = framed.len(), "response sent");
+            let framed = frame_response(&response);
+            if let Err(e) = socket.write_all(&framed).await {
+                debug!(%addr, "write error: {}", e);
+                return;
+            }
+            } // end keep-alive loop
+        });
     }
 }
 

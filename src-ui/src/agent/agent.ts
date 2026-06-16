@@ -472,7 +472,12 @@ export class Agent {
       if (signal.aborted) throw new Error('aborted');
       bus.emit('agent:tool-started', { toolName: call.name, args });
       const toolStart = performance.now();
-      result = await t.execute(args);
+      result = await t.execute(args, (chunk) => {
+        this.sink({
+          kind: EventKind.ToolProgress,
+          tool: { id: call.id, name: call.name, args: call.arguments, output: chunk, read_only: t?.readOnly() ?? false },
+        });
+      });
       log.debug('tool', 'executed', { name: call.name, elapsed_ms: Math.round(performance.now() - toolStart) });
       // ── PreToolUse hooks: enrich result with graph context ──
       if (this.hooks && !errMsg) {

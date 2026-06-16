@@ -421,7 +421,30 @@ async function setupAgentInner(): Promise<void> {
   }
 
   // Coding tools (file I/O, shell, search, git, web) — always direct CLI invoke
-  const codingExec: ToolExecutor = async (name, args) => {
+  const codingExec: ToolExecutor = async (name, args, onProgress) => {
+    // ── run_shell background mode: stream output via polling ──
+    if (name === 'run_shell' && args['runInBackground']) {
+      const taskId = await invoke<string>('run_shell', args);
+      // Poll for output until the task completes
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 300));
+        try {
+          const status: any = await invoke<any>('bash_output', { taskId });
+          if (status.output && onProgress) {
+            onProgress(status.output);
+          }
+          if (status.done) {
+            done = true;
+            return status.output || '(无输出)';
+          }
+        } catch {
+          done = true;
+          return '(后台任务已结束)';
+        }
+      }
+      return '';
+    }
     const result = await invoke<string>(name, args);
     return typeof result === 'string' ? result : JSON.stringify(result);
   };
