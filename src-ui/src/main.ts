@@ -1174,6 +1174,12 @@ async function init(): Promise<void> {
     }
   });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
+  chatPanel.setOnModeChange(() => {
+    setupAgent().catch(() => {});
+    if (currentPath && agent) {
+      chatPanel.autoRestoreLastSession(currentPath).catch(e => console.error('[mode-change] autoRestoreLastSession failed:', e));
+    }
+  });
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
   btnSettings.addEventListener('click', () => {
     settingsPanel.toggle();
