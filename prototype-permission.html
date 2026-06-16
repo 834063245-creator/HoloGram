@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>HoloGram 权限弹窗原型</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void:        #030812;
+    --void-deep:   #010408;
+    --panel-bg:    rgba(4, 12, 28, 0.92);
+    --panel-edge:  rgba(54, 82, 128, 0.28);
+    --starlight:      #e2edff;
+    --starlight-dim:  rgba(195, 218, 248, 0.85);
+    --text-muted:     rgba(145, 165, 190, 0.65);
+    --signal:        #68a8ff;
+    --signal-bright: #8cc4ff;
+    --signal-glow:   rgba(80, 140, 240, 0.35);
+    --sol:         #f0b848;
+    --nebula:       #a088e0;
+    --pass:  #48cc68;
+    --fail:  #d94444;
+    --warn:  #d69622;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    --font-hud:  'Orbitron', system-ui, sans-serif;
+    --font-body: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+    --snap: 0.15s ease;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: radial-gradient(ellipse at 30% 40%, #0a1628 0%, #030812 60%, #010408 100%);
+    min-height: 100vh;
+    font-family: var(--font-body);
+    color: var(--starlight-dim);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 30px 20px;
+  }
+
+  /* ── 深空装饰 ── */
+  body::before {
+    content: '';
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background:
+      radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.4), transparent),
+      radial-gradient(1px 1px at 60% 70%, rgba(255,255,255,0.3), transparent),
+      radial-gradient(1px 1px at 80% 20%, rgba(255,255,255,0.5), transparent),
+      radial-gradient(1px 1px at 40% 80%, rgba(180,200,255,0.4), transparent),
+      radial-gradient(2px 2px at 10% 60%, rgba(200,220,255,0.3), transparent);
+    pointer-events: none; z-index: 0;
+  }
+
+  h1 {
+    font-family: var(--font-hud);
+    font-size: 18px; font-weight: 600; color: var(--starlight);
+    letter-spacing: 3px; margin-bottom: 8px; position: relative; z-index: 1;
+  }
+  .subtitle {
+    font-size: 11px; color: var(--text-muted);
+    font-family: var(--font-mono); margin-bottom: 40px; position: relative; z-index: 1;
+  }
+
+  .demo-section {
+    position: relative; z-index: 1;
+    width: 100%; max-width: 700px; margin-bottom: 40px;
+  }
+  .section-label {
+    font-family: var(--font-hud); font-size: 10px; letter-spacing: 2px;
+    color: var(--signal); text-transform: uppercase; margin-bottom: 14px;
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     1. Permission Card — inline in chat
+     ═══════════════════════════════════════════════════════════ */
+  .chat-mock {
+    background: rgba(4, 12, 28, 0.4);
+    border: 1px solid rgba(54, 82, 128, 0.12);
+    border-radius: 14px; padding: 20px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .chat-bubble {
+    padding: 10px 14px; border-radius: 10px;
+    font-size: 13px; line-height: 1.5;
+    max-width: 85%;
+  }
+  .chat-bubble.assistant {
+    background: rgba(20, 35, 60, 0.5);
+    color: var(--starlight-dim);
+    align-self: flex-start;
+  }
+  .chat-bubble.user {
+    background: rgba(80, 140, 240, 0.1);
+    color: var(--starlight);
+    align-self: flex-end;
+    text-align: right;
+  }
+
+  .msg-perm-card {
+    margin-top: 6px;
+    border: 1px solid var(--panel-edge, rgba(54, 82, 128, 0.28));
+    border-radius: 10px; padding: 14px 16px;
+    background: var(--panel-bg, rgba(4, 12, 28, 0.92));
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    font-family: var(--font-body, sans-serif);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+  .msg-perm-title {
+    font-size: 13px; margin-bottom: 6px;
+    color: var(--starlight, #e2edff);
+    font-family: var(--font-hud, 'Orbitron', sans-serif);
+    letter-spacing: 0.5px;
+  }
+  .msg-perm-title strong {
+    color: var(--signal, #68a8ff);
+    font-family: var(--font-mono, monospace);
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+  .msg-perm-desc {
+    font-size: 11px; line-height: 1.5;
+    color: var(--starlight-dim, rgba(195, 218, 248, 0.85));
+    margin-bottom: 12px;
+  }
+  .msg-perm-btns {
+    display: flex; gap: 8px;
+  }
+  .msg-perm-btn {
+    flex: 1; padding: 7px 12px;
+    font-size: 12px; font-weight: 600;
+    font-family: var(--font-body, sans-serif);
+    border: 1px solid transparent;
+    border-radius: 6px; cursor: pointer;
+    transition: all var(--snap, 0.15s ease);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  }
+  .msg-perm-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  .msg-perm-btn kbd {
+    font-size: 9px; opacity: 0.6; margin-left: 4px;
+    font-family: var(--font-mono); font-weight: 400;
+  }
+  .perm-always {
+    background: rgba(61, 165, 93, 0.12);
+    border-color: rgba(61, 165, 93, 0.25);
+    color: var(--pass, #48cc68);
+  }
+  .perm-always:hover { background: rgba(61, 165, 93, 0.2); border-color: rgba(61, 165, 93, 0.4); }
+  .perm-once {
+    background: rgba(80, 140, 240, 0.12);
+    border-color: rgba(80, 140, 240, 0.2);
+    color: var(--signal, #68a8ff);
+  }
+  .perm-once:hover { background: rgba(80, 140, 240, 0.2); border-color: rgba(80, 140, 240, 0.35); }
+  .perm-deny {
+    background: rgba(217, 68, 68, 0.08);
+    border-color: rgba(217, 68, 68, 0.15);
+    color: var(--fail, #d94444);
+  }
+  .perm-deny:hover { background: rgba(217, 68, 68, 0.15); border-color: rgba(217, 68, 68, 0.3); }
+  .msg-perm-result {
+    font-size: 11px; color: var(--text-muted, rgba(145, 165, 190, 0.65));
+    font-family: var(--font-mono); padding: 4px 0;
+  }
+
+  .perm-interactive:hover { cursor: pointer; }
+  .perm-interactive.active .perm-once  { background: rgba(80, 140, 240, 0.2); border-color: rgba(80, 140, 240, 0.35); }
+  .perm-interactive.active .perm-deny  { background: rgba(217, 68, 68, 0.15); border-color: rgba(217, 68, 68, 0.3); }
+
+  /* ═══════════════════════════════════════════════════════════
+     2. ask_user Dialog — modal overlay
+     ═══════════════════════════════════════════════════════════ */
+  .btn-show-dialog {
+    padding: 10px 20px;
+    font-family: var(--font-hud); font-size: 11px; letter-spacing: 1px;
+    background: rgba(80, 140, 240, 0.12);
+    border: 1px solid var(--signal-glow);
+    border-radius: 8px; color: var(--signal); cursor: pointer;
+    transition: all var(--snap);
+  }
+  .btn-show-dialog:hover {
+    background: rgba(80, 140, 240, 0.22);
+    border-color: var(--signal);
+    box-shadow: 0 4px 16px rgba(80, 140, 240, 0.15);
+  }
+
+  .overlay {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(3, 8, 18, 0.75);
+    backdrop-filter: blur(8px) saturate(0.6);
+    -webkit-backdrop-filter: blur(8px) saturate(0.6);
+    z-index: 9999;
+    align-items: center; justify-content: center;
+  }
+  .overlay.open { display: flex; }
+
+  .ask-dialog {
+    position: relative;
+    background: var(--panel-bg, rgba(4, 12, 28, 0.92));
+    border: 1px solid var(--panel-edge, rgba(54, 82, 128, 0.28));
+    border-radius: 14px; padding: 28px 28px 22px;
+    max-width: 520px; min-width: 340px; width: 90%;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(54, 82, 128, 0.15) inset;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    color: var(--starlight);
+    font-family: var(--font-body);
+  }
+  .ask-dialog .hdr-tag {
+    font-size: 10px; color: var(--signal);
+    text-transform: uppercase; letter-spacing: 2px; font-weight: 600;
+    font-family: var(--font-hud);
+    margin-bottom: 12px;
+  }
+  .ask-dialog .question {
+    font-size: 14px; line-height: 1.6; margin-bottom: 18px;
+    color: var(--starlight-dim);
+  }
+  .ask-option {
+    display: block; width: 100%; padding: 10px 16px; text-align: left;
+    font-size: 13px; font-family: var(--font-body);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px; color: var(--starlight-dim);
+    cursor: pointer;
+    transition: all 0.12s ease;
+    margin-bottom: 6px;
+  }
+  .ask-option:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .ask-option .desc {
+    font-size: 10px; color: var(--text-muted);
+    margin-top: 3px; font-weight: 400;
+  }
+  .ask-option.selected {
+    background: rgba(80, 140, 240, 0.12);
+    border-color: var(--signal-glow);
+    color: var(--signal-bright);
+  }
+  .ask-option.selected:hover {
+    background: rgba(80, 140, 240, 0.18);
+    border-color: var(--signal);
+  }
+
+  .ask-confirm-btn {
+    display: none; width: 100%; padding: 9px; margin-top: 8px;
+    font-size: 13px; font-weight: 600;
+    background: rgba(80, 140, 240, 0.15);
+    border: 1px solid var(--signal-glow);
+    border-radius: 8px; color: var(--signal);
+    cursor: pointer; font-family: var(--font-body);
+    transition: all 0.12s ease;
+  }
+  .ask-confirm-btn.visible { display: block; }
+  .ask-confirm-btn:hover {
+    background: rgba(80, 140, 240, 0.25);
+    border-color: var(--signal);
+  }
+</style>
+</head>
+<body>
+
+<h1>HOLOGRAM</h1>
+<p class="subtitle">权限系统 · 设计原型</p>
+
+<!-- ═══════════ 1. Permission Card ═══════════ -->
+<div class="demo-section">
+  <div class="section-label">1 · 聊天内嵌权限卡 (msg-perm-card)</div>
+  <div class="chat-mock">
+    <div class="chat-bubble user">帮我重命名 getCwd 为 getCurrentWorkingDirectory</div>
+    <div class="chat-bubble assistant">好的，我先用 dry_run 预览一下影响范围。</div>
+    <!-- 权限卡 -->
+    <div class="msg-perm-card">
+      <div class="msg-perm-title">⚡ <strong>hologram_rename</strong> 请求执行</div>
+      <div class="msg-perm-desc">Safely rename a symbol (function, class, method, variable) across the entire codebase. Uses the dependency graph to find ALL references.</div>
+      <div class="msg-perm-btns">
+        <button class="msg-perm-btn perm-always" onclick="this.closest('.msg-perm-card').querySelector('.msg-perm-btns').innerHTML='<span class=msg-perm-result>✓ 已始终允许</span>'">始终 <kbd>Ctrl+Y</kbd></button>
+        <button class="msg-perm-btn perm-once"  onclick="this.closest('.msg-perm-card').querySelector('.msg-perm-btns').innerHTML='<span class=msg-perm-result>✓ 已允许</span>'">允许 <kbd>Enter</kbd></button>
+        <button class="msg-perm-btn perm-deny"  onclick="this.closest('.msg-perm-card').querySelector('.msg-perm-btns').innerHTML='<span class=msg-perm-result>✗ 已拒绝</span>'">拒绝 <kbd>Esc</kbd></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 2. ask_user Dialog ═══════════ -->
+<div class="demo-section">
+  <div class="section-label">2 · Agent 反问弹窗 (ask_user)</div>
+  <button class="btn-show-dialog" onclick="openDialog()">触发 Agent 反问</button>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="ask-dialog" id="dialog">
+    <div class="hdr-tag">CONFIRM</div>
+    <div class="question">这个改动会影响 23 个文件中的 47 处引用。要预览变更还是直接执行？</div>
+
+    <button class="ask-option" onclick="closeDialog('preview')">
+      仅预览（dry run）
+      <div class="desc">列出将要变更的所有位置，不修改任何文件</div>
+    </button>
+    <button class="ask-option" onclick="closeDialog('execute')">
+      直接执行重命名
+      <div class="desc">跨 23 个文件替换所有引用，保留回滚点</div>
+    </button>
+    <button class="ask-option" onclick="closeDialog('cancel')">
+      取消
+      <div class="desc">不做任何操作</div>
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════ 3. Multi-select variant ═══════════ -->
+<div class="demo-section">
+  <div class="section-label">3 · 多选反问 (multiSelect)</div>
+  <button class="btn-show-dialog" onclick="openMultiDialog()">触发多选反问</button>
+</div>
+
+<div class="overlay" id="multiOverlay">
+  <div class="ask-dialog" id="multiDialog">
+    <div class="hdr-tag">APPROACH</div>
+    <div class="question">你想用什么方案解耦 auth_service？</div>
+
+    <div id="multiOptions">
+      <button class="ask-option" data-idx="0">
+        提取接口层
+        <div class="desc">定义 IAuthProvider 接口，auth_service 和调用方都依赖接口</div>
+      </button>
+      <button class="ask-option" data-idx="1">
+        事件总线
+        <div class="desc">auth 事件通过 EventBus 发布，解耦直接 import 关系</div>
+      </button>
+      <button class="ask-option" data-idx="2">
+        仅拆分 token_cache
+        <div class="desc">最小改动——先拆耦合最深的 token_cache，其他暂时不动</div>
+      </button>
+    </div>
+    <button class="ask-confirm-btn" id="multiConfirm" onclick="resolveMulti()">✓ 确认选择</button>
+  </div>
+</div>
+
+<script>
+  // ── Single-select dialog ──
+  function openDialog() { document.getElementById('overlay').classList.add('open'); }
+  function closeDialog(choice) {
+    document.getElementById('overlay').classList.remove('open');
+    console.log('User chose:', choice);
+  }
+  document.getElementById('overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('open');
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') document.getElementById('overlay').classList.remove('open');
+  });
+
+  // ── Multi-select dialog ──
+  const multiSelected = new Set();
+  function openMultiDialog() {
+    multiSelected.clear();
+    document.querySelectorAll('#multiOptions .ask-option').forEach(b => b.classList.remove('selected'));
+    document.getElementById('multiConfirm').classList.remove('visible');
+    document.getElementById('multiOverlay').classList.add('open');
+  }
+  function resolveMulti() {
+    const chosen = [...multiSelected].map(i =>
+      document.querySelector(`#multiOptions .ask-option[data-idx="${i}"]`).childNodes[0].textContent.trim()
+    );
+    document.getElementById('multiOverlay').classList.remove('open');
+    console.log('Multi-select:', chosen);
+  }
+  document.getElementById('multiOverlay').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('open');
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') document.getElementById('multiOverlay').classList.remove('open');
+  });
+
+  document.getElementById('multiOptions').addEventListener('click', function(e) {
+    const btn = e.target.closest('.ask-option');
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.idx);
+    if (multiSelected.has(idx)) {
+      multiSelected.delete(idx);
+      btn.classList.remove('selected');
+    } else {
+      multiSelected.add(idx);
+      btn.classList.add('selected');
+    }
+    document.getElementById('multiConfirm').classList.toggle('visible', multiSelected.size > 0);
+  });
+</script>
+
+</body>
+</html>

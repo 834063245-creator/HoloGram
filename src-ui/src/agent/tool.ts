@@ -545,26 +545,34 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           const overlay = document.createElement('div');
           Object.assign(overlay.style, {
             position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
-            background: 'rgba(0,0,0,0.6)', zIndex: '9999',
+            background: 'rgba(3, 8, 18, 0.75)', zIndex: '9999',
+            backdropFilter: 'blur(8px) saturate(0.6)', WebkitBackdropFilter: 'blur(8px) saturate(0.6)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           });
           const dialog = document.createElement('div');
           Object.assign(dialog.style, {
-            background: 'var(--panel-bg, rgba(6,12,24,0.97))',
-            border: '1px solid var(--panel-edge, rgba(54,82,128,0.35))',
-            borderRadius: '12px', padding: '24px', maxWidth: '520px', minWidth: '320px',
-            color: 'var(--starlight, #e2edff)', fontFamily: 'var(--font-mono, monospace)',
-            boxShadow: '0 16px 64px rgba(0,0,0,0.5)',
+            background: 'var(--panel-bg, rgba(4, 12, 28, 0.92))',
+            border: '1px solid var(--panel-edge, rgba(54, 82, 128, 0.28))',
+            borderRadius: '14px', padding: '28px 28px 22px', maxWidth: '520px', minWidth: '340px',
+            color: 'var(--starlight, #e2edff)',
+            fontFamily: 'var(--font-body, "Noto Sans SC", sans-serif)',
+            boxShadow: '0 24px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(54, 82, 128, 0.15) inset',
+            backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
+            transition: 'opacity 0.15s ease',
           });
           const hdr = document.createElement('div');
           hdr.textContent = header;
           Object.assign(hdr.style, {
-            fontSize: '11px', color: 'var(--signal, #68a8ff)', marginBottom: '8px',
-            textTransform: 'uppercase', letterSpacing: '1px', fontWeight: '600',
+            fontSize: '10px', color: 'var(--signal, #68a8ff)', marginBottom: '12px',
+            textTransform: 'uppercase', letterSpacing: '2px', fontWeight: '600',
+            fontFamily: 'var(--font-hud, "Orbitron", sans-serif)',
           });
           const q = document.createElement('div');
           q.textContent = question;
-          Object.assign(q.style, { fontSize: '14px', marginBottom: '16px', lineHeight: '1.5' });
+          Object.assign(q.style, {
+            fontSize: '14px', marginBottom: '18px', lineHeight: '1.6',
+            color: 'var(--starlight-dim, rgba(195, 218, 248, 0.85))',
+          });
           dialog.appendChild(hdr); dialog.appendChild(q);
           const btnContainer = document.createElement('div');
           Object.assign(btnContainer.style, {
@@ -581,35 +589,84 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           options.forEach((opt, idx) => {
             const btn = document.createElement('button');
             btn.textContent = opt.label;
+            const isSelected = selected.has(idx);
             Object.assign(btn.style, {
-              display: 'block', width: '100%', padding: '8px 14px', textAlign: 'left',
-              fontSize: '13px', background: selected.has(idx) ? 'rgba(80,140,240,0.15)' : 'rgba(255,255,255,0.04)',
-              border: selected.has(idx) ? '1px solid var(--signal, #68a8ff)' : '1px solid rgba(255,255,255,0.08)',
-              borderRadius: '6px', color: 'var(--starlight-dim, #c9d1d9)', cursor: 'pointer',
+              display: 'block', width: '100%', padding: '10px 16px', textAlign: 'left',
+              fontSize: '13px',
+              background: isSelected
+                ? 'rgba(80, 140, 240, 0.12)'
+                : 'rgba(255, 255, 255, 0.03)',
+              border: isSelected
+                ? '1px solid var(--signal-glow, rgba(80, 140, 240, 0.35))'
+                : '1px solid rgba(255, 255, 255, 0.06)',
+              borderRadius: '8px',
+              color: isSelected ? 'var(--signal-bright, #8cc4ff)' : 'var(--starlight-dim, rgba(195, 218, 248, 0.85))',
+              cursor: 'pointer',
+              fontFamily: 'var(--font-body, "Noto Sans SC", sans-serif)',
+              transition: 'all 0.12s ease',
+            });
+            btn.addEventListener('mouseenter', () => {
+              btn.style.background = isSelected
+                ? 'rgba(80, 140, 240, 0.18)'
+                : 'rgba(255, 255, 255, 0.06)';
+              btn.style.borderColor = isSelected
+                ? 'var(--signal, #68a8ff)'
+                : 'rgba(255, 255, 255, 0.14)';
+            });
+            btn.addEventListener('mouseleave', () => {
+              btn.style.background = isSelected
+                ? 'rgba(80, 140, 240, 0.12)'
+                : 'rgba(255, 255, 255, 0.03)';
+              btn.style.borderColor = isSelected
+                ? 'var(--signal-glow, rgba(80, 140, 240, 0.35))'
+                : 'rgba(255, 255, 255, 0.06)';
             });
             if (opt.description) {
               btn.title = opt.description;
               const desc = document.createElement('div');
               desc.textContent = opt.description;
-              Object.assign(desc.style, { fontSize: '10px', color: 'var(--text-muted, #6b7d90)', marginTop: '2px' });
+              Object.assign(desc.style, {
+                fontSize: '10px', color: 'var(--text-muted, rgba(145, 165, 190, 0.65))',
+                marginTop: '3px', fontWeight: '400',
+              });
               btn.appendChild(desc);
             }
             btn.addEventListener('click', () => {
               if (multiSelect) {
                 if (selected.has(idx)) { selected.delete(idx); } else { selected.add(idx); }
-                btn.style.background = selected.has(idx) ? 'rgba(80,140,240,0.15)' : 'rgba(255,255,255,0.04)';
-                btn.style.border = selected.has(idx) ? '1px solid var(--signal, #68a8ff)' : '1px solid rgba(255,255,255,0.08)';
-                // Show a "Confirm" button if any selected
+                const nowSelected = selected.has(idx);
+                btn.style.background = nowSelected
+                  ? 'rgba(80, 140, 240, 0.12)'
+                  : 'rgba(255, 255, 255, 0.03)';
+                btn.style.border = nowSelected
+                  ? '1px solid var(--signal-glow, rgba(80, 140, 240, 0.35))'
+                  : '1px solid rgba(255, 255, 255, 0.06)';
+                btn.style.color = nowSelected
+                  ? 'var(--signal-bright, #8cc4ff)'
+                  : 'var(--starlight-dim, rgba(195, 218, 248, 0.85))';
                 const existing = btnContainer.querySelector('.ask-confirm');
                 if (selected.size > 0 && !existing) {
                   const confirmBtn = document.createElement('button');
                   confirmBtn.className = 'ask-confirm';
-                  confirmBtn.textContent = '确认选择';
+                  confirmBtn.textContent = '✓ 确认选择';
                   Object.assign(confirmBtn.style, {
-                    display: 'block', width: '100%', padding: '8px', marginTop: '6px',
+                    display: 'block', width: '100%', padding: '9px', marginTop: '8px',
                     fontSize: '13px', fontWeight: '600',
-                    background: 'var(--signal, #68a8ff)', color: '#fff',
-                    border: 'none', borderRadius: '6px', cursor: 'pointer',
+                    background: 'rgba(80, 140, 240, 0.15)',
+                    border: '1px solid var(--signal-glow, rgba(80, 140, 240, 0.3))',
+                    borderRadius: '8px',
+                    color: 'var(--signal, #68a8ff)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-body, "Noto Sans SC", sans-serif)',
+                    transition: 'all 0.12s ease',
+                  });
+                  confirmBtn.addEventListener('mouseenter', () => {
+                    confirmBtn.style.background = 'rgba(80, 140, 240, 0.25)';
+                    confirmBtn.style.borderColor = 'var(--signal, #68a8ff)';
+                  });
+                  confirmBtn.addEventListener('mouseleave', () => {
+                    confirmBtn.style.background = 'rgba(80, 140, 240, 0.15)';
+                    confirmBtn.style.borderColor = 'var(--signal-glow, rgba(80, 140, 240, 0.3))';
                   });
                   confirmBtn.addEventListener('click', done);
                   btnContainer.appendChild(confirmBtn);
