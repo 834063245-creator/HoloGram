@@ -12,29 +12,15 @@
 
 > **语言无关的交互式代码依赖拓扑图生成器。**
 >
-> 不是又一个静态分析工具。HoloGram 把代码库变成一张可对话的 3D 星图——10 门语言统一 IR、原生 LLM Agent 双向联动、从 L1 公开 API 到 L4 封装穿透四层耦合诊断。纯 Rust 引擎，桌面应用双模。
+> 不是又一个静态分析工具。HoloGram 把代码库变成一张可对话的 3D 星图——10 门语言统一 IR、原生 LLM Agent 双向联动、从 L1 公开 API 到 L4 封装穿透四层耦合诊断。纯 Rust 引擎，桌面应用。
 
 ---
 
 ## 三件事让它不同
 
-| | | |
+| **🌍 跨语言统一 IR** | **🤖 图即 Agent 的眼睛** | **🔬 自举验证** |
 |---|---|---|
-| **🌍 跨语言统一 IR** | **🤖 原生 Agent** | **🔬 自举** |
-| 10 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | Agent 和图是同一个系统的两层。94 个 Tauri 命令 + 21 个 MCP 工具直接查图数据库，不是喂源文件让 LLM 猜。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
-
----
-
-## 🤖 原生 Agent
-
-**图是 Agent 的眼睛，Agent 是图的嘴。**
-
-| 能力 | 说明 |
-|---|---|
-| **30+ 原生工具** | 每个工具直查图数据库，不是靠喂代码猜。`neighbors` 查邻居、`impact` 波及范围、`coupling-report` 耦合报告、`blindspots` 盲点、`cycle` 数据流环、`fragile` 脆弱依赖、`community` 社区归属、`history` 节点历史。另有代码搜索、文件读写、Shell、Git 全套。 |
-| **图即上下文** | Agent 不读源文件。耦合深度 L1–L4 提前算好，SQLite FTS5 毫秒检索。一次工具调用几十行 JSON 查清上千行源码的依赖。Token 消耗远低于全量喂代码。 |
-| **双向实时联动** | 单击节点 → Agent 分析；Shift+双节点 → 寻最短路径；Alt+框选 → 批量分析。Agent 调用工具 → 3D 视图实时高亮受影响节点，粒子沿边流动。 |
-| **权限分级** | Shell、Git push、文件写入等危险操作人工确认。API key 本地存储，数据不上传。支持 Anthropic / OpenAI 兼容接口。 |
+| 10 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | 94 个 Tauri 命令 + 21 个 MCP 工具直查图数据库，不是喂源文件让 LLM 猜。耦合深度 L1–L4 提前算好，SQLite FTS5 毫秒检索。Agent 和图是同一系统的两层——图是眼睛，Agent 是嘴。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
 
 ---
 
@@ -56,7 +42,8 @@
   <img src="assets/screenshots/09-git-panel.png" width="32%" />
 </p>
 <p align="center">
-  <img src="assets/screenshots/10-translator.png" width="48%" />
+  <img src="assets/screenshots/10-translator.png" width="65%" />
+  <br/><sub>🔄 代码翻译器 — LLM 逐行翻译 · 三栏审计</sub>
 </p>
 
 ---
@@ -66,29 +53,29 @@
 | | | |
 |---|---|---|
 | **🔄 代码翻译器** | **👁️ Agent 透镜 & 推理轨迹** | **📋 简报 → 星图一键跳转** |
-| 选中任意源文件 → LLM 逐行翻译 → 三栏并排审计（原文 ‖ 译文 ‖ Diff）。支持跨语言移植，译文缓存自动落盘。FileViewer 内集成，Ctrl+T 一键触发。 | Agent 调过的节点持续高亮，其余降到 1% 透明度——一眼看清它"看过哪里"。渐变虚线串联最近 20 步访问序列，星图上一条发光的推理足迹。 | 保存文件 → 引擎自动跑约束校验 → 违规项实时出现在简报面板。点击任意违规行 → 星图平滑飞行到对应节点。从"哪里违规"到"违规在哪"——零步。 |
+| 选中源文件 → LLM 逐行翻译 → 三栏并排审计（原文 ‖ 译文 ‖ Diff）。跨语言移植，缓存自动落盘。Ctrl+T 一键触发。 | Agent 调过的节点持续高亮，其余降到 1% 透明度——一眼看清它"看过哪里"。渐变虚线串联最近 20 步访问序列，星图上的推理足迹。 | 保存文件 → 引擎自动跑约束校验 → 违规项实时出现。点击任意违规行 → 星图平滑飞行到对应节点。从"哪里违规"到"违规在哪"——零步。 |
 
 | **🥧 右键 Pie Menu** | **🔭 三层折叠视图** | **⏳ 决策时间轴** |
-| 节点上右键 → 环形菜单弹出：波及范围 / 聚焦飞行 / 最短路径 / 节点详情。Blender 式的肌肉记忆交互，无需工具栏。 | Tab 循环切换。宇宙层：每个社区一团螺旋星云（golden ratio 色调）。星座层：星云展开为节点群。Galaxy 内部：双击星系进入，Esc 退出。粒子在星系间沿边流动。 | 每次分析、check、文件变更自动记录时间轴。左侧面板滑入，按时间倒序。谁改了什么、引发了什么——一条线看透项目演化。 |
+| 节点上右键 → 环形菜单弹出：波及范围 / 聚焦飞行 / 最短路径 / 节点详情。Blender 式的肌肉记忆交互，无需工具栏。 | Tab 循环切换。宇宙层：每个社区一团螺旋星云。星座层：星云展开为节点群。Galaxy 内部：双击进入，Esc 退出。粒子在星系间沿边流动。 | 每次分析、check、文件变更自动记录时间轴。左侧面板滑入，按时间倒序。谁改了什么、引发了什么——一条线看透项目演化。 |
 
 | **🎯 图作为输入设备** | **🔥 感知升级三件套** | **⚡ InstancedMesh 规模化** |
-| Shift+点击两个节点 → BFS 自动寻最短路径 → 路径高亮 → Agent 自动分析依赖链架构风险。Alt+拖拽框选 → 收集框内节点 → Agent 自动总结区域模块关系。图不再只是输出——它是输入端。 | **复发热点：** 同一文件多次触发 L4 警报 → 星图着色自动升级，越危险越红。**冲突预演：** 双分支 diff 叠加耦合分析，合并前预知冲突。**门禁模式：** 新模块自动评估 fan-in/fan-out/耦合深度。 | N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点 1 draw call，60 FPS。hover/click/高亮/波及/折叠全部走 `setColorAt` + `_setCoreScale` API。 |
+| Shift+点击两个节点 → BFS 最短路径 → 路径高亮 → Agent 自动分析依赖链风险。Alt+拖拽框选 → 收集框内节点 → Agent 总结区域模块关系。图不再只是输出——它是输入端。 | **复发热点：** 同一文件多次触发 L4 警报 → 星图着色升级。**冲突预演：** 双分支 diff 叠加耦合分析，合并前预知冲突。**门禁模式：** 新模块自动评估 fan-in/fan-out。 | N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点 1 draw call，60 FPS。hover/click/高亮/波及/折叠全部走 `setColorAt` API。 |
 
 ---
 
-## 功能
+## 功能规格
 
 | 🪐 **3D 星图** | 🌍 **10 语言** | 🧠 **三层分析** |
 |---|---|---|
-| 力导向 + BloomPass 发光 + 全息网格 Shader + 边粒子流动。三种渲染模式。大项目自动降级轻量文件图。Tab 切宇宙/星座折叠，双击进入星系。 | Rust 引擎 tree-sitter 统一分析。Python/TS/JS 走专用适配器，其余 7 门走通用适配器。Grammar 编译时静态链接，零配置。 | V1 基础拓扑 → V2 深层诊断（L1–L4 耦合/数据流环/线程冲突/盲点）→ V3 变更路由（五级破坏信号 + YAML 阈值）。 |
+| 力导向 + BloomPass 发光 + 全息网格 Shader + 粒子流动。三种渲染模式。大项目自动降级轻量文件图。 | Rust 引擎 tree-sitter 统一分析。Python/TS/JS 走专用适配器，其余 7 门走通用适配器。Grammar 静态链接，零配置。 | V1 基础拓扑 → V2 深层诊断（L1–L4 耦合/数据流环/线程冲突/盲点）→ V3 变更路由（五级破坏信号 + YAML 阈值）。 |
 
-| ⚡ **Rust 全量** | 🛡️ **约束门禁** | 🎯 **内置 IDE 工具** |
+| ⚡ **Rust 全量引擎** | 🛡️ **约束门禁** | 🎯 **内置 IDE 工具** |
 |---|---|---|
-| 引擎全量分析（Django 3,031 文件 4.1s），无需增量。文件监听 + 自动重分析 + 原子替换。图始终最新。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词（password/token/api_key）强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull 图形化操作）。 |
+| 全量分析（Django 3,031 文件 4.1s），无需增量。文件监听 + 自动重分析。图始终最新。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull）。 |
 
 | 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **194 测试** |
 |---|---|---|
-| JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Rust 引擎长驻，JSON-RPC over stdio + TCP :9777 双模。引擎自启动，崩溃 3 次/60s 自动降级。 | Rust `#[test]` 全覆盖引擎 19 模块：图数据模型、适配器、管线、耦合分析、社区发现、路由、MCP 协议。Tauri 2 桌面应用，Windows `.msi`。 |
+| JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Rust 引擎长驻，JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。 | Rust `#[test]` 全覆盖 19 模块：图数据模型、适配器、管线、耦合分析、社区发现、路由、MCP 协议。 |
 
 ---
 
@@ -120,23 +107,7 @@ cargo tauri build
 
 ## 快速上手
 
-**桌面：** 启动 → 打开项目目录（自动分析渲染）→ 单击节点看详情 → Shift+双节点查路径 → Alt+框选区选 → 聊天面板向 Agent 提问。
-
-**引擎 TCP RPC（:9777）：**
-
-```
-analyze:<path>          # 全量分析
-neighbors:<id>:<depth>  # 查邻居
-path:<from>:<to>        # 最短路径
-impact:<id>:<depth>     # 波及范围
-search:<query>          # 节点搜索
-fragile:<limit>         # 脆弱依赖
-cycle                   # 数据流环
-coupling_report:<id>    # 耦合报告
-blindspots              # 边界盲点
-community:<id>          # 社区归属
-check:<path>            # 约束校验
-```
+启动 → 打开项目目录（自动分析渲染）→ 单击节点看详情 → Shift+双节点查路径 → Alt+框选区选 → 聊天面板向 Agent 提问。
 
 ---
 
@@ -144,13 +115,13 @@ check:<path>            # 约束校验
 
 | Python | TypeScript | JavaScript | Go | Rust |
 |---|---|---|---|---|
-| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
+| 专用适配器 | 专用适配器 | 专用适配器 | tree-sitter | tree-sitter |
 
 | Java | C | C++ | Ruby | Lua |
 |---|---|---|---|---|
 | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
 
-> Python 走专用适配器（AST 级别），TypeScript/JS/JSX/TSX 走专用适配器，其余 7 门走通用 tree-sitter 适配器。Grammar 编译时静态链接，无需运行时下载。
+> Python 走 AST 级专用适配器，TypeScript/JS/JSX/TSX 走 TypeScript 适配器，其余 7 门走通用 tree-sitter 适配器。Grammar 编译时静态链接，无需运行时下载。
 
 ---
 
@@ -160,52 +131,20 @@ check:<path>            # 约束校验
 ┌─ 桌面壳 (Tauri 2) ─────────────────────────────────────┐
 │  ┌─ 前端 (TypeScript) ──┐  IPC   ┌─ Rust 后端 ────────┐ │
 │  │ Three.js 3D · Agent  │◄─────►│ 路由 · Git · Shell  │ │
-│  │ Monaco · xterm.js    │       │ McpManager · Engine  │ │
+│  │ Monaco · xterm.js    │       │ McpManager          │ │
 │  └──────────────────────┘       └─────────┬───────────┘ │
 └───────────────────────────────────────────┼─────────────┘
                                             │ TCP :9777 / MCP serve
                       ┌─────────────────────▼─────────────┐
                       │ Rust 引擎 (engine/)                │
                       │ 发现 → 分析 → 跨文件 → 社区 → 序列化 │
-                      │ 10 tree-sitter 语法 · 3 专用适配器   │
-                      │ → JSON / MsgPack / SQLite          │
+                      │ 10 tree-sitter 语法 · 3 适配器       │
+                      │ JSON / MsgPack / SQLite            │
                       │ 21 MCP 工具 · 194 tests · 19 模块   │
                       └───────────────────────────────────┘
 ```
 
-> **引擎自启动：** Tauri 启动时自动 spawn `engine.exe`（TCP :9777 默认模式）。IDE 集成走 MCP serve 模式（`engine.exe serve --project-root`）。
-
----
-
-## 数据模型
-
-| 节点 | `SYMBOL` 函数/类/模块/变量 | `MEDIUM` 文件/数据库/队列/缓存 | `TEMPORAL` 线程/定时器/事件循环 |
-|---|---|---|---|
-| **边** | `STRUCTURAL` 调用/继承/导入 | `DATA` 读/写/订阅 | `TEMPORAL` 执行于/触发/阻塞 |
-| **深度** | **L1** 公开 API ▸ **L2** 内部导入 ▸ **L3** 共享数据 ▸ **L4** 封装穿透 | | |
-
----
-
-## 约束校验
-
-`hologram.constraints.yaml`：
-
-```yaml
-routing:
-  L5:  { enabled: true }                            # 永远路由
-  L4:  { enabled: true, blast_radius_threshold: 20 }
-  L3:  { enabled: true }
-  L2:  { enabled: true }
-  L1:  { enabled: false }                           # 仅可见
-allowlist:
-  L4: ["tests/"]
-denylist:
-  keywords: ["password", "secret", "token", "api_key"]
-```
-
-```
-引擎 check 端点 → pass/fail 编码在输出中，直入 CI
-```
+> **引擎自启动：** Tauri 启动时自动 spawn `engine.exe`（TCP :9777）。IDE 集成走 MCP serve 模式（`engine.exe serve --project-root`）。
 
 ---
 
