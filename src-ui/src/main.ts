@@ -21,6 +21,7 @@ import { Agent } from './agent/agent';
 import { ToolRegistry, createHologramTools, createHologramToolsFromSchemas, createCodingTools, type ToolExecutor } from './agent/tool';
 import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
+import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
 import { t, setLang } from './i18n';
@@ -219,6 +220,7 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
   checkPanel.update({ passed: true, timestamp: '', changed_files: [], total_changed_files: 0, l5_violations: [], l4_violations: [], l3_violations: [], l2_violations: [], passed_checks: [], blast_radius: 0, cross_community_edges: 0, new_cycles: 0, new_thread_conflicts: 0, api_signature_changes: 0 });
   // Register this workspace with the backend so all tool commands route here
   await invoke('set_active_project', { path: folder }).catch(() => {});
+  initLogger(folder);
 
   setLoading(true, folder);
 
@@ -273,6 +275,10 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
     showGraphView(folder);
     setModeButtonsEnabled(true);
     statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
+    log.info('main', 'project loaded', {
+      nodes: nodeCount,
+      edges: Array.isArray(graph.edges) ? graph.edges.length : Object.keys(graph.edges || {}).length,
+    });
     setLoading(false);
     unlistenProgress(); unlistenPhase(); unlistenHeartbeat(); currentPhase = '';
     // Agent 初始化（异步，不阻塞图的显示）
@@ -1398,9 +1404,9 @@ async function init(): Promise<void> {
   listen<{ path: string; error: string }>('analysis-failed', (event) => {
     const { path: projPath, error } = event.payload;
     if (!currentPath || !isSamePath(currentPath, projPath)) return;
+    log.error('main', 'analysis failed', { path: projPath, error });
     const short = (error || '未知错误').slice(0, 80);
     statusText.textContent = `⚠️ 后台分析失败: ${short}`;
-    console.error('[analysis-failed]', error);
   });
 
   function _doGraphUpdate(graph: any): void {

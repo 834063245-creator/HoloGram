@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::graph::{Edge, Graph, Node};
+use crate::graph::{Graph, Node};
 
 /// Neighbors of a node (outgoing edges → connected nodes, with edge info).
 pub fn neighbors(graph: &Graph, node_id: &str, depth: usize) -> Vec<(String, String, u8)> {

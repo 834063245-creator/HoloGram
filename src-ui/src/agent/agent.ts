@@ -12,6 +12,7 @@ import type { Tool, ToolRegistry } from './tool';
 import type { PermissionGate } from './permission';
 import type { HookRegistry } from './hooks';
 import { bus } from '../ui/events';
+import { log } from './logger';
 
 // ---- Event types ----
 
@@ -187,15 +188,28 @@ export class Agent {
 
   /** Run one turn: append user input, drive the tool loop. */
   async run(signal: AbortSignal, input: string): Promise<void> {
+    const turnStart = performance.now();
+    log.info('agent', 'turn started', { model: this.prov.name() });
     this.sink({ kind: EventKind.TurnStarted });
     this.session.push({ role: 'user', content: input });
 
     for (let step = 0; this.maxSteps <= 0 || step < this.maxSteps; step++) {
       // ---- Stream ----
       const { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1);
-      if (err) throw err;
+      if (err) {
+        log.error('agent', 'stream error', { error: String(err.message || err) });
+        throw err;
+      }
 
       if (usage && usage.total_tokens > 0) {
+        log.info('agent', 'llm response', {
+          turn: step + 1,
+          model: this.prov.name(),
+          finish_reason: usage.finish_reason,
+          total_tokens: usage.total_tokens,
+          cache_hit_tokens: usage.cache_hit_tokens,
+          elapsed_ms: Math.round(performance.now() - turnStart),
+        });
         this.cacheHitTotal += usage.cache_hit_tokens;
         this.cacheMissTotal += usage.cache_miss_tokens;
         this.lastUsage = usage;
@@ -226,6 +240,10 @@ export class Agent {
       if (calls.length === 0) return; // model gave final answer
 
       // ---- Execute ----
+      log.info('agent', 'execute batch', {
+        tools: calls.map(c => c.name),
+        count: calls.length,
+      });
       const results = await this.executeBatch(signal, calls);
       for (let i = 0; i < calls.length; i++) {
         this.session.push({
@@ -453,7 +471,9 @@ export class Agent {
 
       if (signal.aborted) throw new Error('aborted');
       bus.emit('agent:tool-started', { toolName: call.name, args });
+      const toolStart = performance.now();
       result = await t.execute(args);
+      log.debug('tool', 'executed', { name: call.name, elapsed_ms: Math.round(performance.now() - toolStart) });
       // ── PreToolUse hooks: enrich result with graph context ──
       if (this.hooks && !errMsg) {
         try {
@@ -466,6 +486,7 @@ export class Agent {
       if (e?.name === 'AbortError' || e?.message?.includes('aborted')) throw e;
       result = `error: ${e.message || e}`;
       errMsg = firstLine(e.message || String(e));
+      log.warn('agent', 'tool failed', { tool: call.name, error: errMsg });
     }
 
     const { body, truncMsg } = truncateToolOutput(result, call.name);

@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use super::{Edge, EdgeKind, Graph, Node, NodeKind};
+use super::{Edge, Graph};
 
 /// Cross-file edge resolver.
 /// After all files are parsed and merged, resolves edge targets by

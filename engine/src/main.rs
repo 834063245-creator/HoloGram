@@ -1,9 +1,9 @@
 #![windows_subsystem = "windows"]
 
-use hologram_engine::analysis::{coupling::compute_coupling, fragile_nodes, detect_cycles, coupling_report, graph_summary,
-    classify_cycles, thread_conflict_report, find_blindspots};
+use hologram_engine::analysis::{coupling::compute_coupling, fragile_nodes, detect_cycles, coupling_report, graph_summary, thread_conflict_report, find_blindspots};
 use hologram_engine::community::detect_communities;
 use hologram_engine::graph::{CrossFileResolver, query, Graph, EdgeKind};
+use hologram_engine::logging;
 use hologram_engine::routing::preflight::run_full_check;
 use hologram_engine::timeline::TimelineStore;
 use hologram_engine::pipeline::runner::analyze_project;
@@ -12,19 +12,22 @@ use serde_json::{self, json};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tracing::{info, debug};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── MCP serve mode ──
     if let Some(project_root) = mcp::parse_serve_args() {
-        eprintln!("[engine] MCP serve mode — project: {}", project_root);
         let root = PathBuf::from(&project_root);
         if !root.exists() {
             eprintln!("[engine] ERROR: project root not found: {}", project_root);
             std::process::exit(1);
         }
+        let _log_guard = logging::init_logging(Some(&root));
+        info!(project_root = %project_root, "engine starting in MCP serve mode");
+
         // Auto-analyze on startup
-        eprintln!("[engine] analyzing project...");
+        info!("analysis started");
         let mut result = analyze_project(&root);
         CrossFileResolver::resolve(&mut result.graph);
         compute_coupling(&mut result.graph);
@@ -34,6 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
             *cache = Some(result.graph);
         }
+        info!(nodes = node_count, edges = edge_count, elapsed = %result.elapsed_secs, "analysis complete");
+
         // Signal ready to parent process (McpManager reads this)
         let ready = serde_json::json!({
             "jsonrpc": "2.0",
@@ -45,8 +50,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         println!("{}", serde_json::to_string(&ready).unwrap_or_default());
-        eprintln!("[engine] analysis complete: {} nodes, {} edges, {:.1}s",
-            node_count, edge_count, result.elapsed_secs);
 
         let server = McpServer::new(&root);
         server.run_stdio();
@@ -54,17 +57,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── TCP RPC server mode (default) ──
+    let _log_guard = logging::init_logging(None);
     let listener = TcpListener::bind("127.0.0.1:9777").await?;
-    println!("[engine] listening on 127.0.0.1:9777");
+    info!("TCP server listening on 127.0.0.1:9777");
 
     loop {
         let (mut socket, addr) = listener.accept().await?;
-        println!("[engine] connected: {}", addr);
+        debug!(%addr, "client connected");
 
         let mut buf = vec![0u8; 4096];
         let n = socket.read(&mut buf).await?;
         let request = String::from_utf8_lossy(&buf[..n]);
-        println!("[engine] received: {}", request.trim());
+        debug!(request_len = request.len(), "received request");
 
         let response = if request.starts_with("check:") {
     handle_check(request.trim())
@@ -78,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         find_blindspots(c["L4"].as_u64().unwrap_or(0) as usize, cycles.len(), conflicts["conflict_count"].as_u64().unwrap_or(0) as usize)
     })
 } else if request.starts_with("timeline") {
-    handle_simple("timeline", request.trim(), |g, a| {
+    handle_simple("timeline", request.trim(), |_g, a| {
         let path = std::path::Path::new(a);
         let store = TimelineStore::open(path).ok();
         json!(store.map(|s| s.query(50)).unwrap_or_default())
@@ -106,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!(found.map(|c| c.iter().take(50).collect::<Vec<_>>()))
             })
         } else if request.starts_with("diff:") {
-            handle_simple("diff:", request.trim(), |g, a| {
+            handle_simple("diff:", request.trim(), |g, _a| {
                 let before = Graph::new(); // placeholder: load from file
                 let d = g.diff(&before);
                 json!({"added":d.added_nodes.len(),"removed":d.removed_nodes.len(),"modified":d.modified_nodes.len()})
@@ -141,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let framed = frame_response(&response);
         socket.write_all(&framed).await?;
-        println!("[engine] sent {} bytes", framed.len());
+        debug!(bytes = framed.len(), "response sent");
     }
 }
 
@@ -160,16 +164,12 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     // Post-processing: cross-file edge resolution
     let resolve_start = std::time::Instant::now();
     let resolved = CrossFileResolver::resolve(&mut result.graph);
-    println!(
-        "[engine] cross-file: {} edges resolved in {:.2}s",
-        resolved,
-        resolve_start.elapsed().as_secs_f64()
-    );
+    info!(edges = resolved, elapsed_secs = resolve_start.elapsed().as_secs_f64(), "cross-file resolution done");
 
     // Post-processing: coupling depth + community detection
     let coupling_start = std::time::Instant::now();
     compute_coupling(&mut result.graph);
-    println!("[engine] coupling: {:.2}s", coupling_start.elapsed().as_secs_f64());
+    info!(elapsed_secs = coupling_start.elapsed().as_secs_f64(), "coupling computation done");
 
     let comm_start = std::time::Instant::now();
     let communities = detect_communities(&result.graph, 42);
@@ -185,11 +185,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         store.record("analyze", None, &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.graph.node_count(), result.graph.edge_count(), result.elapsed_secs));
     }
 
-    println!(
-        "[engine] communities: {} found in {:.2}s",
-        communities.len(),
-        comm_start.elapsed().as_secs_f64()
-    );
+    info!(count = communities.len(), elapsed_secs = comm_start.elapsed().as_secs_f64(), "communities detected");
 
     // Serialize full graph for Unity consumption
     let nodes: Vec<serde_json::Value> = result.graph.nodes.values().map(|n| {
@@ -380,6 +376,7 @@ fn frame_response(payload: &[u8]) -> Vec<u8> {
 }
 
 /// Parse a framed message: returns (payload, bytes_consumed) or None.
+#[allow(dead_code)]
 fn unframe(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
     if buf.len() < 4 { return None; }
     let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
