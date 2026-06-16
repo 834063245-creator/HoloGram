@@ -162,7 +162,7 @@ function fibonacciSphere(n: number, radius: number): Float32Array {
 // are LOCKED — safety layers only, no tuning.
 // ═══════════════════════════════════════════════════════════════
 
-function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
+async function layout3D(n: number, edgePairs: [number, number][], signal?: AbortSignal): Promise<Float32Array> {
   if (n === 0) return new Float32Array(0);
 
   // ── Core parameters (LOCKED) ──
@@ -182,7 +182,13 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   const ATT_CAP = shellRadius;             // per-pair attraction
   const VEL_CAP = shellRadius * 0.25;      // per-node velocity before damping
 
+  // Yield every N iterations to keep the UI responsive
+  const YIELD_EVERY = n > 4000 ? 2 : n > 1500 ? 3 : 5;
+
   for (let iter = 0; iter < maxIter; iter++) {
+    // Abort if a newer render supersedes this one
+    if (signal?.aborted) return pos;
+
     // ── Repulsion (all pairs) ──
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
@@ -253,6 +259,11 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
         pos[i * 3 + 1] -= (dy / dist) * drift;
         pos[i * 3 + 2] -= (dz / dist) * drift;
       }
+    }
+
+    // Yield to event loop every N iterations to keep the UI responsive
+    if (iter % YIELD_EVERY === YIELD_EVERY - 1 && iter < maxIter - 1) {
+      await new Promise<void>(r => setTimeout(r, 0));
     }
   }
   return pos;
@@ -372,6 +383,9 @@ export class StarGraph {
   private blastMaxDist = 3; // Reduced from 8 to 3 for more focused impact analysis
   private blastEdgeType: string = 'all'; // 'all', 'structural', 'data', 'temporal'
   private blastDirection: string = 'both'; // 'both', 'outbound', 'inbound'
+
+  // Incremental-update abort: cancel in-flight layout when new data arrives
+  private _layoutAbort: AbortController | null = null;
 
   // ── Community / Galaxy fold overlay ──────────────────────
   private foldMode = false;
@@ -3055,6 +3069,9 @@ export class StarGraph {
   }
 
   private async _renderImpl(graph: GraphJSON): Promise<void> {
+    // Cancel any in-flight layout from a previous render
+    if (this._layoutAbort) { this._layoutAbort.abort(); }
+    this._layoutAbort = new AbortController();
     this.clearGraph();
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
@@ -3158,11 +3175,11 @@ export class StarGraph {
         rawPos = gpuResult;
         layoutSource = 'GPU';
       } else {
-        rawPos = layout3D(nodes.length, pairs);
+        rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal);
         layoutSource = 'CPU(fallback)';
       }
     } else {
-      rawPos = layout3D(nodes.length, pairs);
+      rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal);
     }
     // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
