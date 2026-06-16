@@ -139,11 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             b"{\"error\":\"unknown command\"}".to_vec()
         };
 
-        // 4-byte LE length prefix + payload
-        let len = response.len() as u32;
-        let mut framed = Vec::with_capacity(4 + response.len());
-        framed.extend_from_slice(&len.to_le_bytes());
-        framed.extend_from_slice(&response);
+        let framed = frame_response(&response);
         socket.write_all(&framed).await?;
         println!("[engine] sent {} bytes", framed.len());
     }
@@ -253,7 +249,7 @@ fn handle_check(request: &str) -> Vec<u8> {
 
     // Auto-analyze if no cached graph
     {
-        let cache = mcp::CACHED_GRAPH.lock().unwrap();
+        let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
         if cache.is_none() {
             drop(cache);
             if root.exists() {
@@ -265,7 +261,7 @@ fn handle_check(request: &str) -> Vec<u8> {
         }
     }
 
-    let cache = mcp::CACHED_GRAPH.lock().unwrap();
+    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
     let after = match cache.as_ref() {
         Some(g) => g,
         None => return b"{\"error\":\"project not found\"}".to_vec(),
@@ -305,7 +301,7 @@ fn handle_check(request: &str) -> Vec<u8> {
 
 fn handle_simple(prefix: &str, request: &str, f: fn(&Graph, &str) -> serde_json::Value) -> Vec<u8> {
     let arg = request.strip_prefix(prefix).unwrap_or("");
-    let cache = mcp::CACHED_GRAPH.lock().unwrap();
+    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
     match cache.as_ref() {
         Some(g) => serde_json::to_vec(&f(g, arg)).unwrap_or_default(),
         None => b"{\"error\":\"no graph loaded\"}".to_vec(),
@@ -314,7 +310,7 @@ fn handle_simple(prefix: &str, request: &str, f: fn(&Graph, &str) -> serde_json:
 
 fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
     let args = request.strip_prefix(prefix).unwrap_or("");
-    let cache = mcp::CACHED_GRAPH.lock().unwrap();
+    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
     let graph = match cache.as_ref() {
         Some(g) => g,
         None => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
@@ -368,4 +364,232 @@ fn handle_get_graph() -> Vec<u8> {
         ]
     }))
     .unwrap_or_default()
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Protocol helpers (testable)
+// ═══════════════════════════════════════════════════════════════
+
+/// Frame a payload with 4-byte little-endian length prefix.
+fn frame_response(payload: &[u8]) -> Vec<u8> {
+    let len = payload.len() as u32;
+    let mut framed = Vec::with_capacity(4 + payload.len());
+    framed.extend_from_slice(&len.to_le_bytes());
+    framed.extend_from_slice(payload);
+    framed
+}
+
+/// Parse a framed message: returns (payload, bytes_consumed) or None.
+fn unframe(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
+    if buf.len() < 4 { return None; }
+    let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    if buf.len() < 4 + len { return None; }
+    Some((buf[4..4 + len].to_vec(), 4 + len))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hologram_engine::graph::{Edge, EdgeKind, Node, NodeKind};
+    use hologram_engine::mcp;
+
+    // Mutex to serialize CACHED_GRAPH access in bin tests
+    static BIN_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_bin() -> std::sync::MutexGuard<'static, ()> {
+        BIN_MUTEX.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn load_test_graph() -> std::sync::MutexGuard<'static, ()> {
+        let guard = lock_bin();
+        let mut g = hologram_engine::graph::Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("src/a.rs".into());
+        g.add_node(a);
+        let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
+        b.location = Some("src/b.rs".into());
+        g.add_node(b);
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
+            *cache = Some(g);
+        }
+        guard
+    }
+
+    fn clear_graph() {
+        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
+            *cache = None;
+        }
+    }
+
+    // ── Framing protocol ──
+
+    #[test]
+    fn test_frame_roundtrip() {
+        let payload = b"{\"ok\":true}";
+        let framed = frame_response(payload);
+        assert_eq!(framed.len(), 4 + payload.len());
+        let (decoded, consumed) = unframe(&framed).unwrap();
+        assert_eq!(decoded, payload);
+        assert_eq!(consumed, framed.len());
+    }
+
+    #[test]
+    fn test_frame_empty_payload() {
+        let framed = frame_response(b"");
+        assert_eq!(&framed[..4], &[0, 0, 0, 0]); // length 0
+        let (decoded, _) = unframe(&framed).unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn test_frame_large_payload() {
+        let payload = vec![b'x'; 65536];
+        let framed = frame_response(&payload);
+        let (decoded, _) = unframe(&framed).unwrap();
+        assert_eq!(decoded.len(), 65536);
+    }
+
+    #[test]
+    fn test_unframe_insufficient_data() {
+        assert!(unframe(&[0x01]).is_none());
+        let framed = frame_response(b"hello");
+        assert!(unframe(&framed[..2]).is_none()); // truncated
+    }
+
+    // ── handle_get_graph ──
+
+    #[test]
+    fn test_handle_get_graph_returns_hardcoded_structure() {
+        let response = handle_get_graph();
+        let v: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 3);
+        assert_eq!(v["edges"].as_array().unwrap().len(), 2);
+        assert_eq!(v["nodes"][0]["id"], "node_a");
+    }
+
+    // ── handle_simple ──
+
+    #[test]
+    fn test_handle_simple_with_graph() {
+        let _g = load_test_graph();
+        // "fragile:5" → calls fragile_nodes(g, "5") where "5" is parsed as limit
+        let resp = handle_simple("fragile:", "fragile:5", |g, a| {
+            json!(hologram_engine::analysis::fragile_nodes(g, a.parse().unwrap_or(10)))
+        });
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v.is_array());
+    }
+
+    #[test]
+    fn test_handle_simple_no_graph() {
+        clear_graph();
+        let resp = handle_simple("fragile:", "fragile:5", |_, _| json!({}));
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert_eq!(v["error"], "no graph loaded");
+    }
+
+    #[test]
+    fn test_handle_simple_empty_arg() {
+        let _g = load_test_graph();
+        // "cycle" with no arg
+        let resp = handle_simple("cycle", "cycle", |g, _| {
+            json!(hologram_engine::analysis::detect_cycles(g))
+        });
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v.is_array());
+    }
+
+    // ── handle_query ──
+
+    #[test]
+    fn test_handle_query_neighbors() {
+        let _g = load_test_graph();
+        let resp = handle_query("neighbors:a", "neighbors:");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v["neighbors"].is_array());
+    }
+
+    #[test]
+    fn test_handle_query_path_found() {
+        let _g = load_test_graph();
+        let resp = handle_query("path:a:b", "path:");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v["path"].is_array());
+        assert!(v["length"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_handle_query_path_missing_args() {
+        let _g = load_test_graph();
+        let resp = handle_query("path:a", "path:");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("usage"));
+    }
+
+    #[test]
+    fn test_handle_query_search() {
+        let _g = load_test_graph();
+        let resp = handle_query("search:mod", "search:");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v["results"].is_array());
+    }
+
+    #[test]
+    fn test_handle_query_impact() {
+        let _g = load_test_graph();
+        let resp = handle_query("impact:a:2", "impact:");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v["layers"].is_array());
+    }
+
+    #[test]
+    fn test_handle_query_no_graph() {
+        clear_graph();
+        let resp = handle_query("neighbors:a", "neighbors:");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert_eq!(v["error"], "no graph loaded, run analyze first");
+    }
+
+    // ── handle_analyze (smoke test with temp project) ──
+
+    #[test]
+    fn test_handle_analyze_valid_project() {
+        let _g = lock_bin();
+        let tmp = std::env::temp_dir().join("hologram_main_test_proj");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("main.py"), "def hello(): pass\n").unwrap();
+
+        let path = tmp.to_str().unwrap();
+        // handle_analyze takes the raw request string (prefix stripped by caller in main loop)
+        let resp = handle_analyze(path);
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert!(v["nodes"].is_array());
+        assert!(v["node_count"].as_u64().unwrap() > 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_handle_analyze_nonexistent_path() {
+        let fake = std::env::temp_dir().join("__hologram_nonexistent_dir__");
+        // Ensure it doesn't exist
+        let _ = std::fs::remove_dir_all(&fake);
+        let resp = handle_analyze(fake.to_str().unwrap());
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert_eq!(v["error"], "path not found");
+    }
+
+    // ── handle_check ──
+
+    #[test]
+    fn test_handle_check_no_project() {
+        let _g = lock_bin();
+        clear_graph();
+        // handle_check strips the "check:" prefix internally
+        let resp = handle_check("check:C:/nonexistent/path/xyz");
+        let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+        assert_eq!(v["error"], "project not found");
+    }
 }
