@@ -313,7 +313,33 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", target))
+    let stdout = EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", target))?;
+
+    // Persist engine result to hologram_graph.json — keeps disk in sync with engine memory.
+    // Without this, load_graph_json (used by openProject) reads stale data.
+    if !stdout.trim().is_empty() && !stdout.contains("\"error\"") {
+        if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+            let wrapped = serde_json::json!({
+                "meta": {
+                    "source_root": &target,
+                    "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+                    "version": "0.1.0",
+                    "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
+                    "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
+                },
+                "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
+                "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
+                "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
+            });
+            let graph_path = format!("{}/hologram_graph.json", target);
+            let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
+            if let Err(e) = std::fs::write(&graph_path, &graph_json) {
+                eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
+            }
+        }
+    }
+
+    Ok(stdout)
 }
 
 #[tauri::command]
@@ -594,9 +620,25 @@ async fn exec_command(
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000)); // default 5 min
 
     let mut child = if cfg!(target_os = "windows") {
-        let mut c = silent_command("cmd");
-        c.arg("/c").arg(cmd_escape(&command));
-        c
+        // Prefer Git Bash (supports Unix commands like ls, grep, python),
+        // fall back to cmd.exe if bash is not on PATH.
+        let use_bash = std::process::Command::new("bash")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if use_bash {
+            let mut c = silent_command("bash");
+            c.arg("-c").arg(&command);
+            c
+        } else {
+            let mut c = silent_command("cmd");
+            c.arg("/c").arg(cmd_escape(&command));
+            c
+        }
     } else {
         let mut c = silent_command("sh");
         c.arg("-c").arg(sh_escape(&command));

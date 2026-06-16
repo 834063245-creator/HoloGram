@@ -101,4 +101,84 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn test_analyze_empty_project() {
+        let tmp = std::env::temp_dir().join("hologram_test_empty");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let result = analyze_project(&tmp);
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.nodes_total, 0);
+        assert_eq!(result.edges_total, 0);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_analyze_rust_project() {
+        let tmp = std::env::temp_dir().join("hologram_test_rust");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("src")).unwrap();
+
+        fs::write(tmp.join("src").join("main.rs"),
+            "fn main() {\n    println!(\"hello\");\n}\n\npub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+        ).unwrap();
+
+        let result = analyze_project(&tmp);
+        assert!(result.files_parsed >= 1);
+        // Rust tree-sitter should find at least main + add
+        assert!(result.nodes_total >= 2, "should find main + add in Rust file");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_analyze_go_project() {
+        let tmp = std::env::temp_dir().join("hologram_test_go");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("main.go"),
+            "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"hello\")\n}\n"
+        ).unwrap();
+
+        let result = analyze_project(&tmp);
+        assert!(result.files_parsed >= 1);
+        assert!(result.nodes_total >= 1);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_analyze_nested_directories() {
+        let tmp = std::env::temp_dir().join("hologram_test_nested");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("src").join("utils")).unwrap();
+
+        fs::write(tmp.join("src").join("main.py"), "def main(): pass\n").unwrap();
+        fs::write(tmp.join("src").join("utils").join("helpers.py"), "def helper(): pass\n").unwrap();
+
+        let result = analyze_project(&tmp);
+        assert_eq!(result.files_parsed, 2);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_analyze_syntax_error_tolerant() {
+        let tmp = std::env::temp_dir().join("hologram_test_err");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("broken.py"), "def foo(:\n    pass\n").unwrap();
+        fs::write(tmp.join("ok.py"), "def bar():\n    pass\n").unwrap();
+
+        let result = analyze_project(&tmp);
+        // Should not crash; should parse at least the valid file
+        assert!(result.files_parsed >= 1);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }

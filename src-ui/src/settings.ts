@@ -40,7 +40,7 @@ const DEFAULTS: AppSettings = {
       name: 'deepseek',
       apiKey: '',
       baseUrl: 'https://api.deepseek.com/v1',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-pro',
     },
     {
       kind: 'anthropic',

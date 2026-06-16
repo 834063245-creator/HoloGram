@@ -159,4 +159,74 @@ mod tests {
         let e = g.get_edge("e1_resolved").unwrap();
         assert_eq!(e.target, "models.User");
     }
+
+    #[test]
+    fn test_resolve_source_and_target() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("lib.fn_a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("lib.fn_b", "fn_b", NodeKind::Symbol));
+        // Both source and target need resolution
+        g.add_edge(Edge::new("e1", "fn_a", "fn_b", EdgeKind::Calls));
+
+        let resolved = CrossFileResolver::resolve(&mut g);
+        assert_eq!(resolved, 1);
+        let e = g.get_edge("e1_resolved").unwrap();
+        assert_eq!(e.source, "lib.fn_a");
+        assert_eq!(e.target, "lib.fn_b");
+    }
+
+    #[test]
+    fn test_resolve_multiple_candidates_best_match() {
+        let mut g = Graph::new();
+        // Two modules define a "User" class
+        g.add_node(Node::new("auth.models.User", "User", NodeKind::Symbol));
+        g.add_node(Node::new("shop.models.User", "User", NodeKind::Symbol));
+        // Reference uses qualified name "models.User"
+        g.add_node(Node::new("views.index", "index", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "views.index", "models.User", EdgeKind::Calls));
+
+        let resolved = CrossFileResolver::resolve(&mut g);
+        // Should resolve to auth.models.User (first registered, or best match)
+        let e = g.get_edge("e1_resolved");
+        assert!(e.is_some(), "should resolve even with ambiguity");
+    }
+
+    #[test]
+    fn test_resolve_already_resolved_edge_unchanged() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        // Edge already has correct IDs
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+
+        let resolved = CrossFileResolver::resolve(&mut g);
+        assert_eq!(resolved, 0, "already-resolved edge should not count");
+        assert!(g.get_edge("e1").is_some());
+    }
+
+    #[test]
+    fn test_orphan_edge_cleanup() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        // Edge to non-existent node
+        g.add_edge(Edge::new("e1", "a", "nonexistent", EdgeKind::Calls));
+
+        let resolved = CrossFileResolver::resolve(&mut g);
+        // Orphan edge should be cleaned
+        assert!(g.get_edge("e1").is_none(), "orphan edge should be removed");
+        assert!(resolved > 0, "orphan cleanup counts as resolution");
+    }
+
+    #[test]
+    fn test_resolve_no_name_match() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        // Edge to a name that doesn't match anything
+        g.add_edge(Edge::new("e1", "a", "totally_unknown_name", EdgeKind::Calls));
+
+        let resolved = CrossFileResolver::resolve(&mut g);
+        // Should be cleaned as orphan
+        assert!(g.get_edge("e1").is_none());
+        assert!(resolved > 0);
+    }
 }

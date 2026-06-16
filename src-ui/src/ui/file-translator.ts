@@ -711,8 +711,8 @@ export class FileTranslator {
       body = JSON.stringify({
         model: provider.model,
         max_tokens: maxTokens,
-        system: promptWithCount + '\n\n代码内容：\n' + content,
-        messages: [{ role: 'user', content: '请翻译上面的代码。' }],
+        system: promptWithCount,
+        messages: [{ role: 'user', content: `代码内容：\n\`\`\`\n${content}\n\`\`\`\n\n请翻译并返回 JSON。` }],
       });
     } else {
       // OpenAI-compatible (including DeepSeek)
@@ -736,9 +736,10 @@ export class FileTranslator {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, 60000);
 
-    // Combine our AbortController with the timeout
+    // Propagate user cancellation (tab close / panel destroy) to the fetch controller
     signal.addEventListener('abort', () => controller.abort());
 
     let response: Response;
@@ -749,6 +750,12 @@ export class FileTranslator {
         body,
         signal: controller.signal,
       });
+    } catch (err) {
+      // Distinguish timeout abort from user-initiated abort
+      if (timedOut) {
+        throw new Error('翻译超时：LLM 请求超过 60 秒未响应，请重试或选择更少的代码行');
+      }
+      throw err; // user-initiated AbortError → silently discarded upstream
     } finally {
       clearTimeout(timeoutId);
     }
