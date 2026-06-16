@@ -12,6 +12,7 @@ mod engine_client;
 mod sandbox;
 mod audit;
 mod credential;
+mod logging;
 
 use mcp_manager::McpManager;
 use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
@@ -28,6 +29,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
+use tracing_appender::non_blocking::WorkerGuard;
 
 // Windows: hide console windows for subprocesses
 #[cfg(windows)]
@@ -56,6 +58,9 @@ static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32:
 /// Cached bash availability on Windows — detected once, avoids blocking every shell call.
 static HAS_BASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
+/// Logging guard — initialized once on first project open, held for process lifetime.
+static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
+
 fn has_bash() -> bool {
     *HAS_BASH.get_or_init(|| {
         std::process::Command::new("bash")
@@ -76,7 +81,7 @@ fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
             c
         } else {
             let mut c = silent_command("cmd");
-            c.arg("/c").arg(cmd_escape(cmd));
+            c.arg("/s").arg("/c").arg(cmd);
             c
         }
     } else {
@@ -164,14 +169,6 @@ fn silent_command(program: &str) -> Command {
     cmd
 }
 
-/// Escape a command string for `cmd /c` on Windows.
-/// `cmd /c` strips the outermost double quotes, so we wrap the command
-/// and escape any inner `"` as `\"`. This prevents commands like
-/// `node -e "console.log('hello')"` from losing their nested quotes.
-fn cmd_escape(command: &str) -> String {
-    format!("\"{}\"", command.replace('"', "\\\""))
-}
-
 /// Safe shell quoting for `sh -c` on Unix — uses single-quote wrapping
 /// with embedded single quotes escaped as '\'' (end quote, escaped quote, start quote).
 fn sh_escape(command: &str) -> String {
@@ -245,6 +242,8 @@ fn set_active_project(path: String) -> Result<(), String> {
     let project_path = std::path::Path::new(&path);
     *SANDBOX.lock().unwrap() = Some(Sandbox::new(project_path));
     *AUDIT_LOGGER.lock().unwrap() = Some(AuditLogger::new(project_path));
+    // Init structured logging on first project open
+    let _ = LOG_GUARD.get_or_init(|| logging::init_logging(project_path));
     let last_path_file = project_root().join(".last_project");
     if let Err(e) = std::fs::write(&last_path_file, &path) {
         eprintln!("[hologram] failed to write .last_project: {e}");
@@ -259,6 +258,7 @@ fn get_active_project() -> Result<String, String> {
     Ok(ACTIVE_PROJECT.lock().unwrap().clone())
 }
 
+#[allow(dead_code)]
 fn active_graph() -> String {
     let proj = ACTIVE_PROJECT.lock().unwrap();
     if !proj.is_empty() {
@@ -382,7 +382,7 @@ async fn hologram_path(from: String, to: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_diff(before_path: String, after_path: Option<String>) -> Result<String, String> {
+async fn hologram_diff(_before_path: String, _after_path: Option<String>) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("diff:")
 }
 
@@ -392,12 +392,12 @@ async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
+async fn hologram_cycle(_mode: Option<String>) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("cycle:")
 }
 
 #[tauri::command]
-async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
+async fn hologram_search(query: String, _limit: Option<i32>) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send(&format!("search:{}", query))
 }
 
@@ -407,7 +407,7 @@ async fn hologram_coupling_report(module: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
+async fn hologram_blindspots(_threshold: Option<f64>) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("blindspots:")
 }
 
@@ -421,7 +421,7 @@ async fn hologram_timeline(
     path: Option<String>,
     since: Option<String>,
     limit: Option<i32>,
-    module: Option<String>,
+    _module: Option<String>,
 ) -> Result<String, String> {
     // Resolve project path
     let proj = path
@@ -476,8 +476,8 @@ async fn hologram_timeline(
 
 #[tauri::command]
 async fn hologram_community_report(
-    resolution: Option<f64>,
-    min_size: Option<i32>,
+    _resolution: Option<f64>,
+    _min_size: Option<i32>,
 ) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("community_report:")
 }
@@ -489,10 +489,10 @@ async fn hologram_graph_summary() -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_rename(
-    old_name: String,
-    new_name: String,
-    dry_run: Option<bool>,
-    node_id: Option<String>,
+    _old_name: String,
+    _new_name: String,
+    _dry_run: Option<bool>,
+    _node_id: Option<String>,
 ) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("rename:")
 }
@@ -544,7 +544,7 @@ async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<Stri
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
+async fn hologram_run_health(path: String, _days: Option<i32>) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
 }
 
@@ -553,12 +553,12 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn hologram_history(node_id: String) -> Result<String, String> {
+async fn hologram_history(_node_id: String) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("history:")
 }
 
 #[tauri::command]
-async fn hologram_community(node_id: String) -> Result<String, String> {
+async fn hologram_community(_node_id: String) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("community:")
 }
 
@@ -592,8 +592,8 @@ async fn hologram_changes() -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_hotspots(
-    days: Option<i32>,
-    min_count: Option<i32>,
+    _days: Option<i32>,
+    _min_count: Option<i32>,
 ) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("timeline:")
 }
@@ -604,8 +604,8 @@ async fn hologram_hotspots(
 
 #[tauri::command]
 async fn hologram_workspace_conflict(
-    path_a: String,
-    path_b: String,
+    _path_a: String,
+    _path_b: String,
 ) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send("timeline:")
 }
@@ -617,7 +617,7 @@ async fn hologram_workspace_conflict(
 #[tauri::command]
 async fn hologram_gate_check(
     path: String,
-    module_file: Option<String>,
+    _module_file: Option<String>,
 ) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
 }
@@ -650,7 +650,7 @@ async fn exec_command(
             c
         } else {
             let mut c = silent_command("cmd");
-            c.arg("/c").arg(cmd_escape(&command));
+            c.arg("/s").arg("/c").arg(&command);
             c
         }
     } else {
@@ -836,6 +836,19 @@ async fn write_file_content(file_path: String, content: String) -> Result<(), St
 // ═══════════════════════════════════════════════════════
 // File tree operations
 // ═══════════════════════════════════════════════════════
+
+/// Append a line to a log file — used by the TypeScript UI logger.
+#[tauri::command]
+fn log_append(path: String, content: String) -> Result<(), String> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("log_append: cannot open {}: {}", path, e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("log_append: write failed: {}", e))
+}
 
 #[tauri::command]
 async fn create_directory(path: String) -> Result<(), String> {
@@ -2306,6 +2319,7 @@ fn main() {
             list_directory,
             read_file_content,
             write_file_content,
+            log_append,
             create_directory,
             delete_file_or_dir,
             rename_file_or_dir,

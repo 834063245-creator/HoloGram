@@ -7,14 +7,15 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
+use tracing::{info, warn};
 
 use crate::analysis::*;
 use crate::community::detect_communities;
 use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKind};
-use crate::pipeline::runner::{analyze_project, PipelineResult};
+use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
 use crate::timeline::TimelineStore;
 
@@ -151,6 +152,7 @@ impl McpServer {
 
     /// Process one JSON-RPC request line, return JSON-RPC response line (or None for notifications).
     pub fn handle_request(&self, line: &str) -> Option<String> {
+        let start = std::time::Instant::now();
         let request: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => return None,
@@ -162,12 +164,18 @@ impl McpServer {
         // Notifications have no id — ignore
         let id = req_id?;
 
+        info!(method = %method, id = %id, "mcp request");
+
         let result = match method {
             "tools/list" => self.handle_tools_list(&id),
             "tools/call" => self.handle_tools_call(&request, &id),
-            _ => McpServer::error_response(&id, -32601, &format!("Method not found: {}", method)),
+            _ => {
+                warn!(method = %method, id = %id, "unknown MCP method");
+                McpServer::error_response(&id, -32601, &format!("Method not found: {}", method))
+            }
         };
 
+        info!(method = %method, id = %id, elapsed_ms = start.elapsed().as_millis(), "mcp response");
         Some(serde_json::to_string(&result).unwrap_or_default())
     }
 
@@ -482,7 +490,7 @@ impl McpServer {
     }
 
     fn tool_thread_conflicts(&self, args: &Value, id: &Value) -> Value {
-        let node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let _node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
         self.with_graph(id, |g| {
             let mut resources = serde_json::Map::new();
             // Find medium nodes
@@ -699,19 +707,19 @@ impl McpServer {
             drop(lock);
             return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
         }
-        eprintln!("[mcp] 开始分析项目: {}", path);
+        info!(%path, "mcp analyze started");
         let mut result = analyze_project(&root);
 
         // Cross-file resolution
         let resolved = CrossFileResolver::resolve(&mut result.graph);
-        eprintln!("[mcp] cross-file: {} edges resolved", resolved);
+        info!(edges = resolved, "mcp cross-file resolved");
 
         // Coupling analysis
         compute_coupling(&mut result.graph);
 
         // Community detection
         let communities = detect_communities(&result.graph, 42);
-        eprintln!("[mcp] communities: {} found", communities.len());
+        info!(count = communities.len(), "mcp communities detected");
 
         // Cache the graph
         let graph = result.graph.clone();

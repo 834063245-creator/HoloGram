@@ -5,6 +5,7 @@ const IS_TAURI = '__TAURI_INTERNALS__' in window;
 
 // ── Mock invoke ──
 import { mockInvoke } from './mock-data';
+import { log } from './agent/logger';
 
 let _realInvoke: any;
 let _realListen: any;
@@ -35,7 +36,14 @@ async function loadRealListen() {
 export async function invoke<T = any>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (IS_TAURI) {
     await loadReal();
-    return _realInvoke(cmd, args);
+    log.debug('bridge', 'invoke', { command: cmd });
+    try {
+      const result = await _realInvoke(cmd, args);
+      return result;
+    } catch (e: any) {
+      log.error('bridge', 'invoke failed', { command: cmd, error: String(e) });
+      throw e;
+    }
   }
   // Browser mock mode
   return mockInvoke(cmd, args) as T;

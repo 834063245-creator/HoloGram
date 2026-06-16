@@ -5,7 +5,7 @@ use serde_json::json;
 /// Classify cycles from Tarjan SCC: pure_code, data_persistent, llm_involved
 pub fn classify_cycles(graph: &Graph) -> serde_json::Value {
     let cycles = detect_cycles(graph);
-    let mut pure = 0; let mut data = 0; let mut llm = 0;
+    let mut pure = 0; let mut data = 0; let llm = 0;
     for c in &cycles {
         let node_ids: Vec<&str> = c["nodes"].as_array().map(|a|
             a.iter().filter_map(|v| v.as_str()).collect()

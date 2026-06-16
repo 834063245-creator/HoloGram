@@ -27,6 +27,7 @@ impl Sandbox {
     }
 
     /// Add a directory to the read whitelist.
+    #[allow(dead_code)]
     pub fn allow_read(&mut self, dir: &Path) {
         if let Ok(canon) = std::fs::canonicalize(dir) {
             self.read_whitelist.push(canon);
@@ -75,27 +76,79 @@ impl Sandbox {
     }
 
     /// Validate a write operation. Dead-locked to project directory.
+    /// Unlike resolve_read, allows paths where the parent directory doesn't exist yet —
+    /// write_file_content has its own create_dir_all to create missing parents.
     pub fn resolve_write(&self, path: &Path) -> SandboxResult {
-        let result = self.resolve_read(path);
-
-        // For write: additionally verify result is within write_root
-        if let SandboxResult::Allowed(ref real) = result {
-            if !real.starts_with(&self.write_root) {
-                return SandboxResult::Denied(format!(
-                    "write to {:?} denied: outside write root {:?}",
-                    real, self.write_root
-                ));
+        // Try normal resolution first (handles existing files and new files in existing dirs)
+        let real = match std::fs::canonicalize(path) {
+            Ok(p) => p,
+            Err(_) => {
+                if let Some(parent) = path.parent() {
+                    match std::fs::canonicalize(parent) {
+                        Ok(p) => p.join(path.file_name().unwrap_or_default()),
+                        Err(_) => {
+                            // Parent doesn't exist — find nearest existing ancestor
+                            match find_existing_ancestor(path) {
+                                Some((canon_ancestor, orig_ancestor)) => {
+                                    if !canon_ancestor.starts_with(&self.write_root) {
+                                        return SandboxResult::Denied(format!(
+                                            "write outside write root {:?}", self.write_root
+                                        ));
+                                    }
+                                    // Preserve intermediate path components
+                                    let relative = path.strip_prefix(&orig_ancestor).unwrap_or(path);
+                                    canon_ancestor.join(relative)
+                                }
+                                None => return SandboxResult::Denied("parent directory not found".into()),
+                            }
+                        }
+                    }
+                } else {
+                    return SandboxResult::Denied("invalid path".into());
+                }
             }
+        };
+
+        // Verify within write_root
+        if !real.starts_with(&self.write_root) {
+            return SandboxResult::Denied(format!(
+                "write to {:?} denied: outside write root {:?}",
+                real, self.write_root
+            ));
         }
 
-        result
+        // Reject symlinks / junctions
+        if is_symlink_or_junction(path) {
+            return SandboxResult::Denied("symlinks and junctions are not allowed".into());
+        }
+
+        SandboxResult::Allowed(real)
     }
 
     /// Validate a delete operation. Same as write + confirmation required at UI layer.
+    #[allow(dead_code)]
     pub fn resolve_delete(&self, path: &Path) -> SandboxResult {
         // Deleting is the most dangerous — strict write root check
         self.resolve_write(path)
     }
+}
+
+/// Walk up the directory tree to find the nearest existing ancestor.
+/// Returns (canonical_ancestor, original_ancestor), or None if no ancestor exists.
+fn find_existing_ancestor(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut current = path.to_path_buf();
+    while let Some(parent) = current.parent() {
+        if parent.as_os_str().is_empty() {
+            break;
+        }
+        current = parent.to_path_buf();
+        if current.exists() {
+            if let Ok(canon) = std::fs::canonicalize(&current) {
+                return Some((canon, current));
+            }
+        }
+    }
+    None
 }
 
 /// Detect NTFS symlinks and junctions on Windows.

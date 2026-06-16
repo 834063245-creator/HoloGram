@@ -42,6 +42,7 @@ impl AuditLogger {
     }
 
     /// Read recent entries (for frontend audit panel).
+    #[allow(dead_code)]
     pub fn recent(&self, limit: usize) -> Vec<String> {
         let content = fs::read_to_string(&self.log_path).unwrap_or_default();
         let lines: Vec<&str> = content.lines().collect();

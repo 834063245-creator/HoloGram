@@ -48,6 +48,7 @@ impl EngineClient {
     }
 
     /// Check if the engine is reachable.
+    #[allow(dead_code)]
     pub fn ping(&self) -> bool {
         self.send("ping").is_ok()
     }
