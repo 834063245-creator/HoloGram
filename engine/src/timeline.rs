@@ -26,7 +26,7 @@ impl TimelineStore {
     }
 
     pub fn record(&self, event_type: &str, file_path: Option<&str>, summary: &str) {
-        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let file_val = file_path.unwrap_or("");
         let props = "{}";
         if let Ok(db) = self.db.lock() {
