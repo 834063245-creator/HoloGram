@@ -20,7 +20,7 @@
 
 | **🌍 跨语言统一 IR** | **🤖 图即 Agent 的眼睛** | **🔬 自举验证** |
 |---|---|---|
-| 10 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | 94 个 Tauri 命令 + 21 个 MCP 工具直查图数据库，不是喂源文件让 LLM 猜。耦合深度 L1–L4 提前算好，SQLite FTS5 毫秒检索。Agent 和图是同一系统的两层——图是眼睛，Agent 是嘴。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
+| 10 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | 45 个原生工具直查图数据库，不是喂源文件让 LLM 猜。耦合深度 L1–L4 提前算好，SQLite FTS5 毫秒检索。Agent 和图是同一系统的两层——图是眼睛，Agent 是嘴。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
 
 ---
 
@@ -127,7 +127,7 @@ N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点场景 **1 draw 
 
 | 能力 | 说明 |
 |---|---|
-| **94 个原生工具直查图数据库** | neighbors / impact / path / coupling-report / blindspots / cycle / fragile / community / history / search / check / preflight / health / diff / timeline … 另有文件读写、Shell、Git、WebFetch 全套。Agent 不喂源文件——一次工具调用几十行 JSON 查清上千行源码的依赖，Token 消耗远低于全量读代码。 |
+| **45 个原生工具直查图数据库** | 24 个图查询（neighbors / impact / path / coupling-report / blindspots / cycle / fragile / community / history / search / check / preflight / health / diff / timeline …）+ 17 个编码（文件读写 / Shell / Git / WebFetch）+ 4 个记忆（memory list/read/save/delete）。Agent 不喂源文件——一次工具调用几十行 JSON 查清上千行源码的依赖，Token 消耗远低于全量读代码。 |
 | **Agent ↔ 星图双向实时联动** | Agent 调工具 → 3D 视图实时高亮受影响节点，粒子沿边流动。path → 路径高亮，fragile → 脆弱节点标琥珀，cycle → 循环节点标红，impact → 聚焦飞行，diff → 绿增红删。 |
 | **图作为输入设备** | **Shift+双节点** → BFS 最短路径 → Agent 自动分析依赖链风险。**Alt+框选区域** → Agent 自动总结模块关系。**单击节点** → 详情卡 + "问 Agent"入口。 |
 | **全面板覆盖** | 星图详情卡 · 简报违规行 · 文件查看器 · 文件树 · 时间轴事件 · 约束面板——6 个面板全部有"问 Agent"按钮，点一下打开聊天窗自动发送上下文。 |
