@@ -9,19 +9,25 @@ import * as monaco from 'monaco-editor';
 import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 import { FileTranslator } from './file-translator';
 
+// Monaco workers — Vite ?worker syntax bundles them as separate chunks
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+
 // LSP session cache: language -> session_id (shared across all FileViewer instances)
 const lspSessions = new Map<string, number>();
 
-// -- Monaco worker config for Vite ESM --
+// -- Monaco worker config --
 self.MonacoEnvironment = {
   getWorker(_workerId: string, label: string) {
-    const getWorkerUrl = (path: string) => new URL(path, import.meta.url).href;
     switch (label) {
-      case 'json': return new Worker(getWorkerUrl('monaco-editor/esm/vs/language/json/json.worker.js'), { type: 'module' });
-      case 'css': case 'scss': case 'less': return new Worker(getWorkerUrl('monaco-editor/esm/vs/language/css/css.worker.js'), { type: 'module' });
-      case 'html': case 'handlebars': case 'razor': return new Worker(getWorkerUrl('monaco-editor/esm/vs/language/html/html.worker.js'), { type: 'module' });
-      case 'typescript': case 'javascript': return new Worker(getWorkerUrl('monaco-editor/esm/vs/language/typescript/ts.worker.js'), { type: 'module' });
-      default: return new Worker(getWorkerUrl('monaco-editor/esm/vs/editor/editor.worker.js'), { type: 'module' });
+      case 'json': return new jsonWorker();
+      case 'css': case 'scss': case 'less': return new cssWorker();
+      case 'html': case 'handlebars': case 'razor': return new htmlWorker();
+      case 'typescript': case 'javascript': return new tsWorker();
+      default: return new editorWorker();
     }
   },
 };
