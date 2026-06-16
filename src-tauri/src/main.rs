@@ -452,6 +452,29 @@ async fn hologram_rename(
 // V3: Check — constraint validation + change summary
 // ═══════════════════════════════════════════════════════
 
+/// Record a user-facing event in the timeline DB (file save, edit, etc.).
+#[tauri::command]
+async fn hologram_record_event(
+    event_type: String,
+    file: Option<String>,
+    summary: String,
+) -> Result<String, String> {
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    if proj.is_empty() {
+        return Err("未设置活跃工作区".into());
+    }
+    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
+    let db = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("无法打开时间轴: {}", e))?;
+    let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let file_val = file.unwrap_or_default();
+    db.execute(
+        "INSERT INTO events (timestamp, event_type, file, summary) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![ts, event_type, file_val, summary],
+    ).map_err(|e| format!("写入失败: {}", e))?;
+    Ok("ok".into())
+}
+
 #[tauri::command]
 async fn hologram_run_check(path: String) -> Result<String, String> {
     EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
@@ -2193,6 +2216,7 @@ fn main() {
             hologram_blindspots,
             hologram_thread_conflicts,
             hologram_timeline,
+            hologram_record_event,
             hologram_community_report,
             hologram_graph_summary,
             hologram_rename,

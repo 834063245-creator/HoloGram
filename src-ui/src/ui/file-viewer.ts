@@ -506,6 +506,12 @@ export class FileViewer {
     const content = tab.model.getValue();
     try {
       await invoke('write_file_content', { filePath: tab.filePath, content });
+      // Record timeline event (fire-and-forget)
+      invoke('hologram_record_event', {
+        eventType: 'file_changed',
+        file: tab.filePath,
+        summary: `保存: ${tab.fileName}`,
+      }).catch(() => { /* timeline recording is best-effort */ });
       tab.originalContent = content;
       tab.dirty = false;
       tab.error = '';
