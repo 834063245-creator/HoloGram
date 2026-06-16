@@ -83,6 +83,8 @@ function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): l
   } as languages.CompletionItem;
 }
 
+const lspWarned = new Set<string>();
+
 export async function startLsp(language: string, rootUri: string): Promise<number | null> {
   if (lspSessions.has(language)) return lspSessions.get(language)!;
   try {
@@ -90,7 +92,10 @@ export async function startLsp(language: string, rootUri: string): Promise<numbe
     lspSessions.set(language, sid);
     return sid;
   } catch {
-    console.warn(`[LSP] 未安装 ${language} language server`);
+    if (!lspWarned.has(language)) {
+      lspWarned.add(language);
+      console.warn(`[LSP] 未安装 ${language} language server（已静默后续同类提示）`);
+    }
     return null;
   }
 }
