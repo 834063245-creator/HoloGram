@@ -73,9 +73,11 @@ export class ChatPanel {
   private lastUsageText = '';
   private projectPath = '';
   private onOpenSettings: (() => void) | null = null;
+  private _onModeChange: (() => void) | null = null;
   private footerClickCleanup: (() => void) | null = null;
 
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
+  setOnModeChange(fn: () => void): void { this._onModeChange = fn; }
   setAgentFactory(fn: () => Promise<Agent | null>): void { this.agentFactory = fn; }
 
   constructor(container: HTMLElement) {
@@ -1722,7 +1724,7 @@ export class ChatPanel {
         s.agent.chatMode = modeId as any;
         saveSettings(s);
         popup.classList.remove('open');
-        this.onOpenSettings?.(); // triggers setupAgent reinit
+        this._onModeChange?.();
         this.addNotice(`模式已切换为 "${CHAT_MODES.find(m => m.id === modeId)?.label}"`, 'info');
       });
     });
