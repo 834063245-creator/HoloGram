@@ -652,12 +652,11 @@ export class FileTranslator {
   }
 
   private onColScroll(colIdx: number): void {
-    if (colIdx !== 0) return; // Only code column drives scroll sync
-    const srcBody = this.colBodies[0];
-    const scrollTop = srcBody.scrollTop;
+    const srcBody = this.colBodies[colIdx];
+    const rowCls = ['.ft-code-line', '.ft-human-line', '.ft-audit-line'][colIdx];
 
-    // Find the first fully visible line in the code column
-    const rows = srcBody.querySelectorAll<HTMLElement>('.ft-code-line');
+    // Find the first fully visible line in the scrolled column
+    const rows = srcBody.querySelectorAll<HTMLElement>(rowCls);
     let targetLine = 0;
     for (const row of rows) {
       const rect = row.getBoundingClientRect();
@@ -673,8 +672,9 @@ export class FileTranslator {
       }
     }
 
-    // Sync other columns
-    for (let i = 1; i < this.colBodies.length; i++) {
+    // Sync all OTHER columns to the same line
+    for (let i = 0; i < this.colBodies.length; i++) {
+      if (i === colIdx) continue;
       const targetRow = this.colBodies[i].querySelector<HTMLElement>(`[data-line="${targetLine}"]`);
       if (targetRow) {
         this.colBodies[i].scrollTop = targetRow.offsetTop - this.colBodies[i].offsetTop;
