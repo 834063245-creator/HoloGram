@@ -5,14 +5,14 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-911%20passed-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-194%20passed-brightgreen" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
 > **语言无关的交互式代码依赖拓扑图生成器。**
 >
-> 不是又一个静态分析工具。HoloGram 把代码库变成一张可对话的 3D 星图——14 门语言统一 IR、原生 LLM Agent 双向联动、从 L1 公开 API 到 L4 封装穿透四层耦合诊断。自举验证，CLI / 桌面应用双模。
+> 不是又一个静态分析工具。HoloGram 把代码库变成一张可对话的 3D 星图——10 门语言统一 IR、原生 LLM Agent 双向联动、从 L1 公开 API 到 L4 封装穿透四层耦合诊断。纯 Rust 引擎，桌面应用双模。
 
 ---
 
@@ -21,7 +21,7 @@
 | | | |
 |---|---|---|
 | **🌍 跨语言统一 IR** | **🤖 原生 Agent** | **🔬 自举** |
-| 14 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | Agent 和图是同一个系统的两层。30+ 工具直接查图数据库，不是喂源文件让 LLM 猜。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
+| 10 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | Agent 和图是同一个系统的两层。94 个 Tauri 命令 + 21 个 MCP 工具直接查图数据库，不是喂源文件让 LLM 猜。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
 
 ---
 
@@ -60,17 +60,17 @@
 
 ## 功能
 
-| 🪐 **3D 星图** | 🌍 **14 语言** | 🧠 **三层分析** |
+| 🪐 **3D 星图** | 🌍 **10 语言** | 🧠 **三层分析** |
 |---|---|---|
-| 力导向 + BloomPass 发光 + 全息网格 Shader + 边粒子流动。三种渲染模式。大项目自动降级轻量文件图。Tab 切宇宙/星座折叠，双击进入星系。 | Python 走标准库 `ast`，其余 13 门走 tree-sitter。统一 IR——跨语言依赖天然支持。Grammar 首次自动下载编译，零配置。 | V1 基础拓扑 → V2 深层诊断（L1–L4 耦合/数据流环/线程冲突/盲点）→ V3 变更路由（五级破坏信号 + YAML 阈值）。 |
+| 力导向 + BloomPass 发光 + 全息网格 Shader + 边粒子流动。三种渲染模式。大项目自动降级轻量文件图。Tab 切宇宙/星座折叠，双击进入星系。 | Rust 引擎 tree-sitter 统一分析。Python/TS/JS 走专用适配器，其余 7 门走通用适配器。Grammar 编译时静态链接，零配置。 | V1 基础拓扑 → V2 深层诊断（L1–L4 耦合/数据流环/线程冲突/盲点）→ V3 变更路由（五级破坏信号 + YAML 阈值）。 |
 
-| ⚡ **增量更新** | 🛡️ **约束门禁** | 🎯 **内置 IDE 工具** |
+| ⚡ **Rust 全量** | 🛡️ **约束门禁** | 🎯 **内置 IDE 工具** |
 |---|---|---|
-| 文件监听 + 仅重分析变更部分 + 原子替换 + 失败回滚。图始终最新。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词（password/token/api_key）强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull 图形化操作）。 |
+| 引擎全量分析（Django 3,031 文件 4.1s），无需增量。文件监听 + 自动重分析 + 原子替换。图始终最新。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词（password/token/api_key）强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull 图形化操作）。 |
 
-| 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **911 测试** |
+| 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **194 测试** |
 |---|---|---|
-| JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Python 引擎长驻，JSON-RPC 通信。崩溃 3 次/60s 自动降级。 | pytest 全覆盖 V1/V2/V3 + CLI + MCP + 序列化往返 + 边界条件。Tauri 2 桌面应用，Windows `.msi`。 |
+| JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Rust 引擎长驻，JSON-RPC over stdio + TCP :9777 双模。引擎自启动，崩溃 3 次/60s 自动降级。 | Rust `#[test]` 全覆盖引擎 19 模块：图数据模型、适配器、管线、耦合分析、社区发现、路由、MCP 协议。Tauri 2 桌面应用，Windows `.msi`。 |
 
 ---
 
@@ -82,14 +82,13 @@
 
 ### 从源码构建
 
-**依赖：** [Rust](https://rustup.rs/) · [Node.js](https://nodejs.org/) ≥ 18 · [Python](https://www.python.org/) ≥ 3.10 · Git + gcc（tree-sitter grammar 编译）· [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Win10+ 已预装）
+**依赖：** [Rust](https://rustup.rs/) · [Node.js](https://nodejs.org/) ≥ 18 · [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Win10+ 已预装）
 
 ```bash
 git clone https://github.com/834063245-creator/HoloGram.git && cd HoloGram
 
-# Python 引擎
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[full,dev]"
+# 编译 Rust 引擎
+cd engine && cargo build --release && cd ..
 
 # 前端
 cd src-ui && npm install && npm run build && cd ..
@@ -99,43 +98,41 @@ cargo tauri build
 # → src-tauri/target/release/bundle/msi/*.msi
 ```
 
-### 仅 CLI
-
-```bash
-pip install -e ".[full]"
-hologram analyze ./my-project --json --output graph.json
-```
-
 ---
 
 ## 快速上手
 
 **桌面：** 启动 → 打开项目目录（自动分析渲染）→ 单击节点看详情 → Shift+双节点查路径 → Alt+框选区选 → 聊天面板向 Agent 提问。
 
-**CLI：**
+**引擎 TCP RPC（:9777）：**
 
-```bash
-hologram analyze ./my-project --json --output graph.json   # 分析
-hologram neighbors auth --json                              # 查邻居
-hologram impact auth --depth 3 --json                       # 波及范围
-hologram path auth database --json                          # 最短路径
-hologram coupling-report auth --json                        # 耦合报告
-hologram check --json                                       # 约束校验
+```
+analyze:<path>          # 全量分析
+neighbors:<id>:<depth>  # 查邻居
+path:<from>:<to>        # 最短路径
+impact:<id>:<depth>     # 波及范围
+search:<query>          # 节点搜索
+fragile:<limit>         # 脆弱依赖
+cycle                   # 数据流环
+coupling_report:<id>    # 耦合报告
+blindspots              # 边界盲点
+community:<id>          # 社区归属
+check:<path>            # 约束校验
 ```
 
 ---
 
 ## 支持语言
 
-| Python | TypeScript | JavaScript | Go | Rust | Java | C |
-|---|---|---|---|---|---|---|
-| AST | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
+| Python | TypeScript | JavaScript | Go | Rust |
+|---|---|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
 
-| C++ | Ruby | C# | Kotlin | Swift | PHP | Lua |
-|---|---|---|---|---|---|---|
-| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
+| Java | C | C++ | Ruby | Lua |
+|---|---|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
 
-> Grammar 首次使用时自动从 GitHub 下载编译（需 Git + gcc）。
+> Python 走专用适配器（AST 级别），TypeScript/JS/JSX/TSX 走专用适配器，其余 7 门走通用 tree-sitter 适配器。Grammar 编译时静态链接，无需运行时下载。
 
 ---
 
@@ -144,20 +141,21 @@ hologram check --json                                       # 约束校验
 ```
 ┌─ 桌面壳 (Tauri 2) ─────────────────────────────────────┐
 │  ┌─ 前端 (TypeScript) ──┐  IPC   ┌─ Rust 后端 ────────┐ │
-│  │ Three.js 3D · Agent  │◄─────►│ 子进程管理 · Git    │ │
-│  │ Monaco · xterm.js    │       │ Shell · MCP 生命周期 │ │
+│  │ Three.js 3D · Agent  │◄─────►│ 路由 · Git · Shell  │ │
+│  │ Monaco · xterm.js    │       │ McpManager · Engine  │ │
 │  └──────────────────────┘       └─────────┬───────────┘ │
 └───────────────────────────────────────────┼─────────────┘
-                                            │ spawn / JSON-RPC
+                                            │ TCP :9777 / MCP serve
                       ┌─────────────────────▼─────────────┐
-                      │ Python 引擎 (src_python/)          │
+                      │ Rust 引擎 (engine/)                │
                       │ 发现 → 分析 → 跨文件 → 社区 → 序列化 │
-                      │ Python AST · TS 适配器 · tree-sitter │
+                      │ 10 tree-sitter 语法 · 3 专用适配器   │
                       │ → JSON / MsgPack / SQLite          │
+                      │ 21 MCP 工具 · 194 tests · 19 模块   │
                       └───────────────────────────────────┘
 ```
 
-> Rust 层**不做分析**。它管理子进程、路由 IPC、提供系统集成。代码分析全在 Python 引擎，渲染与 Agent 在 WebView。
+> **引擎自启动：** Tauri 启动时自动 spawn `engine.exe`（TCP :9777 默认模式）。IDE 集成走 MCP serve 模式（`engine.exe serve --project-root`）。
 
 ---
 
@@ -187,8 +185,8 @@ denylist:
   keywords: ["password", "secret", "token", "api_key"]
 ```
 
-```bash
-hologram check --json   # pass/fail 编码在输出中，直入 CI
+```
+引擎 check 端点 → pass/fail 编码在输出中，直入 CI
 ```
 
 ---
@@ -196,19 +194,27 @@ hologram check --json   # pass/fail 编码在输出中，直入 CI
 ## 开发
 
 ```bash
-pytest tests/ -x -q                                   # 911 测试
-cargo check --manifest-path src-tauri/Cargo.toml       # Rust
-cd src-ui && npx tsc --noEmit                          # TypeScript
-cd src-ui && npm run dev                               # 前端 dev server
+# Rust 引擎
+cd engine && cargo test                                # 194 tests
+cd engine && cargo build
+
+# 桌面应用
+cargo check --manifest-path src-tauri/Cargo.toml
+cargo tauri dev                          # 开发模式（自动 spawn engine.exe）
+
+# 前端
+cd src-ui && npx tsc --noEmit            # TypeScript
+cd src-ui && npm run dev                 # 前端 dev server
 ```
 
 ```
-src_python/      Python 分析引擎        src-tauri/      Rust / Tauri 壳
-src-ui/          TypeScript 前端        tests/          pytest 测试集
+engine/          Rust 分析引擎（19 模块，194 tests）
+src-tauri/       Rust / Tauri 壳（94 个 Tauri 命令）
+src-ui/          TypeScript 前端（Three.js + Agent + Monaco + xterm.js）
 assets/          图标及 UI 原型
 ```
 
-| 🐍 Python 3.10+ | 🦀 Rust 1.80+ | 🟢 Node 18+ | 💙 TS 5.6 | ⚡ Vite 6 | 🖥️ Tauri 2 | 🎮 Three.js | 📝 Monaco |
+| 🦀 Rust 1.80+ | 💙 TS 5.6 | 🟢 Node 18+ | ⚡ Vite 6 | 🖥️ Tauri 2 | 🎮 Three.js | 📝 Monaco |
 
 ---
 
