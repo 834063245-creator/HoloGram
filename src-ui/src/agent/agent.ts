@@ -8,7 +8,8 @@ import type {
   Usage,
 } from '../provider/types';
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
-import type { Tool, ToolRegistry } from './tool';
+import { ToolRegistry } from './tool';
+import type { Tool } from './tool';
 import type { PermissionGate } from './permission';
 import type { HookRegistry } from './hooks';
 import { bus } from '../ui/events';
@@ -709,6 +710,64 @@ export class Agent {
 
   private toolReadOnly(name: string): boolean {
     return this.tools.get(name)?.readOnly() ?? false;
+  }
+
+  // ══════════════════════════════════════════════════════
+  // Sub-agent spawn — for parallel / delegated work
+  // ══════════════════════════════════════════════════════
+
+  /** Spawn a sub-agent with full tool access to handle a focused task.
+   *  Runs one turn (may include tool calls) and returns the final text. */
+  async spawnSubAgent(
+    signal: AbortSignal,
+    description: string,
+    prompt: string,
+    onProgress?: (chunk: string) => void,
+  ): Promise<{ text: string; err?: string }> {
+    // Clone all tools from parent — sub-agent has full agency
+    const subTools = new ToolRegistry();
+    for (const t of this.tools.all()) {
+      subTools.register(t);
+    }
+
+    const subSystem = `你是主 Agent 派出的子任务 Agent。执行一个聚焦的专项任务。
+
+## 任务
+${prompt}
+
+## 规则
+1. **全权** — 你有写文件、跑命令、Git 操作的全部权限。放心干。
+2. **专注** — 只完成分配给你的任务，不要偏离。
+3. **先查后动** — 涉及代码库的，先调图查询工具（hologram_*）再动手。
+4. **直接给结论** — 不要反问或延续对话。完成后直接输出结果。
+5. **简短** — 输出精炼，不需要写论文。
+
+## 可用工具
+${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`).join('\n')}`;
+
+    // Shared provider, fresh session, no compact
+    const subAgent = new Agent(
+      this.prov,
+      subTools,
+      subSystem,
+      { maxSteps: 8, temperature: 0.3 },
+      (ev) => {
+        if (ev.kind === EventKind.Text && ev.text && onProgress) {
+          onProgress(ev.text);
+        }
+      },
+    );
+
+    try {
+      // Run a single turn — sub-agent can call tools
+      await subAgent.run(signal, '开始执行。');
+      // Extract the last assistant message as the result
+      const session = subAgent.getSession();
+      const lastAssistant = [...session].reverse().find(m => m.role === 'assistant');
+      return { text: lastAssistant?.content || '(子 Agent 没有生成回复)' };
+    } catch (e: any) {
+      return { text: '', err: e.message || '子 Agent 执行失败' };
+    }
   }
 }
 

@@ -18,12 +18,12 @@ import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
-import { ToolRegistry, createHologramTools, createHologramToolsFromSchemas, createCodingTools, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createHologramTools, createHologramToolsFromSchemas, createCodingTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
 import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
-import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
+import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES } from './settings';
 import { t, setLang } from './i18n';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
@@ -463,6 +463,12 @@ async function setupAgentInner(): Promise<void> {
   const systemPrompt = buildSystemPrompt(memorySection);
   const agentOpts = settings.agent || {};
 
+  // ── Apply chat mode preset (temperature, maxSteps) ──
+  const mode = CHAT_MODES.find(m => m.id === agentOpts.chatMode) || CHAT_MODES[0];
+  const temperature = mode.temperature;
+  const maxSteps = mode.maxSteps;
+  const contextWindow = agentOpts.contextWindow ?? 0;
+
   // ── Permission gate ──
   const defaultMode = settings.permissions?.defaultMode || 'ask';
   const perm = new PermissionPolicy(defaultMode);
@@ -484,11 +490,21 @@ async function setupAgentInner(): Promise<void> {
 
   agent = new Agent(prov, registry, systemPrompt, {
     pricing,
-    temperature: agentOpts.temperature,
-    maxSteps: agentOpts.maxSteps,
-    contextWindow: agentOpts.contextWindow,
+    temperature,
+    maxSteps,
+    contextWindow,
     gate,
   }, chatPanel.sink);
+
+  // ── Register sub-agent tool (needs the live agent instance) ──
+  try {
+    const agentRef = agent; // capture for closure
+    registry.register(createSubAgentTool(
+      async (description, prompt, onProgress) =>
+        agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress),
+    ));
+    dbg('setupAgent', 'sub-agent tool registered');
+  } catch (e) { console.error('[setupAgent] sub-agent tool registration failed:', e); }
 
   // ── PreToolUse hooks: enrich tool results with graph context ──
   if (currentGraphData) {
@@ -694,6 +710,10 @@ function buildSystemPrompt(memorySection = ''): string {
 - 节点: ${nodes} 个
 - 边: ${edges} 条
 - 当前约束配置可通过 \`read_constraints\` 查看
+
+## 用户焦点上下文
+
+用户消息有时会以 \`[用户当前选中了图中的节点 "xxx"]\` 或 \`[用户当前正在查看文件 "xxx"]\` 前缀开头。这表示用户在 UI 中正在关注该节点/文件。当你需要读取文件或分析代码时，优先考虑这些路径——用户说"读一下这个"时就是指它。
 
 ## 记忆库
 

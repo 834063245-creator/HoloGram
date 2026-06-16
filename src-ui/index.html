@@ -1331,6 +1331,45 @@
       border-color: rgba(60, 100, 180, 0.3);
       color: var(--signal-bright);
     }
+    /* Mode badge */
+    .chat-mode-badge {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 2px 6px; border-radius: 2px;
+      background: rgba(15, 25, 42, 0.35); color: rgba(150, 180, 220, 0.7);
+      border: 1px solid rgba(50, 80, 140, 0.1);
+      cursor: pointer; white-space: nowrap;
+      transition: all var(--snap);
+    }
+    .chat-mode-badge:hover {
+      background: rgba(25, 40, 68, 0.5);
+      border-color: rgba(60, 100, 180, 0.25);
+      color: var(--starlight);
+    }
+    /* Mode popup */
+    .chat-mode-popup {
+      position: absolute; bottom: 100%; left: 0;
+      margin-bottom: 6px;
+      background: rgba(7, 14, 26, 0.96);
+      border: 1px solid rgba(50, 80, 140, 0.2);
+      border-radius: 4px; padding: 4px;
+      display: none; flex-direction: column; gap: 2px;
+      min-width: 160px; z-index: 200;
+      backdrop-filter: blur(12px);
+    }
+    .chat-mode-popup.open { display: flex; }
+    .chat-mode-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; border-radius: 3px;
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); font-size: 10px;
+      transition: all var(--snap);
+    }
+    .chat-mode-item:hover, .chat-mode-item.active {
+      background: rgba(25, 45, 75, 0.5); color: var(--starlight);
+    }
+    .chat-mode-item.active { border-left: 2px solid var(--signal); padding-left: 6px; }
+    .chat-mode-item-label { font-weight: 600; min-width: 28px; }
+    .chat-mode-item-desc { font-size: 9px; color: rgba(150, 180, 220, 0.5); }
     .chat-usage-badge {
       color: rgba(105, 145, 200, 0.4);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

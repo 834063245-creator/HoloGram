@@ -8,7 +8,7 @@ import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
 import { resolveApproval } from '../agent/permission';
-import { loadSettings } from '../settings';
+import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
 import type { Message } from '../provider/types';
 import { marked } from 'marked';
@@ -50,6 +50,10 @@ export class ChatPanel {
   private activeIdx = -1;
   private agentFactory: (() => Promise<Agent | null>) | null = null;
 
+  // User focus tracking — so the Agent knows what file/node the user is looking at
+  private _userFocusFile: string | null = null;
+  private _userFocusNode: { name: string; location?: string } | null = null;
+
   // Streaming state
   private starGraph: StarGraph | null = null;
   private abortCtrl: AbortController | null = null;
@@ -81,7 +85,14 @@ export class ChatPanel {
     bus.on('agent:permission-request', (req: { id: string; toolName: string; description: string; args: Record<string, unknown> }) => {
       this.renderPermissionCard(req);
     });
-    // Global keyboard shortcuts for active permission card
+    // ── Track user focus — file viewer / file tree / graph selection ──
+    bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
+    bus.on('navigate:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
+    bus.on('graph:node-clicked', (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
+      this._userFocusNode = { name: data.nodeName, location: data.location || undefined };
+      this._userFocusFile = null;
+    });
+    // ── Global keyboard shortcuts for active permission card
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       if (!this.activePermId) return;
       // Don't intercept when user is typing in the input area
@@ -1088,9 +1099,21 @@ export class ChatPanel {
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
 
-    // User bubble
+    // User bubble (original text, focus context is for Agent eyes only)
     this.appendUserBubble(text);
     this.scrollBottom();
+
+    // Build focus context prefix — tells Agent what the user is looking at
+    let focusPrefix = '';
+    if (this._userFocusNode) {
+      focusPrefix = `[用户当前选中了图中的节点 "${this._userFocusNode.name}"`;
+      if (this._userFocusNode.location) {
+        focusPrefix += ` (位于 ${this._userFocusNode.location})`;
+      }
+      focusPrefix += ']\n\n';
+    } else if (this._userFocusFile) {
+      focusPrefix = `[用户当前正在查看文件 "${this._userFocusFile}"]\n\n`;
+    }
 
     // Start turn separator
     this.addTurnSep();
@@ -1098,7 +1121,7 @@ export class ChatPanel {
     // Run agent
     this.abortCtrl = new AbortController();
     try {
-      await this.agent.run(this.abortCtrl.signal, text);
+      await this.agent.run(this.abortCtrl.signal, focusPrefix + text);
     } catch (err: any) {
       if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
         this.addNotice('已中止', 'info');
@@ -1555,11 +1578,15 @@ export class ChatPanel {
 
     const thinking = active?.thinking ? ' · 思考' : '';
     const usageStr = this.lastUsageText ? ` · ${this.lastUsageText}` : '';
+    const mode = CHAT_MODES.find(m => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
 
     this.footerEl.innerHTML = `
       <div class="chat-footer-left">
         <button class="chat-model-badge chat-model-clickable" title="点击切换模型 · ${active?.name} / ${active?.model}">
           ${iconHtml('agent', 10)} ${modelLabel}${thinking}
+        </button>
+        <button class="chat-mode-badge" id="chat-mode-badge" title="切换模式 · 当前: ${mode.label}">
+          ${iconHtml('agent', 10)} ${mode.label}
         </button>
         <span class="chat-usage-badge">${usageStr}</span>
       </div>
@@ -1569,6 +1596,8 @@ export class ChatPanel {
         </button>
         <button class="chat-session-add" title="新建会话">${iconHtml('plus', 12)}</button>
       </div>`;
+
+    this._buildModePopup(mode);
 
     // Popup menu for /
     const popup = document.createElement('div');
@@ -1658,6 +1687,54 @@ export class ChatPanel {
     this.footerEl.querySelector('.chat-session-add')?.addEventListener('click', () => {
       this.createNewSession();
     });
+  }
+
+  // ── Mode selector popup ──
+
+  private _buildModePopup(currentMode: typeof CHAT_MODES[0]): void {
+    const badge = this.footerEl.querySelector('#chat-mode-badge') as HTMLElement;
+    if (!badge) return;
+
+    // Remove any existing popup
+    const existing = this.footerEl.querySelector('.chat-mode-popup');
+    if (existing) existing.remove();
+
+    const popup = document.createElement('div');
+    popup.className = 'chat-mode-popup';
+    popup.innerHTML = CHAT_MODES.map(m => `
+      <button class="chat-mode-item${m.id === currentMode.id ? ' active' : ''}" data-mode="${m.id}">
+        <span class="chat-mode-item-label">${m.label}</span>
+        <span class="chat-mode-item-desc">${m.description}</span>
+      </button>
+    `).join('');
+
+    this.footerEl.appendChild(popup);
+
+    badge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      popup.classList.toggle('open');
+    });
+
+    popup.querySelectorAll('.chat-mode-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const modeId = (item as HTMLElement).dataset['mode'] as string;
+        const s = loadSettings();
+        s.agent.chatMode = modeId as any;
+        saveSettings(s);
+        popup.classList.remove('open');
+        this.onOpenSettings?.(); // triggers setupAgent reinit
+        this.addNotice(`模式已切换为 "${CHAT_MODES.find(m => m.id === modeId)?.label}"`, 'info');
+      });
+    });
+
+    // Close on outside click
+    const handler = (e: MouseEvent) => {
+      if (!popup.contains(e.target as Node) && e.target !== badge) {
+        popup.classList.remove('open');
+      }
+    };
+    document.addEventListener('click', handler);
+    // Cleanup old handler when popup is destroyed (next updateFooter wipes it)
   }
 
   // ── Helpers ──

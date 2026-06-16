@@ -46,6 +46,14 @@ export class ToolRegistry {
   names(): string[] {
     return Array.from(this.tools.keys());
   }
+
+  all(): Tool[] {
+    return Array.from(this.tools.values());
+  }
+
+  filterReadOnly(): Tool[] {
+    return this.all().filter(t => t.readOnly());
+  }
 }
 
 // ---- Hologram 工具定义 (13 tools → Python engine) ----
@@ -1124,4 +1132,45 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       execute: (args) => exec('web_fetch', args),
     },
   ];
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Sub-Agent Tool — spawn a child Agent for parallel / delegated work
+// ═══════════════════════════════════════════════════════════════
+
+export type SubAgentSpawner = (
+  description: string,
+  prompt: string,
+  onProgress?: (chunk: string) => void,
+) => Promise<{ text: string; err?: string }>;
+
+export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
+  return {
+    name: () => 'agent_spawn',
+    description: () =>
+      'Spawn a sub-agent with full tool access to handle a focused task in parallel. The sub-agent has the same tools as you — graph queries, file read/write, shell commands, git, search. Use to offload research or delegate editing/building/testing work. Returns the sub-agent\'s text response.',
+    parameters: () => ({
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'Short label for the sub-agent task (3-5 words, used in progress display)',
+        },
+        prompt: {
+          type: 'string',
+          description: 'The task for the sub-agent to perform. Be specific about what to find or analyze.',
+        },
+      },
+      required: ['description', 'prompt'],
+    }),
+    readOnly: () => false,
+    execute: async (args, onProgress) => {
+      const description = (args['description'] as string) || '子任务';
+      const prompt = (args['prompt'] as string) || '';
+      if (!prompt) return '(agent_spawn: prompt is required)';
+      const result = await spawner(description, prompt, onProgress);
+      if (result.err) return `[子 Agent 错误] ${result.err}`;
+      return result.text;
+    },
+  };
 }
