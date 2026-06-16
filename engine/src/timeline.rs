@@ -9,6 +9,10 @@ pub struct TimelineStore {
 impl TimelineStore {
     pub fn open(project_root: &Path) -> Result<Self, String> {
         let db_path = project_root.join(".hologram").join("timeline.db");
+        // Ensure parent directory exists
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("timeline mkdir: {}", e))?;
+        }
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("timeline db: {}", e))?;
         conn.execute_batch(
@@ -54,5 +58,76 @@ impl TimelineStore {
             }).unwrap().filter_map(|r| r.ok()).collect();
         }
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_timeline() -> (TimelineStore, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("hologram_timeline_test_{}", uuid::Uuid::new_v4()));
+        let store = TimelineStore::open(&dir).expect("failed to open temp timeline");
+        (store, dir)
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_open_creates_db() {
+        let dir = std::env::temp_dir().join(format!("hologram_test_open_{}", uuid::Uuid::new_v4()));
+        let result = TimelineStore::open(&dir);
+        assert!(result.is_ok());
+        let db_path = dir.join(".hologram").join("timeline.db");
+        assert!(db_path.exists());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_record_and_query() {
+        let (store, dir) = temp_timeline();
+        store.record("analyze", Some("src/main.rs"), "analysis completed");
+        store.record("change", None, "file modified");
+
+        let events = store.query(10);
+        assert_eq!(events.len(), 2);
+        // Most recent first (DESC)
+        assert_eq!(events[0]["event_type"], "change");
+        assert_eq!(events[1]["event_type"], "analyze");
+        assert_eq!(events[1]["file"], "src/main.rs");
+        assert_eq!(events[1]["summary"], "analysis completed");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_query_respects_limit() {
+        let (store, dir) = temp_timeline();
+        for i in 0..5 {
+            store.record("test", None, &format!("event {}", i));
+        }
+        let events = store.query(2);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["summary"], "event 4"); // DESC order
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_query_empty() {
+        let (store, dir) = temp_timeline();
+        let events = store.query(10);
+        assert!(events.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_record_without_file() {
+        let (store, dir) = temp_timeline();
+        store.record("health_check", None, "all good");
+        let events = store.query(1);
+        assert_eq!(events[0]["file"], "");
+        assert_eq!(events[0]["event_type"], "health_check");
+        cleanup(&dir);
     }
 }

@@ -119,3 +119,76 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         "violation_count": violations.len() as u32,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use super::*;
+
+    #[test]
+    fn test_preflight_empty_graphs() {
+        let g = Graph::new();
+        let r = run_full_check(&g, &g, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["blast_radius"], 0);
+        assert_eq!(r["violation_count"], 0);
+    }
+
+    #[test]
+    fn test_preflight_no_changes() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+
+        let r = run_full_check(&g, &g, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["blast_radius"], 0);
+    }
+
+    #[test]
+    fn test_preflight_detects_l5_on_migration() {
+        let g = Graph::new();
+        let r = run_full_check(&g, &g, &["migrations/0001_init.py".into()], ".");
+        assert!(!r["passed"].as_bool().unwrap());
+        assert!(r["violation_count"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_preflight_blast_radius_with_changes() {
+        let mut g = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("src/handler.rs".into());
+        g.add_node(a);
+        let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
+        b.location = Some("src/handler.rs".into());
+        g.add_node(b);
+        g.add_node(Node::new("c", "mod_c", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "c", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "c", "b", EdgeKind::Calls));
+
+        let r = run_full_check(&g, &g, &["src/handler.rs".into()], ".");
+        // BFS from a,b should include c within depth 3
+        assert!(r["blast_radius"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_preflight_api_signature_changes() {
+        let mut before = Graph::new();
+        let mut a = Node::new("a", "fn_a", NodeKind::Symbol);
+        a.out_degree = 1;
+        before.add_node(a);
+
+        let mut after = Graph::new();
+        let mut a2 = Node::new("a", "fn_a", NodeKind::Symbol);
+        a2.out_degree = 3; // changed
+        after.add_node(a2);
+        // New node
+        let mut b = Node::new("b", "fn_b", NodeKind::Symbol);
+        b.out_degree = 1;
+        after.add_node(b);
+
+        let r = run_full_check(&before, &after, &[], ".");
+        assert_eq!(r["api_signature_changes"], 2, "a changed + b new = 2");
+    }
+}

@@ -41,3 +41,88 @@ pub fn detect_cycles(graph: &Graph) -> Vec<serde_json::Value> {
         serde_json::json!({ "nodes": node_names, "size": c.len() })
     }).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use super::*;
+
+    #[test]
+    fn test_cycles_empty_graph() {
+        let g = Graph::new();
+        assert!(detect_cycles(&g).is_empty());
+    }
+
+    #[test]
+    fn test_cycles_no_cycle() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        g.add_node(Node::new("c", "c", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        assert!(detect_cycles(&g).is_empty());
+    }
+
+    #[test]
+    fn test_cycles_simple_cycle() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "b", "a", EdgeKind::Calls)); // back edge
+        let cycles = detect_cycles(&g);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0]["size"], 2);
+    }
+
+    #[test]
+    fn test_cycles_three_node_cycle() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        g.add_node(Node::new("c", "c", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        let cycles = detect_cycles(&g);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0]["size"], 3);
+    }
+
+    #[test]
+    fn test_cycles_self_loop() {
+        // Self-loops produce SCC of size 1, which is filtered (must be >1 for cycles).
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "a", EdgeKind::Calls)); // self-loop
+        let cycles = detect_cycles(&g);
+        assert_eq!(cycles.len(), 0, "self-loop SCC size=1 is filtered");
+    }
+
+    #[test]
+    fn test_cycles_isolated_nodes() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        // No edges
+        assert!(detect_cycles(&g).is_empty());
+    }
+
+    #[test]
+    fn test_cycles_multiple_scc() {
+        let mut g = Graph::new();
+        // Component 1: a↔b
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "b", "a", EdgeKind::Calls));
+        // Component 2: c↔d
+        g.add_node(Node::new("c", "c", NodeKind::Symbol));
+        g.add_node(Node::new("d", "d", NodeKind::Symbol));
+        g.add_edge(Edge::new("e3", "c", "d", EdgeKind::Calls));
+        g.add_edge(Edge::new("e4", "d", "c", EdgeKind::Calls));
+        let cycles = detect_cycles(&g);
+        assert_eq!(cycles.len(), 2);
+    }
+}

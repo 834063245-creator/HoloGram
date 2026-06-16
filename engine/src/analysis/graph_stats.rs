@@ -16,3 +16,51 @@ pub fn graph_summary(graph: &Graph) -> serde_json::Value {
         "edge_types": edge_types
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use super::*;
+
+    #[test]
+    fn test_summary_empty_graph() {
+        let g = Graph::new();
+        let s = graph_summary(&g);
+        assert_eq!(s["nodes_total"], 0);
+        assert_eq!(s["edges_total"], 0);
+        assert_eq!(s["symbols"], 0);
+        assert_eq!(s["media"], 0);
+        assert_eq!(s["temporals"], 0);
+    }
+
+    #[test]
+    fn test_summary_counts_node_kinds() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("s1", "sym", NodeKind::Symbol));
+        g.add_node(Node::new("s2", "sym2", NodeKind::Symbol));
+        g.add_node(Node::new("m1", "db", NodeKind::Medium));
+        g.add_node(Node::new("t1", "timer", NodeKind::Temporal));
+
+        let s = graph_summary(&g);
+        assert_eq!(s["symbols"], 2);
+        assert_eq!(s["media"], 1);
+        assert_eq!(s["temporals"], 1);
+        assert_eq!(s["nodes_total"], 4);
+    }
+
+    #[test]
+    fn test_summary_counts_edge_types() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "a", "b", EdgeKind::Reads));
+        g.add_edge(Edge::new("e3", "a", "b", EdgeKind::Reads));
+
+        let s = graph_summary(&g);
+        assert_eq!(s["edges_total"], 3);
+        let et = &s["edge_types"];
+        assert_eq!(et["calls"], 1);
+        assert_eq!(et["reads"], 2);
+    }
+}

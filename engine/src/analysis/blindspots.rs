@@ -37,3 +37,61 @@ pub fn find_blindspots(
 
     json!({ "boundaries": boundaries, "count": boundaries.len() })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_blindspots_all_zero() {
+        let r = find_blindspots(0, 0, 0);
+        assert_eq!(r["count"], 0);
+        assert!(r["boundaries"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_blindspots_l4_only() {
+        let r = find_blindspots(3, 0, 0);
+        assert_eq!(r["count"], 1);
+        let b = &r["boundaries"][0];
+        assert_eq!(b["type"], "encapsulation_penetration");
+        assert_eq!(b["severity"], "medium");
+    }
+
+    #[test]
+    fn test_blindspots_cycles_high_severity() {
+        let r = find_blindspots(0, 10, 0);
+        assert_eq!(r["count"], 1);
+        let b = &r["boundaries"][0];
+        assert_eq!(b["type"], "circular_dependency");
+        assert_eq!(b["severity"], "high");
+    }
+
+    #[test]
+    fn test_blindspots_cycles_medium_severity() {
+        let r = find_blindspots(0, 3, 0);
+        let b = &r["boundaries"][0];
+        assert_eq!(b["severity"], "medium");
+    }
+
+    #[test]
+    fn test_blindspots_conflicts_high() {
+        let r = find_blindspots(0, 0, 10);
+        let b = &r["boundaries"][0];
+        assert_eq!(b["type"], "concurrent_access");
+        assert_eq!(b["severity"], "high");
+    }
+
+    #[test]
+    fn test_blindspots_conflicts_low() {
+        let r = find_blindspots(0, 0, 2);
+        let b = &r["boundaries"][0];
+        assert_eq!(b["severity"], "low");
+    }
+
+    #[test]
+    fn test_blindspots_all_three() {
+        let r = find_blindspots(1, 1, 1);
+        assert_eq!(r["count"], 3);
+    }
+}

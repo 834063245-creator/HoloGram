@@ -861,3 +861,502 @@ fn edge_to_value(e: &Edge) -> Value {
         "coupling_depth": e.coupling_depth,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // MUTEX enforces serial access to the process-wide CACHED_GRAPH static,
+    // preventing parallel MCP tests from stepping on each other.
+    static MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // ── Helpers ──
+
+    fn make_rpc(method: &str, params: Value, id: u64) -> Value {
+        json!({ "jsonrpc": "2.0", "method": method, "params": params, "id": id })
+    }
+
+    fn make_tool_call(name: &str, args: Value, id: u64) -> Value {
+        make_rpc("tools/call", json!({ "name": name, "arguments": args }), id)
+    }
+
+    fn make_notification(method: &str) -> Value {
+        json!({ "jsonrpc": "2.0", "method": method })
+    }
+
+    fn server() -> McpServer {
+        McpServer::new(&std::env::temp_dir())
+    }
+
+    /// Load a test graph into CACHED_GRAPH. Returns the lock guard so the
+    /// graph stays live until the guard is dropped at the end of the test.
+    fn load_test_graph() -> std::sync::MutexGuard<'static, ()> {
+        let guard = MUTEX.lock().unwrap();
+        let mut g = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("src/a.rs".into());
+        a.out_degree = 2;
+        g.add_node(a);
+        let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
+        b.location = Some("src/b.rs".into());
+        b.in_degree = 1;
+        g.add_node(b);
+        let mut m = Node::new("m1", "shared_db", NodeKind::Medium);
+        m.location = Some("store.rs".into());
+        g.add_node(m);
+        let mut e1 = Edge::new("e1", "a", "b", EdgeKind::Calls);
+        e1.coupling_depth = 2;
+        g.add_edge(e1);
+        let mut e2 = Edge::new("e2", "a", "m1", EdgeKind::Writes);
+        e2.coupling_depth = 4;
+        g.add_edge(e2);
+        if let Ok(mut cache) = CACHED_GRAPH.lock() {
+            *cache = Some(g);
+        }
+        guard
+    }
+
+    fn clear_graph() {
+        if let Ok(mut cache) = CACHED_GRAPH.lock() {
+            *cache = None;
+        }
+    }
+
+    // ── parse_serve_args ──
+
+    #[test]
+    fn test_parse_serve_args_basic() {
+        // parse_serve_args reads from real argv; we can only test the parsing logic indirectly.
+        // This test verifies that when NOT in serve mode, it returns None.
+        let args: Vec<String> = std::env::args().collect();
+        if !args.contains(&"serve".to_string()) {
+            assert!(parse_serve_args().is_none());
+        }
+    }
+
+    // ── JSON-RPC protocol ──
+
+    #[test]
+    fn test_handle_invalid_json() {
+        let srv = server();
+        assert!(srv.handle_request("not json").is_none());
+    }
+
+    #[test]
+    fn test_handle_notification_no_id() {
+        let srv = server();
+        let req = serde_json::to_string(&make_notification("tools/list")).unwrap();
+        assert!(srv.handle_request(&req).is_none(), "notifications should be ignored");
+    }
+
+    #[test]
+    fn test_handle_unknown_method() {
+        let srv = server();
+        let req = serde_json::to_string(&make_rpc("bogus/method", json!({}), 1)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn test_tools_list() {
+        let srv = server();
+        let req = serde_json::to_string(&make_rpc("tools/list", json!({}), 1)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let tools = v["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 22, "22 tools defined");
+        // Check key tools exist
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"hologram_neighbors"));
+        assert!(names.contains(&"hologram_analyze"));
+        assert!(names.contains(&"hologram_preflight"));
+        assert!(names.contains(&"hologram_rename"));
+    }
+
+    #[test]
+    fn test_tool_call_unknown_tool() {
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_nonexistent", json!({}), 2)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32601);
+    }
+
+    // ── Tool: neighbors ──
+
+    #[test]
+    fn test_neighbors_missing_node_id() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_neighbors", json!({}), 3)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_neighbors_node_not_found() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_neighbors",
+            json!({"node_id": "nonexistent"}), 4)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let content = &v["result"]["content"][0]["text"];
+        assert!(content.as_str().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn test_neighbors_returns_data() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_neighbors",
+            json!({"node_id": "a"}), 5)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["node"]["id"], "a");
+        assert!(data["neighbor_count"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_neighbors_no_graph() {
+        let _g = MUTEX.lock().unwrap();
+        let srv = server();
+        clear_graph();
+        let req = serde_json::to_string(&make_tool_call("hologram_neighbors",
+            json!({"node_id": "a"}), 6)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32000);
+    }
+
+    // ── Tool: impact ──
+
+    #[test]
+    fn test_impact_missing_node_id() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_impact", json!({}), 7)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_impact_with_default_depth() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_impact",
+            json!({"node_id": "a"}), 8)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["max_depth"], 3);
+        assert_eq!(data["source_node_id"], "a");
+    }
+
+    // ── Tool: path ──
+
+    #[test]
+    fn test_path_missing_params() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_path", json!({}), 9)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_path_found() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_path",
+            json!({"from_id": "a", "to_id": "b"}), 10)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["path_count"], 1);
+    }
+
+    // ── Tool: history ──
+
+    #[test]
+    fn test_history_returns_data() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_history",
+            json!({"node_id": "a"}), 11)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        // Node "a" has 2 outgoing edges, 0 incoming → dependent_count=2
+        assert!(data["dependent_count"].as_u64().unwrap() > 0);
+        assert_eq!(data["dependency_count"], 0);
+    }
+
+    // ── Tool: community ──
+
+    #[test]
+    fn test_community_returns_data() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_community",
+            json!({"node_id": "a"}), 12)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["node_id"], "a");
+        assert!(data.get("community").is_some());
+    }
+
+    // ── Tool: delayed ──
+
+    #[test]
+    fn test_delayed_empty() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_delayed", json!({}), 13)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        // No temporal edges in test graph
+        assert_eq!(data["total_delayed_edges"], 0);
+    }
+
+    // ── Tool: fragile ──
+
+    #[test]
+    fn test_fragile_returns_top_n() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_fragile",
+            json!({"limit": 2}), 14)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["limit"], 2);
+        assert!(data["fragile_modules"].as_array().unwrap().len() <= 2);
+    }
+
+    // ── Tool: cycle ──
+
+    #[test]
+    fn test_cycle_default_mode() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_cycle", json!({}), 15)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["mode_filter"], "all");
+    }
+
+    // ── Tool: thread_conflicts ──
+
+    #[test]
+    fn test_thread_conflicts() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_thread_conflicts",
+            json!({}), 16)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data.get("resources").is_some());
+    }
+
+    // ── Tool: coupling_report ──
+
+    #[test]
+    fn test_coupling_report_missing_module() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_coupling_report",
+            json!({}), 17)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_coupling_report_with_module() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_coupling_report",
+            json!({"module_name": "a"}), 18)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data["total_edges"].as_u64().unwrap() > 0);
+    }
+
+    // ── Tool: timeline ──
+
+    #[test]
+    fn test_timeline() {
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_timeline",
+            json!({"limit": 10}), 19)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert!(v.get("result").is_some() || v.get("error").is_some());
+    }
+
+    // ── Tool: blindspots ──
+
+    #[test]
+    fn test_blindspots() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_blindspots",
+            json!({"filter": "all"}), 20)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data.get("boundaries").is_some());
+    }
+
+    // ── Tool: preflight ──
+
+    #[test]
+    fn test_preflight_missing_files() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_preflight", json!({}), 21)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_preflight_with_files() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_preflight",
+            json!({"files": ["src/a.rs"]}), 22)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data["risk_level"].as_str().is_some());
+    }
+
+    // ── Tool: search ──
+
+    #[test]
+    fn test_search_missing_query() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_search", json!({}), 23)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_search_finds_nodes() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_search",
+            json!({"query": "mod"}), 24)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data["count"].as_u64().unwrap() > 0);
+    }
+
+    // ── Tool: graph_summary ──
+
+    #[test]
+    fn test_graph_summary() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_graph_summary", json!({}), 25)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(data["nodes_total"], 3);
+        assert_eq!(data["edges_total"], 2);
+    }
+
+    // ── Tool: community_report ──
+
+    #[test]
+    fn test_community_report() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_community_report",
+            json!({"min_size": 1}), 26)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data.get("total_communities").is_some());
+    }
+
+    // ── Tool: diff ──
+
+    #[test]
+    fn test_diff_missing_before_path() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_diff", json!({}), 27)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    // ── Tool: run_health ──
+
+    #[test]
+    fn test_run_health_missing_path() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_run_health", json!({}), 28)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    // ── Tool: rename ──
+
+    #[test]
+    fn test_rename_missing_names() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_rename", json!({}), 29)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_rename_dry_run() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_rename",
+            json!({"old_name": "mod_a", "new_name": "module_a", "dry_run": true}), 30)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(data["dry_run"].as_bool().unwrap());
+        assert_eq!(data["matched_count"], 1);
+    }
+}
