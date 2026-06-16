@@ -60,8 +60,8 @@
 </td>
 <td width="50%" valign="top">
 
-### 👁️ Agent 透镜 & 推理轨迹
-Agent 调过的节点在星图上持续高亮，其余降到 1% 透明度——一眼看清它"看过哪里"。渐变虚线串联最近 20 步访问序列，像星图上一条发光的推理足迹。
+### ⚡ 保存即刷新
+文件保存 → watcher 秒级检测 → 引擎自动重分析 → 星图静默刷新。全程无需手动触发，图始终与代码同步。
 
 </td>
 </tr>
@@ -96,8 +96,8 @@ Tab 循环切换。**宇宙层** — 每个社区一团螺旋星云（golden rat
 <tr>
 <td valign="top">
 
-### 🎯 图作为输入设备
-Shift+点击两个节点 → BFS 自动寻最短路径 → 路径高亮 → Agent 自动分析依赖链架构风险。Alt+拖拽框选 → 收集框内节点 →高亮 → Agent 自动总结区域模块关系。图不再只是输出——它是你的输入端。
+### 📦 冷启动秒开
+MessagePack 二进制直读，缓存优先策略。打开项目 → 已有缓存即秒显上次图，引擎后台静默更新。大项目不再等——先看到图，再等最新。
 
 </td>
 <td valign="top">
@@ -118,6 +118,22 @@ N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点场景 **1 draw 
 </td>
 </tr>
 </table>
+
+---
+
+## 🤖 原生 Agent
+
+**图是眼睛，Agent 是嘴——同一个系统的两层，天然共生。**
+
+| 能力 | 说明 |
+|---|---|
+| **94 个原生工具直查图数据库** | neighbors / impact / path / coupling-report / blindspots / cycle / fragile / community / history / search / check / preflight / health / diff / timeline … 另有文件读写、Shell、Git、WebFetch 全套。Agent 不喂源文件——一次工具调用几十行 JSON 查清上千行源码的依赖，Token 消耗远低于全量读代码。 |
+| **Agent ↔ 星图双向实时联动** | Agent 调工具 → 3D 视图实时高亮受影响节点，粒子沿边流动。path → 路径高亮，fragile → 脆弱节点标琥珀，cycle → 循环节点标红，impact → 聚焦飞行，diff → 绿增红删。 |
+| **图作为输入设备** | **Shift+双节点** → BFS 最短路径 → Agent 自动分析依赖链风险。**Alt+框选区域** → Agent 自动总结模块关系。**单击节点** → 详情卡 + "问 Agent"入口。 |
+| **全面板覆盖** | 星图详情卡 · 简报违规行 · 文件查看器 · 文件树 · 时间轴事件 · 约束面板——6 个面板全部有"问 Agent"按钮，点一下打开聊天窗自动发送上下文。 |
+| **Agent 透镜 & 轨迹** | 图上只亮 Agent 访问过的节点（其余 1% 透明度）+ 渐变虚线串联最近 20 步推理序列。一键切换透镜开关，看清 Agent "看过哪里"。 |
+| **会话持久化** | 对话历史自动保存到 `.hologram/chat_sessions.json`，重启/切换项目后恢复——换个项目回来接着聊。 |
+| **权限分级** | Shell、Git push、文件写入等危险操作人工确认。API key 本地存储，数据不上传。支持 Anthropic / OpenAI 兼容接口。 |
 
 ---
 
