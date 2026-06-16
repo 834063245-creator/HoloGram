@@ -724,6 +724,7 @@ export class FileTranslator {
         apiKey: provider.apiKey,
         baseUrl: provider.baseUrl,
         model: provider.model,
+        disableThinking: true, // translation doesn't need reasoning — skip chain-of-thought
       });
       for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
         if (chunk.type === ChunkType.Text) rawText += chunk.text;

@@ -10,12 +10,14 @@ export interface OpenAIConfig {
   apiKey: string;
   baseUrl: string; // e.g. "https://api.deepseek.com/v1" or "https://api.openai.com/v1"
   model: string;
+  /** Disable reasoning/thinking mode (DeepSeek v4-pro). Default: false (auto). */
+  disableThinking?: boolean;
 }
 
 export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   const name = cfg.name || 'openai';
   const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // user controls v1 prefix in baseUrl
-  const { model, apiKey } = cfg;
+  const { model, apiKey, disableThinking } = cfg;
 
   return {
     name() {
@@ -23,7 +25,7 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
     },
 
     async *stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk> {
-      const body = buildChatRequest(sanitizeToolPairing(req.messages), req.tools, model, req.max_tokens);
+      const body = buildChatRequest(sanitizeToolPairing(req.messages), req.tools, model, req.max_tokens, disableThinking);
       const response = await sendWithRetry(signal, baseUrl, apiKey, name, body);
 
       if (!response.body) throw new Error(`${name}: no response body`);
@@ -68,6 +70,7 @@ interface ChatRequest {
   max_tokens: number;
   stream: true;
   stream_options?: { include_usage: true };
+  thinking?: { type: 'enabled' | 'disabled' };
 }
 
 function buildChatRequest(
@@ -75,7 +78,9 @@ function buildChatRequest(
   tools: Request['tools'],
   model: string,
   maxTok: number,
+  disableThinking?: boolean,
 ): ChatRequest {
+  const thinking = disableThinking ? { type: 'disabled' as const } : undefined;
   const chatMsgs: ChatMessage[] = [];
 
   for (const m of msgs) {
@@ -145,6 +150,7 @@ function buildChatRequest(
     max_tokens: maxTok > 0 ? maxTok : DEFAULT_MAX_TOKENS,
     stream: true,
     stream_options: { include_usage: true },
+    thinking,
   };
 
   return r;
