@@ -3,6 +3,9 @@
 
 import { invoke } from '../bridge';
 import { loadSettings, getActiveProvider, type ProviderSettings } from '../settings';
+import { createAnthropicProvider } from '../provider/anthropic';
+import { createOpenAIProvider } from '../provider/openai';
+import { ChunkType } from '../provider/types';
 import { iconHtml } from './icons';
 import type * as monaco from 'monaco-editor';
 import './file-translator.css';
@@ -690,98 +693,49 @@ export class FileTranslator {
     maxTokens: number,
     extraNote?: string,
   ): Promise<{ lines: TranslationLine[] }> {
-    // Create fresh AbortController
+    // Create fresh AbortController for user cancellation (tab close / panel destroy)
     if (this.abortController) this.abortController.abort();
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
-    const promptWithCount = `${SYSTEM_PROMPT}\n\n代码行数：${lineCount}\n目标语言：${language}${extraNote || ''}`;
+    const systemPrompt = `${SYSTEM_PROMPT}\n\n代码行数：${lineCount}\n目标语言：${language}${extraNote || ''}`;
+    const userMessage = `代码内容：\n\`\`\`\n${content}\n\`\`\`\n\n请翻译并返回 JSON。`;
 
-    let url: string;
-    let headers: Record<string, string>;
-    let body: string;
+    const messages = [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: userMessage },
+    ];
 
+    // Use the same proven provider infrastructure as chat/agent (streaming + retry + SSE)
+    let rawText = '';
     if (provider.kind === 'anthropic') {
-      url = `${provider.baseUrl}/v1/messages`;
-      headers = {
-        'x-api-key': provider.apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      };
-      body = JSON.stringify({
+      const p = createAnthropicProvider({
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
         model: provider.model,
-        max_tokens: maxTokens,
-        system: promptWithCount,
-        messages: [{ role: 'user', content: `代码内容：\n\`\`\`\n${content}\n\`\`\`\n\n请翻译并返回 JSON。` }],
+        thinking: provider.thinking,
       });
-    } else {
-      // OpenAI-compatible (including DeepSeek)
-      let baseUrl = provider.baseUrl;
-      if (!baseUrl.endsWith('/v1')) {
-        baseUrl = baseUrl.replace(/\/$/, '') + '/v1';
+      for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
+        if (chunk.type === ChunkType.Text) rawText += chunk.text;
+        else if (chunk.type === ChunkType.Error) throw chunk.err!;
       }
-      url = `${baseUrl}/chat/completions`;
-      headers = {
-        'Authorization': `Bearer ${provider.apiKey}`,
-        'content-type': 'application/json',
-      };
-      body = JSON.stringify({
+    } else {
+      const p = createOpenAIProvider({
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
         model: provider.model,
-        max_tokens: maxTokens,
-        messages: [
-          { role: 'system', content: promptWithCount },
-          { role: 'user', content: `代码内容：\n\`\`\`\n${content}\n\`\`\`\n\n请翻译并返回 JSON。` },
-        ],
       });
-    }
-
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, 60000);
-
-    // Propagate user cancellation (tab close / panel destroy) to the fetch controller
-    signal.addEventListener('abort', () => controller.abort());
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: controller.signal,
-      });
-    } catch (err) {
-      // Distinguish timeout abort from user-initiated abort
-      if (timedOut) {
-        throw new Error('翻译超时：LLM 请求超过 60 秒未响应，请重试或选择更少的代码行');
+      for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
+        if (chunk.type === ChunkType.Text) rawText += chunk.text;
+        else if (chunk.type === ChunkType.Error) throw chunk.err!;
       }
-      throw err; // user-initiated AbortError → silently discarded upstream
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`翻译失败：${response.status} ${response.statusText}${errText ? ' — ' + errText.slice(0, 200) : ''}`);
-    }
-
-    const data = await response.json();
-
-    // Extract text from response
-    let rawText: string;
-    if (provider.kind === 'anthropic') {
-      rawText = data?.content?.[0]?.text || '';
-    } else {
-      rawText = data?.choices?.[0]?.message?.content || '';
     }
 
     // Try to extract JSON from the response
     let parsed: any;
     try {
-      // Try direct parse first
       parsed = JSON.parse(rawText);
     } catch {
-      // Try to find JSON block in markdown
       const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/) || rawText.match(/(\{[\s\S]*\})/);
       if (jsonMatch) {
         try {
