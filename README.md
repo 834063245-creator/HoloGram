@@ -238,7 +238,7 @@ HoloGram 的 Rust 引擎可以独立作为 MCP 服务器运行，在任何 Claud
 1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版 hologram-engine.exe
 2. 把 hologram-engine.exe 放到 ~/.hologram/ 目录下
 3. 在当前 AI 编程工具的 MCP 配置中注册这个服务：启动命令是 ~/.hologram/hologram-engine.exe，参数是 serve
-4. 在我的每个常用项目 CLAUDE.md 里加一条规则：修改代码前先查 hologram_impact 看依赖波及范围
+4. 找到当前工具的项目规则文件（如 CLAUDE.md / .cursorrules / .windsurfrules / .github/copilot-instructions.md 等），写入 HoloGram 工具使用规则：改代码前先查 hologram_impact 看依赖波及，改完查 hologram_neighbors 确认未破坏连接，涉及多文件时查 hologram_coupling_report 看耦合深度
 5. 完成后告诉我怎么验证装好了
 ```
 
