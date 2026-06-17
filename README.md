@@ -5,14 +5,14 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-194%20passed-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-293%20passed-brightgreen" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows-blue" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
 > **语言无关的交互式代码依赖拓扑图生成器。**
 >
-> 不是又一个静态分析工具。HoloGram 把代码库变成一张可对话的 3D 星图——10 门语言统一 IR、原生 LLM Agent 双向联动、从 L1 公开 API 到 L4 封装穿透四层耦合诊断。纯 Rust 引擎，桌面应用。
+> 不是又一个静态分析工具。HoloGram 把代码库变成一张可对话的 3D 星图——18 门语言统一 IR、原生 LLM Agent 双向联动、从 L1 公开 API 到 L4 封装穿透四层耦合诊断。纯 Rust 引擎，桌面应用。
 
 ---
 
@@ -20,7 +20,7 @@
 
 | **🌍 跨语言统一 IR** | **🤖 图即 Agent 的眼睛** | **🔬 自举验证** |
 |---|---|---|
-| 10 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | 45 个原生工具直查图数据库，不是喂源文件让 LLM 猜。耦合深度 L1–L4 提前算好，SQLite FTS5 毫秒检索。Agent 和图是同一系统的两层——图是眼睛，Agent 是嘴。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
+| 18 门语言全部映射到同一张图。TypeScript 调 Python、Rust 调 Go——照样追踪。 | 46 个原生工具直查图数据库，不是喂源文件让 LLM 猜。耦合深度 L1–L4 提前算好，SQLite FTS5 毫秒检索。Agent 和图是同一系统的两层——图是眼睛，Agent 是嘴。 | 用自己的图 debug 自己。项目根目录下的依赖分析结果随时可查——既是验证，也是活样本。 |
 
 ---
 
@@ -61,7 +61,7 @@
 <td width="50%" valign="top">
 
 ### ⚡ 保存即刷新
-文件保存 → watcher 秒级检测 → 引擎自动重分析 → 星图静默刷新。全程无需手动触发，图始终与代码同步。
+文件保存 → watcher 秒级检测 → 引擎增量更新 → 星图静默刷新。全程无需手动触发，图始终与代码同步。
 
 </td>
 </tr>
@@ -127,11 +127,12 @@ N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点场景 **1 draw 
 
 | 能力 | 说明 |
 |---|---|
-| **45 个原生工具直查图数据库** | 24 个图查询（neighbors / impact / path / coupling-report / blindspots / cycle / fragile / community / history / search / check / preflight / health / diff / timeline …）+ 17 个编码（文件读写 / Shell / Git / WebFetch）+ 4 个记忆（memory list/read/save/delete）。Agent 不喂源文件——一次工具调用几十行 JSON 查清上千行源码的依赖，Token 消耗远低于全量读代码。 |
+| **48 个原生工具直查图数据库** | 24 个图查询（explore / neighbors / impact / path / coupling-report / blindspots / cycle / fragile / community / history / search / check / preflight / health / diff / timeline …）+ 19 个编码（文件读写 / Shell / Git / WebFetch）+ 4 个记忆（memory list/read/save/delete）+ 子 Agent spawn。Agent 不喂源文件——一次工具调用几十行 JSON 查清上千行源码的依赖，Token 消耗远低于全量读代码。 |
 | **Agent ↔ 星图双向实时联动** | Agent 调工具 → 3D 视图实时高亮受影响节点，粒子沿边流动。path → 路径高亮，fragile → 脆弱节点标琥珀，cycle → 循环节点标红，impact → 聚焦飞行，diff → 绿增红删。 |
 | **图作为输入设备** | **Shift+双节点** → BFS 最短路径 → Agent 自动分析依赖链风险。**Alt+框选区域** → Agent 自动总结模块关系。**单击节点** → 详情卡 + "问 Agent"入口。 |
 | **全面板覆盖** | 星图详情卡 · 简报违规行 · 文件查看器 · 文件树 · 时间轴事件 · 约束面板——6 个面板全部有"问 Agent"按钮，点一下打开聊天窗自动发送上下文。 |
 | **Agent 透镜 & 轨迹** | 图上只亮 Agent 访问过的节点（其余 1% 透明度）+ 渐变虚线串联最近 20 步推理序列。一键切换透镜开关，看清 Agent "看过哪里"。 |
+| **NL 自然语言探索** | `hologram_explore` 接受自然语言查询——"DataRequest 怎么 validate"——引擎自动切词消歧，BFS 路径搜索，一次返回 Flow + Blast Radius + Relationships + Source Code + Architecture Alerts。 |
 | **会话持久化** | 对话历史自动保存到 `.hologram/chat_sessions.json`，重启/切换项目后恢复——换个项目回来接着聊。 |
 | **权限分级** | Shell、Git push、文件写入等危险操作人工确认。API key 本地存储，数据不上传。支持 Anthropic / OpenAI 兼容接口。 |
 
@@ -139,17 +140,17 @@ N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点场景 **1 draw 
 
 ## 功能规格
 
-| 🪐 **3D 星图** | 🌍 **10 语言** | 🧠 **三层分析** |
+| 🪐 **3D 星图** | 🌍 **18 语言** | 🧠 **四层分析** |
 |---|---|---|
-| 力导向 + BloomPass 发光 + 全息网格 Shader + 粒子流动。三种渲染模式。大项目自动降级轻量文件图。 | Rust 引擎 tree-sitter 统一分析。Python/TS/JS 走专用适配器，其余 7 门走通用适配器。Grammar 静态链接，零配置。 | V1 基础拓扑 → V2 深层诊断（L1–L4 耦合/数据流环/线程冲突/盲点）→ V3 变更路由（五级破坏信号 + YAML 阈值）。 |
+| 力导向 + BloomPass 发光 + 全息网格 Shader + 粒子流动。三种渲染模式。大项目自动降级轻量文件图。 | Rust 引擎 tree-sitter 统一分析。18 种 grammar 静态链接，零配置。 | V1 基础拓扑 → V2 深层诊断（L1–L4 耦合/数据流环/线程冲突/盲点）→ V3 变更路由（五级破坏信号 + YAML 阈值）→ 动态调度合成（callback/observer 边检测）。 |
 
 | ⚡ **Rust 全量引擎** | 🛡️ **约束门禁** | 🎯 **内置 IDE 工具** |
 |---|---|---|
-| 全量分析（Django 3,031 文件 4.1s），无需增量。文件监听 + 自动重分析。图始终最新。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull）。 |
+| 存储引擎 v2.5：MemoryIndex（邻接表 + 倒排索引）+ SqliteDb（持久化 + FTS5 全文搜索）+ 增量更新。Django 3,031 文件 4.1s。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull）。 |
 
-| 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **194 测试** |
+| 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **293 测试** |
 |---|---|---|
-| JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Rust 引擎长驻，JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。 | Rust `#[test]` 全覆盖 19 模块：图数据模型、适配器、管线、耦合分析、社区发现、路由、MCP 协议。 |
+| JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Rust 引擎长驻，JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。 | Rust `#[test]` 全覆盖：图数据模型、适配器、管线、耦合分析、社区发现、路由、存储引擎、MCP 协议。 |
 
 ---
 
@@ -187,15 +188,26 @@ cargo tauri build
 
 ## 支持语言
 
-| Python | TypeScript | JavaScript | Go | Rust |
-|---|---|---|---|---|
-| 专用适配器 | 专用适配器 | 专用适配器 | tree-sitter | tree-sitter |
+| Python | TypeScript | JavaScript | Go | Rust | Java |
+|---|---|---|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
 
-| Java | C | C++ | Ruby | Lua |
-|---|---|---|---|---|
-| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
+| C | C++ | Ruby | Lua | C# | Swift |
+|---|---|---|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
 
-> Python 走 AST 级专用适配器，TypeScript/JS/JSX/TSX 走 TypeScript 适配器，其余 7 门走通用 tree-sitter 适配器。Grammar 编译时静态链接，无需运行时下载。
+| Dart | Scala | Haskell | JSON | HTML | CSS |
+|---|---|---|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
+
+> 全部 18 门语言走 tree-sitter 适配器。Grammar 编译时静态链接，无需运行时下载。另 12 种语法依赖已就绪，上游 tree-sitter 升级后一行启用。
+
+### 框架路由覆盖
+
+8 种主流框架的 URL→处理函数映射自动检测，在图里可见：
+
+| Django | Express | FastAPI | Flask | Rails | Spring | Gin | NestJS |
+|---|---|---|---|---|---|---|---|
 
 ---
 
@@ -212,9 +224,9 @@ cargo tauri build
                       ┌─────────────────────▼─────────────┐
                       │ Rust 引擎 (engine/)                │
                       │ 发现 → 分析 → 跨文件 → 社区 → 序列化 │
-                      │ 10 tree-sitter 语法 · 3 适配器       │
-                      │ JSON / MsgPack / SQLite            │
-                      │ 21 MCP 工具 · 194 tests · 19 模块   │
+                      │ 18 tree-sitter 语法                 │
+                      │ MemoryIndex + SqliteDb + FTS5      │
+                      │ 24 MCP 工具 · 293 tests               │
                       └───────────────────────────────────┘
 ```
 
@@ -274,7 +286,7 @@ HoloGram 自己的 `.mcp.json` 是项目级配置的参考模板。
 
 ```bash
 # Rust 引擎
-cd engine && cargo test                                # 194 tests
+cd engine && cargo test                                # 293 tests
 cd engine && cargo build
 
 # 桌面应用
@@ -287,8 +299,8 @@ cd src-ui && npm run dev                 # 前端 dev server
 ```
 
 ```
-engine/          Rust 分析引擎（19 模块，194 tests）
-src-tauri/       Rust / Tauri 壳（94 个 Tauri 命令）
+engine/          Rust 分析引擎（存储引擎 v2.5 + 24 MCP 工具，293 tests）
+src-tauri/       Rust / Tauri 壳
 src-ui/          TypeScript 前端（Three.js + Agent + Monaco + xterm.js）
 assets/          图标及 UI 原型
 ```
