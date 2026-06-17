@@ -32,22 +32,27 @@ impl GraphMerger {
         let mut other_seen: HashMap<String, String> = HashMap::new();
 
         for (id, node) in other.nodes {
-            let key = node.loc_key();
+            // When location is None, use node id to avoid merging unrelated nodes
+            let key = node.location.as_ref()
+                .map(|loc| format!("{}::{}::{}", loc, node.name, node.kind.as_str()))
+                .unwrap_or_else(|| format!("{}::{}::{}", node.id, node.name, node.kind.as_str()));
 
             // Check global index AND intra-graph dedup
             if self.loc_index.contains_key(&key) || other_seen.contains_key(&key) {
                 continue;
             }
 
-            self.loc_index.insert(key, id.clone());
-            other_seen.insert(node.loc_key(), id.clone());
+            self.loc_index.insert(key.clone(), id.clone());
+            other_seen.insert(key, id.clone());
             self.graph.add_node(node);
             added += 1;
         }
 
-        // Edges — accept all, resolver will fix cross-file targets later
+        // Edges — only accept edges whose endpoints exist in the merged graph
         for (_, edge) in other.edges {
-            self.graph.add_edge(edge);
+            if self.graph.nodes.contains_key(&edge.source) && self.graph.nodes.contains_key(&edge.target) {
+                self.graph.add_edge(edge);
+            }
         }
 
         added

@@ -89,13 +89,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::task::spawn_blocking(move || handle_check(req.trim()))
                     .await.unwrap_or_else(|_| b"{\"error\":\"check panicked\"}".to_vec())
             } else if req_owned.starts_with("thread") {
-                handle_simple("thread", req_owned.trim(), |g, _| thread_conflict_report(g, &[]))
+                let arg = req_owned.trim().strip_prefix("thread:").unwrap_or("");
+                handle_simple("thread", arg, |g, severity| {
+                    let mut report = thread_conflict_report(g, &[]);
+                    if !severity.is_empty() {
+                        if let Some(obj) = report.as_object_mut() {
+                            obj.insert("severity_filter".into(), json!(severity));
+                        }
+                    }
+                    report
+                })
             } else if req_owned.starts_with("blindspots") {
-                handle_simple("blindspots", req_owned.trim(), |g, _| {
+                let arg = req_owned.trim().strip_prefix("blindspots:").unwrap_or("");
+                let threshold: usize = arg.parse().unwrap_or(0);
+                handle_simple("blindspots", arg, move |g, _| {
                     let c = coupling_report(g, "");
                     let cycles = detect_cycles(g);
                     let conflicts = thread_conflict_report(g, &[]);
-                    find_blindspots(c["L4"].as_u64().unwrap_or(0) as usize, cycles.len(), conflicts["conflict_count"].as_u64().unwrap_or(0) as usize)
+                    find_blindspots(
+                        if threshold > 0 { threshold } else { c["L4"].as_u64().unwrap_or(0) as usize },
+                        cycles.len(),
+                        conflicts["conflict_count"].as_u64().unwrap_or(0) as usize,
+                    )
                 })
             } else if req_owned.starts_with("timeline") {
                 handle_simple("timeline", req_owned.trim(), |_g, a| {
@@ -146,9 +161,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if req_owned.starts_with("path:") {
                 handle_query(req_owned.trim(), "path:")
             } else if req_owned.starts_with("search:") {
-                handle_query(req_owned.trim(), "search:")
+                // Parse "search:query:limit" — limit is optional
+                let args = req_owned.trim().strip_prefix("search:").unwrap_or("");
+                let (query_str, limit): (&str, usize) = match args.rfind(':') {
+                    Some(pos) if pos > 0 => {
+                        let (q, l) = args.split_at(pos);
+                        (q, l[1..].parse().unwrap_or(50))
+                    }
+                    _ => (args, 50),
+                };
+                handle_simple("search:", query_str, move |g, _| {
+                    let results = query::search_nodes(g, query_str);
+                    let truncated: Vec<_> = results.iter().take(limit).map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
+                    json!({"results": truncated, "total": results.len(), "limit": limit})
+                })
             } else if req_owned.starts_with("impact:") {
                 handle_query(req_owned.trim(), "impact:")
+            } else if req_owned.starts_with("rename:") {
+                // Parse "rename:old_name:new_name:dry_run:node_id"
+                let args = req_owned.trim().strip_prefix("rename:").unwrap_or("");
+                let parts: Vec<&str> = args.splitn(4, ':').collect();
+                let old_name = parts.first().copied().unwrap_or("");
+                let new_name = parts.get(1).copied().unwrap_or("");
+                let dry_run: bool = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(false);
+                let _node_id = parts.get(3).copied().unwrap_or("");
+                handle_simple("rename:", old_name, move |g, _| {
+                    let matched: Vec<_> = g.nodes.values()
+                        .filter(|n| n.name == old_name || n.id.contains(old_name))
+                        .collect();
+                    if matched.is_empty() {
+                        json!({"error": format!("No nodes match '{}'", old_name)})
+                    } else if dry_run {
+                        json!({"dry_run": true, "matched_count": matched.len(), "matched": matched.iter().map(|n| json!({"id": n.id, "name": n.name})).collect::<Vec<_>>()})
+                    } else {
+                        json!({"dry_run": false, "renamed_count": matched.len(), "old_name": old_name, "new_name": new_name, "note": "TCP rename: in-memory only. Use MCP tool for full rename support."})
+                    }
+                })
             } else if req_owned.contains("get_graph") {
                 handle_get_graph()
             } else if req_owned.contains("ping") {
@@ -211,16 +259,26 @@ fn handle_analyze(path: &str) -> Vec<u8> {
             "id": n.id,
             "name": n.name,
             "type": n.kind.as_str(),
-            "location": n.location
+            "location": n.location,
+            "in_degree": n.in_degree,
+            "out_degree": n.out_degree,
+            "properties": n.properties,
+            "position": n.position,
+            "community_id": n.community_id
         })
     }).collect();
 
     let edges: Vec<serde_json::Value> = result.graph.edges.values().map(|e| {
         serde_json::json!({
+            "id": e.id,
             "source": e.source,
             "target": e.target,
             "type": e.kind.as_str(),
-            "coupling_depth": e.coupling_depth
+            "coupling_depth": e.coupling_depth,
+            "cross_file": e.cross_file,
+            "direction": e.direction,
+            "temporal_delay_sec": e.temporal_delay_sec,
+            "medium_node_id": e.medium_node_id
         })
     }).collect();
 
@@ -313,7 +371,7 @@ fn handle_check(request: &str) -> Vec<u8> {
     serde_json::to_vec(&result).unwrap_or_default()
 }
 
-fn handle_simple(prefix: &str, request: &str, f: fn(&Graph, &str) -> serde_json::Value) -> Vec<u8> {
+fn handle_simple<F: FnOnce(&Graph, &str) -> serde_json::Value>(prefix: &str, request: &str, f: F) -> Vec<u8> {
     let arg = request.strip_prefix(prefix).unwrap_or("");
     let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
     match cache.as_ref() {
@@ -338,7 +396,7 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
     // Try to load baseline
     match Graph::from_json_file(&baseline_path) {
         Ok(baseline) => {
-            let d = current.diff(&baseline);
+            let d = baseline.diff(&current);
             let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let removed_nodes: Vec<_> = d.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let modified_nodes: Vec<_> = d.modified_nodes.iter().map(|(old, new)| json!({
@@ -414,18 +472,30 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
 }
 
 fn handle_get_graph() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "nodes": [
-            {"id": "node_a", "name": "handle_request", "type": "function"},
-            {"id": "node_b", "name": "UserModel", "type": "class"},
-            {"id": "node_c", "name": "cache_get", "type": "function"}
-        ],
-        "edges": [
-            {"id": "edge_1", "source": "node_a", "target": "node_b", "type": "calls", "coupling_depth": 2},
-            {"id": "edge_2", "source": "node_b", "target": "node_c", "type": "calls", "coupling_depth": 1}
-        ]
-    }))
-    .unwrap_or_default()
+    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
+    match cache.as_ref() {
+        Some(g) => {
+            let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| {
+                serde_json::json!({
+                    "id": n.id, "name": n.name, "type": n.kind.as_str(),
+                    "location": n.location, "in_degree": n.in_degree,
+                    "out_degree": n.out_degree, "properties": n.properties,
+                    "position": n.position, "community_id": n.community_id,
+                })
+            }).collect();
+            let edges: Vec<serde_json::Value> = g.edges.values().map(|e| {
+                serde_json::json!({
+                    "id": e.id, "source": e.source, "target": e.target,
+                    "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+                    "cross_file": e.cross_file, "direction": e.direction,
+                    "temporal_delay_sec": e.temporal_delay_sec,
+                    "medium_node_id": e.medium_node_id,
+                })
+            }).collect();
+            serde_json::to_vec(&serde_json::json!({"nodes": nodes, "edges": edges})).unwrap_or_default()
+        }
+        None => b"{\"nodes\":[],\"edges\":[]}".to_vec(),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -523,12 +593,36 @@ mod tests {
     // ── handle_get_graph ──
 
     #[test]
-    fn test_handle_get_graph_returns_hardcoded_structure() {
+    fn test_handle_get_graph_returns_empty_when_no_cache() {
+        let _lock = lock_bin();
+        clear_graph();
         let response = handle_get_graph();
         let v: serde_json::Value = serde_json::from_slice(&response).unwrap();
-        assert_eq!(v["nodes"].as_array().unwrap().len(), 3);
-        assert_eq!(v["edges"].as_array().unwrap().len(), 2);
-        assert_eq!(v["nodes"][0]["id"], "node_a");
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 0);
+        assert_eq!(v["edges"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_handle_get_graph_returns_cached_data() {
+        // Populate CACHED_GRAPH first
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
+            *cache = Some(g);
+        }
+        let response = handle_get_graph();
+        let v: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(v["edges"].as_array().unwrap().len(), 1);
+        let ids: Vec<&str> = v["nodes"].as_array().unwrap().iter()
+            .filter_map(|n| n["id"].as_str()).collect();
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"b"));
+        assert_eq!(v["edges"][0]["source"], "a");
+        // Clean up — must run even if assertions fail
+        let _ = mcp::CACHED_GRAPH.lock().map(|mut c| *c = None);
     }
 
     // ── handle_simple ──
@@ -546,6 +640,7 @@ mod tests {
 
     #[test]
     fn test_handle_simple_no_graph() {
+        let _lock = lock_bin();
         clear_graph();
         let resp = handle_simple("fragile:", "fragile:5", |_, _| json!({}));
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();

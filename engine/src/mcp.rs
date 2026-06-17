@@ -25,6 +25,11 @@ use crate::watcher;
 pub static CACHED_GRAPH: std::sync::LazyLock<Mutex<Option<Graph>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+/// Global re-entrant lock preventing concurrent full analysis across
+/// MCP tools, watcher, and TCP RPC handler.
+pub static ANALYZE_LOCK: std::sync::LazyLock<Mutex<()>> =
+    std::sync::LazyLock::new(|| Mutex::new(()));
+
 /// Parse CLI args for `engine.exe serve [--project-root <path>]`.
 /// Returns None if not in serve mode.
 /// Returns Some(None) for serve mode without --project-root (lazy startup).
@@ -106,7 +111,7 @@ fn tool_definitions() -> Vec<Value> {
         // ── V3 check + health (2) ──
         tool_def("hologram_run_check", "Run full constraint validation (V3) on the current project.",
             &[("path", "string", "Project root directory path")], &["path"]),
-        tool_def("hologram_run_health", "Get project health score + trend over time.",
+        tool_def("hologram_run_health", "Get current project health snapshot (trend requires historical data).",
             &[("path", "string", "Project root directory path"), ("days", "integer", "Days to look back (default 30)")], &["path"]),
         tool_def("hologram_rename", "Safely rename a symbol across all files with atomic rollback.",
             &[("old_name", "string", "Current name"), ("new_name", "string", "New name"), ("dry_run", "boolean", "Preview only (default false)"), ("node_id", "string", "Optional specific node ID")], &["old_name", "new_name"]),
@@ -141,15 +146,12 @@ pub struct McpServer {
     /// Path to the project root directory (for re-analysis, timeline, etc.)
     /// Wrapped in Mutex so tool_analyze can switch projects at runtime.
     project_root: Mutex<PathBuf>,
-    /// Re-entrant lock for re-analysis (prevents concurrent full analysis)
-    analyze_lock: Mutex<()>,
 }
 
 impl McpServer {
     pub fn new(project_root: &Path) -> Self {
         Self {
             project_root: Mutex::new(project_root.to_path_buf()),
-            analyze_lock: Mutex::new(()),
         }
     }
 
@@ -722,7 +724,7 @@ impl McpServer {
                     });
                 }
             };
-            let diff = after.diff(&before);
+            let diff = before.diff(&after);
             let added_nodes: Vec<_> = diff.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let removed_nodes: Vec<_> = diff.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let modified_nodes: Vec<_> = diff.modified_nodes.iter().map(|(old, new)| json!({
@@ -749,7 +751,7 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "path is required");
         }
         // Try to acquire the analyze lock (non-blocking)
-        let lock = match self.analyze_lock.try_lock() {
+        let lock = match ANALYZE_LOCK.try_lock() {
             Ok(l) => l,
             Err(_) => return McpServer::error_response(id, -32000, "分析正在进行中，请稍后重试"),
         };
@@ -812,7 +814,7 @@ impl McpServer {
         if !root.exists() {
             return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
         }
-        let lock = match self.analyze_lock.try_lock() {
+        let lock = match ANALYZE_LOCK.try_lock() {
             Ok(l) => l,
             Err(_) => return McpServer::error_response(id, -32000, "分析正在进行中，请稍后重试"),
         };
@@ -867,17 +869,14 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "old_name and new_name are required");
         }
 
-        self.with_graph(id, |g| {
-            // Collect all nodes matching old_name
-            let matched: Vec<_> = g.nodes.values()
-                .filter(|n| n.name == old_name || n.id.contains(old_name))
-                .collect();
-
-            if matched.is_empty() {
-                return json!({"error": format!("No nodes match '{}'", old_name)});
-            }
-
-            if dry_run {
+        if dry_run {
+            self.with_graph(id, |g| {
+                let matched: Vec<_> = g.nodes.values()
+                    .filter(|n| n.name == old_name || n.id.contains(old_name))
+                    .collect();
+                if matched.is_empty() {
+                    return json!({"error": format!("No nodes match '{}'", old_name)});
+                }
                 json!({
                     "dry_run": true,
                     "old_name": old_name,
@@ -887,18 +886,39 @@ impl McpServer {
                     "files_to_modify": matched.iter().filter_map(|n| n.location.clone()).collect::<Vec<_>>(),
                     "message": format!("Dry run: {} nodes would be renamed from '{}' to '{}'. Execute with dry_run=false to commit.", matched.len(), old_name, new_name),
                 })
-            } else {
-                // Rename is destructive — for safety, only rename in-memory graph nodes.
-                // File modifications require the Python core/rename.py logic; this is a stub.
-                json!({
-                    "dry_run": false,
-                    "old_name": old_name,
-                    "new_name": new_name,
-                    "renamed_count": matched.len(),
-                    "warning": "In-memory rename performed. File-level rename not yet implemented in Rust engine — use Python engine for full rename support.",
-                })
+            })
+        } else {
+            // Actually rename nodes in-memory
+            match CACHED_GRAPH.lock() {
+                Ok(mut guard) => match guard.as_mut() {
+                    Some(g) => {
+                        let matched_ids: Vec<String> = g.nodes.values()
+                            .filter(|n| n.name == old_name || n.id.contains(old_name))
+                            .map(|n| n.id.clone())
+                            .collect();
+                        if matched_ids.is_empty() {
+                            return McpServer::error_response(id, -32000, &format!("No nodes match '{}'", old_name));
+                        }
+                        let count = matched_ids.len();
+                        for nid in &matched_ids {
+                            if let Some(node) = g.nodes.get_mut(nid) {
+                                node.name = new_name.to_string();
+                            }
+                        }
+                        McpServer::tool_result(id, json!({
+                            "dry_run": false,
+                            "old_name": old_name,
+                            "new_name": new_name,
+                            "renamed_count": count,
+                            "renamed_ids": matched_ids,
+                            "note": "In-memory rename applied. File-level rename is not yet implemented.",
+                        }))
+                    }
+                    None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
+                },
+                Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
             }
-        })
+        }
     }
 }
 
@@ -915,6 +935,9 @@ fn node_to_value(n: &Node) -> Value {
         "location": n.location,
         "in_degree": n.in_degree,
         "out_degree": n.out_degree,
+        "properties": n.properties,
+        "position": n.position,
+        "community_id": n.community_id,
     })
 }
 
@@ -925,6 +948,10 @@ fn edge_to_value(e: &Edge) -> Value {
         "target": e.target,
         "type": e.kind.as_str(),
         "coupling_depth": e.coupling_depth,
+        "cross_file": e.cross_file,
+        "direction": e.direction,
+        "temporal_delay_sec": e.temporal_delay_sec,
+        "medium_node_id": e.medium_node_id,
     })
 }
 
