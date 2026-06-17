@@ -866,6 +866,10 @@ impl McpServer {
         let routes_found = detect_framework_routes(&mut result.graph, &root);
         info!(count = routes_found, "mcp framework routes detected");
 
+        // Dynamic dispatch synthesis (callback/observer edges)
+        let syn_edges = synthesize_dynamic_edges(&mut result.graph, &root);
+        info!(count = syn_edges, "mcp dynamic dispatch edges synthesized");
+
         // Community detection
         let communities = detect_communities(&result.graph, 42);
         info!(count = communities.len(), "mcp communities detected");

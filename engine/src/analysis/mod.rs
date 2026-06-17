@@ -8,6 +8,7 @@ pub mod threading;
 pub mod blindspots;
 pub mod explore;
 pub mod framework_routes;
+pub mod dynamic_dispatch;
 
 pub use coupling::compute_coupling;
 pub use fragility::fragile_nodes;
@@ -19,3 +20,4 @@ pub use threading::thread_conflict_report;
 pub use blindspots::find_blindspots;
 pub use explore::explore;
 pub use framework_routes::detect_framework_routes;
+pub use dynamic_dispatch::synthesize_dynamic_edges;
