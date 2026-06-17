@@ -2291,20 +2291,22 @@ fn main() {
         .manage(watcher_state)
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Kill all orphaned background jobs on window close
-                if let Ok(mut jobs) = BG_JOBS.lock() {
+                // Kill all orphaned background jobs (non-blocking — if lock is held, skip)
+                if let Ok(mut jobs) = BG_JOBS.try_lock() {
                     for (_, job) in jobs.iter_mut() {
                         let _ = job.child.kill();
                         let _ = job.child.wait();
                     }
                     jobs.clear();
                 }
-                // Stop MCP server on exit
-                if let Ok(mut mgr) = MCP_MANAGER.lock() {
+                // Stop MCP server (non-blocking)
+                if let Ok(mut mgr) = MCP_MANAGER.try_lock() {
                     mgr.stop();
                 }
                 // Stop Unity on exit
                 let _ = UNITY_MANAGER.stop();
+                // Hard exit to ensure no zombie processes
+                std::process::exit(0);
             }
         })
         .invoke_handler(tauri::generate_handler![
