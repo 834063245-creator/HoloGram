@@ -1,10 +1,56 @@
 # PROJECT.md — 全息观测站 · 唯一真相源
 
-> **最后更新：2026-06-17 · explore聚合工具上线 · 敌对审查26缺陷全扫 · 序列化补齐 · 传参修复 · 并发加固**
+> **最后更新：2026-06-17 · NL探索+8框架路由+动态调度合成 · 249测试**
 
 ---
 
-## 2026-06-17 前端感知升级（本轮）
+## 2026-06-17 第二轮 — NL探索 · 框架路由 · 动态调度（本轮）
+
+从 CodeGraph 拆入功能，全在 Rust 引擎侧落地。
+
+### NL 自然语言探索
+
+`hologram_explore` 现接受自然语言 query 字符串，引擎自动切词+消歧，无需 Agent 预提取符号名。
+
+| 改动 | 文件 |
+|------|------|
+| NL 切词 | `explore.rs` — `tokenize()` 正则切分+代码标识符过滤 |
+| PascalCase 上下文消歧 | `explore.rs` — `disambiguate()` 用容器类名筛候选 |
+| BFS 路径搜索 | `explore.rs` — 最大深度7，最大探索1500节点 |
+| MCP 参数扩展 | `mcp.rs` — tool_explore 接受 `query` 字符串参数 |
+
+### 框架路由覆盖（8 种）
+
+| 框架 | 模式 | 语言 | 文件 |
+|------|------|------|------|
+| Django | `path('url', view)` | Python | `framework_routes.rs` |
+| Express | `app.get('url', handler)` | JS/TS | `framework_routes.rs` |
+| FastAPI | `@app.get('/url')` | Python | `framework_routes.rs` |
+| Flask | `@app.route('/url', methods=['GET'])` | Python | `framework_routes.rs` |
+| Rails | `get '/x', to: 'controller#action'` | Ruby | `framework_routes.rs` |
+| Spring | `@GetMapping("/url")` | Java | `framework_routes.rs` |
+| Gin | `r.GET("/url", handler)` | Go | `framework_routes.rs` |
+| NestJS | `@Controller + @Get` | TS | `framework_routes.rs` |
+
+### 动态调度合成 Phase 1
+
+静态图盲区补全——检测 callback/observer 注册模式，在图里创建 synthesized 边。
+
+| 语言 | 识别模式 |
+|------|----------|
+| JS/TS | `addEventListener`, `.on()`, `.then()`, `.subscribe()`, `.use()` |
+| Python | `.subscribe()`, `.add_callback()`, `.register()`, `.on()`, `.connect()` |
+
+检出后创建 `coupling_depth=3, direction=synthesized` 边，feed 进 explore 的 `synthesizedHops`。
+
+### 语言支持扩展
+
+tree-sitter 语法 10→18 种：新增 C# / Swift / Dart / Scala / Haskell / JSON / HTML / CSS。
+另 12 种（PHP/Kotlin/Bash/YAML/TOML/Markdown 等）依赖已在 Cargo.toml，待上游 tree-sitter 升级后一行启用。
+
+---
+
+## 2026-06-17 前端感知升级（第一轮）
 
 ### 原生 Agent 功能补齐
 
@@ -28,9 +74,9 @@
 
 ```
 ── 图查询 (25) ──
-hologram_analyze/neighbors/impact/path/diff/fragile/cycle/coupling_report
+hologram_analyze/neighbors/impact/path/explore/diff/fragile/cycle/coupling_report
 blindspots/thread_conflicts/timeline/community_report/graph_summary
-history/community/delayed/changes/search/explore/hotspots
+history/community/delayed/changes/search/status/hotspots
 run_check/run_preflight/run_health/gate_check/workspace_conflict/rename
 ── 编码 (17) ──
 write_file/edit_file/read_file_content/search_code/list_directory
@@ -183,7 +229,7 @@ GraphMerger 死代码、_sanitize_for_json 双重清理、PipelineReport.sources
 | `src_python/routing/signals.py` | `engine/src/routing/signals.rs` |
 | `src_python/routing/constraints.py` | `engine/src/routing/constraints.rs` |
 | `src_python/routing/summary.py` | `engine/src/routing/summary.rs` |
-| 无 | `engine/src/analysis/` — fragility, cycles, coupling_report, graph_stats, dataflow, threading, blindspots, explore |
+| 无 | `engine/src/analysis/` — fragility, cycles, coupling_report, graph_stats, dataflow, threading, blindspots, explore, framework_routes, dynamic_dispatch |
 | `src_python/timeline.py` | `engine/src/timeline.rs` |
 
 **v3 Python 引擎状态：** 已完全退役。`src_python/` 目录可安全归档。所有 Tauri 命令、MCP 工具、分析管线均走 Rust 引擎。
@@ -713,15 +759,6 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 | **权限卡片交互** | `chat.ts` — 键盘快捷键(Esc/Enter/Ctrl+Y) + hover/active反馈 | ✅ 2026-06-17 |
 | **文件树实时更新** | `file-tree.ts` + `main.ts` — 1.5s防抖 + 按钮hover动画 | ✅ 2026-06-17 |
 | **变更(diff)修复** | `engine/main.rs` + `mcp.rs` + `main.rs`(Tauri) — 三层基线保存/加载 | ✅ 2026-06-17 |
-
-### 未落地 ❌ — 感知升级（Vibe Coding 安全后视镜）
-
-> 以下不是要扩展引擎，是把已有数据中"能统计但没渲染成感知"的东西亮出来。
-> 每一个都是 vibe coding 过程中真实遇到的"今天特别不顺"，数据已经在数据库里，缺的是呈现。
-
-| 功能 | 说明 | 优先级 |
-|---|---|---|
-| **变更风险指纹** | 时间轴每条变更附带当时 check 简报快照，可回溯风险状态 | P5 |
 
 ### 已落地 ✅ — 感知升级
 
