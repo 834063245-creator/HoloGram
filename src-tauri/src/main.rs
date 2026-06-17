@@ -342,35 +342,47 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    let stdout = EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", target))?;
 
-    // Persist engine result to hologram_graph.json — keeps disk in sync with engine memory.
-    // Without this, load_graph_json (used by openProject) reads stale data.
-    if !stdout.trim().is_empty() && !stdout.contains("\"error\"") {
-        if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            let wrapped = serde_json::json!({
-                "meta": {
-                    "source_root": &target,
-                    "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-                    "version": "0.1.0",
-                    "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
-                    "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
-                },
-                "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
-                "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
-                "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
-            });
-            let graph_path = format!("{}/hologram_graph.json", target);
-            let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
-            if let Err(e) = std::fs::write(&graph_path, &graph_json) {
-                eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
+    // Try MCP transport first (engine in serve mode)
+    let result = {
+        let mut mgr = MCP_MANAGER.lock().unwrap();
+        mgr.call("hologram_analyze", &serde_json::json!({"path": &target}).to_string())
+    };
+
+    match result {
+        Ok(stdout) => {
+            // Persist engine result to hologram_graph.json
+            if !stdout.trim().is_empty() && !stdout.contains("\"error\"") {
+                if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    let wrapped = serde_json::json!({
+                        "meta": {
+                            "source_root": &target,
+                            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+                            "version": "0.1.0",
+                            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
+                            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
+                        },
+                        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
+                        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
+                        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
+                    });
+                    let graph_path = format!("{}/hologram_graph.json", target);
+                    let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
+                    if let Err(e) = std::fs::write(&graph_path, &graph_json) {
+                        eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
+                    }
+                    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", target));
+                }
             }
-            // Remove stale binary cache so cold start doesn't read old Python .hologram
-            let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", target));
+            Ok(stdout)
+        }
+        Err(mcp_err) => {
+            // Fallback: try TCP engine (legacy dev mode without MCP)
+            eprintln!("[hologram] MCP analyze failed ({}), trying TCP fallback", mcp_err);
+            let tcp_result = EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", target))?;
+            Ok(tcp_result)
         }
     }
-
-    Ok(stdout)
 }
 
 #[tauri::command]
