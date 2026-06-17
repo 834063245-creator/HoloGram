@@ -6,6 +6,7 @@ pub mod pipeline;
 pub mod routing;
 pub mod rpc;
 pub mod serialization;
+pub mod storage;
 pub mod timeline;
 pub mod mcp;
 pub mod logging;

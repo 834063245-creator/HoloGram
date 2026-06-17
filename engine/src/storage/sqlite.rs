@@ -35,7 +35,7 @@ impl SqliteDb {
         )
         .map_err(|e| format!("pragma: {}", e))?;
 
-        let mut db = Self { conn, db_path };
+        let db = Self { conn, db_path };
         db.ensure_schema()?;
         db.migrate_timeline(project_root)?;
         Ok(db)
