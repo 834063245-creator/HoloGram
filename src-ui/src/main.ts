@@ -339,8 +339,6 @@ const ARG_TRANSLATIONS: Record<string, ArgMap> = {
   hologram_impact:          { nodeId: 'node_id', maxDepth: 'depth' },
   hologram_neighbors:       { nodeId: 'node_id' },
   hologram_path:            { from: 'from_id', to: 'to_id' },
-  hologram_blindspots:      { threshold: 'filter' },
-  hologram_thread_conflicts:{ severity: 'node_id' },
   hologram_diff:            { beforePath: 'before_path' },
   hologram_coupling_report: { module: 'module_name' },
   hologram_community_report:{ minSize: 'min_size' },

@@ -98,18 +98,13 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_analyze',
       description: () =>
-        'Run a full graph analysis on a code directory. Returns the complete dependency graph as structured JSON (nodes + edges). Zero-config. Use this first to get the lay of the land.',
+        'Run a full graph analysis on a code directory. Returns the complete dependency graph as structured JSON (nodes + edges). Zero-config, language auto-detected. Use this first to get the lay of the land.',
       parameters: () => ({
         type: 'object',
         properties: {
           path: {
             type: 'string',
             description: 'Directory path to analyze (defaults to current working directory)',
-          },
-          language: {
-            type: 'string',
-            enum: ['python', 'typescript', 'auto'],
-            description: 'Language to analyze (default: auto-detect)',
           },
         },
       }),
@@ -209,14 +204,15 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_blindspots',
       description: () =>
-        'Find cross-boundary edges — nodes connected across module/package boundaries through runtime mechanisms (dynamic dispatch, reflection, late binding) rather than static imports. Note: plugin systems and dependency injection frameworks produce these edges by design; they are not necessarily defects.',
+        'Get all detected architecture boundaries: L4 encapsulation violations, unlocked concurrency, and circular dependencies. Returns each boundary with type and severity.',
       parameters: () => ({
         type: 'object',
         properties: {
-          threshold: {
-            type: 'number',
-            description: 'Confidence threshold for flagging (0.0-1.0, default: 0.5)',
-            default: 0.5,
+          filter: {
+            type: 'string',
+            enum: ['all', 'L4', 'thread', 'cycle'],
+            description: 'Boundary type filter (default: all)',
+            default: 'all',
           },
         },
       }),
@@ -226,15 +222,13 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_thread_conflicts',
       description: () =>
-        'Detect potential thread/async conflicts — shared-memory writes without synchronization, concurrent data structure access, race condition patterns.',
+        'Detect potential thread/async conflicts — shared-memory writes without synchronization, concurrent data structure access, race condition patterns. Omit node_id for global matrix.',
       parameters: () => ({
         type: 'object',
         properties: {
-          severity: {
+          node_id: {
             type: 'string',
-            enum: ['all', 'high', 'medium'],
-            description: 'Minimum severity to report (default: high)',
-            default: 'high',
+            description: 'Optional node ID — if omitted, returns global conflict matrix',
           },
         },
       }),
@@ -262,17 +256,13 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_diff',
       description: () =>
-        'Diff two snapshots of the dependency graph. Returns added/removed/modified nodes and edges. Useful for understanding the impact of a change.',
+        'Diff the current graph against a baseline JSON snapshot. Returns added/removed nodes and edges. First call creates the baseline; subsequent calls compare against it.',
       parameters: () => ({
         type: 'object',
         properties: {
           beforePath: {
             type: 'string',
-            description: 'Path to the baseline graph JSON',
-          },
-          afterPath: {
-            type: 'string',
-            description: 'Path to the updated graph JSON (omit to compare against live analysis)',
+            description: 'Path to the baseline graph JSON file',
           },
         },
         required: ['beforePath'],
@@ -287,11 +277,6 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          resolution: {
-            type: 'number',
-            description: 'Leiden resolution parameter (higher = more, smaller communities; default: 1.0)',
-            default: 1.0,
-          },
           minSize: {
             type: 'integer',
             description: 'Minimum community size to report (default: 3)',
@@ -376,7 +361,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_history',
       description: () =>
-        'Get the decision history for a specific node — what past changes involved this node, its dependency count (fan-in), and dependent count (fan-out). Use when asked about a node\'s change history or stability.',
+        'Look up a node by ID — returns its name, type, in/out degree, and location. Use to inspect a specific node\'s metadata and connectivity.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -404,7 +389,8 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_delayed',
       description: () =>
-        'List all edges with temporal/async delays in the graph. Returns realtime (0 delay) and periodic (non-zero delay) edges separately. Use when asked about async calls, scheduled tasks, or temporal coupling patterns.',
+        'List all temporal edges in the graph — async calls, triggers, scheduled tasks. Returns source, target, and type for each. Use when asked about async dependencies or temporal coupling.',
+
       parameters: () => ({
         type: 'object',
         properties: {},
@@ -448,7 +434,8 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_rename',
       description: () =>
-        'Safely rename a symbol (function, class, method, variable) across the entire codebase. Uses the dependency graph to find ALL references — not text grep — so comments and string literals are never false positives. Updates all files atomically with rollback. Always run with dry_run=true first to preview changes before executing.',
+        'Rename a symbol in the dependency graph (in-memory). Finds all matching nodes by name and renames them. Always run with dry_run=true first to preview which nodes will be affected.',
+
       parameters: () => ({
         type: 'object',
         properties: {
@@ -828,9 +815,9 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
 
     // ── Code Search ──
     {
-      name: () => 'search_code',
+      name: () => 'search_content',
       description: () =>
-        'Search for a pattern across all source files in a directory. Returns matching files with line numbers and content. Supports both literal substring (default, case-insensitive) and regex (set useRegex: true). Skips binary files, hidden dirs, and build artifacts.',
+        'Search for a text pattern across all source files in a directory. Returns matching files with line numbers and content. Supports both literal substring (default, case-insensitive) and regex (set useRegex: true). Skips binary files, hidden dirs, and build artifacts.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -860,7 +847,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
         required: ['directory', 'pattern'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('search_code', args),
+      execute: (args) => exec('search_content', args),
     },
 
     // ── Shell ──

@@ -1308,6 +1308,15 @@ async fn search_code(
     }).to_string())
 }
 
+/// Alias: LLM sometimes generates "search_content" instead of "search_code"
+#[tauri::command]
+async fn search_content(
+    directory: String, pattern: String, file_types: Option<String>,
+    max_results: Option<usize>, use_regex: Option<bool>,
+) -> Result<String, String> {
+    search_code(directory, pattern, file_types, max_results, use_regex).await
+}
+
 // ═══════════════════════════════════════════════════════
 // Coding Agent: edit_file — exact string replacement (Claude Code style)
 // ═══════════════════════════════════════════════════════
@@ -2632,6 +2641,7 @@ fn main() {
             git_file_at_head,
             git_show,
             search_code,
+            search_content,
             web_fetch,
             edit_file,
             start_mcp_server,

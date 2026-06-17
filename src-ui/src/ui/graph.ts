@@ -3259,9 +3259,12 @@ export class StarGraph {
       const st = document.getElementById('status-text');
       if (st) st.textContent = (st.textContent || '') + ' | ' + this._diagMsg;
     }
+    // Fix: container was display:none during constructor onResize(), so renderer
+    // never got sized properly. Re-sync once the container is visible.
+    this.onResize();
   }
 
-  // ── end of _renderImpl; render() wrapper is above ──
+  // -- end of _renderImpl; render() wrapper is above --
 
   // ── Progressive reveal: materialize nodes in batches ────────
   private _revealRevealed = true; // false during animation
