@@ -1035,8 +1035,10 @@ export class ChatPanel {
     if (!text || this.running) return;
 
     if (!this.agent) {
-      const extra = this.lastAgentDiag ? `\n${this.lastAgentDiag}` : '';
-      this.addNotice(`Agent 未就绪 — 请先配置 API Key 或等待项目加载${extra}`, 'error');
+      const detail = this.lastAgentDiag
+        ? `${this.lastAgentDiag} (factory:${this.agentFactory ? 'yes' : 'NO'})`
+        : '请先配置 API Key 或等待项目加载';
+      this.addNotice(`Agent 未就绪 — ${detail}`, 'error');
       return;
     }
 
@@ -1325,9 +1327,9 @@ export class ChatPanel {
   }
 
   private flushText(): void {
-    if (this.currentTextEl) {
+    if (this.currentTextEl && this._streamTextBuf) {
       this.currentTextEl.classList.remove('streaming');
-      // Final render: full markdown + syntax highlight
+      // Final render: full markdown + syntax highlight (only if not already rendered by renderMarkdownText)
       const raw = this._streamTextBuf;
       const html = DOMPurify.sanitize(marked.parse(raw) as string);
       this.currentTextEl.innerHTML = html;
