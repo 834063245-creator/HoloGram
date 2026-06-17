@@ -230,6 +230,36 @@ impl MemoryIndex {
         self.has_aux_indexes
     }
 
+    // ── compatibility: reconstruct Edge objects from adjacency (for CACHED_GRAPH migration) ──
+
+    /// Reconstruct outgoing Edge objects. Missing fields get defaults.
+    pub fn get_outgoing_edges(&self, node_id: &str) -> Vec<crate::graph::Edge> {
+        let mut edges = Vec::new();
+        if let Some(targets) = self.out_adj.get(node_id) {
+            for (tgt, kind, depth) in targets {
+                let id = format!("{}::{}::{}", node_id, tgt, kind.as_str());
+                let mut edge = crate::graph::Edge::new(id, node_id, tgt, *kind);
+                edge.coupling_depth = *depth;
+                edges.push(edge);
+            }
+        }
+        edges
+    }
+
+    /// Reconstruct incoming Edge objects.
+    pub fn get_incoming_edges(&self, node_id: &str) -> Vec<crate::graph::Edge> {
+        let mut edges = Vec::new();
+        if let Some(sources) = self.in_adj.get(node_id) {
+            for (src, kind, depth) in sources {
+                let id = format!("{}::{}::{}", src, node_id, kind.as_str());
+                let mut edge = crate::graph::Edge::new(id, src, node_id, *kind);
+                edge.coupling_depth = *depth;
+                edges.push(edge);
+            }
+        }
+        edges
+    }
+
     // ── adjacency ──
 
     /// Outgoing edges from a node. Returns references into the adjacency list.

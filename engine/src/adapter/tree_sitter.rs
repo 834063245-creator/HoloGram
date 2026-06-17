@@ -10,7 +10,6 @@ impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
 
     fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>) {
-        // Macro for grammars that export LANGUAGE(LanguageFn) compatible with tree-sitter 0.24
         macro_rules! do_parse { ($ts_crate:ident) => {{
             let lang: tree_sitter::Language = $ts_crate::LANGUAGE.into();
             let mut p = Parser::new();
@@ -38,8 +37,10 @@ impl TreeSitterAdapter {
             "html" | "htm" => do_parse!(tree_sitter_html),
             "css" => do_parse!(tree_sitter_css),
 
-            // TODO: tree-sitter <0.23 grammars — needs cross-version FFI bridge
-            // php, kotlin, ocaml, nix, bash, toml, markdown, yaml, zig, elixir, erlang, r
+            // ── Pending tree-sitter 0.23+ upgrade (C symbols clash with 0.19/0.20) ──
+            // Dependencies pre-cached in Cargo.toml. Once these grammars ship with
+            // tree-sitter ≥0.23, uncomment the match arms and they'll work immediately.
+            // php · kotlin · ocaml · nix · bash · toml · markdown · yaml · zig · elixir · erlang · r
             _ => (vec![], vec![]),
         }
     }
@@ -226,11 +227,11 @@ pub fn add(a: i32, b: i32) -> i32 {
     }
 
     #[test]
-    fn test_analyze_kotlin_not_yet() {
-        // tree-sitter-kotlin not yet in parse_ext (needs cross-version FFI bridge)
+    fn test_analyze_kotlin_pending() {
+        // tree-sitter-kotlin pending 0.23+ upgrade (C symbol clash)
         let a = TreeSitterAdapter;
-        let (nodes, _edges) = a.analyze("Main.kt", "fun main() {}");
-        assert!(nodes.is_empty(), "kt should return empty until kotlin grammar is wired");
+        let (nodes, _) = a.analyze("Main.kt", "fun main() {}");
+        assert!(nodes.is_empty(), "kt not yet wired — pending grammar upgrade");
     }
 
     #[test]

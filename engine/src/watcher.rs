@@ -1,12 +1,10 @@
 // File watcher for MCP serve mode.
 // Watches the project directory for source file changes,
-// debounces them, then re-analyzes and hot-reloads CACHED_GRAPH.
+// debounces them, then incrementally updates the graph (with full fallback).
 //
 // Only watches known source extensions (same as discovery phase).
-//
-// Supports watcher lifecycle: start_watcher() spawns a thread;
-// stop_watcher() signals it to exit (used when switching projects).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -18,8 +16,9 @@ use tracing::{info, warn};
 use crate::analysis::coupling::compute_coupling;
 use crate::community::detect_communities;
 use crate::graph::CrossFileResolver;
-use crate::mcp::{CACHED_GRAPH, ANALYZE_LOCK};
+use crate::mcp::{CACHED_GRAPH, ANALYZE_LOCK, GRAPH_STORE};
 use crate::pipeline::runner::analyze_project;
+use crate::storage::{IncrementalUpdater, MemoryIndex};
 
 /// Known source file extensions that trigger re-analysis.
 const SOURCE_EXTS: &[&str] = &[
@@ -37,25 +36,17 @@ const IGNORE_DIRS: &[&str] = &[
     ".pytest_cache", ".ruff_cache", "dist", "build",
 ];
 
-/// Shared stop signal. Set to true to stop the currently running watcher thread.
+/// Shared stop signal.
 static STOP_FLAG: AtomicBool = AtomicBool::new(false);
 
-/// Signal the current watcher to stop. Returns after a brief pause so the
-/// thread has time to notice the flag and exit.
 pub fn stop_watcher() {
     STOP_FLAG.store(true, Ordering::SeqCst);
     std::thread::sleep(Duration::from_millis(200));
 }
 
-/// Start a background file watcher on the given project root.
-///
-/// On any source file change, debounces for 2 seconds then re-runs
-/// the full analysis pipeline and swaps the cached graph atomically.
-///
-/// The thread checks STOP_FLAG each loop iteration and exits cleanly
-/// when signaled via stop_watcher().
+/// Start a background file watcher. On change, tries incremental update first;
+/// falls back to full re-analysis if incremental fails or no existing index.
 pub fn start_watcher(project_root: PathBuf) {
-    // Reset stop flag before starting
     STOP_FLAG.store(false, Ordering::SeqCst);
 
     std::thread::spawn(move || {
@@ -71,7 +62,6 @@ pub fn start_watcher(project_root: PathBuf) {
             }
         };
 
-        // Watch recursively, ignoring non-source dirs
         if let Err(e) = watcher.watch(&project_root, RecursiveMode::Recursive) {
             warn!("[watcher] failed to watch {:?}: {}", project_root, e);
             return;
@@ -80,14 +70,15 @@ pub fn start_watcher(project_root: PathBuf) {
         info!("[watcher] watching {:?} for source changes", project_root);
 
         let mut pending = false;
+        let mut changed_paths: Vec<(PathBuf, String)> = Vec::new(); // (path, action)
+        let mut seen_paths: HashSet<PathBuf> = HashSet::new();
         let mut last_event = Instant::now();
         let debounce_window = Duration::from_millis(2000);
         let poll_interval = Duration::from_millis(500);
 
         loop {
-            // Check stop signal
             if STOP_FLAG.load(Ordering::SeqCst) {
-                info!("[watcher] stopped (requested by engine)");
+                info!("[watcher] stopped");
                 return;
             }
 
@@ -96,9 +87,11 @@ pub fn start_watcher(project_root: PathBuf) {
                     if !is_source_change(&event) {
                         continue;
                     }
-                    if !pending {
-                        for p in &event.paths {
-                            info!("[watcher] change: {}", p.display());
+                    let action = event_action(&event);
+                    for p in &event.paths {
+                        if seen_paths.insert(p.clone()) {
+                            info!("[watcher] change ({}): {}", action, p.display());
+                            changed_paths.push((p.clone(), action.to_string()));
                         }
                     }
                     pending = true;
@@ -110,7 +103,11 @@ pub fn start_watcher(project_root: PathBuf) {
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if pending && last_event.elapsed() >= debounce_window {
                         pending = false;
-                        do_reanalyze(&project_root);
+                        let paths = std::mem::take(&mut changed_paths);
+                        seen_paths.clear();
+                        if !paths.is_empty() {
+                            do_update(&project_root, &paths);
+                        }
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -119,13 +116,19 @@ pub fn start_watcher(project_root: PathBuf) {
     });
 }
 
-/// Returns true if the event is a source file modification we care about.
+fn event_action(event: &Event) -> &str {
+    match event.kind {
+        EventKind::Create(_) => "created",
+        EventKind::Remove(_) => "removed",
+        _ => "modified",
+    }
+}
+
 fn is_source_change(event: &Event) -> bool {
     match event.kind {
         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {}
         _ => return false,
     }
-
     event.paths.iter().any(|p| {
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
         let is_source = SOURCE_EXTS.contains(&ext);
@@ -136,19 +139,66 @@ fn is_source_change(event: &Event) -> bool {
     })
 }
 
-/// Re-run the full analysis pipeline and swap the cached graph.
-fn do_reanalyze(root: &std::path::Path) {
-    // Try to acquire analyze lock to avoid racing with MCP tool_analyze.
-    // If another analysis is in progress, skip this watcher-triggered run.
+/// Try incremental update first. Fall back to full re-analysis on failure.
+fn do_update(root: &std::path::Path, changed_files: &[(PathBuf, String)]) {
     let lock = match ANALYZE_LOCK.try_lock() {
         Ok(l) => l,
         Err(_) => {
-            info!("[watcher] analysis already in progress, skipping re-analyze");
+            info!("[watcher] analysis already in progress, skipping");
             return;
         }
     };
 
-    info!("[watcher] re-analyzing project...");
+    let start = Instant::now();
+    info!("[watcher] {} file(s) changed, trying incremental update", changed_files.len());
+
+    // Try incremental path if GraphStore is initialized
+    if let Some(store_mtx) = GRAPH_STORE.get() {
+        if let Ok(store) = store_mtx.lock() {
+            let old_edge_count = store.read(|idx| idx.edge_count());
+            let update_result = store.write(|idx| {
+                let paths: Vec<(PathBuf, &str)> = changed_files
+                    .iter()
+                    .map(|(p, a)| (p.clone(), a.as_str()))
+                    .collect();
+                IncrementalUpdater::update(&paths, idx, root, &store.db)
+            });
+
+            match update_result {
+                Ok((new_idx, errors)) => {
+                    let new_nodes = new_idx.node_count();
+                    let new_edges = new_idx.edge_count();
+                    store.swap_index(new_idx);
+                    drop(lock);
+                    info!(
+                        "[watcher] incremental done: {} nodes, {} edges ({} parse errs) in {:.1}s",
+                        new_nodes,
+                        new_edges,
+                        errors,
+                        start.elapsed().as_secs_f64()
+                    );
+                    // Sync CACHED_GRAPH from new index (backward compat)
+                    sync_cached_graph_from_store(&store);
+                    return;
+                }
+                Err(e) => {
+                    warn!(
+                        "[watcher] incremental failed ({}), falling back to full re-analysis",
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // Fallback: full re-analysis
+    full_reanalyze(root);
+    drop(lock);
+}
+
+/// Full re-analysis (original behavior, now a fallback).
+fn full_reanalyze(root: &std::path::Path) {
+    info!("[watcher] full re-analysis...");
     let start = Instant::now();
 
     let mut result = analyze_project(root);
@@ -159,16 +209,43 @@ fn do_reanalyze(root: &std::path::Path) {
     let nodes = result.graph.node_count();
     let edges = result.graph.edge_count();
 
+    if let Some(store_mtx) = GRAPH_STORE.get() {
+        if let Ok(store) = store_mtx.lock() {
+            let idx = MemoryIndex::from_existing_graph(&result.graph);
+            store.swap_index(idx);
+            let _ = store.save();
+        }
+    }
     if let Ok(mut cache) = CACHED_GRAPH.lock() {
         *cache = Some(result.graph);
     }
 
-    drop(lock);
-
     info!(
-        "[watcher] re-analysis done: {} nodes, {} edges in {:.1}s",
+        "[watcher] full re-analysis done: {} nodes, {} edges in {:.1}s",
         nodes,
         edges,
         start.elapsed().as_secs_f64()
     );
+}
+
+/// Sync CACHED_GRAPH from GraphStore's MemoryIndex (backward compat).
+fn sync_cached_graph_from_store(store: &crate::storage::GraphStore) {
+    // Build a legacy Graph from MemoryIndex for CACHED_GRAPH compatibility
+    let mut g = crate::graph::Graph::new();
+    store.read(|idx| {
+        for node in idx.nodes_iter() {
+            g.add_node(node.clone());
+        }
+        for (source, targets) in idx.edges_iter() {
+            for (target, kind, coupling_depth) in targets {
+                let id = format!("{}::{}::{}", source, target, kind.as_str());
+                let mut edge = crate::graph::Edge::new(id, source, target, *kind);
+                edge.coupling_depth = *coupling_depth;
+                g.add_edge(edge);
+            }
+        }
+    });
+    if let Ok(mut cache) = CACHED_GRAPH.lock() {
+        *cache = Some(g);
+    }
 }

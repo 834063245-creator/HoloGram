@@ -1,7 +1,12 @@
+// Graph query functions — O(E) legacy implementations.
+// DEPRECATED: New code should use crate::storage::query or GraphStore directly.
+// These functions are kept for backward compat with callers that pass &Graph.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use crate::graph::{Graph, Node};
 
 /// Neighbors of a node (outgoing edges → connected nodes, with edge info).
+/// DEPRECATED: use storage::query::neighbors or MemoryIndex::neighbors() directly.
 pub fn neighbors(graph: &Graph, node_id: &str, depth: usize) -> Vec<(String, String, u8)> {
     let mut result = Vec::new();
     let mut visited = HashSet::new();
@@ -30,7 +35,8 @@ pub fn neighbors(graph: &Graph, node_id: &str, depth: usize) -> Vec<(String, Str
     result
 }
 
-/// BFS shortest path between two nodes. Returns sequence of node IDs.
+/// BFS shortest path between two nodes.
+/// DEPRECATED: use storage::query::shortest_path or MemoryIndex::shortest_path() directly.
 pub fn shortest_path(graph: &Graph, from: &str, to: &str) -> Option<Vec<String>> {
     let mut prev: HashMap<&str, &str> = HashMap::new();
     let mut visited = HashSet::new();
@@ -39,7 +45,6 @@ pub fn shortest_path(graph: &Graph, from: &str, to: &str) -> Option<Vec<String>>
     visited.insert(from);
     queue.push_back(from);
 
-    // Build adjacency
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in graph.edges.values() {
         adj.entry(&edge.source).or_default().push(&edge.target);
@@ -70,7 +75,8 @@ pub fn shortest_path(graph: &Graph, from: &str, to: &str) -> Option<Vec<String>>
     Some(path)
 }
 
-/// Search nodes by name substring. Returns matching node IDs.
+/// Search nodes by name substring.
+/// DEPRECATED: use FTS5 via tool_search or MemoryIndex::fts_search().
 pub fn search_nodes<'a>(graph: &'a Graph, query: &str) -> Vec<&'a Node> {
     let lower = query.to_lowercase();
     graph.nodes.values()
@@ -79,6 +85,7 @@ pub fn search_nodes<'a>(graph: &'a Graph, query: &str) -> Vec<&'a Node> {
 }
 
 /// Impact analysis: BFS blast from a node, returning nodes by distance layer.
+/// DEPRECATED: use storage::query::impact or MemoryIndex::impact() directly.
 pub fn impact(graph: &Graph, node_id: &str, max_depth: usize) -> Vec<(usize, Vec<String>)> {
     let mut layers: Vec<(usize, Vec<String>)> = Vec::new();
     let mut visited = HashSet::new();
@@ -149,6 +156,6 @@ mod tests {
     fn test_impact() {
         let g = test_graph();
         let layers = impact(&g, "a", 2);
-        assert_eq!(layers.len(), 3); // depth 0, 1, 2
+        assert_eq!(layers.len(), 3);
     }
 }
