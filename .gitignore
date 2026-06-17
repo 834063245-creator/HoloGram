@@ -77,11 +77,17 @@ STARGRAPH_SPEC.md
 TEST_SPEC.md
 CODE_AUDIT_CHECKLIST.md
 FRONTEND_AUDIT_CHECKLIST.md
+V4_CONSTRUCTION_PLAN.md
+GRAPH_ALGORITHMS.md
+GSAP_GUIDE.md
+LOG_SYSTEM_PLAN.md
 docs_archive/
+specs/
 
 # One-off internal scripts (not for public repo)
 src-ui/test-once.ts
 src-ui/test-agent.ts
+test_mcp_protocol.sh
 
 # Generated docs — not for source control
 AGENT_MEMORY_SYSTEM.txt

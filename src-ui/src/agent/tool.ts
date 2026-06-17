@@ -56,14 +56,45 @@ export class ToolRegistry {
   }
 }
 
-// ---- Hologram 工具定义 (13 tools → Python engine) ----
+// ---- Hologram 图查询工具 (24 tools — 与引擎 MCP 双线对齐) ----
+// 硬编码工具 = Agent 的"嘴"：描述经过 LLM 调优，告诉 Agent 什么时候用、用完了下一步调什么。
+// MCP = 执行通道：长驻引擎进程 <100ms 响应，挂了自动降级 CLI。
+// 两者永远对齐——引擎新增 MCP 工具必须同步在此补硬编码定义。
 
-/** Tool executor: invokes Tauri commands → Python engine. Override for non-Tauri env.
+/** Tool executor: invokes tools via MCP (fast, persistent) or CLI (fallback).
  *  onProgress is an optional callback for streaming partial output during execution. */
 export type ToolExecutor = (toolName: string, args: Record<string, unknown>, onProgress?: (chunk: string) => void) => Promise<string>;
 
 export function createHologramTools(exec: ToolExecutor): Tool[] {
   return [
+    // ── 聚合查询（首选入口）──
+    {
+      name: () => 'hologram_explore',
+      description: () =>
+        '【默认首选】统一聚合查询：一次返回 Flow（调用路径）+ Blast Radius（波及范围）+ Relationships（关系图）+ Source Code（源码）+ Architecture Alerts（架构告警）。支持自然语言输入——直接写 "DataRequest 怎么 validate task" 即可，引擎自动切词消歧。不确定用什么工具时先调这个。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: '自然语言查询，引擎自动切词提取符号名。例如 "DataRequest validate task" 或 "auth模块的依赖链"',
+          },
+          symbols: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '显式指定符号名列表（与 query 二选一，query 优先）',
+          },
+          includeSource: {
+            type: 'boolean',
+            description: '是否返回源码片段（默认 true）',
+            default: true,
+          },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_explore', args),
+    },
+    // ── 基础图查询 ──
     {
       name: () => 'hologram_analyze',
       description: () =>
@@ -343,48 +374,6 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       execute: (args) => exec('hologram_run_health', args),
     },
     {
-      name: () => 'read_file_content',
-      description: () =>
-        'Read the content of a file on disk. Returns the full text content by default. Use offset and limit to read a specific range of lines (0-indexed). Use to inspect source code files when analyzing dependencies or investigating violations.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          filePath: {
-            type: 'string',
-            description: 'Absolute path to the file to read',
-          },
-          offset: {
-            type: 'integer',
-            description: 'Line number to start reading from (0-indexed, default: 0)',
-          },
-          limit: {
-            type: 'integer',
-            description: 'Maximum number of lines to return (default: all lines)',
-          },
-        },
-        required: ['filePath'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('read_file_content', args),
-    },
-    {
-      name: () => 'read_constraints',
-      description: () =>
-        'Read the current constraint configuration (hologram.constraints.yaml) for the project. Returns the YAML content. Use to check routing rules, thresholds, and allowlist/denylist settings.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          projectPath: {
-            type: 'string',
-            description: 'Project root directory path',
-          },
-        },
-        required: ['projectPath'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('read_constraints', args),
-    },
-    {
       name: () => 'hologram_history',
       description: () =>
         'Get the decision history for a specific node — what past changes involved this node, its dependency count (fan-in), and dependent count (fan-out). Use when asked about a node\'s change history or stability.',
@@ -473,6 +462,17 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       // TODO: 支持动态 readOnly (dry_run=true 时只读); 当前接口签名 readOnly(): boolean 不支持参数
       readOnly: () => false,
       execute: (args) => exec('hologram_rename', args),
+    },
+    {
+      name: () => 'hologram_status',
+      description: () =>
+        'Get engine status and memory stats. Returns loading phase, node/edge counts, store type (MemoryIndex or legacy Graph), and elapsed load time. Use when Agent needs to check if the graph is ready or diagnose why tools are returning empty results.',
+      parameters: () => ({
+        type: 'object',
+        properties: {},
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_status', args),
     },
   ];
 }
@@ -711,6 +711,31 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
 
     // ── File Operations ──
     {
+      name: () => 'read_file_content',
+      description: () =>
+        'Read the content of a file on disk. Returns the full text content by default. Use offset and limit to read a specific range of lines (0-indexed). Use to inspect source code files when analyzing dependencies or investigating violations.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Absolute path to the file to read',
+          },
+          offset: {
+            type: 'integer',
+            description: 'Line number to start reading from (0-indexed, default: 0)',
+          },
+          limit: {
+            type: 'integer',
+            description: 'Maximum number of lines to return (default: all lines)',
+          },
+        },
+        required: ['filePath'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('read_file_content', args),
+    },
+    {
       name: () => 'write_file',
       description: () =>
         'Create or overwrite a file with the given content. Creates parent directories if needed. Use to write new files or modify existing ones.',
@@ -782,6 +807,23 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('list_directory', args),
+    },
+    {
+      name: () => 'read_constraints',
+      description: () =>
+        'Read the current constraint configuration (hologram.constraints.yaml) for the project. Returns the YAML content. Use to check routing rules, thresholds, and allowlist/denylist settings.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Project root directory path',
+          },
+        },
+        required: ['projectPath'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('read_constraints', args),
     },
 
     // ── Code Search ──

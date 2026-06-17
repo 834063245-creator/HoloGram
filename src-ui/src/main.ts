@@ -18,7 +18,7 @@ import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
-import { ToolRegistry, createHologramTools, createHologramToolsFromSchemas, createCodingTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createHologramTools, createCodingTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
 import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { initLogger, log } from './agent/logger';
@@ -377,47 +377,43 @@ async function setupAgentInner(): Promise<void> {
 
   const registry = new ToolRegistry();
 
-  // ── Step 1: 修传输层 — MCP 优先，CLI 兜底 ──
-  // Factory: CLI executor（合并原 exec/exec2 重复代码）
-  function createExecutor(_graphData: any, _sg: StarGraph): ToolExecutor {
-    return async (name, args) => {
-      const result = await invoke<string>(name, args);
-      // Visualization now handled by AgentVisualizer via EventBus (single entry)
-      return typeof result === 'string' ? result : JSON.stringify(result);
-    };
-  }
+  // ── 双线对齐：硬编码 schema 给 Agent 看（描述调优过），MCP 做执行通道（快）──
+  // 硬编码工具始终注册——Agent 看到的是最优描述，不会"想不起来调"。
+  // MCP 挂了自动降级 CLI，对 Agent 透明。
 
-  // Try MCP for hologram tools — faster (persistent process, <100ms vs 500ms+ CLI)
-  let hologramViaMcp = false;
+  // Step 1: 尝试启动 MCP 做执行通道
+  let mcpExec: ToolExecutor | null = null;
   if (currentGraphData && currentPath) {
     try {
-      const toolsJson = await invoke<string>('start_mcp_server', { projectRoot: currentPath });
-      const parsed = JSON.parse(toolsJson);
-      const schemas = (parsed.tools || []) as Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
-
-      // MCP executor: calls mcp_call instead of direct invoke
-      const mcpExec: ToolExecutor = async (name, args) => {
+      await invoke<string>('start_mcp_server', { projectRoot: currentPath });
+      mcpExec = async (name, args) => {
         const result = await invoke<string>('mcp_call', { toolName: name, args: JSON.stringify(args) });
-        // Visualization now handled by AgentVisualizer via EventBus (single entry)
         return result;
       };
-
-      for (const tool of createHologramToolsFromSchemas(schemas, mcpExec)) {
-        registry.register(tool);
-      }
-      hologramViaMcp = true;
-      dbg('setupAgent', `MCP mode: ${schemas.length} tools`);
+      dbg('setupAgent', 'MCP executor ready (hardcoded schemas + MCP transport)');
     } catch (e) {
-      dbg('setupAgent', `MCP unavailable, CLI fallback: ${e}`);
+      dbg('setupAgent', `MCP unavailable, using CLI transport: ${e}`);
     }
   }
 
-  // CLI fallback for hologram tools (MCP failed or no project path)
-  if (!hologramViaMcp && currentGraphData) {
-    const exec = createExecutor(currentGraphData, starGraph);
-    for (const tool of createHologramTools(exec)) {
+  // Step 2: 始终注册硬编码 hologram 工具（LLM 最优描述），执行时优先走 MCP
+  if (currentGraphData) {
+    const holoExec: ToolExecutor = async (name, args) => {
+      // MCP 优先，挂了降级 CLI
+      if (mcpExec) {
+        try {
+          return await mcpExec(name, args);
+        } catch {
+          // MCP 调用失败 → 降级 CLI
+        }
+      }
+      const result = await invoke<string>(name, args);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    };
+    for (const tool of createHologramTools(holoExec)) {
       registry.register(tool);
     }
+    dbg('setupAgent', `${createHologramTools(holoExec).length} hologram tools registered (${mcpExec ? 'MCP' : 'CLI'} transport)`);
   }
 
   // Coding tools (file I/O, shell, search, git, web) — always direct CLI invoke
@@ -531,12 +527,19 @@ async function setupAgentInner(): Promise<void> {
         ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
         : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
     const r = new ToolRegistry();
-    const exec2 = createExecutor(currentGraphData, starGraph);
+    // New sessions use same MCP-first executor (or CLI fallback)
+    const factoryExec: ToolExecutor = async (name, args) => {
+      if (mcpExec) {
+        try { return await mcpExec(name, args); } catch { /* fall through */ }
+      }
+      const result = await invoke<string>(name, args);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    };
     if (currentGraphData) {
-      for (const tool of createHologramTools(exec2)) r.register(tool);
+      for (const tool of createHologramTools(factoryExec)) r.register(tool);
     }
     // Coding tools always available
-    for (const tool of createCodingTools(exec2)) r.register(tool);
+    for (const tool of createCodingTools(factoryExec)) r.register(tool);
     // Memory tools for new sessions too
     if (mm) {
       for (const tool of createMemoryTools(mm)) r.register(tool);
