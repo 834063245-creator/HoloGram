@@ -23,7 +23,7 @@ import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/pe
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
-import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES } from './settings';
+import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { t, setLang } from './i18n';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
@@ -341,16 +341,52 @@ async function setupAgent(): Promise<void> {
 }
 
 async function setupAgentInner(): Promise<void> {
-  const settings = loadSettings();
+  let settings = loadSettings();
+  // ── 诊断：直接读 localStorage 原始值 ──
+  const rawLS = (typeof localStorage !== 'undefined') ? localStorage.getItem('hologram_settings') : null;
+  let lsKeys = '';
+  if (rawLS) {
+    try {
+      const p = JSON.parse(rawLS);
+      for (const pp of (p.providers || [])) {
+        lsKeys += `${pp.name}:${(pp.apiKey||'').length} `;
+      }
+    } catch { lsKeys = 'parseErr'; }
+  } else {
+    lsKeys = 'null';
+  }
+  console.error('[DIAG] localStorage raw keys:', lsKeys);
+
+  // Restore API keys from system encrypted storage if localStorage was wiped
+  settings = await restoreSecrets(settings);
   const active = getActiveProvider(settings);
 
+  // Try credential store directly
+  let credOk = '?';
+  try {
+    const { invoke } = await import('./bridge');
+    const credVal = await invoke('credential_get', { provider: active.name });
+    credOk = (credVal && (credVal as string).trim()) ? 'got:' + (credVal as string).length : 'empty';
+  } catch (e: any) { credOk = 'err:' + String(e).slice(0,30); }
+
+  const diag = `[Agent] provider=${active.name} ls=${lsKeys} cred=${credOk} keyLen=${(active.apiKey||'').length}`;
+  console.error('[DIAG]', diag);
+  statusText.textContent = diag;
+  bus.emit('agent:diag', { text: diag, ready: !!active.apiKey && active.apiKey.trim() !== '' });
+
   if (!active.apiKey || active.apiKey.trim() === '') {
+    console.error('[DIAG] NO KEY — agent disabled');
     agent = null;
     chatPanel.setAgent(null);
+    bus.emit('agent:diag', { text: `❌ 未检测到 API Key — provider="${active.name}" 的 Key 为空。请在设置中填入 Key。`, ready: false });
     return;
   }
 
+  // Auto-persist to credential store so future localStorage wipes don't lose the key
+  persistSecrets(settings).catch(() => {});
+
   // ── Load memories into prompt ──
+  try {
   let memorySection = '';
   if (currentPath) {
     memoryManager = new MemoryManager(currentPath);
@@ -511,66 +547,79 @@ async function setupAgentInner(): Promise<void> {
     agent.setHooks(hooks);
   }
 
+  console.log('[setupAgent] agent created successfully — setting on chatPanel');
+  statusText.textContent = '[Agent] ✅ 已就绪';
   chatPanel.setAgent(agent);
 
-  // Set factory for creating new sessions
-  const mm = memoryManager; // capture for closure
-  const hookCtx = currentGraphData
-    ? (() => { const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(currentGraphData); return createGraphContext(fileIndex, fanIn, fanOut); })()
-    : null;
-  chatPanel.setAgentFactory(async () => {
-    const s = loadSettings();
-    const act = getActiveProvider(s);
-    if (!act.apiKey || act.apiKey.trim() === '') return null;
-    const p: Provider =
-      act.kind === 'anthropic'
-        ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
-        : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
-    const r = new ToolRegistry();
-    // New sessions use same MCP-first executor (or CLI fallback)
-    const factoryExec: ToolExecutor = async (name, args) => {
-      if (mcpExec) {
-        try { return await mcpExec(name, args); } catch { /* fall through */ }
+  // Set factory for creating new sessions (inside try block so it closes over mcpExec/perm/gate)
+  {
+    const mm = memoryManager; // capture for closure
+    const hookCtx = currentGraphData
+      ? (() => { const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(currentGraphData); return createGraphContext(fileIndex, fanIn, fanOut); })()
+      : null;
+    chatPanel.setAgentFactory(async () => {
+      let s = loadSettings();
+      s = await restoreSecrets(s);
+      const act = getActiveProvider(s);
+      if (!act.apiKey || act.apiKey.trim() === '') return null;
+      const p: Provider =
+        act.kind === 'anthropic'
+          ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
+          : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
+      const r = new ToolRegistry();
+      // New sessions use same MCP-first executor (or CLI fallback)
+      const factoryExec: ToolExecutor = async (name, args) => {
+        if (mcpExec) {
+          try { return await mcpExec(name, args); } catch { /* fall through */ }
+        }
+        const result = await invoke<string>(name, args);
+        return typeof result === 'string' ? result : JSON.stringify(result);
+      };
+      if (currentGraphData) {
+        for (const tool of createHologramTools(factoryExec)) r.register(tool);
       }
-      const result = await invoke<string>(name, args);
-      return typeof result === 'string' ? result : JSON.stringify(result);
-    };
-    if (currentGraphData) {
-      for (const tool of createHologramTools(factoryExec)) r.register(tool);
-    }
-    // Coding tools always available
-    for (const tool of createCodingTools(factoryExec)) r.register(tool);
-    // Memory tools for new sessions too
-    if (mm) {
-      for (const tool of createMemoryTools(mm)) r.register(tool);
-    }
-    const pr = defaultPricing(act.kind, act.model);
-    const aOpts = s.agent || {};
-    // Reload memory content so new sessions see latest memories from other tabs
-    let memSection = '';
-    if (mm) {
-      try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }
-    }
-    // Permission gate for new session (shares policy with main agent)
-    const gate2 = new PermissionGate(perm, (toolName, desc, args) =>
-      showApprovalDialog(toolName, desc, args),
-    );
-    gate2.onRemember = gate.onRemember;
-    const newAgent = new Agent(p, r, buildSystemPrompt(memSection), {
-      pricing: pr,
-      temperature: aOpts.temperature,
-      maxSteps: aOpts.maxSteps,
-      contextWindow: aOpts.contextWindow,
-      gate: gate2,
-    }, chatPanel.sink);
-    // Wire hooks for new sessions too
-    if (hookCtx) {
-      const hooks = new HookRegistry();
-      hooks.register(createGraphContextHook(hookCtx));
-      newAgent.setHooks(hooks);
-    }
-    return newAgent;
-  });
+      // Coding tools always available
+      for (const tool of createCodingTools(factoryExec)) r.register(tool);
+      // Memory tools for new sessions too
+      if (mm) {
+        for (const tool of createMemoryTools(mm)) r.register(tool);
+      }
+      const pr = defaultPricing(act.kind, act.model);
+      const aOpts = s.agent || {};
+      // Reload memory content so new sessions see latest memories from other tabs
+      let memSection = '';
+      if (mm) {
+        try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }
+      }
+      // Permission gate for new session (shares policy with main agent)
+      const gate2 = new PermissionGate(perm, (toolName, desc, args) =>
+        showApprovalDialog(toolName, desc, args),
+      );
+      gate2.onRemember = gate.onRemember;
+      const newAgent = new Agent(p, r, buildSystemPrompt(memSection), {
+        pricing: pr,
+        temperature: aOpts.temperature,
+        maxSteps: aOpts.maxSteps,
+        contextWindow: aOpts.contextWindow,
+        gate: gate2,
+      }, chatPanel.sink);
+      // Wire hooks for new sessions too
+      if (hookCtx) {
+        const hooks = new HookRegistry();
+        hooks.register(createGraphContextHook(hookCtx));
+        newAgent.setHooks(hooks);
+      }
+      return newAgent;
+    });
+  }
+
+  } catch (e: any) {
+    console.error('[setupAgent] CRASH during agent creation:', e.message || e);
+    statusText.textContent = `[Agent] ❌ 创建失败: ${String(e).slice(0, 80)}`;
+    agent = null;
+    chatPanel.setAgent(null);
+    return;
+  }
 }
 
 function buildSystemPrompt(memorySection = ''): string {
@@ -1527,6 +1576,7 @@ async function init(): Promise<void> {
       statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
       showGraphView(root);
       setLoading(false);
+      statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       // Agent 初始化（异步，不阻塞图的显示）
       try { await setupAgent(); } catch (e) { console.error('[init] setupAgent failed:', e); }
       // Restore saved sessions for the cached project (must be AFTER setupAgent sets agentFactory)
@@ -1535,7 +1585,6 @@ async function init(): Promise<void> {
       runCheck();
       timelinePanel.setProjectPath(root || null);
       hotspotsPanel.setProjectPath(root || null);
-      statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       try { await invoke('start_watching', { path: root }); } catch { /* ignore */ }
       return;
     }
