@@ -9,3 +9,4 @@ pub mod serialization;
 pub mod timeline;
 pub mod mcp;
 pub mod logging;
+pub mod watcher;

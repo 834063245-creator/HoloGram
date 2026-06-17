@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::time::Instant;
 
+use tracing::info;
+
 use crate::graph::merge::GraphMerger;
 use crate::graph::Graph;
 use crate::pipeline::discovery::discover_files;
@@ -27,7 +29,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
         "py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
         "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua"
     ]);
-    println!("[pipeline] discovered {} Python files", files.len());
+    info!("[pipeline] discovered {} source files", files.len());
 
     // Step 2: Parallel parse
     let parser = ParallelParser::new();
@@ -56,7 +58,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
         elapsed_secs: elapsed.as_secs_f64(),
     };
 
-    println!(
+    info!(
         "[pipeline] done: {} files → {} nodes, {} edges in {:.2}s",
         result.files_parsed, result.nodes_total, result.edges_total, result.elapsed_secs
     );

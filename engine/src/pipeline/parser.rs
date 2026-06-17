@@ -3,6 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use tracing::info;
+
 use crate::adapter::registry::AdapterRegistry;
 use crate::graph::{Edge, Node};
 
@@ -39,7 +41,7 @@ impl ParallelParser {
 
         let elapsed = start.elapsed();
         let total_lines: usize = results.iter().map(|r| r.source_len).sum();
-        println!(
+        info!(
             "[parser] {} files, {} lines in {:.2}s ({:.0} files/s)",
             results.len(),
             total_lines,

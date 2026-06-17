@@ -8,6 +8,7 @@ use hologram_engine::routing::preflight::run_full_check;
 use hologram_engine::timeline::TimelineStore;
 use hologram_engine::pipeline::runner::analyze_project;
 use hologram_engine::mcp::{self, McpServer};
+use hologram_engine::watcher;
 use serde_json::{self, json};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,42 +18,45 @@ use tracing::{info, debug};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── MCP serve mode ──
-    if let Some(project_root) = mcp::parse_serve_args() {
-        let root = PathBuf::from(&project_root);
-        if !root.exists() {
-            eprintln!("[engine] ERROR: project root not found: {}", project_root);
-            std::process::exit(1);
-        }
-        let _log_guard = logging::init_logging(Some(&root));
-        info!(project_root = %project_root, "engine starting in MCP serve mode");
+    if let Some(project_root_opt) = mcp::parse_serve_args() {
+        let log_root = project_root_opt.as_deref().map(PathBuf::from);
+        let _log_guard = logging::init_logging(log_root.as_deref());
 
-        // Auto-analyze on startup
-        info!("analysis started");
-        let mut result = analyze_project(&root);
-        CrossFileResolver::resolve(&mut result.graph);
-        compute_coupling(&mut result.graph);
-        detect_communities(&result.graph, 42);
-        let node_count = result.graph.node_count();
-        let edge_count = result.graph.edge_count();
-        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
-            *cache = Some(result.graph);
-        }
-        info!(nodes = node_count, edges = edge_count, elapsed = %result.elapsed_secs, "analysis complete");
+        match project_root_opt {
+            Some(project_root) => {
+                // Serve with --project-root: auto-analyze + watcher
+                let root = PathBuf::from(&project_root);
+                if !root.exists() {
+                    eprintln!("[engine] ERROR: project root not found: {}", project_root);
+                    std::process::exit(1);
+                }
+                info!(project_root = %project_root, "engine starting in MCP serve mode (with project)");
 
-        // Signal ready to parent process (McpManager reads this)
-        let ready = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "ready",
-            "params": {
-                "node_count": node_count,
-                "edge_count": edge_count,
-                "elapsed_secs": result.elapsed_secs
+                info!("analysis started");
+                let mut result = analyze_project(&root);
+                CrossFileResolver::resolve(&mut result.graph);
+                compute_coupling(&mut result.graph);
+                detect_communities(&result.graph, 42);
+                let node_count = result.graph.node_count();
+                let edge_count = result.graph.edge_count();
+                if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
+                    *cache = Some(result.graph);
+                }
+                info!(nodes = node_count, edges = edge_count, elapsed = %result.elapsed_secs, "analysis complete");
+
+                watcher::start_watcher(root.clone());
+
+                let server = McpServer::new(&root);
+                server.run_stdio();
             }
-        });
-        println!("{}", serde_json::to_string(&ready).unwrap_or_default());
-
-        let server = McpServer::new(&root);
-        server.run_stdio();
+            None => {
+                // Serve without --project-root: lazy startup
+                // First hologram_analyze call loads the graph.
+                info!("engine starting in MCP serve mode (lazy — no project)");
+                let server = McpServer::new(std::path::Path::new("."));
+                server.run_stdio();
+            }
+        }
         return Ok(());
     }
 

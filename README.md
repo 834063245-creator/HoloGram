@@ -222,6 +222,62 @@ cargo tauri build
 
 ---
 
+## 🧩 只用 MCP（不开桌面应用）
+
+HoloGram 的 Rust 引擎可以独立作为 MCP 服务器运行，在任何 Claude Code / Cursor 会话中使用——不需要安装桌面应用。
+
+### 给 vibe coder：让 Agent 帮你装
+
+直接对 Claude Code / Cursor 说：
+
+> 帮我装 HoloGram MCP 服务。clone 仓库到本地，编译引擎 `cd engine && cargo build --release`，把 `engine/target/release/hologram-engine.exe` 拷到 `~/.hologram/`，最后在 `~/.claude/mcp.json` 写入配置。
+
+Agent 会自己完成所有步骤。
+
+### 手动三步
+
+**1. 编译引擎**
+```bash
+git clone https://github.com/834063245-creator/HoloGram.git
+cd HoloGram/engine
+cargo build --release
+```
+
+**2. 安装到全局路径**
+```bash
+mkdir -p ~/.hologram
+cp target/release/hologram-engine.exe ~/.hologram/   # Windows
+# cp target/release/hologram-engine ~/.hologram/      # macOS / Linux
+```
+
+**3. 创建 `~/.claude/mcp.json`**（Windows: `C:\Users\<你>\.claude\mcp.json`）
+
+```json
+{
+  "mcpServers": {
+    "hologram": {
+      "command": "C:/Users/<你>/.hologram/hologram-engine.exe",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+> **macOS / Linux：** 把路径改成 `/home/<你>/.hologram/hologram-engine`。
+
+重启 Claude Code。第一个项目用 `hologram_analyze(path="/你的项目路径")` 载入，之后引擎自动增量更新。
+
+### 项目级 vs 全局
+
+| 方式 | 文件位置 | 效果 |
+|---|---|---|
+| **全局** | `~/.claude/mcp.json` | 所有项目都能用，启动不分析（懒加载） |
+| **项目级** | 项目根目录 `.mcp.json` | 优先级更高，可加 `--project-root` 自动分析 |
+
+HoloGram 自己的 `.mcp.json` 是项目级配置的参考模板。
+
+---
+
 ## 开发
 
 ```bash

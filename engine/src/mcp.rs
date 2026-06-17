@@ -18,14 +18,18 @@ use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKi
 use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
 use crate::timeline::TimelineStore;
+use crate::watcher;
 
 /// Global cached graph, shared with the TCP RPC server.
 /// The MCP server reads from and writes to this cache.
 pub static CACHED_GRAPH: std::sync::LazyLock<Mutex<Option<Graph>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
-/// Parse CLI args for `engine.exe serve --project-root <path>`.
-pub fn parse_serve_args() -> Option<String> {
+/// Parse CLI args for `engine.exe serve [--project-root <path>]`.
+/// Returns None if not in serve mode.
+/// Returns Some(None) for serve mode without --project-root (lazy startup).
+/// Returns Some(Some(path)) for serve mode with --project-root.
+pub fn parse_serve_args() -> Option<Option<String>> {
     let args: Vec<String> = std::env::args().collect();
     let mut project_root: Option<String> = None;
     let mut is_serve = false;
@@ -42,7 +46,7 @@ pub fn parse_serve_args() -> Option<String> {
             project_root = Some(arg.trim_start_matches("--project-root=").to_string());
         }
     }
-    if is_serve { project_root } else { None }
+    if is_serve { Some(project_root) } else { None }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -135,7 +139,8 @@ fn tool_def(name: &str, desc: &str, props: &[(&str, &str, &str)], required: &[&s
 
 pub struct McpServer {
     /// Path to the project root directory (for re-analysis, timeline, etc.)
-    project_root: PathBuf,
+    /// Wrapped in Mutex so tool_analyze can switch projects at runtime.
+    project_root: Mutex<PathBuf>,
     /// Re-entrant lock for re-analysis (prevents concurrent full analysis)
     analyze_lock: Mutex<()>,
 }
@@ -143,8 +148,20 @@ pub struct McpServer {
 impl McpServer {
     pub fn new(project_root: &Path) -> Self {
         Self {
-            project_root: project_root.to_path_buf(),
+            project_root: Mutex::new(project_root.to_path_buf()),
             analyze_lock: Mutex::new(()),
+        }
+    }
+
+    /// Get a clone of the current project root.
+    fn project_root(&self) -> PathBuf {
+        self.project_root.lock().unwrap().clone()
+    }
+
+    /// Update the project root (called by tool_analyze when switching projects).
+    fn set_project_root(&self, path: &Path) {
+        if let Ok(mut root) = self.project_root.lock() {
+            *root = path.to_path_buf();
         }
     }
 
@@ -167,8 +184,10 @@ impl McpServer {
         info!(method = %method, id = %id, "mcp request");
 
         let result = match method {
+            "initialize" => self.handle_initialize(&id),
             "tools/list" => self.handle_tools_list(&id),
             "tools/call" => self.handle_tools_call(&request, &id),
+            "ping" => McpServer::success_response(&id, json!({})),
             _ => {
                 warn!(method = %method, id = %id, "unknown MCP method");
                 McpServer::error_response(&id, -32601, &format!("Method not found: {}", method))
@@ -215,6 +234,22 @@ impl McpServer {
         let text = serde_json::to_string(&data).unwrap_or_default();
         McpServer::success_response(id, json!({
             "content": [{ "type": "text", "text": text }]
+        }))
+    }
+
+    // ── initialize ──
+
+    fn handle_initialize(&self, id: &Value) -> Value {
+        info!("MCP initialize handshake");
+        McpServer::success_response(id, json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "hologram-engine",
+                "version": "4.0.0"
+            }
         }))
     }
 
@@ -441,7 +476,7 @@ impl McpServer {
     fn tool_changes(&self, args: &Value, id: &Value) -> Value {
         let project_root = args.get("project_root").and_then(|v| v.as_str())
             .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
+            .unwrap_or_else(|| self.project_root());
         match TimelineStore::open(&project_root) {
             Ok(store) => {
                 let events = store.query(100);
@@ -549,7 +584,7 @@ impl McpServer {
 
     fn tool_timeline(&self, args: &Value, id: &Value) -> Value {
         let limit = Self::get_arg_usize(args, "limit", 100).max(1);
-        match TimelineStore::open(&self.project_root) {
+        match TimelineStore::open(&self.project_root()) {
             Ok(store) => {
                 let events = store.query(limit);
                 McpServer::tool_result(id, json!({ "events": events, "total": events.len() }))
@@ -742,6 +777,13 @@ impl McpServer {
         if let Ok(mut cache) = CACHED_GRAPH.lock() {
             *cache = Some(graph);
         }
+
+        // Stop old watcher (if any) and start a new one on the new project
+        watcher::stop_watcher();
+        watcher::start_watcher(root.clone());
+
+        // Update active project root so tools like run_health/timeline use the right path
+        self.set_project_root(&root);
 
         drop(lock);
 
