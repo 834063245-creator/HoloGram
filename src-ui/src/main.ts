@@ -266,7 +266,11 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
     }
     if (forceReanalyze) {
       const json = await invoke<string>('hologram_analyze', { path: folder });
-      graph = JSON.parse(json);
+      const summary = JSON.parse(json);
+      // hologram_analyze returns summary only — read persisted full graph
+      const graphPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
+      const raw = await invoke<string>('read_file_content', { filePath: graphPath });
+      graph = JSON.parse(raw);
     }
     currentGraphData = graph;
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
