@@ -18,7 +18,7 @@ use tracing::{info, warn};
 use crate::analysis::coupling::compute_coupling;
 use crate::community::detect_communities;
 use crate::graph::CrossFileResolver;
-use crate::mcp::CACHED_GRAPH;
+use crate::mcp::{CACHED_GRAPH, ANALYZE_LOCK};
 use crate::pipeline::runner::analyze_project;
 
 /// Known source file extensions that trigger re-analysis.
@@ -138,6 +138,16 @@ fn is_source_change(event: &Event) -> bool {
 
 /// Re-run the full analysis pipeline and swap the cached graph.
 fn do_reanalyze(root: &std::path::Path) {
+    // Try to acquire analyze lock to avoid racing with MCP tool_analyze.
+    // If another analysis is in progress, skip this watcher-triggered run.
+    let lock = match ANALYZE_LOCK.try_lock() {
+        Ok(l) => l,
+        Err(_) => {
+            info!("[watcher] analysis already in progress, skipping re-analyze");
+            return;
+        }
+    };
+
     info!("[watcher] re-analyzing project...");
     let start = Instant::now();
 
@@ -152,6 +162,8 @@ fn do_reanalyze(root: &std::path::Path) {
     if let Ok(mut cache) = CACHED_GRAPH.lock() {
         *cache = Some(result.graph);
     }
+
+    drop(lock);
 
     info!(
         "[watcher] re-analysis done: {} nodes, {} edges in {:.1}s",

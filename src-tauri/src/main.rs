@@ -313,11 +313,19 @@ fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
 fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
     match EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", project_path)) {
         Ok(json) => {
-            if json.trim().is_empty() || json.contains("\"error\"") {
-                eprintln!("[hologram] engine analysis error: {}", json);
+            if json.trim().is_empty() {
+                eprintln!("[hologram] engine analysis returned empty response");
                 None
+            } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
+                if parsed.get("error").is_some() {
+                    eprintln!("[hologram] engine analysis error: {}", json);
+                    None
+                } else {
+                    Some(json)
+                }
             } else {
-                Some(json)
+                eprintln!("[hologram] engine returned non-JSON: {}", json);
+                None
             }
         }
         Err(e) => {
@@ -366,8 +374,9 @@ async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_neighbors(node_id: String, _depth: Option<i32>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("neighbors:{}:2", node_id))
+async fn hologram_neighbors(node_id: String, depth: Option<i32>) -> Result<String, String> {
+    let d = depth.unwrap_or(2);
+    EngineClient::new("127.0.0.1:9777").send(&format!("neighbors:{}:{}", node_id, d))
 }
 
 #[tauri::command]
@@ -392,13 +401,15 @@ async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_cycle(_mode: Option<String>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("cycle:")
+async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
+    let m = mode.unwrap_or_else(|| "all".into());
+    EngineClient::new("127.0.0.1:9777").send(&format!("cycle:{}", m))
 }
 
 #[tauri::command]
-async fn hologram_search(query: String, _limit: Option<i32>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("search:{}", query))
+async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
+    let l = limit.unwrap_or(50);
+    EngineClient::new("127.0.0.1:9777").send(&format!("search:{}:{}", query, l))
 }
 
 #[tauri::command]
@@ -407,13 +418,15 @@ async fn hologram_coupling_report(module: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_blindspots(_threshold: Option<f64>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("blindspots:")
+async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
+    let t = threshold.map(|v| v.to_string()).unwrap_or_default();
+    EngineClient::new("127.0.0.1:9777").send(&format!("blindspots:{}", t))
 }
 
 #[tauri::command]
-async fn hologram_thread_conflicts(_severity: Option<String>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("thread:")
+async fn hologram_thread_conflicts(severity: Option<String>) -> Result<String, String> {
+    let s = severity.unwrap_or_default();
+    EngineClient::new("127.0.0.1:9777").send(&format!("thread:{}", s))
 }
 
 #[tauri::command]
@@ -434,6 +447,7 @@ async fn hologram_timeline(
     let db = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
     let lim = limit.unwrap_or(60);
+    let module_filter = _module.filter(|m| !m.is_empty());
 
     // Build query with optional since filter
     let has_since = since.as_ref().filter(|s| !s.is_empty()).is_some();
@@ -471,15 +485,27 @@ async fn hologram_timeline(
         }).map_err(|e| format!("读取失败: {}", e))?
         .filter_map(|r| r.ok()).collect()
     };
-    Ok(serde_json::json!({"events": events}).to_string())
+    // Apply module filter if provided
+    let events: Vec<_> = if let Some(ref m) = module_filter {
+        events.into_iter().filter(|e| {
+            e.get("file").and_then(|f| f.as_str())
+                .map(|f| f.contains(m.as_str()))
+                .unwrap_or(false)
+        }).collect()
+    } else {
+        events
+    };
+    Ok(serde_json::json!({"events": events, "module_filter": module_filter}).to_string())
 }
 
 #[tauri::command]
 async fn hologram_community_report(
-    _resolution: Option<f64>,
-    _min_size: Option<i32>,
+    resolution: Option<f64>,
+    min_size: Option<i32>,
 ) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("community_report:")
+    let r = resolution.map(|v| v.to_string()).unwrap_or_default();
+    let m = min_size.map(|v| v.to_string()).unwrap_or_default();
+    EngineClient::new("127.0.0.1:9777").send(&format!("community_report:{}:{}", r, m))
 }
 
 #[tauri::command]
@@ -489,12 +515,14 @@ async fn hologram_graph_summary() -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_rename(
-    _old_name: String,
-    _new_name: String,
-    _dry_run: Option<bool>,
-    _node_id: Option<String>,
+    old_name: String,
+    new_name: String,
+    dry_run: Option<bool>,
+    node_id: Option<String>,
 ) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("rename:")
+    let dry = dry_run.unwrap_or(false);
+    let nid = node_id.unwrap_or_default();
+    EngineClient::new("127.0.0.1:9777").send(&format!("rename:{}:{}:{}:{}", old_name, new_name, dry, nid))
 }
 
 // ═══════════════════════════════════════════════════════

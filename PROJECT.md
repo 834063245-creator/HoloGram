@@ -1,6 +1,6 @@
 # PROJECT.md — 全息观测站 · 唯一真相源
 
-> **最后更新：2026-06-17 · 子Agent系统落地 · 流式Markdown渲染 · 模式切换 · 工具进度直播 · 焦点上下文 · 变更(diff)修复 · 文件树实时更新**
+> **最后更新：2026-06-17 · 敌对审查26缺陷全扫 · 序列化补齐 · 传参修复 · 并发加固**
 
 ---
 
@@ -100,6 +100,60 @@ agent_spawn
 GraphMerger 死代码、_sanitize_for_json 双重清理、PipelineReport.sources 峰值内存、add_node 静默合并、from_project 注释偏差。
 
 **修改文件：** graph.py · merger.py · runner.py · cache.py · diff.py · cli.py · dataflow.py · mcp_server.py · coupling.py · tests (2 处)
+
+---
+
+## 第二轮审计修复（2026-06-17 · 26 条）
+
+**敌对审查发现 26 条缺陷（3 致命 / 7 高危 / 10 中危 / 6 低危），本轮全扫。195 测试全绿。**
+
+### 致命（3）— 全系统数据截断
+
+| ID | 文件:行 | 问题 | 修复 |
+|---|---|---|---|
+| C1 | main.rs:209-225 | `handle_analyze` 序列化丢弃 `in_degree/out_degree/properties/position/community_id` + 边丢弃 `id/cross_file/direction/temporal_delay_sec/medium_node_id` | 补全 9 个字段 |
+| K1 | main.rs:416-429 | `handle_get_graph` 返回硬编码 3 假节点 | 从 `CACHED_GRAPH` 读取真实图 |
+| A1 | main.rs:491-498 | `hologram_rename` 4 参数全 `_` 吞掉 | 拼接 `old_name:new_name:dry_run:nid` |
+
+### 高危（7）— 传参遗漏 + 序列化缺陷
+
+| ID | 文件:行 | 问题 | 修复 |
+|---|---|---|---|
+| A2-8 | main.rs(Tauri) | `neighbors/cycle/search/blindspots/thread/timeline/community_report` 7 命令忽略用户参数 | 全部拼入命令字符串 |
+| C2 | mcp.rs:909-918 | `node_to_value` 缺 `properties/position/community_id` | 补 3 字段 |
+| C3 | mcp.rs:921-928 | `edge_to_value` 缺 `cross_file/direction/temporal_delay_sec/medium_node_id` | 补 4 字段 |
+| F1/2 | watcher.rs | `do_reanalyze` 不检查 analyze_lock → 与 MCP tool_analyze 并发覆盖 CACHED_GRAPH | 全局 `ANALYZE_LOCK` + watcher try_lock 跳过 |
+
+### 中危（10）— 语义错误 + 静默降级
+
+| ID | 文件:行 | 问题 | 修复 |
+|---|---|---|---|
+| C4 | main.rs:341 + mcp.rs:725 | `diff()` 两处调用 `after.diff(&before)` added/removed 标签颠倒 | 改为 `before.diff(&after)` |
+| D2 | mcp.rs:890-899 | `tool_rename` 非dry_run 不实际改名 | 获取 `CACHED_GRAPH` mut 锁直接改 `node.name` |
+| G1 | main.rs:92-98 | `handle_simple` blindspots/thread 硬编码参数 | 解析 `blindspots:N` / `thread:severity` |
+| B1 | merge.rs:38 + node.rs:61 | `loc_key` 当 `location=None` 时键为 `::name::kind` 误合并 | merge 中 location 为 None 时用 id 做 key |
+| B2 | merge.rs:49-51 | merge 无条件接所有边→孤儿边 | 验证端点存在 |
+| C5 | resolver.rs:109-122 | `resolve_name` 部分包前缀匹配可能选错 | 要求全 name_parts 精确匹配 |
+| D3 | mcp.rs:110 | `tool_run_health` 描述声称 trend 但返回硬编码 85/stable | 描述改为"current snapshot" |
+| H3 | dataflow.rs:6-21 | `classify_cycles` 零外部调用 + `llm=0` 非mut | 改 `let mut llm=0` + `if has_llm { llm+=1 }` |
+
+### 低危（6）— 已修复
+
+| ID | 文件:行 | 问题 | 修复 |
+|---|---|---|---|
+| G3 | main.rs:316 | `run_engine_analysis` 字符串 `contains("\"error\"")` 误判 | 先 `serde_json::from_str` 再查 `get("error")` |
+| K2 | resolver.rs:132 | 测试缺 `Node` import（预存bug） | 加 import |
+| - | main.rs:374 | `handle_simple` fn指针→泛型闭包 | 支持捕获变量 |
+
+### 架构改动
+
+- **新增** `ANALYZE_LOCK` 全局锁（`mcp.rs`），MCP 工具和 watcher 共用，消除 TOCTOU 窗口
+- **移除** `McpServer.analyze_lock` 实例字段，改用全局锁
+- **新增** TCP RPC `rename:` 处理器（原完全缺失）
+- **修复** `search:` TCP handler 支持 `limit` 参数（从 `handle_query` 改为闭包解析）
+- **修复** `resolver.rs` 测试模块缺 `Node` import（预存，`cargo test --lib` 之前已 fail）
+
+**修改文件：** `engine/src/main.rs` · `engine/src/mcp.rs` · `engine/src/watcher.rs` · `engine/src/graph/merge.rs` · `engine/src/graph/resolver.rs` · `engine/src/analysis/dataflow.rs` · `src-tauri/src/main.rs` · `PROJECT.md`
 
 ---
 
