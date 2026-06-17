@@ -1340,7 +1340,50 @@ async fn edit_file(
         }
         let c = content.matches(&old_string).count();
         if c == 0 {
-            return Err(format!("文件中未找到指定的文本片段。请确认 old_string 与文件内容完全一致（包括缩进和换行）。"));
+            // Whitespace-tolerant: match line-by-line after trimming each line.
+            // Catches LLM indentation / trailing-space mismatches.
+            let old_lines: Vec<&str> = old_string.lines().collect();
+            if !old_lines.is_empty() {
+                let file_lines: Vec<&str> = content.lines().collect();
+                let first_trimmed = old_lines[0].trim();
+                for start in 0..file_lines.len() {
+                    if file_lines[start].trim() != first_trimmed { continue; }
+                    let mut matched = true;
+                    for k in 1..old_lines.len() {
+                        if start + k >= file_lines.len()
+                            || file_lines[start + k].trim() != old_lines[k].trim()
+                        { matched = false; break; }
+                    }
+                    if matched && start + old_lines.len() <= file_lines.len() {
+                        let prefix = file_lines[start]
+                            .chars().take_while(|c| c.is_whitespace()).collect::<String>();
+                        let new_ls: Vec<&str> = new_string.lines().collect();
+                        let mut out = String::new();
+                        for l in &file_lines[..start] { out.push_str(l); out.push('\n'); }
+                        for (k, nl) in new_ls.iter().enumerate() {
+                            if k == 0 { out.push_str(&prefix); }
+                            out.push_str(nl); out.push('\n');
+                        }
+                        for l in &file_lines[start + old_lines.len()..] {
+                            out.push_str(l); out.push('\n');
+                        }
+                        let trimmed = out.trim_end_matches('\n').to_string();
+                        write_atomic(&file_path, &trimmed)?;
+                        return Ok("已替换 1 处匹配（容错模式：逐行对齐）".to_string());
+                    }
+                    break; // first-line matched once, no need to scan further
+                }
+            }
+            // Diagnostic: show where the first line appears in the file
+            let first_line = old_string.lines().next().unwrap_or("(empty)");
+            let best = fuzzy_find(&content, first_line);
+            let hint = match best {
+                Some((ln, ctx)) => format!("line {}: {}", ln, ctx),
+                None => format!("file starts: {}",
+                    content.lines().take(3).collect::<Vec<_>>().join(" | ")),
+            };
+            let key = if first_line.len() > 60 { &first_line[..60] } else { first_line };
+            return Err(format!("not found: \"{}\" | {}", key, hint));
         }
         if c > 1 {
             return Err(format!(
@@ -2539,6 +2582,28 @@ fn credential_clear() -> Result<(), String> {
     credential::clear_credentials()
 }
 
+
+/// Atomic write: temp file then rename.
+fn write_atomic(file_path: &str, content: &str) -> Result<(), String> {
+    let tmp_path = format!("{}.tmp", file_path);
+    std::fs::write(&tmp_path, content)
+        .map_err(|e| format!("write_atomic(tmp): {}", e))?;
+    std::fs::rename(&tmp_path, file_path)
+        .map_err(|e| format!("write_atomic(rename): {}", e))?;
+    Ok(())
+}
+
+/// Find line in content containing query (fuzzy substring match).
+fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> {
+    let q = query.trim();
+    if q.is_empty() { return None; }
+    for (i, line) in content.lines().enumerate() {
+        if line.contains(q) {
+            return Some((i + 1, line.trim().chars().take(80).collect()));
+        }
+    }
+    None
+}
 fn main() {
     let watcher_state = Arc::new(WatcherState {
         running: AtomicBool::new(false),

@@ -54,6 +54,9 @@ export class GitPanel {
 
   constructor() {
     this.buildDOM();
+    bus.on('workspace:files-changed', () => {
+      if (this.openState && this.projectPath) this.refresh();
+    });
   }
 
   // ── DOM ────────────────────────────────────────────────
