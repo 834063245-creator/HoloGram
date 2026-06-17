@@ -154,35 +154,62 @@ N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点场景 **1 draw 
 
 ---
 
-## 安装
+---
+## 安装与使用
 
-### Windows 预编译包
+### 桌面应用
 
-从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 下载 `.msi`。
+从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 下载 `.msi` 安装包，双击即可。
 
-### 从源码构建
-
-**依赖：** [Rust](https://rustup.rs/) · [Node.js](https://nodejs.org/) ≥ 18 · [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Win10+ 已预装）
+**从源码构建** 需要 [Rust](https://rustup.rs/) · [Node.js](https://nodejs.org/) ≥ 18 · [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Win10+ 已预装）：
 
 ```bash
 git clone https://github.com/834063245-creator/HoloGram.git && cd HoloGram
-
-# 编译 Rust 引擎
 cd engine && cargo build --release && cd ..
-
-# 前端
 cd src-ui && npm install && npm run build && cd ..
-
-# 桌面应用
 cargo tauri build
 # → src-tauri/target/release/bundle/msi/*.msi
 ```
 
+启动 → 打开项目目录 → 自动分析渲染 → 单击节点看详情 → 聊天面板向 Agent 提问。
+
 ---
 
-## 快速上手
+### 🧩 MCP 模式（独立引擎，不开桌面应用）
 
-启动 → 打开项目目录（自动分析渲染）→ 单击节点看详情 → Shift+双节点查路径 → Alt+框选区选 → 聊天面板向 Agent 提问。
+引擎是单文件二进制，18 种 tree-sitter 语法全静态链接，零依赖。在任何 Claude Code / Cursor 会话中作为 MCP 服务器运行。
+
+**🤙 一句话安装 — 复制下面这段话，发给 Claude Code / Cursor：**
+
+```
+请帮我安装 HoloGram MCP 服务。步骤：
+
+1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版 hologram-engine.exe
+2. 把 hologram-engine.exe 放到用户主目录下的 .hologram 文件夹里（全局安装，所有项目共用）
+3. 在当前 AI 编程工具的 MCP 配置中注册这个服务：启动命令是 ~/.hologram/hologram-engine.exe，参数是 serve
+4. 找到当前工具的全局和项目规则文件，写入 HoloGram 全部工具的使用规则（全局 + 项目两层都写，确保所有项目自动生效）
+5. 在所有项目的全局规则文件中，追加一条强制前置检查规则：每次接到新任务，动手前先扫一眼可用的 MCP 工具列表，问自己"有工具能帮我缩小范围或直接给答案吗？"——哪怕结论是没用，也比跳过这步强。这条规则不限 HoloGram，适用所有已安装的 MCP 服务
+6. 完成后告诉我怎么验证装好了
+```
+
+**不用懂技术。复制、粘贴、回车。Agent 会自己搞定。**
+
+**从源码编译引擎：**
+
+```bash
+git clone https://github.com/834063245-creator/HoloGram.git
+cd HoloGram/engine && cargo build --release
+mkdir -p ~/.hologram && cp target/release/hologram-engine.exe ~/.hologram/
+```
+
+之后让 Agent 配 `mcp.json`。重启 Claude Code / Cursor，第一个项目 `hologram_analyze(path="/你的项目路径")` 载入，之后自动增量更新。
+
+| 配置方式 | 文件位置 | 效果 |
+|---|---|---|
+| **全局** | `~/.claude/mcp.json` | 所有项目都能用，启动不分析（懒加载） |
+| **项目级** | 项目根目录 `.mcp.json` | 优先级更高，可加 `--project-root` 自动分析 |
+
+HoloGram 自己的 `.mcp.json` 是项目级配置的参考模板。
 
 ---
 
@@ -226,59 +253,11 @@ cargo tauri build
                       │ 发现 → 分析 → 跨文件 → 社区 → 序列化 │
                       │ 18 tree-sitter 语法                 │
                       │ MemoryIndex + SqliteDb + FTS5      │
-                      │ 24 MCP 工具 · 293 tests               │
+                      │ 24 MCP 工具 · 293 tests             │
                       └───────────────────────────────────┘
 ```
 
 > **引擎自启动：** Tauri 启动时自动 spawn `engine.exe`（TCP :9777）。IDE 集成走 MCP serve 模式（`engine.exe serve --project-root`）。
-
----
-
-## 🧩 只用 MCP（不开桌面应用）
-
-HoloGram 的 Rust 引擎可以独立作为 MCP 服务器运行，在任何 Claude Code / Cursor 会话中使用——不需要安装桌面应用。
-
-引擎是单文件二进制，tree-sitter 语法全静态链接，零依赖。丢哪都能跑。
-
-### 🤙 一句话安装
-
-**复制下面这段话，发给 Claude Code / Cursor / 任意 AI 编程助手：**
-
-```
-请帮我安装 HoloGram MCP 服务。步骤：
-
-1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版 hologram-engine.exe
-2. 把 hologram-engine.exe 放到用户主目录下的 .hologram 文件夹里（全局安装，所有项目共用）
-3. 在当前 AI 编程工具的 MCP 配置中注册这个服务：启动命令是 ~/.hologram/hologram-engine.exe，参数是 serve
-4. 找到当前工具的全局和项目规则文件，写入 HoloGram 全部工具的使用规则（全局 + 项目两层都写，确保所有项目自动生效）
-5. 在所有项目的全局规则文件中，追加一条强制前置检查规则：每次接到新任务，动手前先扫一眼可用的 MCP 工具列表，问自己"有工具能帮我缩小范围或直接给答案吗？"——哪怕结论是没用，也比跳过这步强。这条规则不限 HoloGram，适用所有已安装的 MCP 服务
-6. 完成后告诉我怎么验证装好了
-```
-
-**不用懂技术。复制、粘贴、回车。Agent 会自己搞定。**
-
-### 从源码编译（想自己改引擎的人）
-
-```bash
-git clone https://github.com/834063245-creator/HoloGram.git
-cd HoloGram/engine
-cargo build --release
-mkdir -p ~/.hologram
-cp target/release/hologram-engine.exe ~/.hologram/
-```
-
-然后同上，让 Agent 配 `mcp.json`。
-
-重启 Claude Code / Cursor。第一个项目用 `hologram_analyze(path="/你的项目路径")` 载入，之后引擎自动增量更新。
-
-### 项目级 vs 全局
-
-| 方式 | 文件位置 | 效果 |
-|---|---|---|
-| **全局** | `~/.claude/mcp.json` | 所有项目都能用，启动不分析（懒加载） |
-| **项目级** | 项目根目录 `.mcp.json` | 优先级更高，可加 `--project-root` 自动分析 |
-
-HoloGram 自己的 `.mcp.json` 是项目级配置的参考模板。
 
 ---
 
