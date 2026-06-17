@@ -95,6 +95,11 @@ export function sanitizeToolPairing(msgs: Message[]): Message[] {
       i++; // orphan tool message — drop
       continue;
     }
+    // Skip empty assistant messages — DeepSeek rejects them
+    if (m.role === 'assistant' && !m.content && (!m.tool_calls || m.tool_calls.length === 0)) {
+      i++;
+      continue;
+    }
     out.push(m);
     i++;
   }

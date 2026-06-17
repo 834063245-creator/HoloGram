@@ -70,7 +70,7 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
     let mut edge_counter = 0u32;
 
     // Module node — file-level anchor so edges have a valid source
-    nodes.push(Node::new(file_id, file_id, NodeKind::Symbol));
+    nodes.push(Node::new(file_id, file_id, NodeKind::File));
 
     let root = tree.root_node();
     let cursor = &mut root.walk();
@@ -85,7 +85,7 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                         let nid = format!("{}.{}", file_id, name);
                         edge_counter += 1;
                         edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), file_id, &nid, EdgeKind::Defines));
-                        nodes.push(Node::new(&nid, name, NodeKind::Symbol));
+                        nodes.push(Node::new(&nid, name, NodeKind::Function));
                     }
                 }
             }
@@ -95,7 +95,7 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                         let nid = format!("{}.{}", file_id, name);
                         edge_counter += 1;
                         edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), file_id, &nid, EdgeKind::Defines));
-                        nodes.push(Node::new(&nid, name, NodeKind::Symbol));
+                        nodes.push(Node::new(&nid, name, NodeKind::Class));
 
                         // extends → inheritance edge
                         // (JS "extends" is nested under "class_heritage", TS is direct field)
@@ -119,7 +119,7 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                         let nid = format!("{}.{}", file_id, name);
                         edge_counter += 1;
                         edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), file_id, &nid, EdgeKind::Defines));
-                        nodes.push(Node::new(&nid, name, NodeKind::Symbol));
+                        nodes.push(Node::new(&nid, name, NodeKind::Interface));
                     }
                 }
             }

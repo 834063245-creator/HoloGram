@@ -734,6 +734,12 @@
       white-space: nowrap; display: flex; align-items: center; gap: 4px;
     }
     .dock-tab:hover { color: var(--starlight-dim); background: rgba(30, 50, 80, 0.3); }
+    .dock-tab .git-badge {
+      font-family: var(--font-mono); font-size: 8px; font-weight: 700;
+      background: var(--sol); color: #0a0a14; padding: 1px 5px; border-radius: 8px;
+      min-width: 16px; text-align: center; line-height: 1;
+    }
+    .dock-tab .git-badge.clean { background: var(--pass); }
     .dock-tab.active {
       color: var(--signal-bright);
       background: rgba(30, 55, 100, 0.4);
@@ -759,10 +765,6 @@
     #status .right { display: flex; gap: 16px; }
     #status .warn { color: var(--fail); }
     #status .caution { color: var(--warn); }
-    #status-git { color: var(--sol); cursor: pointer; transition: color var(--snap); }
-    #status-git:hover { color: var(--sol-bright); }
-    #status-git.clean { color: var(--pass); }
-    .status-sep { color: rgba(60,90,140,0.3); user-select: none; }
 
     /* ═══════════════════════════════════════════════════════════════
        WELCOME — empty state
@@ -3095,7 +3097,7 @@
   <div id="left-tabs" style="">
     <button class="dock-tab" data-panel="explorer" data-icon="folder-closed">资源</button>
     <button class="dock-tab" data-panel="timeline" data-icon="timeline">时间轴</button>
-    <button class="dock-tab" data-panel="git" data-icon="git-branch">Git</button>
+    <button class="dock-tab" id="dock-git" data-panel="git" data-icon="git-branch">Git</button>
     <button class="dock-tab" data-panel="hotspots" data-icon="fire">热点</button>
   </div>
   <div id="right-tabs" style="">
@@ -3114,8 +3116,6 @@
     <span class="left" id="status-text">◈ STATUS NOMINAL · 就绪</span>
     <span class="right">
       <span id="status-nodes"></span>
-      <span class="status-sep">|</span>
-      <span id="status-git"></span>
       <span id="status-edges"></span>
     </span>
   </div>
