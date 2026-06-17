@@ -342,43 +342,19 @@ async function setupAgent(): Promise<void> {
 
 async function setupAgentInner(): Promise<void> {
   let settings = loadSettings();
-  // ── 诊断：直接读 localStorage 原始值 ──
-  const rawLS = (typeof localStorage !== 'undefined') ? localStorage.getItem('hologram_settings') : null;
-  let lsKeys = '';
-  if (rawLS) {
-    try {
-      const p = JSON.parse(rawLS);
-      for (const pp of (p.providers || [])) {
-        lsKeys += `${pp.name}:${(pp.apiKey||'').length} `;
-      }
-    } catch { lsKeys = 'parseErr'; }
-  } else {
-    lsKeys = 'null';
-  }
-  console.error('[DIAG] localStorage raw keys:', lsKeys);
 
   // Restore API keys from system encrypted storage if localStorage was wiped
   settings = await restoreSecrets(settings);
   const active = getActiveProvider(settings);
 
-  // Try credential store directly
-  let credOk = '?';
-  try {
-    const { invoke } = await import('./bridge');
-    const credVal = await invoke('credential_get', { provider: active.name });
-    credOk = (credVal && (credVal as string).trim()) ? 'got:' + (credVal as string).length : 'empty';
-  } catch (e: any) { credOk = 'err:' + String(e).slice(0,30); }
-
-  const diag = `[Agent] provider=${active.name} ls=${lsKeys} cred=${credOk} keyLen=${(active.apiKey||'').length}`;
-  console.error('[DIAG]', diag);
+  const diag = `[Agent] provider=${active.name} keyLen=${(active.apiKey||'').length}`;
   statusText.textContent = diag;
   bus.emit('agent:diag', { text: diag, ready: !!active.apiKey && active.apiKey.trim() !== '' });
 
   if (!active.apiKey || active.apiKey.trim() === '') {
-    console.error('[DIAG] NO KEY — agent disabled');
     agent = null;
     chatPanel.setAgent(null);
-    bus.emit('agent:diag', { text: `❌ 未检测到 API Key — provider="${active.name}" 的 Key 为空。请在设置中填入 Key。`, ready: false });
+    bus.emit('agent:diag', { text: `❌ 未检测到 API Key — provider="${active.name}" 的 Key 为空。`, ready: false });
     return;
   }
 
@@ -414,19 +390,22 @@ async function setupAgentInner(): Promise<void> {
   const registry = new ToolRegistry();
 
   // ── 双线对齐：硬编码 schema 给 Agent 看（描述调优过），MCP 做执行通道（快）──
-  // 硬编码工具始终注册——Agent 看到的是最优描述，不会"想不起来调"。
-  // MCP 挂了自动降级 CLI，对 Agent 透明。
 
   // Step 1: 尝试启动 MCP 做执行通道
   let mcpExec: ToolExecutor | null = null;
   if (currentGraphData && currentPath) {
     try {
-      await invoke<string>('start_mcp_server', { projectRoot: currentPath });
-      mcpExec = async (name, args) => {
-        const result = await invoke<string>('mcp_call', { toolName: name, args: JSON.stringify(args) });
-        return result;
-      };
-      dbg('setupAgent', 'MCP executor ready (hardcoded schemas + MCP transport)');
+      // MCP startup is fire-and-forget — Agent starts immediately with CLI fallback,
+      // switches to MCP transport when ready.
+      invoke<string>('start_mcp_server', { projectRoot: currentPath }).then(() => {
+        mcpExec = async (name, args) => {
+          const result = await invoke<string>('mcp_call', { toolName: name, args: JSON.stringify(args) });
+          return result;
+        };
+        dbg('setupAgent', 'MCP executor ready (hot-swap from CLI)');
+      }).catch((e) => {
+        dbg('setupAgent', `MCP unavailable, staying on CLI: ${e}`);
+      });
     } catch (e) {
       dbg('setupAgent', `MCP unavailable, using CLI transport: ${e}`);
     }
@@ -612,10 +591,11 @@ async function setupAgentInner(): Promise<void> {
       return newAgent;
     });
   }
-
   } catch (e: any) {
-    console.error('[setupAgent] CRASH during agent creation:', e.message || e);
-    statusText.textContent = `[Agent] ❌ 创建失败: ${String(e).slice(0, 80)}`;
+    const errMsg = `Agent 创建异常: ${String(e?.message || e).slice(0, 120)}`;
+    console.error('[setupAgent] CRASH:', errMsg);
+    statusText.textContent = `[Agent] ❌ ${errMsg}`;
+    bus.emit('agent:diag', { text: errMsg, ready: false });
     agent = null;
     chatPanel.setAgent(null);
     return;
