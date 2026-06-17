@@ -379,6 +379,7 @@ fn direct_analyze(path: &str) -> Result<String, String> {
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
+    let _ = regenerate_file_graph(&path);
 
     Ok(serde_json::json!({
         "status": "ok", "total_nodes": nc, "total_edges": ec,
@@ -1801,6 +1802,7 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
 
     // Remove stale binary cache so cold start doesn't read old Python .hologram
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
+    let _ = regenerate_file_graph(&path);
 
     // Register as active workspace — all tool commands now route here
     *ACTIVE_PROJECT.lock().unwrap() = path.clone();
