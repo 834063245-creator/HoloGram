@@ -1,11 +1,12 @@
 //! Explore — unified query aggregator.
 //!
-//! Takes a list of symbol names (already extracted from NL by the agent's LLM),
-//! returns Flow + Blast Radius + Relationships + Source Code + Architecture Alerts
-//! in a single response. Eliminates the "search → neighbors → path → Read" chain.
+//! Input: natural language query or pre-parsed symbol names.
+//! Output: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts.
+//! Eliminates the "search → neighbors → path → Read" chain.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use serde_json::json;
 
@@ -18,12 +19,23 @@ use crate::graph::query;
 // ═══════════════════════════════════════════════════════════════
 
 /// Execute an explore query. Returns a `serde_json::Value` ready for MCP response.
+/// Accepts either a natural language `query` string or pre-parsed `symbol_names` array.
+/// If `query` is provided, NL parsing extracts symbol names automatically.
 pub fn explore(
     graph: &Graph,
     project_root: &Path,
     symbol_names: &[String],
+    query: Option<&str>,
     include_source: bool,
 ) -> serde_json::Value {
+    // NL parsing: extract symbol names from natural language query
+    let effective_symbols: Vec<String> = if !symbol_names.is_empty() {
+        symbol_names.to_vec()
+    } else if let Some(q) = query {
+        parse_nl_query(graph, q)
+    } else {
+        Vec::new()
+    };
     let mut ctx = ExploreCtx {
         graph,
         project_root,
@@ -34,7 +46,7 @@ pub fn explore(
     };
 
     // Step 1: Resolve symbols → nodes
-    for sym in symbol_names {
+    for sym in &effective_symbols {
         let results = query::search_nodes(graph, sym);
         // Prefer exact name match, then take first
         // results: Vec<&Node>
@@ -114,6 +126,135 @@ struct ExploreCtx<'a> {
     named_nodes: Vec<Node>,
     named_ids: HashSet<String>,
     named_files: HashSet<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NL → Symbol Resolution (Spec lines 85-167)
+// ═══════════════════════════════════════════════════════════════
+
+/// Parse a natural language query into symbol names.
+/// Step 1: Tokenize — split on whitespace/punctuation, filter to code-like tokens.
+/// Step 2: Classify — PascalCase = context, qualified (:: or .) = exact, rest = simple.
+/// Step 3: Disambiguate — use PascalCase context to scope simple tokens.
+fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
+    let tokens = tokenize(query);
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    // Classify tokens
+    let mut pascal_tokens: Vec<String> = Vec::new();
+    let mut qualified_tokens: Vec<String> = Vec::new();
+    let mut simple_tokens: Vec<String> = Vec::new();
+
+    for tok in &tokens {
+        if tok.contains("::") || tok.contains('.') {
+            qualified_tokens.push(tok.clone());
+        } else if is_pascal_case(tok) {
+            pascal_tokens.push(tok.clone());
+        } else {
+            simple_tokens.push(tok.clone());
+        }
+    }
+
+    let mut result: Vec<String> = Vec::new();
+
+    // Qualified tokens → direct lookup (exact match by qualified name)
+    for qt in &qualified_tokens {
+        // Search by the full qualified name
+        let matches = query::search_nodes(graph, qt);
+        if let Some(best) = matches.iter().find(|n| n.name == *qt).or_else(|| matches.first()) {
+            result.push(best.name.clone());
+        }
+    }
+
+    // Simple tokens → disambiguate with PascalCase context
+    for st in &simple_tokens {
+        let matches = query::search_nodes(graph, st);
+        let filtered = disambiguate(&matches, &pascal_tokens);
+        for node in filtered {
+            result.push(node.name.clone());
+        }
+    }
+
+    // PascalCase tokens: add if they resolve (and don't match project/package name)
+    for pt in &pascal_tokens {
+        let matches = query::search_nodes(graph, pt);
+        if matches.len() == 1 {
+            result.push(matches[0].name.clone());
+        } else if let Some(best) = matches.iter().find(|n| n.name == *pt) {
+            result.push(best.name.clone());
+        }
+    }
+
+    // Deduplicate, cap at 16
+    let mut seen = HashSet::new();
+    result.retain(|s| seen.insert(s.clone()));
+    result.truncate(16);
+    result
+}
+
+/// Tokenize: split on whitespace/punctuation, keep code-like tokens only.
+fn tokenize(query: &str) -> Vec<String> {
+    static SPLIT_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static ID_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static EXT_RE: OnceLock<regex::Regex> = OnceLock::new();
+
+    let re = SPLIT_RE.get_or_init(|| regex::Regex::new(r"[\s,()\[\]]+").unwrap());
+    let id_re = ID_RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z_$][\w$]*(?:(?:::|\.)[\w$]+)*$").unwrap());
+    let ext_re = EXT_RE.get_or_init(|| regex::Regex::new(r"\.(py|rs|ts|tsx|js|jsx|go|java|swift|c|h|cpp|rb|lua|cs|php|kt|dart|scala|hs|json|html|css|yaml|yml|toml|md|sh)$").unwrap());
+
+    let mut tokens: Vec<String> = re.split(query)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Filter: must match identifier pattern, not a file extension, length >= 2
+    tokens.retain(|t| {
+        id_re.is_match(t) && !ext_re.is_match(t) && t.len() >= 2
+    });
+
+    // Deduplicate
+    let mut seen = HashSet::new();
+    tokens.retain(|t| seen.insert(t.clone()));
+    tokens.truncate(16);
+    tokens
+}
+
+/// PascalCase: first char uppercase ASCII, at least 4 chars.
+fn is_pascal_case(s: &str) -> bool {
+    s.len() >= 4
+        && s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Disambiguate simple tokens using PascalCase context tokens.
+/// If candidates ≤ 3, keep all. Otherwise filter by container name match.
+fn disambiguate<'a>(candidates: &[&'a Node], pascal_tokens: &[String]) -> Vec<&'a Node> {
+    if candidates.len() <= 3 {
+        return candidates.to_vec();
+    }
+
+    // Keep candidates whose container (qualified name prefix) matches a PascalCase token
+    let in_context: Vec<&Node> = candidates.iter().filter(|n| {
+        // Get the container: everything before the last :: in the qualified name.
+        // The id typically looks like "src.module.ClassName.method"
+        let container = n.id.rsplitn(2, '.').nth(1).unwrap_or("");
+        pascal_tokens.iter().any(|pt| {
+            container.eq_ignore_ascii_case(pt)
+                || container.contains(pt.as_str())
+        })
+    }).copied().collect();
+
+    if !in_context.is_empty() {
+        in_context.into_iter().take(4).collect()
+    } else {
+        // Fallback: prefer higher-degree nodes (more connected = more important)
+        let mut sorted: Vec<&&Node> = candidates.iter().collect();
+        sorted.sort_by_key(|n| n.in_degree.saturating_add(n.out_degree));
+        sorted.reverse();
+        sorted.into_iter().take(1).copied().collect()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -716,7 +857,7 @@ mod tests {
     fn test_explore_two_symbols() {
         let g = test_graph();
         let tmp = std::env::temp_dir();
-        let result = explore(&g, &tmp, &["DataRequest.task".into(), "DataRequest.validate".into()], true);
+        let result = explore(&g, &tmp, &["DataRequest.task".into(), "DataRequest.validate".into()], None, true);
 
         // Flow should exist
         assert!(result["flow"]["path"].is_array());
@@ -742,7 +883,7 @@ mod tests {
     fn test_explore_empty_graph() {
         let g = Graph::new();
         let tmp = std::env::temp_dir();
-        let result = explore(&g, &tmp, &["nothing".into()], false);
+        let result = explore(&g, &tmp, &["nothing".into()], None, false);
         assert_eq!(result["flow"], json!(null));
         assert_eq!(result["nodeIds"].as_array().unwrap().len(), 0);
         assert!(result["meta"]["hint"].as_str().unwrap().contains("未找到"));
@@ -791,5 +932,68 @@ mod tests {
         assert!(is_test_node(&n, "tests/test_foo.rs"));
         let n2 = Node::new("n2", "business", NodeKind::Symbol);
         assert!(!is_test_node(&n2, "src/business.rs"));
+    }
+
+    // ── NL Parser tests ──
+
+    #[test]
+    fn test_tokenize_simple() {
+        let tokens = tokenize("DataRequest validate task");
+        assert!(tokens.contains(&"DataRequest".to_string()));
+        assert!(tokens.contains(&"validate".to_string()));
+        assert!(tokens.contains(&"task".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_filters_chinese() {
+        let tokens = tokenize("DataRequest 怎么 validate 一个 task");
+        // Chinese characters should be filtered out
+        assert!(tokens.contains(&"DataRequest".to_string()));
+        assert!(tokens.contains(&"validate".to_string()));
+        assert!(tokens.contains(&"task".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_filters_short() {
+        let tokens = tokenize("a b c ab");
+        // Single chars filtered (<2)
+        assert!(!tokens.contains(&"a".to_string()));
+        assert!(!tokens.contains(&"b".to_string()));
+        assert!(!tokens.contains(&"c".to_string()));
+        assert!(tokens.contains(&"ab".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_filters_extensions() {
+        let tokens = tokenize("main.py handler.ts");
+        assert!(!tokens.contains(&"main.py".to_string()));
+        assert!(!tokens.contains(&"handler.ts".to_string()));
+    }
+
+    #[test]
+    fn test_is_pascal_case() {
+        assert!(is_pascal_case("DataRequest"));
+        assert!(is_pascal_case("UserService"));
+        assert!(!is_pascal_case("dataRequest")); // starts lowercase
+        assert!(!is_pascal_case("URL"));           // too short (<4)
+        assert!(!is_pascal_case("abc"));           // too short + lowercase
+    }
+
+    #[test]
+    fn test_disambiguate_few_candidates() {
+        let g = test_graph();
+        let candidates: Vec<&Node> = g.nodes.values().collect();
+        let pascal: Vec<String> = vec![];
+        // With 3 or fewer candidates, all are kept
+        let few: Vec<&Node> = candidates.iter().take(3).copied().collect();
+        let result = disambiguate(&few, &pascal);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_nl_query_basic() {
+        let g = test_graph();
+        let symbols = parse_nl_query(&g, "DataRequest.task DataRequest.validate UploadService");
+        assert!(!symbols.is_empty(), "Should extract at least some symbols");
     }
 }

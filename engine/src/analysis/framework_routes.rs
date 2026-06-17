@@ -2,8 +2,7 @@
 //! into HoloGram's Rust engine. Detects web framework routes and creates
 //! route nodes in the dependency graph, linking URLs to their handlers.
 //!
-//! Currently supports: Django, Express, FastAPI
-//! Planned: Rails, Spring, Flask
+//! Currently supports: Django, Express, FastAPI, Flask, Rails, Spring
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -36,7 +35,10 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
     {
         if let Ok(rel) = entry.path().strip_prefix(project_root) {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if is_django_url_file(&rel_str) || is_express_file(&rel_str) || is_fastapi_candidate(&rel_str) {
+            if is_django_url_file(&rel_str) || is_express_file(&rel_str)
+                || is_fastapi_candidate(&rel_str) || is_flask_candidate(&rel_str)
+                || is_rails_file(&rel_str) || is_spring_candidate(&rel_str)
+            {
                 files.insert(rel_str);
             }
         }
@@ -52,9 +54,23 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
                 let routes = detect_express_routes(file, &source);
                 added += inject_routes(graph, &routes);
             } else if is_fastapi_candidate(file) {
-                // Content pre-filter: only parse files that contain @ decorators
                 if source.contains("@app.") || source.contains("@router.") {
                     let routes = detect_fastapi_routes(file, &source);
+                    added += inject_routes(graph, &routes);
+                }
+            } else if is_flask_candidate(file) {
+                if source.contains("@app.route") || source.contains("@bp.route") {
+                    let routes = detect_flask_routes(file, &source);
+                    added += inject_routes(graph, &routes);
+                }
+            } else if is_rails_file(file) {
+                let routes = detect_rails_routes(file, &source);
+                added += inject_routes(graph, &routes);
+            } else if is_spring_candidate(file) {
+                if source.contains("@GetMapping") || source.contains("@RequestMapping")
+                    || source.contains("@PostMapping")
+                {
+                    let routes = detect_spring_routes(file, &source);
                     added += inject_routes(graph, &routes);
                 }
             }
@@ -477,6 +493,430 @@ fn extract_fastapi_decorator(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Flask — @app.route("/path", methods=["GET"])
+// ═══════════════════════════════════════════════════════════════
+
+fn is_flask_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".py")
+}
+
+/// Detect Flask `@app.route("/path", methods=["GET"])` decorator.
+/// Same tree-sitter pattern as FastAPI but decorator name is `route` (not an HTTP method).
+fn detect_flask_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return result,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "decorated_definition" {
+            let mut handler_name = String::new();
+            let mut decorators = Vec::new();
+
+            let mut node_cursor = node.walk();
+            for child in node.children(&mut node_cursor) {
+                match child.kind() {
+                    "decorator" => decorators.push(child),
+                    "function_definition" | "async_function_definition" | "class_definition" => {
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            handler_name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            for deco in &decorators {
+                if let Some((method, path)) = extract_flask_decorator(deco, source) {
+                    let line = node.start_position().row + 1;
+                    result.push((method, path, handler_name.clone(), file.to_string(), line));
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    result
+}
+
+/// Extract (HTTP_METHOD, route_path) from Flask @app.route decorator.
+/// Pattern: @app.route("/path", methods=["GET", "POST"]) or just @app.route("/path")
+fn extract_flask_decorator(
+    decorator: &tree_sitter::Node,
+    source: &str,
+) -> Option<(String, String)> {
+    let mut dec_cursor = decorator.walk();
+    let children: Vec<_> = decorator.children(&mut dec_cursor).collect();
+
+    // Find the call node
+    let call_node = children.iter().find(|c| c.kind() == "call")?;
+
+    // Check that function is an attribute ending with "route"
+    let func = call_node.child_by_field_name("function")?;
+    if func.kind() != "attribute" {
+        return None;
+    }
+    let mut attr_cursor = func.walk();
+    let last_id = func.children(&mut attr_cursor)
+        .filter(|c| c.kind() == "identifier")
+        .last()
+        .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string())?;
+    if last_id != "route" {
+        return None;
+    }
+
+    // Extract path from first string argument
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut args_cursor = args.walk();
+    let mut path = String::new();
+    let mut methods: Vec<String> = vec!["GET".into()]; // default Flask method
+
+    for child in args.children(&mut args_cursor) {
+        if child.kind() == "string" && path.is_empty() {
+            path = child.utf8_text(source.as_bytes()).unwrap_or("")
+                .trim_matches(&['\'', '"', 'r', 'b'][..]).to_string();
+        }
+        // Look for methods=["GET", "POST"] keyword
+        if child.kind() == "keyword_argument" {
+            let kw_text = child.utf8_text(source.as_bytes()).unwrap_or("");
+            if kw_text.starts_with("methods=") {
+                // Extract method names from the list
+                let mut kw_cursor = child.walk();
+                for kw_child in child.children(&mut kw_cursor) {
+                    if kw_child.kind() == "string" {
+                        let m = kw_child.utf8_text(source.as_bytes()).unwrap_or("")
+                            .trim_matches(&['\'', '"'][..]).to_uppercase();
+                        if !m.is_empty() && m != "METHODS" {
+                            if methods.len() == 1 && methods[0] == "GET" { methods.clear(); }
+                            methods.push(m);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !path.is_empty() {
+        let method = methods.join(",");
+        Some((method, path))
+    } else {
+        None
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Rails — config/routes.rb DSL
+// ═══════════════════════════════════════════════════════════════
+
+fn is_rails_file(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".rb") && (lower.contains("routes") || lower.contains("route"))
+}
+
+/// Detect Rails routes.rb DSL: `get '/path', to: 'controller#action'`
+/// Also: `resources :users`, `namespace :admin do ... end`
+fn detect_rails_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_ruby::LANGUAGE.into()).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return result,
+    };
+
+    let http_methods: HashSet<&str> = [
+        "get", "post", "put", "patch", "delete", "head", "options",
+        "match", "resources", "resource", "root", "namespace", "scope",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        // Rails routes are call nodes: `get '/path'` or `get '/path', to: 'controller#action'`
+        if node.kind() == "call" || node.kind() == "method_call" {
+            if let Some((method, path, handler)) = extract_rails_route(&node, source, &http_methods) {
+                let line = node.start_position().row + 1;
+                result.push((method, path, handler, file.to_string(), line));
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    result
+}
+
+fn extract_rails_route(
+    node: &tree_sitter::Node,
+    source: &str,
+    http_methods: &HashSet<&str>,
+) -> Option<(String, String, String)> {
+    // Get the first identifier (HTTP method)
+    let mut node_cursor = node.walk();
+    let method = node.children(&mut node_cursor)
+        .find(|c| c.kind() == "identifier")
+        .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_lowercase())?;
+
+    if !http_methods.contains(method.as_str()) {
+        return None;
+    }
+
+    // Find first string (route path) — recursively search children
+    let path = find_first_string(node, source)?;
+
+    // Find handler (to: 'controller#action')
+    let handler = if method == "resources" || method == "resource" {
+        format!("{}Controller", capitalize_first(&path))
+    } else if method == "namespace" || method == "scope" {
+        String::new()
+    } else {
+        find_rails_handler(node, source).unwrap_or_default()
+    };
+
+    let method_upper = method.to_uppercase();
+    if handler.is_empty() {
+        Some((method_upper, path, String::new()))
+    } else {
+        Some((method_upper, path, handler))
+    }
+}
+
+/// Find first string-or-symbol content recursively in a node tree.
+fn find_first_string(node: &tree_sitter::Node, source: &str) -> Option<String> {
+    if node.kind() == "string_content" {
+        let raw = node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+        if !raw.is_empty() { return Some(raw); }
+    }
+    if node.kind() == "string" {
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            if child.kind() == "string_content" {
+                let raw = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                if !raw.is_empty() { return Some(raw); }
+            }
+        }
+        let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
+        let cleaned = raw.trim_matches(&['\'', '"'][..]).to_string();
+        if !cleaned.is_empty() { return Some(cleaned); }
+    }
+    // Ruby symbols: :articles, :users
+    if node.kind() == "simple_symbol" || node.kind() == "symbol" {
+        let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
+        let cleaned = raw.trim_start_matches(':').to_string();
+        if !cleaned.is_empty() { return Some(cleaned); }
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        if let Some(s) = find_first_string(&child, source) {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// Find `controller#action` handler in a Rails route call node.
+fn find_rails_handler(node: &tree_sitter::Node, source: &str) -> Option<String> {
+    // Recursively search for 'string_content' containing '#'
+    if node.kind() == "string_content" {
+        let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
+        if raw.contains('#') { return Some(raw.to_string()); }
+    }
+    // Also check string node text
+    if node.kind() == "string" {
+        let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
+        let cleaned = raw.trim_matches(&['\'', '"'][..]);
+        if cleaned.contains('#') { return Some(cleaned.to_string()); }
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        if let Some(h) = find_rails_handler(&child, source) {
+            return Some(h);
+        }
+    }
+    None
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Spring — @GetMapping, @PostMapping, @RequestMapping annotations
+// ═══════════════════════════════════════════════════════════════
+
+fn is_spring_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".java") || lower.ends_with(".kt")
+}
+
+/// Detect Spring `@GetMapping("/path")`, `@PostMapping`, `@RequestMapping(...)` annotations.
+fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    // Determine language
+    let is_kotlin = file.ends_with(".kt") || file.ends_with(".kts");
+    let lang: tree_sitter::Language = if is_kotlin {
+        // Kotlin tree-sitter isn't wired yet, skip
+        return result;
+    } else {
+        tree_sitter_java::LANGUAGE.into()
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&lang).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return result,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        // Spring annotations sit on method_declaration or class_declaration
+        if node.kind() == "method_declaration" || node.kind() == "class_declaration" {
+            let mut handler_name = String::new();
+            if let Some(name_node) = node.child_by_field_name("name") {
+                handler_name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+            }
+
+            // Check for Spring annotations among modifiers/annotations
+            let mut node_cursor = node.walk();
+            for child in node.children(&mut node_cursor) {
+                if child.kind() == "modifiers" || child.kind() == "annotation" {
+                    // Scan for @RequestMapping, @GetMapping, etc.
+                    find_spring_annotations(&child, source, &mut result, &handler_name, file);
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    result
+}
+
+fn find_spring_annotations(
+    node: &tree_sitter::Node,
+    source: &str,
+    result: &mut Vec<DetectedRoute>,
+    handler_name: &str,
+    file: &str,
+) {
+    let spring_annotations: HashSet<&str> = [
+        "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
+        "DeleteMapping", "PatchMapping",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let mut cursor = node.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = node.children(&mut cursor).collect();
+
+    while let Some(child) = stack.pop() {
+        if child.kind() == "annotation" || child.kind() == "marker_annotation" {
+            // Extract annotation name
+            let mut ac = child.walk();
+            for ac_child in child.children(&mut ac) {
+                if ac_child.kind() == "identifier" {
+                    let name = ac_child.utf8_text(source.as_bytes()).unwrap_or("");
+                    if spring_annotations.contains(name) {
+                        // Map annotation name to HTTP method
+                        let method = match name {
+                            "GetMapping" => "GET",
+                            "PostMapping" => "POST",
+                            "PutMapping" => "PUT",
+                            "DeleteMapping" => "DELETE",
+                            "PatchMapping" => "PATCH",
+                            _ => "ALL",
+                        };
+                        // Find path string in annotation arguments
+                        let path = extract_spring_path(&child, source)
+                            .unwrap_or_else(|| "/".to_string());
+                        let line = child.start_position().row + 1;
+                        result.push((
+                            method.to_string(),
+                            path,
+                            handler_name.to_string(),
+                            file.to_string(),
+                            line,
+                        ));
+                    }
+                }
+            }
+        }
+        let mut cc = child.walk();
+        let children: Vec<_> = child.children(&mut cc).collect();
+        for c in children.into_iter().rev() {
+            stack.push(c);
+        }
+    }
+}
+
+fn extract_spring_path(annotation: &tree_sitter::Node, source: &str) -> Option<String> {
+    let mut cursor = annotation.walk();
+    for child in annotation.children(&mut cursor) {
+        if child.kind() == "annotation_argument_list" || child.kind() == "argument_list" {
+            let mut ac = child.walk();
+            for arg in child.children(&mut ac) {
+                if arg.kind() == "string_literal" || arg.kind() == "string" {
+                    return Some(arg.utf8_text(source.as_bytes()).unwrap_or("")
+                        .trim_matches(&['\'', '"'][..]).to_string());
+                }
+                // annotation_member: value = "/path"
+                if arg.kind() == "annotation_member" || arg.kind() == "element_value_pair" {
+                    let mut mc = arg.walk();
+                    for mchild in arg.children(&mut mc) {
+                        if mchild.kind() == "string_literal" || mchild.kind() == "string" {
+                            return Some(mchild.utf8_text(source.as_bytes()).unwrap_or("")
+                                .trim_matches(&['\'', '"'][..]).to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Route injection into graph
 // ═══════════════════════════════════════════════════════════════
 
@@ -795,6 +1235,110 @@ def plain_function():
         assert!(is_fastapi_candidate("routers/users.py"));
         assert!(!is_fastapi_candidate("main.js"));
         assert!(!is_fastapi_candidate("urls.ts"));
+    }
+
+    // ── Flask tests ──
+
+    #[test]
+    fn test_detect_flask_route() {
+        let source = r#"
+from flask import Flask
+app = Flask(__name__)
+
+@app.route("/api/users", methods=["GET", "POST"])
+def users():
+    return {"users": []}
+"#;
+        let routes = detect_flask_routes("app.py", source);
+        assert!(!routes.is_empty(), "Should detect @app.route decorator");
+        assert_eq!(routes[0].1, "/api/users");
+        assert_eq!(routes[0].2, "users");
+    }
+
+    #[test]
+    fn test_detect_flask_simple_route() {
+        let source = r#"
+@app.route("/health")
+def health():
+    return "ok"
+"#;
+        let routes = detect_flask_routes("app.py", source);
+        assert!(!routes.is_empty(), "Should detect simple @app.route");
+        assert_eq!(routes[0].1, "/health");
+        // Default method is GET
+        assert!(routes[0].0.contains("GET"));
+    }
+
+    // ── Rails tests ──
+
+    #[test]
+    fn test_detect_rails_get() {
+        let source = r#"
+Rails.application.routes.draw do
+  get '/users', to: 'users#index'
+  post '/users', to: 'users#create'
+end
+"#;
+        let routes = detect_rails_routes("config/routes.rb", source);
+        assert!(!routes.is_empty(), "Should detect Rails routes");
+    }
+
+    #[test]
+    fn test_detect_rails_resources() {
+        let source = r#"
+Rails.application.routes.draw do
+  resources :articles
+end
+"#;
+        let routes = detect_rails_routes("routes.rb", source);
+        assert!(!routes.is_empty(), "Should detect resources");
+    }
+
+    #[test]
+    fn test_is_rails_file() {
+        assert!(is_rails_file("config/routes.rb"));
+        assert!(is_rails_file("routes.rb"));
+        assert!(!is_rails_file("app/models/user.rb"));
+    }
+
+    // ── Spring tests ──
+
+    #[test]
+    fn test_detect_spring_get_mapping() {
+        let source = r#"
+@RestController
+public class UserController {
+    @GetMapping("/api/users")
+    public List<User> getUsers() {
+        return List.of();
+    }
+}
+"#;
+        let routes = detect_spring_routes("UserController.java", source);
+        assert!(!routes.is_empty(), "Should detect @GetMapping");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+    }
+
+    #[test]
+    fn test_detect_spring_request_mapping() {
+        let source = r#"
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+    @PostMapping("/create")
+    public Order create() { return null; }
+}
+"#;
+        let routes = detect_spring_routes("OrderController.java", source);
+        assert!(!routes.is_empty(), "Should detect Spring annotations");
+    }
+
+    #[test]
+    fn test_is_spring_candidate() {
+        assert!(is_spring_candidate("UserController.java"));
+        assert!(is_spring_candidate("Service.kt"));
+        assert!(!is_spring_candidate("main.py"));
     }
 
 }
