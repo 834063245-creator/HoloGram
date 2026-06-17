@@ -6,6 +6,7 @@ pub mod graph_stats;
 pub mod dataflow;
 pub mod threading;
 pub mod blindspots;
+pub mod explore;
 
 pub use coupling::compute_coupling;
 pub use fragility::fragile_nodes;
@@ -15,3 +16,4 @@ pub use graph_stats::graph_summary;
 pub use dataflow::classify_cycles;
 pub use threading::thread_conflict_report;
 pub use blindspots::find_blindspots;
+pub use explore::explore;

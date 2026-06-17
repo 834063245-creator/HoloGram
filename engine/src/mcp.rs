@@ -99,6 +99,8 @@ fn tool_definitions() -> Vec<Value> {
         // ── V3+ parity (5) ──
         tool_def("hologram_search", "Fuzzy search for nodes by name or ID.",
             &[("query", "string", "Partial name or ID to search for"), ("limit", "integer", "Max results (default 20)")], &["query"]),
+        tool_def("hologram_explore", "Unified query: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts. Takes symbol names (agent's LLM extracts from NL), returns everything in one response.",
+            &[("symbols", "array", "List of symbol names to explore"), ("includeSource", "boolean", "Include source code sections (default true)")], &["symbols"]),
         tool_def("hologram_graph_summary", "Get a high-level summary of the current dependency graph.",
             &[], &[]),
         tool_def("hologram_community_report", "Report on community/cluster structure in the codebase.",
@@ -285,6 +287,7 @@ impl McpServer {
             "hologram_blindspots" => self.tool_blindspots(&args, id),
             "hologram_preflight" => self.tool_preflight(&args, id),
             "hologram_search" => self.tool_search(&args, id),
+            "hologram_explore" => self.tool_explore(&args, id),
             "hologram_graph_summary" => self.tool_graph_summary(&args, id),
             "hologram_community_report" => self.tool_community_report(&args, id),
             "hologram_diff" => self.tool_diff(&args, id),
@@ -673,6 +676,32 @@ impl McpServer {
         })
     }
 
+    fn tool_explore(&self, args: &Value, id: &Value) -> Value {
+        let symbols: Vec<String> = args.get("symbols")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if symbols.is_empty() {
+            return McpServer::error_response(id, -32602, "symbols array is required");
+        }
+        let include_source = args.get("includeSource")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        // Need both graph and project_root — can't use with_graph
+        let project_root = self.project_root();
+        match CACHED_GRAPH.lock() {
+            Ok(guard) => match guard.as_ref() {
+                Some(g) => {
+                    let result = explore(g, &project_root, &symbols, include_source);
+                    McpServer::tool_result(id, result)
+                }
+                None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
+            },
+            Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
+        }
+    }
+
     fn tool_graph_summary(&self, args: &Value, id: &Value) -> Value {
         let _ = args;
         self.with_graph(id, |g| {
@@ -1058,7 +1087,7 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 22, "22 tools defined");
+        assert_eq!(tools.len(), 23, "23 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"hologram_neighbors"));
@@ -1451,5 +1480,82 @@ mod tests {
         let data: Value = serde_json::from_str(text).unwrap();
         assert!(data["dry_run"].as_bool().unwrap());
         assert_eq!(data["matched_count"], 1);
+    }
+
+    // ── Tool: explore ──
+
+    #[test]
+    fn test_explore_missing_symbols() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+            json!({}), 31)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_explore_with_symbols() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+            json!({"symbols": ["mod_a", "mod_b"]}), 32)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+
+        // Flow should exist between mod_a and mod_b
+        assert!(data["flow"]["path"].is_array(), "Flow path should be an array");
+
+        // Relationships should have calls
+        assert!(data["relationships"]["calls"].is_array(), "Should have calls relationship");
+
+        // Blast radius should be present
+        assert!(data["blastRadius"]["dependents"].is_array());
+
+        // Architecture alerts should be present (may be empty object)
+        assert!(data["architectureAlerts"].is_object());
+
+        // Node IDs for 3D linkage
+        assert!(data["nodeIds"].is_array());
+
+        // Meta
+        assert!(data["meta"]["totalSymbolsFound"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_explore_single_symbol() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+            json!({"symbols": ["mod_a"]}), 33)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+
+        // Flow should be null with only 1 symbol
+        assert_eq!(data["flow"], json!(null));
+
+        // But other sections should still work
+        assert!(data["nodeIds"].is_array());
+    }
+
+    #[test]
+    fn test_explore_no_source() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+            json!({"symbols": ["mod_a", "mod_b"], "includeSource": false}), 34)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+
+        // Source code should be empty
+        let source = data["sourceCode"].as_array().unwrap();
+        assert!(source.is_empty(), "sourceCode should be empty when includeSource=false");
     }
 }

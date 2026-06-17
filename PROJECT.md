@@ -1,6 +1,6 @@
 # PROJECT.md — 全息观测站 · 唯一真相源
 
-> **最后更新：2026-06-17 · 敌对审查26缺陷全扫 · 序列化补齐 · 传参修复 · 并发加固**
+> **最后更新：2026-06-17 · explore聚合工具上线 · 敌对审查26缺陷全扫 · 序列化补齐 · 传参修复 · 并发加固**
 
 ---
 
@@ -16,6 +16,7 @@
 | **焦点上下文** | `chat.ts` + `main.ts` | 监听 `highlight:file`/`navigate:file`/`graph:node-clicked` → 发送消息时注入 `[用户当前正在查看 xxx]` 前缀 |
 | **模式切换** | `settings.ts` + `chat.ts` + `main.ts` | 四种Agent模式：通用(0.7/50步) / 编码(0.3/80步) / 架构(0.5/60步) / 极速(0.2/25步)，聊天框底部badge+popup，保存触发重初始化 |
 | **变更(diff)修复** | `engine/main.rs` + `main.rs`(Tauri) + `mcp.rs` | 三层全修：引擎 `Graph::new()` 占位→真实文件IO(首次自动创建hologram_before.json基线)，Tauri handler不再丢弃参数，MCP工具同步 |
+| **Explore 聚合查询** | `engine/src/analysis/explore.rs` + `mcp.rs` | `hologram_explore` — 一次返回 Flow + Blast Radius + Relationships + Source Code + Architecture Alerts，Agent 日常首选 |
 | **文件树实时更新** | `file-tree.ts` + `main.ts` | 监听 `workspace:files-changed` 事件，1.5s防抖自动刷新 |
 | **文件树按钮反馈** | `file-tree.ts` + `index.html` | `.ft-header-btn` hover蓝底+active缩放+transition，刷新按钮旋转180°动画 |
 | **权限卡片键盘修复** | `chat.ts` | 键盘快捷键绕过DOM更新→`resolvePermCard()`统一路径 |
@@ -26,10 +27,10 @@
 **Agent 工具：46 个**（45 + agent_spawn）
 
 ```
-── 图查询 (24) ──
+── 图查询 (25) ──
 hologram_analyze/neighbors/impact/path/diff/fragile/cycle/coupling_report
 blindspots/thread_conflicts/timeline/community_report/graph_summary
-history/community/delayed/changes/search/hotspots
+history/community/delayed/changes/search/explore/hotspots
 run_check/run_preflight/run_health/gate_check/workspace_conflict/rename
 ── 编码 (17) ──
 write_file/edit_file/read_file_content/search_code/list_directory
@@ -51,8 +52,8 @@ agent_spawn
 
 | 迁移项 | Python | Rust | 状态 |
 |---|---|---|---|
-| MCP 协议层 | `mcp_server.py` (1,231 行) | `engine/src/mcp.rs` (570 行) | ✅ |
-| 21 个 MCP 工具 | `mcp_server.py` 内联 | `mcp.rs` 工具分发 | ✅ |
+| MCP 协议层 | `mcp_server.py` (1,231 行) | `engine/src/mcp.rs` (~1,400 行) | ✅ |
+| 22 个 MCP 工具 | `mcp_server.py` 内联 | `mcp.rs` 工具分发 + `explore.rs` 聚合查询 | ✅ |
 | 全量分析 | `python -m src_python analyze` | `EngineClient.send("analyze:")` | ✅ |
 | 轻量图生成 | 400 行 Python AST 扫描 | `EngineClient` (Rust 4s vs Python 10-30s) | ✅ |
 | 后台分析 | `python -m src_python analyze` 子进程轮询 | Rust 后台线程 + EngineClient | ✅ |
@@ -182,7 +183,7 @@ GraphMerger 死代码、_sanitize_for_json 双重清理、PipelineReport.sources
 | `src_python/routing/signals.py` | `engine/src/routing/signals.rs` |
 | `src_python/routing/constraints.py` | `engine/src/routing/constraints.rs` |
 | `src_python/routing/summary.py` | `engine/src/routing/summary.rs` |
-| 无 | `engine/src/analysis/` — fragility, cycles, coupling_report, graph_stats, dataflow, threading, blindspots |
+| 无 | `engine/src/analysis/` — fragility, cycles, coupling_report, graph_stats, dataflow, threading, blindspots, explore |
 | `src_python/timeline.py` | `engine/src/timeline.rs` |
 
 **v3 Python 引擎状态：** 已完全退役。`src_python/` 目录可安全归档。所有 Tauri 命令、MCP 工具、分析管线均走 Rust 引擎。
