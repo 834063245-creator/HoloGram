@@ -759,6 +759,10 @@
     #status .right { display: flex; gap: 16px; }
     #status .warn { color: var(--fail); }
     #status .caution { color: var(--warn); }
+    #status-git { color: var(--sol); cursor: pointer; transition: color var(--snap); }
+    #status-git:hover { color: var(--sol-bright); }
+    #status-git.clean { color: var(--pass); }
+    .status-sep { color: rgba(60,90,140,0.3); user-select: none; }
 
     /* ═══════════════════════════════════════════════════════════════
        WELCOME — empty state
@@ -3080,6 +3084,8 @@
     <span class="left" id="status-text">◈ STATUS NOMINAL · 就绪</span>
     <span class="right">
       <span id="status-nodes"></span>
+      <span class="status-sep">|</span>
+      <span id="status-git"></span>
       <span id="status-edges"></span>
     </span>
   </div>

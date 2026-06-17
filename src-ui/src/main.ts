@@ -83,6 +83,8 @@ function layoutViaWorker(
 const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
 const statusText = document.getElementById('status-text')!;
+const statusGit = document.getElementById('status-git')!;
+let _gitStatusTimer: ReturnType<typeof setInterval> | null = null;
 const tbPath = document.getElementById('tb-path')!;
 const btnExplorer = document.getElementById('btn-explorer') as HTMLButtonElement;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
@@ -278,6 +280,7 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
     // ── 渲染 ──
     starGraph.render(graph);
     showGraphView(folder);
+    startGitIndicator();
     setModeButtonsEnabled(true);
     statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
     log.info('main', 'project loaded', {
@@ -1561,6 +1564,7 @@ async function init(): Promise<void> {
       setModeButtonsEnabled(true);
       statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
       showGraphView(root);
+      startGitIndicator();
       setLoading(false);
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       // Agent 初始化（异步，不阻塞图的显示）
@@ -1580,5 +1584,40 @@ async function init(): Promise<void> {
   welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
   setupAgent().catch(() => {});
 }
+
+// ── Git status bar indicator ──────────────────────────────
+
+function updateGitIndicator(): void {
+  if (!currentPath) { statusGit.textContent = ''; return; }
+  invoke<string>('git_status', { path: currentPath }).then(raw => {
+    const status = JSON.parse(raw) as { files?: Array<{ status: string; staged: boolean }> };
+    const files = status.files || [];
+    const stagedCount = files.filter(f => f.staged).length;
+    const totalCount = files.length;
+    if (totalCount === 0) {
+      statusGit.textContent = '✓ 干净';
+      statusGit.className = 'clean';
+    } else {
+      statusGit.textContent = `⬤ ${totalCount} 文件${stagedCount > 0 ? ` (${stagedCount} 已暂存)` : ''}`;
+      statusGit.className = '';
+    }
+  }).catch(() => { statusGit.textContent = ''; });
+}
+
+function startGitIndicator(): void {
+  if (_gitStatusTimer) clearInterval(_gitStatusTimer);
+  updateGitIndicator();
+  _gitStatusTimer = setInterval(updateGitIndicator, 3000);
+  // Also refresh when file watcher detects changes
+  bus.on('workspace:files-changed', () => updateGitIndicator());
+}
+
+// 点击 git 状态指示器 → 打开 Git 面板
+statusGit.addEventListener('click', () => {
+  if (!GitPanel.get().isOpen() && currentPath) GitPanel.get().load(currentPath);
+  else GitPanel.get().toggle();
+});
+statusGit.style.cursor = 'pointer';
+statusGit.title = '点击打开源代码管理';
 
 init();
