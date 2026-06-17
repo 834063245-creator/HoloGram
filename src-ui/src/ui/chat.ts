@@ -75,6 +75,19 @@ export class ChatPanel {
   private onOpenSettings: (() => void) | null = null;
   private _onModeChange: (() => void) | null = null;
   private footerClickCleanup: (() => void) | null = null;
+  private lastAgentDiag = '';
+
+  private hintText(): string {
+    const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
+    return this.lastAgentDiag ? `${base}\n\n诊断: ${this.lastAgentDiag}` : base;
+  }
+
+  private refreshHint(): void {
+    const hint = document.getElementById('chat-hint');
+    if (hint && !this.agent) {
+      hint.textContent = this.hintText();
+    }
+  }
 
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
   setOnModeChange(fn: () => void): void { this._onModeChange = fn; }
@@ -111,6 +124,13 @@ export class ChatPanel {
         e.preventDefault();
         e.stopPropagation();
         this.resolvePermCard({ allow: true, remember: true });
+      }
+    });
+    // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
+    bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
+      this.lastAgentDiag = d.text;
+      if (!d.ready && this.openState) {
+        this.refreshHint();
       }
     });
   }
@@ -256,7 +276,8 @@ export class ChatPanel {
 
   private async createNewSession(): Promise<void> {
     if (!this.agentFactory) {
-      this.addNotice('请先配置 API Key（设置 → Provider）', 'info');
+      const extra = this.lastAgentDiag ? `\n诊断: ${this.lastAgentDiag}` : '';
+      this.addNotice(`请先配置 API Key（设置 → Provider）${extra}`, 'info');
       return;
     }
     const newAgent = await this.agentFactory();
@@ -479,7 +500,11 @@ export class ChatPanel {
 
   /** Load a saved session from disk into a new tab. */
   async loadSessionFromDisk(projectPath: string, sessionId: number): Promise<void> {
-    if (!this.agentFactory) { this.addNotice('请先配置 API Key', 'error'); return; }
+    if (!this.agentFactory) {
+      const extra = this.lastAgentDiag ? `\n诊断: ${this.lastAgentDiag}` : '';
+      this.addNotice(`请先配置 API Key${extra}`, 'error');
+      return;
+    }
 
     let data: any;
     try {
@@ -881,9 +906,10 @@ export class ChatPanel {
     // Welcome hint
     const hint = document.createElement('div');
     hint.className = 'chat-hint';
+    hint.id = 'chat-hint';
     hint.textContent = this.agent
       ? '向我提问代码库的问题，或直接聊天'
-      : '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
+      : this.hintText();
     this.msgList.appendChild(hint);
 
     // Input area
@@ -1009,7 +1035,8 @@ export class ChatPanel {
     if (!text || this.running) return;
 
     if (!this.agent) {
-      this.addNotice('Agent 未就绪 — 请先配置 API Key 或等待项目加载', 'error');
+      const extra = this.lastAgentDiag ? `\n${this.lastAgentDiag}` : '';
+      this.addNotice(`Agent 未就绪 — 请先配置 API Key 或等待项目加载${extra}`, 'error');
       return;
     }
 

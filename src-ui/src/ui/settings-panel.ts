@@ -2,7 +2,7 @@
 // Provider | Agent | 显示 三个标签页
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化
 
-import { loadSettings, saveSettings, updateProvider } from '../settings';
+import { loadSettings, saveSettings, persistSecrets, updateProvider } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
 import { setLang } from '../i18n';
 import type { Lang } from '../i18n';
@@ -532,6 +532,16 @@ export class SettingsPanel {
 
     // Save to localStorage
     saveSettings(s);
+    // Also persist API keys to system encrypted storage (DPAPI)
+    persistSecrets(s).catch(() => {});
+    const rawLS2 = (typeof localStorage !== 'undefined') ? localStorage.getItem('hologram_settings') : null;
+    let verifyLen = '?';
+    if (rawLS2) {
+      try { const p2 = JSON.parse(rawLS2); const ap = p2.providers?.find((pp:any) => pp.name === active.name); verifyLen = String((ap?.apiKey || '').length); } catch { verifyLen = 'parseErr'; }
+    }
+    console.error('[DIAG] saved. verify localStorage keyLen=', verifyLen);
+    const st = document.getElementById('status-text');
+    if (st) st.textContent = `[settings] saved, ls verify=${verifyLen}`;
     setLang(s.display.language);
     bus.emit('lang:changed', { lang: s.display.language });
     this.originalSettings = JSON.parse(JSON.stringify(s));
