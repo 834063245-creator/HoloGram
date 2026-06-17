@@ -2,9 +2,9 @@
 //! into HoloGram's Rust engine. Detects web framework routes and creates
 //! route nodes in the dependency graph, linking URLs to their handlers.
 //!
-//! Currently supports: Django, Express, FastAPI, Flask, Rails, Spring
+//! Currently supports: Django, Express, FastAPI, Flask, Rails, Spring, Gin, NestJS
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
@@ -38,6 +38,7 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
             if is_django_url_file(&rel_str) || is_express_file(&rel_str)
                 || is_fastapi_candidate(&rel_str) || is_flask_candidate(&rel_str)
                 || is_rails_file(&rel_str) || is_spring_candidate(&rel_str)
+                || is_gin_candidate(&rel_str) || is_nestjs_candidate(&rel_str)
             {
                 files.insert(rel_str);
             }
@@ -71,6 +72,20 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
                     || source.contains("@PostMapping")
                 {
                     let routes = detect_spring_routes(file, &source);
+                    added += inject_routes(graph, &routes);
+                }
+            } else if is_gin_candidate(file) {
+                if source.contains(".GET(") || source.contains(".POST(")
+                    || source.contains(".Use(") || source.contains(".Group(")
+                {
+                    let routes = detect_gin_routes(file, &source);
+                    added += inject_routes(graph, &routes);
+                }
+            } else if is_nestjs_candidate(file) {
+                if source.contains("@Controller") || source.contains("@Get")
+                    || source.contains("@Post")
+                {
+                    let routes = detect_nestjs_routes(file, &source);
                     added += inject_routes(graph, &routes);
                 }
             }
@@ -917,6 +932,282 @@ fn extract_spring_path(annotation: &tree_sitter::Node, source: &str) -> Option<S
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Gin — Go web framework: r.GET("/path", handler)
+// ═══════════════════════════════════════════════════════════════
+
+fn is_gin_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".go")
+}
+
+fn detect_gin_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_go::LANGUAGE.into()).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return result,
+    };
+
+    let http_methods: HashSet<&str> = [
+        "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
+        "Use", "Group", "Handle",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        // Gin routes are selector_expression calls: r.GET("/path", handler)
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                if func.kind() == "selector_expression" {
+                    // selector_expression: r.GET → field "GET"
+                    let mut sel_cursor = func.walk();
+                    let method = match func.children(&mut sel_cursor)
+                        .find(|c| c.kind() == "field_identifier")
+                        .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string()) {
+                            Some(m) => m,
+                            None => continue,
+                        };
+
+                    if http_methods.contains(method.as_str()) {
+                        if let Some(args) = node.child_by_field_name("arguments") {
+                            let line = node.start_position().row + 1;
+                            if let Some((m, path, handler)) = extract_gin_route(&args, &method, source) {
+                                result.push((m, path, handler, file.to_string(), line));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    result
+}
+
+fn extract_gin_route(
+    args: &tree_sitter::Node,
+    method: &str,
+    source: &str,
+) -> Option<(String, String, String)> {
+    let mut args_cursor = args.walk();
+    let arg_children: Vec<_> = args.children(&mut args_cursor).collect();
+
+    let mut path = String::new();
+    let mut handler = String::new();
+    let mut found_path = false;
+
+    for ac in &arg_children {
+        let kind = ac.kind();
+        let text = ac.utf8_text(source.as_bytes()).unwrap_or("");
+
+        if (kind == "interpreted_string_literal" || kind == "raw_string_literal") && !found_path {
+            path = text.trim_matches(&['"', '`'][..]).to_string();
+            found_path = true;
+            continue;
+        }
+
+        if found_path && kind != "," && kind != "(" && kind != ")" {
+            handler = text.to_string();
+            break;
+        }
+    }
+
+    if !path.is_empty() {
+        Some((method.to_string(), path, handler))
+    } else {
+        None
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NestJS — @Controller('prefix') + @Get('path') decorators
+// ═══════════════════════════════════════════════════════════════
+
+fn is_nestjs_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".ts") || lower.ends_with(".tsx")
+}
+
+fn detect_nestjs_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return result,
+    };
+
+    // NestJS decorators and their decorated members are SIBLINGS inside class_body,
+    // unlike Python where decorator+definition form a single node.
+    // Strategy: walk class_body children sequentially, pairing decorator → method_definition.
+
+    let mut controller_prefixes: HashMap<usize, String> = HashMap::new();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        // Capture @Controller prefix per class
+        if node.kind() == "class_declaration" {
+            let start = node.start_byte();
+            let mut class_prefix = String::new();
+            let mut nc = node.walk();
+            for child in node.children(&mut nc) {
+                if child.kind() == "decorator" {
+                    if let Some(prefix) = extract_nestjs_controller_prefix(&child, source) {
+                        class_prefix = prefix;
+                    }
+                }
+            }
+            controller_prefixes.insert(start, class_prefix);
+        }
+
+        // class_body: decorator + method_definition are siblings — pair them
+        if node.kind() == "class_body" {
+            let parent_prefix = find_parent_controller_prefix(&node, &controller_prefixes);
+
+            let mut nc = node.walk();
+            let siblings: Vec<_> = node.children(&mut nc).collect();
+            let mut pending_decorator: Option<(String, String)> = None; // (method, sub_path)
+
+            for sib in &siblings {
+                if sib.kind() == "decorator" {
+                    pending_decorator = extract_nestjs_method_decorator(sib, source);
+                } else if sib.kind() == "method_definition" || sib.kind() == "public_field_definition" {
+                    let handler_name = sib.child_by_field_name("name")
+                        .map(|n| n.utf8_text(source.as_bytes()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+
+                    if let Some((method, sub_path)) = pending_decorator.take() {
+                        let full_path = format!("{}/{}", parent_prefix.trim_matches('/'), sub_path.trim_matches('/'));
+                        let full_path = full_path.trim_matches('/').to_string();
+                        let line = sib.start_position().row + 1;
+                        result.push((method, format!("/{}", full_path), handler_name, file.to_string(), line));
+                    }
+                }
+            }
+            continue; // class_body children are already processed
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    result
+}
+
+fn find_parent_controller_prefix(
+    node: &tree_sitter::Node,
+    prefixes: &HashMap<usize, String>,
+) -> String {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "class_declaration" {
+            if let Some(prefix) = prefixes.get(&p.start_byte()) {
+                return prefix.clone();
+            }
+        }
+        cur = p.parent();
+    }
+    String::new()
+}
+
+fn extract_nestjs_controller_prefix(decorator: &tree_sitter::Node, source: &str) -> Option<String> {
+    let mut dc = decorator.walk();
+    for child in decorator.children(&mut dc) {
+        if child.kind() == "call_expression" {
+            // @Controller('prefix') — identifier is a direct child, not a field
+            let name = find_callee_name(&child, source);
+            if name == Some("Controller".to_string()) {
+                if let Some(args) = child.child_by_field_name("arguments") {
+                    let mut ac = args.walk();
+                    for arg in args.children(&mut ac) {
+                        if arg.kind() == "string" {
+                            return Some(arg.utf8_text(source.as_bytes()).unwrap_or("")
+                                .trim_matches(&['\'', '"', '`'][..]).to_string());
+                        }
+                    }
+                }
+                return Some(String::new()); // @Controller() without prefix
+            }
+        }
+    }
+    None
+}
+
+/// Find the callee name in a call_expression — looks for identifier child (TS) or
+/// `function` field (Python/Java).
+fn find_callee_name(call: &tree_sitter::Node, source: &str) -> Option<String> {
+    // Try field name first
+    if let Some(func) = call.child_by_field_name("function") {
+        if func.kind() == "identifier" || func.kind() == "property_identifier" {
+            return Some(func.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+        }
+    }
+    // Fallback: find identifier among direct children
+    let mut cc = call.walk();
+    for child in call.children(&mut cc) {
+        if child.kind() == "identifier" || child.kind() == "property_identifier" {
+            return Some(child.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+        }
+    }
+    None
+}
+
+fn extract_nestjs_method_decorator(decorator: &tree_sitter::Node, source: &str) -> Option<(String, String)> {
+    let methods: HashMap<&str, &str> = [
+        ("Get", "GET"), ("Post", "POST"), ("Put", "PUT"), ("Delete", "DELETE"),
+        ("Patch", "PATCH"), ("Head", "HEAD"), ("Options", "OPTIONS"), ("All", "ALL"),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let mut dc = decorator.walk();
+    for child in decorator.children(&mut dc) {
+        if child.kind() == "call_expression" {
+            let name = find_callee_name(&child, source)?;
+            if let Some(http_method) = methods.get(name.as_str()) {
+                let sub_path = if let Some(args) = child.child_by_field_name("arguments") {
+                    let mut ac = args.walk();
+                    let arg_children: Vec<_> = args.children(&mut ac).collect();
+                    arg_children.iter()
+                        .find(|a| a.kind() == "string")
+                        .map(|a| a.utf8_text(source.as_bytes()).unwrap_or("")
+                            .trim_matches(&['\'', '"', '`'][..]).to_string())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                return Some((http_method.to_string(), sub_path));
+            }
+        }
+    }
+    None
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Route injection into graph
 // ═══════════════════════════════════════════════════════════════
 
@@ -1339,6 +1630,78 @@ public class OrderController {
         assert!(is_spring_candidate("UserController.java"));
         assert!(is_spring_candidate("Service.kt"));
         assert!(!is_spring_candidate("main.py"));
+    }
+
+    // ── Gin tests ──
+
+    #[test]
+    fn test_detect_gin_get() {
+        let source = r#"
+package main
+import "github.com/gin-gonic/gin"
+
+func main() {
+    r := gin.Default()
+    r.GET("/api/users", getUsers)
+}
+"#;
+        let routes = detect_gin_routes("main.go", source);
+        assert!(!routes.is_empty(), "Should detect Gin GET route");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+    }
+
+    #[test]
+    fn test_detect_gin_post() {
+        let source = r#"
+r.POST("/api/orders", createOrder)
+"#;
+        let routes = detect_gin_routes("router.go", source);
+        assert!(!routes.is_empty());
+        assert_eq!(routes[0].0, "POST");
+    }
+
+    #[test]
+    fn test_is_gin_candidate() {
+        assert!(is_gin_candidate("main.go"));
+        assert!(is_gin_candidate("router.go"));
+        assert!(!is_gin_candidate("main.py"));
+    }
+
+    // ── NestJS tests ──
+
+    #[test]
+    fn test_detect_nestjs_controller() {
+        let source = r#"
+@Controller('users')
+export class UsersController {
+    @Get()
+    findAll() { return []; }
+}
+"#;
+        let routes = detect_nestjs_routes("users.controller.ts", source);
+        assert!(!routes.is_empty(), "Should detect NestJS @Get route");
+    }
+
+    #[test]
+    fn test_detect_nestjs_post() {
+        let source = r#"
+@Controller('orders')
+export class OrdersController {
+    @Post('create')
+    create() { return {}; }
+}
+"#;
+        let routes = detect_nestjs_routes("orders.controller.ts", source);
+        assert!(!routes.is_empty());
+        assert_eq!(routes[0].0, "POST");
+    }
+
+    #[test]
+    fn test_is_nestjs_candidate() {
+        assert!(is_nestjs_candidate("users.controller.ts"));
+        assert!(is_nestjs_candidate("app.module.tsx"));
+        assert!(!is_nestjs_candidate("main.py"));
     }
 
 }
