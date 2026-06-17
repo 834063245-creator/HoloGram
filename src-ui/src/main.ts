@@ -250,14 +250,19 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
   );
 
   try {
-    // ── 加载图：MsgPack 缓存优先，未命中则走引擎 RPC ──
+    // ── 加载图：MsgPack 缓存优先，未命中或强制重分析则走引擎 RPC ──
     let graph: any;
-    try {
-      const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
-      const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
-      graph = decode(bytes) as any;
-    } catch {
-      // Fallback: call engine analyze via RPC
+    if (!forceReanalyze) {
+      try {
+        const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
+        const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
+        graph = decode(bytes) as any;
+      } catch {
+        // Fallback: call engine analyze via RPC
+        forceReanalyze = true; // trigger the re-analyze path below
+      }
+    }
+    if (forceReanalyze) {
       const json = await invoke<string>('hologram_analyze', { path: folder });
       graph = JSON.parse(json);
     }
@@ -1132,6 +1137,8 @@ async function init(): Promise<void> {
   btnCheck.addEventListener('click', () => {
     closeBottomSiblings('check');
     checkPanel.toggle();
+    // 每次打开简报面板时跑一次检查（已有 checkRunning 守卫防重复）
+    if (checkPanel.isOpen() && currentPath) runCheck();
     updateTabs();
   });
 
@@ -1533,6 +1540,11 @@ async function init(): Promise<void> {
         currentGraphData = graph;
         starGraph.render(graph);
         statusText.textContent = '⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目';
+        // Still try setting up what we can (timeline, agent may fail gracefully)
+        try { await setupAgent(); } catch (e) { console.error('[init] setupAgent failed:', e); }
+        timelinePanel.setProjectPath(null);
+        hotspotsPanel.setProjectPath(null);
+        setLoading(false);
         return;
       }
 

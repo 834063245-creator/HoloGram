@@ -228,6 +228,14 @@ const MOCK_DIFF = {
 // ── Agent tool mock responses ──
 const MOCK_TOOL_RESPONSES: Record<string, any> = {
   hologram_analyze: JSON.stringify({ nodes: MOCK_NODES.length, edges: MOCK_EDGES.length, communities: MOCK_COMMUNITIES.length }),
+  hologram_explore: JSON.stringify({
+    query: 'explore result',
+    flow: { path: ['router', 'middleware', 'auth', 'database'], depth: 4 },
+    blast_radius: { affected_nodes: 7, files: ['middleware.ts', 'auth.ts', 'cache.ts'], risk: 'medium' },
+    relationships: { direct_deps: 5, indirect_deps: 12, coupling_score: 0.45 },
+    source_code: '// See read_file_content for full source',
+    architecture_alerts: [{ severity: 'info', message: 'Standard module pattern — no anomalies detected' }],
+  }),
   hologram_neighbors: JSON.stringify({ node: "router", depth: 1, neighbors: ["request", "response", "route_parser", "server"], edge_count: 3 }),
   hologram_impact: JSON.stringify({ source: "router", max_depth: 3, reachable_count: 12, tree: { "router": ["request", "response"], "request": [], "response": ["serializer"] } }),
   hologram_path: JSON.stringify({ path: ["router", "response", "serializer"], length: 3 }),

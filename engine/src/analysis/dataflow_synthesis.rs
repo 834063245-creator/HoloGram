@@ -7,6 +7,13 @@ use std::path::Path;
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
 pub fn synthesize_dataflow_edges(graph: &mut Graph, project_root: &Path) -> usize {
+    // Guard: on large graphs (>500 source files) the per-file re-parse + O(N) lookups
+    // can take minutes. Skip synthesis — it's an enhancement, not core analysis.
+    let total_files_estimate = graph.nodes.values().filter_map(|n| n.location.as_ref()).count();
+    if total_files_estimate > 500 {
+        tracing::info!(files = total_files_estimate, "[dataflow] skipping — project too large");
+        return 0;
+    }
     let mut added = 0usize;
     let mut files: HashSet<String> = HashSet::new();
     for node in graph.nodes.values() {

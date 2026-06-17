@@ -190,11 +190,16 @@ export class Agent {
   /** Run one turn: append user input, drive the tool loop. */
   async run(signal: AbortSignal, input: string): Promise<void> {
     const turnStart = performance.now();
+    const genAtStart = this.sessionGen;
     log.info('agent', 'turn started', { model: this.prov.name() });
     this.sink({ kind: EventKind.TurnStarted });
     this.session.push({ role: 'user', content: input });
 
     for (let step = 0; this.maxSteps <= 0 || step < this.maxSteps; step++) {
+      // 每轮循环前检查中止信号与会话替换
+      if (signal.aborted) throw new Error('aborted');
+      if (this.sessionGen !== genAtStart) throw new Error('aborted');
+
       // ---- Stream ----
       const { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1);
       if (err) {
@@ -378,6 +383,7 @@ export class Agent {
     // Execute — parallel read-only, serial writers
     const batches = partitionCalls(this.tools, calls);
     for (const batch of batches) {
+      if (signal.aborted) throw new Error('aborted');
       if (batch.parallel && batch.end - batch.start > 1) {
         await Promise.all(
           calls.slice(batch.start, batch.end).map(async (call, i) => {
@@ -457,6 +463,9 @@ export class Agent {
     let result: string;
     let errMsg = '';
     try {
+      // 中止信号优先检查（必须在权限门前，防止弹窗死锁）
+      if (signal.aborted) throw new Error('aborted');
+
       // ── Permission gate ──
       if (this.gate) {
         const check = await this.gate.check(call.name, t.description(), args, t.readOnly());
@@ -469,8 +478,6 @@ export class Agent {
           };
         }
       }
-
-      if (signal.aborted) throw new Error('aborted');
       bus.emit('agent:tool-started', { toolName: call.name, args });
       const toolStart = performance.now();
       result = await t.execute(args, (chunk) => {

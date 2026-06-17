@@ -7,7 +7,7 @@ import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
-import { resolveApproval } from '../agent/permission';
+import { resolveApproval, cancelPendingApprovals } from '../agent/permission';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
 import type { Message } from '../provider/types';
@@ -182,6 +182,10 @@ export class ChatPanel {
     this.openState = false;
     this.panel.classList.remove('chat-open');
     if (this.running) this.abort();
+    // Save before closing — prevents data loss if app crashes while panel is closed
+    if (this.projectPath && this.activeIdx >= 0) {
+      this.saveActiveSession(this.projectPath).catch(() => {});
+    }
     // Dismiss any pending permission card (keyboard shortcut guard)
     if (this.activePermId) {
       this.resolvePermCard({ allow: false, remember: false });
@@ -371,7 +375,9 @@ export class ChatPanel {
     });
   }
 
-  // ── Session persistence — one file per session ──
+  // ── Session persistence — one file per session, localStorage backup ──
+
+  private lsKey(id: number): string { return `hologram_session_${id}`; }
 
   private sessionsDir(projectPath: string): string {
     return `${projectPath.replace(/\\/g, '/')}/.hologram/sessions`;
@@ -385,7 +391,8 @@ export class ChatPanel {
     return `${this.sessionsDir(projectPath)}/_active.json`;
   }
 
-  /** Save the active session to its own file. Updates _active.json tracker. */
+  /** Save the active session to its own file. Updates _active.json tracker.
+   *  Also writes a sync localStorage backup so the session survives app crash / force-close. */
   async saveActiveSession(projectPath: string): Promise<void> {
     if (!projectPath || this.activeIdx < 0) return;
     const s = this.sessions[this.activeIdx];
@@ -400,10 +407,19 @@ export class ChatPanel {
       messages: s.agent.getSession(),
     };
 
+    // 1) Sync localStorage backup — survives beforeunload timeout / process kill
+    const json = JSON.stringify(data);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(this.lsKey(s.id), json);
+      }
+    } catch { /* quota exceeded — disk write is the fallback */ }
+
+    // 2) Async disk write (atomic: tmp → rename)
     try {
       await invoke('write_file_content', {
         filePath: this.sessionFile(projectPath, s.id),
-        content: JSON.stringify(data),
+        content: json,
       });
     } catch (e) {
       console.error('[chat] saveActiveSession 失败:', e);
@@ -417,28 +433,61 @@ export class ChatPanel {
     } catch { /* non-critical */ }
   }
 
-  /** Restore the last active session on project open. */
+  /** Restore the last active session on project open.
+   *  Tries file first, falls back to localStorage (survives app crash / force-close). */
   async autoRestoreLastSession(projectPath: string): Promise<void> {
     if (!this.agentFactory || !projectPath) return;
 
+    // ── Resolve last session id ──
     let lastId = 0;
+    // 1) Tracker file
     try {
       const raw = await invoke<string>('read_file_content', { filePath: this.trackerFile(projectPath) });
       const t = JSON.parse(raw);
       lastId = t.lastId || 0;
       nextSessionId = Math.max(nextSessionId, t.nextId || 0);
-    } catch {
-      return;
+    } catch { /* tracker missing — try localStorage scan below */ }
+
+    // 2) If tracker missing, scan localStorage for newest session
+    if (!lastId && typeof localStorage !== 'undefined') {
+      let newestTs = '';
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key?.startsWith('hologram_session_')) continue;
+        try {
+          const d = JSON.parse(localStorage.getItem(key)!);
+          if (d.id && !d.deleted && d.savedAt > newestTs) {
+            newestTs = d.savedAt;
+            lastId = d.id;
+          }
+        } catch { /* skip corrupt entry */ }
+      }
+      if (lastId) nextSessionId = Math.max(nextSessionId, lastId + 1);
     }
     if (!lastId) return;
 
-    let data: any;
+    // ── Load session data (file first, localStorage fallback) ──
+    let data: any = null;
+    // 1) Try disk file
     try {
-      data = JSON.parse(await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, lastId) }));
-    } catch {
-      return;
+      const fileRaw = await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, lastId) });
+      data = JSON.parse(fileRaw);
+    } catch { /* file missing — try localStorage */ }
+
+    // 2) localStorage fallback (may be newer if beforeunload save didn't complete)
+    if (typeof localStorage !== 'undefined') {
+      const lsRaw = localStorage.getItem(this.lsKey(lastId));
+      if (lsRaw) {
+        try {
+          const lsData = JSON.parse(lsRaw);
+          // Use localStorage if file was missing OR localStorage has newer data
+          if (!data || !data.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt)) {
+            data = lsData;
+          }
+        } catch { /* corrupt localStorage entry */ }
+      }
     }
-    if (!data.messages || data.messages.length === 0) return;
+    if (!data || !data.messages || data.messages.length === 0) return;
 
     const agent = await this.agentFactory();
     if (!agent) return;
@@ -498,7 +547,7 @@ export class ChatPanel {
     return result;
   }
 
-  /** Load a saved session from disk into a new tab. */
+  /** Load a saved session from disk into a new tab. Falls back to localStorage. */
   async loadSessionFromDisk(projectPath: string, sessionId: number): Promise<void> {
     if (!this.agentFactory) {
       const extra = this.lastAgentDiag ? `\n诊断: ${this.lastAgentDiag}` : '';
@@ -507,9 +556,19 @@ export class ChatPanel {
     }
 
     let data: any;
+    // 1) Try disk file
     try {
       data = JSON.parse(await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, sessionId) }));
-    } catch {
+    } catch { /* try localStorage */ }
+
+    // 2) localStorage fallback
+    if (!data && typeof localStorage !== 'undefined') {
+      const lsRaw = localStorage.getItem(this.lsKey(sessionId));
+      if (lsRaw) {
+        try { data = JSON.parse(lsRaw); } catch { /* corrupt */ }
+      }
+    }
+    if (!data) {
       this.addNotice('会话文件读取失败', 'error');
       return;
     }
@@ -551,6 +610,10 @@ export class ChatPanel {
       this.addNotice('删除会话文件失败', 'error');
       return; // Don't close tab if write failed
     }
+    // Clean localStorage backup
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(this.lsKey(sessionId));
+    } catch { /* ignore */ }
     // If this session is open in a tab, close that tab
     const idx = this.sessions.findIndex(s => s.id === sessionId);
     if (idx >= 0) this.closeSession(idx);
@@ -990,9 +1053,14 @@ export class ChatPanel {
 
   private newSession(): void {
     if (!this.agent) return;
+    // 先中止当前运行 — abort() 已包含安全超时，不强制 running=false
+    // （强制设 false 会导致旧 run 还在执行时新消息就能发送，污染会话）
+    if (this.running) {
+      this.abort();
+    }
     // Save current messages before clearing
     if (this.activeIdx >= 0) this.saveCurrentMessages();
-    this.agent.newSession();
+    this.agent.newSession(); // 递增 sessionGen，旧 run 检测到 gen 变化自动丢弃
     // Clear message list UI
     this.msgList.innerHTML = '';
     this.addNotice('已开启新会话 — 上下文已清空', 'info');
@@ -1026,8 +1094,8 @@ export class ChatPanel {
       this.setRunning(false);
       this.abortCtrl = null;
       this.finishTurn();
+      bus.emit('chat:turn-done', {});
     });
-    bus.emit('chat:turn-done', {});
   }
 
   private async sendMessage(): Promise<void> {
@@ -1173,6 +1241,30 @@ export class ChatPanel {
   private abort(): void {
     if (this.abortCtrl) {
       this.abortCtrl.abort();
+      // 解散所有待审批弹窗（防止权限门死锁）
+      cancelPendingApprovals();
+      // 立即视觉反馈 — 不等 .finally()，防止卡死时 UI 无响应
+      this.inputArea.disabled = false;
+      this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
+      this.stopBtn.classList.add('hidden');
+      this.sendBtn.classList.remove('hidden');
+      this.addNotice('正在中止…', 'info');
+      // 安全超时：3 秒内若 Agent 没响应，强制复位
+      const safety = setTimeout(() => {
+        if (this.running) {
+          this.running = false;
+          this.abortCtrl = null;
+          this.finishTurn();
+          this.addNotice('已强制中止（超时）', 'warn');
+        }
+      }, 3000);
+      // 如果 Agent 正常响应了，取消安全超时
+      const poll = setInterval(() => {
+        if (!this.running) {
+          clearTimeout(safety);
+          clearInterval(poll);
+        }
+      }, 200);
       this.abortCtrl = null;
     }
   }

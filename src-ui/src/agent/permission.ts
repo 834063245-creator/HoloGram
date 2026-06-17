@@ -221,3 +221,11 @@ export function resolveApproval(id: string, result: { allow: boolean; remember: 
     resolve(result);
   }
 }
+
+/** Dismiss all pending permission dialogs with "deny" — called on abort/stop. */
+export function cancelPendingApprovals(): void {
+  for (const [id, resolve] of pending) {
+    pending.delete(id);
+    resolve({ allow: false, remember: false });
+  }
+}
