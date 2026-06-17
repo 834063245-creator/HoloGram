@@ -3,6 +3,7 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
 use crate::graph::Graph;
+use crate::storage::MemoryIndex;
 
 /// A community = a set of node IDs.
 pub type Community = Vec<String>;
@@ -150,12 +151,14 @@ pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
     }
 
     // ── Phase 3: convert to output format ──
+    // Pre-build idx → node_id lookup for O(1) deterministic access
+    let idx_to_id: Vec<&str> = node_ids.iter().map(|id| id.as_str()).collect();
     let mut result: Vec<Vec<String>> = community_nodes
         .values()
         .map(|nodes| {
             nodes
                 .iter()
-                .map(|&idx| graph.nodes.iter().nth(idx).unwrap().0.clone())
+                .map(|&idx| idx_to_id[idx].to_string())
                 .collect()
         })
         .collect();
@@ -166,6 +169,92 @@ pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
     // Assign community_ids to graph nodes
     // (graph is immutable here, but we return the community data)
 
+    result
+}
+
+/// Detect communities from MemoryIndex (same Louvain algorithm, MemoryIndex input).
+pub fn detect_communities_from_index(idx: &MemoryIndex, seed: u64) -> Vec<Community> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let node_ids: Vec<String> = idx.nodes_iter().map(|n| n.id.clone()).collect();
+    let n = node_ids.len();
+    if n == 0 { return vec![]; }
+    let id_to_idx: HashMap<&str, usize> = node_ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
+    let mut degrees = vec![0.0f64; n];
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+    let mut m: f64 = 0.0;
+    for (source, targets) in idx.edges_iter() {
+        if let Some(&si) = id_to_idx.get(source) {
+            for (target, _, _, _) in targets {
+                if let Some(&ti) = id_to_idx.get(target.as_str()) {
+                    let w = 1.0;
+                    adj[si].push((ti, w));
+                    adj[ti].push((si, w));
+                    degrees[si] += w;
+                    degrees[ti] += w;
+                    m += w;
+                }
+            }
+        }
+    }
+    if m == 0.0 { return node_ids.into_iter().map(|id| vec![id]).collect(); }
+    run_louvain(&node_ids, n, &adj, &degrees, m, &mut rng)
+}
+
+fn run_louvain(
+    node_ids: &[String],
+    n: usize,
+    adj: &[Vec<(usize, f64)>],
+    degrees: &[f64],
+    m: f64,
+    rng: &mut rand::rngs::StdRng,
+) -> Vec<Community> {
+    let mut communities: Vec<usize> = (0..n).collect();
+    let mut community_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n { community_nodes.entry(i).or_default().push(i); }
+    let mut improved = true;
+    let mut iter = 0;
+    let max_iter = 100;
+    while improved && iter < max_iter {
+        improved = false; iter += 1;
+        let mut order: Vec<usize> = (0..n).collect();
+        order.shuffle(rng);
+        for &i in &order {
+            let old_comm = communities[i];
+            let ki = degrees[i];
+            let mut comm_weights: HashMap<usize, f64> = HashMap::new();
+            for &(neighbor, w) in &adj[i] { *comm_weights.entry(communities[neighbor]).or_default() += w; }
+            let ki_in_old = comm_weights.get(&old_comm).copied().unwrap_or(0.0);
+            let sigma_tot_old = community_total(&community_nodes, degrees, old_comm);
+            let mut best_comm = old_comm;
+            let mut best_gain = 0.0f64;
+            for (&c, &ki_in) in &comm_weights {
+                if c == old_comm { continue; }
+                let sigma_tot_c = community_total(&community_nodes, degrees, c);
+                let gain = (ki_in - ki_in_old) / m - ki * (sigma_tot_c - (sigma_tot_old - ki)) / (2.0 * m * m);
+                if gain > best_gain { best_gain = gain; best_comm = c; }
+            }
+            let gain_isolated = -ki_in_old / m + ki * (sigma_tot_old - ki) / (2.0 * m * m);
+            if gain_isolated > best_gain && gain_isolated > 0.0 { best_gain = gain_isolated; best_comm = i; }
+            if best_comm != old_comm && best_gain > 0.0 {
+                community_nodes.get_mut(&old_comm).unwrap().retain(|&x| x != i);
+                if community_nodes.get(&old_comm).map_or(0, |v| v.len()) == 0 { community_nodes.remove(&old_comm); }
+                community_nodes.entry(best_comm).or_default().push(i);
+                communities[i] = best_comm;
+                improved = true;
+            }
+        }
+        let mut new_comm_ids: HashMap<usize, usize> = HashMap::new();
+        let mut next_id = 0;
+        for &c in community_nodes.keys() { new_comm_ids.insert(c, next_id); next_id += 1; }
+        let mut new_community_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (old_c, nodes) in &community_nodes { new_community_nodes.insert(new_comm_ids[old_c], nodes.clone()); }
+        community_nodes = new_community_nodes;
+        for i in 0..n { communities[i] = new_comm_ids[&communities[i]]; }
+    }
+    let mut result: Vec<Vec<String>> = community_nodes.values()
+        .map(|nodes| nodes.iter().map(|&idx| node_ids[idx].clone()).collect())
+        .collect();
+    result.sort_by_key(|c| -(c.len() as i64));
     result
 }
 

@@ -42,6 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut result = analyze_project(&root);
                 CrossFileResolver::resolve(&mut result.graph);
                 compute_coupling(&mut result.graph);
+                hologram_engine::analysis::detect_framework_routes(&mut result.graph, &root);
+                hologram_engine::analysis::synthesize_dynamic_edges(&mut result.graph, &root);
+                hologram_engine::analysis::synthesize_dataflow_edges(&mut result.graph, &root);
                 detect_communities(&result.graph, 42);
                 let node_count = result.graph.node_count();
                 let edge_count = result.graph.edge_count();
@@ -49,8 +52,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(store_mtx) = mcp::GRAPH_STORE.get() {
                     if let Ok(store) = store_mtx.lock() {
                         let idx = MemoryIndex::from_existing_graph(&result.graph);
+                        let ec = idx.edge_count();
                         store.swap_index(idx);
-                        let _ = store.save();
+                        if let Err(e) = store.save() {
+                            warn!("[main] GraphStore save failed: {}", e);
+                        } else {
+                            info!(edges = ec, "[main] GraphStore saved");
+                        }
                     }
                 }
                 if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
@@ -98,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let req_owned = request.to_string();
             debug!(request_len = req_owned.len(), "received request");
 
-            let response = if req_owned.starts_with("check:") {
+            let response = if req_owned.starts_with("check:") || req_owned.starts_with("preflight:") || req_owned.starts_with("health:") {
                 let req = req_owned.clone();
                 tokio::task::spawn_blocking(move || handle_check(req.trim()))
                     .await.unwrap_or_else(|_| b"{\"error\":\"check panicked\"}".to_vec())
@@ -246,10 +254,18 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     let resolved = CrossFileResolver::resolve(&mut result.graph);
     info!(edges = resolved, elapsed_secs = resolve_start.elapsed().as_secs_f64(), "cross-file resolution done");
 
-    // Post-processing: coupling depth + community detection
+    // Post-processing: coupling depth + framework routes + dynamic dispatch
     let coupling_start = std::time::Instant::now();
     compute_coupling(&mut result.graph);
     info!(elapsed_secs = coupling_start.elapsed().as_secs_f64(), "coupling computation done");
+
+    // Framework route detection (Django, Express, ...)
+    hologram_engine::analysis::detect_framework_routes(&mut result.graph, &root);
+    info!("framework routes detected");
+
+    // Dynamic dispatch synthesis (callback/observer edges)
+    hologram_engine::analysis::synthesize_dynamic_edges(&mut result.graph, &root);
+    info!("dynamic dispatch edges synthesized");
 
     let comm_start = std::time::Instant::now();
     let communities = detect_communities(&result.graph, 42);

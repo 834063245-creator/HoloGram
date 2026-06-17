@@ -145,7 +145,7 @@ impl IncrementalUpdater {
 
         // ── Validate ──
         let new_edge_count = new_index.recompute_edge_count();
-        if total_errors > 0 && (new_edge_count as f64) < (old_edge_count as f64) * 0.5 {
+        if total_errors > 0 && (new_edge_count as f64) < (old_edge_count as f64) * 0.85 {
             return Err(format!(
                 "validate failed: {} edges → {} edges ({} parse errors), rejecting swap",
                 old_edge_count, new_edge_count, total_errors
@@ -171,8 +171,8 @@ impl IncrementalUpdater {
             idx.insert_node(node.clone());
         }
         for (source, targets) in old.edges_iter() {
-            for (target, kind, depth) in targets {
-                idx.upsert_edge(source, target, *kind, *depth);
+            for (target, kind, depth, delay) in targets {
+                idx.upsert_edge(source, target, *kind, *depth, *delay);
             }
         }
         idx
@@ -348,7 +348,7 @@ impl IncrementalUpdater {
         // Find cross-file edges from the analysis where this node is the source
         for edge in &analysis.edges {
             if edge.source == node_id && edge.cross_file {
-                index.upsert_edge(&edge.source, &edge.target, edge.kind, edge.coupling_depth);
+                index.upsert_edge(&edge.source, &edge.target, edge.kind, edge.coupling_depth, edge.temporal_delay_sec);
             }
         }
     }
@@ -385,14 +385,14 @@ impl IncrementalUpdater {
                         if old_file != changed_file {
                             // This is from an unchanged file — preserve edges
                             let targets = old_index.outgoing(cid, None);
-                            for (tgt, kind, depth) in &targets {
+                            for (tgt, kind, depth, _delay) in &targets {
                                 // If target was in the changed file, re-point
                                 let tgt_node = old_index.get_node(tgt);
                                 if let Some(tn) = tgt_node {
                                     if let Some(ref tl) = tn.location {
                                         let tf = tl.rsplit_once(':').map(|(f, _)| f).unwrap_or(tl);
                                         if tf == changed_file && tn.name == name {
-                                            new_index.upsert_edge(cid, node_id, *kind, *depth);
+                                            new_index.upsert_edge(cid, node_id, *kind, *depth, None);
                                         }
                                     }
                                 }

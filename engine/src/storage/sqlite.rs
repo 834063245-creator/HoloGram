@@ -221,18 +221,19 @@ impl SqliteDb {
         Ok(nodes)
     }
 
-    /// Returns (source, target, kind, coupling_depth) tuples.
-    pub fn load_all_edges(&self) -> Result<Vec<(String, String, EdgeKind, u8)>, String> {
+    /// Returns (source, target, kind, coupling_depth, temporal_delay_sec) tuples.
+    pub fn load_all_edges(&self) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>)>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT source, target, kind, coupling_depth FROM edges")
+            .prepare("SELECT source, target, kind, coupling_depth, temporal_delay_sec FROM edges")
             .map_err(|e| format!("prepare edges: {}", e))?;
         let rows = stmt
             .query_map([], |row| {
                 let kind_str: String = row.get(2)?;
                 let kind = edge_kind_from_str(&kind_str);
                 let depth: i64 = row.get(3)?;
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, kind, depth as u8))
+                let delay: Option<f64> = row.get(4)?;
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, kind, depth as u8, delay))
             })
             .map_err(|e| format!("query edges: {}", e))?;
         let mut edges = Vec::new();
@@ -285,23 +286,24 @@ impl SqliteDb {
         Ok(())
     }
 
-    /// Batch upsert edges using (source, target, kind) tuples.
+    /// Batch upsert edges using (source, target, kind, coupling_depth, temporal_delay_sec) tuples.
     pub fn batch_upsert_edges(
         &self,
-        edges: &[(&str, &str, EdgeKind, u8)],
+        edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
     ) -> Result<(), String> {
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| format!("tx: {}", e))?;
-        for &(source, target, kind, coupling_depth) in edges {
+        for &(source, target, kind, coupling_depth, temporal_delay_sec) in edges {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
             tx.execute(
-                "INSERT INTO edges (id, source, target, kind, coupling_depth)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
-                    coupling_depth=MAX(excluded.coupling_depth, coupling_depth)",
-                params![id, source, target, kind.as_str(), coupling_depth as i64],
+                    coupling_depth=MAX(excluded.coupling_depth, coupling_depth),
+                    temporal_delay_sec=COALESCE(excluded.temporal_delay_sec, temporal_delay_sec)",
+                params![id, source, target, kind.as_str(), coupling_depth as i64, temporal_delay_sec],
             )
             .map_err(|e| format!("insert edge {}: {}", id, e))?;
         }
@@ -351,6 +353,11 @@ impl SqliteDb {
                 params![ts, event_type, file.unwrap_or(""), summary],
             )
             .map_err(|e| format!("timeline insert: {}", e))?;
+        // Prune to keep latest 10000 events (prevents unbounded growth)
+        let _ = self.conn.execute(
+            "DELETE FROM timeline_events WHERE id NOT IN (SELECT id FROM timeline_events ORDER BY id DESC LIMIT 10000)",
+            [],
+        );
         Ok(())
     }
 

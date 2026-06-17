@@ -1,1 +1,1 @@
-pub mod compat_json;
+// serialization module — reserved for future use

@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::analysis::*;
-use crate::community::detect_communities;
+use crate::community::{detect_communities, detect_communities_from_index};
 use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
@@ -228,7 +228,13 @@ impl McpServer {
         };
 
         info!(method = %method, id = %id, elapsed_ms = start.elapsed().as_millis(), "mcp response");
-        Some(serde_json::to_string(&result).unwrap_or_default())
+        match serde_json::to_string(&result) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!(method = %method, id = %id, error = %e, "mcp response serialization failed");
+                None
+            }
+        }
     }
 
     /// Main loop: read JSON-RPC from stdin, write responses to stdout.
@@ -268,6 +274,16 @@ impl McpServer {
         McpServer::success_response(id, json!({
             "content": [{ "type": "text", "text": text }]
         }))
+    }
+
+    /// Like tool_result but detects embedded {"error": "..."} in closures
+    /// and converts them to proper JSON-RPC error responses.
+    fn result_or_error(id: &Value, data: Value) -> Value {
+        if let Some(msg) = data.get("error").and_then(|e| e.as_str()) {
+            McpServer::error_response(id, -32000, msg)
+        } else {
+            McpServer::tool_result(id, data)
+        }
     }
 
     // ── initialize ──
@@ -343,7 +359,7 @@ impl McpServer {
             Some(store) => {
                 let gs = store.lock().unwrap();
                 let result = gs.read(|idx| f(idx));
-                McpServer::tool_result(id, result)
+                Self::result_or_error(id, result)
             }
             None => {
                 // Fallback: use legacy CACHED_GRAPH
@@ -351,7 +367,7 @@ impl McpServer {
                     Ok(guard) => match guard.as_ref() {
                         Some(g) => {
                             let idx = MemoryIndex::from_existing_graph(g);
-                            McpServer::tool_result(id, f(&idx))
+                            Self::result_or_error(id, f(&idx))
                         }
                         None => McpServer::error_response(
                             id,
@@ -371,7 +387,7 @@ impl McpServer {
     {
         match CACHED_GRAPH.lock() {
             Ok(guard) => match guard.as_ref() {
-                Some(g) => McpServer::tool_result(id, f(g)),
+                Some(g) => Self::result_or_error(id, f(g)),
                 None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
             },
             Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
@@ -419,7 +435,7 @@ impl McpServer {
                     "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
                 })
             });
-            return McpServer::tool_result(id, result);
+            return Self::result_or_error(id, result);
         }
         self.with_graph(id, |g| {
             let node = match g.get_node(&node_id) {
@@ -445,35 +461,35 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         let depth = Self::get_arg_usize(args, "depth", 3);
-        self.with_graph(id, |g| {
-            if g.get_node(&node_id).is_none() {
+        self.with_store(id, |idx| {
+            if idx.get_node(&node_id).is_none() {
                 return json!({"error": format!("Node {} not found", node_id)});
             }
-            let layers = query::impact(g, &node_id, depth);
+            let layers = idx.impact(&node_id, depth);
             let total_affected: usize = layers.iter().map(|(_, nodes)| nodes.len()).sum();
             json!({
                 "source_node_id": node_id,
                 "max_depth": depth,
-                "total_affected_nodes": total_affected.saturating_sub(1), // exclude self
+                "total_affected_nodes": total_affected.saturating_sub(1),
                 "layers": layers.iter().map(|(d, nodes)| json!({"depth": d, "nodes": nodes})).collect::<Vec<_>>(),
             })
         })
     }
 
     fn tool_path(&self, args: &Value, id: &Value) -> Value {
-        let from_id = args.get("from_id").and_then(|v| v.as_str()).unwrap_or("");
-        let to_id = args.get("to_id").and_then(|v| v.as_str()).unwrap_or("");
+        let from_id = Self::get_arg_str(args, &["from_id", "fromId", "from"]);
+        let to_id = Self::get_arg_str(args, &["to_id", "toId", "to"]);
         if from_id.is_empty() || to_id.is_empty() {
             return McpServer::error_response(id, -32602, "from_id and to_id are required");
         }
-        self.with_graph(id, |g| {
-            if g.get_node(from_id).is_none() {
+        self.with_store(id, |idx| {
+            if idx.get_node(&from_id).is_none() {
                 return json!({"error": format!("Node {} not found", from_id)});
             }
-            if g.get_node(to_id).is_none() {
+            if idx.get_node(&to_id).is_none() {
                 return json!({"error": format!("Node {} not found", to_id)});
             }
-            match query::shortest_path(g, from_id, to_id) {
+            match idx.shortest_path(&from_id, &to_id) {
                 Some(path) => json!({"from_id": from_id, "to_id": to_id, "path_count": 1, "paths": [path]}),
                 None => json!({"from_id": from_id, "to_id": to_id, "path_count": 0, "paths": []}),
             }
@@ -485,6 +501,10 @@ impl McpServer {
         if node_id.is_empty() {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
+        // Query timeline for real decision history
+        let decision_history = TimelineStore::open(&self.project_root())
+            .map(|store| store.query(20))
+            .unwrap_or_default();
         // Try GraphStore first
         if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
             let result = store.read(|idx| {
@@ -496,12 +516,12 @@ impl McpServer {
                 let out_count = idx.outgoing(&node_id, None).len();
                 json!({
                     "node": node_to_value(node),
-                    "decision_history": [],
+                    "decision_history": decision_history,
                     "dependency_count": dep_count,
                     "dependent_count": out_count,
                 })
             });
-            return McpServer::tool_result(id, result);
+            return Self::result_or_error(id, result);
         }
         self.with_graph(id, |g| {
             let node = match g.get_node(&node_id) {
@@ -512,7 +532,7 @@ impl McpServer {
             let outgoing = g.outgoing_edges(&node_id);
             json!({
                 "node": node_to_value(node),
-                "decision_history": [],
+                "decision_history": decision_history,
                 "dependency_count": incoming.len(),
                 "dependent_count": outgoing.len(),
             })
@@ -524,12 +544,11 @@ impl McpServer {
         if node_id.is_empty() {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
-        self.with_graph(id, |g| {
-            if g.get_node(&node_id).is_none() {
+        self.with_store(id, |idx| {
+            if idx.get_node(&node_id).is_none() {
                 return json!({"error": format!("Node {} not found", node_id)});
             }
-            // Find which community this node belongs to
-            let communities = detect_communities(g, 42);
+            let communities = detect_communities_from_index(idx, 42);
             for (i, comm) in communities.iter().enumerate() {
                 if comm.contains(&node_id) {
                     let siblings: Vec<_> = comm.iter().filter(|nid| *nid != &node_id).cloned().collect();
@@ -552,20 +571,22 @@ impl McpServer {
 
     fn tool_delayed(&self, args: &Value, id: &Value) -> Value {
         let _ = args;
-        self.with_graph(id, |g| {
-            let delayed: Vec<_> = g.edges.values()
-                .filter(|e| matches!(e.kind, EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences))
-                .map(|e| {
-                    let src = g.get_node(&e.source);
-                    let tgt = g.get_node(&e.target);
-                    json!({
-                        "source": src.map(node_to_value).unwrap_or(json!({"id": e.source})),
-                        "target": tgt.map(node_to_value).unwrap_or(json!({"id": e.target})),
-                        "delay_sec": e.temporal_delay_sec.unwrap_or(0.0),
-                        "edge_type": e.kind.as_str(),
-                    })
-                })
-                .collect::<Vec<_>>();
+        self.with_store(id, |idx| {
+            let mut delayed = Vec::new();
+            for (source, targets) in idx.edges_iter() {
+                for (target, kind, _depth, delay) in targets {
+                    if matches!(kind, EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences) {
+                        let src = idx.get_node(source);
+                        let tgt = idx.get_node(target);
+                        delayed.push(json!({
+                            "source": src.map(node_to_value).unwrap_or(json!({"id": source})),
+                            "target": tgt.map(node_to_value).unwrap_or(json!({"id": target})),
+                            "delay_sec": delay.unwrap_or(0.0),
+                            "edge_type": kind.as_str(),
+                        }));
+                    }
+                }
+            }
             let realtime: Vec<_> = delayed.iter().filter(|d| d["delay_sec"].as_f64().unwrap_or(-1.0) == 0.0).cloned().collect();
             let periodic: Vec<_> = delayed.iter().filter(|d| d["delay_sec"].as_f64().unwrap_or(0.0) > 0.0).cloned().collect();
             json!({
@@ -602,23 +623,27 @@ impl McpServer {
 
     fn tool_fragile(&self, args: &Value, id: &Value) -> Value {
         let limit = Self::get_arg_usize(args, "limit", 5).max(1);
-        self.with_graph(id, |g| {
-            let fragile = fragile_nodes(g, limit);
+        self.with_store(id, |idx| {
+            let fragile = fragile_nodes_from_index(idx, limit);
             json!({ "fragile_modules": fragile, "limit": limit })
         })
     }
 
     fn tool_cycle(&self, args: &Value, id: &Value) -> Value {
         let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("all");
-        self.with_graph(id, |g| {
-            let cycles = detect_cycles(g);
+        self.with_store(id, |idx| {
+            let classified = classify_cycles_from_index(idx);
+            let all_cycles: Vec<_> = classified["cycles"].as_array()
+                .cloned()
+                .unwrap_or_default();
             let filtered: Vec<_> = match mode {
-                "data" | "llm" => cycles.into_iter().filter(|c| {
-                    c.get("category").and_then(|cat| cat.as_str())
-                        .map(|cat| matches!(cat, "data_persistent" | "llm_involved"))
-                        .unwrap_or(false)
+                "data" => all_cycles.into_iter().filter(|c| {
+                    c.get("category").and_then(|v| v.as_str()) == Some("data_persistent")
                 }).collect(),
-                _ => cycles,
+                "llm" => all_cycles.into_iter().filter(|c| {
+                    c.get("category").and_then(|v| v.as_str()) == Some("llm_involved")
+                }).collect(),
+                _ => all_cycles,
             };
             json!({
                 "total_cycles": filtered.len(),
@@ -639,7 +664,7 @@ impl McpServer {
                     let mut threads_info = Vec::new();
                     let mut has_write = false;
                     let mut lock_edges = Vec::new();
-                    for (src_id, kind, _depth) in &incoming {
+                    for (src_id, kind, _depth, _delay) in &incoming {
                         if let Some(src) = idx.get_node(src_id) {
                             let access = if matches!(kind, EdgeKind::Writes) { "W" } else { "R" };
                             if access == "W" { has_write = true; }
@@ -675,7 +700,7 @@ impl McpServer {
                     "unlocked_resources": unlocked_keys,
                 })
             });
-            return McpServer::tool_result(id, result);
+            return Self::result_or_error(id, result);
         }
         // Legacy fallback
         self.with_graph(id, |g| {
@@ -728,8 +753,8 @@ impl McpServer {
         if module.is_empty() {
             return McpServer::error_response(id, -32602, "module_name is required");
         }
-        self.with_graph(id, |g| {
-            coupling_report(g, module)
+        self.with_store(id, |idx| {
+            coupling_report_from_index(idx, module)
         })
     }
 
@@ -750,10 +775,10 @@ impl McpServer {
 
     fn tool_blindspots(&self, args: &Value, id: &Value) -> Value {
         let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
-        self.with_graph(id, |g| {
-            let c = coupling_report(g, "");
+        self.with_store(id, |idx| {
+            let c = coupling_report_from_index(idx, "");
             let l4 = c["L4"].as_u64().unwrap_or(0) as usize;
-            let cycles = detect_cycles(g);
+            let cycles = detect_cycles_from_index(idx);
             let blind = find_blindspots(l4, cycles.len(), 0);
             json!(blind)
         })
@@ -769,12 +794,11 @@ impl McpServer {
         if files.is_empty() {
             return McpServer::error_response(id, -32602, "files list is required");
         }
-        self.with_graph(id, |g| {
-            // Build a simple preflight: for each file, compute impact
+        self.with_store(id, |idx| {
             let mut file_reports = Vec::new();
             for file in &files {
                 let mut affected_nodes = Vec::new();
-                for node in g.nodes.values() {
+                for node in idx.nodes_iter() {
                     if let Some(ref loc) = node.location {
                         if loc.starts_with(file) || loc.contains(file) {
                             affected_nodes.push(node.id.clone());
@@ -783,7 +807,7 @@ impl McpServer {
                 }
                 let mut total_impact = 0usize;
                 for nid in &affected_nodes {
-                    let layers = query::impact(g, nid, 3);
+                    let layers = idx.impact(nid, 3);
                     total_impact += layers.iter().map(|(_, nodes)| nodes.len()).sum::<usize>();
                 }
                 file_reports.push(json!({
@@ -850,8 +874,31 @@ impl McpServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        // Need both graph and project_root — can't use with_graph
         let project_root = self.project_root();
+
+        // Try GraphStore first, fall back to CACHED_GRAPH
+        if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+            // Build Graph snapshot from MemoryIndex for explore() compatibility
+            let g = store.read(|idx| {
+                let mut g = Graph::new();
+                for node in idx.nodes_iter() {
+                    g.add_node(node.clone());
+                }
+                for (source, targets) in idx.edges_iter() {
+                    for (target, kind, coupling_depth, delay) in targets {
+                        let eid = format!("{}::{}::{}", source, target, kind.as_str());
+                        let mut edge = Edge::new(eid, source, target, *kind);
+                        edge.coupling_depth = *coupling_depth;
+                        edge.temporal_delay_sec = *delay;
+                        g.add_edge(edge);
+                    }
+                }
+                g
+            });
+            let result = explore(&g, &project_root, &symbols, query_str.as_deref(), include_source);
+            return Self::result_or_error(id, result);
+        }
+
         match CACHED_GRAPH.lock() {
             Ok(guard) => match guard.as_ref() {
                 Some(g) => {
@@ -866,15 +913,15 @@ impl McpServer {
 
     fn tool_graph_summary(&self, args: &Value, id: &Value) -> Value {
         let _ = args;
-        self.with_graph(id, |g| {
-            graph_summary(g)
+        self.with_store(id, |idx| {
+            graph_summary_from_index(idx)
         })
     }
 
     fn tool_community_report(&self, args: &Value, id: &Value) -> Value {
         let min_size = Self::get_arg_usize(args, "min_size", 3).max(1);
-        self.with_graph(id, |g| {
-            let communities = detect_communities(g, 42);
+        self.with_store(id, |idx| {
+            let communities = detect_communities_from_index(idx, 42);
             let filtered: Vec<_> = communities.iter()
                 .filter(|c| c.len() >= min_size)
                 .enumerate()
@@ -952,6 +999,8 @@ impl McpServer {
             return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
         }
         info!(%path, "mcp analyze started");
+        // Lazy-init GraphStore if not initialized yet (e.g. serve without --project-root)
+        let _ = init_graph_store(&root);
         let mut result = analyze_project(&root);
 
         // Cross-file resolution
@@ -969,24 +1018,30 @@ impl McpServer {
         let syn_edges = synthesize_dynamic_edges(&mut result.graph, &root);
         info!(count = syn_edges, "mcp dynamic dispatch edges synthesized");
 
+        // Dataflow synthesis (Reads/Writes/Shares/Triggers/Awaits)
+        let df_edges = synthesize_dataflow_edges(&mut result.graph, &root);
+        info!(count = df_edges, "mcp dataflow edges synthesized");
+
         // Community detection
         let communities = detect_communities(&result.graph, 42);
         info!(count = communities.len(), "mcp communities detected");
 
-        // Cache the graph — both legacy CACHED_GRAPH and new GraphStore
+        // Cache the graph — update GRAPH_STORE first (primary), then CACHED_GRAPH (legacy).
+        // Build MemoryIndex from result.graph before moving the clone.
         let graph = result.graph.clone();
-        if let Ok(mut cache) = CACHED_GRAPH.lock() {
-            *cache = Some(graph);
-        }
+        let idx = MemoryIndex::from_existing_graph(&result.graph);
         // Sync to GraphStore (MemoryIndex + SQLite)
         if let Some(store_mtx) = GRAPH_STORE.get() {
             if let Ok(store) = store_mtx.lock() {
-                let idx = MemoryIndex::from_existing_graph(&result.graph);
                 store.swap_index(idx);
                 if let Err(e) = store.save() {
                     warn!("[mcp] GraphStore save failed: {}", e);
                 }
             }
+        }
+        // Update legacy CACHED_GRAPH
+        if let Ok(mut cache) = CACHED_GRAPH.lock() {
+            *cache = Some(graph);
         }
 
         // Stop old watcher (if any) and start a new one on the new project
@@ -1028,19 +1083,34 @@ impl McpServer {
             Err(_) => return McpServer::error_response(id, -32000, "分析正在进行中，请稍后重试"),
         };
 
+        // Lazy-init GraphStore if not initialized
+        let _ = init_graph_store(&root);
         let mut result = analyze_project(&root);
         CrossFileResolver::resolve(&mut result.graph);
         compute_coupling(&mut result.graph);
+        detect_framework_routes(&mut result.graph, &root);
+        synthesize_dynamic_edges(&mut result.graph, &root);
+        synthesize_dataflow_edges(&mut result.graph, &root);
+        detect_communities(&mut result.graph, 42);
 
         let after = result.graph.clone();
+        let idx = MemoryIndex::from_existing_graph(&after);
+        // Update GraphStore first (primary), then CACHED_GRAPH (legacy)
+        if let Some(store_mtx) = GRAPH_STORE.get() {
+            if let Ok(store) = store_mtx.lock() {
+                store.swap_index(idx);
+                let _ = store.save();
+            }
+        }
+        // Clone for check before moving into cache
+        let before_graph = before.unwrap_or_else(|| after.clone());
+        let after_check = after.clone();
         if let Ok(mut cache) = CACHED_GRAPH.lock() {
-            *cache = Some(after.clone());
+            *cache = Some(after);
         }
         drop(lock);
-
-        let before_graph = before.unwrap_or_else(|| after.clone());
         let changed_files: Vec<String> = vec![];
-        let check_result = run_full_check(&before_graph, &after, &changed_files, path);
+        let check_result = run_full_check(&before_graph, &after_check, &changed_files, path);
 
         McpServer::tool_result(id, check_result)
     }
@@ -1051,17 +1121,37 @@ impl McpServer {
         if path.is_empty() {
             return McpServer::error_response(id, -32602, "path is required");
         }
-        // Health stub: returns current graph stats as health snapshot
         self.with_graph(id, |g| {
             let summary = graph_summary(g);
+            // Real health score from graph metrics:
+            // - edge/node ratio (density): 0-40 points
+            // - coupling distribution (lower L3/L4 is better): 0-30 points
+            // - fragile node count (fewer is better): 0-20 points
+            // - cycle count (fewer is better): 0-10 points
+            let n = g.node_count().max(1) as f64;
+            let e = g.edge_count() as f64;
+            let density = (e / n).min(5.0) / 5.0 * 40.0; // cap at 5 edges/node = perfect
+            let cycles = crate::analysis::cycles::detect_cycles(g).len().min(20) as f64;
+            let cycle_score = (1.0 - cycles / 20.0).max(0.0) * 10.0;
+            let fragile = crate::analysis::fragility::fragile_nodes(g, 20);
+            let fragile_count = fragile.len().min(20) as f64;
+            let fragile_score = (1.0 - fragile_count / 20.0).max(0.0) * 20.0;
+            let coupling_score = 30.0; // baseline — coupling report is expensive, skip inline
+            let score = ((density + coupling_score + fragile_score + cycle_score) as u32).min(100);
+            let trend = if n > 0.0 && e / n > 2.0 { "healthy" } else if e > 0.0 { "stable" } else { "needs_edges" };
             json!({
                 "path": path,
                 "days": days,
                 "current_health": {
                     "total_nodes": g.node_count(),
                     "total_edges": g.edge_count(),
-                    "score": 85,
-                    "trend": "stable",
+                    "score": score,
+                    "trend": trend,
+                    "breakdown": {
+                        "density": (density as u32),
+                        "cycles": (cycle_score as u32),
+                        "fragile": (fragile_score as u32),
+                    }
                 },
                 "summary": summary,
                 "note": "Health trend requires historical snapshots — showing current state only.",
@@ -1097,36 +1187,52 @@ impl McpServer {
                 })
             })
         } else {
-            // Actually rename nodes in-memory
-            match CACHED_GRAPH.lock() {
-                Ok(mut guard) => match guard.as_mut() {
-                    Some(g) => {
-                        let matched_ids: Vec<String> = g.nodes.values()
-                            .filter(|n| n.name == old_name || n.id.contains(old_name))
-                            .map(|n| n.id.clone())
-                            .collect();
-                        if matched_ids.is_empty() {
-                            return McpServer::error_response(id, -32000, &format!("No nodes match '{}'", old_name));
-                        }
-                        let count = matched_ids.len();
-                        for nid in &matched_ids {
-                            if let Some(node) = g.nodes.get_mut(nid) {
-                                node.name = new_name.to_string();
+            // Collect matching IDs first (need CACHED_GRAPH read access)
+            let (matched_ids, count) = {
+                match CACHED_GRAPH.lock() {
+                    Ok(mut guard) => match guard.as_mut() {
+                        Some(g) => {
+                            let ids: Vec<String> = g.nodes.values()
+                                .filter(|n| n.name == old_name || n.id.contains(old_name))
+                                .map(|n| n.id.clone())
+                                .collect();
+                            if ids.is_empty() {
+                                return McpServer::error_response(id, -32000, &format!("No nodes match '{}'", old_name));
                             }
+                            let count = ids.len();
+                            for nid in &ids {
+                                if let Some(node) = g.nodes.get_mut(nid) {
+                                    node.name = new_name.to_string();
+                                }
+                            }
+                            (ids, count)
                         }
-                        McpServer::tool_result(id, json!({
-                            "dry_run": false,
-                            "old_name": old_name,
-                            "new_name": new_name,
-                            "renamed_count": count,
-                            "renamed_ids": matched_ids,
-                            "note": "In-memory rename applied. File-level rename is not yet implemented.",
-                        }))
-                    }
-                    None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
-                },
-                Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
+                        None => return McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
+                    },
+                    Err(_) => return McpServer::error_response(id, -32000, "Internal lock error"),
+                }
+            }; // CACHED_GRAPH lock released here
+
+            // Persist to GraphStore (MemoryIndex + SQLite)
+            if let Some(store_mtx) = GRAPH_STORE.get() {
+                if let Ok(store) = store_mtx.lock() {
+                    store.write(|idx| {
+                        for nid in &matched_ids {
+                            idx.rename_node_name(nid, new_name);
+                        }
+                    });
+                    let _ = store.save();
+                }
             }
+
+            McpServer::tool_result(id, json!({
+                "dry_run": false,
+                "old_name": old_name,
+                "new_name": new_name,
+                "renamed_count": count,
+                "renamed_ids": matched_ids,
+                "note": "Rename applied to graph and persisted to storage. File-level rename on disk is not yet implemented.",
+            }))
         }
     }
 
@@ -1357,8 +1463,8 @@ mod tests {
             json!({"node_id": "nonexistent"}), 4)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        let content = &v["result"]["content"][0]["text"];
-        assert!(content.as_str().unwrap().contains("not found"));
+        // error is now a proper JSON-RPC error, not embedded in result
+        assert!(v["error"]["message"].as_str().unwrap().contains("not found"));
     }
 
     #[test]

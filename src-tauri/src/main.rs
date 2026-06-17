@@ -564,7 +564,7 @@ async fn hologram_run_check(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<String, String> {
     let files_json = serde_json::to_string(&files).unwrap_or_default();
-    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}\n{}", path, files_json))
+    EngineClient::new("127.0.0.1:9777").send(&format!("preflight:{}\n{}", path, files_json))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -572,8 +572,9 @@ async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<Stri
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn hologram_run_health(path: String, _days: Option<i32>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
+async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
+    let days = days.unwrap_or(30);
+    EngineClient::new("127.0.0.1:9777").send(&format!("health:{}:{}", path, days))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -581,13 +582,13 @@ async fn hologram_run_health(path: String, _days: Option<i32>) -> Result<String,
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn hologram_history(_node_id: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("history:")
+async fn hologram_history(node_id: String) -> Result<String, String> {
+    EngineClient::new("127.0.0.1:9777").send(&format!("history:{}", node_id))
 }
 
 #[tauri::command]
-async fn hologram_community(_node_id: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("community:")
+async fn hologram_community(node_id: String) -> Result<String, String> {
+    EngineClient::new("127.0.0.1:9777").send(&format!("community:{}", node_id))
 }
 
 #[tauri::command]
@@ -620,10 +621,15 @@ async fn hologram_changes() -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_hotspots(
-    _days: Option<i32>,
-    _min_count: Option<i32>,
+    days: Option<i32>,
+    min_count: Option<i32>,
 ) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("timeline:")
+    // TODO: implement dedicated hotspots endpoint in engine TCP server
+    EngineClient::new("127.0.0.1:9777").send(&format!(
+        "timeline:{}:{}",
+        days.unwrap_or(30),
+        min_count.unwrap_or(3)
+    ))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -632,10 +638,11 @@ async fn hologram_hotspots(
 
 #[tauri::command]
 async fn hologram_workspace_conflict(
-    _path_a: String,
-    _path_b: String,
+    path_a: String,
+    path_b: String,
 ) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("timeline:")
+    // TODO: implement dedicated conflict endpoint in engine TCP server
+    EngineClient::new("127.0.0.1:9777").send(&format!("conflict:{}:{}", path_a, path_b))
 }
 
 // ═══════════════════════════════════════════════════════

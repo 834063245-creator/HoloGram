@@ -69,6 +69,9 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
     let mut edges = Vec::new();
     let mut edge_counter = 0u32;
 
+    // Module node — file-level anchor so edges have a valid source
+    nodes.push(Node::new(file_id, file_id, NodeKind::Symbol));
+
     let root = tree.root_node();
     let cursor = &mut root.walk();
     let mut to_visit = vec![root];
@@ -80,6 +83,8 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                 if let Some(name_node) = node.child_by_field_name("name") {
                     if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
                         let nid = format!("{}.{}", file_id, name);
+                        edge_counter += 1;
+                        edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), file_id, &nid, EdgeKind::Defines));
                         nodes.push(Node::new(&nid, name, NodeKind::Symbol));
                     }
                 }
@@ -88,6 +93,8 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                 if let Some(name_node) = node.child_by_field_name("name") {
                     if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
                         let nid = format!("{}.{}", file_id, name);
+                        edge_counter += 1;
+                        edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), file_id, &nid, EdgeKind::Defines));
                         nodes.push(Node::new(&nid, name, NodeKind::Symbol));
 
                         // extends → inheritance edge
@@ -110,6 +117,8 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                 if let Some(name_node) = node.child_by_field_name("name") {
                     if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
                         let nid = format!("{}.{}", file_id, name);
+                        edge_counter += 1;
+                        edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), file_id, &nid, EdgeKind::Defines));
                         nodes.push(Node::new(&nid, name, NodeKind::Symbol));
                     }
                 }
@@ -177,6 +186,6 @@ mod tests {
     fn test_empty_js() {
         let adapter = TypeScriptAdapter::new();
         let (nodes, _) = adapter.analyze("empty.js", "// nothing");
-        assert_eq!(nodes.len(), 0);
+        assert_eq!(nodes.len(), 1); // module node always created
     }
 }

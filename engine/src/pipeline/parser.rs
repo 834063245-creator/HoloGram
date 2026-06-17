@@ -53,8 +53,13 @@ impl ParallelParser {
     }
 
     fn parse_one(&self, path: &PathBuf) -> Option<FileData> {
-        let ext = path.extension()?.to_str()?;
-        let adapter = self.registry.get(ext)?;
+        let ext = path.extension().and_then(|e| e.to_str())?;
+        let adapter = self.registry.get(ext);
+        if adapter.is_none() {
+            tracing::warn!(ext, path = %path.display(), "[parser] no adapter for extension, skipping file");
+            return None;
+        }
+        let adapter = adapter.unwrap();
 
         let source = fs::read_to_string(path).ok()?;
         let source_len = source.lines().count();

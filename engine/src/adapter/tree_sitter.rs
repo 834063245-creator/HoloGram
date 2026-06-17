@@ -83,6 +83,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
             if let Some(nn) = node.child_by_field_name("name") {
                 if let Ok(name) = nn.utf8_text(source.as_bytes()) {
                     let nid = format!("{}.{}", module_id, name);
+                    counter+=1; edges.push(Edge::new(format!("def_{}_{}", file_id, counter), &module_id, &nid, EdgeKind::Defines));
                     nodes.push(Node::new(&nid, name, NodeKind::Symbol));
                     for f in &["extends","implements","base_classes"] {
                         if let Some(b) = node.child_by_field_name(f) {

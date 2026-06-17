@@ -27,6 +27,8 @@ const SOURCE_EXTS: &[&str] = &[
     "go", "rs", "java",
     "c", "h", "cpp", "hpp", "cc", "hh", "cxx", "hxx",
     "rb", "lua",
+    "cs", "swift", "dart", "scala", "sc", "hs",
+    "json", "html", "htm", "css",
 ];
 
 /// Directories to ignore during watching.
@@ -155,7 +157,7 @@ fn do_update(root: &std::path::Path, changed_files: &[(PathBuf, String)]) {
     // Try incremental path if GraphStore is initialized
     if let Some(store_mtx) = GRAPH_STORE.get() {
         if let Ok(store) = store_mtx.lock() {
-            let old_edge_count = store.read(|idx| idx.edge_count());
+            let _old_edge_count = store.read(|idx| idx.edge_count());
             let update_result = store.write(|idx| {
                 let paths: Vec<(PathBuf, &str)> = changed_files
                     .iter()
@@ -204,6 +206,9 @@ fn full_reanalyze(root: &std::path::Path) {
     let mut result = analyze_project(root);
     CrossFileResolver::resolve(&mut result.graph);
     compute_coupling(&mut result.graph);
+    crate::analysis::framework_routes::detect_framework_routes(&mut result.graph, root);
+    crate::analysis::dynamic_dispatch::synthesize_dynamic_edges(&mut result.graph, root);
+    crate::analysis::dataflow_synthesis::synthesize_dataflow_edges(&mut result.graph, root);
     detect_communities(&result.graph, 42);
 
     let nodes = result.graph.node_count();
@@ -237,10 +242,11 @@ fn sync_cached_graph_from_store(store: &crate::storage::GraphStore) {
             g.add_node(node.clone());
         }
         for (source, targets) in idx.edges_iter() {
-            for (target, kind, coupling_depth) in targets {
+            for (target, kind, coupling_depth, delay) in targets {
                 let id = format!("{}::{}::{}", source, target, kind.as_str());
                 let mut edge = crate::graph::Edge::new(id, source, target, *kind);
                 edge.coupling_depth = *coupling_depth;
+                edge.temporal_delay_sec = *delay;
                 g.add_edge(edge);
             }
         }

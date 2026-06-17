@@ -48,11 +48,9 @@ impl GraphMerger {
             added += 1;
         }
 
-        // Edges — only accept edges whose endpoints exist in the merged graph
+        // Edges — accept all, resolver will fix cross-file targets later
         for (_, edge) in other.edges {
-            if self.graph.nodes.contains_key(&edge.source) && self.graph.nodes.contains_key(&edge.target) {
-                self.graph.add_edge(edge);
-            }
+            self.graph.add_edge(edge);
         }
 
         added

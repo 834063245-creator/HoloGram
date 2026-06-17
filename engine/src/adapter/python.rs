@@ -81,6 +81,8 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                         let node_id = format!("{}.{}", file_id, name);
                         let mut n = Node::new(&node_id, name, NodeKind::Symbol);
                         n.properties = serde_json::json!({"kind": "function"});
+                        edge_counter += 1;
+                        edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), &module_node_id, &node_id, EdgeKind::Defines));
                         nodes.push(n);
                     }
                 }
@@ -91,6 +93,8 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                         let node_id = format!("{}.{}", file_id, name);
                         let mut n = Node::new(&node_id, name, NodeKind::Symbol);
                         n.properties = serde_json::json!({"kind": "class"});
+                        edge_counter += 1;
+                        edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), &module_node_id, &node_id, EdgeKind::Defines));
 
                         // Extract base classes → inheritance edges
                         if let Some(bases) = node.child_by_field_name("superclasses") {

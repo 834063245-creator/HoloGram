@@ -23,10 +23,10 @@ pub struct LoadProgress {
 /// In-memory graph index. All queries hit this structure — SQLite is for persistence + FTS only.
 pub struct MemoryIndex {
     nodes: HashMap<String, Node>,
-    /// source → [(target, edge_kind, coupling_depth)]
-    out_adj: HashMap<String, Vec<(String, EdgeKind, u8)>>,
-    /// target → [(source, edge_kind, coupling_depth)]
-    in_adj: HashMap<String, Vec<(String, EdgeKind, u8)>>,
+    /// source → [(target, edge_kind, coupling_depth, temporal_delay_sec)]
+    out_adj: HashMap<String, Vec<(String, EdgeKind, u8, Option<f64>)>>,
+    /// target → [(source, edge_kind, coupling_depth, temporal_delay_sec)]
+    in_adj: HashMap<String, Vec<(String, EdgeKind, u8, Option<f64>)>>,
     /// symbol name → node IDs (exact match only; substring/prefix → FTS5)
     name_index: HashMap<String, Vec<String>>,
     /// file path → node IDs in that file
@@ -69,11 +69,11 @@ impl MemoryIndex {
             idx.out_adj
                 .entry(edge.source.clone())
                 .or_default()
-                .push((edge.target.clone(), edge.kind, edge.coupling_depth));
+                .push((edge.target.clone(), edge.kind, edge.coupling_depth, edge.temporal_delay_sec));
             idx.in_adj
                 .entry(edge.target.clone())
                 .or_default()
-                .push((edge.source.clone(), edge.kind, edge.coupling_depth));
+                .push((edge.source.clone(), edge.kind, edge.coupling_depth, edge.temporal_delay_sec));
         }
         idx.edge_count = edge_count;
         idx
@@ -92,15 +92,15 @@ impl MemoryIndex {
         }
         idx.out_adj.reserve(idx.nodes.len());
         idx.in_adj.reserve(idx.nodes.len());
-        for (source, target, kind, coupling_depth) in db_edges {
+        for (source, target, kind, coupling_depth, _delay) in db_edges {
             idx.out_adj
                 .entry(source.clone())
                 .or_default()
-                .push((target.clone(), kind, coupling_depth));
+                .push((target.clone(), kind, coupling_depth, None)); // SQLite doesn't store temporal_delay_sec yet — None
             idx.in_adj
                 .entry(target.clone())
                 .or_default()
-                .push((source.clone(), kind, coupling_depth));
+                .push((source.clone(), kind, coupling_depth, None));
         }
         idx.edge_count = idx
             .out_adj
@@ -114,7 +114,7 @@ impl MemoryIndex {
     /// skip them and set has_aux_indexes = false. Fallback: FTS5 for all searches.
     pub fn from_sqlite_degraded(db: &SqliteDb) -> Result<Self, String> {
         let mut idx = Self::new();
-        idx.has_aux_indexes = false;
+        // Start degraded; build aux indexes after loading nodes/edges
         let db_nodes = db.load_all_nodes()?;
         let db_edges = db.load_all_edges()?;
         idx.nodes.reserve(db_nodes.len());
@@ -123,34 +123,36 @@ impl MemoryIndex {
         }
         idx.out_adj.reserve(idx.nodes.len());
         idx.in_adj.reserve(idx.nodes.len());
-        for (source, target, kind, coupling_depth) in db_edges {
+        for (source, target, kind, coupling_depth, _delay) in db_edges {
             idx.out_adj
                 .entry(source.clone())
                 .or_default()
-                .push((target.clone(), kind, coupling_depth));
+                .push((target.clone(), kind, coupling_depth, None));
             idx.in_adj
                 .entry(target.clone())
                 .or_default()
-                .push((source.clone(), kind, coupling_depth));
+                .push((source.clone(), kind, coupling_depth, None));
         }
         idx.edge_count = idx
             .out_adj
             .values()
             .map(|v| v.len())
             .sum();
+        // Recover aux indexes now that nodes are loaded
+        idx.ensure_aux_indexes();
         Ok(idx)
     }
 
     /// Persist to SQLite (full dump, used after full analysis).
     pub fn to_sqlite(&self, db: &SqliteDb) -> Result<(), String> {
         let nodes: Vec<&Node> = self.nodes.values().collect();
-        let edges: Vec<(&str, &str, EdgeKind, u8)> = self
+        let edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = self
             .out_adj
             .iter()
             .flat_map(|(src, targets)| {
                 targets
                     .iter()
-                    .map(move |(tgt, kind, depth)| (src.as_str(), tgt.as_str(), *kind, *depth))
+                    .map(move |(tgt, kind, depth, delay)| (src.as_str(), tgt.as_str(), *kind, *depth, *delay))
             })
             .collect();
         db.batch_upsert_nodes(&nodes)?;
@@ -236,10 +238,11 @@ impl MemoryIndex {
     pub fn get_outgoing_edges(&self, node_id: &str) -> Vec<crate::graph::Edge> {
         let mut edges = Vec::new();
         if let Some(targets) = self.out_adj.get(node_id) {
-            for (tgt, kind, depth) in targets {
+            for (tgt, kind, depth, delay) in targets {
                 let id = format!("{}::{}::{}", node_id, tgt, kind.as_str());
                 let mut edge = crate::graph::Edge::new(id, node_id, tgt, *kind);
                 edge.coupling_depth = *depth;
+                edge.temporal_delay_sec = *delay;
                 edges.push(edge);
             }
         }
@@ -250,10 +253,11 @@ impl MemoryIndex {
     pub fn get_incoming_edges(&self, node_id: &str) -> Vec<crate::graph::Edge> {
         let mut edges = Vec::new();
         if let Some(sources) = self.in_adj.get(node_id) {
-            for (src, kind, depth) in sources {
+            for (src, kind, depth, delay) in sources {
                 let id = format!("{}::{}::{}", src, node_id, kind.as_str());
                 let mut edge = crate::graph::Edge::new(id, src, node_id, *kind);
                 edge.coupling_depth = *depth;
+                edge.temporal_delay_sec = *delay;
                 edges.push(edge);
             }
         }
@@ -267,12 +271,12 @@ impl MemoryIndex {
         &self,
         node_id: &str,
         kind_filter: Option<&[EdgeKind]>,
-    ) -> Vec<&(String, EdgeKind, u8)> {
+    ) -> Vec<&(String, EdgeKind, u8, Option<f64>)> {
         let Some(targets) = self.out_adj.get(node_id) else {
             return Vec::new();
         };
         if let Some(kinds) = kind_filter {
-            targets.iter().filter(|(_, k, _)| kinds.contains(k)).collect()
+            targets.iter().filter(|(_, k, _, _)| kinds.contains(k)).collect()
         } else {
             targets.iter().collect()
         }
@@ -283,12 +287,12 @@ impl MemoryIndex {
         &self,
         node_id: &str,
         kind_filter: Option<&[EdgeKind]>,
-    ) -> Vec<&(String, EdgeKind, u8)> {
+    ) -> Vec<&(String, EdgeKind, u8, Option<f64>)> {
         let Some(sources) = self.in_adj.get(node_id) else {
             return Vec::new();
         };
         if let Some(kinds) = kind_filter {
-            sources.iter().filter(|(_, k, _)| kinds.contains(k)).collect()
+            sources.iter().filter(|(_, k, _, _)| kinds.contains(k)).collect()
         } else {
             sources.iter().collect()
         }
@@ -314,7 +318,7 @@ impl MemoryIndex {
                 continue;
             }
             // Check both outgoing and incoming
-            let both: Vec<Vec<&(String, EdgeKind, u8)>> = vec![
+            let both: Vec<Vec<&(String, EdgeKind, u8, Option<f64>)>> = vec![
                 self.out_adj
                     .get(&current)
                     .map(|v| v.iter().collect())
@@ -325,7 +329,7 @@ impl MemoryIndex {
                     .unwrap_or_default(),
             ];
             for targets in &both {
-                for (other, kind, coupling_depth) in targets {
+                for (other, kind, coupling_depth, _delay) in targets {
                     if let Some(kinds) = kind_filter {
                         if !kinds.contains(kind) {
                             continue;
@@ -360,7 +364,7 @@ impl MemoryIndex {
 
             // outgoing
             if let Some(targets) = self.out_adj.get(&cur) {
-                for (tgt, _, _) in targets {
+                for (tgt, _, _, _) in targets {
                     if visited.insert(tgt.clone()) {
                         queue.push_back((tgt.clone(), depth + 1));
                     }
@@ -368,7 +372,7 @@ impl MemoryIndex {
             }
             // incoming
             if let Some(sources) = self.in_adj.get(&cur) {
-                for (src, _, _) in sources {
+                for (src, _, _, _) in sources {
                     if visited.insert(src.clone()) {
                         queue.push_back((src.clone(), depth + 1));
                     }
@@ -396,12 +400,12 @@ impl MemoryIndex {
             // neighbors: outgoing + incoming
             let mut neighbor_ids = Vec::new();
             if let Some(targets) = self.out_adj.get(&cur) {
-                for (tgt, _, _) in targets {
+                for (tgt, _, _, _) in targets {
                     neighbor_ids.push(tgt.clone());
                 }
             }
             if let Some(sources) = self.in_adj.get(&cur) {
-                for (src, _, _) in sources {
+                for (src, _, _, _) in sources {
                     neighbor_ids.push(src.clone());
                 }
             }
@@ -446,7 +450,7 @@ impl MemoryIndex {
         self.nodes.values()
     }
 
-    pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &[(String, EdgeKind, u8)])> {
+    pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &[(String, EdgeKind, u8, Option<f64>)])> {
         self.out_adj
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_slice()))
@@ -465,18 +469,18 @@ impl MemoryIndex {
         if let Some(targets) = self.out_adj.remove(id) {
             let count = targets.len();
             self.edge_count = self.edge_count.saturating_sub(count);
-            for (tgt, _, _) in &targets {
+            for (tgt, _, _, _) in &targets {
                 if let Some(sources) = self.in_adj.get_mut(tgt) {
-                    sources.retain(|(s, _, _)| s != id);
+                    sources.retain(|(s, _, _, _)| s != id);
                 }
             }
         }
         if let Some(sources) = self.in_adj.remove(id) {
             let count = sources.len();
             self.edge_count = self.edge_count.saturating_sub(count);
-            for (src, _, _) in &sources {
+            for (src, _, _, _) in &sources {
                 if let Some(targets) = self.out_adj.get_mut(src) {
-                    targets.retain(|(t, _, _)| t != id);
+                    targets.retain(|(t, _, _, _)| t != id);
                 }
             }
         }
@@ -497,32 +501,18 @@ impl MemoryIndex {
         self.nodes.remove(id)
     }
 
-    /// Insert or update an edge. If same (source, target, kind) exists,
-    /// coupling_depth takes the larger value.
-    pub fn upsert_edge(&mut self, source: &str, target: &str, kind: EdgeKind, coupling_depth: u8) {
+    /// Insert or update an edge. Stores full adjacency tuple including temporal_delay_sec.
+    /// Dedup: same (source, target, kind, coupling_depth) is a no-op.
+    pub fn upsert_edge(&mut self, source: &str, target: &str, kind: EdgeKind, coupling_depth: u8, temporal_delay_sec: Option<f64>) {
         let entry = self.out_adj.entry(source.to_string()).or_default();
-        if let Some(existing) = entry
-            .iter_mut()
-            .find(|(t, k, _)| t == target && *k == kind)
-        {
-            if coupling_depth > existing.2 {
-                existing.2 = coupling_depth;
-            }
-        } else {
-            entry.push((target.to_string(), kind, coupling_depth));
+        if !entry.iter().any(|(t, k, d, _)| t == target && *k == kind && *d == coupling_depth) {
+            entry.push((target.to_string(), kind, coupling_depth, temporal_delay_sec));
             self.edge_count += 1;
         }
-        // in_adj
+        // in_adj (same temporal_delay_sec for reverse direction)
         let in_entry = self.in_adj.entry(target.to_string()).or_default();
-        if let Some(existing) = in_entry
-            .iter_mut()
-            .find(|(s, k, _)| s == source && *k == kind)
-        {
-            if coupling_depth > existing.2 {
-                existing.2 = coupling_depth;
-            }
-        } else {
-            in_entry.push((source.to_string(), kind, coupling_depth));
+        if !in_entry.iter().any(|(s, k, d, _)| s == source && *k == kind && *d == coupling_depth) {
+            in_entry.push((source.to_string(), kind, coupling_depth, temporal_delay_sec));
         }
     }
 
@@ -531,14 +521,14 @@ impl MemoryIndex {
         let mut removed = false;
         if let Some(targets) = self.out_adj.get_mut(source) {
             let before = targets.len();
-            targets.retain(|(t, k, _)| !(t == target && *k == kind));
+            targets.retain(|(t, k, _, _)| !(t == target && *k == kind));
             if targets.len() < before {
                 removed = true;
                 self.edge_count -= before - targets.len();
             }
         }
         if let Some(sources) = self.in_adj.get_mut(target) {
-            sources.retain(|(s, k, _)| !(s == source && *k == kind));
+            sources.retain(|(s, k, _, _)| !(s == source && *k == kind));
         }
         removed
     }
@@ -546,6 +536,30 @@ impl MemoryIndex {
     /// Compute total edge count by scanning adjacency (for validation).
     pub fn recompute_edge_count(&self) -> usize {
         self.out_adj.values().map(|v| v.len()).sum()
+    }
+
+    /// Rename a node (name only — ID stays unchanged, preserving edges).
+    /// Updates the name_index. Returns true if the node existed.
+    pub fn rename_node_name(&mut self, id: &str, new_name: &str) -> bool {
+        let node = match self.nodes.get_mut(id) {
+            Some(n) => n,
+            None => return false,
+        };
+        let old_name = node.name.clone();
+        if old_name == new_name {
+            return true;
+        }
+        if self.has_aux_indexes {
+            if let Some(ids) = self.name_index.get_mut(&old_name) {
+                ids.retain(|x| x != id);
+            }
+            self.name_index
+                .entry(new_name.to_string())
+                .or_default()
+                .push(id.to_string());
+        }
+        node.name = new_name.to_string();
+        true
     }
 }
 
@@ -589,7 +603,7 @@ mod tests {
         let mut idx = MemoryIndex::new();
         idx.insert_node(test_node("a", "A", Some("src/a.rs")));
         idx.insert_node(test_node("b", "B", Some("src/b.rs")));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 2);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 2, None);
 
         assert_eq!(idx.edge_count(), 1);
         let out = idx.outgoing("a", None);
@@ -607,11 +621,13 @@ mod tests {
         let mut idx = MemoryIndex::new();
         idx.insert_node(test_node("a", "A", None));
         idx.insert_node(test_node("b", "B", None));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 1);
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 3); // deeper coupling wins
-        assert_eq!(idx.edge_count(), 1);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 3, None); // different depth → separate edge
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 3, None); // same (s,t,k,d) → dedup
+        assert_eq!(idx.edge_count(), 2, "two distinct (kind,depth) tuples");
         let out = idx.outgoing("a", None);
-        assert_eq!(out[0].2, 3); // kept larger
+        assert!(out.iter().any(|(_, _, d, _)| *d == 1), "depth=1 entry present");
+        assert!(out.iter().any(|(_, _, d, _)| *d == 3), "depth=3 entry present");
     }
 
     #[test]
@@ -619,7 +635,7 @@ mod tests {
         let mut idx = MemoryIndex::new();
         idx.insert_node(test_node("a", "A", None));
         idx.insert_node(test_node("b", "B", None));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 0);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
 
         idx.remove_node("a");
         assert_eq!(idx.node_count(), 1);
@@ -633,8 +649,8 @@ mod tests {
         idx.insert_node(test_node("a", "A", None));
         idx.insert_node(test_node("b", "B", None));
         idx.insert_node(test_node("c", "C", None));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 0);
-        idx.upsert_edge("b", "c", EdgeKind::Calls, 0);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+        idx.upsert_edge("b", "c", EdgeKind::Calls, 0, None);
 
         let path = idx.shortest_path("a", "c").unwrap();
         assert_eq!(path, vec!["a", "b", "c"]);
@@ -654,8 +670,8 @@ mod tests {
         idx.insert_node(test_node("a", "A", None));
         idx.insert_node(test_node("b", "B", None));
         idx.insert_node(test_node("c", "C", None));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 0);
-        idx.upsert_edge("b", "c", EdgeKind::Calls, 0);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+        idx.upsert_edge("b", "c", EdgeKind::Calls, 0, None);
 
         let nb = idx.neighbors("a", 1, None);
         assert_eq!(nb.len(), 1);
@@ -671,8 +687,8 @@ mod tests {
         idx.insert_node(test_node("a", "A", None));
         idx.insert_node(test_node("b", "B", None));
         idx.insert_node(test_node("c", "C", None));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 0);
-        idx.upsert_edge("b", "c", EdgeKind::Calls, 0);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+        idx.upsert_edge("b", "c", EdgeKind::Calls, 0, None);
 
         let layers = idx.impact("a", 2);
         assert_eq!(layers.len(), 3); // depth 0,1,2
@@ -704,8 +720,8 @@ mod tests {
         idx.insert_node(test_node("a", "A", None));
         idx.insert_node(test_node("b", "B", None));
         idx.insert_node(test_node("c", "C", None));
-        idx.upsert_edge("a", "b", EdgeKind::Calls, 0);
-        idx.upsert_edge("a", "c", EdgeKind::Imports, 0);
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+        idx.upsert_edge("a", "c", EdgeKind::Imports, 0, None);
 
         let calls = idx.outgoing("a", Some(&[EdgeKind::Calls]));
         assert_eq!(calls.len(), 1);

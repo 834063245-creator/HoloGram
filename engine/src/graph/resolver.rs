@@ -55,7 +55,7 @@ impl CrossFileResolver {
 
         // Remove old unresolved edges, add resolved ones
         for eid in &to_remove {
-            graph.edges.remove(eid);
+            graph.remove_edge(eid);
         }
         for edge in new_edges {
             if graph.nodes.contains_key(&edge.source) && graph.nodes.contains_key(&edge.target) {
@@ -73,7 +73,7 @@ impl CrossFileResolver {
             .map(|(id, _)| id.clone())
             .collect();
         for eid in &orphan_edges {
-            graph.edges.remove(eid);
+            graph.remove_edge(eid);
         }
         resolved += orphan_edges.len(); // count cleaned edges too
 
@@ -105,22 +105,28 @@ fn resolve_name(
         if candidates.len() == 1 {
             return Some(candidates[0].clone());
         }
-        // Multiple candidates — try exact prefix match only
+        // Multiple candidates — pick the most qualified (longest) match
+        let mut best: Option<&String> = None;
+        let mut best_score = 0usize;
         for candidate in candidates {
             if name.contains('.') && candidate.contains('.') {
                 let name_parts: Vec<&str> = name.rsplit('.').collect();
                 let cand_parts: Vec<&str> = candidate.rsplit('.').collect();
-                // Require the entire name to match a suffix of the candidate,
-                // not just a partial overlap of the last N parts.
-                // e.g. "shop.models.User" (3 parts) must match all 3 parts of candidate.
                 let match_len = name_parts.len().min(cand_parts.len());
                 if match_len == name_parts.len()
                     && match_len >= 2
                     && name_parts[..match_len] == cand_parts[..match_len]
                 {
-                    return Some(candidate.clone());
+                    let score = cand_parts.len(); // longer full path = more qualified
+                    if score > best_score {
+                        best_score = score;
+                        best = Some(candidate);
+                    }
                 }
             }
+        }
+        if let Some(c) = best {
+            return Some(c.clone());
         }
     }
 

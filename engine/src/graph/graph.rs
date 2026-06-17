@@ -89,6 +89,19 @@ impl Graph {
         self.edges.insert(edge.id.clone(), edge);
     }
 
+    pub fn remove_edge(&mut self, id: &str) -> Option<Edge> {
+        let removed = self.edges.remove(id);
+        if let Some(ref edge) = removed {
+            if let Some(src) = self.nodes.get_mut(&edge.source) {
+                src.out_degree = src.out_degree.saturating_sub(1);
+            }
+            if let Some(tgt) = self.nodes.get_mut(&edge.target) {
+                tgt.in_degree = tgt.in_degree.saturating_sub(1);
+            }
+        }
+        removed
+    }
+
     pub fn get_edge(&self, id: &str) -> Option<&Edge> {
         self.edges.get(id)
     }

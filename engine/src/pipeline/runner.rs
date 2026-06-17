@@ -27,7 +27,8 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     // Step 1: Discovery
     let files = discover_files(root, &[
         "py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
-        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua"
+        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
+        "cs","swift","dart","scala","sc","hs","json","html","htm","css",
     ]);
     info!("[pipeline] discovered {} source files", files.len());
 
@@ -37,17 +38,15 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
 
     // Step 3: Merge with incremental index (O(n) per file, not O(n²))
     let mut merger = GraphMerger::new();
-    let mut nodes_total = 0usize;
-    let mut edges_total = 0usize;
 
     for result in &file_results {
         let file_graph = build_file_graph(result);
-        nodes_total += file_graph.node_count();
-        edges_total += file_graph.edge_count();
         merger.merge(file_graph);
     }
 
     let graph = merger.into_graph();
+    let nodes_total = graph.node_count();
+    let edges_total = graph.edge_count();
     let elapsed = start.elapsed();
 
     let result = PipelineResult {
