@@ -799,6 +799,10 @@ impl McpServer {
         // Coupling analysis
         compute_coupling(&mut result.graph);
 
+        // Framework route detection (Django, Express, ...)
+        let routes_found = detect_framework_routes(&mut result.graph, &root);
+        info!(count = routes_found, "mcp framework routes detected");
+
         // Community detection
         let communities = detect_communities(&result.graph, 42);
         info!(count = communities.len(), "mcp communities detected");
