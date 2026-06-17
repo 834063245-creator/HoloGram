@@ -2411,8 +2411,7 @@ fn main() {
         .setup(|app| {
             // v4 Phase 4: server for Unity events
             start_unity_event_server(app.handle().clone());
-            // v4: auto-start Rust engine
-            start_engine();
+            // Engine is started on-demand by start_mcp_server — no auto-start needed
             Ok(())
         })
         .run(tauri::generate_context!())
