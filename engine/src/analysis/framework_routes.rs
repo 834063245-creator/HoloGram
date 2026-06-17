@@ -2,8 +2,8 @@
 //! into HoloGram's Rust engine. Detects web framework routes and creates
 //! route nodes in the dependency graph, linking URLs to their handlers.
 //!
-//! Currently supports: Django, Express
-//! Planned: FastAPI, Rails, Spring, Flask
+//! Currently supports: Django, Express, FastAPI
+//! Planned: Rails, Spring, Flask
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -36,7 +36,7 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
     {
         if let Ok(rel) = entry.path().strip_prefix(project_root) {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if is_django_url_file(&rel_str) || is_express_file(&rel_str) {
+            if is_django_url_file(&rel_str) || is_express_file(&rel_str) || is_fastapi_candidate(&rel_str) {
                 files.insert(rel_str);
             }
         }
@@ -51,6 +51,12 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
             } else if is_express_file(file) {
                 let routes = detect_express_routes(file, &source);
                 added += inject_routes(graph, &routes);
+            } else if is_fastapi_candidate(file) {
+                // Content pre-filter: only parse files that contain @ decorators
+                if source.contains("@app.") || source.contains("@router.") {
+                    let routes = detect_fastapi_routes(file, &source);
+                    added += inject_routes(graph, &routes);
+                }
             }
         }
     }
@@ -346,6 +352,131 @@ fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// FastAPI — decorator-based routes
+// ═══════════════════════════════════════════════════════════════
+
+fn is_fastapi_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".py")
+}
+
+/// Detect FastAPI `@app.get("/path")` and `@router.post("/path")` decorators.
+/// Pattern: decorator is a call on an attribute of app/router with an HTTP method name.
+fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return result,
+    };
+
+    let http_methods: HashSet<&str> = [
+        "get", "post", "put", "delete", "patch", "head", "options", "trace",
+        "websocket", "api_route", "add_api_route",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "decorated_definition" {
+            let mut handler_name = String::new();
+            let mut decorators = Vec::new();
+
+            // Collect children: decorator nodes vs definition node
+            let mut node_cursor = node.walk();
+            for child in node.children(&mut node_cursor) {
+                match child.kind() {
+                    "decorator" => decorators.push(child),
+                    "function_definition" | "async_function_definition" | "class_definition" => {
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            handler_name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Try each decorator for HTTP method pattern
+            for deco in &decorators {
+                if let Some((method, path)) = extract_fastapi_decorator(deco, source, &http_methods) {
+                    let line = node.start_position().row + 1;
+                    result.push((method, path, handler_name.clone(), file.to_string(), line));
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    result
+}
+
+/// Extract (HTTP_METHOD, route_path) from a FastAPI decorator node.
+/// tree-sitter-python decorator: `@` call
+/// where call has an attribute function (app.get, router.post) and argument_list.
+fn extract_fastapi_decorator(
+    decorator: &tree_sitter::Node,
+    source: &str,
+    http_methods: &HashSet<&str>,
+) -> Option<(String, String)> {
+    // decorator children: ['@', call]
+    let mut dec_cursor = decorator.walk();
+    let children: Vec<_> = decorator.children(&mut dec_cursor).collect();
+
+    // Find the call node
+    let call_node = children.iter().find(|c| c.kind() == "call")?;
+
+    // Get the function (must be attribute: app.get, router.post)
+    let func = call_node.child_by_field_name("function")?;
+    if func.kind() != "attribute" {
+        return None;
+    }
+
+    // Extract method name (last identifier in the attribute)
+    let mut attr_cursor = func.walk();
+    let method = func.children(&mut attr_cursor)
+        .filter(|c| c.kind() == "identifier")
+        .last()
+        .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_uppercase())?;
+
+    if !http_methods.contains(method.to_lowercase().as_str()) {
+        return None;
+    }
+
+    // Extract route path from first string in argument_list
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut args_cursor = args.walk();
+    for child in args.children(&mut args_cursor) {
+        if child.kind() == "string" {
+            let path = child.utf8_text(source.as_bytes()).unwrap_or("");
+            let path = path
+                .trim_matches(&['\'', '"', 'r', 'b'][..])
+                .split('"')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if !path.is_empty() {
+                return Some((method, path));
+            }
+        }
+    }
+
+    None
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Route injection into graph
 // ═══════════════════════════════════════════════════════════════
 
@@ -576,4 +707,94 @@ app.use('/api/v2', v2Router);
         let found = find_handler_node(&g, "views.user_list", "myapp/urls.py");
         assert_eq!(found, "myapp.views.user_list", "Should match by last component");
     }
+
+    // ── FastAPI tests ──
+
+    #[test]
+    fn test_detect_fastapi_get() {
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/api/users")
+async def get_users():
+    return {"users": []}
+"#;
+        let routes = detect_fastapi_routes("main.py", source);
+        assert!(!routes.is_empty(), "Should detect @app.get decorator");
+        let (method, url, handler, _file, _line) = &routes[0];
+        assert_eq!(method, "GET");
+        assert_eq!(url, "/api/users");
+        assert_eq!(handler, "get_users");
+    }
+
+    #[test]
+    fn test_detect_fastapi_post() {
+        let source = r#"
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.post("/api/orders")
+def create_order():
+    pass
+"#;
+        let routes = detect_fastapi_routes("routers/orders.py", source);
+        assert!(!routes.is_empty(), "Should detect @router.post decorator");
+        let (method, url, handler, _file, _line) = &routes[0];
+        assert_eq!(method, "POST");
+        assert_eq!(url, "/api/orders");
+        assert_eq!(handler, "create_order");
+    }
+
+    #[test]
+    fn test_detect_fastapi_put() {
+        let source = r#"
+@app.put("/api/users/{user_id}")
+def update_user(user_id: int):
+    pass
+"#;
+        let routes = detect_fastapi_routes("main.py", source);
+        assert!(!routes.is_empty(), "Should detect @app.put decorator");
+        let (method, url, _handler, _file, _line) = &routes[0];
+        assert_eq!(method, "PUT");
+        assert_eq!(url, "/api/users/{user_id}");
+    }
+
+    #[test]
+    fn test_detect_fastapi_multiple_routes() {
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/items")
+def list_items(): pass
+
+@app.post("/items")
+def create_item(): pass
+
+@app.delete("/items/{item_id}")
+def delete_item(item_id: int): pass
+"#;
+        let routes = detect_fastapi_routes("main.py", source);
+        assert_eq!(routes.len(), 3, "Should detect 3 routes");
+    }
+
+    #[test]
+    fn test_fastapi_no_decorators_returns_empty() {
+        let source = r#"
+def plain_function():
+    pass
+"#;
+        let routes = detect_fastapi_routes("utils.py", source);
+        assert!(routes.is_empty(), "No decorators → no routes");
+    }
+
+    #[test]
+    fn test_is_fastapi_candidate() {
+        assert!(is_fastapi_candidate("main.py"));
+        assert!(is_fastapi_candidate("routers/users.py"));
+        assert!(!is_fastapi_candidate("main.js"));
+        assert!(!is_fastapi_candidate("urls.ts"));
+    }
+
 }
