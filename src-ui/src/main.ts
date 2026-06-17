@@ -422,48 +422,17 @@ async function setupAgentInner(): Promise<void> {
 
   const registry = new ToolRegistry();
 
-  // ── 双线对齐：硬编码 schema 给 Agent 看（描述调优过），MCP 做执行通道（快）──
-
-  // Step 1: 尝试启动 MCP 做执行通道
-  let mcpExec: ToolExecutor | null = null;
-  if (currentGraphData && currentPath) {
-    try {
-      // MCP startup is fire-and-forget — Agent starts immediately with CLI fallback,
-      // switches to MCP transport when ready.
-      invoke<string>('start_mcp_server', { projectRoot: currentPath }).then(() => {
-        mcpExec = async (name, args) => {
-          const result = await invoke<string>('mcp_call', { toolName: name, args: JSON.stringify(args) });
-          return result;
-        };
-        dbg('setupAgent', 'MCP executor ready (hot-swap from CLI)');
-      }).catch((e) => {
-        dbg('setupAgent', `MCP unavailable, staying on CLI: ${e}`);
-      });
-    } catch (e) {
-      dbg('setupAgent', `MCP unavailable, using CLI transport: ${e}`);
-    }
-  }
-
-  // Step 2: 始终注册硬编码 hologram 工具（LLM 最优描述），执行时优先走 MCP
+  // Hologram 工具注册 — 引擎已编译进 Tauri，直接调，不走 MCP
   if (currentGraphData) {
     const holoExec: ToolExecutor = async (name, args) => {
-      // 参数名翻译：Agent 工具用 camelCase（LLM 友好），MCP 引擎用 snake_case
       const mapped = translateArgs(name, args);
-      // MCP 优先，挂了降级 CLI 并清掉 mcpExec 避免后续白等
-      if (mcpExec) {
-        try {
-          return await mcpExec(name, mapped);
-        } catch {
-          mcpExec = null;
-        }
-      }
       const result = await invoke<string>(name, mapped);
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
     for (const tool of createHologramTools(holoExec)) {
       registry.register(tool);
     }
-    dbg('setupAgent', `${createHologramTools(holoExec).length} hologram tools registered (${mcpExec ? 'MCP' : 'CLI'} transport)`);
+    dbg('setupAgent', `${createHologramTools(holoExec).length} hologram tools registered (direct engine)`);
   }
 
   // Coding tools (file I/O, shell, search, git, web) — always direct CLI invoke
@@ -583,9 +552,6 @@ async function setupAgentInner(): Promise<void> {
       const r = new ToolRegistry();
       // New sessions use same MCP-first executor (or CLI fallback)
       const factoryExec: ToolExecutor = async (name, args) => {
-        if (mcpExec) {
-          try { return await mcpExec(name, args); } catch { /* fall through */ }
-        }
         const result = await invoke<string>(name, args);
         return typeof result === 'string' ? result : JSON.stringify(result);
       };

@@ -310,23 +310,8 @@ fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
 /// Run analysis via Rust Engine for a project, return JSON.
 /// Rust engine is fast enough (~4s for Django) that incremental mode is unnecessary.
 fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
-    match mcp_invoke("hologram_analyze", serde_json::json!({"path": project_path})) {
-        Ok(json) => {
-            if json.trim().is_empty() {
-                eprintln!("[hologram] engine analysis returned empty response");
-                None
-            } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
-                if parsed.get("error").is_some() {
-                    eprintln!("[hologram] engine analysis error: {}", json);
-                    None
-                } else {
-                    Some(json)
-                }
-            } else {
-                eprintln!("[hologram] engine returned non-JSON: {}", json);
-                None
-            }
-        }
+    match direct_analyze(project_path) {
+        Ok(json) => Some(json),
         Err(e) => {
             eprintln!("[hologram] engine analysis failed: {e}");
             None
@@ -335,106 +320,425 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
 }
 
 // ═══════════════════════════════════════════════════════
-// MCP helper — all hologram_* tools route through McpManager, never TCP
+// Direct engine calls — Agent tools call engine library functions in-process
+// No MCP/stdio, no parameter translation, no process lifecycle.
 // ═══════════════════════════════════════════════════════
 
-/// Invoke an MCP tool via the persistent engine MCP server (engine.exe serve).
-/// Replaces all EngineClient::new("127.0.0.1:9777").send() — the engine runs in
-/// MCP stdio mode with NO TCP listener, so EngineClient always fails with ECONNREFUSED.
-fn mcp_invoke(tool: &str, args: serde_json::Value) -> Result<String, String> {
-    let mut mgr = MCP_MANAGER.lock().map_err(|e| format!("MCP 锁失败: {e}"))?;
-    mgr.call(tool, &args.to_string())
+use hologram_engine as engine;
+use engine::mcp::CACHED_GRAPH;
+use engine::graph::{Graph, CrossFileResolver};
+use engine::analysis::{coupling::compute_coupling, fragile_nodes, detect_cycles, coupling_report,
+    graph_summary, thread_conflict_report, find_blindspots, detect_framework_routes,
+    synthesize_dynamic_edges, synthesize_dataflow_edges};
+use engine::community::detect_communities;
+use engine::pipeline::runner::analyze_project;
+use engine::graph::query;
+
+/// Run analysis and cache result in CACHED_GRAPH. Returns JSON summary.
+fn direct_analyze(path: &str) -> Result<String, String> {
+    let root = std::path::PathBuf::from(path);
+    if !root.exists() {
+        return Err(format!("路径不存在: {path}"));
+    }
+    let mut result = analyze_project(&root);
+    CrossFileResolver::resolve(&mut result.graph);
+    compute_coupling(&mut result.graph);
+    detect_framework_routes(&mut result.graph, &root);
+    synthesize_dynamic_edges(&mut result.graph, &root);
+    synthesize_dataflow_edges(&mut result.graph, &root);
+    let communities = detect_communities(&result.graph, 42);
+
+    let nc = result.graph.node_count();
+    let ec = result.graph.edge_count();
+    let nodes: Vec<serde_json::Value> = result.graph.nodes.values().map(|n| serde_json::json!({
+        "id": n.id, "name": n.name, "type": n.kind.as_str(),
+        "location": n.location, "in_degree": n.in_degree,
+        "out_degree": n.out_degree, "properties": n.properties,
+        "position": n.position, "community_id": n.community_id,
+    })).collect();
+    let edges: Vec<serde_json::Value> = result.graph.edges.values().map(|e| serde_json::json!({
+        "id": e.id, "source": e.source, "target": e.target,
+        "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+        "cross_file": e.cross_file, "direction": e.direction,
+        "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id,
+    })).collect();
+    let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
+        .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
+        .collect();
+
+    let graph_clone = result.graph.clone();
+    if let Ok(mut cache) = CACHED_GRAPH.lock() { *cache = Some(graph_clone); }
+
+    // Persist hologram_graph.json for frontend
+    let graph_path = format!("{}/hologram_graph.json", path);
+    let wrapped = serde_json::json!({
+        "meta": { "source_root": path,
+            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "version": "0.1.0", "node_count": nc, "edge_count": ec },
+        "nodes": nodes, "edges": edges, "communities": communities_json,
+    });
+    let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
+    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
+
+    Ok(serde_json::json!({
+        "status": "ok", "total_nodes": nc, "total_edges": ec,
+        "communities": communities.len(), "elapsed_secs": result.elapsed_secs,
+        "node_count": nc, "edge_count": ec,
+    }).to_string())
+}
+
+/// Read CACHED_GRAPH and run a query function.
+fn with_graph<F: FnOnce(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
+    let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
+    match cache.as_ref() {
+        Some(g) => Ok(serde_json::to_string(&f(g)).unwrap_or_default()),
+        None => Err("未加载图谱，请先运行 hologram_analyze".into()),
+    }
 }
 
 // ═══════════════════════════════════════════════════════
-// 22 Tauri commands — each mapped to an MCP tool
+// 22 Tauri commands — Agent tools → direct engine calls
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    let stdout = mcp_invoke("hologram_analyze", serde_json::json!({"path": &target}))?;
-
-    // Persist engine result to hologram_graph.json
-    if !stdout.trim().is_empty() && !stdout.contains("\"error\"") {
-        if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            let wrapped = serde_json::json!({
-                "meta": {
-                    "source_root": &target,
-                    "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-                    "version": "0.1.0",
-                    "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
-                    "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
-                },
-                "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
-                "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
-                "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
-            });
-            let graph_path = format!("{}/hologram_graph.json", target);
-            let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
-            if let Err(e) = std::fs::write(&graph_path, &graph_json) {
-                eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
-            }
-            let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", target));
-        }
-    }
-    Ok(stdout)
+    let target_clone = target.clone();
+    tokio::task::spawn_blocking(move || direct_analyze(&target_clone))
+        .await.map_err(|e| format!("分析任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_neighbors(node_id: String, depth: Option<i32>) -> Result<String, String> {
-    mcp_invoke("hologram_neighbors", serde_json::json!({"node_id": node_id, "depth": depth.unwrap_or(2)}))
+    let d = depth.unwrap_or(2) as usize;
+    let nid = node_id.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let nb = query::neighbors(g, &nid, d);
+            serde_json::json!({"neighbors": nb.iter().map(|(s,t,d)| serde_json::json!([s,t,d])).collect::<Vec<_>>()})
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<String, String> {
-    mcp_invoke("hologram_impact", serde_json::json!({"node_id": node_id, "depth": max_depth.unwrap_or(3)}))
+    let d = max_depth.unwrap_or(3) as usize;
+    let nid = node_id.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let layers = query::impact(g, &nid, d);
+            serde_json::json!({"layers": layers})
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_path(from: String, to: String) -> Result<String, String> {
-    mcp_invoke("hologram_path", serde_json::json!({"from_id": from, "to_id": to}))
+    let f = from.clone(); let t = to.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            match query::shortest_path(g, &f, &t) {
+                Some(p) => serde_json::json!({"path": p, "length": p.len()}),
+                None => serde_json::json!({"path": null, "message": "无路径"}),
+            }
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_diff(before_path: String, _after_path: Option<String>) -> Result<String, String> {
-    mcp_invoke("hologram_diff", serde_json::json!({"before_path": before_path}))
+    let bp = before_path.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |current| {
+            match Graph::from_json_file(&bp) {
+                Ok(before) => {
+                    let diff = before.diff(current);
+                    serde_json::json!({
+                        "is_empty": diff.added_nodes.is_empty() && diff.removed_nodes.is_empty(),
+                        "added_nodes": diff.added_nodes.len(),
+                        "removed_nodes": diff.removed_nodes.len(),
+                        "added_edges": diff.added_edges.len(),
+                        "removed_edges": diff.removed_edges.len(),
+                    })
+                }
+                Err(_) => {
+                    let graph_json = serde_json::to_string_pretty(current).unwrap_or_default();
+                    let _ = std::fs::write(&bp, &graph_json);
+                    serde_json::json!({"is_empty": true, "message": "已创建基线快照"})
+                }
+            }
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
-    mcp_invoke("hologram_fragile", serde_json::json!({"limit": limit.unwrap_or(10)}))
+    let lim = limit.unwrap_or(10) as usize;
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| serde_json::json!(fragile_nodes(g, lim)))
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
-    mcp_invoke("hologram_cycle", serde_json::json!({"mode": mode.unwrap_or_else(|| "all".into())}))
+    let m = mode.unwrap_or_else(|| "all".into());
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let cycles = detect_cycles(g);
+            let filtered: Vec<_> = if m == "data" || m == "llm" {
+                cycles.into_iter().filter(|c| c.get("category").and_then(|v| v.as_str()) == Some(&m)).collect()
+            } else { cycles };
+            serde_json::json!({"cycles": filtered, "total_cycles": filtered.len(), "mode_filter": m})
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
-    mcp_invoke("hologram_search", serde_json::json!({"query": query, "limit": limit.unwrap_or(50)}))
+    let q = query.clone(); let lim = limit.unwrap_or(50) as usize;
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let results = query::search_nodes(g, &q);
+            let truncated: Vec<_> = results.iter().take(lim)
+                .map(|n| serde_json::json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()}))
+                .collect();
+            serde_json::json!({"results": truncated, "total": results.len(), "limit": lim})
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_coupling_report(module: String) -> Result<String, String> {
-    mcp_invoke("hologram_coupling_report", serde_json::json!({"module_name": module}))
+    let m = module.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| coupling_report(g, &m))
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
-    // MCP tool uses string filter ("all"/"L4"/"thread"/"cycle"), not float threshold.
-    // Default to "all" — the engine handles filtering internally.
     let _ = threshold;
-    mcp_invoke("hologram_blindspots", serde_json::json!({"filter": "all"}))
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let c = coupling_report(g, "");
+            let cycles = detect_cycles(g);
+            let no_files: Vec<String> = vec![];
+            let conflicts = thread_conflict_report(g, &no_files);
+            let l4_count = c["L4"].as_u64().unwrap_or(0) as usize;
+            find_blindspots(l4_count, cycles.len(), conflicts["conflict_count"].as_u64().unwrap_or(0) as usize)
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 #[tauri::command]
 async fn hologram_thread_conflicts(severity: Option<String>) -> Result<String, String> {
-    // MCP tool takes optional node_id; empty → global matrix
     let node_id = severity.unwrap_or_default();
-    mcp_invoke("hologram_thread_conflicts", serde_json::json!({"node_id": node_id}))
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let filter: Vec<String> = if node_id.is_empty() { vec![] } else { vec![node_id.clone()] };
+            thread_conflict_report(g, &filter)
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
+
+#[tauri::command]
+async fn hologram_community_report(resolution: Option<f64>, min_size: Option<i32>) -> Result<String, String> {
+    let _ = resolution; let ms = min_size.unwrap_or(3);
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let communities = detect_communities(g, 42);
+            let filtered: Vec<_> = communities.iter().enumerate()
+                .filter(|(_, c)| c.len() >= ms as usize)
+                .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
+                .collect();
+            serde_json::json!({"communities": filtered, "total": filtered.len()})
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_graph_summary() -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| graph_summary(g))
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_rename(
+    old_name: String, new_name: String, dry_run: Option<bool>, node_id: Option<String>,
+) -> Result<String, String> {
+    let _ = node_id; let on = old_name.clone(); let nn = new_name.clone();
+    let dr = dry_run.unwrap_or(true);
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let matched: Vec<_> = g.nodes.values()
+                .filter(|n| n.name == on || n.id.contains(&on))
+                .collect();
+            if matched.is_empty() {
+                serde_json::json!({"error": format!("没有匹配 '{}' 的节点", on)})
+            } else if dr {
+                serde_json::json!({"dry_run": true, "matched_count": matched.len(),
+                    "matched": matched.iter().map(|n| serde_json::json!({"id": n.id, "name": n.name})).collect::<Vec<_>>()})
+            } else {
+                serde_json::json!({"dry_run": false, "renamed_count": matched.len(),
+                    "old_name": on, "new_name": nn, "note": "rename via in-process engine"})
+            }
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_explore(
+    query: Option<String>, symbols: Option<Vec<String>>, include_source: Option<bool>,
+) -> Result<String, String> {
+    let q = query.clone(); let sym = symbols.unwrap_or_default();
+    let inc_src = include_source.unwrap_or(true);
+    let proj = project_root();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            engine::analysis::explore::explore(g, &proj, &sym, q.as_deref(), inc_src)
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
+    let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    tokio::task::spawn_blocking(move || {
+        use engine::routing::preflight::run_full_check;
+        let root = std::path::PathBuf::from(&target);
+        let before_path = root.join(".hologram").join("baseline.json");
+        let before = std::fs::read_to_string(&before_path).ok()
+            .and_then(|s| serde_json::from_str::<Graph>(&s).ok())
+            .unwrap_or_default();
+        // Ensure graph is loaded
+        let after = {
+            let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
+            match cache.as_ref() {
+                Some(g) => g.clone(),
+                None => {
+                    drop(cache);
+                    direct_analyze(&target)?;
+                    CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?
+                        .as_ref().cloned()
+                        .ok_or("分析后无图谱".to_string())?
+                }
+            }
+        };
+        let result = run_full_check(&before, &after, &[], &target);
+        let _ = std::fs::create_dir_all(root.join(".hologram"));
+        let _ = std::fs::write(&before_path, serde_json::to_string_pretty(&after).unwrap_or_default());
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }).await.map_err(|e| format!("简报任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_run_health(path: Option<String>, days: Option<i32>) -> Result<String, String> {
+    let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    let d = days.unwrap_or(30);
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let c = coupling_report(g, "");
+            let cycles = detect_cycles(g);
+            let fragile = fragile_nodes(g, 10);
+            let l4 = c["L4"].as_u64().unwrap_or(0) as f64;
+            let density = if g.node_count() > 0 {
+                (l4 / g.node_count() as f64 * 100.0).min(100.0)
+            } else { 0.0 };
+            let score = ((100.0 - density) * 0.6 + 40.0) as u32;
+            serde_json::json!({
+                "current_health": {
+                    "score": score,
+                    "breakdown": {"cycles": cycles.len(), "density": density as u32, "fragile": fragile.len()},
+                    "total_nodes": g.node_count(), "total_edges": g.edge_count(),
+                    "trend": "stable"
+                },
+                "days": d, "path": target,
+                "note": "趋势数据需历史快照 — 仅展示当前状态",
+                "summary": {
+                    "nodes_total": g.node_count(), "edges_total": g.edge_count(),
+                    "symbols": g.node_count(), "media": 0, "temporals": 0,
+                    "edge_types": {"calls": 0, "defines": 0, "imports": 0}
+                }
+            })
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_history(node_id: String) -> Result<String, String> {
+    let nid = node_id.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            g.get_node(&nid).map(|n| serde_json::json!({
+                "id": n.id, "name": n.name, "type": n.kind.as_str(),
+                "out_degree": n.out_degree, "in_degree": n.in_degree
+            })).unwrap_or(serde_json::json!({"error": "not found"}))
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_community(node_id: String) -> Result<String, String> {
+    let nid = node_id.clone();
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            let communities = detect_communities(g, 42);
+            let found = communities.iter().find(|c| c.contains(&nid));
+            found.map(|c| serde_json::json!({"community": c.iter().take(50).collect::<Vec<_>>()}))
+                .unwrap_or(serde_json::json!({"community": null}))
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_delayed() -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            use engine::graph::EdgeKind;
+            let delayed: Vec<_> = g.edges.values()
+                .filter(|e| matches!(e.kind, EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences))
+                .map(|e| serde_json::json!({"source": e.source, "target": e.target, "type": e.kind.as_str()}))
+                .collect();
+            serde_json::json!(delayed)
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_run_preflight(
+    path: String, files: Option<Vec<String>>,
+) -> Result<String, String> {
+    let p = path.clone(); let f = files.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        use engine::routing::preflight::run_full_check;
+        let root = std::path::PathBuf::from(&p);
+        let before = {
+            let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
+            cache.as_ref().cloned().unwrap_or_default()
+        };
+        let result = run_full_check(&Graph::default(), &before, &f, &p);
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_status() -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        with_graph(move |g| {
+            serde_json::json!({
+                "phase": "ready", "store": "MemoryIndex (direct)",
+                "nodes": g.node_count(), "edges": g.edge_count(),
+                "nodes_loaded": g.node_count(), "edges_loaded": g.edge_count(),
+                "has_aux_indexes": true, "elapsed_ms": 0
+            })
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+// ═══════════════════════════════════════════════════════
+// Timeline — already direct SQLite, kept as-is
+// ═══════════════════════════════════════════════════════
 
 #[tauri::command]
 async fn hologram_timeline(
@@ -505,41 +809,6 @@ async fn hologram_timeline(
     Ok(serde_json::json!({"events": events, "module_filter": module_filter}).to_string())
 }
 
-#[tauri::command]
-async fn hologram_community_report(
-    resolution: Option<f64>,
-    min_size: Option<i32>,
-) -> Result<String, String> {
-    // MCP tool only has min_size (resolution not a separate param)
-    let _ = resolution;
-    mcp_invoke("hologram_community_report", serde_json::json!({"min_size": min_size.unwrap_or(3)}))
-}
-
-#[tauri::command]
-async fn hologram_graph_summary() -> Result<String, String> {
-    mcp_invoke("hologram_graph_summary", serde_json::json!({}))
-}
-
-#[tauri::command]
-async fn hologram_rename(
-    old_name: String,
-    new_name: String,
-    dry_run: Option<bool>,
-    node_id: Option<String>,
-) -> Result<String, String> {
-    // MCP rename doesn't filter by node_id — always renames all matching nodes
-    let _ = node_id;
-    mcp_invoke("hologram_rename", serde_json::json!({
-        "old_name": old_name,
-        "new_name": new_name,
-        "dry_run": dry_run.unwrap_or(false),
-    }))
-}
-
-// ═══════════════════════════════════════════════════════
-// V3: Check — constraint validation + change summary
-// ═══════════════════════════════════════════════════════
-
 /// Record a user-facing event in the timeline DB (file save, edit, etc.).
 #[tauri::command]
 async fn hologram_record_event(
@@ -561,50 +830,6 @@ async fn hologram_record_event(
         rusqlite::params![ts, event_type, file_val, summary],
     ).map_err(|e| format!("写入失败: {}", e))?;
     Ok("ok".into())
-}
-
-#[tauri::command]
-async fn hologram_run_check(path: String) -> Result<String, String> {
-    mcp_invoke("hologram_run_check", serde_json::json!({"path": path}))
-}
-
-// ═══════════════════════════════════════════════════════
-// V3: Preflight — pre-commit impact analysis
-// ═══════════════════════════════════════════════════════
-
-#[tauri::command]
-async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<String, String> {
-    // MCP preflight takes files array directly; path is derived from the engine's project_root
-    let _ = path;
-    mcp_invoke("hologram_preflight", serde_json::json!({"files": files}))
-}
-
-// ═══════════════════════════════════════════════════════
-// V3: Health — project health trends
-// ═══════════════════════════════════════════════════════
-
-#[tauri::command]
-async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
-    mcp_invoke("hologram_run_health", serde_json::json!({"path": path, "days": days.unwrap_or(30)}))
-}
-
-// ═══════════════════════════════════════════════════════
-// Agent native tools — graph introspection (from MCP)
-// ═══════════════════════════════════════════════════════
-
-#[tauri::command]
-async fn hologram_history(node_id: String) -> Result<String, String> {
-    mcp_invoke("hologram_history", serde_json::json!({"node_id": node_id}))
-}
-
-#[tauri::command]
-async fn hologram_community(node_id: String) -> Result<String, String> {
-    mcp_invoke("hologram_community", serde_json::json!({"node_id": node_id}))
-}
-
-#[tauri::command]
-async fn hologram_delayed() -> Result<String, String> {
-    mcp_invoke("hologram_delayed", serde_json::json!({}))
 }
 
 #[tauri::command]
@@ -635,10 +860,28 @@ async fn hologram_hotspots(
     days: Option<i32>,
     min_count: Option<i32>,
 ) -> Result<String, String> {
-    // No dedicated MCP hotspots tool — use hologram_timeline as best proxy
     let limit = min_count.unwrap_or(3);
-    let _ = days; // MCP timeline doesn't accept days; engine uses its own window
-    mcp_invoke("hologram_timeline", serde_json::json!({"limit": limit}))
+    let _ = days;
+    // Read timeline directly from SQLite
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
+    match rusqlite::Connection::open(&db_path) {
+        Ok(db) => {
+            let mut stmt = db.prepare("SELECT timestamp, event_type, file, summary FROM events ORDER BY id DESC LIMIT ?1")
+                .map_err(|e| format!("查询失败: {e}"))?;
+            let events: Vec<serde_json::Value> = stmt.query_map(rusqlite::params![limit], |row| {
+                Ok(serde_json::json!({
+                    "timestamp": row.get::<_, String>(0)?,
+                    "event_type": row.get::<_, String>(1)?,
+                    "file": row.get::<_, String>(2).unwrap_or_default(),
+                    "summary": row.get::<_, String>(3).unwrap_or_default(),
+                }))
+            }).map_err(|e| format!("读取失败: {e}"))?
+            .filter_map(|r| r.ok()).collect();
+            Ok(serde_json::json!({"events": events, "limit": limit}).to_string())
+        }
+        Err(e) => Ok(serde_json::json!({"error": format!("无法打开时间轴: {e}"), "events": []}).to_string())
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -668,7 +911,19 @@ async fn hologram_gate_check(
     path: String,
     _module_file: Option<String>,
 ) -> Result<String, String> {
-    mcp_invoke("hologram_run_check", serde_json::json!({"path": path}))
+    // Gate check reuses hologram_run_check logic
+    let target = path;
+    tokio::task::spawn_blocking(move || {
+        use engine::routing::preflight::run_full_check;
+        let root = std::path::PathBuf::from(&target);
+        let before = Graph::default();
+        let after = {
+            let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
+            cache.as_ref().cloned().unwrap_or_default()
+        };
+        let result = run_full_check(&before, &after, &[], &target);
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1511,7 +1766,7 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
     }));
 
     // ── Run analysis via MCP engine (engine.exe serve) ──
-    let stdout = mcp_invoke("hologram_analyze", serde_json::json!({"path": &path}))
+    let stdout = direct_analyze(&path)
         .map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
 
     if let Some(window) = app.get_webview_window("main") {
@@ -1634,7 +1889,7 @@ async fn estimate_project_size(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn generate_lightweight_graph(path: String) -> Result<String, String> {
     // Rust engine full analysis replaces Python lightweight graph (faster: 4s vs 10-30s)
-    let stdout = mcp_invoke("hologram_analyze", serde_json::json!({"path": &path}))
+    let stdout = direct_analyze(&path)
         .map_err(|e| format!("引擎分析失败: {}", e))?;
 
     if stdout.trim().is_empty() || stdout.contains("\"error\"") {
@@ -1682,39 +1937,15 @@ async fn generate_lightweight_graph(path: String) -> Result<String, String> {
 /// so all MCP tools get full symbol-level data once the job finishes.
 #[tauri::command]
 async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<String, String> {
-    // Rust engine background analysis via MCP
+    // Rust engine background analysis — direct in-process call
     let app2 = app.clone();
     let path2 = path.clone();
     std::thread::spawn(move || {
-        match mcp_invoke("hologram_analyze", serde_json::json!({"path": &path2})) {
-            Ok(stdout) if !stdout.trim().is_empty() && !stdout.contains("\"error\"") => {
-                // Save graph to disk
-                let graph_path = format!("{}/hologram_graph.json", path2);
-                if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                    let wrapped = serde_json::json!({
-                        "meta": {
-                            "source_root": path2,
-                            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-                            "version": "0.1.0",
-                            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
-                            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
-                        },
-                        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
-                        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
-                        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
-                    });
-                    let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
-                    // Remove stale binary cache so cold start doesn't read old Python .hologram
-                    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path2));
-                }
-                {
-                    *ACTIVE_PROJECT.lock().unwrap() = path2.clone();
-                    let _ = std::fs::write(project_root().join(".last_project"), &path2);
-                }
+        match direct_analyze(&path2) {
+            Ok(_) => {
+                *ACTIVE_PROJECT.lock().unwrap() = path2.clone();
+                let _ = std::fs::write(project_root().join(".last_project"), &path2);
                 let _ = app2.emit("analysis-complete", serde_json::json!({"path": path2}));
-            }
-            Ok(stdout) => {
-                let _ = app2.emit("analysis-failed", serde_json::json!({"path": path2, "error": stdout}));
             }
             Err(e) => {
                 let _ = app2.emit("analysis-failed", serde_json::json!({"path": path2, "error": e}));
@@ -2062,17 +2293,6 @@ async fn start_mcp_server(project_root: String) -> Result<String, String> {
     mgr.start(&project_root, &engine)
 }
 
-#[tauri::command]
-async fn mcp_call(tool_name: String, args: String) -> Result<String, String> {
-    let mut mgr = MCP_MANAGER.lock().unwrap();
-    mgr.call(&tool_name, &args)
-}
-
-#[tauri::command]
-async fn mcp_list_tools() -> Result<String, String> {
-    let mut mgr = MCP_MANAGER.lock().unwrap();
-    mgr.list_tools()
-}
 
 #[tauri::command]
 async fn stop_mcp_server() -> Result<String, String> {
@@ -2256,28 +2476,41 @@ fn unity_status() -> Result<String, String> {
 
 #[tauri::command]
 fn engine_get_graph() -> Result<String, String> {
-    // No direct MCP equivalent for raw graph dump — use graph_summary
-    mcp_invoke("hologram_graph_summary", serde_json::json!({}))
+    with_graph(|g| graph_summary(g))
 }
 
 #[tauri::command]
 fn engine_neighbors(node_id: String, depth: usize) -> Result<String, String> {
-    mcp_invoke("hologram_neighbors", serde_json::json!({"node_id": node_id, "depth": depth}))
+    with_graph(move |g| {
+        let nb = query::neighbors(g, &node_id, depth);
+        serde_json::json!({"neighbors": nb.iter().map(|(s,t,d)| serde_json::json!([s,t,d])).collect::<Vec<_>>()})
+    })
 }
 
 #[tauri::command]
 fn engine_path(from_id: String, to_id: String) -> Result<String, String> {
-    mcp_invoke("hologram_path", serde_json::json!({"from_id": from_id, "to_id": to_id}))
+    with_graph(move |g| {
+        match query::shortest_path(g, &from_id, &to_id) {
+            Some(p) => serde_json::json!({"path": p, "length": p.len()}),
+            None => serde_json::json!({"path": null, "message": "no path"}),
+        }
+    })
 }
 
 #[tauri::command]
 fn engine_search(query: String) -> Result<String, String> {
-    mcp_invoke("hologram_search", serde_json::json!({"query": query}))
+    with_graph(move |g| {
+        let results = query::search_nodes(g, &query);
+        serde_json::json!({"results": results.iter().map(|n| serde_json::json!({"id":n.id,"name":n.name})).collect::<Vec<_>>()})
+    })
 }
 
 #[tauri::command]
 fn engine_impact(node_id: String, max_depth: usize) -> Result<String, String> {
-    mcp_invoke("hologram_impact", serde_json::json!({"node_id": node_id, "depth": max_depth}))
+    with_graph(move |g| {
+        let layers = query::impact(g, &node_id, max_depth);
+        serde_json::json!({"layers": layers})
+    })
 }
 
 #[tauri::command]
@@ -2400,8 +2633,6 @@ fn main() {
             web_fetch,
             edit_file,
             start_mcp_server,
-            mcp_call,
-            mcp_list_tools,
             stop_mcp_server,
             // PTY
             pty_spawn,
