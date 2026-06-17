@@ -850,11 +850,34 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       execute: (args) => exec('search_content', args),
     },
 
+    // ── Glob ──
+    {
+      name: () => 'glob',
+      description: () =>
+        'Fast file pattern matching using glob patterns. Returns matching file paths sorted by modification time. Supports ** for recursive matching (e.g. "**/*.rs", "src/**/*.ts", "*.json"). Use this instead of run_shell to find files by name pattern — it is faster and respects .gitignore-style exclusions.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Glob pattern to match file paths against (e.g. "**/*.rs", "src/**/agent*.ts", "*.json")',
+          },
+          path: {
+            type: 'string',
+            description: 'Directory to search in. Defaults to the project root.',
+          },
+        },
+        required: ['pattern'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('glob', args),
+    },
+
     // ── Shell ──
     {
       name: () => 'run_shell',
       description: () =>
-        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress and bash_kill to stop. Commands run in the project directory by default.',
+        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress and bash_kill to stop. Commands run in the project directory by default. IMPORTANT: Do NOT use run_shell for file search or code search — use glob (file patterns), search_content (text search), or list_directory (directory listing) instead. run_shell is for building, testing, and git operations that have no dedicated tool.',
       parameters: () => ({
         type: 'object',
         properties: {

@@ -1441,7 +1441,22 @@ export class ChatPanel {
 
   private renderMarkdownText(text: string): void {
     this.ensureAssistantBubble();
-    // Replace streaming text element with final rendered version
+    // If the final text matches what was already streamed, just finalize in place
+    if (this.currentTextEl && text === this._streamTextBuf) {
+      this.currentTextEl.classList.remove('streaming');
+      this.currentTextEl.querySelectorAll('pre code').forEach((block) => {
+        hljs.highlightElement(block as HTMLElement);
+      });
+      if (this.currentBubble) {
+        this.addMessageActions(this.currentBubble);
+      }
+      this._streamTextBuf = '';
+      this.currentTextEl = null;
+      this.currentBubble = null;
+      this.scrollBottom();
+      return;
+    }
+    // Different content: replace streaming text element with final rendered version
     if (this.currentTextEl) {
       this.currentTextEl.remove();
     }
@@ -1578,7 +1593,11 @@ export class ChatPanel {
     const resultEl = card.querySelector('.msg-tool-result') as HTMLElement;
     if (resultEl) {
       const text = tool.err || tool.output || '(无输出)';
-      resultEl.textContent = tool.truncated ? text + '\n…[截断]…' : text;
+      resultEl.innerHTML = formatToolResult(tool.name, text, !!tool.truncated);
+      // Syntax highlight code blocks in the result
+      resultEl.querySelectorAll('pre code').forEach((block) => {
+        hljs.highlightElement(block as HTMLElement);
+      });
     }
 
     // Auto-expand on error
@@ -1964,6 +1983,60 @@ export class ChatPanel {
 }
 
 // ── Static helpers ──
+
+/** Format tool output for display — JSON gets pretty-printed, code gets highlighted. */
+function formatToolResult(toolName: string, text: string, truncated: boolean): string {
+  let body = text;
+  if (truncated) body += '\n…[截断]…';
+
+  // ── JSON: pretty-print in code block ──
+  try {
+    const parsed = JSON.parse(body);
+    const formatted = JSON.stringify(parsed, null, 2);
+    return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
+  } catch {}
+
+  // ── Empty / very short ──
+  if (!body.trim()) return escapeHtml('(无输出)');
+  if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
+
+  // ── Code: read_file_content, run_shell, search_content → code block ──
+  if (toolName === 'read_file_content') {
+    // Detect language from path? For now, generic code block
+    return `<pre><code>${escapeHtml(body)}</code></pre>`;
+  }
+  if (toolName === 'run_shell') {
+    return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
+  }
+  if (toolName === 'search_content') {
+    return `<pre><code>${escapeHtml(body)}</code></pre>`;
+  }
+
+  // ── Edit / write ──
+  if (toolName === 'edit_file' || toolName === 'write_file') {
+    return `<div class="tool-result-edit">${escapeHtml(body)}</div>`;
+  }
+
+  // ── Glob / list_directory — compact list ──
+  if (toolName === 'glob') {
+    try {
+      const data = JSON.parse(text);
+      const lines = (data.results || []).map((r: any) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
+      const header = `<div class="glob-summary">${data.count} 个文件${data.truncated ? ' (结果已截断)' : ''}</div>`;
+      return header + (lines.length > 30
+        ? lines.slice(0, 30).join('\n') + `\n<div class="glob-truncated">… 及其他 ${lines.length - 30} 个结果</div>`
+        : lines.join('\n'));
+    } catch { return escapeHtml(body); }
+  }
+
+  // ── Hologram tools: try parsing as JSON (already handled above), fall through ──
+  // ── Default: render as markdown (supports tables, lists, etc.) ──
+  try {
+    const html = DOMPurify.sanitize(marked.parse(body) as string);
+    if (html && html !== body) return html;
+  } catch {}
+  return escapeHtml(body);
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

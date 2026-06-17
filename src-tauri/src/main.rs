@@ -1318,6 +1318,82 @@ async fn search_content(
 }
 
 // ═══════════════════════════════════════════════════════
+// Coding Agent: glob — file pattern matching
+// ═══════════════════════════════════════════════════════
+
+#[derive(serde::Serialize)]
+struct GlobEntry {
+    path: String,
+    name: String,
+}
+
+#[tauri::command]
+async fn glob(pattern: String, path: Option<String>) -> Result<String, String> {
+    let dir = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    let root = std::path::PathBuf::from(&dir);
+    if !root.is_dir() {
+        return Err(format!("不是有效目录: {}", dir));
+    }
+
+    let glob_pattern = glob::Pattern::new(&pattern)
+        .map_err(|e| format!("无效的 glob 模式: {}", e))?;
+
+    let mut results: Vec<GlobEntry> = Vec::new();
+    let max = 200;
+
+    for entry in walkdir::WalkDir::new(&root)
+        .max_depth(12)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        // Skip hidden dirs / build artifacts
+        let entry_path = entry.path();
+        if entry_path.to_string_lossy().contains("/.git/")
+            || entry_path.to_string_lossy().contains("\\.git\\")
+            || entry_path.to_string_lossy().contains("/node_modules/")
+            || entry_path.to_string_lossy().contains("\\node_modules\\")
+            || entry_path.to_string_lossy().contains("/target/")
+            || entry_path.to_string_lossy().contains("\\target\\")
+            || entry_path.to_string_lossy().contains("/dist/")
+            || entry_path.to_string_lossy().contains("\\dist\\")
+            || entry_path.to_string_lossy().contains("/build/")
+            || entry_path.to_string_lossy().contains("\\build\\")
+            || entry_path.to_string_lossy().contains("/.hologram/")
+            || entry_path.to_string_lossy().contains("\\.hologram\\")
+        {
+            continue;
+        }
+
+        let rel = entry_path
+            .strip_prefix(&root)
+            .unwrap_or(entry_path);
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+        if glob_pattern.matches(&rel_str) {
+            results.push(GlobEntry {
+                path: entry_path.to_string_lossy().to_string(),
+                name: rel.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| rel_str.clone()),
+            });
+        }
+        if results.len() >= max {
+            break;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "pattern": pattern,
+        "count": results.len(),
+        "truncated": results.len() >= max,
+        "results": results,
+    }).to_string())
+}
+
+// ═══════════════════════════════════════════════════════
 // Coding Agent: edit_file — exact string replacement (Claude Code style)
 // ═══════════════════════════════════════════════════════
 
@@ -2707,6 +2783,7 @@ fn main() {
             git_show,
             search_code,
             search_content,
+            glob,
             web_fetch,
             edit_file,
             start_mcp_server,

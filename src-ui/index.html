@@ -1052,13 +1052,43 @@
     .tool-status.tool-err { color: var(--fail); }
     .msg-tool-result {
       display: none; padding: 6px 8px;
-      font-family: var(--font-mono); font-size: 9px; line-height: 1.5;
+      font-size: 9px; line-height: 1.5;
       white-space: pre-wrap; color: rgba(155, 195, 225, 0.7);
       background: rgba(4, 10, 22, 0.4);
       border-top: 1px solid rgba(40, 60, 100, 0.12);
-      max-height: 180px; overflow-y: auto;
+      max-height: 240px; overflow-y: auto;
     }
     .msg-tool-card.tool-expanded .msg-tool-result { display: block; }
+    /* Code blocks inside tool results */
+    .msg-tool-result pre {
+      margin: 0; padding: 0; background: none; border: none;
+      white-space: pre-wrap;
+    }
+    .msg-tool-result pre code {
+      display: block; padding: 4px 6px;
+      font-family: var(--font-mono); font-size: 9px; line-height: 1.5;
+      background: rgba(3, 8, 18, 0.6);
+      border-radius: 3px;
+    }
+    .tool-result-edit {
+      padding: 6px 8px;
+      font-family: var(--font-mono); font-size: 9px;
+      color: var(--sol);
+      background: rgba(3, 8, 18, 0.5);
+      border-radius: 4px;
+      border-left: 3px solid var(--signal-glow, rgba(80, 140, 240, 0.35));
+    }
+    .glob-summary {
+      font-weight: 600; color: var(--starlight); margin-bottom: 2px;
+    }
+    .glob-entry {
+      display: block; padding: 1px 0;
+      font-family: var(--font-mono); font-size: 9px;
+      color: rgba(155, 195, 225, 0.6);
+    }
+    .glob-truncated {
+      color: rgba(145, 165, 190, 0.45); font-style: italic;
+    }
 
     /* Permission card — inline approval request */
     .msg-perm-card {

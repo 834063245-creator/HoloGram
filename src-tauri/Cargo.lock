@@ -1337,6 +1337,7 @@ name = "hologram"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "glob",
  "hologram-engine",
  "libloading 0.8.9",
  "portable-pty",
