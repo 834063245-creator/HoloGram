@@ -10,6 +10,7 @@ impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
 
     fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>) {
+        // Macro for grammars that export LANGUAGE(LanguageFn) compatible with tree-sitter 0.24
         macro_rules! do_parse { ($ts_crate:ident) => {{
             let lang: tree_sitter::Language = $ts_crate::LANGUAGE.into();
             let mut p = Parser::new();
@@ -18,6 +19,7 @@ impl TreeSitterAdapter {
         }}; }
 
         match ext {
+            // Original 7 — tree-sitter 0.23+, LANGUAGE static
             "go" => do_parse!(tree_sitter_go),
             "rs" => do_parse!(tree_sitter_rust),
             "java" => do_parse!(tree_sitter_java),
@@ -25,6 +27,19 @@ impl TreeSitterAdapter {
             "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => do_parse!(tree_sitter_cpp),
             "rb" => do_parse!(tree_sitter_ruby),
             "lua" => do_parse!(tree_sitter_lua),
+
+            // tree-sitter 0.23+ grammars — LANGUAGE static works
+            "cs" => do_parse!(tree_sitter_c_sharp),
+            "swift" => do_parse!(tree_sitter_swift),
+            "dart" => do_parse!(tree_sitter_dart),
+            "scala" | "sc" => do_parse!(tree_sitter_scala),
+            "hs" => do_parse!(tree_sitter_haskell),
+            "json" => do_parse!(tree_sitter_json),
+            "html" | "htm" => do_parse!(tree_sitter_html),
+            "css" => do_parse!(tree_sitter_css),
+
+            // TODO: tree-sitter <0.23 grammars — needs cross-version FFI bridge
+            // php, kotlin, ocaml, nix, bash, toml, markdown, yaml, zig, elixir, erlang, r
             _ => (vec![], vec![]),
         }
     }
@@ -32,7 +47,8 @@ impl TreeSitterAdapter {
 
 impl LanguageAdapter for TreeSitterAdapter {
     fn extensions(&self) -> Vec<String> {
-        vec!["go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua"]
+        vec!["go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
+            "cs","swift","dart","scala","sc","hs","json","html","htm","css"]
             .into_iter().map(|s| s.into()).collect()
     }
 
@@ -122,6 +138,14 @@ mod tests {
         assert!(exts.contains(&"cpp".to_string()));
         assert!(exts.contains(&"rb".to_string()));
         assert!(exts.contains(&"lua".to_string()));
+        assert!(exts.contains(&"cs".to_string()));
+        assert!(exts.contains(&"swift".to_string()));
+        assert!(exts.contains(&"json".to_string()));
+        assert!(exts.contains(&"html".to_string()));
+        assert!(exts.contains(&"css".to_string()));
+        assert!(exts.contains(&"hs".to_string()));
+        assert!(exts.contains(&"dart".to_string()));
+        assert!(exts.contains(&"scala".to_string()));
     }
 
     #[test]
@@ -185,5 +209,41 @@ pub fn add(a: i32, b: i32) -> i32 {
         let id1 = &nodes1[0].id;
         let id2 = &nodes2[0].id;
         assert_ne!(id1, id2, "different files should have different module IDs");
+    }
+
+    #[test]
+    fn test_analyze_csharp_smoke() {
+        // Smoke test: C# grammar loads and parses without panic
+        let a = TreeSitterAdapter;
+        let (_nodes, _edges) = a.analyze("Service.cs", "class UserService {}");
+    }
+
+    #[test]
+    fn test_analyze_swift_smoke() {
+        // Smoke test: Swift grammar loads and parses without panic
+        let a = TreeSitterAdapter;
+        let (_nodes, _edges) = a.analyze("App.swift", "func greet() {}");
+    }
+
+    #[test]
+    fn test_analyze_kotlin_not_yet() {
+        // tree-sitter-kotlin not yet in parse_ext (needs cross-version FFI bridge)
+        let a = TreeSitterAdapter;
+        let (nodes, _edges) = a.analyze("Main.kt", "fun main() {}");
+        assert!(nodes.is_empty(), "kt should return empty until kotlin grammar is wired");
+    }
+
+    #[test]
+    fn test_analyze_json() {
+        let a = TreeSitterAdapter;
+        let src = "{\"name\": \"test\", \"version\": \"1.0\"}";
+        let (nodes, _) = a.analyze("config.json", src);
+        // JSON doesn't have functions/classes, but should have module node
+        assert!(nodes.len() >= 1, "should have at least module node");
+    }
+
+    #[test]
+    fn test_analyze_bash_skipped() {
+        // Temporarily skipped — tree-sitter-bash needs cross-version FFI bridge
     }
 }

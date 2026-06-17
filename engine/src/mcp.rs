@@ -7,7 +7,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
 use tracing::{info, warn};
@@ -17,13 +17,40 @@ use crate::community::detect_communities;
 use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
+use crate::storage::{GraphStore, MemoryIndex};
 use crate::timeline::TimelineStore;
 use crate::watcher;
 
 /// Global cached graph, shared with the TCP RPC server.
 /// The MCP server reads from and writes to this cache.
+/// DEPRECATED: use GRAPH_STORE instead. Kept for backward compat during migration.
 pub static CACHED_GRAPH: std::sync::LazyLock<Mutex<Option<Graph>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
+
+/// New storage engine singleton. Initialized by init_graph_store() at startup.
+/// All graph queries go through this — it provides RwLock<MemoryIndex> for concurrent reads.
+static GRAPH_STORE: OnceLock<Mutex<GraphStore>> = OnceLock::new();
+
+/// Initialize the global GraphStore. Called once at engine startup.
+/// Idempotent: subsequent calls are no-ops.
+pub fn init_graph_store(project_root: &Path) -> Result<(), String> {
+    if GRAPH_STORE.get().is_some() {
+        return Ok(());
+    }
+    let store = GraphStore::open(project_root)?;
+    GRAPH_STORE
+        .set(Mutex::new(store))
+        .map_err(|_| "GraphStore already initialized".to_string())
+}
+
+/// Get a reference to the global GraphStore (with lock).
+/// Returns an error if init_graph_store() hasn't been called yet.
+pub fn with_graph_store<R>(f: impl FnOnce(&GraphStore) -> R) -> Result<R, String> {
+    let store = GRAPH_STORE
+        .get()
+        .ok_or_else(|| String::from("GraphStore not initialized — call init_graph_store() first"))?;
+    Ok(f(&store.lock().unwrap()))
+}
 
 /// Global re-entrant lock preventing concurrent full analysis across
 /// MCP tools, watcher, and TCP RPC handler.
@@ -117,6 +144,8 @@ fn tool_definitions() -> Vec<Value> {
             &[("path", "string", "Project root directory path"), ("days", "integer", "Days to look back (default 30)")], &["path"]),
         tool_def("hologram_rename", "Safely rename a symbol across all files with atomic rollback.",
             &[("old_name", "string", "Current name"), ("new_name", "string", "New name"), ("dry_run", "boolean", "Preview only (default false)"), ("node_id", "string", "Optional specific node ID")], &["old_name", "new_name"]),
+        tool_def("hologram_status", "Get engine loading status and memory stats.",
+            &[], &[]),
     ]
 }
 
@@ -295,6 +324,7 @@ impl McpServer {
             "hologram_run_check" => self.tool_run_check(&args, id),
             "hologram_run_health" => self.tool_run_health(&args, id),
             "hologram_rename" => self.tool_rename(&args, id),
+            "hologram_status" => self.tool_status(&args, id),
             _ => McpServer::error_response(id, -32601, &format!("Tool not found: {}", tool_name)),
         }
     }
@@ -302,6 +332,38 @@ impl McpServer {
     // ══════════════════════════════════════════════════════
     // Tool implementations
     // ══════════════════════════════════════════════════════
+
+    /// Run a read-only closure against MemoryIndex via GraphStore.
+    /// Falls back to CACHED_GRAPH (legacy mode) if GraphStore is not initialized.
+    fn with_store<F>(&self, id: &Value, f: F) -> Value
+    where
+        F: FnOnce(&MemoryIndex) -> Value,
+    {
+        match GRAPH_STORE.get() {
+            Some(store) => {
+                let gs = store.lock().unwrap();
+                let result = gs.read(|idx| f(idx));
+                McpServer::tool_result(id, result)
+            }
+            None => {
+                // Fallback: use legacy CACHED_GRAPH
+                match CACHED_GRAPH.lock() {
+                    Ok(guard) => match guard.as_ref() {
+                        Some(g) => {
+                            let idx = MemoryIndex::from_existing_graph(g);
+                            McpServer::tool_result(id, f(&idx))
+                        }
+                        None => McpServer::error_response(
+                            id,
+                            -32000,
+                            "No graph loaded. Run hologram_analyze first.",
+                        ),
+                    },
+                    Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
+                }
+            }
+        }
+    }
 
     fn with_graph<F>(&self, id: &Value, f: F) -> Value
     where
@@ -953,6 +1015,58 @@ impl McpServer {
             }
         }
     }
+
+    fn tool_status(&self, _args: &Value, id: &Value) -> Value {
+        match GRAPH_STORE.get() {
+            Some(store) => {
+                let gs = store.lock().unwrap();
+                let progress = gs.load_progress();
+                let nodes = gs.read(|idx| idx.node_count());
+                let edges = gs.read(|idx| idx.edge_count());
+                let has_aux = gs.read(|idx| idx.has_aux_indexes());
+                McpServer::tool_result(
+                    id,
+                    json!({
+                        "phase": progress.phase,
+                        "store": "MemoryIndex",
+                        "nodes": nodes,
+                        "edges": edges,
+                        "nodes_loaded": progress.nodes_loaded,
+                        "edges_loaded": progress.edges_loaded,
+                        "elapsed_ms": progress.elapsed_ms,
+                        "has_aux_indexes": has_aux,
+                    }),
+                )
+            }
+            None => {
+                // Fallback: check CACHED_GRAPH
+                match CACHED_GRAPH.lock() {
+                    Ok(guard) => match guard.as_ref() {
+                        Some(g) => McpServer::tool_result(
+                            id,
+                            json!({
+                                "phase": "ready",
+                                "store": "Graph (legacy)",
+                                "nodes": g.node_count(),
+                                "edges": g.edge_count(),
+                                "note": "Using legacy CACHED_GRAPH. Run analyze to migrate to MemoryIndex.",
+                            }),
+                        ),
+                        None => McpServer::tool_result(
+                            id,
+                            json!({
+                                "phase": "empty",
+                                "store": "none",
+                                "nodes": 0,
+                                "edges": 0,
+                            }),
+                        ),
+                    },
+                    Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
+                }
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1091,7 +1205,7 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 23, "23 tools defined");
+        assert_eq!(tools.len(), 24, "24 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"hologram_neighbors"));
