@@ -64,7 +64,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
     let mut edges = Vec::new();
     let mut counter = 0u32;
     let module_id = file_id.replace(['/', '\\'], ".");
-    nodes.push(Node::new(&module_id, file_id, NodeKind::Symbol));
+    nodes.push(Node::new(&module_id, file_id, NodeKind::File));
 
     let root = tree.root_node();
     let mut cursor = root.walk();
@@ -83,8 +83,15 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
             if let Some(nn) = node.child_by_field_name("name") {
                 if let Ok(name) = nn.utf8_text(source.as_bytes()) {
                     let nid = format!("{}.{}", module_id, name);
+                    let nkind = if func_kinds.contains(&kind) {
+                        NodeKind::Function
+                    } else if ["interface_declaration","trait_declaration","type_alias_declaration"].contains(&kind) {
+                        NodeKind::Interface
+                    } else {
+                        NodeKind::Class
+                    };
                     counter+=1; edges.push(Edge::new(format!("def_{}_{}", file_id, counter), &module_id, &nid, EdgeKind::Defines));
-                    nodes.push(Node::new(&nid, name, NodeKind::Symbol));
+                    nodes.push(Node::new(&nid, name, nkind));
                     for f in &["extends","implements","base_classes"] {
                         if let Some(b) = node.child_by_field_name(f) {
                             if let Ok(bn) = b.utf8_text(source.as_bytes()) {

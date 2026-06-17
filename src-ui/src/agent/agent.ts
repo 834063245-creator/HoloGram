@@ -234,6 +234,12 @@ export class Agent {
         this.sink({ kind: EventKind.Notice, level: 'warn', text: warnMsg });
       }
 
+      // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls
+      if (!text && calls.length === 0) {
+        log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
+        return;
+      }
+
       // Store assistant turn (reasoning kept for display, not re-uploaded)
       this.session.push({
         role: 'assistant',

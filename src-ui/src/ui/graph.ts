@@ -58,16 +58,23 @@ const GLOW_COLORS: Record<string, number> = {
 };
 
 function edgeColorByType(edgeType: string, direction: string, crossFile = false): THREE.Color {
-  if (edgeType === 'data' || edgeType === 'DATA') {
-    return direction === 'write' ? new THREE.Color(0xff7777) : new THREE.Color(0x66dd66);
-  }
-  if (edgeType === 'temporal' || edgeType === 'TEMPORAL') {
-    return new THREE.Color(0xffaa55);
-  }
-  // Cross-file inherit edges: subtle magenta, rare enough to not clutter
-  if (crossFile && direction === 'inherit') return new THREE.Color(0xff66ff);
-  // Cross-file call edges use the default L1 blue (0x6699cc) — same as same-file edges,
-  // to avoid cyan noise drowning the graph
+  const et = edgeType.toLowerCase();
+  // Data edges — green read, red write, amber share
+  if (et === 'reads') return new THREE.Color(0x66dd66);
+  if (et === 'writes') return new THREE.Color(0xff7777);
+  if (et === 'shares') return new THREE.Color(0xffaa44);
+  // Temporal edges — orange
+  if (et === 'triggers' || et === 'awaits' || et === 'sequences') return new THREE.Color(0xffaa55);
+  // Backward-compat: old Python engine keywords
+  if (et === 'data') return direction === 'write' ? new THREE.Color(0xff7777) : new THREE.Color(0x66dd66);
+  if (et === 'temporal') return new THREE.Color(0xffaa55);
+  // Inheritance — magenta
+  if (et === 'inherits' || (crossFile && direction === 'inherit')) return new THREE.Color(0xff66ff);
+  // Imports — subtle teal-blue
+  if (et === 'imports') return new THREE.Color(0x5599cc);
+  // Defines — slightly brighter blue
+  if (et === 'defines') return new THREE.Color(0x5588cc);
+  // Calls and everything else — structural blue
   return new THREE.Color(0x6699cc);
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
@@ -1381,6 +1388,8 @@ export class StarGraph {
 
   private updateHover(): void {
     if (this.nodeCores.length === 0) return;
+    // Guard: skip if mouse coordinates are invalid (container not yet sized)
+    if (!isFinite(this.mouse.x) || !isFinite(this.mouse.y)) return;
     // Cloud hover: any level where clouds are visible (universe, sub-clouds, sub-sub-clouds)
     const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0
       && !this.nodeCores.some(c => c.visible); // no visible nodes = cloud view
@@ -3259,9 +3268,9 @@ export class StarGraph {
       const st = document.getElementById('status-text');
       if (st) st.textContent = (st.textContent || '') + ' | ' + this._diagMsg;
     }
-    // Fix: container was display:none during constructor onResize(), so renderer
-    // never got sized properly. Re-sync once the container is visible.
-    this.onResize();
+    // Fix: container may have been display:none during constructor onResize().
+    // Defer resize one frame to ensure CSS layout has settled.
+    requestAnimationFrame(() => this.onResize());
   }
 
   // -- end of _renderImpl; render() wrapper is above --
@@ -3777,7 +3786,8 @@ export class StarGraph {
     const IDLE = this._idleCounter > 60; // ~1s of no activity
 
     if (!IDLE || this._idleCounter % 4 === 0) {
-      this.updateHover(); this.updateFocus();
+      try { this.updateHover(); } catch { /* hover must never crash the animation loop */ }
+      try { this.updateFocus(); } catch { /* ditto */ }
     }
 
     // Hover effects

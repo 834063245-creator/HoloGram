@@ -5,15 +5,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeKind {
-    Symbol,
-    Medium,
-    Temporal,
+    Symbol,    // generic / uncategorized
+    Function,  // function / method / constructor
+    Class,     // class / struct / enum
+    Module,    // namespace / package
+    File,      // source file module
+    Interface, // interface / trait / type alias
+    Medium,    // storage / IO
+    Temporal,  // async / timer
 }
 
 impl NodeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             NodeKind::Symbol => "symbol",
+            NodeKind::Function => "function",
+            NodeKind::Class => "class",
+            NodeKind::Module => "module",
+            NodeKind::File => "file",
+            NodeKind::Interface => "interface",
             NodeKind::Medium => "medium",
             NodeKind::Temporal => "temporal",
         }

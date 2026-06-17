@@ -67,7 +67,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
 
     // Create a file-level module node — all file-scope edges use this as source
     let module_node_id = file_id.to_string();
-    nodes.push(Node::new(&module_node_id, file_id, NodeKind::Symbol));
+    nodes.push(Node::new(&module_node_id, file_id, NodeKind::File));
 
     let root = tree.root_node();
     let mut cursor = root.walk();
@@ -79,8 +79,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                 if let Some(name_node) = node.child_by_field_name("name") {
                     if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
                         let node_id = format!("{}.{}", file_id, name);
-                        let mut n = Node::new(&node_id, name, NodeKind::Symbol);
-                        n.properties = serde_json::json!({"kind": "function"});
+                        let n = Node::new(&node_id, name, NodeKind::Function);
                         edge_counter += 1;
                         edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), &module_node_id, &node_id, EdgeKind::Defines));
                         nodes.push(n);
@@ -91,8 +90,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                 if let Some(name_node) = node.child_by_field_name("name") {
                     if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
                         let node_id = format!("{}.{}", file_id, name);
-                        let mut n = Node::new(&node_id, name, NodeKind::Symbol);
-                        n.properties = serde_json::json!({"kind": "class"});
+                        let n = Node::new(&node_id, name, NodeKind::Class);
                         edge_counter += 1;
                         edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), &module_node_id, &node_id, EdgeKind::Defines));
 

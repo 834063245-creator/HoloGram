@@ -82,8 +82,8 @@ function layoutViaWorker(
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
+const dockGit = document.getElementById('dock-git')!;
 const statusText = document.getElementById('status-text')!;
-const statusGit = document.getElementById('status-git')!;
 let _gitStatusTimer: ReturnType<typeof setInterval> | null = null;
 const tbPath = document.getElementById('tb-path')!;
 const btnExplorer = document.getElementById('btn-explorer') as HTMLButtonElement;
@@ -1426,40 +1426,40 @@ async function init(): Promise<void> {
   let _pendingRender: ReturnType<typeof setTimeout> | null = null;
   const GRAPH_UPDATE_DEBOUNCE_MS = 2500; // accumulate file changes over 2.5s before re-render
 
-  listen<string>('graph-updated', async (event) => {
+    listen<string>('graph-updated', async (event) => {
     try {
-      const graph = JSON.parse(event.payload);
-      // Guard: ignore watcher events from a previous project (race after workspace switch)
-      const eventRoot = graph.meta?.source_root || '';
+      const summary = JSON.parse(event.payload);
+      const eventRoot = summary.meta?.source_root || '';
       if (currentPath && eventRoot && !isSamePath(eventRoot, currentPath)) {
         console.warn('[graph-updated] ignoring stale event from', eventRoot, 'current is', currentPath);
         return;
       }
-      const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
-      if (nodeCount > 0) {
-        // Always update the in-memory graph data — Agent tools read from this
-        currentGraphData = graph;
-        // Also refresh the file-level graph
-        if (currentPath) {
+      const nc = summary.total_nodes || summary.node_count || 0;
+      if (nc > 0 && currentPath) {
+        // Watcher emits summary only — read persisted full graph for render + Agent tools
+        try {
+          const graphPath = currentPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
+          const raw = await invoke<string>('read_file_content', { filePath: graphPath });
+          const graph = JSON.parse(raw);
+          currentGraphData = graph;
+
           try {
             const filesPath = currentPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
             currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
           } catch { /* file graph may not exist yet */ }
-        }
 
-        // Debounce the 3D re-render — skip if we just rendered recently
-        const now = Date.now();
-        if (now - _lastGraphUpdate < GRAPH_UPDATE_DEBOUNCE_MS) {
-          // Schedule a deferred render; if another update arrives, the timer resets
-          if (_pendingRender) clearTimeout(_pendingRender);
-          _pendingRender = setTimeout(() => {
-            _pendingRender = null;
-            if (currentGraphData) _doGraphUpdate(currentGraphData);
-          }, GRAPH_UPDATE_DEBOUNCE_MS - (now - _lastGraphUpdate));
-          return;
-        }
-        if (_pendingRender) { clearTimeout(_pendingRender); _pendingRender = null; }
-        _doGraphUpdate(graph);
+          const now = Date.now();
+          if (now - _lastGraphUpdate < GRAPH_UPDATE_DEBOUNCE_MS) {
+            if (_pendingRender) clearTimeout(_pendingRender);
+            _pendingRender = setTimeout(() => {
+              _pendingRender = null;
+              if (currentGraphData) _doGraphUpdate(currentGraphData);
+            }, GRAPH_UPDATE_DEBOUNCE_MS - (now - _lastGraphUpdate));
+            return;
+          }
+          if (_pendingRender) { clearTimeout(_pendingRender); _pendingRender = null; }
+          _doGraphUpdate(graph);
+        } catch { /* graph file not ready yet */ }
       }
     } catch { /* ignore */ }
   });
@@ -1589,39 +1589,40 @@ async function init(): Promise<void> {
   setupAgent().catch(() => {});
 }
 
-// ── Git status bar indicator ──────────────────────────────
+// ── Git dock-tab badge indicator ─────────────────────────
 
 function updateGitIndicator(): void {
-  if (!currentPath) { statusGit.textContent = ''; return; }
+  if (!currentPath) { return; }
+  const badge = dockGit.querySelector('.git-badge') as HTMLElement | null;
   invoke<string>('git_status', { path: currentPath }).then(raw => {
     const status = JSON.parse(raw) as { files?: Array<{ status: string; staged: boolean }> };
     const files = status.files || [];
-    const stagedCount = files.filter(f => f.staged).length;
     const totalCount = files.length;
+    if (!badge) return;
     if (totalCount === 0) {
-      statusGit.textContent = '✓ 干净';
-      statusGit.className = 'clean';
+      badge.textContent = '';
+      badge.className = 'git-badge clean';
     } else {
-      statusGit.textContent = `⬤ ${totalCount} 文件${stagedCount > 0 ? ` (${stagedCount} 已暂存)` : ''}`;
-      statusGit.className = '';
+      badge.textContent = String(totalCount);
+      badge.className = 'git-badge';
     }
-  }).catch(() => { statusGit.textContent = ''; });
+  }).catch(() => {
+    if (badge) { badge.textContent = ''; badge.className = 'git-badge clean'; }
+  });
 }
 
 function startGitIndicator(): void {
   if (_gitStatusTimer) clearInterval(_gitStatusTimer);
+  // Ensure badge element exists
+  const existing = dockGit.querySelector('.git-badge');
+  if (!existing) {
+    const badge = document.createElement('span');
+    badge.className = 'git-badge';
+    dockGit.appendChild(badge);
+  }
   updateGitIndicator();
   _gitStatusTimer = setInterval(updateGitIndicator, 3000);
-  // Also refresh when file watcher detects changes
   bus.on('workspace:files-changed', () => updateGitIndicator());
 }
-
-// 点击 git 状态指示器 → 打开 Git 面板
-statusGit.addEventListener('click', () => {
-  if (!GitPanel.get().isOpen() && currentPath) GitPanel.get().load(currentPath);
-  else GitPanel.get().toggle();
-});
-statusGit.style.cursor = 'pointer';
-statusGit.title = '点击打开源代码管理';
 
 init();

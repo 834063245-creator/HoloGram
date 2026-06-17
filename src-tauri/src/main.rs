@@ -756,8 +756,13 @@ async fn hologram_timeline(
         return Err("未设置活跃工作区".into());
     }
     let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
-    let db = rusqlite::Connection::open(&db_path)
+        let db = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
+    // Ensure table exists (may be freshly created or wiped by engine re-analyze)
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');
+         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);"
+    ).map_err(|e| format!("建表失败: {}", e))?;
     let lim = limit.unwrap_or(60);
     let module_filter = _module.filter(|m| !m.is_empty());
 
@@ -824,6 +829,9 @@ async fn hologram_record_event(
     let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
     let db = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("无法打开时间轴: {}", e))?;
+    let _ = db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');"
+    );
     let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
     let file_val = file.unwrap_or_default();
     db.execute(
@@ -839,6 +847,9 @@ async fn hologram_changes() -> Result<String, String> {
     let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
     let db = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("无法打开时间轴: {}", e))?;
+    let _ = db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');"
+    );
     let mut stmt = db.prepare("SELECT timestamp, event_type, summary FROM events ORDER BY id DESC LIMIT 10")
         .map_err(|e| format!("查询失败: {}", e))?;
     let changes: Vec<serde_json::Value> = stmt.query_map([], |row| {
