@@ -6,7 +6,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-194%20passed-brightgreen" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows-blue" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
@@ -226,46 +226,36 @@ cargo tauri build
 
 HoloGram 的 Rust 引擎可以独立作为 MCP 服务器运行，在任何 Claude Code / Cursor 会话中使用——不需要安装桌面应用。
 
-### 给 vibe coder：让 Agent 帮你装
+引擎是单文件二进制，tree-sitter 语法全静态链接，零依赖。丢哪都能跑。
 
-直接对 Claude Code / Cursor 说：
+### 🤙 一句话安装
 
-> 帮我装 HoloGram MCP 服务。clone 仓库到本地，编译引擎 `cd engine && cargo build --release`，把 `engine/target/release/hologram-engine.exe` 拷到 `~/.hologram/`，最后在 `~/.claude/mcp.json` 写入配置。
+**复制下面这段话，发给 Claude Code / Cursor / 任意 AI 编程助手：**
 
-Agent 会自己完成所有步骤。
+```
+请帮我安装 HoloGram MCP 服务。步骤：
 
-### 手动三步
+1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版 hologram-engine.exe
+2. 把 hologram-engine.exe 放到 ~/.hologram/ 目录下
+3. 在当前 AI 编程工具的 MCP 配置中注册这个服务：启动命令是 ~/.hologram/hologram-engine.exe，参数是 serve
+4. 完成后告诉我怎么验证装好了
+```
 
-**1. 编译引擎**
+**不用懂技术。复制、粘贴、回车。Agent 会自己搞定。**
+
+### 从源码编译（想自己改引擎的人）
+
 ```bash
 git clone https://github.com/834063245-creator/HoloGram.git
 cd HoloGram/engine
 cargo build --release
-```
-
-**2. 安装到全局路径**
-```bash
 mkdir -p ~/.hologram
-cp target/release/hologram-engine.exe ~/.hologram/   # Windows
-# cp target/release/hologram-engine ~/.hologram/      # macOS / Linux
+cp target/release/hologram-engine.exe ~/.hologram/
 ```
 
-**3. 创建 `~/.claude/mcp.json`**（Windows: `C:\Users\<你>\.claude\mcp.json`）
+然后同上，让 Agent 配 `mcp.json`。
 
-```json
-{
-  "mcpServers": {
-    "hologram": {
-      "command": "C:/Users/<你>/.hologram/hologram-engine.exe",
-      "args": ["serve"]
-    }
-  }
-}
-```
-
-> **macOS / Linux：** 把路径改成 `/home/<你>/.hologram/hologram-engine`。
-
-重启 Claude Code。第一个项目用 `hologram_analyze(path="/你的项目路径")` 载入，之后引擎自动增量更新。
+重启 Claude Code / Cursor。第一个项目用 `hologram_analyze(path="/你的项目路径")` 载入，之后引擎自动增量更新。
 
 ### 项目级 vs 全局
 
