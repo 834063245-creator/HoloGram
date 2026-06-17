@@ -126,8 +126,8 @@ fn tool_definitions() -> Vec<Value> {
         // ── V3+ parity (5) ──
         tool_def("hologram_search", "Fuzzy search for nodes by name or ID.",
             &[("query", "string", "Partial name or ID to search for"), ("limit", "integer", "Max results (default 20)")], &["query"]),
-        tool_def("hologram_explore", "Unified query: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts. Takes symbol names (agent's LLM extracts from NL), returns everything in one response.",
-            &[("symbols", "array", "List of symbol names to explore"), ("includeSource", "boolean", "Include source code sections (default true)")], &["symbols"]),
+        tool_def("hologram_explore", "Unified query: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts. Accepts natural language query or symbol names, returns everything in one response.",
+            &[("query", "string", "Natural language query (e.g. 'DataRequest validate task'). Auto-extracts symbol names."), ("symbols", "array", "List of symbol names (alternative to query)"), ("includeSource", "boolean", "Include source code sections (default true)")], &[]),
         tool_def("hologram_graph_summary", "Get a high-level summary of the current dependency graph.",
             &[], &[]),
         tool_def("hologram_community_report", "Report on community/cluster structure in the codebase.",
@@ -743,8 +743,9 @@ impl McpServer {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        if symbols.is_empty() {
-            return McpServer::error_response(id, -32602, "symbols array is required");
+        let query_str = args.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
+        if symbols.is_empty() && query_str.is_none() {
+            return McpServer::error_response(id, -32602, "symbols array or query string is required");
         }
         let include_source = args.get("includeSource")
             .and_then(|v| v.as_bool())
@@ -755,7 +756,7 @@ impl McpServer {
         match CACHED_GRAPH.lock() {
             Ok(guard) => match guard.as_ref() {
                 Some(g) => {
-                    let result = explore(g, &project_root, &symbols, include_source);
+                    let result = explore(g, &project_root, &symbols, query_str.as_deref(), include_source);
                     McpServer::tool_result(id, result)
                 }
                 None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
@@ -1611,6 +1612,21 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn test_explore_with_query() {
+        let _g = load_test_graph();
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+            json!({"query": "mod_a mod_b"}), 35)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+        // NL query should extract mod_a and mod_b, producing flow + blast + etc.
+        assert!(data["flow"]["path"].is_array(), "NL query should produce flow");
+        assert!(data["nodeIds"].as_array().unwrap().len() >= 2, "Should find at least 2 nodes");
     }
 
     #[test]
