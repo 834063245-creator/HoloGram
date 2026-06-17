@@ -70,10 +70,19 @@ impl McpManager {
         self.request_id = 0;
 
         // Wait for the ready signal from the server (analysis may take a while)
-        self.read_ready()?;
+        if let Err(e) = self.read_ready() {
+            self.kill_inner(); // clean up leaked child
+            return Err(e);
+        }
 
         // Immediately fetch tool list so the frontend can build dynamic tools
-        let tools = self.send_request("tools/list", "{}")?;
+        let tools = match self.send_request("tools/list", "{}") {
+            Ok(t) => t,
+            Err(e) => {
+                self.kill_inner(); // clean up leaked child
+                return Err(e);
+            }
+        };
 
         // Reset crash tracking on successful start
         self.crash_count = 0;
