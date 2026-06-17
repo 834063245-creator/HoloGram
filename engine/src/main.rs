@@ -41,6 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 info!("engine MCP serve ready — analysis + watcher deferred to first hologram_analyze");
 
+                // Send ready signal for Tauri McpManager — it expects {"method":"ready"}
+                // before sending initialize + tools/list. Without this, read_ready() times out.
+                println!(r#"{{"jsonrpc":"2.0","method":"ready"}}"#);
+
                 let server = McpServer::new(&root);
                 server.run_stdio();
             }

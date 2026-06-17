@@ -331,6 +331,34 @@ function doSearch(): void {
 
 // ── Agent setup ──
 
+// 参数名翻译：Agent 工具 → MCP 引擎
+// Agent 工具的 LLM schema 用 camelCase（LLM 生成更自然），
+// 但 MCP 引擎 + Tauri 命令用 snake_case + 部分字段名不同。
+type ArgMap = Record<string, string>;
+const ARG_TRANSLATIONS: Record<string, ArgMap> = {
+  hologram_impact:          { nodeId: 'node_id', maxDepth: 'depth' },
+  hologram_neighbors:       { nodeId: 'node_id' },
+  hologram_path:            { from: 'from_id', to: 'to_id' },
+  hologram_blindspots:      { threshold: 'filter' },
+  hologram_thread_conflicts:{ severity: 'node_id' },
+  hologram_diff:            { beforePath: 'before_path' },
+  hologram_coupling_report: { module: 'module_name' },
+  hologram_community_report:{ minSize: 'min_size' },
+  hologram_history:         { nodeId: 'node_id' },
+  hologram_community:       { nodeId: 'node_id' },
+  hologram_rename:          { oldName: 'old_name', newName: 'new_name', dryRun: 'dry_run', nodeId: 'node_id' },
+};
+
+function translateArgs(tool: string, args: Record<string, unknown>): Record<string, unknown> {
+  const map = ARG_TRANSLATIONS[tool];
+  if (!map) return args;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    out[map[k] || k] = v;
+  }
+  return out;
+}
+
 async function setupAgent(): Promise<void> {
   if (agentSetupRunning) { agentSetupPending = true; return; }
   agentSetupRunning = true;
@@ -419,15 +447,17 @@ async function setupAgentInner(): Promise<void> {
   // Step 2: 始终注册硬编码 hologram 工具（LLM 最优描述），执行时优先走 MCP
   if (currentGraphData) {
     const holoExec: ToolExecutor = async (name, args) => {
+      // 参数名翻译：Agent 工具用 camelCase（LLM 友好），MCP 引擎用 snake_case
+      const mapped = translateArgs(name, args);
       // MCP 优先，挂了降级 CLI 并清掉 mcpExec 避免后续白等
       if (mcpExec) {
         try {
-          return await mcpExec(name, args);
+          return await mcpExec(name, mapped);
         } catch {
           mcpExec = null;
         }
       }
-      const result = await invoke<string>(name, args);
+      const result = await invoke<string>(name, mapped);
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
     for (const tool of createHologramTools(holoExec)) {
