@@ -111,8 +111,7 @@ export class TimelinePanel {
   // ── Public API ──
 
   setProjectPath(path: string | null): void {
-    // Same path — don't reset events or re-fetch
-    if (this.path === path && path !== null) return;
+    // Allow re-entry for same path (supports retry after failure)
     const pathChanged = this.path !== path;
     this.path = path;
     if (path) {

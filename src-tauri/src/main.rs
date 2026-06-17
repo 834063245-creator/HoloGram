@@ -18,7 +18,6 @@ use mcp_manager::McpManager;
 use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
 use lsp_manager::{lsp_start, lsp_request, lsp_stop};
 use unity_manager::UnityManager;
-use engine_client::EngineClient;
 use sandbox::Sandbox;
 use audit::{AuditEntry, AuditLogger, now_iso};
 use std::collections::HashMap;
@@ -311,7 +310,7 @@ fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
 /// Run analysis via Rust Engine for a project, return JSON.
 /// Rust engine is fast enough (~4s for Django) that incremental mode is unnecessary.
 fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
-    match EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", project_path)) {
+    match mcp_invoke("hologram_analyze", serde_json::json!({"path": project_path})) {
         Ok(json) => {
             if json.trim().is_empty() {
                 eprintln!("[hologram] engine analysis returned empty response");
@@ -336,109 +335,105 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
 }
 
 // ═══════════════════════════════════════════════════════
-// 13 Tauri commands — one per hologram tool
+// MCP helper — all hologram_* tools route through McpManager, never TCP
+// ═══════════════════════════════════════════════════════
+
+/// Invoke an MCP tool via the persistent engine MCP server (engine.exe serve).
+/// Replaces all EngineClient::new("127.0.0.1:9777").send() — the engine runs in
+/// MCP stdio mode with NO TCP listener, so EngineClient always fails with ECONNREFUSED.
+fn mcp_invoke(tool: &str, args: serde_json::Value) -> Result<String, String> {
+    let mut mgr = MCP_MANAGER.lock().map_err(|e| format!("MCP 锁失败: {e}"))?;
+    mgr.call(tool, &args.to_string())
+}
+
+// ═══════════════════════════════════════════════════════
+// 22 Tauri commands — each mapped to an MCP tool
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    let stdout = mcp_invoke("hologram_analyze", serde_json::json!({"path": &target}))?;
 
-    // Try MCP transport first (engine in serve mode)
-    let result = {
-        let mut mgr = MCP_MANAGER.lock().unwrap();
-        mgr.call("hologram_analyze", &serde_json::json!({"path": &target}).to_string())
-    };
-
-    match result {
-        Ok(stdout) => {
-            // Persist engine result to hologram_graph.json
-            if !stdout.trim().is_empty() && !stdout.contains("\"error\"") {
-                if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                    let wrapped = serde_json::json!({
-                        "meta": {
-                            "source_root": &target,
-                            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-                            "version": "0.1.0",
-                            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
-                            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
-                        },
-                        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
-                        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
-                        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
-                    });
-                    let graph_path = format!("{}/hologram_graph.json", target);
-                    let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
-                    if let Err(e) = std::fs::write(&graph_path, &graph_json) {
-                        eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
-                    }
-                    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", target));
-                }
+    // Persist engine result to hologram_graph.json
+    if !stdout.trim().is_empty() && !stdout.contains("\"error\"") {
+        if let Ok(engine_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+            let wrapped = serde_json::json!({
+                "meta": {
+                    "source_root": &target,
+                    "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+                    "version": "0.1.0",
+                    "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
+                    "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
+                },
+                "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
+                "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
+                "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
+            });
+            let graph_path = format!("{}/hologram_graph.json", target);
+            let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
+            if let Err(e) = std::fs::write(&graph_path, &graph_json) {
+                eprintln!("[hologram] hologram_analyze: 写盘失败 {}: {e}", graph_path);
             }
-            Ok(stdout)
-        }
-        Err(mcp_err) => {
-            // Fallback: try TCP engine (legacy dev mode without MCP)
-            eprintln!("[hologram] MCP analyze failed ({}), trying TCP fallback", mcp_err);
-            let tcp_result = EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", target))?;
-            Ok(tcp_result)
+            let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", target));
         }
     }
+    Ok(stdout)
 }
 
 #[tauri::command]
 async fn hologram_neighbors(node_id: String, depth: Option<i32>) -> Result<String, String> {
-    let d = depth.unwrap_or(2);
-    EngineClient::new("127.0.0.1:9777").send(&format!("neighbors:{}:{}", node_id, d))
+    mcp_invoke("hologram_neighbors", serde_json::json!({"node_id": node_id, "depth": depth.unwrap_or(2)}))
 }
 
 #[tauri::command]
 async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<String, String> {
-    let d = max_depth.unwrap_or(3);
-    EngineClient::new("127.0.0.1:9777").send(&format!("impact:{}:{}", node_id, d))
+    mcp_invoke("hologram_impact", serde_json::json!({"node_id": node_id, "depth": max_depth.unwrap_or(3)}))
 }
 
 #[tauri::command]
 async fn hologram_path(from: String, to: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("path:{}:{}", from, to))
+    mcp_invoke("hologram_path", serde_json::json!({"from_id": from, "to_id": to}))
 }
 
 #[tauri::command]
 async fn hologram_diff(before_path: String, _after_path: Option<String>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("diff:{}", before_path))
+    mcp_invoke("hologram_diff", serde_json::json!({"before_path": before_path}))
 }
 
 #[tauri::command]
 async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("fragile:{}", limit.unwrap_or(10)))
+    mcp_invoke("hologram_fragile", serde_json::json!({"limit": limit.unwrap_or(10)}))
 }
 
 #[tauri::command]
 async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
-    let m = mode.unwrap_or_else(|| "all".into());
-    EngineClient::new("127.0.0.1:9777").send(&format!("cycle:{}", m))
+    mcp_invoke("hologram_cycle", serde_json::json!({"mode": mode.unwrap_or_else(|| "all".into())}))
 }
 
 #[tauri::command]
 async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
-    let l = limit.unwrap_or(50);
-    EngineClient::new("127.0.0.1:9777").send(&format!("search:{}:{}", query, l))
+    mcp_invoke("hologram_search", serde_json::json!({"query": query, "limit": limit.unwrap_or(50)}))
 }
 
 #[tauri::command]
 async fn hologram_coupling_report(module: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("coupling_report:{}", module))
+    mcp_invoke("hologram_coupling_report", serde_json::json!({"module_name": module}))
 }
 
 #[tauri::command]
 async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
-    let t = threshold.map(|v| v.to_string()).unwrap_or_default();
-    EngineClient::new("127.0.0.1:9777").send(&format!("blindspots:{}", t))
+    // MCP tool uses string filter ("all"/"L4"/"thread"/"cycle"), not float threshold.
+    // Default to "all" — the engine handles filtering internally.
+    let _ = threshold;
+    mcp_invoke("hologram_blindspots", serde_json::json!({"filter": "all"}))
 }
 
 #[tauri::command]
 async fn hologram_thread_conflicts(severity: Option<String>) -> Result<String, String> {
-    let s = severity.unwrap_or_default();
-    EngineClient::new("127.0.0.1:9777").send(&format!("thread:{}", s))
+    // MCP tool takes optional node_id; empty → global matrix
+    let node_id = severity.unwrap_or_default();
+    mcp_invoke("hologram_thread_conflicts", serde_json::json!({"node_id": node_id}))
 }
 
 #[tauri::command]
@@ -515,14 +510,14 @@ async fn hologram_community_report(
     resolution: Option<f64>,
     min_size: Option<i32>,
 ) -> Result<String, String> {
-    let r = resolution.map(|v| v.to_string()).unwrap_or_default();
-    let m = min_size.map(|v| v.to_string()).unwrap_or_default();
-    EngineClient::new("127.0.0.1:9777").send(&format!("community_report:{}:{}", r, m))
+    // MCP tool only has min_size (resolution not a separate param)
+    let _ = resolution;
+    mcp_invoke("hologram_community_report", serde_json::json!({"min_size": min_size.unwrap_or(3)}))
 }
 
 #[tauri::command]
 async fn hologram_graph_summary() -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("graph_summary:")
+    mcp_invoke("hologram_graph_summary", serde_json::json!({}))
 }
 
 #[tauri::command]
@@ -532,9 +527,13 @@ async fn hologram_rename(
     dry_run: Option<bool>,
     node_id: Option<String>,
 ) -> Result<String, String> {
-    let dry = dry_run.unwrap_or(false);
-    let nid = node_id.unwrap_or_default();
-    EngineClient::new("127.0.0.1:9777").send(&format!("rename:{}:{}:{}:{}", old_name, new_name, dry, nid))
+    // MCP rename doesn't filter by node_id — always renames all matching nodes
+    let _ = node_id;
+    mcp_invoke("hologram_rename", serde_json::json!({
+        "old_name": old_name,
+        "new_name": new_name,
+        "dry_run": dry_run.unwrap_or(false),
+    }))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -566,7 +565,7 @@ async fn hologram_record_event(
 
 #[tauri::command]
 async fn hologram_run_check(path: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
+    mcp_invoke("hologram_run_check", serde_json::json!({"path": path}))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -575,8 +574,9 @@ async fn hologram_run_check(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<String, String> {
-    let files_json = serde_json::to_string(&files).unwrap_or_default();
-    EngineClient::new("127.0.0.1:9777").send(&format!("preflight:{}\n{}", path, files_json))
+    // MCP preflight takes files array directly; path is derived from the engine's project_root
+    let _ = path;
+    mcp_invoke("hologram_preflight", serde_json::json!({"files": files}))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -585,8 +585,7 @@ async fn hologram_run_preflight(path: String, files: Vec<String>) -> Result<Stri
 
 #[tauri::command]
 async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, String> {
-    let days = days.unwrap_or(30);
-    EngineClient::new("127.0.0.1:9777").send(&format!("health:{}:{}", path, days))
+    mcp_invoke("hologram_run_health", serde_json::json!({"path": path, "days": days.unwrap_or(30)}))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -595,17 +594,17 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 
 #[tauri::command]
 async fn hologram_history(node_id: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("history:{}", node_id))
+    mcp_invoke("hologram_history", serde_json::json!({"node_id": node_id}))
 }
 
 #[tauri::command]
 async fn hologram_community(node_id: String) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("community:{}", node_id))
+    mcp_invoke("hologram_community", serde_json::json!({"node_id": node_id}))
 }
 
 #[tauri::command]
 async fn hologram_delayed() -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send("delayed:")
+    mcp_invoke("hologram_delayed", serde_json::json!({}))
 }
 
 #[tauri::command]
@@ -636,12 +635,10 @@ async fn hologram_hotspots(
     days: Option<i32>,
     min_count: Option<i32>,
 ) -> Result<String, String> {
-    // TODO: implement dedicated hotspots endpoint in engine TCP server
-    EngineClient::new("127.0.0.1:9777").send(&format!(
-        "timeline:{}:{}",
-        days.unwrap_or(30),
-        min_count.unwrap_or(3)
-    ))
+    // No dedicated MCP hotspots tool — use hologram_timeline as best proxy
+    let limit = min_count.unwrap_or(3);
+    let _ = days; // MCP timeline doesn't accept days; engine uses its own window
+    mcp_invoke("hologram_timeline", serde_json::json!({"limit": limit}))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -653,8 +650,13 @@ async fn hologram_workspace_conflict(
     path_a: String,
     path_b: String,
 ) -> Result<String, String> {
-    // TODO: implement dedicated conflict endpoint in engine TCP server
-    EngineClient::new("127.0.0.1:9777").send(&format!("conflict:{}:{}", path_a, path_b))
+    // No dedicated MCP conflict tool yet — return structured stub
+    Ok(serde_json::json!({
+        "status": "not_implemented",
+        "message": "workspace_conflict requires a dedicated MCP tool (not yet implemented in engine). Use hologram_preflight on each workspace to compare impact.",
+        "path_a": path_a,
+        "path_b": path_b,
+    }).to_string())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -666,7 +668,7 @@ async fn hologram_gate_check(
     path: String,
     _module_file: Option<String>,
 ) -> Result<String, String> {
-    EngineClient::new("127.0.0.1:9777").send(&format!("check:{}", path))
+    mcp_invoke("hologram_run_check", serde_json::json!({"path": path}))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1508,9 +1510,8 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
         "phase": "analysis", "message": "Rust 引擎分析中..."
     }));
 
-    // ── Run analysis via Rust Engine (TCP :9777) ──
-    let stdout = EngineClient::new("127.0.0.1:9777")
-        .send(&format!("analyze:{}", path))
+    // ── Run analysis via MCP engine (engine.exe serve) ──
+    let stdout = mcp_invoke("hologram_analyze", serde_json::json!({"path": &path}))
         .map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
 
     if let Some(window) = app.get_webview_window("main") {
@@ -1633,8 +1634,7 @@ async fn estimate_project_size(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn generate_lightweight_graph(path: String) -> Result<String, String> {
     // Rust engine full analysis replaces Python lightweight graph (faster: 4s vs 10-30s)
-    let stdout = EngineClient::new("127.0.0.1:9777")
-        .send(&format!("analyze:{}", path))
+    let stdout = mcp_invoke("hologram_analyze", serde_json::json!({"path": &path}))
         .map_err(|e| format!("引擎分析失败: {}", e))?;
 
     if stdout.trim().is_empty() || stdout.contains("\"error\"") {
@@ -1682,11 +1682,11 @@ async fn generate_lightweight_graph(path: String) -> Result<String, String> {
 /// so all MCP tools get full symbol-level data once the job finishes.
 #[tauri::command]
 async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<String, String> {
-    // Rust engine background analysis — fast enough to run synchronously via EngineClient
+    // Rust engine background analysis via MCP
     let app2 = app.clone();
     let path2 = path.clone();
     std::thread::spawn(move || {
-        match EngineClient::new("127.0.0.1:9777").send(&format!("analyze:{}", path2)) {
+        match mcp_invoke("hologram_analyze", serde_json::json!({"path": &path2})) {
             Ok(stdout) if !stdout.trim().is_empty() && !stdout.contains("\"error\"") => {
                 // Save graph to disk
                 let graph_path = format!("{}/hologram_graph.json", path2);
@@ -2256,32 +2256,28 @@ fn unity_status() -> Result<String, String> {
 
 #[tauri::command]
 fn engine_get_graph() -> Result<String, String> {
-    let client = EngineClient::new("127.0.0.1:9777");
-    client.send("get_graph")
+    // No direct MCP equivalent for raw graph dump — use graph_summary
+    mcp_invoke("hologram_graph_summary", serde_json::json!({}))
 }
 
 #[tauri::command]
 fn engine_neighbors(node_id: String, depth: usize) -> Result<String, String> {
-    let client = EngineClient::new("127.0.0.1:9777");
-    client.send(&format!("neighbors:{}:{}", node_id, depth))
+    mcp_invoke("hologram_neighbors", serde_json::json!({"node_id": node_id, "depth": depth}))
 }
 
 #[tauri::command]
 fn engine_path(from_id: String, to_id: String) -> Result<String, String> {
-    let client = EngineClient::new("127.0.0.1:9777");
-    client.send(&format!("path:{}:{}", from_id, to_id))
+    mcp_invoke("hologram_path", serde_json::json!({"from_id": from_id, "to_id": to_id}))
 }
 
 #[tauri::command]
 fn engine_search(query: String) -> Result<String, String> {
-    let client = EngineClient::new("127.0.0.1:9777");
-    client.send(&format!("search:{}", query))
+    mcp_invoke("hologram_search", serde_json::json!({"query": query}))
 }
 
 #[tauri::command]
 fn engine_impact(node_id: String, max_depth: usize) -> Result<String, String> {
-    let client = EngineClient::new("127.0.0.1:9777");
-    client.send(&format!("impact:{}:{}", node_id, max_depth))
+    mcp_invoke("hologram_impact", serde_json::json!({"node_id": node_id, "depth": max_depth}))
 }
 
 #[tauri::command]

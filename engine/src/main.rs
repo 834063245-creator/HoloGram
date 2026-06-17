@@ -8,8 +8,6 @@ use hologram_engine::routing::preflight::run_full_check;
 use hologram_engine::timeline::TimelineStore;
 use hologram_engine::pipeline::runner::analyze_project;
 use hologram_engine::mcp::{self, McpServer};
-use hologram_engine::storage::MemoryIndex;
-use hologram_engine::watcher;
 use serde_json::{self, json};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,40 +31,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 info!(project_root = %project_root, "engine starting in MCP serve mode (with project)");
 
-                // Initialize the new storage engine (GraphStore + SQLite)
+                // Initialize the storage engine (GraphStore + SQLite) lazily.
+                // Actual analysis is deferred to the first hologram_analyze MCP call.
+                // Watcher is also deferred — Windows notify can emit spurious events
+                // during startup, triggering re-analysis loops (622MB, 195 CPU seen).
                 if let Err(e) = mcp::init_graph_store(&root) {
                     warn!("[main] GraphStore init failed (non-fatal): {}", e);
                 }
 
-                info!("analysis started");
-                let mut result = analyze_project(&root);
-                CrossFileResolver::resolve(&mut result.graph);
-                compute_coupling(&mut result.graph);
-                hologram_engine::analysis::detect_framework_routes(&mut result.graph, &root);
-                hologram_engine::analysis::synthesize_dynamic_edges(&mut result.graph, &root);
-                hologram_engine::analysis::synthesize_dataflow_edges(&mut result.graph, &root);
-                detect_communities(&result.graph, 42);
-                let node_count = result.graph.node_count();
-                let edge_count = result.graph.edge_count();
-                // Sync to GraphStore (before moving graph into CACHED_GRAPH)
-                if let Some(store_mtx) = mcp::GRAPH_STORE.get() {
-                    if let Ok(store) = store_mtx.lock() {
-                        let idx = MemoryIndex::from_existing_graph(&result.graph);
-                        let ec = idx.edge_count();
-                        store.swap_index(idx);
-                        if let Err(e) = store.save() {
-                            warn!("[main] GraphStore save failed: {}", e);
-                        } else {
-                            info!(edges = ec, "[main] GraphStore saved");
-                        }
-                    }
-                }
-                if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
-                    *cache = Some(result.graph);
-                }
-                info!(nodes = node_count, edges = edge_count, elapsed = %result.elapsed_secs, "analysis complete");
-
-                watcher::start_watcher(root.clone());
+                info!("engine MCP serve ready — analysis + watcher deferred to first hologram_analyze");
 
                 let server = McpServer::new(&root);
                 server.run_stdio();

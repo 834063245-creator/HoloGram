@@ -31,7 +31,7 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
 
       if (!response.body) throw new Error(`${name}: no response body`);
 
-      yield* readSSE(response.body, name);
+      yield* readSSE(response.body, name, signal);
     },
   };
 }
@@ -284,6 +284,7 @@ interface StreamEvent {
 async function* readSSE(
   body: ReadableStream<Uint8Array>,
   name: string,
+  signal?: AbortSignal,
 ): AsyncGenerator<Chunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -299,6 +300,7 @@ async function* readSSE(
 
   try {
     while (true) {
+      if (signal?.aborted) throw new Error(`${name}: aborted`);
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
