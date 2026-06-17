@@ -414,12 +414,12 @@ async function setupAgentInner(): Promise<void> {
   // Step 2: 始终注册硬编码 hologram 工具（LLM 最优描述），执行时优先走 MCP
   if (currentGraphData) {
     const holoExec: ToolExecutor = async (name, args) => {
-      // MCP 优先，挂了降级 CLI
+      // MCP 优先，挂了降级 CLI 并清掉 mcpExec 避免后续白等
       if (mcpExec) {
         try {
           return await mcpExec(name, args);
         } catch {
-          // MCP 调用失败 → 降级 CLI
+          mcpExec = null;
         }
       }
       const result = await invoke<string>(name, args);
