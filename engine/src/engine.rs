@@ -495,6 +495,67 @@ impl Engine {
         });
     }
 
+    // ── Timeline ─────────────────────────────────────────────
+
+    /// Record a timeline event. Delegates to the store's SQLite backend.
+    pub fn record_timeline(
+        &self,
+        event_type: &str,
+        node_id: Option<&str>,
+        summary: &str,
+    ) -> Result<(), String> {
+        let store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("Store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Engine not initialized".to_string())?;
+        store
+            .db
+            .record_timeline(event_type, node_id, summary)
+            .map_err(|e| format!("Timeline record failed: {}", e))
+    }
+
+    /// Record a timeline event with properties.
+    pub fn record_timeline_with_props(
+        &self,
+        event_type: &str,
+        node_id: Option<&str>,
+        summary: &str,
+        props: &serde_json::Value,
+    ) -> Result<(), String> {
+        let store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("Store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Engine not initialized".to_string())?;
+        store
+            .db
+            .record_timeline_with_props(event_type, node_id, summary, props)
+            .map_err(|e| format!("Timeline record failed: {}", e))
+    }
+
+    /// Query timeline events.
+    pub fn query_timeline(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("Store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Engine not initialized".to_string())?;
+        store
+            .db
+            .query_timeline(limit)
+            .map_err(|e| format!("Timeline query failed: {}", e))
+    }
+
     /// Stop the file watcher. Blocks until the watcher thread exits (max ~500ms).
     pub fn stop_watcher(&self) {
         self.watcher_running.store(false, Ordering::SeqCst);
@@ -639,6 +700,44 @@ pub fn engine_state() -> EngineState {
 /// methods like start_watcher() / stop_watcher() on the Engine.
 pub fn with_engine<R>(f: impl FnOnce(&Engine) -> R) -> Option<R> {
     ENGINE.read().as_ref().map(f)
+}
+
+/// Record a timeline event on the global engine.
+pub fn engine_record_timeline(
+    event_type: &str,
+    node_id: Option<&str>,
+    summary: &str,
+) -> Result<(), String> {
+    let guard = ENGINE.read();
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+    engine.record_timeline(event_type, node_id, summary)
+}
+
+/// Record a timeline event with properties on the global engine.
+pub fn engine_record_timeline_with_props(
+    event_type: &str,
+    node_id: Option<&str>,
+    summary: &str,
+    props: &serde_json::Value,
+) -> Result<(), String> {
+    let guard = ENGINE.read();
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+    engine.record_timeline_with_props(event_type, node_id, summary, props)
+}
+
+/// Query timeline events from the global engine.
+pub fn engine_query_timeline(
+    limit: usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    let guard = ENGINE.read();
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+    engine.query_timeline(limit)
 }
 
 /// Run analysis on the global engine. Convenience wrapper that callers

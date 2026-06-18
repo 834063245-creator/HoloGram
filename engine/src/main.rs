@@ -1,12 +1,11 @@
 #![windows_subsystem = "windows"]
 
-use hologram_engine::analysis::{coupling::compute_coupling, fragile_nodes, detect_cycles, coupling_report, graph_summary, thread_conflict_report, find_blindspots};
+use hologram_engine::analysis::{fragile_nodes, detect_cycles, coupling_report, graph_summary, thread_conflict_report, find_blindspots};
 use hologram_engine::community::detect_communities;
-use hologram_engine::graph::{CrossFileResolver, query, Graph, EdgeKind};
+use hologram_engine::graph::{query, Graph, EdgeKind};
 use hologram_engine::logging;
 use hologram_engine::routing::preflight::run_full_check;
-use hologram_engine::pipeline::runner::analyze_project;
-use hologram_engine::mcp::{self, McpServer, with_graph_store};
+use hologram_engine::mcp::{self, McpServer};
 use serde_json::{self, json};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -112,9 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
             } else if req_owned.starts_with("timeline") {
                 handle_simple("timeline", req_owned.trim(), |_g, _a| {
-                    json!(with_graph_store(|store| {
-                        store.db.query_timeline(50).unwrap_or_default()
-                    }).unwrap_or_default())
+                    json!(hologram_engine::engine::engine_query_timeline(50).unwrap_or_default())
                 })
             } else if req_owned.starts_with("analyze:") {
                 let path = req_owned.trim().strip_prefix("analyze:").unwrap_or(".").trim().to_string();
@@ -223,95 +220,52 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         .unwrap_or_default();
     }
 
-    let mut result = analyze_project(&root);
-
-    // Post-processing: cross-file edge resolution
-    let resolve_start = std::time::Instant::now();
-    let resolved = CrossFileResolver::resolve(&mut result.graph);
-    info!(edges = resolved, elapsed_secs = resolve_start.elapsed().as_secs_f64(), "cross-file resolution done");
-
-    // Post-processing: coupling depth + framework routes + dynamic dispatch
-    let coupling_start = std::time::Instant::now();
-    compute_coupling(&mut result.graph);
-    info!(elapsed_secs = coupling_start.elapsed().as_secs_f64(), "coupling computation done");
-
-    // Framework route detection (Django, Express, ...)
-    hologram_engine::analysis::detect_framework_routes(&mut result.graph, &root);
-    info!("framework routes detected");
-
-    // Dynamic dispatch synthesis (callback/observer edges)
-    hologram_engine::analysis::synthesize_dynamic_edges(&mut result.graph, &root);
-    info!("dynamic dispatch edges synthesized");
-
-    let comm_start = std::time::Instant::now();
-    let communities = detect_communities(&result.graph, 42);
-
-    // Cache for subsequent queries
-    let graph_clone = result.graph.clone();
-    if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
-        *cache = Some(graph_clone);
-    }
+    // Initialize engine and run analysis
+    let _ = hologram_engine::engine::engine_init(&root);
+    let result = match hologram_engine::engine::engine_analyze(&root) {
+        Ok(r) => r,
+        Err(e) => return serde_json::to_vec(&serde_json::json!({"error": e})).unwrap_or_default(),
+    };
 
     // Record timeline event
-    let _ = with_graph_store(|store| {
-        store.db.record_timeline(
-            "analyze",
-            None::<&str>,
-            &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.graph.node_count(), result.graph.edge_count(), result.elapsed_secs),
-        ).ok()
-    });
-
-    info!(count = communities.len(), elapsed_secs = comm_start.elapsed().as_secs_f64(), "communities detected");
+    let _ = hologram_engine::engine::engine_record_timeline(
+        "analyze",
+        None::<&str>,
+        &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.node_count, result.edge_count, result.elapsed_secs),
+    );
 
     // Serialize full graph for Unity consumption
     let nodes: Vec<serde_json::Value> = result.graph.nodes.values().map(|n| {
         serde_json::json!({
-            "id": n.id,
-            "name": n.name,
-            "type": n.kind.as_str(),
-            "location": n.location,
-            "in_degree": n.in_degree,
-            "out_degree": n.out_degree,
-            "properties": n.properties,
-            "position": n.position,
-            "community_id": n.community_id
+            "id": n.id, "name": n.name, "type": n.kind.as_str(),
+            "location": n.location, "in_degree": n.in_degree,
+            "out_degree": n.out_degree, "properties": n.properties,
+            "position": n.position, "community_id": n.community_id
         })
     }).collect();
 
     let edges: Vec<serde_json::Value> = result.graph.edges.values().map(|e| {
         serde_json::json!({
-            "id": e.id,
-            "source": e.source,
-            "target": e.target,
-            "type": e.kind.as_str(),
-            "coupling_depth": e.coupling_depth,
-            "cross_file": e.cross_file,
-            "direction": e.direction,
-            "temporal_delay_sec": e.temporal_delay_sec,
-            "medium_node_id": e.medium_node_id
+            "id": e.id, "source": e.source, "target": e.target,
+            "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+            "cross_file": e.cross_file, "direction": e.direction,
+            "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id
         })
     }).collect();
 
-    let communities_json: Vec<serde_json::Value> = communities
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            serde_json::json!({
-                "id": format!("comm_{}", i),
-                "label": format!("社区 {}", i + 1),
-                "size": c.len(),
-                "node_ids": c
-            })
-        })
+    // Detect communities for serialization
+    let communities = detect_communities(&result.graph, 42);
+    let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
+        .map(|(i, c)| serde_json::json!({
+            "id": format!("comm_{}", i), "label": format!("社区 {}", i + 1),
+            "size": c.len(), "node_ids": c
+        }))
         .collect();
 
     serde_json::to_vec(&serde_json::json!({
-        "nodes": nodes,
-        "edges": edges,
-        "communities": communities_json,
+        "nodes": nodes, "edges": edges, "communities": communities_json,
         "elapsed_secs": result.elapsed_secs,
-        "node_count": result.graph.node_count(),
-        "edge_count": result.graph.edge_count()
+        "node_count": result.node_count, "edge_count": result.edge_count
     }))
     .unwrap_or_default()
 }
@@ -329,24 +283,20 @@ fn handle_check(request: &str) -> Vec<u8> {
     let hologram_dir = root.join(".hologram");
     let baseline_path = hologram_dir.join("baseline.json");
 
-    // Auto-analyze if no cached graph
-    {
-        let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
-        if cache.is_none() {
-            drop(cache);
-            if root.exists() {
-                let mut result = analyze_project(&root);
-                compute_coupling(&mut result.graph);
-                detect_communities(&result.graph, 42);
-                if let Ok(mut c) = mcp::CACHED_GRAPH.lock() { *c = Some(result.graph.clone()); }
-            }
-        }
+    // Guard: project must exist
+    if !root.exists() {
+        return b"{\"error\":\"project not found\"}".to_vec();
     }
 
-    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
-    let after = match cache.as_ref() {
-        Some(g) => g,
-        None => return b"{\"error\":\"project not found\"}".to_vec(),
+    // Auto-analyze if no graph loaded
+    if hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0).unwrap_or(false) == false {
+        let _ = hologram_engine::engine::engine_init(&root);
+        let _ = hologram_engine::engine::engine_analyze(&root);
+    }
+
+    let after = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {
+        Ok(g) => g,
+        Err(_) => return b"{\"error\":\"analysis failed\"}".to_vec(),
     };
 
     // Load previous baseline — first run has no baseline, use empty graph
@@ -359,63 +309,54 @@ fn handle_check(request: &str) -> Vec<u8> {
         hologram_engine::graph::Graph::default()
     };
 
-    let result = run_full_check(&before, after, &changed_files, path);
+    let result = run_full_check(&before, &after, &changed_files, path);
 
     // Save current graph as new baseline — only if check passed
     let passed = result["passed"].as_bool().unwrap_or(true);
     if passed {
         let _ = std::fs::create_dir_all(&hologram_dir);
-        if let Ok(json) = serde_json::to_string_pretty(after) {
+        if let Ok(json) = serde_json::to_string_pretty(&after) {
             let _ = std::fs::write(&baseline_path, json);
         }
     }
 
-    // Record timeline event with full check properties
-    let _ = with_graph_store(|store| {
-        let violation_count = result["violation_count"].as_u64().unwrap_or(0);
-        let event_type = if passed { "commit_clean" } else { "commit_violation" };
-        let summary = if passed {
-            format!("简报通过（{} 违规）", violation_count)
-        } else {
-            format!("简报未通过：{} 条违规", violation_count)
-        };
-        let props = serde_json::json!({
-            "passed": result["passed"],
-            "timestamp": result["timestamp"],
-            "changed_files": result["changed_files"],
-            "total_changed_files": result["total_changed_files"],
-            "l5_violations": result["l5_violations"],
-            "l4_violations": result["l4_violations"],
-            "l3_violations": result["l3_violations"],
-            "l2_violations": result["l2_violations"],
-            "passed_checks": result["passed_checks"],
-            "blast_radius": result["blast_radius"],
-            "cross_community_edges": result["cross_community_edges"],
-            "new_cycles": result["new_cycles"],
-            "new_thread_conflicts": result["new_thread_conflicts"],
-            "api_signature_changes": result["api_signature_changes"],
-            "violation_count": result["violation_count"],
-        });
-        store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props).ok()
+    // Record timeline event
+    let violation_count = result["violation_count"].as_u64().unwrap_or(0);
+    let event_type = if passed { "commit_clean" } else { "commit_violation" };
+    let summary = if passed {
+        format!("简报通过（{} 违规）", violation_count)
+    } else {
+        format!("简报未通过：{} 条违规", violation_count)
+    };
+    let props = serde_json::json!({
+        "passed": result["passed"],
+        "violation_count": violation_count,
     });
+    let _ = hologram_engine::engine::engine_record_timeline_with_props(
+        &event_type, None::<&str>, &summary, &props,
+    );
 
     serde_json::to_vec(&result).unwrap_or_default()
 }
 
 fn handle_simple<F: FnOnce(&Graph, &str) -> serde_json::Value>(prefix: &str, request: &str, f: F) -> Vec<u8> {
     let arg = request.strip_prefix(prefix).unwrap_or("");
-    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
-    match cache.as_ref() {
-        Some(g) => serde_json::to_vec(&f(g, arg)).unwrap_or_default(),
-        None => b"{\"error\":\"no graph loaded\"}".to_vec(),
+    match hologram_engine::engine::engine_read_graph(|g| {
+        if g.edge_count() == 0 && g.node_count() == 0 {
+            return serde_json::Value::Null; // signal "no graph"
+        }
+        f(g, arg)
+    }) {
+        Ok(v) if v.is_null() => b"{\"error\":\"no graph loaded\"}".to_vec(),
+        Ok(v) => serde_json::to_vec(&v).unwrap_or_default(),
+        Err(_) => b"{\"error\":\"no graph loaded\"}".to_vec(),
     }
 }
 
 fn handle_diff(baseline_path: &str) -> Vec<u8> {
-    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
-    let current = match cache.as_ref() {
-        Some(g) => g,
-        None => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
+    let current = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {
+        Ok(g) if g.node_count() > 0 || g.edge_count() > 0 => g,
+        _ => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
     };
 
     let baseline_path = if baseline_path.is_empty() {
@@ -424,7 +365,6 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
         baseline_path.to_string()
     };
 
-    // Try to load baseline
     match Graph::from_json_file(&baseline_path) {
         Ok(baseline) => {
             let d = baseline.diff(&current);
@@ -437,16 +377,13 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
             let is_empty = added_nodes.is_empty() && removed_nodes.is_empty() && modified_nodes.is_empty();
             serde_json::to_vec(&json!({
                 "is_empty": is_empty,
-                "added_nodes": added_nodes,
-                "removed_nodes": removed_nodes,
+                "added_nodes": added_nodes, "removed_nodes": removed_nodes,
                 "modified_nodes": modified_nodes,
-                "added_edges": d.added_edges.len(),
-                "removed_edges": d.removed_edges.len(),
+                "added_edges": d.added_edges.len(), "removed_edges": d.removed_edges.len(),
             })).unwrap_or_default()
         }
         Err(_) => {
-            // Baseline doesn't exist yet — save current graph as baseline
-            let graph_json = serde_json::to_string_pretty(current).unwrap_or_default();
+            let graph_json = serde_json::to_string_pretty(&current).unwrap_or_default();
             if let Err(e) = std::fs::write(&baseline_path, &graph_json) {
                 return serde_json::to_vec(&json!({"error": format!("无法创建基线: {}", e)})).unwrap_or_default();
             }
@@ -461,10 +398,9 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
 
 fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
     let args = request.strip_prefix(prefix).unwrap_or("");
-    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
-    let graph = match cache.as_ref() {
-        Some(g) => g,
-        None => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
+    let graph = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {
+        Ok(g) if g.node_count() > 0 || g.edge_count() > 0 => g,
+        _ => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
     };
 
     let result = match prefix {
@@ -472,28 +408,28 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
             let parts: Vec<&str> = args.split(':').collect();
             let node_id = parts[0];
             let depth: usize = parts.get(1).and_then(|d| d.parse().ok()).unwrap_or(1);
-            let nb = query::neighbors(graph, node_id, depth);
+            let nb = query::neighbors(&graph, node_id, depth);
             serde_json::json!({ "neighbors": nb.iter().map(|(s,t,d)| json!([s,t,d])).collect::<Vec<_>>() })
         }
         "path:" => {
             let parts: Vec<&str> = args.split(':').collect();
             if parts.len() < 2 { serde_json::json!({"error":"usage: path:from:to"}) }
             else {
-                match query::shortest_path(graph, parts[0], parts[1]) {
+                match query::shortest_path(&graph, parts[0], parts[1]) {
                     Some(p) => serde_json::json!({"path": p, "length": p.len()}),
                     None => serde_json::json!({"path": null, "message": "no path found"}),
                 }
             }
         }
         "search:" => {
-            let results = query::search_nodes(graph, args);
+            let results = query::search_nodes(&graph, args);
             serde_json::json!({ "results": results.iter().map(|n| json!({"id":n.id,"name":n.name})).collect::<Vec<_>>() })
         }
         "impact:" => {
             let parts: Vec<&str> = args.split(':').collect();
             let node_id = parts[0];
             let max_depth: usize = parts.get(1).and_then(|d| d.parse().ok()).unwrap_or(3);
-            let layers = query::impact(graph, node_id, max_depth);
+            let layers = query::impact(&graph, node_id, max_depth);
             serde_json::json!({ "layers": layers })
         }
         _ => serde_json::json!({"error":"unknown query"}),
@@ -503,29 +439,28 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
 }
 
 fn handle_get_graph() -> Vec<u8> {
-    let cache = mcp::CACHED_GRAPH.lock().unwrap_or_else(|e| e.into_inner());
-    match cache.as_ref() {
-        Some(g) => {
-            let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| {
-                serde_json::json!({
-                    "id": n.id, "name": n.name, "type": n.kind.as_str(),
-                    "location": n.location, "in_degree": n.in_degree,
-                    "out_degree": n.out_degree, "properties": n.properties,
-                    "position": n.position, "community_id": n.community_id,
-                })
-            }).collect();
-            let edges: Vec<serde_json::Value> = g.edges.values().map(|e| {
-                serde_json::json!({
-                    "id": e.id, "source": e.source, "target": e.target,
-                    "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-                    "cross_file": e.cross_file, "direction": e.direction,
-                    "temporal_delay_sec": e.temporal_delay_sec,
-                    "medium_node_id": e.medium_node_id,
-                })
-            }).collect();
-            serde_json::to_vec(&serde_json::json!({"nodes": nodes, "edges": edges})).unwrap_or_default()
-        }
-        None => b"{\"nodes\":[],\"edges\":[]}".to_vec(),
+    match hologram_engine::engine::engine_read_graph(|g| {
+        let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| {
+            serde_json::json!({
+                "id": n.id, "name": n.name, "type": n.kind.as_str(),
+                "location": n.location, "in_degree": n.in_degree,
+                "out_degree": n.out_degree, "properties": n.properties,
+                "position": n.position, "community_id": n.community_id,
+            })
+        }).collect();
+        let edges: Vec<serde_json::Value> = g.edges.values().map(|e| {
+            serde_json::json!({
+                "id": e.id, "source": e.source, "target": e.target,
+                "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+                "cross_file": e.cross_file, "direction": e.direction,
+                "temporal_delay_sec": e.temporal_delay_sec,
+                "medium_node_id": e.medium_node_id,
+            })
+        }).collect();
+        serde_json::json!({"nodes": nodes, "edges": edges})
+    }) {
+        Ok(v) => serde_json::to_vec(&v).unwrap_or_default(),
+        Err(_) => b"{\"nodes\":[],\"edges\":[]}".to_vec(),
     }
 }
 
@@ -566,24 +501,27 @@ mod tests {
 
     fn load_test_graph() -> std::sync::MutexGuard<'static, ()> {
         let guard = lock_bin();
-        let mut g = hologram_engine::graph::Graph::new();
-        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
-        a.location = Some("src/a.rs".into());
-        g.add_node(a);
-        let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
-        b.location = Some("src/b.rs".into());
-        g.add_node(b);
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
-            *cache = Some(g);
-        }
+        let tmp = std::env::temp_dir().join("hologram_bin_test");
+        let _ = std::fs::create_dir_all(&tmp);
+        let _ = hologram_engine::engine::engine_init(&tmp);
+        let _ = hologram_engine::engine::engine_write(|idx| {
+            let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+            a.location = Some("src/a.rs".into());
+            idx.insert_node(a);
+            let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
+            b.location = Some("src/b.rs".into());
+            idx.insert_node(b);
+            idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        });
         guard
     }
 
     fn clear_graph() {
-        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
-            *cache = None;
-        }
+        // Remove all graph data while keeping engine alive.
+        let _ = hologram_engine::engine::engine_write(|idx| {
+            let ids: Vec<String> = { idx.nodes_iter().map(|n| n.id.clone()).collect() };
+            for id in &ids { idx.remove_node(id); }
+        });
     }
 
     // ── Framing protocol ──
@@ -635,14 +573,15 @@ mod tests {
 
     #[test]
     fn test_handle_get_graph_returns_cached_data() {
-        // Populate CACHED_GRAPH first
-        let mut g = Graph::new();
-        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
-        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        if let Ok(mut cache) = mcp::CACHED_GRAPH.lock() {
-            *cache = Some(g);
-        }
+        let _lock = lock_bin();
+        let tmp = std::env::temp_dir().join("hologram_bin_get_graph");
+        let _ = std::fs::create_dir_all(&tmp);
+        let _ = hologram_engine::engine::engine_init(&tmp);
+        let _ = hologram_engine::engine::engine_write(|idx| {
+            idx.insert_node(Node::new("a", "fn_a", NodeKind::Symbol));
+            idx.insert_node(Node::new("b", "fn_b", NodeKind::Symbol));
+            idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        });
         let response = handle_get_graph();
         let v: serde_json::Value = serde_json::from_slice(&response).unwrap();
         assert_eq!(v["nodes"].as_array().unwrap().len(), 2);
@@ -652,8 +591,6 @@ mod tests {
         assert!(ids.contains(&"a"));
         assert!(ids.contains(&"b"));
         assert_eq!(v["edges"][0]["source"], "a");
-        // Clean up — must run even if assertions fail
-        let _ = mcp::CACHED_GRAPH.lock().map(|mut c| *c = None);
     }
 
     // ── handle_simple ──
@@ -777,7 +714,7 @@ mod tests {
         let _g = lock_bin();
         clear_graph();
         // handle_check strips the "check:" prefix internally
-        let resp = handle_check("check:C:/nonexistent/path/xyz");
+        let resp = handle_check("check:C:/hologram_definitely_nonexistent_dir_xyz123");
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
         assert_eq!(v["error"], "project not found");
     }
