@@ -13,6 +13,7 @@ mod sandbox;
 mod audit;
 mod credential;
 mod logging;
+mod workspace;
 
 use mcp_manager::McpManager;
 use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
@@ -262,6 +263,62 @@ fn get_active_project() -> Result<String, String> {
     Ok(ACTIVE_PROJECT.lock().unwrap().clone())
 }
 
+// ═══════════════════════════════════════════════════════
+// Workspace lifecycle commands — v4.1 unified workspace management
+// These replace the old piecemeal set_active_project + start_watching + stop_watching.
+// ═══════════════════════════════════════════════════════
+
+/// Type alias for the managed workspace state.
+type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
+
+/// Open and activate a workspace. Creates sandbox, audit logger, sets ACTIVE_PROJECT.
+/// Called once when the user opens a folder.
+#[tauri::command]
+async fn workspace_activate(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let handle = workspace::WorkspaceHandle::new(&path);
+    handle.activate(&ACTIVE_PROJECT, &project_root());
+
+    // Also populate legacy globals for backward compat during transition (Phase 3 will remove)
+    let project_path = std::path::Path::new(&path);
+    *SANDBOX.lock().unwrap() = Some(Sandbox::new(project_path));
+    *AUDIT_LOGGER.lock().unwrap() = Some(AuditLogger::new(project_path));
+    let _ = LOG_GUARD.get_or_init(|| logging::init_logging(project_path));
+
+    *state.lock().unwrap() = Some(handle);
+    Ok(())
+}
+
+/// Deactivate the current workspace. Stops the file watcher, clears changed files.
+/// Called before switching to a new workspace or closing the app.
+#[tauri::command]
+async fn workspace_deactivate(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    if let Some(ref mut handle) = *state.lock().unwrap() {
+        handle.deactivate();
+    }
+    *state.lock().unwrap() = None;
+    Ok(())
+}
+
+/// Start the file watcher for the active workspace.
+/// Must be called after workspace_activate.
+#[tauri::command]
+async fn workspace_start_watcher(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    if let Some(ref mut handle) = *state.lock().unwrap() {
+        handle.start_watcher(app);
+        Ok(())
+    } else {
+        Err("没有活跃的工作区".into())
+    }
+}
+
 #[allow(dead_code)]
 fn active_graph() -> String {
     let proj = ACTIVE_PROJECT.lock().unwrap();
@@ -276,9 +333,10 @@ fn active_graph() -> String {
 }
 
 // ═══════════════════════════════════════════════════════
-// Watcher State
+// Watcher State (legacy — replaced by WorkspaceHandle in workspace.rs)
 // ═══════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 struct WatcherState {
     running: AtomicBool,
     project_path: Mutex<String>,
@@ -340,7 +398,7 @@ use engine::pipeline::runner::analyze_project;
 use engine::graph::query;
 
 /// Run analysis and cache result in CACHED_GRAPH. Returns JSON summary.
-fn direct_analyze(path: &str) -> Result<String, String> {
+pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
     let root = std::path::PathBuf::from(path);
     if !root.exists() {
         return Err(format!("路径不存在: {path}"));
@@ -404,7 +462,8 @@ fn with_graph<F: FnOnce(&Graph) -> serde_json::Value>(f: F) -> Result<String, St
 }
 
 /// 从 CACHED_GRAPH 序列化完整图 JSON — 前端和 analyze_and_load 共用。
-fn serialize_cached_graph() -> Result<String, String> {
+/// `source_root` is the workspace path to embed in the graph meta.
+fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
     let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
     match cache.as_ref() {
         Some(g) => {
@@ -427,7 +486,7 @@ fn serialize_cached_graph() -> Result<String, String> {
                 .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
                 .collect();
             let meta = serde_json::json!({
-                "source_root": ACTIVE_PROJECT.lock().unwrap().clone(),
+                "source_root": source_root,
                 "node_count": g.node_count(),
                 "edge_count": g.edge_count(),
             });
@@ -438,9 +497,17 @@ fn serialize_cached_graph() -> Result<String, String> {
 }
 
 /// 返回 CACHED_GRAPH 的完整 JSON — 前端唯一数据来源（冷启动除外）。
+/// Reads the workspace path from the active WorkspaceHandle, falling back to ACTIVE_PROJECT.
 #[tauri::command]
-async fn get_full_graph() -> Result<String, String> {
-    tokio::task::spawn_blocking(move || serialize_cached_graph())
+async fn get_full_graph(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let source_root = if let Some(ref handle) = *state.lock().unwrap() {
+        handle.path.clone()
+    } else {
+        ACTIVE_PROJECT.lock().unwrap().clone()
+    };
+    tokio::task::spawn_blocking(move || serialize_cached_graph(&source_root))
         .await.map_err(|e| format!("任务失败: {e}"))?
 }
 
@@ -1938,7 +2005,7 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
         let _ = regenerate_file_graph(&path);
     }
 
-    serialize_cached_graph()
+    serialize_cached_graph(&path)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2685,12 +2752,17 @@ fn main() {
         project_path: Mutex::new(String::new()),
     });
 
+    let workspace_state: WorkspaceState = Arc::new(Mutex::new(None));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(watcher_state)
+        .manage(workspace_state)
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Kill all orphaned background jobs (non-blocking — if lock is held, skip)
+                // Deactivate workspace (stops watcher with proper join)
+                // workspace_state is captured by the builder chain — we access it via a
+                // static fallback: the legacy globals handle cleanup here
                 if let Ok(mut jobs) = BG_JOBS.try_lock() {
                     for (_, job) in jobs.iter_mut() {
                         let _ = job.child.kill();
@@ -2746,6 +2818,9 @@ fn main() {
             hologram_gate_check,
             start_watching,
             stop_watching,
+            workspace_activate,
+            workspace_deactivate,
+            workspace_start_watcher,
             list_directory,
             read_file_content,
             write_file_content,
