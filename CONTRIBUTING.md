@@ -2,7 +2,7 @@
 
 感谢你对 HoloGram 的兴趣！
 
-HoloGram 是一个 **Python 引擎 + Rust/Tauri 2 桌面壳 + TypeScript/Three.js 3D 前端** 的项目。贡献前请先读下面的指南。
+HoloGram 是一个 **Rust 分析引擎 + Tauri 2 桌面壳 + TypeScript/Three.js 3D 前端** 的项目。贡献前请先读下面的指南。
 
 ## 行为准则
 
@@ -31,15 +31,15 @@ HoloGram 是一个 **Python 引擎 + Rust/Tauri 2 桌面壳 + TypeScript/Three.j
 1. Fork 仓库
 2. 创建 feature 分支：`git checkout -b feature/your-feature`
 3. 写代码
-4. **Python 改动必须跑测试**：
+4. **Rust 引擎改动必须跑测试**：
    ```bash
-   pytest tests/ -x -q
+   cd engine && cargo test
    ```
 5. **前端改动必须通过类型检查**：
    ```bash
    cd src-ui && npx tsc --noEmit
    ```
-6. **Rust 改动必须通过编译检查**：
+6. **Tauri 层改动必须通过编译检查**：
    ```bash
    cargo check --manifest-path src-tauri/Cargo.toml
    ```
@@ -55,13 +55,16 @@ HoloGram 是一个 **Python 引擎 + Rust/Tauri 2 桌面壳 + TypeScript/Three.j
 ### 项目结构
 
 ```
-src_python/     Python 分析引擎（代码分析逻辑全在这里）
-├── adapters/   tree-sitter / AST 多语言适配器
-├── analysis/   深层诊断（耦合/数据流/线程）
-├── core/       图模型、社区检测、合并、重命名
-├── pipeline/   分析流水线、缓存、文件发现
-├── routing/    变更路由和约束校验
-└── cli.py      CLI 入口
+engine/         Rust 分析引擎（代码分析逻辑全在这里）
+├── src/
+│   ├── graph/        图模型、合并、diff、resolver
+│   ├── adapter/      tree-sitter 多语言适配器
+│   ├── analysis/     深层诊断（耦合/数据流/线程/盲区/explore）
+│   ├── pipeline/     分析流水线（发现/解析/编排）
+│   ├── community/    社区检测（Louvain）
+│   ├── routing/      变更路由和约束校验
+│   ├── storage/      存储引擎（MemoryIndex/SqliteDb/GraphStore）
+│   └── mcp.rs        MCP Server（25 个工具）
 
 src-ui/src/     TypeScript 前端
 ├── agent/      Agent 工具、hooks、内存、权限
@@ -70,28 +73,27 @@ src-ui/src/     TypeScript 前端
 └── main.ts     应用入口
 
 src-tauri/      Rust / Tauri 2 桌面壳
-├── src/        Rust 源码
+├── src/        Rust 桥接层（Tauri commands + EngineClient）
 ├── Cargo.toml
 └── tauri.conf.json
-
-tests/          Python 测试集（pytest）
 ```
 
 ### 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 分析引擎 | Python 3.10+ · networkx · igraph · leidenalg · tree-sitter |
+| 分析引擎 | Rust · tree-sitter (18 语言) · rayon 并行 · parking_lot |
+| 存储引擎 | MemoryIndex (邻接表) · SQLite+FTS5 · GraphStore (RwLock) |
 | 桌面壳 | Rust · Tauri 2 |
-| 前端 | TypeScript · Vite · Three.js · Monaco · xterm.js |
-| 测试 | pytest (Python) · cargo test (Rust) · tsc (TypeScript) |
+| 前端 | TypeScript · Vite · Three.js · Monaco · xterm.js · GSAP |
+| 测试 | cargo test (Rust 275+) · tsc (TypeScript) |
 
 ### 需要帮助？
 
 - 阅读 [README](README.md)
 - 查看 [GitHub Discussions](https://github.com/834063245-creator/HoloGram/discussions)
-- Python 代码内有大量中文注释，读源码也是好办法
+- [PROJECT.md](PROJECT.md) 是项目全景真相源
 
 ---
 
-**HoloGram 用自己分析自己。** 跑一遍 `hologram analyze .`，你就能看到自己的贡献在依赖图里怎么连上整个项目。
+**HoloGram 用自己分析自己。** 跑一遍 `hologram_analyze`，你就能看到自己的贡献在依赖图里怎么连上整个项目。
