@@ -52,6 +52,14 @@ pub enum EngineState {
     Analyzing {
         /// When the analysis started (ms since epoch).
         started_at_ms: u64,
+        /// Current phase label (e.g. "解析文件", "社区检测").
+        phase: String,
+        /// Files processed so far.
+        current: usize,
+        /// Total files to process (0 if unknown).
+        total: usize,
+        /// File currently being processed (empty if none).
+        file: String,
     },
     /// Unrecoverable error.
     Error(String),
@@ -290,34 +298,54 @@ impl Engine {
         let started_at = std::time::Instant::now();
         let started_at_ms = chrono::Utc::now().timestamp_millis() as u64;
 
+        // Helper to update progress (avoids repeating state write pattern)
+        let set_progress = |phase: &str, current: usize, total: usize, file: &str| {
+            *self.state.write() = EngineState::Analyzing {
+                started_at_ms,
+                phase: phase.to_string(),
+                current,
+                total,
+                file: file.to_string(),
+            };
+        };
+
         // Set state to Analyzing
-        *self.state.write() = EngineState::Analyzing { started_at_ms };
+        set_progress("发现文件", 0, 0, "");
 
         info!("[engine] analysis started for {}", project_root.display());
 
-        // 1. Core analysis
+        // 1. Core analysis (parse cache included for downstream synthesis)
+        set_progress("解析文件", 0, 0, "");
         let mut result = analyze_project(project_root);
+        let parse_cache = &result.parse_cache;
+        set_progress("解析完成", result.files_parsed, result.files_parsed, "");
 
         // 2. Cross-file resolution
+        set_progress("跨文件解析", 0, 0, "");
         let resolved = CrossFileResolver::resolve(&mut result.graph);
         info!(edges = resolved, "[engine] cross-file resolved");
 
         // 3. Coupling analysis
+        set_progress("耦合分析", 0, 0, "");
         compute_coupling(&mut result.graph);
 
-        // 4. Framework route detection
-        let routes_found = detect_framework_routes(&mut result.graph, project_root);
+        // 4. Framework route detection (uses parse cache to avoid re-parsing)
+        set_progress("框架路由检测", 0, 0, "");
+        let routes_found = detect_framework_routes(&mut result.graph, project_root, parse_cache);
         info!(count = routes_found, "[engine] framework routes detected");
 
-        // 5. Dynamic dispatch synthesis
-        let syn_edges = synthesize_dynamic_edges(&mut result.graph, project_root);
+        // 5. Dynamic dispatch synthesis (uses parse cache)
+        set_progress("动态调度合成", 0, 0, "");
+        let syn_edges = synthesize_dynamic_edges(&mut result.graph, project_root, parse_cache);
         info!(count = syn_edges, "[engine] dynamic dispatch edges synthesized");
 
-        // 6. Dataflow synthesis
-        let df_edges = synthesize_dataflow_edges(&mut result.graph, project_root);
+        // 6. Dataflow synthesis (uses parse cache)
+        set_progress("数据流合成", 0, 0, "");
+        let df_edges = synthesize_dataflow_edges(&mut result.graph, project_root, parse_cache);
         info!(count = df_edges, "[engine] dataflow edges synthesized");
 
         // 7. Community detection
+        set_progress("社区检测", 0, 0, "");
         let communities = detect_communities(&result.graph, 42);
         info!(count = communities.len(), "[engine] communities detected");
 
@@ -327,6 +355,7 @@ impl Engine {
         let elapsed = started_at.elapsed().as_secs_f64();
 
         // 8. Store into GraphStore (MemoryIndex + SQLite)
+        set_progress("写入数据库", 0, 0, "");
         let idx = MemoryIndex::from_existing_graph(&result.graph);
 
         let store_guard = self

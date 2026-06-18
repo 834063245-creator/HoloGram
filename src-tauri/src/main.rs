@@ -437,10 +437,17 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
             "version": "0.1.0", "node_count": nc, "edge_count": ec },
         "nodes": nodes, "edges": edges, "communities": comms,
     });
-    let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
+    let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
     // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
     let _ = regenerate_file_graph(&path);
+
+    // Record timeline event (mirrors engine binary's handle_analyze)
+    let _ = engine_api::engine_record_timeline(
+        "analyze",
+        None::<&str>,
+        &format!("全量分析完成：{} 节点, {} 边, {:.1}s", nc, ec, result.elapsed_secs),
+    );
 
     Ok(serde_json::json!({
         "status": "ok", "total_nodes": nc, "total_edges": ec,
@@ -475,9 +482,18 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
             "temporal_delay_sec": e.temporal_delay_sec,
             "medium_node_id": e.medium_node_id,
         })).collect();
-        let communities = detect_communities(g, 42);
-        let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
-            .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
+        // Rebuild communities from pre-computed community_id on each node
+        // (avoids re-running Louvain, which is O(V·avg_degree·iterations))
+        let mut comm_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for n in &nodes {
+            if let Some(cid) = n.get("community_id").and_then(|v| v.as_str()) {
+                if let Some(node_id) = n.get("id").and_then(|v| v.as_str()) {
+                    comm_map.entry(cid.to_string()).or_default().push(node_id.to_string());
+                }
+            }
+        }
+        let communities_json: Vec<serde_json::Value> = comm_map.iter()
+            .map(|(cid, node_ids)| serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids}))
             .collect();
         let meta = serde_json::json!({
             "source_root": source_root,
@@ -509,11 +525,53 @@ async fn get_full_graph(
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn hologram_analyze(path: Option<String>) -> Result<String, String> {
+async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    run_analyze_with_progress(target, app).await
+}
+
+/// Run engine analysis while polling progress and emitting frontend events.
+async fn run_analyze_with_progress(target: String, app: tauri::AppHandle) -> Result<String, String> {
     let target_clone = target.clone();
-    tokio::task::spawn_blocking(move || direct_analyze(&target_clone))
-        .await.map_err(|e| format!("分析任务失败: {e}"))?
+    let app_clone = app.clone();
+
+    // Spawn analysis in a blocking thread
+    let analyze_handle = tokio::task::spawn_blocking(move || {
+        direct_analyze(&target_clone)
+    });
+
+    // Poll engine progress while analysis runs
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let state = engine_api::engine_state();
+        match state {
+            engine_api::EngineState::Analyzing { phase, current, total, file, started_at_ms, .. } => {
+                let _ = app_clone.emit("analyze-phase", serde_json::json!({
+                    "phase": phase.clone(),
+                    "message": phase,
+                }));
+                if total > 0 {
+                    let _ = app_clone.emit("analyze-progress", serde_json::json!({
+                        "current": current,
+                        "total": total,
+                        "file": file,
+                    }));
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                let elapsed = now_ms.saturating_sub(started_at_ms);
+                let _ = app_clone.emit("analyze-heartbeat", serde_json::json!({
+                    "label": phase,
+                    "elapsed": format!("{:.1}s", elapsed as f64 / 1000.0),
+                }));
+            }
+            _ => break, // analysis done (Ready/Error) or not started
+        }
+    }
+
+    match analyze_handle.await {
+        Ok(result) => result,
+        Err(e) => Err(format!("分析任务失败: {}", e)),
+    }
 }
 
 #[tauri::command]
@@ -1899,17 +1957,28 @@ fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
         }
     }
 
+    // Build node_id → file lookup in O(N) — avoids O(N*E) find_node_file scan
+    let node_file: std::collections::HashMap<&str, &str> = g.get("nodes")
+        .and_then(|v| v.as_array())
+        .map(|nodes| {
+            nodes.iter().filter_map(|n| {
+                let id = n.get("id").and_then(|v| v.as_str())?;
+                let file = n.get("location").and_then(|v| v.as_str()).unwrap_or("")
+                    .split(':').next().unwrap_or("");
+                if file.is_empty() { None } else { Some((id, file)) }
+            }).collect()
+        }).unwrap_or_default();
+
     // Count edges per file pair
     let mut file_edges: std::collections::HashMap<(String, String), u32> = std::collections::HashMap::new();
     if let Some(edges) = g.get("edges").and_then(|v| v.as_array()) {
         for e in edges {
             let src = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
             let tgt = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
-            // Find which file each node belongs to
-            let src_file = find_node_file(&g, src);
-            let tgt_file = find_node_file(&g, tgt);
+            let src_file = node_file.get(src).copied().unwrap_or("");
+            let tgt_file = node_file.get(tgt).copied().unwrap_or("");
             if !src_file.is_empty() && !tgt_file.is_empty() && src_file != tgt_file {
-                *file_edges.entry((src_file, tgt_file)).or_default() += 1;
+                *file_edges.entry((src_file.to_string(), tgt_file.to_string())).or_default() += 1;
             }
         }
     }
@@ -1931,7 +2000,7 @@ fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
         "meta": g.get("meta").cloned().unwrap_or(serde_json::json!({})),
     });
 
-    std::fs::write(&files_path, serde_json::to_string_pretty(&file_graph).unwrap_or_default())
+    std::fs::write(&files_path, serde_json::to_string(&file_graph).unwrap_or_default())
         .map_err(|e| format!("Cannot write file graph: {}", e))?;
     Ok("ok".to_string())
 }
@@ -1959,11 +2028,10 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站 — 分析中...");
     }
-    let _ = app.emit("analyze-phase", serde_json::json!({
-        "phase": "analysis", "message": "Rust 引擎分析中..."
-    }));
 
-    direct_analyze(&path).map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
+    // Run analysis with progress (reuses the polling helper)
+    let analyze_future = run_analyze_with_progress(path.clone(), app.clone());
+    analyze_future.await.map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站");
