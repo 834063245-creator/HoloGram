@@ -7,18 +7,18 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, RwLock};
 
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::analysis::*;
 use crate::community::{detect_communities, detect_communities_from_index};
+use crate::engine;
 use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
 use crate::storage::{GraphStore, MemoryIndex};
-use crate::watcher;
 
 /// Global cached graph, shared with the TCP RPC server.
 /// The MCP server reads from and writes to this cache.
@@ -28,27 +28,30 @@ pub static CACHED_GRAPH: std::sync::LazyLock<Mutex<Option<Graph>>> =
 
 /// New storage engine singleton. Initialized by init_graph_store() at startup.
 /// All graph queries go through this — it provides RwLock<MemoryIndex> for concurrent reads.
-pub static GRAPH_STORE: OnceLock<Mutex<GraphStore>> = OnceLock::new();
+///
+/// Outer RwLock allows replacing the entire store when the workspace switches.
+/// Inner Mutex serializes access to the non-Sync GraphStore (rusqlite::Connection is !Sync).
+pub static GRAPH_STORE: std::sync::LazyLock<RwLock<Option<Mutex<GraphStore>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(None));
 
-/// Initialize the global GraphStore. Called once at engine startup.
-/// Idempotent: subsequent calls are no-ops.
+/// Initialize (or re-initialize) the global GraphStore for the given project root.
+/// If the store was previously opened for a different project, it is replaced with a
+/// new store at the correct path — preventing cross-project data contamination.
 pub fn init_graph_store(project_root: &Path) -> Result<(), String> {
-    if GRAPH_STORE.get().is_some() {
-        return Ok(());
-    }
-    let store = GraphStore::open(project_root)?;
-    GRAPH_STORE
-        .set(Mutex::new(store))
-        .map_err(|_| "GraphStore already initialized".to_string())
+    // Forward to the unified Engine — the single source of truth.
+    // Engine::init handles same-project reuse and workspace switch internally.
+    engine::engine_init(project_root)
 }
 
 /// Get a reference to the global GraphStore (with lock).
 /// Returns an error if init_graph_store() hasn't been called yet.
 pub fn with_graph_store<R>(f: impl FnOnce(&GraphStore) -> R) -> Result<R, String> {
-    let store = GRAPH_STORE
-        .get()
+    let outer = GRAPH_STORE.read().unwrap();
+    let store_mtx = outer
+        .as_ref()
         .ok_or_else(|| String::from("GraphStore not initialized — call init_graph_store() first"))?;
-    Ok(f(&store.lock().unwrap()))
+    let gs = store_mtx.lock().unwrap();
+    Ok(f(&gs))
 }
 
 /// Global re-entrant lock preventing concurrent full analysis across
@@ -354,7 +357,7 @@ impl McpServer {
     where
         F: FnOnce(&MemoryIndex) -> Value,
     {
-        match GRAPH_STORE.get() {
+        match GRAPH_STORE.read().unwrap().as_ref() {
             Some(store) => {
                 let gs = store.lock().unwrap();
                 let result = gs.read(|idx| f(idx));
@@ -417,7 +420,7 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         // Try GraphStore (MemoryIndex) first
-        if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             let result = store.read(|idx| {
                 let node = match idx.get_node(&node_id) {
                     Some(n) => n,
@@ -501,13 +504,13 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         // Query timeline for real decision history
-        let decision_history = if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        let decision_history = if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             store.db.query_timeline(20).unwrap_or_default()
         } else {
             vec![]
         };
         // Try GraphStore first
-        if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             let result = store.read(|idx| {
                 let node = match idx.get_node(&node_id) {
                     Some(n) => n,
@@ -605,7 +608,7 @@ impl McpServer {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root());
         // Read from unified GraphStore SqliteDb
-        let events = if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        let events = if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             store.db.query_timeline(100).unwrap_or_default()
         } else {
             vec![]
@@ -655,7 +658,7 @@ impl McpServer {
     fn tool_thread_conflicts(&self, args: &Value, id: &Value) -> Value {
         let _node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
         // Try GraphStore first
-        if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             let result = store.read(|idx| {
                 let mut resources = serde_json::Map::new();
                 for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
@@ -760,7 +763,7 @@ impl McpServer {
     fn tool_timeline(&self, args: &Value, id: &Value) -> Value {
         let limit = Self::get_arg_usize(args, "limit", 100).max(1);
         // Read from unified GraphStore SqliteDb
-        let events = if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        let events = if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             store.db.query_timeline(limit).unwrap_or_default()
         } else {
             vec![]
@@ -835,7 +838,7 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "query is required");
         }
         // Try GraphStore FTS5 first (O(log N)), fall back to legacy O(N) scan
-        if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             let results = store
                 .read(|idx| idx.fts_search(&store.db, query_str, limit).unwrap_or_default());
             let count = results.len();
@@ -874,7 +877,7 @@ impl McpServer {
         let project_root = self.project_root();
 
         // Try GraphStore first, fall back to CACHED_GRAPH
-        if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
             // Build Graph snapshot from MemoryIndex for explore() compatibility
             let g = store.read(|idx| {
                 let mut g = Graph::new();
@@ -985,78 +988,42 @@ impl McpServer {
         if path.is_empty() {
             return McpServer::error_response(id, -32602, "path is required");
         }
-        // Try to acquire the analyze lock (non-blocking)
-        let lock = match ANALYZE_LOCK.try_lock() {
-            Ok(l) => l,
-            Err(_) => return McpServer::error_response(id, -32000, "分析正在进行中，请稍后重试"),
-        };
         let root = PathBuf::from(path);
         if !root.exists() {
-            drop(lock);
             return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
         }
         info!(%path, "mcp analyze started");
-        // Lazy-init GraphStore if not initialized yet (e.g. serve without --project-root)
-        let _ = init_graph_store(&root);
-        let mut result = analyze_project(&root);
 
-        // Cross-file resolution
-        let resolved = CrossFileResolver::resolve(&mut result.graph);
-        info!(edges = resolved, "mcp cross-file resolved");
+        // Initialize engine for this project (idempotent — no-op if already initialized)
+        if let Err(e) = engine::engine_init(&root) {
+            return McpServer::error_response(id, -32000, &format!("Engine init failed: {}", e));
+        }
 
-        // Coupling analysis
-        compute_coupling(&mut result.graph);
+        // Run analysis through the unified Engine.
+        // Locking, pipeline, storage, and CACHED_GRAPH sync are handled internally.
+        match engine::engine_analyze(&root) {
+            Ok(result) => {
+                // Restart watcher on new project root
+                engine::with_engine(|eng| {
+                    eng.stop_watcher();
+                    eng.start_watcher(root.clone(), None::<Box<dyn Fn(String) + Send + 'static>>);
+                });
 
-        // Framework route detection (Django, Express, ...)
-        let routes_found = detect_framework_routes(&mut result.graph, &root);
-        info!(count = routes_found, "mcp framework routes detected");
+                // Update project root for tools like run_health/timeline
+                self.set_project_root(&root);
 
-        // Dynamic dispatch synthesis (callback/observer edges)
-        let syn_edges = synthesize_dynamic_edges(&mut result.graph, &root);
-        info!(count = syn_edges, "mcp dynamic dispatch edges synthesized");
-
-        // Dataflow synthesis (Reads/Writes/Shares/Triggers/Awaits)
-        let df_edges = synthesize_dataflow_edges(&mut result.graph, &root);
-        info!(count = df_edges, "mcp dataflow edges synthesized");
-
-        // Community detection
-        let communities = detect_communities(&result.graph, 42);
-        info!(count = communities.len(), "mcp communities detected");
-
-        // Cache the graph — update GRAPH_STORE first (primary), then CACHED_GRAPH (legacy).
-        // Build MemoryIndex from result.graph before moving the clone.
-        let graph = result.graph.clone();
-        let idx = MemoryIndex::from_existing_graph(&result.graph);
-        // Sync to GraphStore (MemoryIndex + SQLite)
-        if let Some(store_mtx) = GRAPH_STORE.get() {
-            if let Ok(store) = store_mtx.lock() {
-                store.swap_index(idx);
-                if let Err(e) = store.save() {
-                    warn!("[mcp] GraphStore save failed: {}", e);
-                }
+                McpServer::tool_result(id, json!({
+                    "status": "ok",
+                    "total_nodes": result.node_count,
+                    "total_edges": result.edge_count,
+                    "communities": result.community_count,
+                    "elapsed_secs": result.elapsed_secs,
+                }))
+            }
+            Err(e) => {
+                McpServer::error_response(id, -32000, &format!("Analysis failed: {}", e))
             }
         }
-        // Update legacy CACHED_GRAPH
-        if let Ok(mut cache) = CACHED_GRAPH.lock() {
-            *cache = Some(graph);
-        }
-
-        // Stop old watcher (if any) and start a new one on the new project
-        watcher::stop_watcher();
-        watcher::start_watcher(root.clone());
-
-        // Update active project root so tools like run_health/timeline use the right path
-        self.set_project_root(&root);
-
-        drop(lock);
-
-        McpServer::tool_result(id, json!({
-            "status": "ok",
-            "total_nodes": result.graph.node_count(),
-            "total_edges": result.graph.edge_count(),
-            "communities": communities.len(),
-            "elapsed_secs": result.elapsed_secs,
-        }))
     }
 
     // ── V3 check + health ──
@@ -1080,8 +1047,11 @@ impl McpServer {
             Err(_) => return McpServer::error_response(id, -32000, "分析正在进行中，请稍后重试"),
         };
 
-        // Lazy-init GraphStore if not initialized
-        let _ = init_graph_store(&root);
+        // Init GraphStore for the target project. Will reopen if workspace changed.
+        if let Err(e) = init_graph_store(&root) {
+            drop(lock);
+            return McpServer::error_response(id, -32000, &format!("GraphStore init failed: {}", e));
+        }
         let mut result = analyze_project(&root);
         CrossFileResolver::resolve(&mut result.graph);
         compute_coupling(&mut result.graph);
@@ -1093,7 +1063,7 @@ impl McpServer {
         let after = result.graph.clone();
         let idx = MemoryIndex::from_existing_graph(&after);
         // Update GraphStore first (primary), then CACHED_GRAPH (legacy)
-        if let Some(store_mtx) = GRAPH_STORE.get() {
+        if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
             if let Ok(store) = store_mtx.lock() {
                 store.swap_index(idx);
                 let _ = store.save();
@@ -1135,7 +1105,7 @@ impl McpServer {
             "api_signature_changes": check_result["api_signature_changes"],
             "violation_count": check_result["violation_count"],
         });
-        if let Some(store_mtx) = GRAPH_STORE.get() {
+        if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
             if let Ok(store) = store_mtx.lock() {
                 let _ = store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
             }
@@ -1243,7 +1213,7 @@ impl McpServer {
             }; // CACHED_GRAPH lock released here
 
             // Persist to GraphStore (MemoryIndex + SQLite)
-            if let Some(store_mtx) = GRAPH_STORE.get() {
+            if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
                 if let Ok(store) = store_mtx.lock() {
                     store.write(|idx| {
                         for nid in &matched_ids {
@@ -1266,7 +1236,7 @@ impl McpServer {
     }
 
     fn tool_status(&self, _args: &Value, id: &Value) -> Value {
-        match GRAPH_STORE.get() {
+        match GRAPH_STORE.read().unwrap().as_ref() {
             Some(store) => {
                 let gs = store.lock().unwrap();
                 let progress = gs.load_progress();

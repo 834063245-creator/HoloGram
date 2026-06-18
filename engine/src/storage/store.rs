@@ -2,7 +2,7 @@
 // Replaces CACHED_GRAPH: Mutex<Option<Graph>> with RwLock<MemoryIndex> + SqliteDb.
 // Allows N concurrent reads, 1 write for swap operations.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::RwLock;
@@ -18,6 +18,9 @@ pub struct GraphStore {
     pub index: RwLock<MemoryIndex>,
     /// Persistent database.
     pub db: SqliteDb,
+    /// Project root this store was opened for. Used to detect workspace switches
+    /// so we can reopen the SQLite at the correct path instead of cross-contaminating.
+    project_root: PathBuf,
     /// Loading progress (for hologram_status). Updated during startup load.
     loading: RwLock<LoadProgress>,
     /// Timestamp when loading started (ms since epoch, for elapsed_ms calc).
@@ -37,6 +40,7 @@ impl GraphStore {
         let store = Self {
             index: RwLock::new(MemoryIndex::new()),
             db,
+            project_root: project_root.to_path_buf(),
             loading: RwLock::new(LoadProgress {
                 phase: "loading".into(),
                 nodes_loaded: 0,
@@ -126,6 +130,11 @@ impl GraphStore {
     pub fn save(&self) -> Result<(), String> {
         let idx = self.index.read();
         idx.to_sqlite(&self.db)
+    }
+
+    /// Return the project root this store was opened for.
+    pub fn project_root(&self) -> &Path {
+        &self.project_root
     }
 
     /// Swap the in-memory index with a new one. Holds write lock briefly.

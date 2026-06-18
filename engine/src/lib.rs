@@ -7,6 +7,7 @@ pub mod routing;
 pub mod rpc;
 pub mod serialization;
 pub mod storage;
+pub mod engine;
 pub mod mcp;
 pub mod logging;
 pub mod watcher;
