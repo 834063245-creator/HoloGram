@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-293%20passed-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-287%20passed-brightgreen" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows-blue" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
@@ -148,7 +148,7 @@ N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh`。5000 节点场景 **1 draw 
 |---|---|---|
 | 存储引擎 v2.5：MemoryIndex（邻接表 + 倒排索引）+ SqliteDb（持久化 + FTS5 全文搜索）+ 增量更新。Django 3,031 文件 4.1s。 | YAML 规则。L5 不可逆变更永报警。黑名单关键词强制路由。结果编码在 JSON 中，可入 CI。 | Monaco 浮动编辑器 · xterm.js 多标签终端 · Git 面板（stage / diff / commit / push / pull）。 |
 
-| 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **293 测试** |
+| 📦 **三格式序列化** | 🔌 **MCP 长驻服务** | ✅ **287 测试** |
 |---|---|---|
 | JSON 通用交换 · MessagePack 二进制加载 · SQLite + FTS5 全文模糊搜索。 | Rust 引擎长驻，JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。 | Rust `#[test]` 全覆盖：图数据模型、适配器、管线、耦合分析、社区发现、路由、存储引擎、MCP 协议。 |
 
@@ -253,7 +253,7 @@ HoloGram 自己的 `.mcp.json` 是项目级配置的参考模板。
                       │ 发现 → 分析 → 跨文件 → 社区 → 序列化 │
                       │ 18 tree-sitter 语法                 │
                       │ MemoryIndex + SqliteDb + FTS5      │
-                      │ 24 MCP 工具 · 293 tests             │
+                      │ 25 MCP 工具 · 287 tests             │
                       └───────────────────────────────────┘
 ```
 
@@ -265,7 +265,7 @@ HoloGram 自己的 `.mcp.json` 是项目级配置的参考模板。
 
 ```bash
 # Rust 引擎
-cd engine && cargo test                                # 293 tests
+cd engine && cargo test                                # 287 tests
 cd engine && cargo build
 
 # 桌面应用
@@ -278,7 +278,7 @@ cd src-ui && npm run dev                 # 前端 dev server
 ```
 
 ```
-engine/          Rust 分析引擎（存储引擎 v2.5 + 24 MCP 工具，293 tests）
+engine/          Rust 分析引擎（存储引擎 v2.5 + 25 MCP 工具，287 tests）
 src-tauri/       Rust / Tauri 壳
 src-ui/          TypeScript 前端（Three.js + Agent + Monaco + xterm.js）
 assets/          图标及 UI 原型
