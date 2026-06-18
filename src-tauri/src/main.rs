@@ -430,11 +430,6 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
         .map(|(i, _)| serde_json::json!({"id": format!("comm_{}", i), "size": 0, "node_ids": []}))
         .collect();
 
-    // Update legacy CACHED_GRAPH for backward compat (Engine::analyze already did this)
-    if let Ok(mut cache) = CACHED_GRAPH.lock() {
-        *cache = Some(graph.clone());
-    }
-
     // Persist hologram_graph.json for cold-start
     let graph_path = format!("{}/hologram_graph.json", path);
     let wrapped = serde_json::json!({
