@@ -18,7 +18,6 @@ use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKi
 use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
 use crate::storage::{GraphStore, MemoryIndex};
-use crate::timeline::TimelineStore;
 use crate::watcher;
 
 /// Global cached graph, shared with the TCP RPC server.
@@ -502,9 +501,11 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         // Query timeline for real decision history
-        let decision_history = TimelineStore::open(&self.project_root())
-            .map(|store| store.query(20))
-            .unwrap_or_default();
+        let decision_history = if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
+            store.db.query_timeline(20).unwrap_or_default()
+        } else {
+            vec![]
+        };
         // Try GraphStore first
         if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
             let result = store.read(|idx| {
@@ -600,16 +601,14 @@ impl McpServer {
     }
 
     fn tool_changes(&self, args: &Value, id: &Value) -> Value {
-        let project_root = args.get("project_root").and_then(|v| v.as_str())
+        let _project_root = args.get("project_root").and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root());
-        // Try GraphStore's SqliteDb first, fall back to legacy TimelineStore
+        // Read from unified GraphStore SqliteDb
         let events = if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
             store.db.query_timeline(100).unwrap_or_default()
         } else {
-            TimelineStore::open(&project_root)
-                .map(|s| s.query(100))
-                .unwrap_or_default()
+            vec![]
         };
         let last = events.first().cloned();
         McpServer::tool_result(id, json!({
@@ -760,13 +759,11 @@ impl McpServer {
 
     fn tool_timeline(&self, args: &Value, id: &Value) -> Value {
         let limit = Self::get_arg_usize(args, "limit", 100).max(1);
-        // Try GraphStore's SqliteDb first, fall back to legacy TimelineStore
+        // Read from unified GraphStore SqliteDb
         let events = if let Some(store) = GRAPH_STORE.get().and_then(|s| s.lock().ok()) {
             store.db.query_timeline(limit).unwrap_or_default()
         } else {
-            TimelineStore::open(&self.project_root())
-                .map(|s| s.query(limit))
-                .unwrap_or_default()
+            vec![]
         };
         McpServer::tool_result(id, json!({ "events": events, "total": events.len() }))
     }
@@ -1111,6 +1108,38 @@ impl McpServer {
         drop(lock);
         let changed_files: Vec<String> = vec![];
         let check_result = run_full_check(&before_graph, &after_check, &changed_files, path);
+
+        // Record timeline event with full check properties
+        let passed = check_result["passed"].as_bool().unwrap_or(true);
+        let violation_count = check_result["violation_count"].as_u64().unwrap_or(0);
+        let event_type = if passed { "commit_clean" } else { "commit_violation" };
+        let summary = if passed {
+            format!("简报通过（{} 违规）", violation_count)
+        } else {
+            format!("简报未通过：{} 条违规", violation_count)
+        };
+        let props = serde_json::json!({
+            "passed": check_result["passed"],
+            "timestamp": check_result["timestamp"],
+            "changed_files": check_result["changed_files"],
+            "total_changed_files": check_result["total_changed_files"],
+            "l5_violations": check_result["l5_violations"],
+            "l4_violations": check_result["l4_violations"],
+            "l3_violations": check_result["l3_violations"],
+            "l2_violations": check_result["l2_violations"],
+            "passed_checks": check_result["passed_checks"],
+            "blast_radius": check_result["blast_radius"],
+            "cross_community_edges": check_result["cross_community_edges"],
+            "new_cycles": check_result["new_cycles"],
+            "new_thread_conflicts": check_result["new_thread_conflicts"],
+            "api_signature_changes": check_result["api_signature_changes"],
+            "violation_count": check_result["violation_count"],
+        });
+        if let Some(store_mtx) = GRAPH_STORE.get() {
+            if let Ok(store) = store_mtx.lock() {
+                let _ = store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
+            }
+        }
 
         McpServer::tool_result(id, check_result)
     }
