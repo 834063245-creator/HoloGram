@@ -5,9 +5,8 @@ use hologram_engine::community::detect_communities;
 use hologram_engine::graph::{CrossFileResolver, query, Graph, EdgeKind};
 use hologram_engine::logging;
 use hologram_engine::routing::preflight::run_full_check;
-use hologram_engine::timeline::TimelineStore;
 use hologram_engine::pipeline::runner::analyze_project;
-use hologram_engine::mcp::{self, McpServer};
+use hologram_engine::mcp::{self, McpServer, with_graph_store};
 use serde_json::{self, json};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -112,10 +111,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 })
             } else if req_owned.starts_with("timeline") {
-                handle_simple("timeline", req_owned.trim(), |_g, a| {
-                    let path = std::path::Path::new(a);
-                    let store = TimelineStore::open(path).ok();
-                    json!(store.map(|s| s.query(50)).unwrap_or_default())
+                handle_simple("timeline", req_owned.trim(), |_g, _a| {
+                    json!(with_graph_store(|store| {
+                        store.db.query_timeline(50).unwrap_or_default()
+                    }).unwrap_or_default())
                 })
             } else if req_owned.starts_with("analyze:") {
                 let path = req_owned.trim().strip_prefix("analyze:").unwrap_or(".").trim().to_string();
@@ -254,9 +253,13 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     }
 
     // Record timeline event
-    if let Ok(store) = TimelineStore::open(&root) {
-        store.record("analyze", None, &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.graph.node_count(), result.graph.edge_count(), result.elapsed_secs));
-    }
+    let _ = with_graph_store(|store| {
+        store.db.record_timeline(
+            "analyze",
+            None::<&str>,
+            &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.graph.node_count(), result.graph.edge_count(), result.elapsed_secs),
+        ).ok()
+    });
 
     info!(count = communities.len(), elapsed_secs = comm_start.elapsed().as_secs_f64(), "communities detected");
 
@@ -358,22 +361,43 @@ fn handle_check(request: &str) -> Vec<u8> {
 
     let result = run_full_check(&before, after, &changed_files, path);
 
-    // Save current graph as new baseline for next check
-    let _ = std::fs::create_dir_all(&hologram_dir);
-    if let Ok(json) = serde_json::to_string_pretty(after) {
-        let _ = std::fs::write(&baseline_path, json);
-    }
-
-    // Record timeline event
-    if let Ok(store) = TimelineStore::open(&root) {
-        let passed = result["passed"].as_bool().unwrap_or(true);
-        let violation_count = result["violation_count"].as_u64().unwrap_or(0);
-        if passed {
-            store.record("check_pass", None, &format!("简报通过（{} 违规）", violation_count));
-        } else {
-            store.record("check_fail", None, &format!("简报未通过：{} 条违规", violation_count));
+    // Save current graph as new baseline — only if check passed
+    let passed = result["passed"].as_bool().unwrap_or(true);
+    if passed {
+        let _ = std::fs::create_dir_all(&hologram_dir);
+        if let Ok(json) = serde_json::to_string_pretty(after) {
+            let _ = std::fs::write(&baseline_path, json);
         }
     }
+
+    // Record timeline event with full check properties
+    let _ = with_graph_store(|store| {
+        let violation_count = result["violation_count"].as_u64().unwrap_or(0);
+        let event_type = if passed { "commit_clean" } else { "commit_violation" };
+        let summary = if passed {
+            format!("简报通过（{} 违规）", violation_count)
+        } else {
+            format!("简报未通过：{} 条违规", violation_count)
+        };
+        let props = serde_json::json!({
+            "passed": result["passed"],
+            "timestamp": result["timestamp"],
+            "changed_files": result["changed_files"],
+            "total_changed_files": result["total_changed_files"],
+            "l5_violations": result["l5_violations"],
+            "l4_violations": result["l4_violations"],
+            "l3_violations": result["l3_violations"],
+            "l2_violations": result["l2_violations"],
+            "passed_checks": result["passed_checks"],
+            "blast_radius": result["blast_radius"],
+            "cross_community_edges": result["cross_community_edges"],
+            "new_cycles": result["new_cycles"],
+            "new_thread_conflicts": result["new_thread_conflicts"],
+            "api_signature_changes": result["api_signature_changes"],
+            "violation_count": result["violation_count"],
+        });
+        store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props).ok()
+    });
 
     serde_json::to_vec(&result).unwrap_or_default()
 }

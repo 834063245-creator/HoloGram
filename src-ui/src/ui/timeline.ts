@@ -5,16 +5,14 @@ import { invoke } from '../bridge';
 import { bus } from './events';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
+import type { CheckResult } from './check';
 
 export interface TimelineEvent {
   id: number;
   timestamp: string;
   event_type: string;
   file: string;
-  changed_by: string;
-  related_nodes: string[];
   summary: string;
-  data_file_diff?: Record<string, unknown>;
   properties?: Record<string, unknown>;
 }
 
@@ -117,9 +115,11 @@ export class TimelinePanel {
     if (path) {
       if (pathChanged) this.events = [];
       this.refresh();
-      // Auto-refresh every 30s
-      if (this.refreshInterval) clearInterval(this.refreshInterval);
-      this.refreshInterval = setInterval(() => this.refresh(), 30000);
+      // Event-driven refresh — timeline:refresh emitted on each graph update
+      if (!this.refreshInterval) {
+        bus.on('timeline:refresh', () => this.refresh());
+        this.refreshInterval = 1 as any; // marker: event listener registered
+      }
     }
   }
 
@@ -212,15 +212,6 @@ export class TimelinePanel {
       html += `<button class="tl-ask-btn" title="问 Agent 关于这次变更">${iconHtml('agent', 10)}</button>`;
       html += `</div>`;
       if (ev.summary) html += `<div class="tl-event-summary">${escapeHtml(ev.summary)}${isCheckEvent ? ` <span class="tl-check-badge ${checkPassed ? 'tl-check-badge-pass' : 'tl-check-badge-fail'}">${checkPassed ? '✓ 通过' : '✗ 未通过'}</span>` : ''}</div>`;
-      if (ev.changed_by) html += `<div class="tl-event-meta">${escapeHtml(ev.changed_by)}</div>`;
-      if (ev.related_nodes && ev.related_nodes.length > 0) {
-        const nodes = ev.related_nodes.slice(0, 3).map(n => {
-          const short = n.split('.').pop() || n;
-          return `<span class="tl-event-node-link" data-node="${escapeHtml(n)}">${escapeHtml(short)}</span>`;
-        }).join(', ');
-        const more = ev.related_nodes.length > 3 ? ` +${ev.related_nodes.length - 3}` : '';
-        html += `<div class="tl-event-nodes">${nodes}${more}</div>`;
-      }
       html += `</div></div>`;
     }
 
@@ -285,9 +276,10 @@ export class TimelinePanel {
       const ev = this.events.find(e => e.id === eventId);
       if (!ev || !ev.properties) return;
 
-      // Check if this event has stored briefing data
-      const violations = ev.properties['violations'] as Record<string, unknown> | undefined;
-      if (!violations) return;
+      // Check if this event has stored briefing data (full CheckResult shape in properties)
+      const hasCheckData = ev.properties
+        && (ev.properties['l2_violations'] || ev.properties['passed'] !== undefined);
+      if (!hasCheckData) return;
 
       // Mark as clickable
       el.classList.add('tl-event-clickable');
@@ -297,7 +289,7 @@ export class TimelinePanel {
         if (target.closest('.tl-event-node-link') || target.closest('.tl-event-file')) return;
         e.stopPropagation();
         bus.emit('check:history', {
-          checkData: violations,
+          checkData: ev.properties as unknown as CheckResult,
           timestamp: ev.timestamp,
         });
       });

@@ -5,7 +5,6 @@
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
-use tracing::{info, warn};
 
 use crate::graph::{EdgeKind, Node, NodeKind};
 
@@ -37,7 +36,6 @@ impl SqliteDb {
 
         let db = Self { conn, db_path };
         db.ensure_schema()?;
-        db.migrate_timeline(project_root)?;
         Ok(db)
     }
 
@@ -143,36 +141,6 @@ impl SqliteDb {
         );
 
         Ok(())
-    }
-
-    /// Migrate timeline events from legacy timeline.db into hologram.db.
-    fn migrate_timeline(&self, project_root: &Path) -> Result<(), String> {
-        let legacy_path = project_root.join(".hologram").join("timeline.db");
-        if !legacy_path.exists() {
-            return Ok(());
-        }
-        info!(
-            "[sqlite] migrating timeline events from {}",
-            legacy_path.display()
-        );
-        let result = self.conn.execute_batch(&format!(
-            "ATTACH DATABASE '{}' AS timeline_legacy;
-             INSERT OR IGNORE INTO main.timeline_events (id, timestamp, event_type, file, summary, properties)
-                 SELECT id, timestamp, event_type, file, summary, properties FROM timeline_legacy.events;
-             DETACH DATABASE timeline_legacy;",
-            legacy_path.display().to_string().replace('\\', "\\\\")
-        ));
-        match result {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&legacy_path);
-                info!("[sqlite] timeline migration complete, removed legacy db");
-                Ok(())
-            }
-            Err(e) => {
-                warn!("[sqlite] timeline migration failed (non-fatal): {}", e);
-                Ok(())
-            }
-        }
     }
 
     // ── full table loads (for MemoryIndex construction) ──
@@ -361,21 +329,50 @@ impl SqliteDb {
         Ok(())
     }
 
+    /// Record a timeline event with custom properties JSON.
+    /// Properties must be a valid serde_json::Value — stored as JSON string.
+    pub fn record_timeline_with_props(
+        &self,
+        event_type: &str,
+        file: Option<&str>,
+        summary: &str,
+        properties: &serde_json::Value,
+    ) -> Result<(), String> {
+        let ts = chrono::Local::now()
+            .format("%Y-%m-%dT%H:%M:%S")
+            .to_string();
+        let props_str = serde_json::to_string(properties).unwrap_or_else(|_| "{}".into());
+        self.conn
+            .execute(
+                "INSERT INTO timeline_events (timestamp, event_type, file, summary, properties)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![ts, event_type, file.unwrap_or(""), summary, props_str],
+            )
+            .map_err(|e| format!("timeline insert: {}", e))?;
+        // Prune to keep latest 10000 events (prevents unbounded growth)
+        let _ = self.conn.execute(
+            "DELETE FROM timeline_events WHERE id NOT IN (SELECT id FROM timeline_events ORDER BY id DESC LIMIT 10000)",
+            [],
+        );
+        Ok(())
+    }
+
     pub fn query_timeline(&self, limit: usize) -> Result<Vec<serde_json::Value>, String> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT timestamp, event_type, file, summary, properties FROM timeline_events ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, event_type, file, summary, properties FROM timeline_events ORDER BY id DESC LIMIT ?",
             )
             .map_err(|e| format!("timeline prepare: {}", e))?;
         let rows = stmt
             .query_map(params![limit as i64], |row| {
-                let props_str: String = row.get(4).unwrap_or_else(|_| "{}".into());
+                let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
                 Ok(serde_json::json!({
-                    "timestamp": row.get::<_, String>(0)?,
-                    "event_type": row.get::<_, String>(1)?,
-                    "file": row.get::<_, String>(2).unwrap_or_default(),
-                    "summary": row.get::<_, String>(3).unwrap_or_default(),
+                    "id": row.get::<_, i64>(0)?,
+                    "timestamp": row.get::<_, String>(1)?,
+                    "event_type": row.get::<_, String>(2)?,
+                    "file": row.get::<_, String>(3).unwrap_or_default(),
+                    "summary": row.get::<_, String>(4).unwrap_or_default(),
                     "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
                 }))
             })

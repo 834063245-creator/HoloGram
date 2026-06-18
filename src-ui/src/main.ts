@@ -811,6 +811,7 @@ async function runCheck(): Promise<void> {
     statusText.textContent = '简报请求失败';
   } finally {
     checkRunning = false;
+    bus.emit('timeline:refresh');
     // If a check was requested while we were running, run one more after a short delay
     if (checkPending) {
       checkPending = false;
@@ -1500,6 +1501,7 @@ async function init(): Promise<void> {
     runCheck();
     timelinePanel.setProjectPath(currentPath);
     hotspotsPanel.setProjectPath(currentPath);
+    bus.emit('timeline:refresh');
     // Notify file tree to refresh (debounced in FileTreePanel)
     bus.emit('workspace:files-changed', {});
   }
