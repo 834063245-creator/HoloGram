@@ -51,6 +51,7 @@ export class TimelinePanel {
   private events: TimelineEvent[] = [];
   private loading = false;
   private path: string | null = null;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(container: HTMLElement) {
@@ -117,10 +118,18 @@ export class TimelinePanel {
       this.refresh();
       // Event-driven refresh — timeline:refresh emitted on each graph update
       if (!this.refreshInterval) {
-        bus.on('timeline:refresh', () => this.refresh());
+        bus.on('timeline:refresh', () => this.scheduleRefresh());
         this.refreshInterval = 1 as any; // marker: event listener registered
       }
     }
+  }
+
+  private scheduleRefresh(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      void this.refresh();
+    }, 600);
   }
 
   async refresh(): Promise<void> {
@@ -297,6 +306,7 @@ export class TimelinePanel {
   }
 
   destroy(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.refreshInterval) clearInterval(this.refreshInterval);
     this.panel.remove();
   }

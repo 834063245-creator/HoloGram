@@ -4,13 +4,100 @@ use crate::graph::{Graph, NodeKind};
 use crate::routing::{constraints::{ConstraintConfig, check_constraints}, signals::SignalGenerator, summary::generate_summary};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+
+/// Path to the per-project graph snapshot used as the briefing baseline.
+pub fn baseline_path(project_root: &Path) -> PathBuf {
+    project_root.join(".hologram").join("baseline.json")
+}
+
+pub fn load_baseline(project_root: &Path) -> Graph {
+    let path = baseline_path(project_root);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Graph::default()
+    }
+}
+
+pub fn save_baseline(project_root: &Path, graph: &Graph) {
+    let dir = project_root.join(".hologram");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string_pretty(graph) {
+        let _ = std::fs::write(baseline_path(project_root), json);
+    }
+}
+
+/// Full CheckResult properties for timeline round-trip (historical briefing click).
+pub fn check_timeline_props(result: &Value) -> Value {
+    json!({
+        "passed": result["passed"],
+        "timestamp": result["timestamp"],
+        "changed_files": result["changed_files"],
+        "total_changed_files": result["total_changed_files"],
+        "l5_violations": result["l5_violations"],
+        "l4_violations": result["l4_violations"],
+        "l3_violations": result["l3_violations"],
+        "l2_violations": result["l2_violations"],
+        "passed_checks": result["passed_checks"],
+        "blast_radius": result["blast_radius"],
+        "cross_community_edges": result["cross_community_edges"],
+        "new_cycles": result["new_cycles"],
+        "new_thread_conflicts": result["new_thread_conflicts"],
+        "api_signature_changes": result["api_signature_changes"],
+        "violation_count": result["violation_count"],
+    })
+}
+
+fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: bool) -> Value {
+    json!({
+        "passed": true,
+        "one_line": one_line,
+        "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "changed_files": changed_files,
+        "total_changed_files": changed_files.len(),
+        "l5_violations": [],
+        "l4_violations": [],
+        "l3_violations": [],
+        "l2_violations": [],
+        "passed_checks": Vec::<String>::new(),
+        "blast_radius": 0u32,
+        "cross_community_edges": 0u32,
+        "new_cycles": 0u32,
+        "new_thread_conflicts": 0u32,
+        "api_signature_changes": 0u32,
+        "coupling_l4": 0u32,
+        "cycles_detected": 0u32,
+        "signals_count": 0u32,
+        "violation_count": 0u32,
+        "quiet": !baseline_seed,
+        "baseline_seed": baseline_seed,
+    })
+}
 
 /// run_full_check — equivalent of Python preflight.py run_full_check()
 pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _project_root: &str) -> Value {
+    // First open: establish baseline quietly — don't audit the whole project.
+    if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
+        return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+    }
+
+    // No file changes and graph size unchanged → nothing to report.
+    if changed_files.is_empty()
+        && before.node_count() == after.node_count()
+        && before.edge_count() == after.edge_count()
+    {
+        return quiet_check_result(changed_files, "无新变更", false);
+    }
+
     let coupling = coupling_report(after, ""); // full graph
     let l4_count = coupling["L4"].as_u64().unwrap_or(0) as usize;
     let cycles = detect_cycles(after);
     let cycle_count = cycles.len();
+    let cycles_before = detect_cycles(before).len();
     let signals = SignalGenerator::new().generate(before, after, changed_files, l4_count, cycle_count);
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(&signals, &config);
@@ -110,7 +197,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         "passed_checks": Vec::<String>::new(),
         "blast_radius": blast_radius as u32,
         "cross_community_edges": cross_community_edges as u32,
-        "new_cycles": cycle_count as u32,
+        "new_cycles": cycle_count.saturating_sub(cycles_before) as u32,
         "new_thread_conflicts": new_thread_conflicts,
         "api_signature_changes": api_signature_changes,
         "coupling_l4": l4_count as u32,
@@ -183,12 +270,36 @@ mod tests {
         let mut a2 = Node::new("a", "fn_a", NodeKind::Symbol);
         a2.out_degree = 3; // changed
         after.add_node(a2);
-        // New node
         let mut b = Node::new("b", "fn_b", NodeKind::Symbol);
         b.out_degree = 1;
         after.add_node(b);
 
-        let r = run_full_check(&before, &after, &[], ".");
+        let r = run_full_check(&before, &after, &["src/a.rs".into()], ".");
         assert_eq!(r["api_signature_changes"], 2, "a changed + b new = 2");
+    }
+
+    #[test]
+    fn test_preflight_stable_cycles_no_false_alarm() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        g.add_node(Node::new("c", "c", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        let r = run_full_check(&g, &g, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["violation_count"], 0);
+    }
+
+    #[test]
+    fn test_preflight_baseline_seed() {
+        let mut after = Graph::new();
+        after.add_node(Node::new("a", "fn", NodeKind::Symbol));
+        let before = Graph::new();
+        let r = run_full_check(&before, &after, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["baseline_seed"], true);
+        assert_eq!(r["violation_count"], 0);
     }
 }

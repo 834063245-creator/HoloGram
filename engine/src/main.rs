@@ -4,7 +4,7 @@ use hologram_engine::analysis::{fragile_nodes, detect_cycles, coupling_report, g
 use hologram_engine::community::detect_communities;
 use hologram_engine::graph::{query, Graph, EdgeKind};
 use hologram_engine::logging;
-use hologram_engine::routing::preflight::run_full_check;
+use hologram_engine::routing::preflight::{check_timeline_props, load_baseline, run_full_check, save_baseline};
 use hologram_engine::mcp::{self, McpServer};
 use serde_json::{self, json};
 use std::path::PathBuf;
@@ -280,8 +280,6 @@ fn handle_check(request: &str) -> Vec<u8> {
         (body.trim(), vec![])
     };
     let root = PathBuf::from(path);
-    let hologram_dir = root.join(".hologram");
-    let baseline_path = hologram_dir.join("baseline.json");
 
     // Guard: project must exist
     if !root.exists() {
@@ -299,42 +297,28 @@ fn handle_check(request: &str) -> Vec<u8> {
         Err(_) => return b"{\"error\":\"analysis failed\"}".to_vec(),
     };
 
-    // Load previous baseline — first run has no baseline, use empty graph
-    let before: hologram_engine::graph::Graph = if baseline_path.exists() {
-        std::fs::read_to_string(&baseline_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        hologram_engine::graph::Graph::default()
-    };
-
+    let before = load_baseline(&root);
     let result = run_full_check(&before, &after, &changed_files, path);
+    save_baseline(&root, &after);
 
-    // Save current graph as new baseline — only if check passed
-    let passed = result["passed"].as_bool().unwrap_or(true);
-    if passed {
-        let _ = std::fs::create_dir_all(&hologram_dir);
-        if let Ok(json) = serde_json::to_string_pretty(&after) {
-            let _ = std::fs::write(&baseline_path, json);
-        }
+    let quiet = result.get("quiet").and_then(|v| v.as_bool()).unwrap_or(false);
+    let baseline_seed = result.get("baseline_seed").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !quiet || baseline_seed {
+        let passed = result["passed"].as_bool().unwrap_or(true);
+        let violation_count = result["violation_count"].as_u64().unwrap_or(0);
+        let event_type = if passed { "commit_clean" } else { "commit_violation" };
+        let summary = if baseline_seed {
+            "基线已建立".to_string()
+        } else if passed {
+            format!("简报通过（{} 违规）", violation_count)
+        } else {
+            format!("简报未通过：{} 条违规", violation_count)
+        };
+        let props = check_timeline_props(&result);
+        let _ = hologram_engine::engine::engine_record_timeline_with_props(
+            &event_type, None::<&str>, &summary, &props,
+        );
     }
-
-    // Record timeline event
-    let violation_count = result["violation_count"].as_u64().unwrap_or(0);
-    let event_type = if passed { "commit_clean" } else { "commit_violation" };
-    let summary = if passed {
-        format!("简报通过（{} 违规）", violation_count)
-    } else {
-        format!("简报未通过：{} 条违规", violation_count)
-    };
-    let props = serde_json::json!({
-        "passed": result["passed"],
-        "violation_count": violation_count,
-    });
-    let _ = hologram_engine::engine::engine_record_timeline_with_props(
-        &event_type, None::<&str>, &summary, &props,
-    );
 
     serde_json::to_vec(&result).unwrap_or_default()
 }

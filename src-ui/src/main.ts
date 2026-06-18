@@ -821,8 +821,8 @@ async function init(): Promise<void> {
       // Use unified switchWorkspace with cached graph
       await switchWorkspace(root, { skipAnalysis: true, cachedGraph: graph });
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
-      // Kick off background full analysis to warm CACHED_GRAPH
-      invoke('hologram_analyze', { path: root }).catch(() => {});
+      // Engine warm-up happens via runCheck → engine_init (SQLite cache). Do NOT fire
+      // hologram_analyze here — it races with runCheck's analyze fallback and blocks workspace switches.
       return;
     }
   } catch { /* no cache */ }

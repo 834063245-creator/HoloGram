@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use parking_lot::RwLock;
+use rusqlite::Connection;
 use tracing::{info, warn};
 
 use crate::analysis::coupling::compute_coupling;
@@ -24,7 +25,8 @@ use crate::community::detect_communities;
 use crate::graph::resolver::CrossFileResolver;
 use crate::graph::Graph;
 use crate::pipeline::runner::analyze_project;
-use crate::storage::{GraphStore, MemoryIndex};
+use crate::storage::{GraphStore, MemoryIndex, SqliteDb};
+use crate::storage::sqlite::{timeline_query, timeline_record, timeline_record_with_props};
 
 // ═══════════════════════════════════════════════════════════════
 // EngineState — lifecycle state machine
@@ -98,6 +100,23 @@ pub struct AnalyzeResult {
 // Engine — the one door
 // ═══════════════════════════════════════════════════════════════
 
+fn graph_from_index(idx: &MemoryIndex) -> Graph {
+    let mut g = Graph::new();
+    for node in idx.nodes_iter() {
+        g.add_node(node.clone());
+    }
+    for (source, targets) in idx.edges_iter() {
+        for (target, kind, coupling_depth, delay) in targets {
+            let id = format!("{}::{}::{}", source, target, kind.as_str());
+            let mut edge = crate::graph::Edge::new(id, source, target, *kind);
+            edge.coupling_depth = *coupling_depth;
+            edge.temporal_delay_sec = *delay;
+            g.add_edge(edge);
+        }
+    }
+    g
+}
+
 /// Central engine instance. Owns all graph state.
 ///
 /// All graph operations — queries, analysis, watching — go through this struct.
@@ -107,6 +126,9 @@ pub struct Engine {
     /// The graph store (MemoryIndex + SQLite). Wrapped in std Mutex because
     /// GraphStore contains rusqlite::Connection which is !Sync.
     store: Mutex<Option<GraphStore>>,
+
+    /// Dedicated SQLite connection for timeline — never blocks on graph store lock.
+    timeline_conn: Mutex<Option<Connection>>,
 
     /// Current project root. Set once during init().
     project_root: Mutex<PathBuf>,
@@ -126,6 +148,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             store: Mutex::new(None),
+            timeline_conn: Mutex::new(None),
             project_root: Mutex::new(PathBuf::new()),
             analyze_lock: Mutex::new(()),
             state: RwLock::new(EngineState::Uninitialized),
@@ -183,12 +206,14 @@ impl Engine {
 
         let start = std::time::Instant::now();
         let store = GraphStore::open(&new_root)?;
+        let timeline_conn = SqliteDb::open_aux_connection(store.db.path())?;
 
         // Read counts for Ready state
         let (node_count, edge_count) = store.read(|idx| (idx.node_count(), idx.edge_count()));
 
-        *self.project_root.lock().unwrap() = new_root;
+        *self.project_root.lock().unwrap() = new_root.clone();
         *self.store.lock().unwrap() = Some(store);
+        *self.timeline_conn.lock().unwrap() = Some(timeline_conn);
         *self.state.write() = EngineState::Ready {
             node_count,
             edge_count,
@@ -223,32 +248,17 @@ impl Engine {
     /// Read data by reconstructing a legacy Graph from the MemoryIndex.
     /// For callers that need the Graph type (legacy API compatibility).
     pub fn read_graph<R>(&self, f: impl FnOnce(&Graph) -> R) -> Result<R, String> {
-        let store_guard = self
-            .store
-            .lock()
-            .map_err(|e| format!("Engine store lock poisoned: {}", e))?;
-        let store = store_guard
-            .as_ref()
-            .ok_or_else(|| "Engine not initialized — call init() first".to_string())?;
+        let graph = {
+            let store_guard = self
+                .store
+                .lock()
+                .map_err(|e| format!("Engine store lock poisoned: {}", e))?;
+            let store = store_guard
+                .as_ref()
+                .ok_or_else(|| "Engine not initialized — call init() first".to_string())?;
 
-        // Build a temporary Graph from MemoryIndex (same pattern as watcher.rs:237-253)
-        let graph = store.read(|idx| {
-            let mut g = Graph::new();
-            for node in idx.nodes_iter() {
-                g.add_node(node.clone());
-            }
-            for (source, targets) in idx.edges_iter() {
-                for (target, kind, coupling_depth, delay) in targets {
-                    let id = format!("{}::{}::{}", source, target, kind.as_str());
-                    let mut edge = crate::graph::Edge::new(id, source, target, *kind);
-                    edge.coupling_depth = *coupling_depth;
-                    edge.temporal_delay_sec = *delay;
-                    g.add_edge(edge);
-                }
-            }
-            g
-        });
-
+            store.read(|idx| graph_from_index(idx))
+        };
         Ok(f(&graph))
     }
 
@@ -294,6 +304,14 @@ impl Engine {
             .analyze_lock
             .lock()
             .map_err(|e| format!("Analyze lock poisoned: {}", e))?;
+
+        // Abort stale analyzes queued before a workspace switch.
+        if self.project_root() != project_root {
+            return Err(format!(
+                "分析已取消（工作区已切换到 {}）",
+                self.project_root().display()
+            ));
+        }
 
         let started_at = std::time::Instant::now();
         let started_at_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -358,14 +376,20 @@ impl Engine {
         set_progress("写入数据库", 0, 0, "");
         let idx = MemoryIndex::from_existing_graph(&result.graph);
 
-        let store_guard = self
-            .store
-            .lock()
-            .map_err(|e| format!("Store lock poisoned: {}", e))?;
-        if let Some(store) = store_guard.as_ref() {
-            store.swap_index(idx);
-            if let Err(e) = store.save() {
-                warn!("[engine] SQLite save failed: {}", e);
+        {
+            let store_guard = self
+                .store
+                .lock()
+                .map_err(|e| format!("Store lock poisoned: {}", e))?;
+            if let Some(store) = store_guard.as_ref() {
+                store.swap_index(idx);
+            }
+        }
+        if let Ok(store_guard) = self.store.lock() {
+            if let Some(store) = store_guard.as_ref() {
+                if let Err(e) = store.save() {
+                    warn!("[engine] SQLite save failed: {}", e);
+                }
             }
         }
 
@@ -526,23 +550,21 @@ impl Engine {
 
     // ── Timeline ─────────────────────────────────────────────
 
-    /// Record a timeline event. Delegates to the store's SQLite backend.
+    /// Record a timeline event. Uses a dedicated DB connection (not graph store lock).
     pub fn record_timeline(
         &self,
         event_type: &str,
         node_id: Option<&str>,
         summary: &str,
     ) -> Result<(), String> {
-        let store_guard = self
-            .store
+        let conn_guard = self
+            .timeline_conn
             .lock()
-            .map_err(|e| format!("Store lock poisoned: {}", e))?;
-        let store = store_guard
+            .map_err(|e| format!("Timeline lock poisoned: {}", e))?;
+        let conn = conn_guard
             .as_ref()
             .ok_or_else(|| "Engine not initialized".to_string())?;
-        store
-            .db
-            .record_timeline(event_type, node_id, summary)
+        timeline_record(conn, event_type, node_id, summary)
             .map_err(|e| format!("Timeline record failed: {}", e))
     }
 
@@ -554,35 +576,30 @@ impl Engine {
         summary: &str,
         props: &serde_json::Value,
     ) -> Result<(), String> {
-        let store_guard = self
-            .store
+        let conn_guard = self
+            .timeline_conn
             .lock()
-            .map_err(|e| format!("Store lock poisoned: {}", e))?;
-        let store = store_guard
+            .map_err(|e| format!("Timeline lock poisoned: {}", e))?;
+        let conn = conn_guard
             .as_ref()
             .ok_or_else(|| "Engine not initialized".to_string())?;
-        store
-            .db
-            .record_timeline_with_props(event_type, node_id, summary, props)
+        timeline_record_with_props(conn, event_type, node_id, summary, props)
             .map_err(|e| format!("Timeline record failed: {}", e))
     }
 
-    /// Query timeline events.
+    /// Query timeline events. Uses a dedicated DB connection (not graph store lock).
     pub fn query_timeline(
         &self,
         limit: usize,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let store_guard = self
-            .store
+        let conn_guard = self
+            .timeline_conn
             .lock()
-            .map_err(|e| format!("Store lock poisoned: {}", e))?;
-        let store = store_guard
+            .map_err(|e| format!("Timeline lock poisoned: {}", e))?;
+        let conn = conn_guard
             .as_ref()
             .ok_or_else(|| "Engine not initialized".to_string())?;
-        store
-            .db
-            .query_timeline(limit)
-            .map_err(|e| format!("Timeline query failed: {}", e))
+        timeline_query(conn, limit).map_err(|e| format!("Timeline query failed: {}", e))
     }
 
     /// Persist the current MemoryIndex to SQLite.

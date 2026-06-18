@@ -31,7 +31,8 @@ impl SqliteDb {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA auto_vacuum=INCREMENTAL;",
+             PRAGMA auto_vacuum=INCREMENTAL;
+             PRAGMA busy_timeout=5000;",
         )
         .map_err(|e| format!("pragma: {}", e))?;
 
@@ -89,6 +90,18 @@ impl SqliteDb {
     /// Return path for diagnostic messages.
     pub fn path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// Secondary connection for timeline I/O — avoids blocking on graph store mutex.
+    pub fn open_aux_connection(db_path: &Path) -> Result<Connection, String> {
+        let conn = Connection::open(db_path)
+            .map_err(|e| format!("open aux hologram.db: {}", e))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout=5000;",
+        )
+        .map_err(|e| format!("pragma aux: {}", e))?;
+        Ok(conn)
     }
 
     /// Create tables if they don't exist.
@@ -358,22 +371,7 @@ impl SqliteDb {
         file: Option<&str>,
         summary: &str,
     ) -> Result<(), String> {
-        let ts = chrono::Local::now()
-            .format("%Y-%m-%dT%H:%M:%S")
-            .to_string();
-        self.conn
-            .execute(
-                "INSERT INTO timeline_events (timestamp, event_type, file, summary, properties)
-                 VALUES (?1, ?2, ?3, ?4, '{}')",
-                params![ts, event_type, file.unwrap_or(""), summary],
-            )
-            .map_err(|e| format!("timeline insert: {}", e))?;
-        // Prune to keep latest 10000 events (prevents unbounded growth)
-        let _ = self.conn.execute(
-            "DELETE FROM timeline_events WHERE id NOT IN (SELECT id FROM timeline_events ORDER BY id DESC LIMIT 10000)",
-            [],
-        );
-        Ok(())
+        timeline_record(&self.conn, event_type, file, summary)
     }
 
     /// Record a timeline event with custom properties JSON.
@@ -385,50 +383,11 @@ impl SqliteDb {
         summary: &str,
         properties: &serde_json::Value,
     ) -> Result<(), String> {
-        let ts = chrono::Local::now()
-            .format("%Y-%m-%dT%H:%M:%S")
-            .to_string();
-        let props_str = serde_json::to_string(properties).unwrap_or_else(|_| "{}".into());
-        self.conn
-            .execute(
-                "INSERT INTO timeline_events (timestamp, event_type, file, summary, properties)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![ts, event_type, file.unwrap_or(""), summary, props_str],
-            )
-            .map_err(|e| format!("timeline insert: {}", e))?;
-        // Prune to keep latest 10000 events (prevents unbounded growth)
-        let _ = self.conn.execute(
-            "DELETE FROM timeline_events WHERE id NOT IN (SELECT id FROM timeline_events ORDER BY id DESC LIMIT 10000)",
-            [],
-        );
-        Ok(())
+        timeline_record_with_props(&self.conn, event_type, file, summary, properties)
     }
 
     pub fn query_timeline(&self, limit: usize) -> Result<Vec<serde_json::Value>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, timestamp, event_type, file, summary, properties FROM timeline_events ORDER BY id DESC LIMIT ?",
-            )
-            .map_err(|e| format!("timeline prepare: {}", e))?;
-        let rows = stmt
-            .query_map(params![limit as i64], |row| {
-                let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
-                Ok(serde_json::json!({
-                    "id": row.get::<_, i64>(0)?,
-                    "timestamp": row.get::<_, String>(1)?,
-                    "event_type": row.get::<_, String>(2)?,
-                    "file": row.get::<_, String>(3).unwrap_or_default(),
-                    "summary": row.get::<_, String>(4).unwrap_or_default(),
-                    "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
-                }))
-            })
-            .map_err(|e| format!("timeline query: {}", e))?;
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(row.map_err(|e| format!("timeline row: {}", e))?);
-        }
-        Ok(events)
+        timeline_query(&self.conn, limit)
     }
 
     /// Run incremental vacuum to reclaim space after many incremental updates.
@@ -442,6 +401,87 @@ impl SqliteDb {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+const TIMELINE_KEEP: i64 = 10_000;
+
+fn timeline_prune(conn: &Connection) {
+    let _ = conn.execute(
+        "DELETE FROM timeline_events WHERE id < (
+            SELECT id FROM timeline_events ORDER BY id DESC LIMIT 1 OFFSET ?1
+        )",
+        params![TIMELINE_KEEP - 1],
+    );
+}
+
+/// Record a timeline event on any hologram.db connection (WAL-safe).
+pub fn timeline_record(
+    conn: &Connection,
+    event_type: &str,
+    file: Option<&str>,
+    summary: &str,
+) -> Result<(), String> {
+    let ts = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string();
+    conn.execute(
+        "INSERT INTO timeline_events (timestamp, event_type, file, summary, properties)
+         VALUES (?1, ?2, ?3, ?4, '{}')",
+        params![ts, event_type, file.unwrap_or(""), summary],
+    )
+    .map_err(|e| format!("timeline insert: {}", e))?;
+    timeline_prune(conn);
+    Ok(())
+}
+
+/// Record a timeline event with JSON properties on any connection.
+pub fn timeline_record_with_props(
+    conn: &Connection,
+    event_type: &str,
+    file: Option<&str>,
+    summary: &str,
+    properties: &serde_json::Value,
+) -> Result<(), String> {
+    let ts = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string();
+    let props_str = serde_json::to_string(properties).unwrap_or_else(|_| "{}".into());
+    conn.execute(
+        "INSERT INTO timeline_events (timestamp, event_type, file, summary, properties)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![ts, event_type, file.unwrap_or(""), summary, props_str],
+    )
+    .map_err(|e| format!("timeline insert: {}", e))?;
+    timeline_prune(conn);
+    Ok(())
+}
+
+/// Query recent timeline events on any connection.
+pub fn timeline_query(conn: &Connection, limit: usize) -> Result<Vec<serde_json::Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, timestamp, event_type, file, summary, properties
+             FROM timeline_events ORDER BY id DESC LIMIT ?",
+        )
+        .map_err(|e| format!("timeline prepare: {}", e))?;
+    let rows = stmt
+        .query_map(params![limit as i64], |row| {
+            let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "timestamp": row.get::<_, String>(1)?,
+                "event_type": row.get::<_, String>(2)?,
+                "file": row.get::<_, String>(3).unwrap_or_default(),
+                "summary": row.get::<_, String>(4).unwrap_or_default(),
+                "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
+            }))
+        })
+        .map_err(|e| format!("timeline query: {}", e))?;
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row.map_err(|e| format!("timeline row: {}", e))?);
+    }
+    Ok(events)
 }
 
 /// Parse edge kind from SQLite string.

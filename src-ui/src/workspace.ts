@@ -186,6 +186,7 @@ export class Workspace {
                 ws.fileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
               } catch { /* file graph may not exist yet */ }
               ws.doGraphUpdate(starGraph, checkPanel);
+              bus.emit('timeline:refresh');
             } catch { /* get_full_graph failed */ }
           }
         } catch { /* ignore */ }
@@ -479,6 +480,7 @@ export class Workspace {
         const result: CheckResult = JSON.parse(json);
         checkPanel.update(result);
         checkPanel.loadAndRenderGate(this.path).catch(() => {});
+        bus.emit('timeline:refresh');
       } catch (parseErr) {
         console.error('[runCheck] JSON parse failed:', parseErr, 'raw:', json.slice(0, 200));
         this.onStatusChange?.('简报解析失败');

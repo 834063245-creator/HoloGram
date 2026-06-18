@@ -394,6 +394,7 @@ use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, thread_conflict_report, find_blindspots};
 use engine::community::detect_communities;
 use engine::graph::query;
+use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 
 /// Run analysis via Engine and cache result. Returns JSON summary.
 pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
@@ -438,6 +439,10 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
         "nodes": nodes, "edges": edges, "communities": comms,
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
+    // Seed briefing baseline on first analyze so open-project check doesn't diff against empty graph.
+    if !root.join(".hologram").join("baseline.json").exists() {
+        save_baseline(&root, graph);
+    }
     // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
     let _ = regenerate_file_graph(&path);
@@ -534,43 +539,55 @@ async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle) -> Result
 async fn run_analyze_with_progress(target: String, app: tauri::AppHandle) -> Result<String, String> {
     let target_clone = target.clone();
     let app_clone = app.clone();
+    let scheduled = std::time::Instant::now();
 
     // Spawn analysis in a blocking thread
-    let analyze_handle = tokio::task::spawn_blocking(move || {
+    let mut analyze_handle = tokio::task::spawn_blocking(move || {
         direct_analyze(&target_clone)
     });
 
-    // Poll engine progress while analysis runs
+    // Poll progress until the blocking task finishes (don't exit early on Ready —
+    // queued analyzes wait on analyze_lock while state stays Ready).
     loop {
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        let state = engine_api::engine_state();
-        match state {
-            engine_api::EngineState::Analyzing { phase, current, total, file, started_at_ms, .. } => {
-                let _ = app_clone.emit("analyze-phase", serde_json::json!({
-                    "phase": phase.clone(),
-                    "message": phase,
-                }));
-                if total > 0 {
-                    let _ = app_clone.emit("analyze-progress", serde_json::json!({
-                        "current": current,
-                        "total": total,
-                        "file": file,
-                    }));
+        tokio::select! {
+            res = &mut analyze_handle => {
+                match res {
+                    Ok(result) => return result,
+                    Err(e) => return Err(format!("分析任务失败: {}", e)),
                 }
-                let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                let elapsed = now_ms.saturating_sub(started_at_ms);
-                let _ = app_clone.emit("analyze-heartbeat", serde_json::json!({
-                    "label": phase,
-                    "elapsed": format!("{:.1}s", elapsed as f64 / 1000.0),
-                }));
             }
-            _ => break, // analysis done (Ready/Error) or not started
+            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
+                let state = engine_api::engine_state();
+                match state {
+                    engine_api::EngineState::Analyzing { phase, current, total, file, started_at_ms, .. } => {
+                        let _ = app_clone.emit("analyze-phase", serde_json::json!({
+                            "phase": phase.clone(),
+                            "message": phase,
+                        }));
+                        if total > 0 {
+                            let _ = app_clone.emit("analyze-progress", serde_json::json!({
+                                "current": current,
+                                "total": total,
+                                "file": file,
+                            }));
+                        }
+                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                        let elapsed = now_ms.saturating_sub(started_at_ms);
+                        let _ = app_clone.emit("analyze-heartbeat", serde_json::json!({
+                            "label": phase,
+                            "elapsed": format!("{:.1}s", elapsed as f64 / 1000.0),
+                        }));
+                    }
+                    _ => {
+                        let elapsed_s = scheduled.elapsed().as_secs_f64();
+                        let _ = app_clone.emit("analyze-heartbeat", serde_json::json!({
+                            "label": "等待分析引擎",
+                            "elapsed": format!("{:.1}s", elapsed_s),
+                        }));
+                    }
+                }
+            }
         }
-    }
-
-    match analyze_handle.await {
-        Ok(result) => result,
-        Err(e) => Err(format!("分析任务失败: {}", e)),
     }
 }
 
@@ -773,17 +790,37 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
         let root = std::path::PathBuf::from(&target);
-        let before_path = root.join(".hologram").join("baseline.json");
-        let before = std::fs::read_to_string(&before_path).ok()
-            .and_then(|s| serde_json::from_str::<Graph>(&s).ok())
-            .unwrap_or_default();
-        // Ensure graph is loaded via Engine
-        let after = engine_api::engine_read_graph(|g| g.clone())
-            .or_else(|_| {
-                direct_analyze(&target)?;
-                engine_api::engine_read_graph(|g| g.clone())
-                    .map_err(|e| format!("分析后无图谱: {}", e))
-            })?;
+        let before = load_baseline(&root);
+        // Prefer in-memory / SQLite cache; only run full analyze when truly empty.
+        let after = if let Ok(g) = engine_api::engine_read_graph(|g| g.clone()) {
+            if g.node_count() > 0 || g.edge_count() > 0 {
+                Some(g)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let after = match after {
+            Some(g) => g,
+            None => {
+                engine_api::engine_init(&root)
+                    .map_err(|e| format!("引擎初始化失败: {}", e))?;
+                if let Ok(g) = engine_api::engine_read_graph(|g| g.clone()) {
+                    if g.node_count() > 0 || g.edge_count() > 0 {
+                        g
+                    } else {
+                        direct_analyze(&target)?;
+                        engine_api::engine_read_graph(|g| g.clone())
+                            .map_err(|e| format!("分析后无图谱: {}", e))?
+                    }
+                } else {
+                    direct_analyze(&target)?;
+                    engine_api::engine_read_graph(|g| g.clone())
+                        .map_err(|e| format!("分析后无图谱: {}", e))?
+                }
+            }
+        };
         let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
             .map(|f| f.clone()).unwrap_or_default();
         // Clear immediately so next check gets a fresh set
@@ -792,40 +829,29 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
         }
         let result = run_full_check(&before, &after, &changed_files, &target);
 
-        // Save baseline only if check passed
-        let passed = result["passed"].as_bool().unwrap_or(true);
-        if passed {
-            let _ = std::fs::create_dir_all(root.join(".hologram"));
-            let _ = std::fs::write(&before_path, serde_json::to_string_pretty(&after).unwrap_or_default());
-        }
+        // Always advance baseline — next check diffs against this snapshot.
+        save_baseline(&root, &after);
 
-        // Record check result to timeline with full CheckResult properties
-        let violation_count = result["violation_count"].as_u64().unwrap_or(0);
-        let event_type = if passed { "commit_clean" } else { "commit_violation" };
-        let summary = if passed {
-            format!("简报通过（{} 违规）", violation_count)
-        } else {
-            format!("简报未通过：{} 条违规", violation_count)
-        };
-        // Store full CheckResult shape so frontend can round-trip via historical briefing
-        let props = serde_json::json!({
-            "passed": result["passed"],
-            "timestamp": result["timestamp"],
-            "changed_files": result["changed_files"],
-            "total_changed_files": result["total_changed_files"],
-            "l5_violations": result["l5_violations"],
-            "l4_violations": result["l4_violations"],
-            "l3_violations": result["l3_violations"],
-            "l2_violations": result["l2_violations"],
-            "passed_checks": result["passed_checks"],
-            "blast_radius": result["blast_radius"],
-            "cross_community_edges": result["cross_community_edges"],
-            "new_cycles": result["new_cycles"],
-            "new_thread_conflicts": result["new_thread_conflicts"],
-            "api_signature_changes": result["api_signature_changes"],
-            "violation_count": result["violation_count"],
-        });
-        let _ = engine_api::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
+        // Record meaningful checks to timeline (skip quiet open-project polls).
+        let quiet = result.get("quiet").and_then(|v| v.as_bool()).unwrap_or(false);
+        let baseline_seed = result.get("baseline_seed").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !quiet || baseline_seed {
+            let passed = result["passed"].as_bool().unwrap_or(true);
+            let violation_count = result["violation_count"].as_u64().unwrap_or(0);
+            let event_type = if passed { "commit_clean" } else { "commit_violation" };
+            let summary = if baseline_seed {
+                "基线已建立".to_string()
+            } else if passed {
+                format!("简报通过（{} 违规）", violation_count)
+            } else {
+                format!("简报未通过：{} 条违规", violation_count)
+            };
+            let props = check_timeline_props(&result);
+            if engine_api::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props).is_err() {
+                let _ = engine_api::engine_init(&root);
+                let _ = engine_api::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
+            }
+        }
 
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("简报任务失败: {e}"))?
