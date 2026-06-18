@@ -7,37 +7,20 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, RwLock};
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::analysis::*;
-use crate::community::{detect_communities, detect_communities_from_index};
+use crate::community::detect_communities_from_index;
 use crate::engine;
-use crate::graph::{query, CrossFileResolver, Edge, EdgeKind, Graph, Node, NodeKind};
-use crate::pipeline::runner::analyze_project;
+use crate::graph::{query, Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::routing::preflight::run_full_check;
-use crate::storage::{GraphStore, MemoryIndex};
+use crate::storage::MemoryIndex;
 
-/// New storage engine singleton. Initialized by init_graph_store() at startup.
-/// All graph queries go through this — it provides RwLock<MemoryIndex> for concurrent reads.
-///
-/// Outer RwLock allows replacing the entire store when the workspace switches.
-/// Inner Mutex serializes access to the non-Sync GraphStore (rusqlite::Connection is !Sync).
-pub static GRAPH_STORE: std::sync::LazyLock<RwLock<Option<Mutex<GraphStore>>>> =
-    std::sync::LazyLock::new(|| RwLock::new(None));
-
-/// Initialize (or re-initialize) the global GraphStore for the given project root.
-/// If the store was previously opened for a different project, it is replaced with a
-/// new store at the correct path — preventing cross-project data contamination.
-pub fn init_graph_store(project_root: &Path) -> Result<(), String> {
-    // Forward to the unified Engine — the single source of truth.
-    // Engine::init handles same-project reuse and workspace switch internally.
-    engine::engine_init(project_root)
-}
-
-// ANALYZE_LOCK + with_graph_store removed — Engine handles concurrency and timeline now.
+// All graph access goes through Engine (engine::engine_* functions).
+// GRAPH_STORE / CACHED_GRAPH / ANALYZE_LOCK / with_graph_store — all removed.
 
 /// Parse CLI args for `engine.exe serve [--project-root <path>]`.
 /// Returns None if not in serve mode.
@@ -377,25 +360,25 @@ impl McpServer {
         if node_id.is_empty() {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
-        // Try GraphStore (MemoryIndex) first
-        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            let result = store.read(|idx| {
-                let node = match idx.get_node(&node_id) {
-                    Some(n) => n,
-                    None => return json!({"error": format!("Node {} not found", node_id)}),
-                };
-                let nb = idx.neighbors(&node_id, 1, None);
-                let incoming = idx.get_incoming_edges(&node_id);
-                let outgoing = idx.get_outgoing_edges(&node_id);
-                json!({
-                    "node": node_to_value(node),
-                    "neighbor_count": nb.len(),
-                    "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
-                    "incoming": incoming.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
-                    "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
-                })
-            });
-            return Self::result_or_error(id, result);
+        // Engine MemoryIndex path (primary)
+        match engine::engine_read(|idx| {
+            let node = match idx.get_node(&node_id) {
+                Some(n) => n.clone(),
+                None => return json!({"error": format!("Node {} not found", node_id)}),
+            };
+            let nb = idx.neighbors(&node_id, 1, None);
+            let incoming = idx.get_incoming_edges(&node_id);
+            let outgoing = idx.get_outgoing_edges(&node_id);
+            json!({
+                "node": node_to_value(&node),
+                "neighbor_count": nb.len(),
+                "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
+                "incoming": incoming.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
+                "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
+            })
+        }) {
+            Ok(value) => return Self::result_or_error(id, value),
+            Err(_) => {} // fall through to with_graph fallback
         }
         self.with_graph(id, |g| {
             let node = match g.get_node(&node_id) {
@@ -461,29 +444,24 @@ impl McpServer {
         if node_id.is_empty() {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
-        // Query timeline for real decision history
-        let decision_history = if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            store.db.query_timeline(20).unwrap_or_default()
-        } else {
-            vec![]
-        };
-        // Try GraphStore first
-        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            let result = store.read(|idx| {
-                let node = match idx.get_node(&node_id) {
-                    Some(n) => n,
-                    None => return json!({"error": format!("Node {} not found", node_id)}),
-                };
-                let dep_count = idx.incoming(&node_id, None).len();
-                let out_count = idx.outgoing(&node_id, None).len();
-                json!({
-                    "node": node_to_value(node),
-                    "decision_history": decision_history,
-                    "dependency_count": dep_count,
-                    "dependent_count": out_count,
-                })
-            });
-            return Self::result_or_error(id, result);
+        let decision_history = engine::engine_query_timeline(20).unwrap_or_default();
+        // Engine MemoryIndex path (primary)
+        match engine::engine_read(|idx| {
+            let node = match idx.get_node(&node_id) {
+                Some(n) => n.clone(),
+                None => return json!({"error": format!("Node {} not found", node_id)}),
+            };
+            let dep_count = idx.incoming(&node_id, None).len();
+            let out_count = idx.outgoing(&node_id, None).len();
+            json!({
+                "node": node_to_value(&node),
+                "decision_history": decision_history,
+                "dependency_count": dep_count,
+                "dependent_count": out_count,
+            })
+        }) {
+            Ok(value) => return Self::result_or_error(id, value),
+            Err(_) => {}
         }
         self.with_graph(id, |g| {
             let node = match g.get_node(&node_id) {
@@ -565,12 +543,7 @@ impl McpServer {
         let _project_root = args.get("project_root").and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root());
-        // Read from unified GraphStore SqliteDb
-        let events = if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            store.db.query_timeline(100).unwrap_or_default()
-        } else {
-            vec![]
-        };
+        let events = engine::engine_query_timeline(100).unwrap_or_default();
         let last = events.first().cloned();
         McpServer::tool_result(id, json!({
             "last_change": last,
@@ -615,64 +588,16 @@ impl McpServer {
 
     fn tool_thread_conflicts(&self, args: &Value, id: &Value) -> Value {
         let _node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-        // Try GraphStore first
-        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            let result = store.read(|idx| {
-                let mut resources = serde_json::Map::new();
-                for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
-                    let incoming = idx.incoming(&medium.id, None);
-                    let mut threads_info = Vec::new();
-                    let mut has_write = false;
-                    let mut lock_edges = Vec::new();
-                    for (src_id, kind, _depth, _delay) in &incoming {
-                        if let Some(src) = idx.get_node(src_id) {
-                            let access = if matches!(kind, EdgeKind::Writes) { "W" } else { "R" };
-                            if access == "W" { has_write = true; }
-                            threads_info.push(json!({
-                                "name": src.name,
-                                "location": src.location,
-                                "access": access,
-                            }));
-                        }
-                        if kind.as_str().contains("lock") {
-                            lock_edges.push(format!("{}::{}::{}", src_id, medium.id, kind.as_str()));
-                        }
-                    }
-                    if !threads_info.is_empty() {
-                        resources.insert(medium.name.clone(), json!({
-                            "medium_type": "medium",
-                            "threads": threads_info,
-                            "thread_count": threads_info.len(),
-                            "has_concurrent_write": has_write,
-                            "lock_detected": !lock_edges.is_empty(),
-                            "lock_edges": lock_edges,
-                        }));
-                    }
-                }
-                let unlocked_keys: Vec<_> = resources.iter()
-                    .filter(|(_, v)| v["has_concurrent_write"].as_bool().unwrap_or(false) && !v["lock_detected"].as_bool().unwrap_or(true))
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                json!({
-                    "resources": resources,
-                    "total_shared_resources": resources.len(),
-                    "unlocked_concurrent_writes": unlocked_keys.len(),
-                    "unlocked_resources": unlocked_keys,
-                })
-            });
-            return Self::result_or_error(id, result);
-        }
-        // Legacy fallback
-        self.with_graph(id, |g| {
+        self.with_store(id, |idx| {
             let mut resources = serde_json::Map::new();
-            for (_mid, medium) in g.nodes.iter().filter(|(_, n)| matches!(n.kind, NodeKind::Medium)) {
-                let incoming = g.incoming_edges(&medium.id);
+            for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
+                let incoming = idx.incoming(&medium.id, None);
                 let mut threads_info = Vec::new();
                 let mut has_write = false;
                 let mut lock_edges = Vec::new();
-                for edge in &incoming {
-                    if let Some(src) = g.get_node(&edge.source) {
-                        let access = if matches!(edge.kind, EdgeKind::Writes) { "W" } else { "R" };
+                for (src_id, kind, _depth, _delay) in &incoming {
+                    if let Some(src) = idx.get_node(src_id) {
+                        let access = if matches!(kind, EdgeKind::Writes) { "W" } else { "R" };
                         if access == "W" { has_write = true; }
                         threads_info.push(json!({
                             "name": src.name,
@@ -680,8 +605,8 @@ impl McpServer {
                             "access": access,
                         }));
                     }
-                    if edge.kind.as_str().contains("lock") {
-                        lock_edges.push(edge.id.clone());
+                    if kind.as_str().contains("lock") {
+                        lock_edges.push(format!("{}::{}::{}", src_id, medium.id, kind.as_str()));
                     }
                 }
                 if !threads_info.is_empty() {
@@ -720,12 +645,7 @@ impl McpServer {
 
     fn tool_timeline(&self, args: &Value, id: &Value) -> Value {
         let limit = Self::get_arg_usize(args, "limit", 100).max(1);
-        // Read from unified GraphStore SqliteDb
-        let events = if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            store.db.query_timeline(limit).unwrap_or_default()
-        } else {
-            vec![]
-        };
+        let events = engine::engine_query_timeline(limit).unwrap_or_default();
         McpServer::tool_result(id, json!({ "events": events, "total": events.len() }))
     }
 
@@ -795,17 +715,16 @@ impl McpServer {
         if query_str.is_empty() {
             return McpServer::error_response(id, -32602, "query is required");
         }
-        // Try GraphStore FTS5 first (O(log N)), fall back to legacy O(N) scan
-        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            let results = store
-                .read(|idx| idx.fts_search(&store.db, query_str, limit).unwrap_or_default());
-            let count = results.len();
-            return McpServer::tool_result(id, json!({
-                "query": query_str,
-                "count": count,
-                "results": results.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
-                "engine": "fts5",
-            }));
+        // Engine FTS5 path (primary — only used when results are non-empty)
+        if let Ok(results) = engine::engine_fts_search(query_str, limit) {
+            if !results.is_empty() {
+                return McpServer::tool_result(id, json!({
+                    "query": query_str,
+                    "count": results.len(),
+                    "results": results.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
+                    "engine": "fts5",
+                }));
+            }
         }
         self.with_graph(id, |g| {
             let results = query::search_nodes(g, query_str);
@@ -1000,12 +919,7 @@ impl McpServer {
             "passed": check_result["passed"],
             "violation_count": check_result["violation_count"],
         });
-        // Timeline via GraphStore (still needed until Engine has timeline API)
-        if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
-            if let Ok(store) = store_mtx.lock() {
-                let _ = store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
-            }
-        }
+        let _ = engine::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
 
         McpServer::tool_result(id, check_result)
     }
@@ -1106,16 +1020,7 @@ impl McpServer {
             }
 
             // Persist to disk
-            if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
-                if let Ok(store) = store_mtx.lock() {
-                    store.write(|idx| {
-                        for nid in &matched_ids {
-                            idx.rename_node_name(nid, new_name);
-                        }
-                    });
-                    let _ = store.save();
-                }
-            }
+            let _ = engine::engine_save();
 
             McpServer::tool_result(id, json!({
                 "dry_run": false,
@@ -1240,6 +1145,8 @@ mod tests {
             idx.upsert_edge("a", "b", EdgeKind::Calls, 2, None);
             idx.upsert_edge("a", "m1", EdgeKind::Writes, 4, None);
         });
+        // Persist to SQLite so FTS5 search works
+        let _ = engine::engine_save();
         guard
     }
 

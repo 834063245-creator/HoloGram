@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
+use tracing::info;
 
 use crate::graph::{EdgeKind, Node, NodeKind};
 
@@ -36,7 +37,53 @@ impl SqliteDb {
 
         let db = Self { conn, db_path };
         db.ensure_schema()?;
+        db.migrate_fts5()?;
         Ok(db)
+    }
+
+    /// Detect and fix broken FTS5 schema from v4.0 (column `node_id` mismatched
+    /// `nodes.id`). Checks the FTS5 table definition directly; if it uses the old
+    /// column name, drops and recreates the FTS5 index plus triggers, then rebuilds
+    /// from the content table.
+    fn migrate_fts5(&self) -> Result<(), String> {
+        // Check if fts_nodes exists and uses the old column name `node_id`.
+        let sql: String = self.conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_nodes'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        if !sql.contains("node_id") {
+            return Ok(()); // already correct or table doesn't exist yet
+        }
+        info!("[sqlite] migrating broken FTS5 schema (node_id → id)");
+        // Drop old triggers (ignore errors — they might not exist)
+        for trig in &["nodes_ai", "nodes_ad", "nodes_au"] {
+            let _ = self.conn.execute_batch(&format!("DROP TRIGGER {}", trig));
+        }
+        self.conn.execute_batch(
+            "DROP TABLE IF EXISTS fts_nodes;
+             CREATE VIRTUAL TABLE fts_nodes USING fts5(
+                 id, name, location,
+                 content=nodes,
+                 content_rowid=rowid
+             );
+             CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
+                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+             END;
+             CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
+                 INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+             END;
+             CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
+                 INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+             END;
+             INSERT INTO fts_nodes(fts_nodes) VALUES('rebuild');",
+        )
+            .map_err(|e| format!("fts5 migration: {}", e))?;
+        info!("[sqlite] FTS5 migration complete");
+        Ok(())
     }
 
     /// Return path for diagnostic messages.
@@ -107,7 +154,7 @@ impl SqliteDb {
         self.conn
             .execute_batch(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS fts_nodes USING fts5(
-                    node_id,
+                    id,
                     name,
                     location,
                     content=nodes,
@@ -120,14 +167,14 @@ impl SqliteDb {
         // rusqlite doesn't support CREATE TRIGGER IF NOT EXISTS, so catch "already exists" error).
         for trigger_sql in [
             "CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
-                INSERT INTO fts_nodes(rowid, node_id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+                INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
             END;",
             "CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
-                INSERT INTO fts_nodes(fts_nodes, rowid, node_id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+                INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
             END;",
             "CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
-                INSERT INTO fts_nodes(fts_nodes, rowid, node_id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
-                INSERT INTO fts_nodes(rowid, node_id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+                INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+                INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
             END;",
         ] {
             let _ = self.conn.execute_batch(trigger_sql);
@@ -288,7 +335,7 @@ impl SqliteDb {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT node_id FROM fts_nodes WHERE fts_nodes MATCH ?1 ORDER BY rank LIMIT ?2",
+                "SELECT id FROM fts_nodes WHERE fts_nodes MATCH ?1 ORDER BY rank LIMIT ?2",
             )
             .map_err(|e| format!("fts prepare: {}", e))?;
         let rows = stmt
