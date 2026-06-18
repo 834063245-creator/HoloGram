@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
@@ -15,12 +16,17 @@ pub struct PipelineResult {
     pub nodes_total: usize,
     pub edges_total: usize,
     pub elapsed_secs: f64,
+    /// Parse cache: file_path → (source_code, parsed_tree).
+    /// Carried forward so synthesis passes (Steps 4-6) can re-walk the same
+    /// ASTs without re-reading + re-parsing files from disk.
+    pub parse_cache: HashMap<String, (String, Option<tree_sitter::Tree>)>,
 }
 
 /// Run the full analysis pipeline on a project directory.
 /// 1. Discover Python files
 /// 2. Parse in parallel with rayon
 /// 3. Merge into single graph (incremental index)
+/// 4. Build parse cache for downstream synthesis
 pub fn analyze_project(root: &Path) -> PipelineResult {
     let start = Instant::now();
 
@@ -39,9 +45,18 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     // Step 3: Merge with incremental index (O(n) per file, not O(n²))
     let mut merger = GraphMerger::new();
 
-    for result in &file_results {
-        let file_graph = build_file_graph(result);
+    // Build parse cache while merging (take ownership of source + tree in one pass)
+    let files_parsed = file_results.len();
+    let mut parse_cache: HashMap<String, (String, Option<tree_sitter::Tree>)> = HashMap::with_capacity(files_parsed);
+
+    for result in file_results.into_iter() {
+        let file_graph = build_file_graph(&result);
         merger.merge(file_graph);
+
+        // Cache source + tree for synthesis passes (Steps 4-6).
+        // Use absolute path (normalized) — synthesis functions look up by abs path.
+        let abs_path = result.path.to_string_lossy().replace('\\', "/");
+        parse_cache.insert(abs_path, (result.source, result.tree));
     }
 
     let graph = merger.into_graph();
@@ -51,10 +66,11 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
 
     let result = PipelineResult {
         graph,
-        files_parsed: file_results.len(),
+        files_parsed,
         nodes_total,
         edges_total,
         elapsed_secs: elapsed.as_secs_f64(),
+        parse_cache,
     };
 
     info!(

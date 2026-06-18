@@ -1,6 +1,13 @@
 use crate::adapter::traits::LanguageAdapter;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
-use tree_sitter::Parser;
+use std::cell::RefCell;
+use tree_sitter::{Language, Parser};
+
+/// Thread-local parser cache — reuses parser across files of the same language.
+/// Avoids Parser::new() + set_language() allocation overhead for thousands of files.
+thread_local! {
+    static TL_PARSER: RefCell<Option<(Parser, String)>> = RefCell::new(None);
+}
 
 /// Generic tree-sitter adapter covering all languages beyond Python and JS/TS.
 /// Each language is matched explicitly due to inconsistent crate APIs.
@@ -9,39 +16,49 @@ pub struct TreeSitterAdapter;
 impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
 
-    fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>) {
-        macro_rules! do_parse { ($ts_crate:ident) => {{
-            let lang: tree_sitter::Language = $ts_crate::LANGUAGE.into();
-            let mut p = Parser::new();
-            if p.set_language(&lang).is_err() { return (vec![], vec![]); }
-            match p.parse(source, None) { Some(t) => generic_walk(&t, source, file_id), None => (vec![], vec![]) }
+    fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
+        macro_rules! do_parse { ($ts_crate:ident, $lang_key:expr) => {{
+            let lang: Language = $ts_crate::LANGUAGE.into();
+            // Reuse thread-local parser when language matches; alloc new parser on lang switch
+            let result = TL_PARSER.with(|cell| {
+                let mut borrow = cell.borrow_mut();
+                let reuse = borrow.as_ref().map_or(false, |(_, cached)| cached == $lang_key);
+                if !reuse {
+                    let mut p = Parser::new();
+                    if p.set_language(&lang).is_err() {
+                        return (vec![], vec![], None);
+                    }
+                    *borrow = Some((p, $lang_key.to_string()));
+                }
+                let (ref mut parser, _) = borrow.as_mut().unwrap();
+                match parser.parse(source, None) {
+                    Some(t) => {
+                        let (nodes, edges) = generic_walk(&t, source, file_id);
+                        (nodes, edges, Some(t))
+                    }
+                    None => (vec![], vec![], None),
+                }
+            });
+            result
         }}; }
 
         match ext {
-            // Original 7 — tree-sitter 0.23+, LANGUAGE static
-            "go" => do_parse!(tree_sitter_go),
-            "rs" => do_parse!(tree_sitter_rust),
-            "java" => do_parse!(tree_sitter_java),
-            "c" | "h" => do_parse!(tree_sitter_c),
-            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => do_parse!(tree_sitter_cpp),
-            "rb" => do_parse!(tree_sitter_ruby),
-            "lua" => do_parse!(tree_sitter_lua),
-
-            // tree-sitter 0.23+ grammars — LANGUAGE static works
-            "cs" => do_parse!(tree_sitter_c_sharp),
-            "swift" => do_parse!(tree_sitter_swift),
-            "dart" => do_parse!(tree_sitter_dart),
-            "scala" | "sc" => do_parse!(tree_sitter_scala),
-            "hs" => do_parse!(tree_sitter_haskell),
-            "json" => do_parse!(tree_sitter_json),
-            "html" | "htm" => do_parse!(tree_sitter_html),
-            "css" => do_parse!(tree_sitter_css),
-
-            // ── Pending tree-sitter 0.23+ upgrade (C symbols clash with 0.19/0.20) ──
-            // Dependencies pre-cached in Cargo.toml. Once these grammars ship with
-            // tree-sitter ≥0.23, uncomment the match arms and they'll work immediately.
-            // php · kotlin · ocaml · nix · bash · toml · markdown · yaml · zig · elixir · erlang · r
-            _ => (vec![], vec![]),
+            "go" => do_parse!(tree_sitter_go, "go"),
+            "rs" => do_parse!(tree_sitter_rust, "rs"),
+            "java" => do_parse!(tree_sitter_java, "java"),
+            "c" | "h" => do_parse!(tree_sitter_c, "c"),
+            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => do_parse!(tree_sitter_cpp, "cpp"),
+            "rb" => do_parse!(tree_sitter_ruby, "rb"),
+            "lua" => do_parse!(tree_sitter_lua, "lua"),
+            "cs" => do_parse!(tree_sitter_c_sharp, "cs"),
+            "swift" => do_parse!(tree_sitter_swift, "swift"),
+            "dart" => do_parse!(tree_sitter_dart, "dart"),
+            "scala" | "sc" => do_parse!(tree_sitter_scala, "scala"),
+            "hs" => do_parse!(tree_sitter_haskell, "hs"),
+            "json" => do_parse!(tree_sitter_json, "json"),
+            "html" | "htm" => do_parse!(tree_sitter_html, "html"),
+            "css" => do_parse!(tree_sitter_css, "css"),
+            _ => (vec![], vec![], None),
         }
     }
 }
@@ -53,7 +70,7 @@ impl LanguageAdapter for TreeSitterAdapter {
             .into_iter().map(|s| s.into()).collect()
     }
 
-    fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {
+    fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
         let ext = file_path.rsplit('.').next().unwrap_or("");
         Self::parse_ext(ext, source, file_path)
     }
@@ -169,7 +186,7 @@ func main() {
     fmt.Println("hello")
 }
 "#;
-        let (nodes, edges) = a.analyze("main.go", src);
+        let (nodes, edges, _) = a.analyze("main.go", src);
         // Should find at least the module node + main function
         assert!(nodes.len() >= 2, "expected module + at least one function");
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
@@ -188,7 +205,7 @@ pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 "#;
-        let (nodes, edges) = a.analyze("main.rs", src);
+        let (nodes, edges, _) = a.analyze("main.rs", src);
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"hello"));
         assert!(names.contains(&"add"));
@@ -197,14 +214,14 @@ pub fn add(a: i32, b: i32) -> i32 {
     #[test]
     fn test_analyze_unknown_extension() {
         let a = TreeSitterAdapter;
-        let (nodes, _edges) = a.analyze("main.xyz", "content");
+        let (nodes, _edges, _) = a.analyze("main.xyz", "content");
         assert!(nodes.is_empty(), "unknown extension should return empty");
     }
 
     #[test]
     fn test_analyze_empty_source() {
         let a = TreeSitterAdapter;
-        let (nodes, edges) = a.analyze("main.go", "");
+        let (nodes, edges, _) = a.analyze("main.go", "");
         // Should have the module node at minimum
         assert!(nodes.len() >= 1, "should have at least module node");
         assert!(edges.is_empty());
@@ -213,8 +230,8 @@ pub fn add(a: i32, b: i32) -> i32 {
     #[test]
     fn test_analyze_modules_have_unique_ids() {
         let a = TreeSitterAdapter;
-        let (nodes1, _) = a.analyze("src/a.go", "package a");
-        let (nodes2, _) = a.analyze("src/b.go", "package b");
+        let (nodes1, _, _) = a.analyze("src/a.go", "package a");
+        let (nodes2, _, _) = a.analyze("src/b.go", "package b");
         let id1 = &nodes1[0].id;
         let id2 = &nodes2[0].id;
         assert_ne!(id1, id2, "different files should have different module IDs");
@@ -224,21 +241,21 @@ pub fn add(a: i32, b: i32) -> i32 {
     fn test_analyze_csharp_smoke() {
         // Smoke test: C# grammar loads and parses without panic
         let a = TreeSitterAdapter;
-        let (_nodes, _edges) = a.analyze("Service.cs", "class UserService {}");
+        let (_nodes, _edges, _) = a.analyze("Service.cs", "class UserService {}");
     }
 
     #[test]
     fn test_analyze_swift_smoke() {
         // Smoke test: Swift grammar loads and parses without panic
         let a = TreeSitterAdapter;
-        let (_nodes, _edges) = a.analyze("App.swift", "func greet() {}");
+        let (_nodes, _edges, _) = a.analyze("App.swift", "func greet() {}");
     }
 
     #[test]
     fn test_analyze_kotlin_pending() {
         // tree-sitter-kotlin pending 0.23+ upgrade (C symbol clash)
         let a = TreeSitterAdapter;
-        let (nodes, _) = a.analyze("Main.kt", "fun main() {}");
+        let (nodes, _, _) = a.analyze("Main.kt", "fun main() {}");
         assert!(nodes.is_empty(), "kt not yet wired — pending grammar upgrade");
     }
 
@@ -246,7 +263,7 @@ pub fn add(a: i32, b: i32) -> i32 {
     fn test_analyze_json() {
         let a = TreeSitterAdapter;
         let src = "{\"name\": \"test\", \"version\": \"1.0\"}";
-        let (nodes, _) = a.analyze("config.json", src);
+        let (nodes, _, _) = a.analyze("config.json", src);
         // JSON doesn't have functions/classes, but should have module node
         assert!(nodes.len() >= 1, "should have at least module node");
     }

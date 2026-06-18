@@ -1,12 +1,19 @@
-use tree_sitter::Parser;
+use std::cell::RefCell;
+use tree_sitter::{Language, Parser};
 
 use crate::adapter::traits::LanguageAdapter;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 
+thread_local! {
+    static TS_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
+    static JS_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
+}
+
 /// Combined JavaScript / TypeScript / TSX adapter.
+/// Uses thread-local parsers to avoid per-file allocation overhead.
 pub struct TypeScriptAdapter {
-    ts_lang: tree_sitter::Language,
-    js_lang: tree_sitter::Language,
+    ts_lang: Language,
+    js_lang: Language,
 }
 
 impl TypeScriptAdapter {
@@ -23,18 +30,23 @@ impl LanguageAdapter for TypeScriptAdapter {
         vec!["js".into(), "jsx".into(), "ts".into(), "tsx".into(), "mjs".into(), "cjs".into(), "mts".into(), "cts".into()]
     }
 
-    fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {
-        let lang = if file_path.ends_with(".ts") || file_path.ends_with(".tsx") || file_path.ends_with(".mts") || file_path.ends_with(".cts") {
-            &self.ts_lang
-        } else {
-            &self.js_lang
-        };
+    fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
+        let is_ts = file_path.ends_with(".ts") || file_path.ends_with(".tsx") || file_path.ends_with(".mts") || file_path.ends_with(".cts");
+        let lang = if is_ts { self.ts_lang.clone() } else { self.js_lang.clone() };
+        let cell = if is_ts { &TS_PARSER } else { &JS_PARSER };
 
-        let mut parser = Parser::new();
-        parser.set_language(&lang).ok();
-        let tree = match parser.parse(source, None) {
+        let tree = cell.with(|cell| {
+            let mut borrow = cell.borrow_mut();
+            let parser = borrow.get_or_insert_with(|| {
+                let mut p = Parser::new();
+                p.set_language(&lang).ok();
+                p
+            });
+            parser.parse(source, None)
+        });
+        let tree = match tree {
             Some(t) => t,
-            None => return (vec![], vec![]),
+            None => return (vec![], vec![], None),
         };
 
         let file_id = file_path
@@ -44,7 +56,8 @@ impl LanguageAdapter for TypeScriptAdapter {
             .unwrap_or(file_path)
             .replace('.', "_");
 
-        walk_ts_tree(&tree, source, &file_id)
+        let (nodes, edges) = walk_ts_tree(&tree, source, &file_id);
+        (nodes, edges, Some(tree))
     }
 }
 
@@ -166,7 +179,7 @@ mod tests {
     fn test_js_function_and_class() {
         let adapter = TypeScriptAdapter::new();
         let src = "function hello() {}\nclass Foo {}\nclass Bar extends Foo {}";
-        let (nodes, edges) = adapter.analyze("test.js", src);
+        let (nodes, edges, _) = adapter.analyze("test.js", src);
         assert!(nodes.iter().any(|n| n.name == "hello"));
         assert!(nodes.iter().any(|n| n.name == "Foo"));
         assert!(nodes.iter().any(|n| n.name == "Bar"));
@@ -176,7 +189,7 @@ mod tests {
     fn test_ts_import_and_interface() {
         let adapter = TypeScriptAdapter::new();
         let src = "import { stuff } from './module';\ninterface IUser { name: string }\nexport type ID = string;";
-        let (nodes, edges) = adapter.analyze("types.ts", src);
+        let (nodes, edges, _) = adapter.analyze("types.ts", src);
         assert!(nodes.iter().any(|n| n.name == "IUser"));
         assert!(nodes.iter().any(|n| n.name == "ID"));
         assert!(edges.iter().any(|e| matches!(e.kind, EdgeKind::Imports)));
@@ -185,7 +198,7 @@ mod tests {
     #[test]
     fn test_empty_js() {
         let adapter = TypeScriptAdapter::new();
-        let (nodes, _) = adapter.analyze("empty.js", "// nothing");
+        let (nodes, _, _) = adapter.analyze("empty.js", "// nothing");
         assert_eq!(nodes.len(), 1); // module node always created
     }
 }

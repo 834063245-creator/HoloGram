@@ -14,6 +14,12 @@ pub struct FileData {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub source_len: usize,
+    /// Raw source text — carried forward for synthesis passes (Steps 4-6)
+    /// so they don't re-read from disk.
+    pub source: String,
+    /// Parsed tree-sitter tree — carried forward for synthesis passes.
+    /// Steps 4-6 walk this tree instead of re-parsing.
+    pub tree: Option<tree_sitter::Tree>,
 }
 
 /// Parallel file parser.
@@ -64,7 +70,7 @@ impl ParallelParser {
         let source = fs::read_to_string(path).ok()?;
         let source_len = source.lines().count();
 
-        let (mut nodes, edges) = adapter.analyze(
+        let (mut nodes, edges, tree) = adapter.analyze(
             &path.to_string_lossy(),
             &source,
         );
@@ -80,6 +86,8 @@ impl ParallelParser {
             nodes,
             edges,
             source_len,
+            source,
+            tree,
         })
     }
 }

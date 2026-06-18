@@ -6,7 +6,10 @@ use std::path::Path;
 
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
-pub fn synthesize_dataflow_edges(graph: &mut Graph, project_root: &Path) -> usize {
+/// Parsed source held in the pipeline parse cache.
+type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
+
+pub fn synthesize_dataflow_edges(graph: &mut Graph, project_root: &Path, parse_cache: &ParseCache) -> usize {
     // Guard: on large graphs (>500 source files) the per-file re-parse + O(N) lookups
     // can take minutes. Skip synthesis — it's an enhancement, not core analysis.
     let total_files_estimate = graph.nodes.values().filter_map(|n| n.location.as_ref()).count();
@@ -35,12 +38,27 @@ pub fn synthesize_dataflow_edges(graph: &mut Graph, project_root: &Path) -> usiz
         }
     }
     for file in &files {
-        let full_path = project_root.join(file);
-        if let Ok(source) = std::fs::read_to_string(&full_path) {
+        // Normalize to absolute path for cache lookup
+        let abs_key = if file.contains(':') {
+            file.clone()
+        } else {
+            project_root.join(file).to_string_lossy().replace('\\', "/")
+        };
+        // Try parse cache first
+        if let Some((source, Some(tree))) = parse_cache.get(&abs_key) {
             if file.to_lowercase().ends_with(".py") {
-                added += synthesize_py(graph, file, &source);
+                added += walk_py_dataflow_tree(graph, file, tree, source);
             } else {
-                added += synthesize_js_ts(graph, file, &source);
+                added += walk_js_dataflow_tree(graph, file, tree, source);
+            }
+        } else {
+            let full_path = project_root.join(file);
+            if let Ok(source) = std::fs::read_to_string(&full_path) {
+                if file.to_lowercase().ends_with(".py") {
+                    added += synthesize_py_fallback(graph, file, &source);
+                } else {
+                    added += synthesize_js_ts_fallback(graph, file, &source);
+                }
             }
         }
     }
@@ -118,10 +136,14 @@ fn synthesize_sequences(
 
 // ═══════════════════════════ Python ═══════════════════════════
 
-fn synthesize_py(graph: &mut Graph, file: &str, source: &str) -> usize {
+fn synthesize_py_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut p = tree_sitter::Parser::new();
     if p.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() { return 0; }
     let tree = match p.parse(source, None) { Some(t) => t, None => return 0 };
+    walk_py_dataflow_tree(graph, file, &tree, source)
+}
+
+fn walk_py_dataflow_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, source: &str) -> usize {
     let mut added = 0usize;
     let ff = fid(file);
     let root = tree.root_node();
@@ -338,13 +360,17 @@ fn py_await_target_expr(node: &tree_sitter::Node, source: &str) -> Option<String
 
 // ═══════════════════════════ JS/TS ═══════════════════════════
 
-fn synthesize_js_ts(graph: &mut Graph, file: &str, source: &str) -> usize {
+fn synthesize_js_ts_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let lang: tree_sitter::Language = if is_ts { tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into() }
         else { tree_sitter_javascript::LANGUAGE.into() };
     let mut p = tree_sitter::Parser::new();
     if p.set_language(&lang).is_err() { return 0; }
     let tree = match p.parse(source, None) { Some(t) => t, None => return 0 };
+    walk_js_dataflow_tree(graph, file, &tree, source)
+}
+
+fn walk_js_dataflow_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, source: &str) -> usize {
     let mut added = 0usize;
     let ff = fid(file);
     let root = tree.root_node();
@@ -592,7 +618,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("x.py"), "").unwrap();
-        assert_eq!(synthesize_dataflow_edges(&mut g, &tmp), 0);
+        assert_eq!(synthesize_dataflow_edges(&mut g, &tmp, &Default::default()), 0);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -603,7 +629,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("a.py"), "counter = 0\ndef inc():\n    x = counter + 1\n    return x\n").unwrap();
-        let n = synthesize_dataflow_edges(&mut g, &tmp);
+        let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default());
         assert!(n > 0, "got {}", n);
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Reads)), "no Reads");
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Writes)), "no Writes");
@@ -617,7 +643,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("m.py"), "db = None\ndef conn():\n    global db\n    db = 'x'\n").unwrap();
-        let n = synthesize_dataflow_edges(&mut g, &tmp);
+        let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default());
         assert!(n > 0, "got {}", n);
         assert!(g.nodes.values().any(|n| matches!(n.kind, NodeKind::Medium)), "no Medium");
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Shares)), "no Shares");
@@ -631,7 +657,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("async_m.py"), "async def fetch():\n    data = await get_data()\n    return data\n").unwrap();
-        let n = synthesize_dataflow_edges(&mut g, &tmp);
+        let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default());
         assert!(n > 0, "got {}", n);
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Triggers)), "no Triggers");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -644,7 +670,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("app.js"), "let count = 0;\nfunction inc() {\n    const x = count + 1;\n    count = x;\n}\n").unwrap();
-        let n = synthesize_dataflow_edges(&mut g, &tmp);
+        let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default());
         assert!(n > 0, "got {}", n);
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Reads)), "no JS Reads");
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Writes)), "no JS Writes");
@@ -658,7 +684,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("chain.js"), "function go() {\n    fetch('/api').then(handleData);\n}\n").unwrap();
-        let n = synthesize_dataflow_edges(&mut g, &tmp);
+        let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default());
         assert!(n > 0, "got {}", n);
         assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Awaits)), "no Awaits");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -671,7 +697,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("pipe.py"), "def run():\n    load()\n    transform()\n    save()\n").unwrap();
-        let n = synthesize_dataflow_edges(&mut g, &tmp);
+        let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default());
         assert!(n > 0, "got {}", n);
         let has_seq = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Sequences));
         assert!(has_seq, "should have Sequences edges between consecutive calls");
