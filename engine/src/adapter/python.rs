@@ -1,22 +1,19 @@
 use crate::adapter::traits::LanguageAdapter;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
-use tree_sitter::Parser;
+use std::cell::RefCell;
+use tree_sitter::{Language, Parser};
+
+thread_local! {
+    static PY_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
+}
 
 /// Python adapter using tree-sitter for AST parsing.
-/// Creates a fresh parser per analyze() call for thread safety.
+/// Uses a thread-local parser to avoid per-file allocation overhead.
 pub struct PythonAdapter;
 
 impl PythonAdapter {
     pub fn new() -> Self {
         Self
-    }
-
-    fn new_parser() -> Parser {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_python::LANGUAGE.into())
-            .expect("failed to load tree-sitter-python grammar");
-        parser
     }
 }
 
@@ -25,18 +22,28 @@ impl LanguageAdapter for PythonAdapter {
         vec!["py".into(), "pyi".into(), "pyx".into()]
     }
 
-    fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>) {
-        let mut parser = Self::new_parser();
-        let tree = match parser.parse(source, None) {
+    fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
+        let tree = PY_PARSER.with(|cell| {
+            let mut borrow = cell.borrow_mut();
+            let parser = borrow.get_or_insert_with(|| {
+                let mut p = Parser::new();
+                p.set_language(&tree_sitter_python::LANGUAGE.into())
+                    .expect("failed to load tree-sitter-python grammar");
+                p
+            });
+            parser.parse(source, None)
+        });
+        let tree = match tree {
             Some(t) => t,
-            None => return (vec![], vec![]),
+            None => return (vec![], vec![], None),
         };
 
         let file_id = file_path
             .trim_end_matches(".py")
             .replace(['/', '\\'], ".");
 
-        walk_python_tree(&tree, source, &file_id)
+        let (nodes, edges) = walk_python_tree(&tree, source, &file_id);
+        (nodes, edges, Some(tree))
     }
 }
 
@@ -186,7 +193,7 @@ mod tests {
     fn test_parse_function_and_class() {
         let adapter = PythonAdapter::new();
         let source = "def hello():\n    pass\n\nclass Foo:\n    def bar(self):\n        pass\n";
-        let (nodes, _edges) = adapter.analyze("test.py", source);
+        let (nodes, _edges, _) = adapter.analyze("test.py", source);
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"hello"), "should find function hello");
         assert!(names.contains(&"Foo"), "should find class Foo");
@@ -197,7 +204,7 @@ mod tests {
     fn test_import_edges() {
         let adapter = PythonAdapter::new();
         let source = "import os\nfrom django.http import HttpResponse\n";
-        let (_nodes, edges) = adapter.analyze("views.py", source);
+        let (_nodes, edges, _) = adapter.analyze("views.py", source);
         // Should have at least the import statement edges
         assert!(edges.iter().any(|e| matches!(e.kind, EdgeKind::Imports)),
             "should create import edges, got {} edges", edges.len());
@@ -207,7 +214,7 @@ mod tests {
     fn test_call_edge() {
         let adapter = PythonAdapter::new();
         let source = "def my_view():\n    render()\n";
-        let (nodes, edges) = adapter.analyze("views.py", source);
+        let (nodes, edges, _) = adapter.analyze("views.py", source);
         assert!(nodes.iter().any(|n| n.name == "my_view"), "should find my_view");
         // The call to render() should create a calls edge
         assert!(edges.iter().any(|e| matches!(e.kind, EdgeKind::Calls)),
@@ -217,10 +224,10 @@ mod tests {
     #[test]
     fn test_empty_and_invalid() {
         let adapter = PythonAdapter::new();
-        let (n1, e1) = adapter.analyze("empty.py", "");
+        let (n1, e1, _) = adapter.analyze("empty.py", "");
         assert_eq!(n1.len(), 1); // module node always created
         assert_eq!(e1.len(), 0);
-        let (n2, e2) = adapter.analyze("bad.py", "this is not valid python @@@");
+        let (n2, e2, _) = adapter.analyze("bad.py", "this is not valid python @@@");
         assert!(n2.len() >= 1);
         assert!(e2.len() >= 0);
     }

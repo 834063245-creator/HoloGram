@@ -190,7 +190,7 @@ impl IncrementalUpdater {
 
         // Use registry to find the right adapter
         let reg = registry::AdapterRegistry::new();
-        let (nodes, edges) = match reg.get(ext) {
+        let (nodes, edges, _tree) = match reg.get(ext) {
             Some(adapter) => adapter.analyze(&file_id, &source),
             None => {
                 return Ok(FileAnalysis {

@@ -13,12 +13,16 @@ use std::path::Path;
 
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
+/// Parsed source held in the pipeline parse cache.
+type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
+
 /// Run dynamic dispatch synthesis on the graph for all supported languages.
+/// Uses the parse cache from Step 1 to avoid re-reading + re-parsing files.
 /// Returns the number of synthesized edges added.
-pub fn synthesize_dynamic_edges(graph: &mut Graph, project_root: &Path) -> usize {
+pub fn synthesize_dynamic_edges(graph: &mut Graph, project_root: &Path, parse_cache: &ParseCache) -> usize {
     let mut added = 0usize;
 
-    // Collect files to scan
+    // Collect files to scan from graph nodes
     let mut files: HashSet<String> = HashSet::new();
     for node in graph.nodes.values() {
         if let Some(ref loc) = node.location {
@@ -43,13 +47,30 @@ pub fn synthesize_dynamic_edges(graph: &mut Graph, project_root: &Path) -> usize
     }
 
     for file in &files {
-        let full_path = project_root.join(file);
-        if let Ok(source) = std::fs::read_to_string(&full_path) {
-            let lower = file.to_lowercase();
+        let lower = file.to_lowercase();
+        // Normalize to absolute path for cache lookup (graph nodes have abs paths,
+        // disk walk yields rel paths — the cache is keyed by abs paths)
+        let abs_key = if file.contains(':') {
+            file.clone() // already absolute (e.g. d:/django/views.py)
+        } else {
+            project_root.join(file).to_string_lossy().replace('\\', "/")
+        };
+        // Try parse cache first (avoids re-reading + re-parsing)
+        if let Some((source, Some(tree))) = parse_cache.get(&abs_key) {
             if lower.ends_with(".py") {
-                added += synthesize_python(graph, file, &source);
+                added += synthesize_py_from_tree(graph, file, tree, source);
             } else {
-                added += synthesize_js_ts(graph, file, &source);
+                added += synthesize_js_from_tree(graph, file, tree, source);
+            }
+        } else {
+            // Fallback: read from disk (for files not in parse cache)
+            let full_path = project_root.join(file);
+            if let Ok(source) = std::fs::read_to_string(&full_path) {
+                if lower.ends_with(".py") {
+                    added += synthesize_py_fallback(graph, file, &source);
+                } else {
+                    added += synthesize_js_fallback(graph, file, &source);
+                }
             }
         }
     }
@@ -61,14 +82,19 @@ pub fn synthesize_dynamic_edges(graph: &mut Graph, project_root: &Path) -> usize
 // JavaScript / TypeScript
 // ═══════════════════════════════════════════════════════════════
 
-fn synthesize_js_ts(graph: &mut Graph, file: &str, source: &str) -> usize {
+/// Walk a cached tree (from Step 1) — no re-parse needed.
+fn synthesize_js_from_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, source: &str) -> usize {
+    walk_js_ts_tree(graph, file, tree, source)
+}
+
+/// Fallback: parse from source for files not in parse cache.
+fn synthesize_js_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let lang: tree_sitter::Language = if is_ts {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     } else {
         tree_sitter_javascript::LANGUAGE.into()
     };
-
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
         return 0;
@@ -77,7 +103,11 @@ fn synthesize_js_ts(graph: &mut Graph, file: &str, source: &str) -> usize {
         Some(t) => t,
         None => return 0,
     };
+    walk_js_ts_tree(graph, file, &tree, source)
+}
 
+/// Shared tree walker — used by both cache and fallback paths.
+fn walk_js_ts_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, source: &str) -> usize {
     let mut added = 0usize;
 
     // Known callback-registering method names
@@ -224,7 +254,13 @@ fn find_containing_function(node: &tree_sitter::Node, source: &str) -> Option<St
 // Python
 // ═══════════════════════════════════════════════════════════════
 
-fn synthesize_python(graph: &mut Graph, file: &str, source: &str) -> usize {
+/// Walk a cached tree (from Step 1) — no re-parse needed.
+fn synthesize_py_from_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, source: &str) -> usize {
+    walk_py_dispatch_tree(graph, file, tree, source)
+}
+
+/// Fallback: parse from source for files not in parse cache.
+fn synthesize_py_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
         return 0;
@@ -233,7 +269,11 @@ fn synthesize_python(graph: &mut Graph, file: &str, source: &str) -> usize {
         Some(t) => t,
         None => return 0,
     };
+    walk_py_dispatch_tree(graph, file, &tree, source)
+}
 
+/// Shared tree walker — used by both cache and fallback paths.
+fn walk_py_dispatch_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, source: &str) -> usize {
     let mut added = 0usize;
 
     // Known Python callback-registering method names
@@ -399,7 +439,7 @@ function setup() {
     button.addEventListener('click', handleClick);
 }
 "#;
-        let added = synthesize_js_ts(&mut g, "app.js", source);
+        let added = synthesize_js_fallback(&mut g, "app.js", source);
         assert!(added >= 1, "Should create synthesized edge for addEventListener callback");
     }
 
@@ -411,7 +451,7 @@ emitter.on('data', onData);
 "#;
         // tree-sitter JS may not expose `function` field on call_expression —
         // the member_expression fallback is used. This test verifies no crash.
-        let _added = synthesize_js_ts(&mut g, "events.js", source);
+        let _added = synthesize_js_fallback(&mut g, "events.js", source);
     }
 
     #[test]
@@ -422,7 +462,7 @@ function init() {
     fetch('/api').then((data) => { console.log(data); });
 }
 "#;
-        let added = synthesize_js_ts(&mut g, "api.js", source);
+        let added = synthesize_js_fallback(&mut g, "api.js", source);
         // .then() with arrow function — at minimum should not crash
         // (arrow_function detection may need fine-tuning per tree-sitter version)
         assert!(added >= 0);
@@ -435,7 +475,7 @@ function init() {
 def main():
     obs.subscribe(on_next)
 "#;
-        let added = synthesize_python(&mut g, "main.py", source);
+        let added = synthesize_py_fallback(&mut g, "main.py", source);
         assert!(added >= 1, "Should create edge for .subscribe() callback");
     }
 
@@ -443,7 +483,7 @@ def main():
     fn test_synthesize_no_callback_returns_zero() {
         let mut g = Graph::new();
         let source = "console.log('hello');";
-        let added = synthesize_js_ts(&mut g, "app.js", source);
+        let added = synthesize_js_fallback(&mut g, "app.js", source);
         assert_eq!(added, 0, "No callback pattern → 0 edges");
     }
 }

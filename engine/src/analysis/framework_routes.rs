@@ -12,9 +12,13 @@ use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 /// A detected route: (http_method, url_pattern, handler_name, file_path, line_number)
 type DetectedRoute = (String, String, String, String, usize);
 
+/// Parsed source held in the pipeline parse cache.
+type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
+
 /// Scan the project for framework routes and inject them into the graph.
+/// Uses the parse cache from Step 1 when available to avoid re-reading + re-parsing.
 /// Called after full analysis + cross-file resolution.
-pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize {
+pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path, parse_cache: &ParseCache) -> usize {
     let mut added = 0usize;
 
     // Collect file paths from graph nodes AND by walking the project directory.
@@ -46,48 +50,65 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path) -> usize 
     }
 
     for file in &files {
-        let full_path = project_root.join(file);
-        if let Ok(source) = std::fs::read_to_string(&full_path) {
-            if is_django_url_file(file) {
-                let routes = detect_django_routes(file, &source);
+        // Normalize to absolute path for cache lookup
+        let abs_key = if file.contains(':') {
+            file.clone()
+        } else {
+            project_root.join(file).to_string_lossy().replace('\\', "/")
+        };
+        // Use parse cache when available; fall back to disk read
+        let source_opt = parse_cache.get(&abs_key).map(|(s, _)| s.clone());
+        let source: String;
+        let source_ref: &str;
+        if let Some(cached) = source_opt {
+            source = cached;
+        } else {
+            let full_path = project_root.join(file);
+            match std::fs::read_to_string(&full_path) {
+                Ok(s) => source = s,
+                Err(_) => continue,
+            }
+        }
+        source_ref = &source;
+        if is_django_url_file(file) {
+            let routes = detect_django_routes(file, source_ref);
+            added += inject_routes(graph, &routes);
+        } else if is_express_file(file) {
+            let routes = detect_express_routes(file, source_ref);
+            added += inject_routes(graph, &routes);
+        } else if is_fastapi_candidate(file) {
+            if source_ref.contains("@app.") || source_ref.contains("@router.") {
+                let routes = detect_fastapi_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
-            } else if is_express_file(file) {
-                let routes = detect_express_routes(file, &source);
+            }
+        } else if is_flask_candidate(file) {
+            if source_ref.contains("@app.route") || source_ref.contains("@bp.route") {
+                let routes = detect_flask_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
-            } else if is_fastapi_candidate(file) {
-                if source.contains("@app.") || source.contains("@router.") {
-                    let routes = detect_fastapi_routes(file, &source);
-                    added += inject_routes(graph, &routes);
-                }
-            } else if is_flask_candidate(file) {
-                if source.contains("@app.route") || source.contains("@bp.route") {
-                    let routes = detect_flask_routes(file, &source);
-                    added += inject_routes(graph, &routes);
-                }
-            } else if is_rails_file(file) {
-                let routes = detect_rails_routes(file, &source);
+            }
+        } else if is_rails_file(file) {
+            let routes = detect_rails_routes(file, source_ref);
+            added += inject_routes(graph, &routes);
+        } else if is_spring_candidate(file) {
+            if source_ref.contains("@GetMapping") || source_ref.contains("@RequestMapping")
+                || source_ref.contains("@PostMapping")
+            {
+                let routes = detect_spring_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
-            } else if is_spring_candidate(file) {
-                if source.contains("@GetMapping") || source.contains("@RequestMapping")
-                    || source.contains("@PostMapping")
-                {
-                    let routes = detect_spring_routes(file, &source);
-                    added += inject_routes(graph, &routes);
-                }
-            } else if is_gin_candidate(file) {
-                if source.contains(".GET(") || source.contains(".POST(")
-                    || source.contains(".Use(") || source.contains(".Group(")
-                {
-                    let routes = detect_gin_routes(file, &source);
-                    added += inject_routes(graph, &routes);
-                }
-            } else if is_nestjs_candidate(file) {
-                if source.contains("@Controller") || source.contains("@Get")
-                    || source.contains("@Post")
-                {
-                    let routes = detect_nestjs_routes(file, &source);
-                    added += inject_routes(graph, &routes);
-                }
+            }
+        } else if is_gin_candidate(file) {
+            if source_ref.contains(".GET(") || source_ref.contains(".POST(")
+                || source_ref.contains(".Use(") || source_ref.contains(".Group(")
+            {
+                let routes = detect_gin_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_nestjs_candidate(file) {
+            if source_ref.contains("@Controller") || source_ref.contains("@Get")
+                || source_ref.contains("@Post")
+            {
+                let routes = detect_nestjs_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
             }
         }
     }
