@@ -388,72 +388,82 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
 // ═══════════════════════════════════════════════════════
 
 use hologram_engine as engine;
+use engine::engine as engine_api;
 use engine::mcp::{CACHED_GRAPH, with_graph_store};
-use engine::graph::{Graph, CrossFileResolver};
-use engine::analysis::{coupling::compute_coupling, fragile_nodes, detect_cycles, coupling_report,
-    graph_summary, thread_conflict_report, find_blindspots, detect_framework_routes,
-    synthesize_dynamic_edges, synthesize_dataflow_edges};
+use engine::graph::Graph;
+use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
+    graph_summary, thread_conflict_report, find_blindspots};
 use engine::community::detect_communities;
-use engine::pipeline::runner::analyze_project;
 use engine::graph::query;
 
-/// Run analysis and cache result in CACHED_GRAPH. Returns JSON summary.
+/// Run analysis via Engine and cache result. Returns JSON summary.
 pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
     let root = std::path::PathBuf::from(path);
     if !root.exists() {
         return Err(format!("路径不存在: {path}"));
     }
-    let mut result = analyze_project(&root);
-    CrossFileResolver::resolve(&mut result.graph);
-    compute_coupling(&mut result.graph);
-    detect_framework_routes(&mut result.graph, &root);
-    synthesize_dynamic_edges(&mut result.graph, &root);
-    synthesize_dataflow_edges(&mut result.graph, &root);
-    let communities = detect_communities(&result.graph, 42);
 
-    let nc = result.graph.node_count();
-    let ec = result.graph.edge_count();
-    let nodes: Vec<serde_json::Value> = result.graph.nodes.values().map(|n| serde_json::json!({
+    // Initialize engine (idempotent) and run analysis
+    engine_api::engine_init(&root)
+        .map_err(|e| format!("Engine init failed: {e}"))?;
+    let result = engine_api::engine_analyze(&root)
+        .map_err(|e| format!("Analyze failed: {e}"))?;
+
+    let graph = &result.graph;
+    let nc = graph.node_count();
+    let ec = graph.edge_count();
+
+    // Serialize for frontend
+    let nodes: Vec<serde_json::Value> = graph.nodes.values().map(|n| serde_json::json!({
         "id": n.id, "name": n.name, "type": n.kind.as_str(),
         "location": n.location, "in_degree": n.in_degree,
         "out_degree": n.out_degree, "properties": n.properties,
         "position": n.position, "community_id": n.community_id,
     })).collect();
-    let edges: Vec<serde_json::Value> = result.graph.edges.values().map(|e| serde_json::json!({
+    let edges: Vec<serde_json::Value> = graph.edges.values().map(|e| serde_json::json!({
         "id": e.id, "source": e.source, "target": e.target,
         "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
         "cross_file": e.cross_file, "direction": e.direction,
         "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id,
     })).collect();
-    let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
-        .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
+    let comms: Vec<serde_json::Value> = (0..result.community_count).enumerate()
+        .map(|(i, _)| serde_json::json!({"id": format!("comm_{}", i), "size": 0, "node_ids": []}))
         .collect();
 
-    let graph_clone = result.graph.clone();
-    if let Ok(mut cache) = CACHED_GRAPH.lock() { *cache = Some(graph_clone); }
+    // Update legacy CACHED_GRAPH for backward compat (Engine::analyze already did this)
+    if let Ok(mut cache) = CACHED_GRAPH.lock() {
+        *cache = Some(graph.clone());
+    }
 
-    // Persist hologram_graph.json for frontend
+    // Persist hologram_graph.json for cold-start
     let graph_path = format!("{}/hologram_graph.json", path);
     let wrapped = serde_json::json!({
         "meta": { "source_root": path,
             "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
             "version": "0.1.0", "node_count": nc, "edge_count": ec },
-        "nodes": nodes, "edges": edges, "communities": communities_json,
+        "nodes": nodes, "edges": edges, "communities": comms,
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
-    // .hologram MsgPack 已退役 — CACHED_GRAPH 是唯一运行时真相，JSON 仅做冷启动存档
+    // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
     let _ = regenerate_file_graph(&path);
 
     Ok(serde_json::json!({
         "status": "ok", "total_nodes": nc, "total_edges": ec,
-        "communities": communities.len(), "elapsed_secs": result.elapsed_secs,
+        "communities": result.community_count, "elapsed_secs": result.elapsed_secs,
         "node_count": nc, "edge_count": ec,
     }).to_string())
 }
 
-/// Read CACHED_GRAPH and run a query function.
-fn with_graph<F: FnOnce(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
+/// Run a query on the graph. Uses Engine (primary) with CACHED_GRAPH fallback.
+fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
+    // Try Engine first
+    if let Ok(result) = engine_api::engine_read_graph(|g| {
+        serde_json::to_string(&f(g)).unwrap_or_default()
+    }) {
+        return Ok(result);
+    }
+    // Fallback to legacy CACHED_GRAPH
     let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
     match cache.as_ref() {
         Some(g) => Ok(serde_json::to_string(&f(g)).unwrap_or_default()),
@@ -461,9 +471,41 @@ fn with_graph<F: FnOnce(&Graph) -> serde_json::Value>(f: F) -> Result<String, St
     }
 }
 
-/// 从 CACHED_GRAPH 序列化完整图 JSON — 前端和 analyze_and_load 共用。
-/// `source_root` is the workspace path to embed in the graph meta.
+/// Serialize full graph JSON — shared by frontend and analyze_and_load.
+/// Reads from Engine (primary) with CACHED_GRAPH fallback.
 fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
+    // Try Engine first
+    let engine_result = engine_api::engine_read_graph(|g| {
+        let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| serde_json::json!({
+            "id": n.id, "name": n.name, "type": n.kind.as_str(),
+            "location": n.location, "in_degree": n.in_degree,
+            "out_degree": n.out_degree,
+            "properties": n.properties, "position": n.position,
+            "community_id": n.community_id,
+        })).collect();
+        let edges: Vec<serde_json::Value> = g.edges.values().map(|e| serde_json::json!({
+            "id": e.id, "source": e.source, "target": e.target,
+            "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+            "cross_file": e.cross_file, "direction": e.direction,
+            "temporal_delay_sec": e.temporal_delay_sec,
+            "medium_node_id": e.medium_node_id,
+        })).collect();
+        let communities = detect_communities(g, 42);
+        let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
+            .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
+            .collect();
+        let meta = serde_json::json!({
+            "source_root": source_root,
+            "node_count": g.node_count(),
+            "edge_count": g.edge_count(),
+        });
+        serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json})).unwrap_or_default()
+    });
+    if let Ok(json) = engine_result {
+        return Ok(json);
+    }
+
+    // Fallback to legacy CACHED_GRAPH
     let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
     match cache.as_ref() {
         Some(g) => {
@@ -2009,111 +2051,6 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
 }
 
 // ═══════════════════════════════════════════════════════
-// Large Project Fast Path — skip full analysis, generate file graph only
-// ═══════════════════════════════════════════════════════
-
-/// Quick pre-scan: count source files & estimate project size.
-/// Returns JSON {file_count, total_bytes, is_large} — is_large=true means
-/// the project should skip full tree-sitter analysis and use file view.
-#[tauri::command]
-async fn estimate_project_size(path: String) -> Result<String, String> {
-    let root = std::path::PathBuf::from(&path);
-    if !root.is_dir() {
-        return Err(format!("不是有效目录: {}", path));
-    }
-
-    let skip_dirs: std::collections::HashSet<&str> = [
-        ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
-        "node_modules", ".venv", "venv", ".hologram", "dist", "build", "target",
-        ".next", ".nuxt", ".cache", "egg-info", ".eggs",
-    ].iter().cloned().collect();
-
-    let source_exts: std::collections::HashSet<&str> = [
-        "py", "pyi", "ts", "tsx", "js", "jsx", "mjs",
-        "go", "rs", "java", "c", "cpp", "cc", "cxx", "h", "hpp", "hh",
-        "rb", "cs", "kt", "kts", "swift", "php", "lua",
-    ].iter().cloned().collect();
-
-    let mut file_count = 0u64;
-    let mut total_bytes = 0u64;
-
-    for entry in walkdir::WalkDir::new(&root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !skip_dirs.contains(name.as_ref())
-        })
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let ext = entry.path().extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if source_exts.contains(ext) {
-            file_count += 1;
-            if let Ok(meta) = entry.metadata() {
-                total_bytes += meta.len();
-            }
-        }
-    }
-
-    // Threshold: >500 source files → skip full analysis, use file view
-    let is_large = file_count > 500;
-
-    Ok(serde_json::json!({
-        "file_count": file_count,
-        "total_bytes": total_bytes,
-        "is_large": is_large,
-    }).to_string())
-}
-
-/// Generate a lightweight file-level dependency graph via AST import scanning.
-/// Skips full tree-sitter analysis. Handles Python (ast), JS/TS (regex), Go/Rust (regex).
-/// Writes both hologram_graph.json and hologram_graph_files.json into the project dir.
-/// Fast: ~5-30s even for Django-sized projects, vs 600s+ timeout for full analysis.
-#[tauri::command]
-async fn generate_lightweight_graph(path: String) -> Result<String, String> {
-    // Rust engine full analysis replaces Python lightweight graph (faster: 4s vs 10-30s)
-    let stdout = direct_analyze(&path)
-        .map_err(|e| format!("引擎分析失败: {}", e))?;
-
-    if stdout.trim().is_empty() || stdout.contains("\"error\"") {
-        return Err(format!("分析失败: {}", stdout));
-    }
-
-    let engine_json: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("引擎返回格式异常: {}", e))?;
-    let wrapped = serde_json::json!({
-        "meta": {
-            "source_root": path,
-            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-            "version": "0.1.0",
-            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
-            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
-        },
-        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
-        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
-        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
-    });
-
-    let graph_path = format!("{}/hologram_graph.json", path);
-    let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
-    std::fs::write(&graph_path, &graph_json)
-        .map_err(|e| format!("保存文件失败: {}", e))?;
-
-    let _ = regenerate_file_graph(&path);
-
-    Ok(serde_json::to_string(&serde_json::json!({
-        "ok": true,
-        "file_count": engine_json.get("node_count"),
-        "edge_count": engine_json.get("edge_count"),
-    })).unwrap_or_default())
-}
-
-// ═══════════════════════════════════════════════════════
 // Background Analysis — run full graph analysis without blocking the UI
 // ═══════════════════════════════════════════════════════
 
@@ -2804,8 +2741,6 @@ fn main() {
             load_binary_graph,
             analyze_and_load,
             analyze_in_background,
-            estimate_project_size,
-            generate_lightweight_graph,
             hologram_run_check,
             hologram_run_preflight,
             hologram_run_health,
