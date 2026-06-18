@@ -6,7 +6,6 @@ import { invoke, listen, isMockMode } from './bridge';
 import { StarGraph, VisualMode } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
-import { decode } from '@msgpack/msgpack';
 import { FileViewer } from './ui/file-viewer';
 import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
@@ -252,26 +251,9 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
   );
 
   try {
-    // ── 加载图：MsgPack 缓存优先，未命中或强制重分析则走引擎 RPC ──
-    let graph: any;
-    if (!forceReanalyze) {
-      try {
-        const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
-        const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
-        graph = decode(bytes) as any;
-      } catch {
-        // Fallback: call engine analyze via RPC
-        forceReanalyze = true; // trigger the re-analyze path below
-      }
-    }
-    if (forceReanalyze) {
-      const json = await invoke<string>('hologram_analyze', { path: folder });
-      const summary = JSON.parse(json);
-      // hologram_analyze returns summary only — read persisted full graph
-      const graphPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
-      const raw = await invoke<string>('read_file_content', { filePath: graphPath });
-      graph = JSON.parse(raw);
-    }
+    // ── 唯一数据来源：analyze_and_load → CACHED_GRAPH → JSON ──
+    const raw = await invoke<string>('analyze_and_load', { path: folder, force: forceReanalyze });
+    const graph = JSON.parse(raw);
     currentGraphData = graph;
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
 
@@ -286,7 +268,8 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
     showGraphView(folder);
     startGitIndicator();
     setModeButtonsEnabled(true);
-    statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
+    const genTime = graph.meta?.generated_at ? new Date(graph.meta.generated_at).toLocaleTimeString() : '';
+    statusText.textContent = `✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`;
     log.info('main', 'project loaded', {
       nodes: nodeCount,
       edges: Array.isArray(graph.edges) ? graph.edges.length : Object.keys(graph.edges || {}).length,
@@ -1440,10 +1423,9 @@ async function init(): Promise<void> {
       }
       const nc = summary.total_nodes || summary.node_count || 0;
       if (nc > 0 && currentPath) {
-        // Watcher emits summary only — read persisted full graph for render + Agent tools
+        // Watcher 更新了 CACHED_GRAPH → 直接从内存拿，不再读磁盘 JSON
         try {
-          const graphPath = currentPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
-          const raw = await invoke<string>('read_file_content', { filePath: graphPath });
+          const raw = await invoke<string>('get_full_graph');
           const graph = JSON.parse(raw);
           currentGraphData = graph;
 
@@ -1463,7 +1445,7 @@ async function init(): Promise<void> {
           }
           if (_pendingRender) { clearTimeout(_pendingRender); _pendingRender = null; }
           _doGraphUpdate(graph);
-        } catch { /* graph file not ready yet */ }
+        } catch { /* get_full_graph failed */ }
       }
     } catch { /* ignore */ }
   });
@@ -1474,8 +1456,7 @@ async function init(): Promise<void> {
     // Only update if still on the same project
     if (!currentPath || !isSamePath(currentPath, projPath)) return;
     try {
-      const graphPath = projPath.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.json';
-      const raw = await invoke<string>('read_file_content', { filePath: graphPath });
+      const raw = await invoke<string>('get_full_graph');
       const fullGraph = JSON.parse(raw);
       const nc = Array.isArray(fullGraph.nodes) ? fullGraph.nodes.length : Object.keys(fullGraph.nodes || {}).length;
       // Update data for tools (Agent reads currentGraphData)
@@ -1523,16 +1504,16 @@ async function init(): Promise<void> {
     bus.emit('workspace:files-changed', {});
   }
 
-  // Try cached graph (A3: msgpack first, JSON fallback)
+  // Try cached graph (JSON only — .hologram MsgPack 已退役)
   try {
     let graph: any;
     try {
-      const bytes = await invoke<Uint8Array>('load_binary_graph');
-      graph = decode(bytes) as any;
-    } catch {
       const json = await invoke<string>('load_graph_json');
       graph = JSON.parse(json);
+    } catch {
+      // No cached graph — show welcome screen
     }
+    if (!graph) { welcome.classList.remove('hidden'); graphEl.classList.add('hidden'); setLoading(false); setupAgent().catch(() => {}); return; }
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
     if (nodeCount > 0) {
       let root: string = graph.meta?.source_root || '';
@@ -1570,11 +1551,14 @@ async function init(): Promise<void> {
 
       starGraph.render(graph);
       setModeButtonsEnabled(true);
-      statusText.textContent = `✨ ${nodeCount} 节点已就绪`;
+      const genTime = graph.meta?.generated_at ? new Date(graph.meta.generated_at).toLocaleTimeString() : '';
+      statusText.textContent = `✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`;
       showGraphView(root);
       startGitIndicator();
       setLoading(false);
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
+      // 冷启动：CACHED_GRAPH 为空，Agent 工具不可用。后台填充。
+      invoke('hologram_analyze', { path: root }).catch(() => {});
       // Agent 初始化（异步，不阻塞图的显示）
       try { await setupAgent(); } catch (e) { console.error('[init] setupAgent failed:', e); }
       // Restore saved sessions for the cached project (must be AFTER setupAgent sets agentFactory)

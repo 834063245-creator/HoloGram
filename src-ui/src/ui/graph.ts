@@ -920,9 +920,8 @@ export class StarGraph {
       }
     }
 
-    // Only intersect visible nodes (constellation or standard view)
-    const visibleCores = this.nodeCores.filter(c => c.visible);
-    const hits = this.raycaster.intersectObjects(visibleCores);
+    // Intersect ALL node cores (ignore .visible — hover/click should always work)
+    const hits = this.raycaster.intersectObjects(this.nodeCores);
     const idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
 
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
@@ -1145,15 +1144,14 @@ export class StarGraph {
 
   // ── Step 3: Shift+click quick path mode ──────────────────
 
-  /** Get node index from a pointer event, or -1 if no node hit. */
+  /** Get node index from a pointer event, or -1 if no node hit. Checks ALL cores. */
   private _hitNode(e: PointerEvent | MouseEvent): number {
     if (this.nodeCores.length === 0) return -1;
     const rect = this.container.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
-    const visibleCores = this.nodeCores.filter(c => c.visible);
-    const hits = this.raycaster.intersectObjects(visibleCores);
+    const hits = this.raycaster.intersectObjects(this.nodeCores);
     return hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
   }
 
@@ -1376,23 +1374,41 @@ export class StarGraph {
   };
 
   // ── Hover ────────────────────────────────────────────────
+  // Hover raycaster uses ALL nodeCores regardless of .visible state.
+  // This is intentional: .visible is a visual/rendering concern, and many
+  // features (agent highlight, path mode, blast) temporarily toggle it.
+  // If a node exists in the graph, it should be hoverable and clickable.
+  // The only exception is fold-mode cloud view, which intentionally restricts
+  // interaction to galaxy clouds only.
 
   private setupHover(): void {
-    this.container.addEventListener('mousemove', (e: MouseEvent) => {
+    this.container.addEventListener('pointermove', (e: PointerEvent) => {
       const rect = this.container.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
       this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     });
-    this.container.addEventListener('mouseleave', () => { this.mouse.x = -999; this.mouse.y = -999; });
+    this.container.addEventListener('pointerleave', () => {
+      this.mouse.x = -999; this.mouse.y = -999;
+    });
+  }
+
+  /** Raycast against node cores; returns index or -1. Uses ALL cores regardless of .visible. */
+  private _raycastNode(): number {
+    if (this.nodeCores.length === 0) return -1;
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const hits = this.raycaster.intersectObjects(this.nodeCores);
+    if (hits.length === 0) return -1;
+    return this.nodeCores.indexOf(hits[0].object as THREE.Mesh);
   }
 
   private updateHover(): void {
     if (this.nodeCores.length === 0) return;
-    // Guard: skip if mouse coordinates are invalid (container not yet sized)
     if (!isFinite(this.mouse.x) || !isFinite(this.mouse.y)) return;
-    // Cloud hover: any level where clouds are visible (universe, sub-clouds, sub-sub-clouds)
+
+    // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
     const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0
-      && !this.nodeCores.some(c => c.visible); // no visible nodes = cloud view
+      && !this.nodeCores.some(c => c.visible);
     if (cloudViewActive) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
       this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -1405,7 +1421,7 @@ export class StarGraph {
           this.hoveredGalaxyIdx = gIdx;
           const gm = this.galaxyMeta[gIdx];
           const shortName = (gm.label || gm.id).split('/')[0].replace(/_/g, ' ');
-          const isSub = !!this.enteredGalaxyId; // inside a galaxy = sub-cloud hover
+          const isSub = !!this.enteredGalaxyId;
           this.tooltipEl.querySelector('.tt-name')!.textContent = `${isSub ? '📁' : '🌌'} ${shortName}`;
           this.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
           this.tooltipEl.querySelector('.tt-loc')!.textContent = isSub ? '点击钻入子社区' : '点击进入查看内部连线';
@@ -1425,18 +1441,17 @@ export class StarGraph {
       }
       return;
     }
-    this.raycaster.setFromCamera(this.mouse, this.camera);
-    // Only intersect visible nodes
-    const visibleCores = this.nodeCores.filter(c => c.visible);
-    const hits = this.raycaster.intersectObjects(visibleCores);
-    const newIdx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
+
+    // Standard / constellation view: raycast all cores (ignore .visible)
+    const newIdx = this._raycastNode();
     if (newIdx !== this.hoveredIdx) {
       // Restore previous hovered node
       if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
-        const prevBase = 0.6 + (this.deg[this.hoveredIdx] / this.maxDeg) * 2.8;
-        this.nodeCores[this.hoveredIdx].scale.setScalar(this.mode === 'full' ? prevBase * 0.4 : prevBase);
+        const prevBase = this.getNodeBaseScale(this.hoveredIdx);
+        const isFull = this.mode === 'full';
+        this.nodeCores[this.hoveredIdx].scale.setScalar(isFull ? prevBase * 0.4 : prevBase);
         if (this.nodeGlows[this.hoveredIdx]) {
-          this.nodeGlows[this.hoveredIdx].scale.setScalar(prevBase * (this.mode === 'full' ? 9 : 5.5));
+          this.nodeGlows[this.hoveredIdx].scale.setScalar(prevBase * (isFull ? 9 : 7.0));
           (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55;
         }
       }
@@ -1839,10 +1854,11 @@ export class StarGraph {
       }
       if (this.nodeCores[i]) this.nodeCores[i].visible = true;
     }
-    // Restore non-highlighted dimmed nodes
+    // Restore non-highlighted dimmed nodes (opacity + visibility)
     for (let i = 0; i < this.nodeGlows.length; i++) {
       if (!this._agentHighlightIndices.has(i)) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
+        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
       }
     }
     // Restore edge opacities
@@ -3385,7 +3401,8 @@ export class StarGraph {
     disposeGroup(this.highlightEdgeGroup);
     disposeGroup(this.commFoldGroup);
     // Dispose stored references (prevent GPU leak across re-renders)
-    for (const core of this.nodeCores) { core.geometry?.dispose(); (core.material as THREE.Material)?.dispose(); }
+    // IMPORTANT: nodeCores share this.sphereGeo — do NOT dispose individual core geometries
+    for (const core of this.nodeCores) { (core.material as THREE.Material)?.dispose(); }
     for (const g of this.nodeGlows) { g.material && (g.material as THREE.Material).dispose(); }
     for (const g of this.nodeGlows2) { g.material && (g.material as THREE.Material).dispose(); }
     for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }

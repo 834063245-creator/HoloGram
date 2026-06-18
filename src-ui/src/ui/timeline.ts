@@ -129,19 +129,27 @@ export class TimelinePanel {
     this.tabStatus.innerHTML = iconHtml('loading', 11);
 
     try {
-      const json = await invoke<string>('hologram_timeline', {
-        path: this.path,
-        limit: 60,
-        module: null as unknown as string,
-        since: null as unknown as string,
-      });
+      // 8-second timeout — prevent perpetual loading if backend hangs
+      const json = await Promise.race([
+        invoke<string>('hologram_timeline', {
+          path: this.path,
+          limit: 60,
+        }),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('Timeline query timed out after 8s')), 8000)
+        ),
+      ]);
       const data = JSON.parse(json) as TimelineData;
       this.events = data.events || [];
       this.tabStatus.innerHTML = `${iconHtml('clock', 11)} ${this.events.length}`;
       if (this.openState) this.render();
     } catch (err) {
       console.error('Timeline refresh failed:', err);
-      this.tabStatus.innerHTML = iconHtml('clock', 11);
+      this.tabStatus.innerHTML = `${iconHtml('clock', 11)} !`;
+      // Show error state in panel if open
+      if (this.openState) {
+        this.content.innerHTML = `<div class="tl-empty" style="color:var(--fail)">时间轴暂时不可用<br><small>${String(err).slice(0, 80)}</small></div>`;
+      }
     } finally {
       this.loading = false;
     }

@@ -232,6 +232,11 @@ fn default_graph() -> String {
 static ACTIVE_PROJECT: std::sync::LazyLock<Mutex<String>> =
     std::sync::LazyLock::new(|| Mutex::new(String::new()));
 
+/// Last changed files tracked by the watcher — used by hologram_run_check
+/// to populate changed_files in the briefing report.
+static LAST_CHANGED_FILES: std::sync::LazyLock<Mutex<Vec<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
 /// Set the active workspace — all tool commands route queries to this project.
 /// Called from the frontend when opening a project (before loading its graph).
 #[tauri::command]
@@ -378,6 +383,7 @@ fn direct_analyze(path: &str) -> Result<String, String> {
         "nodes": nodes, "edges": edges, "communities": communities_json,
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string_pretty(&wrapped).unwrap_or_default());
+    // .hologram MsgPack 已退役 — CACHED_GRAPH 是唯一运行时真相，JSON 仅做冷启动存档
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
     let _ = regenerate_file_graph(&path);
 
@@ -395,6 +401,47 @@ fn with_graph<F: FnOnce(&Graph) -> serde_json::Value>(f: F) -> Result<String, St
         Some(g) => Ok(serde_json::to_string(&f(g)).unwrap_or_default()),
         None => Err("未加载图谱，请先运行 hologram_analyze".into()),
     }
+}
+
+/// 从 CACHED_GRAPH 序列化完整图 JSON — 前端和 analyze_and_load 共用。
+fn serialize_cached_graph() -> Result<String, String> {
+    let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
+    match cache.as_ref() {
+        Some(g) => {
+            let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| serde_json::json!({
+                "id": n.id, "name": n.name, "type": n.kind.as_str(),
+                "location": n.location, "in_degree": n.in_degree,
+                "out_degree": n.out_degree,
+                "properties": n.properties, "position": n.position,
+                "community_id": n.community_id,
+            })).collect();
+            let edges: Vec<serde_json::Value> = g.edges.values().map(|e| serde_json::json!({
+                "id": e.id, "source": e.source, "target": e.target,
+                "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+                "cross_file": e.cross_file, "direction": e.direction,
+                "temporal_delay_sec": e.temporal_delay_sec,
+                "medium_node_id": e.medium_node_id,
+            })).collect();
+            let communities = detect_communities(g, 42);
+            let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
+                .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
+                .collect();
+            let meta = serde_json::json!({
+                "source_root": ACTIVE_PROJECT.lock().unwrap().clone(),
+                "node_count": g.node_count(),
+                "edge_count": g.edge_count(),
+            });
+            Ok(serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json}).to_string())
+        }
+        None => Err("未加载图谱".into()),
+    }
+}
+
+/// 返回 CACHED_GRAPH 的完整 JSON — 前端唯一数据来源（冷启动除外）。
+#[tauri::command]
+async fn get_full_graph() -> Result<String, String> {
+    tokio::task::spawn_blocking(move || serialize_cached_graph())
+        .await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════
@@ -626,9 +673,40 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
                 }
             }
         };
-        let result = run_full_check(&before, &after, &[], &target);
+        let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
+            .map(|f| f.clone()).unwrap_or_default();
+        let result = run_full_check(&before, &after, &changed_files, &target);
         let _ = std::fs::create_dir_all(root.join(".hologram"));
         let _ = std::fs::write(&before_path, serde_json::to_string_pretty(&after).unwrap_or_default());
+
+        // Record check result to timeline DB so frontend can show historical briefings
+        let passed = result["passed"].as_bool().unwrap_or(true);
+        let violation_count = result["violation_count"].as_u64().unwrap_or(0) as usize;
+        let event_type = if passed { "commit_clean" } else { "commit_violation" };
+        let summary = if passed {
+            "简报通过".to_string()
+        } else {
+            format!("检测到 {} 项违规", violation_count)
+        };
+        // Store violations + full check data as properties for historical briefing view
+        let props = serde_json::json!({
+            "violations": result["l5_violations"].as_array().cloned().unwrap_or_default()
+                .into_iter()
+                .chain(result["l4_violations"].as_array().cloned().unwrap_or_default())
+                .chain(result["l3_violations"].as_array().cloned().unwrap_or_default())
+                .chain(result["l2_violations"].as_array().cloned().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            "passed": passed,
+            "blast_radius": result["blast_radius"],
+            "cross_community_edges": result["cross_community_edges"],
+            "new_cycles": result["new_cycles"],
+            "new_thread_conflicts": result["new_thread_conflicts"],
+            "api_signature_changes": result["api_signature_changes"],
+            "changed_files": changed_files,
+        });
+        let _ = record_timeline_event_with_props(
+            &target, event_type, None, &summary, Some(&props),
+        );
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("简报任务失败: {e}"))?
 }
@@ -718,7 +796,8 @@ async fn hologram_run_preflight(
             let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
             cache.as_ref().cloned().unwrap_or_default()
         };
-        let result = run_full_check(&Graph::default(), &before, &f, &p);
+        // Before = current state; after = current state (preflight checks hypothetical changes to files in f)
+        let result = run_full_check(&before, &before, &f, &p);
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
@@ -746,73 +825,75 @@ async fn hologram_timeline(
     path: Option<String>,
     since: Option<String>,
     limit: Option<i32>,
-    _module: Option<String>,
+    module: Option<String>,
 ) -> Result<String, String> {
-    // Resolve project path
     let proj = path
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| ACTIVE_PROJECT.lock().unwrap().clone());
     if proj.is_empty() {
         return Err("未设置活跃工作区".into());
     }
-    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
-        let db = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
-    // Ensure table exists (may be freshly created or wiped by engine re-analyze)
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');
-         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);"
-    ).map_err(|e| format!("建表失败: {}", e))?;
+    let since_val = since.filter(|s| !s.is_empty());
     let lim = limit.unwrap_or(60);
-    let module_filter = _module.filter(|m| !m.is_empty());
+    let module_filter = module.filter(|m| !m.is_empty());
 
-    // Build query with optional since filter
-    let has_since = since.as_ref().filter(|s| !s.is_empty()).is_some();
-    let sql = if has_since {
-        "SELECT id, timestamp, event_type, file, summary, properties FROM events WHERE timestamp >= ?1 ORDER BY id DESC LIMIT ?2"
-    } else {
-        "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?1"
-    };
-    let mut stmt = db.prepare(sql).map_err(|e| format!("查询失败: {}", e))?;
-    let events: Vec<serde_json::Value> = if has_since {
-        let since_val = since.as_deref().unwrap_or("");
-        stmt.query_map(rusqlite::params![since_val, lim], |row| {
-            let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
-            Ok(serde_json::json!({
-                "id": row.get::<_, i64>(0)?,
-                "timestamp": row.get::<_, String>(1)?,
-                "event_type": row.get::<_, String>(2)?,
-                "file": row.get::<_, String>(3).unwrap_or_default(),
-                "summary": row.get::<_, String>(4).unwrap_or_default(),
-                "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
-            }))
-        }).map_err(|e| format!("读取失败: {}", e))?
-        .filter_map(|r| r.ok()).collect()
-    } else {
-        stmt.query_map(rusqlite::params![lim], |row| {
-            let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
-            Ok(serde_json::json!({
-                "id": row.get::<_, i64>(0)?,
-                "timestamp": row.get::<_, String>(1)?,
-                "event_type": row.get::<_, String>(2)?,
-                "file": row.get::<_, String>(3).unwrap_or_default(),
-                "summary": row.get::<_, String>(4).unwrap_or_default(),
-                "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
-            }))
-        }).map_err(|e| format!("读取失败: {}", e))?
-        .filter_map(|r| r.ok()).collect()
-    };
-    // Apply module filter if provided
-    let events: Vec<_> = if let Some(ref m) = module_filter {
-        events.into_iter().filter(|e| {
-            e.get("file").and_then(|f| f.as_str())
-                .map(|f| f.contains(m.as_str()))
-                .unwrap_or(false)
-        }).collect()
-    } else {
-        events
-    };
-    Ok(serde_json::json!({"events": events, "module_filter": module_filter}).to_string())
+    tokio::task::spawn_blocking(move || {
+        let db_dir = std::path::Path::new(&proj).join(".hologram");
+        let _ = std::fs::create_dir_all(&db_dir);
+        let db_path = db_dir.join("timeline.db");
+        let db = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("无法打开时间轴数据库: {}", e))?;
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');
+             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);"
+        ).map_err(|e| format!("建表失败: {}", e))?;
+
+        let has_since = since_val.is_some();
+        let sql = if has_since {
+            "SELECT id, timestamp, event_type, file, summary, properties FROM events WHERE timestamp >= ?1 ORDER BY id DESC LIMIT ?2"
+        } else {
+            "SELECT id, timestamp, event_type, file, summary, properties FROM events ORDER BY id DESC LIMIT ?1"
+        };
+        let mut stmt = db.prepare(sql).map_err(|e| format!("查询失败: {}", e))?;
+        let events: Vec<serde_json::Value> = if has_since {
+            let sv = since_val.as_deref().unwrap_or("");
+            stmt.query_map(rusqlite::params![sv, lim], |row| {
+                let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "timestamp": row.get::<_, String>(1)?,
+                    "event_type": row.get::<_, String>(2)?,
+                    "file": row.get::<_, String>(3).unwrap_or_default(),
+                    "summary": row.get::<_, String>(4).unwrap_or_default(),
+                    "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
+                }))
+            }).map_err(|e| format!("读取失败: {}", e))?
+            .filter_map(|r| r.ok()).collect()
+        } else {
+            stmt.query_map(rusqlite::params![lim], |row| {
+                let props_str: String = row.get(5).unwrap_or_else(|_| "{}".into());
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "timestamp": row.get::<_, String>(1)?,
+                    "event_type": row.get::<_, String>(2)?,
+                    "file": row.get::<_, String>(3).unwrap_or_default(),
+                    "summary": row.get::<_, String>(4).unwrap_or_default(),
+                    "properties": serde_json::from_str::<serde_json::Value>(&props_str).unwrap_or_default(),
+                }))
+            }).map_err(|e| format!("读取失败: {}", e))?
+            .filter_map(|r| r.ok()).collect()
+        };
+        let events: Vec<_> = if let Some(ref m) = module_filter {
+            events.into_iter().filter(|e| {
+                e.get("file").and_then(|f| f.as_str())
+                    .map(|f| f.contains(m.as_str()))
+                    .unwrap_or(false)
+            }).collect()
+        } else {
+            events
+        };
+        Ok(serde_json::json!({"events": events, "module_filter": module_filter}).to_string())
+    }).await.map_err(|e| format!("时间轴查询失败: {e}"))?
 }
 
 /// Record a user-facing event in the timeline DB (file save, edit, etc.).
@@ -826,41 +907,65 @@ async fn hologram_record_event(
     if proj.is_empty() {
         return Err("未设置活跃工作区".into());
     }
-    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
+    tokio::task::spawn_blocking(move || {
+        record_timeline_event(&proj, &event_type, file.as_deref(), &summary)
+            .map(|_| "ok".into())
+    }).await.map_err(|e| format!("时间轴写入失败: {e}"))?
+}
+
+/// Record a timeline event — non-Tauri helper, callable from watcher / edit_file / any Rust path.
+fn record_timeline_event(project_path: &str, event_type: &str, file: Option<&str>, summary: &str) -> Result<(), String> {
+    record_timeline_event_with_props(project_path, event_type, file, summary, None)
+}
+
+fn record_timeline_event_with_props(
+    project_path: &str, event_type: &str, file: Option<&str>, summary: &str,
+    properties: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    let db_dir = std::path::Path::new(project_path).join(".hologram");
+    let _ = std::fs::create_dir_all(&db_dir);
+    let db_path = db_dir.join("timeline.db");
     let db = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("无法打开时间轴: {}", e))?;
     let _ = db.execute_batch(
         "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');"
     );
     let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-    let file_val = file.unwrap_or_default();
+    let file_val = file.unwrap_or("");
+    let props_str = properties
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "{}".to_string());
     db.execute(
-        "INSERT INTO events (timestamp, event_type, file, summary) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![ts, event_type, file_val, summary],
+        "INSERT INTO events (timestamp, event_type, file, summary, properties) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![ts, event_type, file_val, summary, props_str],
     ).map_err(|e| format!("写入失败: {}", e))?;
-    Ok("ok".into())
+    Ok(())
 }
 
 #[tauri::command]
 async fn hologram_changes() -> Result<String, String> {
     let proj = ACTIVE_PROJECT.lock().unwrap().clone();
-    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
-    let db = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("无法打开时间轴: {}", e))?;
-    let _ = db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');"
-    );
-    let mut stmt = db.prepare("SELECT timestamp, event_type, summary FROM events ORDER BY id DESC LIMIT 10")
-        .map_err(|e| format!("查询失败: {}", e))?;
-    let changes: Vec<serde_json::Value> = stmt.query_map([], |row| {
-        Ok(serde_json::json!({
-            "timestamp": row.get::<_, String>(0)?,
-            "event_type": row.get::<_, String>(1)?,
-            "summary": row.get::<_, String>(2).unwrap_or_default(),
-        }))
-    }).map_err(|e| format!("读取: {}", e))?
-    .filter_map(|r| r.ok()).collect();
-    Ok(serde_json::json!({"changes": changes}).to_string())
+    tokio::task::spawn_blocking(move || {
+        let db_dir = std::path::Path::new(&proj).join(".hologram");
+        let _ = std::fs::create_dir_all(&db_dir);
+        let db_path = db_dir.join("timeline.db");
+        let db = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("无法打开时间轴: {}", e))?;
+        let _ = db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, event_type TEXT NOT NULL, file TEXT DEFAULT '', summary TEXT DEFAULT '', properties TEXT DEFAULT '{}');"
+        );
+        let mut stmt = db.prepare("SELECT timestamp, event_type, summary FROM events ORDER BY id DESC LIMIT 10")
+            .map_err(|e| format!("查询失败: {}", e))?;
+        let changes: Vec<serde_json::Value> = stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "timestamp": row.get::<_, String>(0)?,
+                "event_type": row.get::<_, String>(1)?,
+                "summary": row.get::<_, String>(2).unwrap_or_default(),
+            }))
+        }).map_err(|e| format!("读取: {}", e))?
+        .filter_map(|r| r.ok()).collect();
+        Ok(serde_json::json!({"changes": changes}).to_string())
+    }).await.map_err(|e| format!("变更查询失败: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════
@@ -874,26 +979,29 @@ async fn hologram_hotspots(
 ) -> Result<String, String> {
     let limit = min_count.unwrap_or(3);
     let _ = days;
-    // Read timeline directly from SQLite
     let proj = ACTIVE_PROJECT.lock().unwrap().clone();
-    let db_path = std::path::Path::new(&proj).join(".hologram").join("timeline.db");
-    match rusqlite::Connection::open(&db_path) {
-        Ok(db) => {
-            let mut stmt = db.prepare("SELECT timestamp, event_type, file, summary FROM events ORDER BY id DESC LIMIT ?1")
-                .map_err(|e| format!("查询失败: {e}"))?;
-            let events: Vec<serde_json::Value> = stmt.query_map(rusqlite::params![limit], |row| {
-                Ok(serde_json::json!({
-                    "timestamp": row.get::<_, String>(0)?,
-                    "event_type": row.get::<_, String>(1)?,
-                    "file": row.get::<_, String>(2).unwrap_or_default(),
-                    "summary": row.get::<_, String>(3).unwrap_or_default(),
-                }))
-            }).map_err(|e| format!("读取失败: {e}"))?
-            .filter_map(|r| r.ok()).collect();
-            Ok(serde_json::json!({"events": events, "limit": limit}).to_string())
+    tokio::task::spawn_blocking(move || {
+        let db_dir = std::path::Path::new(&proj).join(".hologram");
+        let _ = std::fs::create_dir_all(&db_dir);
+        let db_path = db_dir.join("timeline.db");
+        match rusqlite::Connection::open(&db_path) {
+            Ok(db) => {
+                let mut stmt = db.prepare("SELECT timestamp, event_type, file, summary FROM events ORDER BY id DESC LIMIT ?1")
+                    .map_err(|e| format!("查询失败: {e}"))?;
+                let events: Vec<serde_json::Value> = stmt.query_map(rusqlite::params![limit], |row| {
+                    Ok(serde_json::json!({
+                        "timestamp": row.get::<_, String>(0)?,
+                        "event_type": row.get::<_, String>(1)?,
+                        "file": row.get::<_, String>(2).unwrap_or_default(),
+                        "summary": row.get::<_, String>(3).unwrap_or_default(),
+                    }))
+                }).map_err(|e| format!("读取失败: {e}"))?
+                .filter_map(|r| r.ok()).collect();
+                Ok(serde_json::json!({"events": events, "limit": limit}).to_string())
+            }
+            Err(e) => Ok(serde_json::json!({"error": format!("无法打开时间轴: {e}"), "events": []}).to_string())
         }
-        Err(e) => Ok(serde_json::json!({"error": format!("无法打开时间轴: {e}"), "events": []}).to_string())
-    }
+    }).await.map_err(|e| format!("热点查询失败: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════
@@ -928,12 +1036,13 @@ async fn hologram_gate_check(
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
         let root = std::path::PathBuf::from(&target);
-        let before = Graph::default();
         let after = {
             let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
             cache.as_ref().cloned().unwrap_or_default()
         };
-        let result = run_full_check(&before, &after, &[], &target);
+        let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
+            .map(|f| f.clone()).unwrap_or_default();
+        let result = run_full_check(&after, &after, &changed_files, &target);
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
@@ -1456,6 +1565,16 @@ async fn edit_file(
                         }
                         let trimmed = out.trim_end_matches('\n').to_string();
                         write_atomic(&file_path, &trimmed)?;
+                        // Record timeline event for whitespace-tolerant edit
+                        let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+                        if !proj.is_empty() {
+                            let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
+                            let _ = record_timeline_event(&proj, "agent_edit", Some(&file_path),
+                                &format!("Agent 编辑: {}", short));
+                            if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
+                                if !last.contains(&file_path) { last.push(file_path.clone()); }
+                            }
+                        }
                         return Ok("已替换 1 处匹配（容错模式：逐行对齐）".to_string());
                     }
                     break; // first-line matched once, no need to scan further
@@ -1493,6 +1612,17 @@ async fn edit_file(
         .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
     std::fs::rename(&tmp_path, &file_path)
         .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
+
+    // Record timeline event + update changed files for check (简报)
+    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
+    if !proj.is_empty() {
+        let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
+        let _ = record_timeline_event(&proj, "agent_edit", Some(&file_path),
+            &format!("Agent 编辑: {}", short));
+        if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
+            if !last.contains(&file_path) { last.push(file_path.clone()); }
+        }
+    }
 
     Ok(if replace_all {
         format!("已替换 {} 处匹配", count)
@@ -1867,98 +1997,34 @@ fn find_node_file(g: &serde_json::Value, node_id: &str) -> String {
     String::new()
 }
 
-/// Analyze a folder and return the graph JSON. Uses incremental cache.
-/// Fast path: if cached graph is up-to-date, returns it instantly (no Python).
-/// Set `force` to true to skip the fast-path cache and always re-analyze.
+/// 分析项目并返回完整图 JSON（从 CACHED_GRAPH 序列化）。
+/// 唯一入口 —— 前端拿图数据的唯一途径（冷启动引导除外）。
 #[tauri::command]
 async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHandle) -> Result<String, String> {
-    let force = force.unwrap_or(false);
-    // ── Fast path: cached graph still fresh ──
-    let cached_graph = std::path::PathBuf::from(&path).join("hologram_graph.json");
-    if !force && is_graph_fresh(&cached_graph.to_string_lossy(), &path) {
-        if let Ok(content) = std::fs::read_to_string(&cached_graph) {
-            if !content.trim().is_empty() {
-                // Set active project so all tool commands route to this workspace
-                *ACTIVE_PROJECT.lock().unwrap() = path.clone();
-                if let Err(e) = std::fs::write(project_root().join(".last_project"), &path) {
-                    eprintln!("[hologram] failed to write .last_project: {e}");
-                }
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_title("全息观测站");
-                }
-                // Ensure file-level graph exists (may be missing after cache deletion)
-                let files_path = format!("{}/hologram_graph_files.json", path);
-                if !std::path::Path::new(&files_path).exists() {
-                    let _ = regenerate_file_graph(&path);
-                }
-                return Ok(content);
-            }
-        }
-    }
+    let _ = force;
+    *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+    let _ = std::fs::write(project_root().join(".last_project"), &path);
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站 — 分析中...");
     }
-
-    // Emit phase event
     let _ = app.emit("analyze-phase", serde_json::json!({
         "phase": "analysis", "message": "Rust 引擎分析中..."
     }));
 
-    // ── Run analysis via MCP engine (engine.exe serve) ──
-    let stdout = direct_analyze(&path)
-        .map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
+    direct_analyze(&path).map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站");
     }
 
-    if stdout.trim().is_empty() || stdout.contains("\"error\"") {
-        return Err(format!("分析失败: {}", stdout));
-    }
-
-    // Wrap Rust engine output with standard meta format (compatible with Python engine output)
-    let engine_json: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("引擎返回格式异常: {}", e))?;
-    let wrapped = serde_json::json!({
-        "meta": {
-            "source_root": path,
-            "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-            "version": "0.1.0",
-            "node_count": engine_json.get("node_count").cloned().unwrap_or(serde_json::json!(0)),
-            "edge_count": engine_json.get("edge_count").cloned().unwrap_or(serde_json::json!(0)),
-        },
-        "nodes": engine_json.get("nodes").cloned().unwrap_or(serde_json::json!([])),
-        "edges": engine_json.get("edges").cloned().unwrap_or(serde_json::json!([])),
-        "communities": engine_json.get("communities").cloned().unwrap_or(serde_json::json!([])),
-    });
-    let graph_json = serde_json::to_string_pretty(&wrapped).unwrap_or_default();
-
-    // Save graph JSON to disk
-    let graph_path = format!("{}/hologram_graph.json", path);
-    std::fs::write(&graph_path, &graph_json)
-        .map_err(|e| format!("保存图文件失败: {}", e))?;
-
-    // Remove stale binary cache so cold start doesn't read old Python .hologram
-    let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
-    let _ = regenerate_file_graph(&path);
-
-    // Register as active workspace — all tool commands now route here
-    *ACTIVE_PROJECT.lock().unwrap() = path.clone();
-
-    // ── Ensure file-level graph exists ──
+    // Ensure file-level graph exists
     let files_path = format!("{}/hologram_graph_files.json", path);
     if !std::path::Path::new(&files_path).exists() {
         let _ = regenerate_file_graph(&path);
     }
 
-    // Track last project for cold-start fallback
-    let last_path_file = project_root().join(".last_project");
-    if let Err(e) = std::fs::write(&last_path_file, &path) {
-        eprintln!("[hologram] failed to write .last_project: {e}");
-    }
-
-    Ok(graph_json)
+    serialize_cached_graph()
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2148,6 +2214,17 @@ async fn start_watching(
                 if let Some(json) = run_engine_analysis(&path, &changed_files) {
                     last_mtimes = current_mtimes;
                     consecutive_failures = 0;
+                    // Record timeline events for changed files (时间轴)
+                    if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
+                        *last = changed_files.clone();
+                    }
+                    for cf in &changed_files {
+                        let short = cf.rsplit(['/', '\\']).next().unwrap_or(cf);
+                        let _ = record_timeline_event(
+                            &path, "file_changed", Some(cf),
+                            &format!("文件变更: {}", short),
+                        );
+                    }
                     if let Err(e) = app_handle.emit("graph-updated", json) {
                         eprintln!("[hologram] emit graph-updated failed: {e}");
                     }
@@ -2739,6 +2816,7 @@ fn main() {
             hologram_rename,
             set_active_project,
             get_active_project,
+            get_full_graph,
             load_graph_json,
             load_binary_graph,
             analyze_and_load,
