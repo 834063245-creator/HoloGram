@@ -33,8 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Actual analysis is deferred to the first hologram_analyze MCP call.
                 // Watcher is also deferred — Windows notify can emit spurious events
                 // during startup, triggering re-analysis loops (622MB, 195 CPU seen).
-                if let Err(e) = mcp::init_graph_store(&root) {
-                    warn!("[main] GraphStore init failed (non-fatal): {}", e);
+                if let Err(e) = hologram_engine::engine::engine_init(&root) {
+                    warn!("[main] Engine init failed (non-fatal): {}", e);
                 }
 
                 info!("engine MCP serve ready — analysis + watcher deferred to first hologram_analyze");

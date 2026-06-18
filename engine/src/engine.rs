@@ -556,6 +556,35 @@ impl Engine {
             .map_err(|e| format!("Timeline query failed: {}", e))
     }
 
+    /// Persist the current MemoryIndex to SQLite.
+    pub fn save(&self) -> Result<(), String> {
+        let store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("Store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Engine not initialized".to_string())?;
+        store.save()
+    }
+
+    /// Full-text search via SQLite FTS5. Returns matching nodes.
+    pub fn fts_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::graph::Node>, String> {
+        let store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("Store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Engine not initialized".to_string())?;
+        let db = &store.db;
+        Ok(store.read(|idx| idx.fts_search(db, query, limit).unwrap_or_default()))
+    }
+
     /// Stop the file watcher. Blocks until the watcher thread exits (max ~500ms).
     pub fn stop_watcher(&self) {
         self.watcher_running.store(false, Ordering::SeqCst);
@@ -738,6 +767,27 @@ pub fn engine_query_timeline(
         .as_ref()
         .ok_or_else(|| "Engine not initialized".to_string())?;
     engine.query_timeline(limit)
+}
+
+/// Persist to SQLite on the global engine.
+pub fn engine_save() -> Result<(), String> {
+    let guard = ENGINE.read();
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+    engine.save()
+}
+
+/// Full-text search via FTS5 on the global engine.
+pub fn engine_fts_search(
+    query: &str,
+    limit: usize,
+) -> Result<Vec<crate::graph::Node>, String> {
+    let guard = ENGINE.read();
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+    engine.fts_search(query, limit)
 }
 
 /// Run analysis on the global engine. Convenience wrapper that callers
