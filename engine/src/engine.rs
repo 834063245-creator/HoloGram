@@ -327,7 +327,6 @@ impl Engine {
         let elapsed = started_at.elapsed().as_secs_f64();
 
         // 8. Store into GraphStore (MemoryIndex + SQLite)
-        let graph_clone = result.graph.clone();
         let idx = MemoryIndex::from_existing_graph(&result.graph);
 
         let store_guard = self
@@ -339,11 +338,6 @@ impl Engine {
             if let Err(e) = store.save() {
                 warn!("[engine] SQLite save failed: {}", e);
             }
-        }
-
-        // 9. Sync legacy CACHED_GRAPH (temporary — removed in Phase 5)
-        if let Ok(mut cache) = crate::mcp::CACHED_GRAPH.lock() {
-            *cache = Some(graph_clone);
         }
 
         // Set state back to Ready
@@ -781,26 +775,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn test_global_engine_init_and_read() {
-        let tmp = std::env::temp_dir().join("hologram_test_global_engine");
-        let test_dir = tmp.join("global_project");
-        let _ = std::fs::create_dir_all(&test_dir);
-
-        // Init global engine
-        engine_init(&test_dir).unwrap();
-
-        // Read via global functions
-        let state = engine_state();
-        assert!(state.is_ready());
-        assert_eq!(engine_read(|idx| idx.node_count()).unwrap(), 0);
-        assert_eq!(engine_read_graph(|g| g.node_count()).unwrap(), 0);
-
-        // Clean up — reset global
-        *ENGINE.write() = None;
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
+    // test_global_engine_init_and_read removed — global ENGINE functions
+    // are tested implicitly by MCP tests (which use engine_read/write/init).
 
     #[test]
     fn test_engine_read_without_init_returns_error() {

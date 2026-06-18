@@ -54,10 +54,7 @@ pub fn with_graph_store<R>(f: impl FnOnce(&GraphStore) -> R) -> Result<R, String
     Ok(f(&gs))
 }
 
-/// Global re-entrant lock preventing concurrent full analysis across
-/// MCP tools, watcher, and TCP RPC handler.
-pub static ANALYZE_LOCK: std::sync::LazyLock<Mutex<()>> =
-    std::sync::LazyLock::new(|| Mutex::new(()));
+// ANALYZE_LOCK removed — Engine::analyze() manages its own concurrency internally.
 
 /// Parse CLI args for `engine.exe serve [--project-root <path>]`.
 /// Returns None if not in serve mode.
@@ -352,47 +349,25 @@ impl McpServer {
     // ══════════════════════════════════════════════════════
 
     /// Run a read-only closure against MemoryIndex via GraphStore.
-    /// Falls back to CACHED_GRAPH (legacy mode) if GraphStore is not initialized.
+    /// Read from the Engine's MemoryIndex. All MCP tools go through this.
     fn with_store<F>(&self, id: &Value, f: F) -> Value
     where
         F: FnOnce(&MemoryIndex) -> Value,
     {
-        match GRAPH_STORE.read().unwrap().as_ref() {
-            Some(store) => {
-                let gs = store.lock().unwrap();
-                let result = gs.read(|idx| f(idx));
-                Self::result_or_error(id, result)
-            }
-            None => {
-                // Fallback: use legacy CACHED_GRAPH
-                match CACHED_GRAPH.lock() {
-                    Ok(guard) => match guard.as_ref() {
-                        Some(g) => {
-                            let idx = MemoryIndex::from_existing_graph(g);
-                            Self::result_or_error(id, f(&idx))
-                        }
-                        None => McpServer::error_response(
-                            id,
-                            -32000,
-                            "No graph loaded. Run hologram_analyze first.",
-                        ),
-                    },
-                    Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
-                }
-            }
+        match engine::engine_read(|idx| f(idx)) {
+            Ok(value) => Self::result_or_error(id, value),
+            Err(e) => McpServer::error_response(id, -32000, &e),
         }
     }
 
+    /// Read from the Engine via a legacy Graph. All MCP tools go through this.
     fn with_graph<F>(&self, id: &Value, f: F) -> Value
     where
         F: FnOnce(&Graph) -> Value,
     {
-        match CACHED_GRAPH.lock() {
-            Ok(guard) => match guard.as_ref() {
-                Some(g) => Self::result_or_error(id, f(g)),
-                None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
-            },
-            Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
+        match engine::engine_read_graph(|g| f(g)) {
+            Ok(value) => Self::result_or_error(id, value),
+            Err(e) => McpServer::error_response(id, -32000, &e),
         }
     }
 
@@ -877,38 +852,9 @@ impl McpServer {
         let project_root = self.project_root();
 
         // Try GraphStore first, fall back to CACHED_GRAPH
-        if let Some(store) = GRAPH_STORE.read().unwrap().as_ref().and_then(|s| s.lock().ok()) {
-            // Build Graph snapshot from MemoryIndex for explore() compatibility
-            let g = store.read(|idx| {
-                let mut g = Graph::new();
-                for node in idx.nodes_iter() {
-                    g.add_node(node.clone());
-                }
-                for (source, targets) in idx.edges_iter() {
-                    for (target, kind, coupling_depth, delay) in targets {
-                        let eid = format!("{}::{}::{}", source, target, kind.as_str());
-                        let mut edge = Edge::new(eid, source, target, *kind);
-                        edge.coupling_depth = *coupling_depth;
-                        edge.temporal_delay_sec = *delay;
-                        g.add_edge(edge);
-                    }
-                }
-                g
-            });
-            let result = explore(&g, &project_root, &symbols, query_str.as_deref(), include_source);
-            return Self::result_or_error(id, result);
-        }
-
-        match CACHED_GRAPH.lock() {
-            Ok(guard) => match guard.as_ref() {
-                Some(g) => {
-                    let result = explore(g, &project_root, &symbols, query_str.as_deref(), include_source);
-                    McpServer::tool_result(id, result)
-                }
-                None => McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
-            },
-            Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
-        }
+        self.with_graph(id, |g| {
+            explore(g, &project_root, &symbols, query_str.as_deref(), include_source)
+        })
     }
 
     fn tool_graph_summary(&self, args: &Value, id: &Value) -> Value {
@@ -1033,53 +979,32 @@ impl McpServer {
         if path.is_empty() {
             return McpServer::error_response(id, -32602, "path is required");
         }
-        // Save old graph as baseline
-        let before = CACHED_GRAPH.lock().ok()
-            .and_then(|g| g.clone());
 
-        // Re-analyze
         let root = PathBuf::from(path);
         if !root.exists() {
             return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
         }
-        let lock = match ANALYZE_LOCK.try_lock() {
-            Ok(l) => l,
-            Err(_) => return McpServer::error_response(id, -32000, "分析正在进行中，请稍后重试"),
+
+        // Save current graph as baseline (via Engine)
+        let before = engine::engine_read_graph(|g| g.clone()).ok();
+
+        // Re-analyze via Engine (handles locking, pipeline, storage internally)
+        match engine::engine_init(&root) {
+            Ok(_) => {}
+            Err(e) => return McpServer::error_response(id, -32000, &format!("Engine init failed: {}", e)),
+        }
+        let analyze_result = match engine::engine_analyze(&root) {
+            Ok(r) => r,
+            Err(e) => return McpServer::error_response(id, -32000, &e),
         };
 
-        // Init GraphStore for the target project. Will reopen if workspace changed.
-        if let Err(e) = init_graph_store(&root) {
-            drop(lock);
-            return McpServer::error_response(id, -32000, &format!("GraphStore init failed: {}", e));
-        }
-        let mut result = analyze_project(&root);
-        CrossFileResolver::resolve(&mut result.graph);
-        compute_coupling(&mut result.graph);
-        detect_framework_routes(&mut result.graph, &root);
-        synthesize_dynamic_edges(&mut result.graph, &root);
-        synthesize_dataflow_edges(&mut result.graph, &root);
-        detect_communities(&mut result.graph, 42);
-
-        let after = result.graph.clone();
-        let idx = MemoryIndex::from_existing_graph(&after);
-        // Update GraphStore first (primary), then CACHED_GRAPH (legacy)
-        if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
-            if let Ok(store) = store_mtx.lock() {
-                store.swap_index(idx);
-                let _ = store.save();
-            }
-        }
-        // Clone for check before moving into cache
+        let after = analyze_result.graph.clone();
         let before_graph = before.unwrap_or_else(|| after.clone());
-        let after_check = after.clone();
-        if let Ok(mut cache) = CACHED_GRAPH.lock() {
-            *cache = Some(after);
-        }
-        drop(lock);
-        let changed_files: Vec<String> = vec![];
-        let check_result = run_full_check(&before_graph, &after_check, &changed_files, path);
 
-        // Record timeline event with full check properties
+        let changed_files: Vec<String> = vec![];
+        let check_result = run_full_check(&before_graph, &after, &changed_files, path);
+
+        // Record timeline event
         let passed = check_result["passed"].as_bool().unwrap_or(true);
         let violation_count = check_result["violation_count"].as_u64().unwrap_or(0);
         let event_type = if passed { "commit_clean" } else { "commit_violation" };
@@ -1090,21 +1015,9 @@ impl McpServer {
         };
         let props = serde_json::json!({
             "passed": check_result["passed"],
-            "timestamp": check_result["timestamp"],
-            "changed_files": check_result["changed_files"],
-            "total_changed_files": check_result["total_changed_files"],
-            "l5_violations": check_result["l5_violations"],
-            "l4_violations": check_result["l4_violations"],
-            "l3_violations": check_result["l3_violations"],
-            "l2_violations": check_result["l2_violations"],
-            "passed_checks": check_result["passed_checks"],
-            "blast_radius": check_result["blast_radius"],
-            "cross_community_edges": check_result["cross_community_edges"],
-            "new_cycles": check_result["new_cycles"],
-            "new_thread_conflicts": check_result["new_thread_conflicts"],
-            "api_signature_changes": check_result["api_signature_changes"],
             "violation_count": check_result["violation_count"],
         });
+        // Timeline via GraphStore (still needed until Engine has timeline API)
         if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
             if let Ok(store) = store_mtx.lock() {
                 let _ = store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
@@ -1236,53 +1149,31 @@ impl McpServer {
     }
 
     fn tool_status(&self, _args: &Value, id: &Value) -> Value {
-        match GRAPH_STORE.read().unwrap().as_ref() {
-            Some(store) => {
-                let gs = store.lock().unwrap();
-                let progress = gs.load_progress();
-                let nodes = gs.read(|idx| idx.node_count());
-                let edges = gs.read(|idx| idx.edge_count());
-                let has_aux = gs.read(|idx| idx.has_aux_indexes());
-                McpServer::tool_result(
-                    id,
-                    json!({
-                        "phase": progress.phase,
-                        "store": "MemoryIndex",
-                        "nodes": nodes,
-                        "edges": edges,
-                        "nodes_loaded": progress.nodes_loaded,
-                        "edges_loaded": progress.edges_loaded,
-                        "elapsed_ms": progress.elapsed_ms,
-                        "has_aux_indexes": has_aux,
-                    }),
-                )
+        let state = engine::engine_state();
+        match engine::engine_read(|idx| (idx.node_count(), idx.edge_count(), idx.has_aux_indexes())) {
+            Ok((nodes, edges, has_aux)) => {
+                let phase = match state {
+                    engine::EngineState::Ready { .. } => "ready",
+                    engine::EngineState::Analyzing { .. } => "analyzing",
+                    engine::EngineState::Loading { .. } => "loading",
+                    engine::EngineState::Uninitialized => "empty",
+                    engine::EngineState::Error(_) => "error",
+                };
+                McpServer::tool_result(id, json!({
+                    "phase": phase,
+                    "store": "MemoryIndex",
+                    "nodes": nodes,
+                    "edges": edges,
+                    "has_aux_indexes": has_aux,
+                }))
             }
-            None => {
-                // Fallback: check CACHED_GRAPH
-                match CACHED_GRAPH.lock() {
-                    Ok(guard) => match guard.as_ref() {
-                        Some(g) => McpServer::tool_result(
-                            id,
-                            json!({
-                                "phase": "ready",
-                                "store": "Graph (legacy)",
-                                "nodes": g.node_count(),
-                                "edges": g.edge_count(),
-                                "note": "Using legacy CACHED_GRAPH. Run analyze to migrate to MemoryIndex.",
-                            }),
-                        ),
-                        None => McpServer::tool_result(
-                            id,
-                            json!({
-                                "phase": "empty",
-                                "store": "none",
-                                "nodes": 0,
-                                "edges": 0,
-                            }),
-                        ),
-                    },
-                    Err(_) => McpServer::error_response(id, -32000, "Internal lock error"),
-                }
+            Err(_) => {
+                McpServer::tool_result(id, json!({
+                    "phase": "empty",
+                    "store": "none",
+                    "nodes": 0,
+                    "edges": 0,
+                }))
             }
         }
     }
@@ -1351,34 +1242,39 @@ mod tests {
     /// graph stays live until the guard is dropped at the end of the test.
     fn load_test_graph() -> std::sync::MutexGuard<'static, ()> {
         let guard = MUTEX.lock().unwrap();
-        let mut g = Graph::new();
-        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
-        a.location = Some("src/a.rs".into());
-        a.out_degree = 2;
-        g.add_node(a);
-        let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
-        b.location = Some("src/b.rs".into());
-        b.in_degree = 1;
-        g.add_node(b);
-        let mut m = Node::new("m1", "shared_db", NodeKind::Medium);
-        m.location = Some("store.rs".into());
-        g.add_node(m);
-        let mut e1 = Edge::new("e1", "a", "b", EdgeKind::Calls);
-        e1.coupling_depth = 2;
-        g.add_edge(e1);
-        let mut e2 = Edge::new("e2", "a", "m1", EdgeKind::Writes);
-        e2.coupling_depth = 4;
-        g.add_edge(e2);
-        if let Ok(mut cache) = CACHED_GRAPH.lock() {
-            *cache = Some(g);
-        }
+        let tmp = std::env::temp_dir().join("hologram_mcp_test");
+        let _ = std::fs::create_dir_all(&tmp);
+        let _ = engine::engine_init(&tmp);
+        let _ = engine::engine_write(|idx| {
+            let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+            a.location = Some("src/a.rs".into());
+            a.out_degree = 2;
+            idx.insert_node(a);
+            let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
+            b.location = Some("src/b.rs".into());
+            b.in_degree = 1;
+            idx.insert_node(b);
+            let mut m = Node::new("m1", "shared_db", NodeKind::Medium);
+            m.location = Some("store.rs".into());
+            idx.insert_node(m);
+            idx.upsert_edge("a", "b", EdgeKind::Calls, 2, None);
+            idx.upsert_edge("a", "m1", EdgeKind::Writes, 4, None);
+        });
         guard
     }
 
     fn clear_graph() {
-        if let Ok(mut cache) = CACHED_GRAPH.lock() {
-            *cache = None;
-        }
+        // Clear test data from Engine. We rebuild a fresh MemoryIndex and swap it in.
+        // This avoids borrow-checker issues with iterating while mutating.
+        let _ = engine::engine_write(|idx| {
+            // Remove all nodes (edges go with them automatically)
+            let ids: Vec<String> = {
+                idx.nodes_iter().map(|n| n.id.clone()).collect()
+            };
+            for id in &ids {
+                idx.remove_node(id);
+            }
+        });
     }
 
     // ── parse_serve_args ──
