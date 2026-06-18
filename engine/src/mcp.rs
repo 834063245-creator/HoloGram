@@ -20,12 +20,6 @@ use crate::pipeline::runner::analyze_project;
 use crate::routing::preflight::run_full_check;
 use crate::storage::{GraphStore, MemoryIndex};
 
-/// Global cached graph, shared with the TCP RPC server.
-/// The MCP server reads from and writes to this cache.
-/// DEPRECATED: use GRAPH_STORE instead. Kept for backward compat during migration.
-pub static CACHED_GRAPH: std::sync::LazyLock<Mutex<Option<Graph>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
-
 /// New storage engine singleton. Initialized by init_graph_store() at startup.
 /// All graph queries go through this — it provides RwLock<MemoryIndex> for concurrent reads.
 ///
@@ -43,18 +37,7 @@ pub fn init_graph_store(project_root: &Path) -> Result<(), String> {
     engine::engine_init(project_root)
 }
 
-/// Get a reference to the global GraphStore (with lock).
-/// Returns an error if init_graph_store() hasn't been called yet.
-pub fn with_graph_store<R>(f: impl FnOnce(&GraphStore) -> R) -> Result<R, String> {
-    let outer = GRAPH_STORE.read().unwrap();
-    let store_mtx = outer
-        .as_ref()
-        .ok_or_else(|| String::from("GraphStore not initialized — call init_graph_store() first"))?;
-    let gs = store_mtx.lock().unwrap();
-    Ok(f(&gs))
-}
-
-// ANALYZE_LOCK removed — Engine::analyze() manages its own concurrency internally.
+// ANALYZE_LOCK + with_graph_store removed — Engine handles concurrency and timeline now.
 
 /// Parse CLI args for `engine.exe serve [--project-root <path>]`.
 /// Returns None if not in serve mode.
@@ -1099,33 +1082,30 @@ impl McpServer {
                 })
             })
         } else {
-            // Collect matching IDs first (need CACHED_GRAPH read access)
+            // Collect matching IDs and rename via Engine
             let (matched_ids, count) = {
-                match CACHED_GRAPH.lock() {
-                    Ok(mut guard) => match guard.as_mut() {
-                        Some(g) => {
-                            let ids: Vec<String> = g.nodes.values()
-                                .filter(|n| n.name == old_name || n.id.contains(old_name))
-                                .map(|n| n.id.clone())
-                                .collect();
-                            if ids.is_empty() {
-                                return McpServer::error_response(id, -32000, &format!("No nodes match '{}'", old_name));
-                            }
-                            let count = ids.len();
-                            for nid in &ids {
-                                if let Some(node) = g.nodes.get_mut(nid) {
-                                    node.name = new_name.to_string();
-                                }
-                            }
-                            (ids, count)
-                        }
-                        None => return McpServer::error_response(id, -32000, "No graph loaded. Run hologram_analyze first."),
-                    },
-                    Err(_) => return McpServer::error_response(id, -32000, "Internal lock error"),
+                match engine::engine_read(|idx| {
+                    let ids: Vec<String> = idx.nodes_iter()
+                        .filter(|n| n.name == old_name || n.id.contains(old_name))
+                        .map(|n| n.id.clone())
+                        .collect();
+                    (ids.len(), ids)
+                }) {
+                    Ok((0, _)) => return McpServer::error_response(id, -32000, &format!("No nodes match '{}'", old_name)),
+                    Ok((cnt, ids)) => (ids, cnt),
+                    Err(e) => return McpServer::error_response(id, -32000, &e),
                 }
-            }; // CACHED_GRAPH lock released here
+            };
+            // Apply rename via Engine
+            if let Err(e) = engine::engine_write(|idx| {
+                for nid in &matched_ids {
+                    idx.rename_node_name(nid, &new_name);
+                }
+            }) {
+                return McpServer::error_response(id, -32000, &e);
+            }
 
-            // Persist to GraphStore (MemoryIndex + SQLite)
+            // Persist to disk
             if let Some(store_mtx) = GRAPH_STORE.read().unwrap().as_ref() {
                 if let Ok(store) = store_mtx.lock() {
                     store.write(|idx| {

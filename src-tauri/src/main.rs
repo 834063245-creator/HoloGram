@@ -389,7 +389,6 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
 
 use hologram_engine as engine;
 use engine::engine as engine_api;
-use engine::mcp::{CACHED_GRAPH, with_graph_store};
 use engine::graph::Graph;
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, thread_conflict_report, find_blindspots};
@@ -450,27 +449,18 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
     }).to_string())
 }
 
-/// Run a query on the graph. Uses Engine (primary) with CACHED_GRAPH fallback.
+/// Run a query on the graph. Reads from Engine.
 fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
-    // Try Engine first
-    if let Ok(result) = engine_api::engine_read_graph(|g| {
+    engine_api::engine_read_graph(|g| {
         serde_json::to_string(&f(g)).unwrap_or_default()
-    }) {
-        return Ok(result);
-    }
-    // Fallback to legacy CACHED_GRAPH
-    let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
-    match cache.as_ref() {
-        Some(g) => Ok(serde_json::to_string(&f(g)).unwrap_or_default()),
-        None => Err("未加载图谱，请先运行 hologram_analyze".into()),
-    }
+    })
+    .map_err(|e| format!("Engine error: {}", e))
 }
 
 /// Serialize full graph JSON — shared by frontend and analyze_and_load.
-/// Reads from Engine (primary) with CACHED_GRAPH fallback.
+/// Reads from Engine exclusively.
 fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
-    // Try Engine first
-    let engine_result = engine_api::engine_read_graph(|g| {
+    engine_api::engine_read_graph(|g| {
         let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| serde_json::json!({
             "id": n.id, "name": n.name, "type": n.kind.as_str(),
             "location": n.location, "in_degree": n.in_degree,
@@ -495,42 +485,8 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
             "edge_count": g.edge_count(),
         });
         serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json})).unwrap_or_default()
-    });
-    if let Ok(json) = engine_result {
-        return Ok(json);
-    }
-
-    // Fallback to legacy CACHED_GRAPH
-    let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
-    match cache.as_ref() {
-        Some(g) => {
-            let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| serde_json::json!({
-                "id": n.id, "name": n.name, "type": n.kind.as_str(),
-                "location": n.location, "in_degree": n.in_degree,
-                "out_degree": n.out_degree,
-                "properties": n.properties, "position": n.position,
-                "community_id": n.community_id,
-            })).collect();
-            let edges: Vec<serde_json::Value> = g.edges.values().map(|e| serde_json::json!({
-                "id": e.id, "source": e.source, "target": e.target,
-                "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-                "cross_file": e.cross_file, "direction": e.direction,
-                "temporal_delay_sec": e.temporal_delay_sec,
-                "medium_node_id": e.medium_node_id,
-            })).collect();
-            let communities = detect_communities(g, 42);
-            let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
-                .map(|(i, c)| serde_json::json!({"id": format!("comm_{}", i), "size": c.len(), "node_ids": c}))
-                .collect();
-            let meta = serde_json::json!({
-                "source_root": source_root,
-                "node_count": g.node_count(),
-                "edge_count": g.edge_count(),
-            });
-            Ok(serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json}).to_string())
-        }
-        None => Err("未加载图谱".into()),
-    }
+    })
+    .map_err(|e| format!("Engine error: {}", e))
 }
 
 /// 返回 CACHED_GRAPH 的完整 JSON — 前端唯一数据来源（冷启动除外）。
@@ -763,20 +719,13 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
         let before = std::fs::read_to_string(&before_path).ok()
             .and_then(|s| serde_json::from_str::<Graph>(&s).ok())
             .unwrap_or_default();
-        // Ensure graph is loaded
-        let after = {
-            let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
-            match cache.as_ref() {
-                Some(g) => g.clone(),
-                None => {
-                    drop(cache);
-                    direct_analyze(&target)?;
-                    CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?
-                        .as_ref().cloned()
-                        .ok_or("分析后无图谱".to_string())?
-                }
-            }
-        };
+        // Ensure graph is loaded via Engine
+        let after = engine_api::engine_read_graph(|g| g.clone())
+            .or_else(|_| {
+                direct_analyze(&target)?;
+                engine_api::engine_read_graph(|g| g.clone())
+                    .map_err(|e| format!("分析后无图谱: {}", e))
+            })?;
         let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
             .map(|f| f.clone()).unwrap_or_default();
         // Clear immediately so next check gets a fresh set
@@ -818,9 +767,7 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
             "api_signature_changes": result["api_signature_changes"],
             "violation_count": result["violation_count"],
         });
-        let _ = with_graph_store(|store| {
-            store.db.record_timeline_with_props(&event_type, None::<&str>, &summary, &props)
-        });
+        let _ = engine_api::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
 
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("简报任务失败: {e}"))?
@@ -906,10 +853,7 @@ async fn hologram_run_preflight(
     let p = path.clone(); let f = files.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
-        let before = {
-            let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
-            cache.as_ref().cloned().unwrap_or_default()
-        };
+        let before = engine_api::engine_read_graph(|g| g.clone()).unwrap_or_default();
         // Before = current state; after = current state (preflight checks hypothetical changes to files in f)
         let result = run_full_check(&before, &before, &f, &p);
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -952,9 +896,7 @@ async fn hologram_timeline(
     let module_filter = module.filter(|m| !m.is_empty());
 
     tokio::task::spawn_blocking(move || {
-        let events = with_graph_store(|store| {
-            store.db.query_timeline(lim).unwrap_or_default()
-        }).map_err(|e| format!("时间轴查询失败: {}", e))?;
+        let events = engine_api::engine_query_timeline(lim).unwrap_or_default();
 
         let events: Vec<_> = if let Some(ref m) = module_filter {
             events.into_iter().filter(|e| {
@@ -986,9 +928,8 @@ async fn hologram_record_event(
     summary: String,
 ) -> Result<String, String> {
     let _ = tokio::task::spawn_blocking(move || {
-        with_graph_store(|store| {
-            store.db.record_timeline(&event_type, file.as_deref(), &summary)
-        }).map_err(|e| format!("时间轴写入失败: {}", e))
+        engine_api::engine_record_timeline(&event_type, file.as_deref(), &summary)
+            .map_err(|e| format!("时间轴写入失败: {}", e))
     }).await.map_err(|e| format!("时间轴写入失败: {}", e))??;
     Ok("ok".into())
 }
@@ -996,9 +937,7 @@ async fn hologram_record_event(
 #[tauri::command]
 async fn hologram_changes() -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let changes = with_graph_store(|store| {
-            store.db.query_timeline(10).unwrap_or_default()
-        }).unwrap_or_default();
+        let changes = engine_api::engine_query_timeline(10).unwrap_or_default();
         Ok(serde_json::json!({"changes": changes}).to_string())
     }).await.map_err(|e| format!("变更查询失败: {e}"))?
 }
@@ -1015,11 +954,8 @@ async fn hologram_hotspots(
     let limit = min_count.unwrap_or(3) as usize;
     let _ = days;
     tokio::task::spawn_blocking(move || {
-        match with_graph_store(|store| {
-            Ok::<_, String>(store.db.query_timeline(limit).unwrap_or_default())
-        }) {
-            Ok(Ok(events)) => Ok(serde_json::json!({"events": events, "limit": limit}).to_string()),
-            Ok(Err(e)) => Ok(serde_json::json!({"error": e, "events": []}).to_string()),
+        match engine_api::engine_query_timeline(limit) {
+            Ok(events) => Ok(serde_json::json!({"events": events, "limit": limit}).to_string()),
             Err(e) => Ok(serde_json::json!({"error": e, "events": []}).to_string()),
         }
     }).await.map_err(|e| format!("热点查询失败: {e}"))?
@@ -1056,10 +992,7 @@ async fn hologram_gate_check(
     let target = path;
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
-        let after = {
-            let cache = CACHED_GRAPH.lock().map_err(|e| format!("锁失败: {e}"))?;
-            cache.as_ref().cloned().unwrap_or_default()
-        };
+        let after = engine_api::engine_read_graph(|g| g.clone()).unwrap_or_default();
         let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
             .map(|f| f.clone()).unwrap_or_default();
         let result = run_full_check(&after, &after, &changed_files, &target);
@@ -1589,7 +1522,7 @@ async fn edit_file(
                         let proj = ACTIVE_PROJECT.lock().unwrap().clone();
                         if !proj.is_empty() {
                             let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
-                            let _ = with_graph_store(|s| s.db.record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short)));
+                            let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
                             if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
                                 if !last.contains(&file_path) { last.push(file_path.clone()); }
                             }
@@ -1636,7 +1569,7 @@ async fn edit_file(
     let proj = ACTIVE_PROJECT.lock().unwrap().clone();
     if !proj.is_empty() {
         let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
-        let _ = with_graph_store(|s| s.db.record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short)));
+        let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
         if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
             if !last.contains(&file_path) { last.push(file_path.clone()); }
         }
@@ -2133,7 +2066,7 @@ async fn start_watching(
                     }
                     for cf in &changed_files {
                         let short = cf.rsplit(['/', '\\']).next().unwrap_or(cf);
-                        let _ = with_graph_store(|s| s.db.record_timeline("file_changed", Some(cf.as_str()), &format!("文件变更: {}", short)));
+                        let _ = engine_api::engine_record_timeline("file_changed", Some(cf.as_str()), &format!("文件变更: {}", short));
                     }
                     if let Err(e) = app_handle.emit("graph-updated", json) {
                         eprintln!("[hologram] emit graph-updated failed: {e}");
