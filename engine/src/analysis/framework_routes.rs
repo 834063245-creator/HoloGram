@@ -34,6 +34,7 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path, parse_cac
     // Also discover candidate framework files from disk (recursive)
     for entry in walkdir::WalkDir::new(project_root)
         .into_iter()
+        .filter_entry(|e| !super::is_skippable_dir(e))
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
     {

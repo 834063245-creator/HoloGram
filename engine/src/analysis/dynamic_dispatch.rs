@@ -32,6 +32,7 @@ pub fn synthesize_dynamic_edges(graph: &mut Graph, project_root: &Path, parse_ca
     // Also walk disk for JS/TS/Python files (which may have 0 graph nodes)
     for entry in walkdir::WalkDir::new(project_root)
         .into_iter()
+        .filter_entry(|e| !super::is_skippable_dir(e))
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
     {

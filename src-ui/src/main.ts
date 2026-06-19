@@ -673,15 +673,25 @@ async function init(): Promise<void> {
   btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
 
-  // Re-analyze
+  // Re-analyze — runs analysis in-place without workspace switch
   btnReanalyze.addEventListener('click', async () => {
     if (!workspace?.path) { statusText.textContent = '请先打开项目'; return; }
     btnReanalyze.disabled = true;
     btnReanalyze.textContent = '分析中…';
     statusText.textContent = '重新分析中…';
     try {
-      await switchWorkspace(workspace.path);
+      console.log('[reanalyze] step 1: calling analyze_and_load', workspace.path);
+      const raw = await invoke<string>('analyze_and_load', { path: workspace.path, force: true });
+      console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
+      workspace.graphData = JSON.parse(raw);
+      console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(workspace.graphData.nodes || {}).length);
+      starGraph.render(workspace.graphData);
+      console.log('[reanalyze] step 4: render done');
+      const nc = Array.isArray(workspace.graphData.nodes) ? workspace.graphData.nodes.length : Object.keys(workspace.graphData.nodes || {}).length;
+      statusText.textContent = `✨ ${nc} 节点已就绪`;
+      console.log('[reanalyze] step 5: done');
     } catch (e: any) {
+      console.error('[reanalyze] FAILED:', e);
       statusText.textContent = `重分析失败: ${e}`;
     } finally {
       btnReanalyze.disabled = false;
