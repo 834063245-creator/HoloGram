@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _node_id = parts.get(3).copied().unwrap_or("");
                 handle_simple("rename:", old_name, move |g, _| {
                     let matched: Vec<_> = g.nodes.values()
-                        .filter(|n| n.name == old_name || n.id.contains(old_name))
+                        .filter(|n| n.name == old_name)
                         .collect();
                     if matched.is_empty() {
                         json!({"error": format!("No nodes match '{}'", old_name)})
@@ -325,15 +325,16 @@ fn handle_check(request: &str) -> Vec<u8> {
 
 fn handle_simple<F: FnOnce(&Graph, &str) -> serde_json::Value>(prefix: &str, request: &str, f: F) -> Vec<u8> {
     let arg = request.strip_prefix(prefix).unwrap_or("");
+    let state = hologram_engine::engine::engine_state();
     match hologram_engine::engine::engine_read_graph(|g| {
-        if g.edge_count() == 0 && g.node_count() == 0 {
-            return serde_json::Value::Null; // signal "no graph"
+        if !matches!(state, hologram_engine::engine::EngineState::Ready { .. }) {
+            return serde_json::Value::Null; // engine not initialized
         }
         f(g, arg)
     }) {
-        Ok(v) if v.is_null() => b"{\"error\":\"no graph loaded\"}".to_vec(),
+        Ok(v) if v.is_null() => serde_json::to_vec(&json!({"error": "engine not initialized — run analyze first"})).unwrap_or_default(),
         Ok(v) => serde_json::to_vec(&v).unwrap_or_default(),
-        Err(_) => b"{\"error\":\"no graph loaded\"}".to_vec(),
+        Err(_) => serde_json::to_vec(&json!({"error": "engine not initialized"})).unwrap_or_default(),
     }
 }
 
@@ -591,12 +592,15 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_simple_no_graph() {
+    fn test_handle_simple_empty_graph_is_not_an_error() {
         let _lock = lock_bin();
         clear_graph();
-        let resp = handle_simple("fragile:", "fragile:5", |_, _| json!({}));
+        // Engine is still Ready (node_count=0, edge_count=0) — not an error.
+        // The callback returns json!({}), which is an empty success response.
+        let resp = handle_simple("fragile:", "fragile:5", |_, _| json!({"result": "empty"}));
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
-        assert_eq!(v["error"], "no graph loaded");
+        assert_eq!(v["result"], "empty");
+        assert!(v.get("error").is_none());
     }
 
     #[test]

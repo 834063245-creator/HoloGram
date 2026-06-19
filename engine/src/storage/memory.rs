@@ -92,15 +92,15 @@ impl MemoryIndex {
         }
         idx.out_adj.reserve(idx.nodes.len());
         idx.in_adj.reserve(idx.nodes.len());
-        for (source, target, kind, coupling_depth, _delay) in db_edges {
+        for (source, target, kind, coupling_depth, delay) in db_edges {
             idx.out_adj
                 .entry(source.clone())
                 .or_default()
-                .push((target.clone(), kind, coupling_depth, None)); // SQLite doesn't store temporal_delay_sec yet — None
+                .push((target.clone(), kind, coupling_depth, delay));
             idx.in_adj
                 .entry(target.clone())
                 .or_default()
-                .push((source.clone(), kind, coupling_depth, None));
+                .push((source.clone(), kind, coupling_depth, delay));
         }
         idx.edge_count = idx
             .out_adj
@@ -123,15 +123,15 @@ impl MemoryIndex {
         }
         idx.out_adj.reserve(idx.nodes.len());
         idx.in_adj.reserve(idx.nodes.len());
-        for (source, target, kind, coupling_depth, _delay) in db_edges {
+        for (source, target, kind, coupling_depth, delay) in db_edges {
             idx.out_adj
                 .entry(source.clone())
                 .or_default()
-                .push((target.clone(), kind, coupling_depth, None));
+                .push((target.clone(), kind, coupling_depth, delay));
             idx.in_adj
                 .entry(target.clone())
                 .or_default()
-                .push((source.clone(), kind, coupling_depth, None));
+                .push((source.clone(), kind, coupling_depth, delay));
         }
         idx.edge_count = idx
             .out_adj
@@ -739,5 +739,49 @@ mod tests {
         idx.ensure_aux_indexes();
         assert_eq!(idx.get_nodes_by_name("A").len(), 1);
         assert_eq!(idx.get_nodes_by_file("f.rs").len(), 1);
+    }
+
+    /// F2 regression: temporal_delay_sec must survive a SQLite round-trip.
+    /// Cold-start loads from SQLite were discarding delays (hardcoded None).
+    #[test]
+    fn test_temporal_delay_survives_sqlite_roundtrip() {
+        let tmp = std::env::temp_dir().join("hologram_test_f2_delay");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let db = SqliteDb::open(&tmp).unwrap();
+
+        // Build an index with temporal edges that have non-null delays
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(test_node("a", "src_a", Some("src/a.rs")));
+        idx.insert_node(test_node("b", "src_b", Some("src/b.rs")));
+        idx.insert_node(test_node("c", "src_c", Some("src/c.rs")));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        idx.upsert_edge("a", "c", EdgeKind::Triggers, 1, Some(2.5));
+        idx.upsert_edge("b", "c", EdgeKind::Awaits, 2, Some(0.75));
+
+        // Write to SQLite
+        idx.to_sqlite(&db).unwrap();
+
+        // Load back from SQLite
+        let loaded = MemoryIndex::from_sqlite(&db).unwrap();
+
+        // Delays must be preserved
+        let a_out = loaded.outgoing("a", None);
+        let triggers: Vec<_> = a_out.iter().filter(|(_, kind, _, _)| matches!(kind, EdgeKind::Triggers)).collect();
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].3, Some(2.5), "Triggers delay should survive round-trip");
+
+        let b_out = loaded.outgoing("b", None);
+        let awaits: Vec<_> = b_out.iter().filter(|(_, kind, _, _)| matches!(kind, EdgeKind::Awaits)).collect();
+        assert_eq!(awaits.len(), 1);
+        assert_eq!(awaits[0].3, Some(0.75), "Awaits delay should survive round-trip");
+
+        // Non-temporal edges should have None delay
+        let calls: Vec<_> = a_out.iter().filter(|(_, kind, _, _)| matches!(kind, EdgeKind::Calls)).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].3, None, "Calls edge should have no delay");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

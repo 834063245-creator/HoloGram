@@ -657,7 +657,17 @@ impl McpServer {
             let c = coupling_report_from_index(idx, "");
             let l4 = c["L4"].as_u64().unwrap_or(0) as usize;
             let cycles = detect_cycles_from_index(idx);
-            let blind = find_blindspots(l4, cycles.len(), 0);
+            // Count thread conflicts from index (was hardcoded 0)
+            let mut conflict_count = 0usize;
+            for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
+                let incoming = idx.incoming(&medium.id, None);
+                let has_write = incoming.iter().any(|(_, kind, _, _)| matches!(kind, EdgeKind::Writes));
+                let has_lock = incoming.iter().any(|(_, kind, _, _)| kind.as_str().contains("lock"));
+                if has_write && !has_lock && incoming.len() > 1 {
+                    conflict_count += 1;
+                }
+            }
+            let blind = find_blindspots(l4, cycles.len(), conflict_count);
             json!(blind)
         })
     }
@@ -945,7 +955,10 @@ impl McpServer {
             let fragile = crate::analysis::fragility::fragile_nodes(g, 20);
             let fragile_count = fragile.len().min(20) as f64;
             let fragile_score = (1.0 - fragile_count / 20.0).max(0.0) * 20.0;
-            let coupling_score = 30.0; // baseline — coupling report is expensive, skip inline
+            // Cheap coupling approximation: edge density and L4 ratio
+            let l4_count = g.edges.values().filter(|e| e.coupling_depth >= 4).count() as f64;
+            let coupling_ratio = if e > 0.0 { l4_count / e } else { 0.0 };
+            let coupling_score = (1.0 - coupling_ratio).max(0.0) * 30.0;
             let score = ((density + coupling_score + fragile_score + cycle_score) as u32).min(100);
             let trend = if n > 0.0 && e / n > 2.0 { "healthy" } else if e > 0.0 { "stable" } else { "needs_edges" };
             json!({
@@ -980,7 +993,7 @@ impl McpServer {
         if dry_run {
             self.with_graph(id, |g| {
                 let matched: Vec<_> = g.nodes.values()
-                    .filter(|n| n.name == old_name || n.id.contains(old_name))
+                    .filter(|n| n.name == old_name)
                     .collect();
                 if matched.is_empty() {
                     return json!({"error": format!("No nodes match '{}'", old_name)});
@@ -1000,7 +1013,7 @@ impl McpServer {
             let (matched_ids, count) = {
                 match engine::engine_read(|idx| {
                     let ids: Vec<String> = idx.nodes_iter()
-                        .filter(|n| n.name == old_name || n.id.contains(old_name))
+                        .filter(|n| n.name == old_name)
                         .map(|n| n.id.clone())
                         .collect();
                     (ids.len(), ids)
@@ -1470,6 +1483,46 @@ mod tests {
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         let data: Value = serde_json::from_str(text).unwrap();
         assert!(data.get("boundaries").is_some());
+    }
+
+    /// F3 regression: tool_blindspots must detect thread conflicts (was hardcoded 0).
+    /// Add a second concurrent writer to a Medium without locks and verify
+    /// the "concurrent_access" boundary appears in the result.
+    #[test]
+    fn test_blindspots_reports_thread_conflicts() {
+        let _g = load_test_graph();
+        // Add a second writer to "m1" (the shared_db medium) to create a conflict
+        let mut node_c = Node::new("c", "mod_c", NodeKind::Symbol);
+        node_c.location = Some("src/c.rs".into());
+        let _ = engine::engine_write(|idx| {
+            idx.insert_node(node_c);
+            idx.upsert_edge("c", "m1", EdgeKind::Writes, 4, None);
+            // Also add one more node reading m1 to make incoming.len() > 1
+            let mut node_d = Node::new("d", "mod_d", NodeKind::Symbol);
+            node_d.location = Some("src/d.rs".into());
+            idx.insert_node(node_d);
+            idx.upsert_edge("d", "m1", EdgeKind::Reads, 2, None);
+        });
+
+        let srv = server();
+        let req = serde_json::to_string(&make_tool_call("hologram_blindspots",
+            json!({"filter": "all"}), 21)).unwrap();
+        let resp = srv.handle_request(&req).unwrap();
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let data: Value = serde_json::from_str(text).unwrap();
+
+        let boundaries = data["boundaries"].as_array().unwrap();
+        let has_thread = boundaries.iter().any(|b| b["type"] == "concurrent_access");
+        assert!(has_thread,
+            "F3 regression: blindspots should report thread conflicts. Got boundaries: {:?}",
+            boundaries);
+
+        // Clean up — remove the extra nodes so subsequent tests get a clean 3-node graph
+        let _ = engine::engine_write(|idx| {
+            idx.remove_node("c");
+            idx.remove_node("d");
+        });
     }
 
     // ── Tool: preflight ──

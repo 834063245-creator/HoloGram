@@ -36,6 +36,7 @@ fn is_excluded(entry: &walkdir::DirEntry) -> bool {
         ".tox", ".mypy_cache", ".pytest_cache", ".hg", ".svn",
         "dist", "build", "target", ".eggs", "*.egg-info",
         ".hologram", "htmlcov", ".reasonix", ".codegraph", ".ruff_cache",
+        ".next", ".nuxt", "out", ".angular", ".cache", "coverage",
     ];
     if entry.file_type().is_dir() {
         return excluded_dirs.contains(&name);

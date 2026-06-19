@@ -363,6 +363,7 @@ fn bfs_path(
             continue;
         }
 
+        // Check outgoing edges
         let out_edges = ctx.graph.outgoing_edges(&cur);
         for edge in &out_edges {
             if explore_count >= MAX_EXPLORE {
@@ -377,6 +378,24 @@ fn bfs_path(
                 visited.insert(edge.target.clone());
                 prev.insert(edge.target.clone(), cur.clone());
                 queue.push_back(edge.target.clone());
+                explore_count += 1;
+            }
+        }
+        // Check incoming edges (data flows upstream)
+        let in_edges = ctx.graph.incoming_edges(&cur);
+        for edge in &in_edges {
+            if explore_count >= MAX_EXPLORE {
+                break;
+            }
+            if let Some(ref ef) = edge_filter {
+                if edge.kind != **ef {
+                    continue;
+                }
+            }
+            if !visited.contains(&edge.source) {
+                visited.insert(edge.source.clone());
+                prev.insert(edge.source.clone(), cur.clone());
+                queue.push_back(edge.source.clone());
                 explore_count += 1;
             }
         }

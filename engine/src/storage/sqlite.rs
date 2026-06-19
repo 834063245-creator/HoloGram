@@ -333,8 +333,8 @@ impl SqliteDb {
                 "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
-                    coupling_depth=MAX(excluded.coupling_depth, coupling_depth),
-                    temporal_delay_sec=COALESCE(excluded.temporal_delay_sec, temporal_delay_sec)",
+                    coupling_depth=excluded.coupling_depth,
+                    temporal_delay_sec=excluded.temporal_delay_sec",
                 params![id, source, target, kind.as_str(), coupling_depth as i64, temporal_delay_sec],
             )
             .map_err(|e| format!("insert edge {}: {}", id, e))?;
