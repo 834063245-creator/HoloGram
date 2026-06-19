@@ -38,6 +38,8 @@ export interface MemoryFile {
 // ── MemoryManager ──
 
 export class MemoryManager {
+  private _dirReady = false;
+
   constructor(private projectPath: string) {}
 
   private get dir(): string {
@@ -52,6 +54,18 @@ export class MemoryManager {
     return this.dir + '/' + name + '.md';
   }
 
+  /** Ensure .hologram/memory/ exists before any read. Fixes cold-start where
+   *  sandbox denies reads from non-existent parent directories. */
+  private async ensureDir(): Promise<void> {
+    if (this._dirReady) return;
+    try {
+      await invoke('create_directory', { path: this.dir });
+    } catch {
+      // Directory may already exist or create is not available — safe to continue
+    }
+    this._dirReady = true;
+  }
+
   // ── Prompt section cache ──
 
   private _promptSectionCache: string | null = null;
@@ -61,6 +75,7 @@ export class MemoryManager {
 
   /** Load the raw MEMORY.md text. */
   async loadIndexText(): Promise<string> {
+    await this.ensureDir();
     try {
       return await invoke<string>('read_file_content', { filePath: this.indexPath() });
     } catch {
@@ -96,6 +111,7 @@ export class MemoryManager {
   /** Read a full memory file by name (without .md). Returns null if not found.
    *  Set incrementHit to track recall frequency. */
   async read(name: string, incrementHit = false): Promise<MemoryFile | null> {
+    await this.ensureDir();
     try {
       const raw = await invoke<string>('read_file_content', { filePath: this.filePath(name) });
       const mf = parseFrontmatter(raw);

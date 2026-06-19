@@ -1,0 +1,155 @@
+---
+description: HoloGram MCP 25 工具使用手册（Cursor 专用，补全 MCP schema 未写的「何时用、下一步、参数坑」）
+alwaysApply: true
+---
+
+# HoloGram MCP 工具手册
+
+MCP `tools/list` 只有精简 API 说明；本规则同步自 `src-ui/src/agent/tool.ts` 的 LLM 调优描述。**调用 MCP 时参数名用 snake_case**（与桌面 Agent 的 camelCase 不同）。
+
+## 动手前三步
+
+1. **能 MCP 直答就别 grep 全仓**
+2. 结果空或报错 → 先 `hologram_status`（phase 是否 ready、nodes/edges 是否 >0）
+3. 不知道 `node_id` → 先 `hologram_search`，再用 `node_id` 调 neighbors/impact 等
+
+## 选哪个工具（按用户意图）
+
+| 用户想问 | 用这个 | 别误用 |
+|---------|--------|--------|
+| 这个函数/模块干嘛、改了会不会炸、调用链+源码+告警 | `hologram_explore` | — |
+| **文件/符号连着谁（邻居）** | `hologram_neighbors` | explore（它不列一阶邻居） |
+| 改这里会波及多远 | `hologram_impact` | explore 的 blastRadius 只覆盖已命名符号的入边 |
+| A 怎么依赖到 B | `hologram_path` | explore（需两个符号且偏聚合） |
+| 找名字/文件对应的 node_id | `hologram_search` | explore（NL 会过滤 `.rs` 等扩展名） |
+| 项目最乱/高风险模块 | `hologram_fragile` | — |
+| 循环依赖 | `hologram_cycle` | — |
+| 改这几个文件前先评估 | `hologram_preflight` | run_check（太重） |
+| 全面约束审计 | `hologram_run_check` | 随口问「检查一下」时别上来就跑 |
+| 图还没加载/要重分析 | `hologram_analyze` | — |
+
+**标准链路：** `search` → 拿 `node_id` → `neighbors` / `impact` / `path`  
+**聚合链路：** 已知符号名或 NL 问函数逻辑 → `explore`
+
+---
+
+## 25 个 MCP 工具详解
+
+### 聚合
+
+**`hologram_explore`** — 默认首选（函数级问题，非「列邻居」）
+- **何时用：** 「X 怎么 validate」「auth 依赖链」「改了 Y 波及谁」——一次拿 Flow + Blast Radius + Relationships + Source + 架构告警
+- **参数：** `query`（NL）或 `symbols`（数组）；`includeSource`（默认 true）
+- **NL 坑：** 分词会**丢掉** `.rs/.py/.ts` 等扩展名——问文件请用 `search` 或 `symbols: ["engine_init"]` 这类函数名，别写 `"engine.rs 邻居"`
+- **下一步：** 要完整邻居列表 → `hologram_neighbors(node_id)`
+
+### 图加载与状态
+
+**`hologram_analyze`** — 全量重分析并 reload 图
+- **何时用：** 图空、刚 clone、大改后需刷新
+- **参数：** `path`（项目根）
+
+**`hologram_status`** — 引擎是否 ready、节点/边数量、store 类型
+- **何时用：** 任何工具返回空时的第一步诊断
+
+**`hologram_graph_summary`** — 图概览（节点/边分布、密度、顶层模块）
+- **何时用：** 「这个项目多大、结构怎样」
+
+### 查找与邻居
+
+**`hologram_search`** — 模糊搜符号（FTS5）
+- **何时用：** **第一步**——不知道 exact name / node_id 时
+- **参数：** `query`（必填）, `limit`（默认 20）
+- **下一步：** 从 results[].id 取 `node_id` → `hologram_neighbors`
+
+**`hologram_neighbors`** — 一阶邻居（出边+入边，按边类型分组）
+- **何时用：** 「X 的邻居」「这个文件连着谁」「谁调它、它调谁」
+- **参数：** `node_id`（必填；用 search 返回的 id，不是裸函数名）
+- **返回：** outgoing / incoming / neighbor_count
+
+**`hologram_impact`** — BFS 波及分析（下游 dependents）
+- **何时用：** 「改这里会炸多大范围」
+- **参数：** `node_id`, `depth`（默认 3）
+
+**`hologram_path`** — 两节点间路径
+- **何时用：** 「A 怎么到 B」
+- **参数：** `from_id`, `to_id`
+
+**`hologram_history`** — 节点元数据与决策历史
+- **何时用：** 查单个 node 的 name/type/degree/location
+
+### 架构风险
+
+**`hologram_fragile`** — 高风险模块排行（L1–L4 耦合、fan-in、环参与）
+- **何时用：** 缩小审查范围；hub（auth/config/入口）排前面是正常的
+- **参数：** `limit`（默认 5）
+
+**`hologram_cycle`** — 数据流环 / 强耦合环
+- **参数：** `mode`: `all` | `data` | `llm`
+
+**`hologram_coupling_report`** — 单模块耦合深度报告
+- **参数：** `module_name`（必填）
+
+**`hologram_blindspots`** — L4 封装穿透、未锁并发、LLM 反馈环等边界
+- **参数：** `filter`: `all` | `L4` | `thread` | `cycle`
+
+**`hologram_thread_conflicts`** — 线程/异步冲突矩阵
+- **参数：** `node_id` 可选；省略则全局矩阵
+
+### 社区与结构
+
+**`hologram_community`** — 某节点所属社区 + 兄弟节点
+- **参数：** `node_id`
+
+**`hologram_community_report`** — 全图社区/星座结构（Leiden）
+- **参数：** `min_size`（默认 3）
+
+**`hologram_delayed`** — 所有 temporal 边（异步/调度/延迟耦合）
+- **何时用：** 「异步依赖有哪些」
+
+### 变更与审计
+
+**`hologram_timeline`** — SQLite 因果时间线
+- **参数：** `limit`, `since`（ISO）
+
+**`hologram_changes`** — 最近一次变更及影响
+- **参数：** `project_root` 可选
+
+**`hologram_diff`** — 当前图 vs 基线 JSON
+- **参数：** `before_path`；首次调用会创建基线
+
+**`hologram_preflight`** — 改文件前的风险评估（V3）
+- **何时用：** 「先看看改这里会怎样」「这个改动安全吗」
+- **参数：** `files`（数组，必填）
+- **注意：** MCP 名是 `hologram_preflight`（桌面 Agent 叫 `hologram_run_preflight`）
+
+**`hologram_run_check`** — 全量约束校验（重，会写 timeline）
+- **何时用：** 用户明确要「全面检查/跑约束」
+- **参数：** `path`
+
+**`hologram_run_health`** — 项目健康/耦合密度趋势
+- **何时用：** 「项目最近怎么样」——分数是耦合密度，不是代码质量
+- **参数：** `path`, `days`（默认 30）
+
+### 写操作
+
+**`hologram_rename`** — 跨文件安全重命名（支持 rollback）
+- **必须先** `dry_run: true` 预览
+- **参数：** `old_name`, `new_name`, `dry_run`, `node_id`（消歧）
+
+---
+
+## MCP 参数名速查（易错）
+
+| 工具 | MCP 参数 | 桌面 Agent 别名（勿混用） |
+|------|----------|---------------------------|
+| neighbors / impact / history / community | `node_id` | `nodeId` |
+| path | `from_id`, `to_id` | `from`, `to` |
+| diff | `before_path` | `beforePath` |
+| coupling_report | `module_name` | `module` |
+| community_report | `min_size` | `minSize` |
+| explore | `includeSource` | 同名 |
+
+## 维护
+
+引擎新增 MCP 工具时：**同步更新本规则 + `tool.ts`**。真相源优先级：`tool.ts` 描述 > 本规则 > MCP schema。

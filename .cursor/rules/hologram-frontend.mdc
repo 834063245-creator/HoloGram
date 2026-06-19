@@ -1,0 +1,44 @@
+---
+description: TypeScript 前端结构与 Agent 联动约定
+globs: src-ui/**/*
+alwaysApply: false
+---
+
+# 前端 (`src-ui/`)
+
+**入口：** `main.ts`（UI 壳 + 面板单例）· `workspace.ts`（项目状态机，替代散落全局变量）
+
+## 核心 UI
+
+| 文件 | 职责 |
+|---|---|
+| `ui/graph.ts` | Three.js 3D 星图（~2030 行）；InstancedMesh；layout3D **参数锁定** |
+| `ui/chat.ts` | Agent 聊天；流式 Markdown；权限卡片 |
+| `ui/check.ts` | 简报面板；违规行 → 星图跳转 |
+| `ui/file-viewer.ts` | Monaco 浮动编辑器 |
+| `ui/file-tree.ts` | 文件树；1.5s 防抖刷新 |
+| `agent/agent.ts` | Agent 引擎；子 Agent spawn |
+| `agent/tool.ts` | 46 工具注册；MCP 优先 + CLI 降级 |
+| `agent/permission.ts` | fail-closed 权限闸门 |
+| `ui/events.ts` | EventBus：`graph:*`、`agent:*`、`navigate:*` |
+
+## Agent ↔ 星图双向联动
+
+- Agent 调工具 → `agent:tool-done` → AgentVisualizer 高亮节点
+- Shift+双节点 → 路径 → Agent 自动分析依赖链
+- Alt+框选 → 区域总结
+- 6 个面板均有「问 Agent」入口
+
+## 渲染模式
+
+`minimal` / `standard` / `full` — 独立 StarGraph 实例，切换即重建。折叠视图三层：宇宙/星座/Galaxy 内部。
+
+## 数据加载
+
+优先 MessagePack (`.hologram`)，fallback JSON。布局永远走 JS `layout3D()`（Python 预计算布局已删除）。
+
+## 前端改动注意
+
+- 面板 HTML/CSS 在 `index.html`，48 个 CSS 变量
+- 改前端后：`cd src-ui && npm run build` 再 `cargo tauri build`
+- `bridge.ts` 的 `invoke`/`listen` 封装 Tauri；`isMockMode` 用于无壳调试
