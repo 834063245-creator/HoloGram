@@ -296,6 +296,13 @@ function setupIcons(): void {
     (el as HTMLElement).classList.add('toolbar-btn');
   });
 }
+// ── Helper: set up agent with placeholder workspace (no project loaded) ──
+async function setupPlaceholderAgent(): Promise<void> {
+  if (workspace) return;
+  const ws = Workspace.placeholder();
+  ws.onStatusChange = (msg) => { statusText.textContent = msg; };
+  try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
+}
 
 // ── Init ──
 
@@ -791,11 +798,7 @@ async function init(): Promise<void> {
       welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
       setLoading(false);
       // Set up agent without workspace context (general chat only)
-      if (!workspace) {
-        const ws = Workspace.placeholder() // placeholder, never activated
-        ws.onStatusChange = (msg) => { statusText.textContent = msg; };
-        try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
-      }
+      await setupPlaceholderAgent();
       return;
     }
 
@@ -803,18 +806,13 @@ async function init(): Promise<void> {
     if (nodeCount > 0) {
       let root: string = graph.meta?.source_root || '';
       if (!root) {
-        try { root = await invoke<string>('get_active_project'); } catch { /* ignore */ }
-      }
-      if (!root) {
         // Graph exists but no path — render without workspace
         starGraph.render(graph);
         statusText.textContent = '⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目';
         timelinePanel.setProjectPath(null);
         hotspotsPanel.setProjectPath(null);
         setLoading(false);
-        const ws = Workspace.placeholder()
-        ws.onStatusChange = (msg) => { statusText.textContent = msg; };
-        try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
+        await setupPlaceholderAgent();
         return;
       }
 
@@ -830,11 +828,7 @@ async function init(): Promise<void> {
   // No cached graph — show welcome
   welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
   setLoading(false);
-  if (!workspace) {
-    const ws = Workspace.placeholder()
-    ws.onStatusChange = (msg) => { statusText.textContent = msg; };
-    try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
-  }
+  await setupPlaceholderAgent();
 }
 
 // ── Git indicator ────────────────────────

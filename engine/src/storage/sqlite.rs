@@ -258,7 +258,11 @@ impl SqliteDb {
         let rows = stmt
             .query_map([], |row| {
                 let kind_str: String = row.get(2)?;
-                let kind = edge_kind_from_str(&kind_str);
+                let kind = edge_kind_from_str(&kind_str)
+                    .unwrap_or_else(|msg| {
+                        eprintln!("[hologram] {}", msg);
+                        EdgeKind::Calls
+                    });
                 let depth: i64 = row.get(3)?;
                 let delay: Option<f64> = row.get(4)?;
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, kind, depth as u8, delay))
@@ -485,18 +489,19 @@ pub fn timeline_query(conn: &Connection, limit: usize) -> Result<Vec<serde_json:
 }
 
 /// Parse edge kind from SQLite string.
-fn edge_kind_from_str(s: &str) -> EdgeKind {
+/// Returns an error for unknown kinds instead of silently defaulting to Calls.
+fn edge_kind_from_str(s: &str) -> Result<EdgeKind, String> {
     match s {
-        "imports" => EdgeKind::Imports,
-        "calls" => EdgeKind::Calls,
-        "inherits" => EdgeKind::Inherits,
-        "defines" => EdgeKind::Defines,
-        "reads" => EdgeKind::Reads,
-        "writes" => EdgeKind::Writes,
-        "shares" => EdgeKind::Shares,
-        "triggers" => EdgeKind::Triggers,
-        "awaits" => EdgeKind::Awaits,
-        "sequences" => EdgeKind::Sequences,
-        _ => EdgeKind::Calls, // fallback
+        "imports" => Ok(EdgeKind::Imports),
+        "calls" => Ok(EdgeKind::Calls),
+        "inherits" => Ok(EdgeKind::Inherits),
+        "defines" => Ok(EdgeKind::Defines),
+        "reads" => Ok(EdgeKind::Reads),
+        "writes" => Ok(EdgeKind::Writes),
+        "shares" => Ok(EdgeKind::Shares),
+        "triggers" => Ok(EdgeKind::Triggers),
+        "awaits" => Ok(EdgeKind::Awaits),
+        "sequences" => Ok(EdgeKind::Sequences),
+        other => Err(format!("unknown edge kind: '{}'", other)),
     }
 }
