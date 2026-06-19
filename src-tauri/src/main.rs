@@ -271,6 +271,26 @@ fn get_active_project() -> Result<String, String> {
 /// Type alias for the managed workspace state.
 type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
 
+/// Helper: get the active workspace path from WorkspaceHandle state.
+/// Returns an error if no workspace is open (instead of silently falling back to globals).
+fn workspace_path(state: &WorkspaceState) -> Result<String, String> {
+    state.lock()
+        .map_err(|e| format!("工作区状态错误: {e}"))?
+        .as_ref()
+        .map(|h| h.path.clone())
+        .ok_or_else(|| "未打开工作区，请先打开项目".into())
+}
+
+/// Helper: get a reference to the active WorkspaceHandle.
+fn with_workspace<F, R>(state: &WorkspaceState, f: F) -> Result<R, String>
+where
+    F: FnOnce(&workspace::WorkspaceHandle) -> Result<R, String>,
+{
+    let guard = state.lock().map_err(|e| format!("工作区状态错误: {e}"))?;
+    let handle = guard.as_ref().ok_or("未打开工作区，请先打开项目")?;
+    f(handle)
+}
+
 /// Open and activate a workspace. Creates sandbox, audit logger, sets ACTIVE_PROJECT.
 /// Called once when the user opens a folder.
 #[tauri::command]
@@ -511,16 +531,12 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
 }
 
 /// 返回 CACHED_GRAPH 的完整 JSON — 前端唯一数据来源（冷启动除外）。
-/// Reads the workspace path from the active WorkspaceHandle, falling back to ACTIVE_PROJECT.
+/// Returns an error if no workspace is active (no silent fallback).
 #[tauri::command]
 async fn get_full_graph(
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
-    let source_root = if let Some(ref handle) = *state.lock().unwrap() {
-        handle.path.clone()
-    } else {
-        ACTIVE_PROJECT.lock().unwrap().clone()
-    };
+    let source_root = workspace_path(&state)?;
     tokio::task::spawn_blocking(move || serialize_cached_graph(&source_root))
         .await.map_err(|e| format!("任务失败: {e}"))?
 }
@@ -968,12 +984,14 @@ async fn hologram_timeline(
     since: Option<String>,
     limit: Option<i32>,
     module: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
     let _proj = path
         .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| ACTIVE_PROJECT.lock().unwrap().clone());
+        .or_else(|| workspace_path(&state).ok())
+        .unwrap_or_default();
     if _proj.is_empty() {
-        return Err("未设置活跃工作区".into());
+        return Err("未打开工作区，请先打开项目".into());
     }
     let since_val = since.filter(|s| !s.is_empty());
     let lim = limit.unwrap_or(60) as usize;
@@ -1266,8 +1284,9 @@ async fn read_file_content(
     file_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
-    let real_path = check_sandbox_read(&file_path)?;
+    let real_path = with_workspace(&state, |h| h.check_read(&file_path))?;
     let content = std::fs::read_to_string(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     let lines: Vec<&str> = content.lines().collect();
@@ -1279,8 +1298,12 @@ async fn read_file_content(
 }
 
 #[tauri::command]
-async fn write_file_content(file_path: String, content: String) -> Result<(), String> {
-    let real_path = check_sandbox_write(&file_path)?;
+async fn write_file_content(
+    file_path: String,
+    content: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let real_path = with_workspace(&state, |h| h.check_write(&file_path))?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
         std::fs::create_dir_all(parent)
@@ -1319,8 +1342,11 @@ async fn create_directory(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn delete_file_or_dir(path: String) -> Result<(), String> {
-    let real = check_sandbox_write(&path)?; // delete = write-level lock
+async fn delete_file_or_dir(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let real = with_workspace(&state, |h| h.check_write(&path))?; // delete = write-level lock
     if !real.exists() { return Err(format!("路径不存在: {}", path)); }
     if real.is_dir() {
         std::fs::remove_dir_all(&real)
@@ -1338,9 +1364,13 @@ async fn rename_file_or_dir(from: String, to: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn move_file(source: String, dest_dir: String) -> Result<(), String> {
-    let src_real = check_sandbox_read(&source)?;
-    let dest_real = check_sandbox_write(&dest_dir)?;
+async fn move_file(
+    source: String,
+    dest_dir: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let src_real = with_workspace(&state, |h| h.check_read(&source))?;
+    let dest_real = with_workspace(&state, |h| h.check_write(&dest_dir))?;
     let name = src_real.file_name()
         .ok_or_else(|| format!("无效路径: {}", source))?;
     let dest = dest_real.join(name);
@@ -1560,6 +1590,7 @@ async fn edit_file(
     old_string: String,
     new_string: String,
     replace_all: Option<bool>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
@@ -1603,12 +1634,11 @@ async fn edit_file(
                         let trimmed = out.trim_end_matches('\n').to_string();
                         write_atomic(&file_path, &trimmed)?;
                         // Record timeline event for whitespace-tolerant edit
-                        let proj = ACTIVE_PROJECT.lock().unwrap().clone();
-                        if !proj.is_empty() {
+                        if let Some(ref handle) = *state.lock().unwrap() {
                             let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
                             let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
-                            if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
-                                if !last.contains(&file_path) { last.push(file_path.clone()); }
+                            if let Ok(mut changed) = handle.changed_files.lock() {
+                                if !changed.contains(&file_path) { changed.push(file_path.clone()); }
                             }
                         }
                         return Ok("已替换 1 处匹配（容错模式：逐行对齐）".to_string());
@@ -1650,12 +1680,11 @@ async fn edit_file(
         .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
 
     // Record timeline event + update changed files for check (简报)
-    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
-    if !proj.is_empty() {
+    if let Some(ref handle) = *state.lock().unwrap() {
         let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
         let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
-        if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
-            if !last.contains(&file_path) { last.push(file_path.clone()); }
+        if let Ok(mut changed) = handle.changed_files.lock() {
+            if !changed.contains(&file_path) { changed.push(file_path.clone()); }
         }
     }
 
@@ -1787,10 +1816,13 @@ async fn write_constraints(project_path: String, content: String) -> Result<(), 
 // ═══════════════════════════════════════════════════════
 
 /// Load the graph JSON file and return it as a string.
-/// Tries: 1) explicit path, 2) active project's hologram_graph.json,
-/// 3) global fallback, 4) last project's hologram_graph.json.
+/// Tries: 1) explicit path, 2) active workspace graph, 3) last project recovery (read-only).
+/// No silent fallback — if all tiers miss, returns an error.
 #[tauri::command]
-async fn load_graph_json(path: Option<String>) -> Result<String, String> {
+async fn load_graph_json(
+    path: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
     // 1) explicit path — must exist, no silent fallthrough to wrong project
     if let Some(ref p) = path {
         let content = std::fs::read_to_string(p)
@@ -1801,10 +1833,9 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
         return Ok(content);
     }
 
-    // 2) active workspace graph (only if ACTIVE_PROJECT is explicitly set)
-    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
-    if !proj.is_empty() {
-        let p = std::path::PathBuf::from(&proj).join("hologram_graph.json");
+    // 2) active workspace graph (from WorkspaceHandle, not the legacy global)
+    if let Some(ref handle) = *state.lock().unwrap() {
+        let p = std::path::PathBuf::from(&handle.path).join("hologram_graph.json");
         if let Ok(content) = std::fs::read_to_string(&p) {
             if !content.trim().is_empty() {
                 return Ok(content);
@@ -1812,7 +1843,7 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
         }
     }
 
-    // 3) last project's hologram_graph.json (user's previous workspace)
+    // 3) last project recovery (read-only — no global mutation side effect)
     let last_path_file = project_root().join(".last_project");
     if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
         let trim = last_path.trim();
@@ -1820,19 +1851,9 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
             let p = std::path::PathBuf::from(trim).join("hologram_graph.json");
             if let Ok(content) = std::fs::read_to_string(&p) {
                 if !content.trim().is_empty() {
-                    // Restore ACTIVE_PROJECT so tool commands route correctly
-                    *ACTIVE_PROJECT.lock().unwrap() = trim.to_string();
                     return Ok(content);
                 }
             }
-        }
-    }
-
-    // 4) global fallback — project root's own graph (HoloGramHG itself)
-    let def = default_graph();
-    if let Ok(content) = std::fs::read_to_string(&def) {
-        if !content.trim().is_empty() {
-            return Ok(content);
         }
     }
 
@@ -1840,10 +1861,13 @@ async fn load_graph_json(path: Option<String>) -> Result<String, String> {
 }
 
 /// A3: Load graph from MessagePack binary (.hologram) — 10× faster for >10K nodes.
-/// Tries: 1) explicit path, 2) active project .hologram, 3) global fallback .hologram,
-/// 4) last project .hologram.
+/// Tries: 1) explicit path, 2) active workspace .hologram, 3) last project recovery (read-only).
+/// No silent fallback — if all tiers miss, returns an error.
 #[tauri::command]
-async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
+async fn load_binary_graph(
+    path: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<Vec<u8>, String> {
     // 1) explicit path — must exist, no silent fallthrough to wrong project
     if let Some(ref p) = path {
         // If corresponding .json is newer, reject so frontend loads fresh JSON instead
@@ -1876,10 +1900,9 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         false // .json missing → .hologram is orphaned legacy cache, skip it
     }
 
-    // 2) active workspace .hologram (only if ACTIVE_PROJECT is explicitly set)
-    let proj = ACTIVE_PROJECT.lock().unwrap().clone();
-    if !proj.is_empty() {
-        let p = std::path::PathBuf::from(&proj).join("hologram_graph.hologram");
+    // 2) active workspace .hologram (from WorkspaceHandle, not the legacy global)
+    if let Some(ref handle) = *state.lock().unwrap() {
+        let p = std::path::PathBuf::from(&handle.path).join("hologram_graph.hologram");
         if p.exists() && holo_fresh(&p) {
             if let Ok(bytes) = std::fs::read(&p) {
                 if !bytes.is_empty() {
@@ -1889,7 +1912,7 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
         }
     }
 
-    // 3) last project's .hologram (user's previous workspace)
+    // 3) last project recovery (read-only — no global mutation side effect)
     let last_path_file = project_root().join(".last_project");
     if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
         let trim = last_path.trim();
@@ -1898,21 +1921,9 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
             if p.exists() && holo_fresh(&p) {
                 if let Ok(bytes) = std::fs::read(&p) {
                     if !bytes.is_empty() {
-                        // Restore ACTIVE_PROJECT so tool commands route correctly
-                        *ACTIVE_PROJECT.lock().unwrap() = trim.to_string();
                         return Ok(bytes);
                     }
                 }
-            }
-        }
-    }
-
-    // 4) global fallback — project root's own .hologram (HoloGramHG itself)
-    let def = project_root().join("hologram_graph.hologram");
-    if def.exists() && holo_fresh(&def) {
-        if let Ok(bytes) = std::fs::read(&def) {
-            if !bytes.is_empty() {
-                return Ok(bytes);
             }
         }
     }

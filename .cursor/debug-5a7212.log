@@ -1,0 +1,49 @@
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG"},"timestamp":1781767455862}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":80,"eventCount":0},"timestamp":1781767455942}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG"},"timestamp":1781767461638}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":249,"eventCount":5},"timestamp":1781767461887}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG"},"timestamp":1781767501502}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":267,"eventCount":5},"timestamp":1781767501769}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\amazing5"},"timestamp":1781767820621}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":46,"eventCount":2},"timestamp":1781767820667}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\amazing5"},"timestamp":1781767822971}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":203,"eventCount":3},"timestamp":1781767823174}
+{"sessionId":"5a7212","hypothesisId":"WS4","location":"main.ts:switchWorkspace","message":"Workspace.open start","data":{"folder":"D:\\amazing5"},"timestamp":1781768604816}
+{"sessionId":"5a7212","hypothesisId":"WS5","location":"main.ts:switchWorkspace","message":"Workspace.open done","data":{"folder":"D:\\amazing5","nodeCount":3633},"timestamp":1781768604930}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\amazing5"},"timestamp":1781768604933}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":47,"eventCount":0},"timestamp":1781768604980}
+{"sessionId":"5a7212","hypothesisId":"WS1","location":"main.ts:switchWorkspace","message":"deactivate start","data":{"oldPath":"D:\\amazing5","newPath":"D:\\First Beat CH Memory System"},"timestamp":1781768655836}
+{"sessionId":"5a7212","hypothesisId":"WS4","location":"main.ts:switchWorkspace","message":"Workspace.open start","data":{"folder":"D:\\First Beat CH Memory System"},"timestamp":1781768657271}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\amazing5"},"timestamp":1781768678187}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":258,"eventCount":2},"timestamp":1781768678445}
+{"sessionId":"5a7212","hypothesisId":"WS5","location":"main.ts:switchWorkspace","message":"Workspace.open done","data":{"folder":"D:\\First Beat CH Memory System","nodeCount":15276},"timestamp":1781768768503}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\First Beat CH Memory System"},"timestamp":1781768768504}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":11,"eventCount":3},"timestamp":1781768768515}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\First Beat CH Memory System"},"timestamp":1781768775817}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":719,"eventCount":4},"timestamp":1781768776536}
+{"sessionId":"5a7212","hypothesisId":"WS4","location":"main.ts:switchWorkspace","message":"Workspace.open start","data":{"folder":"D:\\First Beat CH Memory System"},"timestamp":1781769124759}
+{"sessionId":"5a7212","hypothesisId":"WS5","location":"main.ts:switchWorkspace","message":"Workspace.open done","data":{"folder":"D:\\First Beat CH Memory System","nodeCount":15276},"timestamp":1781769124865}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\First Beat CH Memory System"},"timestamp":1781769124865}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":36,"eventCount":0},"timestamp":1781769124901}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\First Beat CH Memory System"},"timestamp":1781769131223}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":734,"eventCount":6},"timestamp":1781769131957}
+{"sessionId":"5a7212","hypothesisId":"WS4","location":"main.ts:switchWorkspace","message":"Workspace.open start","data":{"folder":"D:\\First Beat CH Memory System"},"timestamp":1781769242453}
+{"sessionId":"5a7212","hypothesisId":"WS5","location":"main.ts:switchWorkspace","message":"Workspace.open done","data":{"folder":"D:\\First Beat CH Memory System","nodeCount":15276},"timestamp":1781769242632}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\First Beat CH Memory System"},"timestamp":1781769242633}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":42,"eventCount":0},"timestamp":1781769242675}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\First Beat CH Memory System"},"timestamp":1781769247532}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":782,"eventCount":6},"timestamp":1781769248313}
+{"sessionId":"5a7212","hypothesisId":"WS1","location":"main.ts:switchWorkspace","message":"deactivate start","data":{"oldPath":"D:\\First Beat CH Memory System","newPath":"D:\\HoloGramHG\\.hologram"},"timestamp":1781769266366}
+{"sessionId":"5a7212","hypothesisId":"WS4","location":"main.ts:switchWorkspace","message":"Workspace.open start","data":{"folder":"D:\\HoloGramHG\\.hologram"},"timestamp":1781769268616}
+{"sessionId":"5a7212","hypothesisId":"WS5","location":"main.ts:switchWorkspace","message":"Workspace.open done","data":{"folder":"D:\\HoloGramHG\\.hologram","nodeCount":0},"timestamp":1781769273628}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG\\.hologram"},"timestamp":1781769273629}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":43,"eventCount":1},"timestamp":1781769273672}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG\\.hologram"},"timestamp":1781769274331}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":5,"eventCount":3},"timestamp":1781769274336}
+{"sessionId":"5a7212","hypothesisId":"WS1","location":"main.ts:switchWorkspace","message":"deactivate start","data":{"oldPath":"D:\\HoloGramHG\\.hologram","newPath":"D:\\HoloGramHG"},"timestamp":1781769288745}
+{"sessionId":"5a7212","hypothesisId":"WS4","location":"main.ts:switchWorkspace","message":"Workspace.open start","data":{"folder":"D:\\HoloGramHG"},"timestamp":1781769289737}
+{"sessionId":"5a7212","hypothesisId":"WS5","location":"main.ts:switchWorkspace","message":"Workspace.open done","data":{"folder":"D:\\HoloGramHG","nodeCount":5007},"timestamp":1781769435260}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG"},"timestamp":1781769435261}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":13,"eventCount":1},"timestamp":1781769435274}
+{"sessionId":"5a7212","hypothesisId":"H2","location":"timeline.ts:refresh","message":"refresh start","data":{"path":"D:\\HoloGramHG"},"timestamp":1781769437493}
+{"sessionId":"5a7212","hypothesisId":"H5","location":"timeline.ts:refresh","message":"refresh ok","data":{"elapsedMs":243,"eventCount":2},"timestamp":1781769437736}

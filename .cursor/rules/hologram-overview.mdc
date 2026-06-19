@@ -1,0 +1,52 @@
+---
+description: HoloGram 产品定位、架构总览、用户沟通约束
+alwaysApply: true
+---
+
+# HoloGram 全息观测站
+
+**是什么：** 语言无关的代码依赖拓扑图 + 可对话 Agent。Tauri 2 桌面壳 + Rust 分析引擎 + Three.js 3D 星图。不是静态报告工具——图是 Agent 的眼睛，Agent 是嘴。
+
+**用户画像：** 外行 vibe coder，不看代码，高速迭代。关心「改了会不会炸」，不要术语堆砌。回答简洁直接；描述不清时先猜再确认；「炸了/卡成狗」= 自动排查 bug。
+
+**真相源优先级：** `PROJECT.md` > `CLAUDE.md` > `V4_CONSTRUCTION_PLAN.md`。`docs_archive/` 已归档勿引。
+
+## 三层架构
+
+| 层 | 目录 | 职责 |
+|---|---|---|
+| 引擎 | `engine/` | tree-sitter 解析、图构建、分析、存储、MCP(25工具)、TCP :9777 |
+| 壳 | `src-tauri/` | Tauri 命令、EngineClient、沙箱/审计、Git/Shell、spawn engine |
+| 前端 | `src-ui/` | Three.js 星图、Agent 聊天、Monaco/xterm/Git/简报/约束面板 |
+
+**Python 引擎已完全退役**（2026-06-16）。禁止新增 `src_python/` 路径。
+
+## 打开项目主链路
+
+```
+Workspace.open(path) → analyze_and_load → EngineClient TCP :9777
+→ hologram_graph.json → StarGraph 渲染
+→ watcher 增量更新 → graph-updated 事件
+```
+
+大项目双管线**已移除**——所有项目直接走全量分析 + 星图（Django 3031 文件 ~4.1s）。
+
+## Agent 工具（46 个）
+
+- 图查询 25：MCP 直连 Cursor；**精细使用手册见 `hologram-mcp-tools.mdc`**（何时用、标准链路、参数坑）
+- 函数/逻辑问题 → `hologram_explore`；**列邻居** → `search` → `hologram_neighbors`（不是 explore）
+- 编码 17 + 记忆 4 + 子 Agent `agent_spawn` 1
+
+动手前先问：MCP 工具能否直接给答案？框架路由 8 种（Django/Express/FastAPI/Flask/Rails/Spring/Gin/NestJS）。
+
+## 关键不变式
+
+- `graph.ts` 的 `layout3D()` 参数**锁定**（rep=600, att=0.018, damp=0.72）——用户未明确要求不得改
+- 构建桌面包：`cargo tauri build`（非单独 `cargo build --release`）
+- 改引擎后：`cd engine && cargo build`，再 `cargo tauri dev/build`
+- Windows 路径：`location` 用 `\`；`rsplit(":", 1)` 提取文件路径
+- enum 兼容：`from_json()` 后 type 可能是字符串，同时处理 enum 和 str
+
+## 测试基准
+
+287 tests（269 lib + 18 RPC）。存储 v2.5：MemoryIndex + SqliteDb FTS5 + GraphStore + 增量三阶段。

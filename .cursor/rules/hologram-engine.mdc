@@ -1,0 +1,54 @@
+---
+description: Rust 分析引擎模块地图与管线约定
+globs: engine/**/*
+alwaysApply: false
+---
+
+# Rust 引擎 (`engine/`)
+
+**入口：** `main.rs`（TCP RPC + CLI）· `mcp.rs`（25 MCP 工具）· `engine.rs`（统一 Engine API，替代散落全局变量）
+
+## 分析管线
+
+```
+discover_files → ParallelParser (rayon) → GraphMerger (O(n) 增量索引)
+→ CrossFileResolver → compute_coupling (L1-L4)
+→ detect_communities (Louvain)
+→ detect_framework_routes (8 框架 URL→handler)
+→ synthesize_dynamic_edges (callback/observer 模式)
+→ synthesize_dataflow_edges
+→ 序列化 JSON/MessagePack + 写入 GraphStore/SqliteDb
+```
+
+**parse_cache：** `runner.rs` 在 merge 时缓存 `(source, tree)`，供 synthesis 阶段复用 AST，避免重复解析。
+
+## 模块地图
+
+| 目录 | 职责 |
+|---|---|
+| `graph/` | Node/Edge/Graph、merge、resolver、diff |
+| `adapter/` | LanguageAdapter trait；python/ts 专用 + tree_sitter 通用（18 语言） |
+| `pipeline/` | discovery、parser、runner |
+| `analysis/` | coupling、dataflow、cycles、fragility、explore、framework_routes、dynamic_dispatch |
+| `community/` | Louvain 社区发现 |
+| `routing/` | signals(L5-L1)、patterns、constraints(YAML)、summary、preflight |
+| `storage/` | memory(MemoryIndex)、sqlite(FTS5)、store、incremental、query |
+| `rpc/` | TCP JSON 协议 |
+| `serialization/` | compat_json（前端兼容）、msgpack |
+
+## 双 Store
+
+- `GRAPH_STORE`：MemoryIndex，O(degree) 查询
+- `CACHED_GRAPH`：完整 Graph 对象，向后兼容
+- 更新顺序：先 CACHED_GRAPH 再 GRAPH_STORE（2026-06-18 审计修复）
+
+## 增量更新
+
+watcher → IncrementalUpdater（Phase1 重解析 → Phase2 文件内 diff → Phase3 跨文件边修复）→ validate(阈值 0.85) → swap；失败回退全量。
+
+## 改引擎检查清单
+
+1. `cargo test --lib` + RPC tests
+2. MCP 工具与 TCP handler 参数对齐（camelCase/snake_case 用 `get_arg_str`）
+3. 序列化字段完整（node: properties/position/community_id/degree；edge: cross_file/direction/temporal_delay_sec）
+4. `ANALYZE_LOCK` 防 watcher 与 MCP analyze 并发覆盖
