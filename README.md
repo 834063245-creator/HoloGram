@@ -184,9 +184,13 @@ cargo tauri build
 ```
 请帮我安装 HoloGram MCP 服务。步骤：
 
-1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版 hologram-engine.exe
-2. 把 hologram-engine.exe 放到用户主目录下的 .hologram 文件夹里（全局安装，所有项目共用）
-3. 在当前 AI 编程工具的 MCP 配置中注册这个服务：启动命令是 ~/.hologram/hologram-engine.exe，参数是 serve
+1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版引擎：
+   - Windows: hologram-engine.exe
+   - macOS: hologram-engine（下载后 chmod +x 赋予执行权限）
+2. 把引擎放到用户主目录下的 .hologram 文件夹里（全局安装，所有项目共用）
+3. 在当前 AI 编程工具的 MCP 配置中注册这个服务：
+   - Windows: 启动命令 ~/.hologram/hologram-engine.exe，参数 serve
+   - macOS: 启动命令 ~/.hologram/hologram-engine，参数 serve
 4. 找到当前工具的全局和项目规则文件，写入 HoloGram 全部工具的使用规则（全局 + 项目两层都写，确保所有项目自动生效）
 5. 在所有项目的全局规则文件中，追加一条强制前置检查规则：每次接到新任务，动手前先扫一眼可用的 MCP 工具列表，问自己"有工具能帮我缩小范围或直接给答案吗？"——哪怕结论是没用，也比跳过这步强。这条规则不限 HoloGram，适用所有已安装的 MCP 服务
 6. 完成后告诉我怎么验证装好了
