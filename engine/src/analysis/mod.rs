@@ -9,6 +9,7 @@ pub mod blindspots;
 pub mod explore;
 pub mod framework_routes;
 pub mod dynamic_dispatch;
+pub mod policy_check;
 
 pub mod dataflow_synthesis;
 
@@ -47,3 +48,4 @@ pub use explore::explore;
 pub use framework_routes::detect_framework_routes;
 pub use dynamic_dispatch::synthesize_dynamic_edges;
 pub use dataflow_synthesis::synthesize_dataflow_edges;
+pub use policy_check::policy_check_from_index;

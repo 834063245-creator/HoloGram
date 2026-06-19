@@ -3,7 +3,7 @@
 //
 // Protocol: reads one JSON-RPC request per line from stdin,
 // writes one JSON-RPC response per line to stdout.
-// Supports tools/list and tools/call with all 21 hologram_* tools.
+// Supports tools/list and tools/call with all 25 hologram_* tools.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -111,6 +111,14 @@ fn tool_definitions() -> Vec<Value> {
             &[("old_name", "string", "Current name"), ("new_name", "string", "New name"), ("dry_run", "boolean", "Preview only (default false)"), ("node_id", "string", "Optional specific node ID")], &["old_name", "new_name"]),
         tool_def("hologram_status", "Get engine loading status and memory stats.",
             &[], &[]),
+        tool_def("hologram_policy_check", "Check project boundary rules against the dependency graph. Define rules with source/target file patterns (glob or regex) and edge kinds; returns violations where source files have forbidden edges to target files. Use this to enforce architectural boundaries (e.g. 'modules cannot import each other directly').",
+            &[
+                ("rules", "array", "JSON array of rule objects. Each rule: {name, source, target, edge_kinds?, message?}. source/target are glob or regex patterns. edge_kinds defaults to [\"imports\"]. Valid kinds: imports, calls, inherits, defines, reads, writes, shares, triggers, awaits, sequences."),
+                ("source", "string", "Shortcut: single source file pattern (instead of full rules array)"),
+                ("target", "string", "Shortcut: single target file pattern (instead of full rules array)"),
+                ("edge_kinds", "array", "Shortcut: edge kinds for single-rule mode. Default: [\"imports\"]"),
+            ],
+            &[]),
     ]
 }
 
@@ -306,6 +314,7 @@ impl McpServer {
             "hologram_run_health" => self.tool_run_health(&args, id),
             "hologram_rename" => self.tool_rename(&args, id),
             "hologram_status" => self.tool_status(&args, id),
+            "hologram_policy_check" => self.tool_policy_check(&args, id),
             _ => McpServer::error_response(id, -32601, &format!("Tool not found: {}", tool_name)),
         }
     }
@@ -1075,6 +1084,35 @@ impl McpServer {
             }
         }
     }
+
+    fn tool_policy_check(&self, args: &Value, id: &Value) -> Value {
+        // Accept either a full rules array or a single-rule shortcut.
+        let rules: Value = if let Some(r) = args.get("rules").cloned() {
+            r
+        } else if let (Some(source), Some(target)) = (
+            args.get("source").and_then(|v| v.as_str()),
+            args.get("target").and_then(|v| v.as_str()),
+        ) {
+            let mut rule = json!({
+                "name": "ad-hoc",
+                "source": source,
+                "target": target,
+                "message": format!("{} → {} 依赖违规", source, target),
+            });
+            if let Some(kinds) = args.get("edge_kinds") {
+                rule["edge_kinds"] = kinds.clone();
+            }
+            json!([rule])
+        } else {
+            return McpServer::error_response(
+                id,
+                -32602,
+                "Provide either 'rules' (array of rule objects) or both 'source' and 'target' (string patterns).",
+            );
+        };
+
+        self.with_store(id, |idx| policy_check_from_index(idx, &rules))
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1220,7 +1258,7 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 24, "24 tools defined");
+        assert_eq!(tools.len(), 25, "25 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"hologram_neighbors"));

@@ -56,7 +56,7 @@ export class ToolRegistry {
   }
 }
 
-// ---- Hologram 图查询工具 (24 tools — 与引擎 MCP 双线对齐) ----
+// ---- Hologram 图查询工具 (25 tools — 与引擎 MCP 双线对齐) ----
 // 硬编码工具 = Agent 的"嘴"：描述经过 LLM 调优，告诉 Agent 什么时候用、用完了下一步调什么。
 // MCP = 执行通道：长驻引擎进程 <100ms 响应，挂了自动降级 CLI。
 // 两者永远对齐——引擎新增 MCP 工具必须同步在此补硬编码定义。
@@ -460,6 +460,36 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_status', args),
+    },
+    {
+      name: () => 'hologram_policy_check',
+      description: () =>
+        '检查项目架构边界规则——自定义 source/target 文件匹配模式 + 边类型，扫描依赖图中所有越界依赖。规则用 glob（modules/** 匹配所有模块文件）或正则表达式。拿来做模块隔离验证："模块A有没有偷偷import模块B的内部文件""有没有模块直接调了框架内部API""模块SQL有没有操作别人的表"。改架构前跑一次看当前违规，改完再跑确认没引入新违规。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          rules: {
+            type: 'array',
+            description: '规则对象数组。每条规则: {name: "规则名", source: "源文件pattern", target: "目标文件pattern", edge_kinds?: ["imports"], message?: "违规说明"}。source/target 支持 glob（modules/*/backend/**）或正则。edge_kinds 默认 ["imports"]，可选: imports, calls, inherits, defines, reads, writes, shares, triggers, awaits, sequences。',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: '规则名称（用于报告中标注）' },
+                source: { type: 'string', description: '源文件匹配模式（glob 如 modules/foo/** 或正则）' },
+                target: { type: 'string', description: '目标文件匹配模式（命中即违规）' },
+                edge_kinds: { type: 'array', items: { type: 'string' }, description: '要检查的边类型，默认 ["imports"]' },
+                message: { type: 'string', description: '违规时显示的消息' },
+              },
+              required: ['name', 'source', 'target'],
+            },
+          },
+          source: { type: 'string', description: '快捷模式：单条规则的 source pattern（与 target 配合，不需要传 rules 数组）' },
+          target: { type: 'string', description: '快捷模式：单条规则的 target pattern' },
+          edge_kinds: { type: 'array', items: { type: 'string' }, description: '快捷模式：边类型过滤，默认 ["imports"]' },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_policy_check', args),
     },
   ];
 }

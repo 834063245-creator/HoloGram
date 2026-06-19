@@ -7,6 +7,18 @@ HoloGram 遵循 [Semantic Versioning](https://semver.org/)。
 
 ---
 
+## [0.5.0] — 2026-06-20 · 边界规则引擎
+
+### Added
+- **`hologram_policy_check`** — 自定义架构边界规则引擎。用户定义 source/target 文件匹配模式（glob 或正则）+ 边类型，引擎扫描依赖图返回越界违规清单
+- **EdgeKind::from_str()** — 字符串→边类型枚举的反序列化
+- **快捷模式**：直接传 `source` + `target` 即可单条规则检查，无需构造完整 rules 数组
+- **内置 Agent 工具定义** — 硬编码中文描述，LLM 自动识别"查边界""模块隔离""有没有越界"等触发词
+
+### Changed
+- MCP 工具数 24→25，`test_tools_list` 断言同步更新
+
+---
 ## [0.4.0] — 2026-06-18 · 存储引擎 v2.5 + 全线 Bug 扫除
 
 ### Added
