@@ -26,6 +26,7 @@ use crate::graph::resolver::CrossFileResolver;
 use crate::graph::Graph;
 use crate::pipeline::runner::analyze_project;
 use crate::storage::{GraphStore, MemoryIndex, SqliteDb};
+use crate::storage::incremental::IncrementalUpdater;
 use crate::storage::sqlite::{timeline_query, timeline_record, timeline_record_with_props};
 
 // ═══════════════════════════════════════════════════════════════
@@ -141,6 +142,10 @@ pub struct Engine {
 
     /// Whether the file watcher is running.
     watcher_running: Arc<AtomicBool>,
+
+    /// JoinHandle for the watcher thread. Used by stop_watcher() to confirm
+    /// the old thread has exited before starting a new one.
+    watcher_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Engine {
@@ -153,6 +158,7 @@ impl Engine {
             analyze_lock: Mutex::new(()),
             state: RwLock::new(EngineState::Uninitialized),
             watcher_running: Arc::new(AtomicBool::new(false)),
+            watcher_handle: Mutex::new(None),
         }
     }
 
@@ -372,7 +378,7 @@ impl Engine {
         let community_count = communities.len();
         let elapsed = started_at.elapsed().as_secs_f64();
 
-        // 8. Store into GraphStore (MemoryIndex + SQLite)
+        // 8. Store into GraphStore (MemoryIndex + SQLite) — atomic swap+save
         set_progress("写入数据库", 0, 0, "");
         let idx = MemoryIndex::from_existing_graph(&result.graph);
 
@@ -383,10 +389,6 @@ impl Engine {
                 .map_err(|e| format!("Store lock poisoned: {}", e))?;
             if let Some(store) = store_guard.as_ref() {
                 store.swap_index(idx);
-            }
-        }
-        if let Ok(store_guard) = self.store.lock() {
-            if let Some(store) = store_guard.as_ref() {
                 if let Err(e) = store.save() {
                     warn!("[engine] SQLite save failed: {}", e);
                 }
@@ -444,7 +446,7 @@ impl Engine {
         let running = Arc::clone(&self.watcher_running);
         let root = project_root.clone();
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let (tx, rx) = mpsc::channel();
 
             let mut watcher =
@@ -546,6 +548,9 @@ impl Engine {
                 }
             }
         });
+        if let Ok(mut guard) = self.watcher_handle.lock() {
+            *guard = Some(handle);
+        }
     }
 
     // ── Timeline ─────────────────────────────────────────────
@@ -631,10 +636,15 @@ impl Engine {
         Ok(store.read(|idx| idx.fts_search(db, query, limit).unwrap_or_default()))
     }
 
-    /// Stop the file watcher. Blocks until the watcher thread exits (max ~500ms).
+    /// Stop the file watcher. Joins the watcher thread to guarantee it has exited
+    /// before returning (no blind sleep — the thread signals completion via JoinHandle).
     pub fn stop_watcher(&self) {
         self.watcher_running.store(false, Ordering::SeqCst);
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        if let Ok(mut guard) = self.watcher_handle.lock() {
+            if let Some(handle) = guard.take() {
+                let _ = handle.join();
+            }
+        }
     }
 
     /// Handle file changes from the watcher. Tries incremental update first,
@@ -649,20 +659,37 @@ impl Engine {
         let count = changed_files.len();
         info!("[engine watcher] {} file(s) changed, trying incremental update", count);
 
-        // Try incremental update via engine_write
-        let inc_result = engine_write(|idx| {
+        // Try incremental update via IncrementalUpdater (accesses store directly)
+        let inc_result = (|| -> Result<(), String> {
+            let engine_guard = ENGINE.read();
+            let engine = engine_guard
+                .as_ref()
+                .ok_or_else(|| "Engine not initialized".to_string())?;
+            let store_guard = engine
+                .store
+                .lock()
+                .map_err(|e| format!("store lock: {}", e))?;
+            let store = store_guard
+                .as_ref()
+                .ok_or_else(|| "Store not initialized".to_string())?;
+
             let paths: Vec<(PathBuf, &str)> = changed_files
                 .iter()
                 .map(|(p, a)| (p.clone(), a.as_str()))
                 .collect();
-            // IncrementalUpdater needs SqliteDb — access via the store directly.
-            // For now, we try incremental through the engine's internal store.
-            // If this fails, we fall back to full re-analysis.
-            Err::<((), usize), String>("incremental path needs SqliteDb".into())
-        });
+
+            let (new_idx, errors) =
+                IncrementalUpdater::update(&paths, &store.index.read(), root, &store.db)?;
+
+            store.swap_index(new_idx);
+            if errors > 0 {
+                info!("[engine watcher] incremental update with {} parse errors", errors);
+            }
+            Ok(())
+        })();
 
         match inc_result {
-            Ok(_) => {
+            Ok(()) => {
                 info!(
                     "[engine watcher] incremental done in {:.1}s",
                     start.elapsed().as_secs_f64()
@@ -672,8 +699,11 @@ impl Engine {
                 }
                 return Ok(());
             }
-            Err(_) => {
-                // Incremental not available — fall through to full re-analysis
+            Err(e) => {
+                info!(
+                    "[engine watcher] incremental failed ({}), falling back to full re-analysis",
+                    e
+                );
             }
         }
 
@@ -752,6 +782,11 @@ pub fn engine_read_graph<R>(f: impl FnOnce(&Graph) -> R) -> Result<R, String> {
 }
 
 /// Mutate the global engine's MemoryIndex.
+///
+/// Locking: acquires ENGINE.read() (shared) to prevent workspace switch while
+/// mutating, then acquires the inner store's index.write() for actual serialization.
+/// The ENGINE read lock is NOT a write lock — engine_init() (which replaces the
+/// entire Engine) is the only caller that acquires ENGINE.write().
 pub fn engine_write<R>(f: impl FnOnce(&mut MemoryIndex) -> R) -> Result<R, String> {
     let engine_guard = ENGINE.read();
     let engine = engine_guard
@@ -983,5 +1018,64 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("Engine not initialized"));
+    }
+
+    /// F1 regression: incremental update path must not always return Err.
+    /// Create a project, analyze it, modify a file, then verify
+    /// IncrementalUpdater::update() succeeds (no fallback to full analysis).
+    #[test]
+    fn test_incremental_update_path_is_reachable() {
+        use crate::storage::incremental::IncrementalUpdater;
+        use crate::storage::sqlite::SqliteDb;
+
+        let tmp = std::env::temp_dir().join("hologram_test_f1_incr");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Create a small Python project
+        std::fs::write(tmp.join("main.py"), "def hello():\n    return 'world'\n").unwrap();
+        std::fs::write(tmp.join("util.py"), "def add(a, b):\n    return a + b\n").unwrap();
+
+        // Analyze
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+        let result = engine.analyze(&tmp).unwrap();
+        assert!(result.node_count > 0, "should have nodes after analysis");
+
+        // Read the old index
+        let old_node_count = engine.read(|idx| idx.node_count()).unwrap();
+        assert!(old_node_count > 0);
+
+        // Modify a file (simulate watcher change)
+        std::fs::write(tmp.join("main.py"), "def hello():\n    return 'updated'\ndef new_fn(): pass\n").unwrap();
+
+        // Try incremental update
+        let store_guard = engine.store.lock().unwrap();
+        let store = store_guard.as_ref().unwrap();
+        let changed: Vec<(PathBuf, &str)> = vec![(tmp.join("main.py"), "modified")];
+        let inc_result = IncrementalUpdater::update(
+            &changed,
+            &store.index.read(),
+            &tmp,
+            &store.db,
+        );
+        drop(store_guard);
+
+        // The incremental update should succeed (not fall back to full analysis)
+        match inc_result {
+            Ok((new_idx, errors)) => {
+                assert!(new_idx.node_count() >= old_node_count,
+                    "incremental update should preserve or add nodes (old={}, new={})",
+                    old_node_count, new_idx.node_count());
+                if errors > 0 {
+                    // Parse errors are acceptable but node count shouldn't drop drastically
+                }
+            }
+            Err(e) => {
+                panic!("F1 regression: incremental update should succeed, got: {}", e);
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
