@@ -11,6 +11,25 @@ pub mod framework_routes;
 pub mod dynamic_dispatch;
 
 pub mod dataflow_synthesis;
+
+/// Directories that should never be walked during analysis.
+/// These are build artifacts, dependencies, and VCS — not project source.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules", ".git", "target", "dist", ".venv", "venv",
+    "__pycache__", ".hologram", ".next", ".nuxt", "build", "out",
+    ".angular", ".cache", "coverage", ".tox", ".eggs", "*.egg-info",
+    "htmlcov", ".reasonix", ".codegraph", ".ruff_cache", ".mypy_cache",
+    ".pytest_cache", "env", ".hg", ".svn",
+];
+
+/// Returns true if the entry (file or directory) lives under a skippable directory.
+pub(crate) fn is_skippable_dir(entry: &walkdir::DirEntry) -> bool {
+    entry.path().components().any(|c| {
+        c.as_os_str().to_str().map_or(false, |name| {
+            SKIP_DIRS.contains(&name) || name.starts_with('.')
+        })
+    })
+}
 pub use coupling::compute_coupling;
 pub use fragility::fragile_nodes;
 pub use fragility::fragile_nodes_from_index;

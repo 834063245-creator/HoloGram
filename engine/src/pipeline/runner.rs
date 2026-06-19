@@ -34,7 +34,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     let files = discover_files(root, &[
         "py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
         "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
-        "cs","swift","dart","scala","sc","hs","json","html","htm","css",
+        "cs","swift","dart","scala","sc","hs","html","htm","css",
     ]);
     info!("[pipeline] discovered {} source files", files.len());
 

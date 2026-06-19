@@ -35,6 +35,7 @@ fn is_excluded(entry: &walkdir::DirEntry) -> bool {
         ".git", "__pycache__", "node_modules", "venv", ".venv", "env",
         ".tox", ".mypy_cache", ".pytest_cache", ".hg", ".svn",
         "dist", "build", "target", ".eggs", "*.egg-info",
+        ".hologram", "htmlcov", ".reasonix", ".codegraph", ".ruff_cache",
     ];
     if entry.file_type().is_dir() {
         return excluded_dirs.contains(&name);

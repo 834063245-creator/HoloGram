@@ -27,7 +27,9 @@ pub fn synthesize_dataflow_edges(graph: &mut Graph, project_root: &Path, parse_c
         }
     }
     for entry in walkdir::WalkDir::new(project_root)
-        .into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file())
+        .into_iter()
+        .filter_entry(|e| !super::is_skippable_dir(e))
+        .filter_map(|e| e.ok()).filter(|e| e.file_type().is_file())
     {
         if let Ok(rel) = entry.path().strip_prefix(project_root) {
             let s = rel.to_string_lossy().replace('\\', "/");
