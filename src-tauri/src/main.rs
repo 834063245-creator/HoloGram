@@ -220,52 +220,25 @@ pub(crate) fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn default_graph() -> String {
-    project_root()
-        .join("hologram_graph.json")
-        .to_string_lossy()
-        .to_string()
-}
-
-/// 当前活跃工作区（由 analyze_and_load 在成功分析后设置）。
-/// 所有图查询命令优先使用活跃工作区的 hologram_graph.json，
-/// 未设置时 fallback 到项目根目录的全局文件。
-static ACTIVE_PROJECT: std::sync::LazyLock<Mutex<String>> =
-    std::sync::LazyLock::new(|| Mutex::new(String::new()));
-
-/// Last changed files tracked by the watcher — used by hologram_run_check
-/// to populate changed_files in the briefing report.
-static LAST_CHANGED_FILES: std::sync::LazyLock<Mutex<Vec<String>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
-
-/// Set the active workspace — all tool commands route queries to this project.
-/// Called from the frontend when opening a project (before loading its graph).
+/// Set the active workspace — now a no-op stub. Use workspace_activate instead.
+/// Kept for API compatibility; frontend never calls this directly.
 #[tauri::command]
-fn set_active_project(path: String) -> Result<(), String> {
-    *ACTIVE_PROJECT.lock().unwrap() = path.clone();
-    // v4: init sandbox for this project
-    let project_path = std::path::Path::new(&path);
-    *SANDBOX.lock().unwrap() = Some(Sandbox::new(project_path));
-    *AUDIT_LOGGER.lock().unwrap() = Some(AuditLogger::new(project_path));
-    // Init structured logging on first project open
-    let _ = LOG_GUARD.get_or_init(|| logging::init_logging(project_path));
-    let last_path_file = project_root().join(".last_project");
-    if let Err(e) = std::fs::write(&last_path_file, &path) {
-        eprintln!("[hologram] failed to write .last_project: {e}");
-    }
+fn set_active_project(_path: String) -> Result<(), String> {
     Ok(())
 }
 
 /// Return the currently active workspace path (empty string if none set).
 /// Used by the frontend as a fallback when graph meta.source_root is missing on cold start.
 #[tauri::command]
-fn get_active_project() -> Result<String, String> {
-    Ok(ACTIVE_PROJECT.lock().unwrap().clone())
+fn get_active_project(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    workspace_path(&state)
 }
 
 // ═══════════════════════════════════════════════════════
-// Workspace lifecycle commands — v4.1 unified workspace management
-// These replace the old piecemeal set_active_project + start_watching + stop_watching.
+// Workspace lifecycle commands — v4.1 unified workspace management.
+// All state lives in WorkspaceHandle (workspace.rs).
 // ═══════════════════════════════════════════════════════
 
 /// Type alias for the managed workspace state.
@@ -291,21 +264,19 @@ where
     f(handle)
 }
 
-/// Open and activate a workspace. Creates sandbox, audit logger, sets ACTIVE_PROJECT.
+/// Open and activate a workspace. Creates sandbox, audit logger, persists .last_project.
 /// Called once when the user opens a folder.
 #[tauri::command]
 async fn workspace_activate(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<(), String> {
-    let handle = workspace::WorkspaceHandle::new(&path);
-    handle.activate(&ACTIVE_PROJECT, &project_root());
-
-    // Also populate legacy globals for backward compat during transition (Phase 3 will remove)
+    // Init structured logging on first project open
     let project_path = std::path::Path::new(&path);
-    *SANDBOX.lock().unwrap() = Some(Sandbox::new(project_path));
-    *AUDIT_LOGGER.lock().unwrap() = Some(AuditLogger::new(project_path));
     let _ = LOG_GUARD.get_or_init(|| logging::init_logging(project_path));
+
+    let handle = workspace::WorkspaceHandle::new(&path);
+    handle.activate(&project_root());
 
     *state.lock().unwrap() = Some(handle);
     Ok(())
@@ -339,69 +310,9 @@ async fn workspace_start_watcher(
     }
 }
 
-#[allow(dead_code)]
-fn active_graph() -> String {
-    let proj = ACTIVE_PROJECT.lock().unwrap();
-    if !proj.is_empty() {
-        std::path::PathBuf::from(proj.as_str())
-            .join("hologram_graph.json")
-            .to_string_lossy()
-            .to_string()
-    } else {
-        default_graph()
-    }
-}
-
 // ═══════════════════════════════════════════════════════
 // Watcher State (legacy — replaced by WorkspaceHandle in workspace.rs)
 // ═══════════════════════════════════════════════════════
-
-#[allow(dead_code)]
-struct WatcherState {
-    running: AtomicBool,
-    project_path: Mutex<String>,
-}
-
-/// Collect mtimes of all Python/TypeScript/JS files under root.
-fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
-    let mut map = HashMap::new();
-    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs",
-                 ".go", ".rs", ".java", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
-                 ".rb", ".cs", ".kt", ".kts", ".swift", ".php", ".lua"];
-    for entry in walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() { continue; }
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let ext_with_dot = format!(".{}", ext);
-        if exts.contains(&ext_with_dot.as_str()) {
-            if let Ok(meta) = path.metadata() {
-                if let Ok(mtime) = meta.modified() {
-                    if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                        map.insert(path.to_string_lossy().to_string(), dur.as_secs());
-                    }
-                }
-            }
-        }
-    }
-    map
-}
-
-/// Run analysis via Rust Engine for a project, return JSON.
-/// Rust engine is fast enough (~4s for Django) that incremental mode is unnecessary.
-fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
-    match direct_analyze(project_path) {
-        Ok(json) => Some(json),
-        Err(e) => {
-            eprintln!("[hologram] engine analysis failed: {e}");
-            None
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════
 // Direct engine calls — Agent tools call engine library functions in-process
 // No MCP/stdio, no parameter translation, no process lifecycle.
@@ -801,8 +712,21 @@ async fn hologram_explore(
 }
 
 #[tauri::command]
-async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
+async fn hologram_run_check(
+    path: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    // Extract and clear changed_files before spawning blocking task.
+    // Clearing early prevents a race where new changes arrive mid-check.
+    let changed_files: Vec<String> = state.lock().unwrap().as_ref()
+        .and_then(|h| {
+            let mut files = h.changed_files.lock().ok()?;
+            let snapshot = files.clone();
+            files.clear();
+            Some(snapshot)
+        })
+        .unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
         let root = std::path::PathBuf::from(&target);
@@ -837,12 +761,6 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
                 }
             }
         };
-        let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
-            .map(|f| f.clone()).unwrap_or_default();
-        // Clear immediately so next check gets a fresh set
-        if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
-            last.clear();
-        }
         let result = run_full_check(&before, &after, &changed_files, &target);
 
         // Always advance baseline — next check diffs against this snapshot.
@@ -1089,14 +1007,17 @@ async fn hologram_workspace_conflict(
 async fn hologram_gate_check(
     path: String,
     _module_file: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
     // Gate check reuses hologram_run_check logic
     let target = path;
+    let changed_files: Vec<String> = state.lock().unwrap().as_ref()
+        .and_then(|h| h.changed_files.lock().ok())
+        .map(|f| f.clone())
+        .unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
         let after = engine_api::engine_read_graph(|g| g.clone()).unwrap_or_default();
-        let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
-            .map(|f| f.clone()).unwrap_or_default();
         let result = run_full_check(&after, &after, &changed_files, &target);
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
@@ -2059,7 +1980,7 @@ fn find_node_file(g: &serde_json::Value, node_id: &str) -> String {
 #[tauri::command]
 async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHandle) -> Result<String, String> {
     let _ = force;
-    *ACTIVE_PROJECT.lock().unwrap() = path.clone();
+    // Persist .last_project for cold-start recovery (workspace_activate has already set the handle)
     let _ = std::fs::write(project_root().join(".last_project"), &path);
 
     if let Some(window) = app.get_webview_window("main") {
@@ -2101,7 +2022,6 @@ async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<St
     std::thread::spawn(move || {
         match direct_analyze(&path2) {
             Ok(_) => {
-                *ACTIVE_PROJECT.lock().unwrap() = path2.clone();
                 let _ = std::fs::write(project_root().join(".last_project"), &path2);
                 let _ = app2.emit("analysis-complete", serde_json::json!({"path": path2}));
             }
@@ -2115,97 +2035,6 @@ async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<St
 
 // ═══════════════════════════════════════════════════════
 // File Watcher — live incremental updates
-// ═══════════════════════════════════════════════════════
-
-#[tauri::command]
-async fn start_watching(
-    path: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<WatcherState>>,
-) -> Result<(), String> {
-    // Stop any existing watcher first
-    state.running.store(false, Ordering::SeqCst);
-    thread::sleep(Duration::from_millis(200));
-
-    state.running.store(true, Ordering::SeqCst);
-    *state.project_path.lock().unwrap() = path.clone();
-
-    let watcher = state.inner().clone(); // Arc<WatcherState>
-    let app_handle = app.clone();
-
-    thread::spawn(move || {
-        let mut last_mtimes = collect_file_mtimes(&path);
-        let poll_interval = Duration::from_secs(1);
-        let mut consecutive_failures: u32 = 0;
-
-        while watcher.running.load(Ordering::SeqCst) {
-            thread::sleep(poll_interval);
-
-            if !watcher.running.load(Ordering::SeqCst) { break; }
-
-            let current_mtimes = collect_file_mtimes(&path);
-
-            // Collect changed file paths (new, modified, or deleted)
-            let mut changed_files: Vec<String> = Vec::new();
-            for (fp, mt) in &current_mtimes {
-                match last_mtimes.get(fp) {
-                    Some(old) if old != mt => changed_files.push(fp.clone()),
-                    None => changed_files.push(fp.clone()), // new file
-                    _ => {}
-                }
-            }
-            // Deleted files
-            for fp in last_mtimes.keys() {
-                if !current_mtimes.contains_key(fp) {
-                    changed_files.push(fp.clone());
-                }
-            }
-
-            if !changed_files.is_empty() {
-                if let Some(json) = run_engine_analysis(&path, &changed_files) {
-                    last_mtimes = current_mtimes;
-                    consecutive_failures = 0;
-                    // Record timeline events for changed files (时间轴)
-                    if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
-                        *last = changed_files.clone();
-                    }
-                    for cf in &changed_files {
-                        let short = cf.rsplit(['/', '\\']).next().unwrap_or(cf);
-                        let _ = engine_api::engine_record_timeline("file_changed", Some(cf.as_str()), &format!("文件变更: {}", short));
-                    }
-                    if let Err(e) = app_handle.emit("graph-updated", json) {
-                        eprintln!("[hologram] emit graph-updated failed: {e}");
-                    }
-                } else {
-                    consecutive_failures += 1;
-                    // After 3 consecutive failures, update mtimes anyway to break the retry loop
-                    // and notify the user that live updates are degraded
-                    if consecutive_failures >= 3 {
-                        last_mtimes = current_mtimes;
-                        let msg = format!(
-                            r#"{{"error":"分析失败 (已重试{}次)，实时更新已暂停。保存文件后将重新尝试。"}}"#,
-                            consecutive_failures
-                        );
-                        if let Err(e) = app_handle.emit("graph-updated", msg) {
-                            eprintln!("[hologram] emit graph-updated error failed: {e}");
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn stop_watching(
-    state: tauri::State<'_, Arc<WatcherState>>,
-) -> Result<(), String> {
-    state.running.store(false, Ordering::SeqCst);
-    Ok(())
-}
-
 // ═══════════════════════════════════════════════════════
 // Git 集成 — 轻量 SCM，直接调 git CLI
 // ═══════════════════════════════════════════════════════
@@ -2535,12 +2364,6 @@ fn handle_unity_connection(stream: &mut StdTcpStream, app: &tauri::AppHandle) {
 static UNITY_MANAGER: std::sync::LazyLock<UnityManager> =
     std::sync::LazyLock::new(|| UnityManager::new(UnityManager::default_exe_path()));
 
-static SANDBOX: std::sync::LazyLock<Mutex<Option<Sandbox>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
-
-static AUDIT_LOGGER: std::sync::LazyLock<Mutex<Option<AuditLogger>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
-
 fn start_engine() {
     std::thread::spawn(|| {
         let path = engine_binary();
@@ -2563,64 +2386,6 @@ fn start_engine() {
         }
     });
 }
-
-fn check_sandbox_read(file_path: &str) -> Result<std::path::PathBuf, String> {
-    let sandbox = SANDBOX.lock().unwrap();
-    let sandbox = sandbox.as_ref().ok_or("沙箱未初始化，请先打开项目")?;
-    let path = std::path::Path::new(file_path);
-    match sandbox.resolve_read(path) {
-        sandbox::SandboxResult::Allowed(real) => Ok(real),
-        sandbox::SandboxResult::Denied(reason) => {
-            audit_deny("read", file_path, &reason);
-            Err(format!("读取被拒绝: {}", reason))
-        }
-    }
-}
-
-fn check_sandbox_write(file_path: &str) -> Result<std::path::PathBuf, String> {
-    let sandbox = SANDBOX.lock().unwrap();
-    let sandbox = sandbox.as_ref().ok_or("沙箱未初始化，请先打开项目")?;
-    let path = std::path::Path::new(file_path);
-    match sandbox.resolve_write(path) {
-        sandbox::SandboxResult::Allowed(real) => {
-            audit_allow("write", file_path);
-            Ok(real)
-        }
-        sandbox::SandboxResult::Denied(reason) => {
-            audit_deny("write", file_path, &reason);
-            Err(format!("写入被拒绝: {}", reason))
-        }
-    }
-}
-
-fn audit_allow(tool: &str, path: &str) {
-    if let Ok(logger) = AUDIT_LOGGER.lock() {
-        if let Some(ref logger) = *logger {
-            logger.log(&AuditEntry {
-                timestamp: now_iso(),
-                tool: tool.to_string(),
-                target_path: path.to_string(),
-                action: "allowed".to_string(),
-                reason: String::new(),
-            });
-        }
-    }
-}
-
-fn audit_deny(tool: &str, path: &str, reason: &str) {
-    if let Ok(logger) = AUDIT_LOGGER.lock() {
-        if let Some(ref logger) = *logger {
-            logger.log(&AuditEntry {
-                timestamp: now_iso(),
-                tool: tool.to_string(),
-                target_path: path.to_string(),
-                action: "denied".to_string(),
-                reason: reason.to_string(),
-            });
-        }
-    }
-}
-
 #[tauri::command]
 fn start_unity() -> Result<String, String> {
     match UNITY_MANAGER.start() {
@@ -2717,22 +2482,14 @@ fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> {
     None
 }
 fn main() {
-    let watcher_state = Arc::new(WatcherState {
-        running: AtomicBool::new(false),
-        project_path: Mutex::new(String::new()),
-    });
-
     let workspace_state: WorkspaceState = Arc::new(Mutex::new(None));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(watcher_state)
         .manage(workspace_state)
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Deactivate workspace (stops watcher with proper join)
-                // workspace_state is captured by the builder chain — we access it via a
-                // static fallback: the legacy globals handle cleanup here
+                // Cleanup on window destroy: kill background jobs, stop MCP, stop Unity
                 if let Ok(mut jobs) = BG_JOBS.try_lock() {
                     for (_, job) in jobs.iter_mut() {
                         let _ = job.child.kill();
@@ -2784,8 +2541,6 @@ fn main() {
             hologram_hotspots,
             hologram_workspace_conflict,
             hologram_gate_check,
-            start_watching,
-            stop_watching,
             workspace_activate,
             workspace_deactivate,
             workspace_start_watcher,
@@ -2868,61 +2623,46 @@ fn main() {
 // ═══════════════════════════════════════════════════════
 
 #[cfg(test)]
-pub(crate) fn reset_active_project_for_test() {
-    ACTIVE_PROJECT.lock().unwrap().clear();
-}
-
-#[cfg(test)]
-pub(crate) fn set_active_project_for_test(path: &str) {
-    *ACTIVE_PROJECT.lock().unwrap() = path.to_string();
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn active_graph_falls_back_to_default_when_empty() {
-        reset_active_project_for_test();
-        let result = active_graph();
-        let default = default_graph();
-        assert_eq!(result, default);
+    fn workspace_handle_activate_persists_last_project() {
+        let tmp = std::env::temp_dir().join("hologram_test_activate");
+        let _ = std::fs::create_dir_all(&tmp);
+        let handle = workspace::WorkspaceHandle::new(&tmp.to_string_lossy());
+        handle.activate(&tmp);
+        let last_path = tmp.join(".last_project");
+        assert!(last_path.exists());
+        let content = std::fs::read_to_string(&last_path).unwrap();
+        assert_eq!(content, tmp.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn active_graph_returns_workspace_path_when_set() {
-        set_active_project_for_test("D:/projects/foo");
-        let result = active_graph();
-        assert!(result.contains("D:/projects/foo"));
-        assert!(result.contains("hologram_graph.json"));
-        reset_active_project_for_test();
+    fn workspace_handle_deactivate_stops_watcher() {
+        let tmp = std::env::temp_dir().join("hologram_test_deactivate");
+        let _ = std::fs::create_dir_all(&tmp);
+        let mut handle = workspace::WorkspaceHandle::new(&tmp.to_string_lossy());
+        // deactivate with no watcher running should not panic
+        handle.deactivate();
+        assert!(handle.changed_files.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn active_graph_no_double_slash_when_trailing_slash() {
-        set_active_project_for_test("D:/projects/foo/");
-        let result = active_graph();
-        assert!(!result.contains("//"));
-        assert!(!result.contains("\\\\"));
-        reset_active_project_for_test();
+    fn workspace_path_returns_error_when_no_workspace() {
+        let state: WorkspaceState = Arc::new(Mutex::new(None));
+        assert!(workspace_path(&state).is_err());
     }
 
     #[test]
-    fn active_project_mutex_no_panic() {
-        use std::thread;
-        reset_active_project_for_test();
-
-        let h1 = thread::spawn(|| {
-            *ACTIVE_PROJECT.lock().unwrap() = "/a".to_string();
-        });
-        let h2 = thread::spawn(|| {
-            *ACTIVE_PROJECT.lock().unwrap() = "/b".to_string();
-        });
-        h1.join().unwrap();
-        h2.join().unwrap();
-
-        let val = ACTIVE_PROJECT.lock().unwrap().clone();
-        assert!(val == "/a" || val == "/b");
-        reset_active_project_for_test();
+    fn workspace_path_returns_path_when_workspace_active() {
+        let tmp = std::env::temp_dir().join("hologram_test_path");
+        let _ = std::fs::create_dir_all(&tmp);
+        let handle = workspace::WorkspaceHandle::new(&tmp.to_string_lossy());
+        let state: WorkspaceState = Arc::new(Mutex::new(Some(handle)));
+        assert_eq!(workspace_path(&state).unwrap(), tmp.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

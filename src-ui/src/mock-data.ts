@@ -380,8 +380,8 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     return JSON.stringify(buildMockCheck(false));
   }
 
-  // Watcher (no-op)
-  if (cmd === 'start_watching' || cmd === 'stop_watching') {
+  // Workspace lifecycle (no-op in browser)
+  if (cmd === 'workspace_start_watcher' || cmd === 'workspace_deactivate') {
     return '(mock: watcher not available in browser)';
   }
 

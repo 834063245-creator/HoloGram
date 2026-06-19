@@ -56,12 +56,9 @@ impl WorkspaceHandle {
         }
     }
 
-    /// Activate this workspace: register as the active project and persist to disk.
+    /// Activate this workspace: persist to .last_project for cold-start recovery.
     /// Called once when the workspace is first opened.
-    pub fn activate(&self, active_project: &Mutex<String>, project_root: &Path) {
-        // Set the active project path (was ACTIVE_PROJECT global)
-        *active_project.lock().unwrap() = self.path.clone();
-
+    pub fn activate(&self, project_root: &Path) {
         // Persist to .last_project for cold-start recovery
         let last_path = project_root.join(".last_project");
         let _ = fs::write(&last_path, &self.path);
