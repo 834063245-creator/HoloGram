@@ -20,6 +20,22 @@ pub enum EdgeKind {
 }
 
 impl EdgeKind {
+    pub fn from_str(s: &str) -> Option<EdgeKind> {
+        match s {
+            "imports" => Some(EdgeKind::Imports),
+            "calls" => Some(EdgeKind::Calls),
+            "inherits" => Some(EdgeKind::Inherits),
+            "defines" => Some(EdgeKind::Defines),
+            "reads" => Some(EdgeKind::Reads),
+            "writes" => Some(EdgeKind::Writes),
+            "shares" => Some(EdgeKind::Shares),
+            "triggers" => Some(EdgeKind::Triggers),
+            "awaits" => Some(EdgeKind::Awaits),
+            "sequences" => Some(EdgeKind::Sequences),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             EdgeKind::Imports => "imports",

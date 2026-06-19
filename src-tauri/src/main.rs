@@ -322,7 +322,7 @@ use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::graph::Graph;
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
-    graph_summary, thread_conflict_report, find_blindspots};
+    graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
 use engine::community::detect_communities;
 use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
@@ -396,6 +396,13 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
 fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
     engine_api::engine_read_graph(|g| {
         serde_json::to_string(&f(g)).unwrap_or_default()
+    })
+    .map_err(|e| format!("Engine error: {}", e))
+}
+
+fn with_store<F: Fn(&engine::storage::MemoryIndex) -> serde_json::Value>(f: F) -> Result<String, String> {
+    engine_api::engine_read(|idx| {
+        serde_json::to_string(&f(idx)).unwrap_or_default()
     })
     .map_err(|e| format!("Engine error: {}", e))
 }
@@ -888,6 +895,38 @@ async fn hologram_status() -> Result<String, String> {
                 "nodes_loaded": g.node_count(), "edges_loaded": g.edge_count(),
                 "has_aux_indexes": true, "elapsed_ms": 0
             })
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+async fn hologram_policy_check(
+    rules: Option<serde_json::Value>,
+    source: Option<String>,
+    target: Option<String>,
+    edge_kinds: Option<Vec<String>>,
+) -> Result<String, String> {
+    // Build the rules JSON — either from full rules array or shortcut params
+    let rules_val = if let Some(r) = rules {
+        r
+    } else if let (Some(src), Some(tgt)) = (source.as_ref(), target.as_ref()) {
+        let mut rule = serde_json::json!({
+            "name": "ad-hoc",
+            "source": src,
+            "target": tgt,
+            "message": format!("{} → {} 依赖违规", src, tgt),
+        });
+        if let Some(ref kinds) = edge_kinds {
+            rule["edge_kinds"] = serde_json::json!(kinds);
+        }
+        serde_json::json!([rule])
+    } else {
+        return Err("Provide either 'rules' (array of rule objects) or both 'source' and 'target'.".into());
+    };
+
+    tokio::task::spawn_blocking(move || {
+        with_store(move |idx| {
+            policy_check_from_index(idx, &rules_val)
         })
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
@@ -2541,6 +2580,7 @@ fn main() {
             hologram_hotspots,
             hologram_workspace_conflict,
             hologram_gate_check,
+            hologram_policy_check,
             workspace_activate,
             workspace_deactivate,
             workspace_start_watcher,
