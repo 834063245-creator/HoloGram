@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试 V3 信号生成器 (SignalGenerator)。"""
 
 import pytest

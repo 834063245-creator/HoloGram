@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Constraints Panel — 约束配置 UI
 // 编辑 hologram.constraints.yaml 的图形界面
 

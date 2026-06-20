@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Workspace — owns all state for one open project.
 // Replaces 18+ module-level globals in main.ts.
 //

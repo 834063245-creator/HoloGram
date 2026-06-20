@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // MCP Process Manager — 持久 MCP 进程生命周期管理
 // Step 2: Rust 引擎替代 Python — engine.exe serve 替换 python -m src_python serve
 //

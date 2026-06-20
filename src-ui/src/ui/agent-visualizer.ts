@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Agent Visualizer — 订阅 EventBus，Agent 工具调用完成 → 星图可视化
 // 不改 Agent 循环，不改 Python 引擎。纯胶水层。
 //

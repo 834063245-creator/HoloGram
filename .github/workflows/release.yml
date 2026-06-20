@@ -1,89 +1,17 @@
-name: Release
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
+# Release is done locally via scripts/release.sh — builds engine + app + uploads.
+# This workflow is a no-op placeholder.
+
+name: Release (no-op)
 
 on:
   push:
     branches: [main]
-    tags:
-      - 'v*'
-
-permissions:
-  contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-
+  noop:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: src-ui/package-lock.json
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            src-tauri -> target
-            engine -> target
-
-      - name: Install frontend dependencies
-        run: cd src-ui && npm ci
-
-      - name: Build Engine
-        run: cd engine; cargo build --release
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --locked
-
-      - name: Build (Tauri)
-        run: cd src-tauri; cargo tauri build
-
-      - name: Upload Engine binary
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: engine/target/release/hologram-engine.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload MSI + NSIS installer
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-macos:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: engine -> target
-
-      - name: Build Engine
-        run: cd engine && cargo build --release
-
-      - name: Upload Engine binary (macOS)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: engine/target/release/hologram-engine
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: echo "Release skipped — binary-only distribution. Use scripts/release.sh locally"

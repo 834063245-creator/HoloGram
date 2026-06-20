@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试 V2 线程交错图 (Thread Interleaving Diagram)。"""
 
 import pytest

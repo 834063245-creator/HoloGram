@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Agent 持久化记忆系统 — 对标 Claude Code MEMORY.md
 // 存储位置: .hologram/memory/*.md + MEMORY.md 索引
 // 跨会话、跨 session tab 共享

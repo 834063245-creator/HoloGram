@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // v4 Phase 5 — Credential storage
 // Uses DPAPI on Windows via direct FFI (avoids heavy windows crate dependencies).
 #![allow(non_snake_case)] // Win32 FFI naming conventions

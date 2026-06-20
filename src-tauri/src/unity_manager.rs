@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // HoloGram v4 Phase 0 — Unity process lifecycle manager
 // Minimal stub: spawn Unity.exe, verify it started, provide kill.
 

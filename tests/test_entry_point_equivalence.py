@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 多入口等效性测试 — 保证 4 个分析入口产出等价的图。
 

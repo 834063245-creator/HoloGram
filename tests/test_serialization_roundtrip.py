@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 序列化往返契约测试 — 防止字段丢失、类型退化、JSON 往返不幂等。
 

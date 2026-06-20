@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // PTY Manager — pseudo-terminal sessions for the integrated terminal.
 // Uses portable-pty (WezTerm) for cross-platform ConPTY/pty support.
 

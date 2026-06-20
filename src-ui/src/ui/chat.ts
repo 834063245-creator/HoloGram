@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Chat Panel — 聊天面板 UI
 // 纯 DOM 渲染，EventSink → 消息气泡 / 工具卡片 / 思考折叠
 // Agent 引擎 (agent.ts) 已完整，此文件只管"把事件画到屏幕上"

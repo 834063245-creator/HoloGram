@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Settings — API key management, model selection, provider config
 // Stored in localStorage, backed by Tauri store plugin when available
 

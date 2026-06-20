@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 import json
 
 graph = json.load(open('D:/HoloGramHG/hologram_graph.json', encoding='utf-8'))

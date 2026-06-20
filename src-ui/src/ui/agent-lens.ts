@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Agent Lens — 透镜模式控制器 (Step 2)
 // 订阅 'agent:focus-changed'，追踪 Agent 碰过的节点。
 // 开启透镜后：只有访问过的节点保持高亮，其余降到 1% 透明度。

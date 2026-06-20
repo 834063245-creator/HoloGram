@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Floating File Viewer — 浮动文件窗口（标签页式 + Monaco 编辑器）
 // 可从简报/详情卡片/聊天/时间轴中点击文件名呼出
 // 支持拖拽移动、调整大小、多标签页、Ctrl+S 保存

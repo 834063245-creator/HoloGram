@@ -1,5 +1,7 @@
 {
   "name": "hologram-ui",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 Wenbing Jing",
   "private": true,
   "version": "0.1.0",
   "type": "module",

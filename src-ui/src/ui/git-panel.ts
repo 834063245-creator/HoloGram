@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Git Panel — 轻量源代码管理
 // 深空 HUD 风格，和文件树/时间轴统一的左边缘面板
 // 直接调 Tauri git_* 命令

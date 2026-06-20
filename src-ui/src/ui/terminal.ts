@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // ═══════════════════════════════════════════════════════════════
 // Terminal Panel — xterm.js 多标签页终端
 // 支持新建/删除/切换标签页，收起时后台保持运行

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """CLI 命令端到端测试——覆盖所有子命令的完整路径。"""
 
 import os

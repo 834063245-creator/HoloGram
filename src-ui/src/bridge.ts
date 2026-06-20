@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Bridge — detects Tauri vs browser, routes invoke/listen to real or mock
 // Import this instead of '@tauri-apps/api/core' / '@tauri-apps/api/event'
 

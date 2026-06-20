@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // v4 Phase 5 — 审计日志：每次文件/Git/Shell 操作留痕
 use std::fs::{self, OpenOptions};
 use std::io::Write;

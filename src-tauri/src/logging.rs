@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // HoloGram Tauri Bridge structured logging — NDJSON to .hologram/logs/bridge.log
 use std::path::Path;
 use tracing_appender::non_blocking::WorkerGuard;

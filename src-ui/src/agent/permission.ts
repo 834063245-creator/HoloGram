@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Permission system — allow/ask/deny per tool call
 // Design adapted from Reasonix (internal/permission/permission.go)
 // Pure policy evaluation + interactive approve modal + persistent rules

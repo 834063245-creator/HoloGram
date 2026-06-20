@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Shared right-click context menu — used by FileTree, GitPanel, etc.
 // Styled to match the HUD dark-space aesthetic.
 

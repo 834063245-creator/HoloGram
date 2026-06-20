@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // PreToolUse Hooks —— Agent 调工具时自动注入图上下文
 //
 // Agent 调 read_file / search_code / edit_file / run_shell 时，

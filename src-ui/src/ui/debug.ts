@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Debug diagnostics — controlled by localStorage.debugHologram = '1' or URL ?debug
 // Totally silent in normal use. Open browser console and type:
 //   localStorage.debugHologram = '1'
