@@ -276,7 +276,11 @@ async function* readSSE(
     while (true) {
       if (signal?.aborted) throw new Error(`${name}: aborted`);
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Flush decoder internal state and process any trailing data in buffer
+        buffer += decoder.decode();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
 
       const lines = buffer.split('\n');
@@ -367,6 +371,48 @@ async function* readSSE(
         // Emit usage after choices (so finish_reason is correct)
         if (ev.usage && usage) {
           yield { type: ChunkType.Usage, usage };
+        }
+      }
+    }
+
+    // Process any remaining complete lines in buffer after stream ends
+    if (buffer.trim()) {
+      const remaining = buffer.split('\n').filter((l) => l.trim());
+      for (const raw of remaining) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+
+        let ev: ChatChunk;
+        try {
+          ev = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        if (ev.usage) {
+          usage = {
+            prompt_tokens: ev.usage.prompt_tokens,
+            completion_tokens: ev.usage.completion_tokens,
+            total_tokens: ev.usage.total_tokens,
+            cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
+            cache_miss_tokens:
+              ev.usage.prompt_tokens -
+              (ev.usage.prompt_tokens_details?.cached_tokens || 0),
+            reasoning_tokens:
+              ev.usage.completion_tokens_details?.reasoning_tokens || 0,
+            finish_reason: 'stop',
+          };
+        }
+
+        for (const choice of ev.choices) {
+          if (choice.delta.content) {
+            yield { type: ChunkType.Text, text: choice.delta.content };
+          }
+          if (choice.delta.reasoning_content) {
+            yield { type: ChunkType.Reasoning, text: choice.delta.reasoning_content };
+          }
         }
       }
     }
