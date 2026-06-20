@@ -27,7 +27,6 @@ struct DATA_BLOB {
 }
 
 const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
-const CRYPTPROTECT_LOCAL_MACHINE: u32 = 0x4;
 
 /// Load DPAPI functions from crypt32.dll at runtime.
 fn dpapi_encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -50,7 +49,7 @@ fn dpapi_encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
 
         let ret = unsafe {
             CryptProtectData(&mut blob_in, std::ptr::null(), std::ptr::null(),
-                std::ptr::null(), std::ptr::null(), CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
+                std::ptr::null(), std::ptr::null(), CRYPTPROTECT_UI_FORBIDDEN, // user-scoped: only current user can decrypt
                 &mut blob_out)
         };
         if ret == 0 {
@@ -104,10 +103,12 @@ fn cred_path() -> PathBuf {
 }
 
 /// Store an API key for a provider.
+/// Uses JSON for safe round-trip: keys containing `=` or newlines survive.
 pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
     let dir = cred_path().parent().unwrap().to_path_buf();
     std::fs::create_dir_all(&dir).ok();
-    let data = format!("{}={}", provider, key);
+    // JSON avoids corruption when key contains '=' or '\n'
+    let data = serde_json::json!({"provider": provider, "key": key}).to_string();
     let encrypted = dpapi_encrypt(data.as_bytes())?;
     std::fs::write(cred_path(), encrypted)
         .map_err(|e| format!("write credentials: {}", e))
@@ -122,6 +123,14 @@ pub fn get_api_key(provider: &str) -> Result<Option<String>, String> {
     };
     let plain = dpapi_decrypt(&encrypted)?;
     let s = String::from_utf8(plain).map_err(|e| format!("invalid cred: {}", e))?;
+    // Try JSON first (v4.1), fall back to legacy provider=key for old creds
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+        if v.get("provider").and_then(|p| p.as_str()) == Some(provider) {
+            return Ok(v.get("key").and_then(|k| k.as_str()).map(|k| k.to_string()));
+        }
+        return Ok(None);
+    }
+    // Legacy format: provider=key per line
     for line in s.lines() {
         if let Some((prov, key)) = line.split_once('=') {
             if prov == provider { return Ok(Some(key.to_string())); }

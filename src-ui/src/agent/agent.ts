@@ -141,7 +141,7 @@ export class Agent {
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
-    this.contextWindow = opts.contextWindow ?? 0;
+    this.contextWindow = opts.contextWindow ?? 131072; // default 128K tokens — prevents unbounded growth
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
     this.gate = opts.gate || null;
@@ -500,7 +500,10 @@ export class Agent {
       if (this.hooks && !errMsg) {
         try {
           result = await this.hooks.apply(call.name, args, result);
-        } catch { /* hook failure silently degrades */ }
+        } catch (e: any) {
+          log.warn('agent', 'hook apply failed', { tool: call.name, error: firstLine(e?.message || String(e)) });
+          result = result + '\n\n[注意: 图上下文增强失败（hook error），以下结果为原始工具输出]';
+        }
       }
       // Re-check after execution — the tool may have been slow
       if (signal.aborted) throw new Error('aborted');

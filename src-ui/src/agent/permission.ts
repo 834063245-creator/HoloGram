@@ -200,12 +200,12 @@ export class PermissionGate {
           reason: '此工具被权限策略拒绝。请选择其他方式。',
         };
       case 'ask':
-        if (!this.approve) return { allow: false, reason: '审批通道未就绪，已拒绝。' }; // v4: fail-closed
+        if (!this.approve) return { allow: false, reason: '[APPROVER_NOT_READY] 审批通道未就绪，已拒绝。这不是用户操作，是系统状态异常。' }; // v4: fail-closed
         const result = await this.approve(toolName, toolDescription, args);
         if (!result.allow) {
           return {
             allow: false,
-            reason: '用户拒绝了此工具调用。请选择其他方式或询问用户。',
+            reason: '[USER_DENIED] 用户拒绝了此工具调用。请选择其他方式或询问用户。',
           };
         }
         if (result.remember && this.onRemember) {

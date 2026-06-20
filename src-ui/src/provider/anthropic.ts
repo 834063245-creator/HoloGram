@@ -305,7 +305,11 @@ async function* readSSE(
     while (true) {
       if (signal?.aborted) throw new Error(`${name}: aborted`);
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Flush decoder internal state and process any trailing data in buffer
+        buffer += decoder.decode();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
 
       const lines = buffer.split('\n');
@@ -402,6 +406,34 @@ async function* readSSE(
             yield { type: ChunkType.Error, err: new Error(`${name}: ${msg}`) };
             return;
           }
+        }
+      }
+    }
+
+    // Process any remaining complete lines in buffer after stream ends
+    if (buffer.trim()) {
+      const remaining = buffer.split('\n').filter((l) => l.trim());
+      for (const raw of remaining) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data) continue;
+
+        let ev: StreamEvent;
+        try {
+          ev = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        if (ev.type === 'message_delta') {
+          if (ev.delta?.stop_reason) finishReason = ev.delta.stop_reason;
+          if (ev.usage) {
+            outTok = ev.usage.output_tokens;
+            haveUsage = true;
+          }
+        } else if (ev.type === 'message_stop') {
+          // final event
         }
       }
     }

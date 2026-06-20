@@ -396,10 +396,22 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
 
       parameters: () => ({
         type: 'object',
-        properties: {},
+        properties: {
+          filter: {
+            type: 'string',
+            enum: ['all', 'triggers', 'awaits', 'sequences'],
+            description: '边类型过滤（默认 all）',
+            default: 'all',
+          },
+          limit: {
+            type: 'integer',
+            description: '最大返回条数（默认 100）',
+            default: 100,
+          },
+        },
       }),
       readOnly: () => true,
-      execute: (args) => exec('hologram_delayed', {}),
+      execute: (args) => exec('hologram_delayed', args),
     },
     {
       name: () => 'hologram_changes',
