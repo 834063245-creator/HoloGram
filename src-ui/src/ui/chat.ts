@@ -1820,6 +1820,10 @@ export class ChatPanel {
     this.flushReasoning();
     this.flushText();
     this.pendingToolCards.clear();
+    // Auto-save after every turn so sessions survive crash / force-close
+    if (this.projectPath) {
+      this.saveActiveSession(this.projectPath).catch(() => {});
+    }
   }
 
   private scrollBottom(): void {
