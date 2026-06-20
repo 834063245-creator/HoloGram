@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试 V2 耦合深度计 (Coupling Depth Meter)。"""
 
 import pytest

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试 V3 模式匹配器 (PatternMatcher)。"""
 
 import pytest

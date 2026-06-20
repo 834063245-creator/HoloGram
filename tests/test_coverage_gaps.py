@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """补覆盖率缺口：MCP stdio、社区层级、diff 边界、缓存边界。"""
 
 import os

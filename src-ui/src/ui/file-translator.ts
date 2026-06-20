@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // File Translator — LLM-powered code-to-human translation panel
 // Integrated into FileViewer. Caches results in .hologram/translations/
 

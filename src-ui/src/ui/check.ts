@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Check Panel — 简报面板
 // 消费 hologram check --json 的输出，渲染变更摘要面板
 // 底部抽屉，保存时自动刷新

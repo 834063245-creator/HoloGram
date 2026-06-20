@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // v4 Phase 5 — 安全沙箱：目录监禁 + 读写分级 + 符号链接拒绝
 use std::path::{Path, PathBuf};
 

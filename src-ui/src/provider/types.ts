@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Provider 抽象层 — 统一 Message / Chunk / ToolCall，抹平 Anthropic 和 OpenAI 的 API 差异
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';

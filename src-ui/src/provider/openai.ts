@@ -1,9 +1,12 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // OpenAI-compatible provider — DeepSeek, MiMo, and any OpenAI-compatible endpoint
 // 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
 
-const DEFAULT_MAX_TOKENS = 32768;
+const DEFAULT_MAX_TOKENS = 200000;
 
 export interface OpenAIConfig {
   name?: string;

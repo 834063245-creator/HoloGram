@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试文件监听器（mock watchdog + 轮询模式）。"""
 
 import os

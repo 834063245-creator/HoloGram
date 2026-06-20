@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试图合并器和跨文件解析器。"""
 
 import pytest

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Hotspots Panel — 复发热点检测（P6）
 // 同一文件多次触发 L4 警报 → 星图着色升级
 

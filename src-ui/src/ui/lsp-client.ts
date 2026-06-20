@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // LSP Client — bridges Monaco editor to language servers via Tauri IPC.
 // Phase A: Python (pyright), Rust (rust-analyzer), Go (gopls), TS/JS (tsserver).
 //

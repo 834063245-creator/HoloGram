@@ -3,6 +3,11 @@
 </p>
 
 <p align="center">
+  <strong>© 2026 Wenbing Jing. Licensed under MIT.</strong><br/>
+  <em>This software is free for any use. Attribution required.</em>
+</p>
+
+<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-287%20passed-brightgreen" /></a>

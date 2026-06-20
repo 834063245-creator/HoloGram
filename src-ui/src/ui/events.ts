@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 import { dbg } from './debug';
 
 // Event Bus — lightweight pub/sub for cross-component communication

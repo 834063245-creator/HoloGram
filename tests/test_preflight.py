@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试 preflight + health + run_full_check — V3 胶水层。"""
 
 import json

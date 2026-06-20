@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 多工作区隔离 + 缓存路径等价 — 集成测试。
 

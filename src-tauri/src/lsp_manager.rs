@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // LSP Manager — Language Server Protocol integration.
 // Architecture: Monaco ↔ Tauri IPC ↔ Rust ↔ stdio ↔ Language Server.
 // Pattern: same as MCP manager (JSON-RPC over stdio, crash tracking).

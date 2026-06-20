@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 端到端测试：通过 subprocess 调用 python -m src_python，模拟真实用户行为。
 

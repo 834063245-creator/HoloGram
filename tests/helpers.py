@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试辅助: 临时项目工厂、图比较、文件操作。"""
 
 import os

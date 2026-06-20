@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Conflict Panel — 多工作区冲突预演（P7）
 // 双工作区 diff 叠加耦合分析，标记共同波及节点
 

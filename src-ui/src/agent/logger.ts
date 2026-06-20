@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // HoloGram UI logger — structured NDJSON to .hologram/logs/ui.log
 // Zero external dependencies. Writes via Tauri invoke('log_append').
 

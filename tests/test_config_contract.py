@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 配置契约测试 — 保证 DEFAULT_CONSTRAINTS、YAML 模板、check() 方法三者一致。
 

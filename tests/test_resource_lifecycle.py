@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 资源生命周期 + 并发安全测试 — 防止连接泄漏、缓存膨胀、竞态条件。
 

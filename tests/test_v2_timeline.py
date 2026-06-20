@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """测试 V2 因果审计时间线 (Causal Audit Timeline)。"""
 
 import os

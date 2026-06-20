@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // HoloGram 主入口
 // 三模式星图：minimal / standard / full — 独立实例，切换即重建
 // v4.1: Workspace 抽象 — 所有工作区状态统一管理

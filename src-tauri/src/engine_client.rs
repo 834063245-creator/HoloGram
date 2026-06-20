@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // HoloGram v4 Phase 0 — TCP client to Rust analysis engine
 // Connects to the engine's JSON-RPC server, sends requests, receives responses.
 // Format: 4-byte LE length prefix + JSON payload (both directions).

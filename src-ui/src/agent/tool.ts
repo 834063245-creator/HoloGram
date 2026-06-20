@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Tool 系统 — Tool 接口 + Registry 注册表 + Hologram 工具定义
 
 import type { ToolSchema } from '../provider/types';

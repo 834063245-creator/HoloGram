@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 """
 集成测试：端到端全链路，不 mock，真实文件系统 + 真实分析。
 覆盖：跨文件调用、异步/线程、I/O 模式、复杂继承、完整 CLI 工作流。

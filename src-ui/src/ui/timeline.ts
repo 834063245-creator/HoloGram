@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Timeline Panel — 决策时间轴
 // 消费 hologram_timeline 命令的输出，渲染事件时间线
 

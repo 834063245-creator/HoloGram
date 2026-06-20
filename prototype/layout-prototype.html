@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>星图布局原型 · 自由漂移</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#030812; }
+  canvas { display:block; width:100vw; height:100vh; }
+  #hud {
+    position:fixed; top:16px; left:50%; transform:translateX(-50%);
+    background:rgba(4,12,28,0.85); padding:8px 18px; border-radius:5px;
+    font:12px 'Segoe UI',system-ui,sans-serif; color:#cde;
+    border:1px solid rgba(100,180,255,0.12); z-index:10; pointer-events:none;
+    white-space:nowrap; text-align:center;
+  }
+  .legend {
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    display:flex; gap:16px; background:rgba(4,12,28,0.78); padding:8px 16px;
+    border-radius:5px; border:1px solid rgba(255,255,255,0.05); z-index:10; pointer-events:none;
+  }
+  .legend-item { display:flex; align-items:center; gap:6px; font:11px 'Segoe UI',system-ui; color:#aaa; }
+  .legend-dot { width:10px; height:10px; border-radius:50%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">加载中...</div>
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:#4af"></span>路由层</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#f84"></span>数据层</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#a6f"></span>业务逻辑</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#4d8"></span>工具函数</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#fc4"></span>配置/入口</div>
+</div>
+
+<script>
+// ══════════════════════════════════
+// Mock data
+// ══════════════════════════════════
+const COMMUNITIES = [
+  { id:'routing',  label:'路由层',   color:'#44aaff', count:35 },
+  { id:'data',     label:'数据层',   color:'#ff8844', count:40 },
+  { id:'business', label:'业务逻辑', color:'#aa66ff', count:55 },
+  { id:'utils',    label:'工具函数', color:'#44dd88', count:45 },
+  { id:'config',   label:'配置/入口',color:'#ffcc44', count:25 },
+];
+
+function mulberry32(a) {
+  return function() {
+    a|=0; a=a+0x6D2B79F5|0;
+    let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+    return ((t^t>>>14)>>>0)/4294967296;
+  };
+}
+
+const rng = mulberry32(42);
+const nodes = [];
+for (const c of COMMUNITIES) {
+  for (let i = 0; i < c.count; i++) {
+    nodes.push({
+      id: nodes.length, comm: c.id, color: c.color,
+      degree: i < 3 ? 8 + (rng()*12|0) : 1 + (rng()*4|0),
+    });
+  }
+}
+
+// Edges: dense in-community, very sparse cross-community
+const edges = [];
+const crossCommPairs = {}; // track which community pairs connect
+for (let i = 0; i < nodes.length; i++) {
+  for (let j = i + 1; j < nodes.length; j++) {
+    const same = nodes[i].comm === nodes[j].comm;
+    const prob = same ? 0.06 : 0.002;
+    if (rng() < prob) {
+      edges.push([i, j]);
+      if (!same) {
+        const pair = [nodes[i].comm, nodes[j].comm].sort().join(':');
+        crossCommPairs[pair] = (crossCommPairs[pair] || 0) + 1;
+      }
+    }
+  }
+}
+// Add explicit cross-community bridges via hubs
+for (const n of nodes) {
+  if (n.degree < 8) continue;
+  for (const m of nodes) {
+    if (n.comm === m.comm || rng() > 0.08) continue;
+    const si = nodes.indexOf(n), ti = nodes.indexOf(m);
+    if (!edges.some(e => (e[0]===si&&e[1]===ti)||(e[0]===ti&&e[1]===si))) {
+      edges.push([si, ti]);
+      const pair = [n.comm, m.comm].sort().join(':');
+      crossCommPairs[pair] = (crossCommPairs[pair] || 0) + 1;
+    }
+  }
+}
+
+// ══════════════════════════════════
+// Init positions: each community in a random corner, spread out
+// ══════════════════════════════════
+function scatterSeed() {
+  const pos = new Float64Array(nodes.length * 2);
+  const byComm = {};
+  for (let i = 0; i < nodes.length; i++) {
+    (byComm[nodes[i].comm] ||= []).push(i);
+  }
+  const ids = Object.keys(byComm);
+  // Place each community in a different sector, far apart
+  ids.forEach((cid, ci) => {
+    // Spread communities around a large circle, initially far apart
+    const angle = (ci / ids.length) * Math.PI * 2;
+    const dist = 600 + Math.random() * 400; // 600-1000 units from origin
+    const cx = Math.cos(angle) * dist;
+    const cy = Math.sin(angle) * dist;
+    const spread = 80;
+    for (const mi of byComm[cid]) {
+      pos[mi*2]   = cx + (rng() - 0.5) * spread * 2;
+      pos[mi*2+1] = cy + (rng() - 0.5) * spread * 2;
+    }
+  });
+  return pos;
+}
+
+// ══════════════════════════════════
+// Force layout: no shell, no bounding circle — free drift
+// ══════════════════════════════════
+function freeLayout(initPos) {
+  const n = nodes.length;
+  const pos = new Float64Array(initPos);
+  const vel = new Float64Array(n * 2);
+  const damp = 0.72;
+  const maxIter = 60;
+
+  const byComm = {};
+  for (let i = 0; i < n; i++) {
+    (byComm[nodes[i].comm] ||= []).push(i);
+  }
+  const commIds = Object.keys(byComm);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    // ── 1. All-pairs repulsion (decays with distance) ──
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = pos[i*2] - pos[j*2], dy = pos[i*2+1] - pos[j*2+1];
+        const dist = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+        const f = Math.min(5000 / (dist*dist*0.01 + 1), 4000);
+        vel[i*2] += (dx/dist)*f; vel[i*2+1] += (dy/dist)*f;
+        vel[j*2] -= (dx/dist)*f; vel[j*2+1] -= (dy/dist)*f;
+      }
+    }
+
+    // ── 2. Edge attraction ──
+    for (const [s, t] of edges) {
+      const dx = pos[s*2] - pos[t*2], dy = pos[s*2+1] - pos[t*2+1];
+      const dist = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+      const f = Math.min(dist * 0.03, 300);
+      vel[s*2] -= (dx/dist)*f; vel[s*2+1] -= (dy/dist)*f;
+      vel[t*2] += (dx/dist)*f; vel[t*2+1] += (dy/dist)*f;
+    }
+
+    // ── 3. Community cohesion (strong internal pull) ──
+    for (const members of Object.values(byComm)) {
+      // Compute centroid each iteration
+      let cx = 0, cy = 0;
+      for (const mi of members) { cx += pos[mi*2]; cy += pos[mi*2+1]; }
+      cx /= members.length; cy /= members.length;
+      // Pull members toward their centroid
+      for (const mi of members) {
+        const dx = cx - pos[mi*2], dy = cy - pos[mi*2+1];
+        const dist = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+        const f = dist * 0.04;
+        vel[mi*2] += (dx/dist)*f; vel[mi*2+1] += (dy/dist)*f;
+      }
+    }
+
+    // ── 4. Inter-community repulsion (centroids push apart) ──
+    const centroids = {};
+    for (const cid of commIds) {
+      let mx = 0, my = 0;
+      for (const mi of byComm[cid]) { mx += pos[mi*2]; my += pos[mi*2+1]; }
+      centroids[cid] = { x: mx/byComm[cid].length, y: my/byComm[cid].length };
+    }
+    for (let a = 0; a < commIds.length; a++) {
+      for (let b = a + 1; b < commIds.length; b++) {
+        const ca = centroids[commIds[a]], cb = centroids[commIds[b]];
+        const dx = ca.x - cb.x, dy = ca.y - cb.y;
+        const dist = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+        // Cross-community edge count weakens repulsion (coupled communities stay closer)
+        const pairKey = [commIds[a], commIds[b]].sort().join(':');
+        const crossEdges = crossCommPairs[pairKey] || 0;
+        const repForce = 6000 / (dist*0.02 + 1) / (1 + crossEdges * 3);
+        const f = Math.min(repForce, 400);
+        // Push all member nodes
+        for (const mi of byComm[commIds[a]]) {
+          vel[mi*2] += (dx/dist)*f * 0.4;
+          vel[mi*2+1] += (dy/dist)*f * 0.4;
+        }
+        for (const mi of byComm[commIds[b]]) {
+          vel[mi*2] -= (dx/dist)*f * 0.4;
+          vel[mi*2+1] -= (dy/dist)*f * 0.4;
+        }
+      }
+    }
+
+    // ── 5. Very weak global gravity (just prevent infinite drift) ──
+    for (let i = 0; i < n; i++) {
+      vel[i*2] -= pos[i*2] * 0.00003;
+      vel[i*2+1] -= pos[i*2+1] * 0.00003;
+    }
+
+    // ── Velocity cap ──
+    const VC = 150;
+    for (let i = 0; i < n; i++) {
+      const vm = Math.sqrt(vel[i*2]**2 + vel[i*2+1]**2);
+      if (vm > VC) { const s = VC/vm; vel[i*2]*=s; vel[i*2+1]*=s; }
+    }
+
+    // ── Damping + update ──
+    for (let i = 0; i < n*2; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+  }
+  return pos;
+}
+
+// ══════════════════════════════════
+// Render
+// ══════════════════════════════════
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth * devicePixelRatio;
+  H = canvas.height = window.innerHeight * devicePixelRatio;
+}
+resize();
+window.addEventListener('resize', () => { resize(); draw(); });
+
+let positions = null;
+
+function draw() {
+  if (!positions) return;
+  const dpr = devicePixelRatio;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W2 = W / dpr, H2 = H / dpr;
+
+  // Background
+  ctx.fillStyle = '#030812';
+  ctx.fillRect(0, 0, W2, H2);
+
+  // Holographic grid
+  ctx.strokeStyle = 'rgba(15,30,60,0.2)';
+  ctx.lineWidth = 0.5;
+  const gs = 60;
+  for (let x = gs; x < W2; x += gs) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H2); ctx.stroke(); }
+  for (let y = gs; y < H2; y += gs) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W2,y); ctx.stroke(); }
+
+  // Center origin crosshair (very faint)
+  ctx.strokeStyle = 'rgba(40,70,120,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W2/2-80, H2/2); ctx.lineTo(W2/2+80, H2/2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W2/2, H2/2-80); ctx.lineTo(W2/2, H2/2+80); ctx.stroke();
+
+  // Auto-scale: fit all nodes in viewport with padding
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < nodes.length; i++) {
+    minX = Math.min(minX, positions[i*2]); maxX = Math.max(maxX, positions[i*2]);
+    minY = Math.min(minY, positions[i*2+1]); maxY = Math.max(maxY, positions[i*2+1]);
+  }
+  const dataW = maxX - minX || 1, dataH = maxY - minY || 1;
+  const scale = Math.min((W2 - 120) / dataW, (H2 - 120) / dataH);
+  const offX = W2/2 - (minX + maxX)/2 * scale;
+  const offY = H2/2 - (minY + maxY)/2 * scale;
+
+  function tx(x) { return offX + x * scale; }
+  function ty(y) { return offY + y * scale; }
+
+  // ── Community hulls ──
+  const byComm = {};
+  for (let i = 0; i < nodes.length; i++) {
+    (byComm[nodes[i].comm] ||= []).push(i);
+  }
+
+  for (const [cid, members] of Object.entries(byComm)) {
+    if (members.length < 5) continue;
+    // Convex hull (simple: compute bounding circle)
+    let mx = 0, my = 0;
+    for (const mi of members) { mx += positions[mi*2]; my += positions[mi*2+1]; }
+    mx /= members.length; my /= members.length;
+    let maxR = 0;
+    for (const mi of members) {
+      maxR = Math.max(maxR, Math.hypot(positions[mi*2]-mx, positions[mi*2+1]-my));
+    }
+    maxR = Math.max(maxR, 25) * scale;
+
+    const sx = tx(mx), sy = ty(my);
+    const comm = COMMUNITIES.find(c => c.id === cid);
+
+    // Filled nebula
+    const nebula = ctx.createRadialGradient(sx, sy, maxR*0.3, sx, sy, maxR*1.4);
+    nebula.addColorStop(0, comm.color + '18');
+    nebula.addColorStop(0.5, comm.color + '06');
+    nebula.addColorStop(1, 'transparent');
+    ctx.fillStyle = nebula;
+    ctx.beginPath(); ctx.arc(sx, sy, maxR*1.4, 0, Math.PI*2); ctx.fill();
+
+    // Dashed ring
+    ctx.save();
+    ctx.strokeStyle = comm.color;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.3;
+    ctx.setLineDash([4, 10]);
+    ctx.beginPath(); ctx.arc(sx, sy, maxR*1.1, 0, Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Label
+    ctx.fillStyle = comm.color;
+    ctx.globalAlpha = 0.7;
+    ctx.font = 'bold 13px "Segoe UI", system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(comm.label, sx, sy - maxR*1.1 - 10);
+    // Node count
+    ctx.globalAlpha = 0.4;
+    ctx.font = '10px "Segoe UI", system-ui';
+    ctx.fillText(members.length + ' nodes', sx, sy - maxR*1.1 + 8);
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Cross-community edges (faint arcs) ──
+  for (const [s, t] of edges) {
+    if (nodes[s].comm === nodes[t].comm) continue;
+    const sx = tx(positions[s*2]), sy = ty(positions[s*2+1]);
+    const ex = tx(positions[t*2]), ey = ty(positions[t*2+1]);
+    const dist = Math.hypot(ex-sx, ey-sy);
+    if (dist < 5) continue;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(180,200,240,0.08)';
+    ctx.lineWidth = 0.4;
+    ctx.beginPath();
+    // Bezier curve for long edges
+    const mx2 = (sx + ex) / 2, my2 = (sy + ey) / 2;
+    const offset = Math.min(dist * 0.3, 200);
+    const cpx = mx2 - (ey - sy) * 0.15;
+    const cpy = my2 + (ex - sx) * 0.15;
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(cpx, cpy, ex, ey);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Intra-community edges (visible within clusters) ──
+  for (const [s, t] of edges) {
+    if (nodes[s].comm !== nodes[t].comm) continue;
+    const sx = tx(positions[s*2]), sy = ty(positions[s*2+1]);
+    const ex = tx(positions[t*2]), ey = ty(positions[t*2+1]);
+    ctx.strokeStyle = 'rgba(60,80,130,0.15)';
+    ctx.lineWidth = 0.4;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  }
+
+  // ── Nodes ──
+  for (let i = 0; i < nodes.length; i++) {
+    const nx = tx(positions[i*2]), ny = ty(positions[i*2+1]);
+    const r = 1.5 + (nodes[i].degree / 20) * 6;
+
+    // Glow
+    const glow = ctx.createRadialGradient(nx, ny, r*0.2, nx, ny, r*3);
+    glow.addColorStop(0, nodes[i].color + 'bb');
+    glow.addColorStop(0.3, nodes[i].color + '18');
+    glow.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(nx, ny, r*3, 0, Math.PI*2); ctx.fill();
+
+    // Core
+    ctx.fillStyle = nodes[i].color;
+    ctx.beginPath(); ctx.arc(nx, ny, r, 0, Math.PI*2); ctx.fill();
+
+    // Hot center
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath(); ctx.arc(nx, ny, r*0.3, 0, Math.PI*2); ctx.fill();
+  }
+
+  // ── HUD update ──
+  const hud = document.getElementById('hud');
+  if (hud) {
+    // Measure community separation
+    const cents = {};
+    for (const cid of Object.keys(byComm)) {
+      let mx=0, my=0;
+      for (const mi of byComm[cid]) { mx+=positions[mi*2]; my+=positions[mi*2+1]; }
+      cents[cid] = {x:mx/byComm[cid].length, y:my/byComm[cid].length};
+    }
+    let minDist = Infinity, maxDist = 0;
+    const cids = Object.keys(cents);
+    for (let a=0; a<cids.length; a++) {
+      for (let b=a+1; b<cids.length; b++) {
+        const d = Math.hypot(cents[cids[a]].x-cents[cids[b]].x, cents[cids[a]].y-cents[cids[b]].y);
+        minDist = Math.min(minDist, d); maxDist = Math.max(maxDist, d);
+      }
+    }
+    const spread = maxDist / Math.max(minDist, 1);
+    hud.innerHTML = [
+      `社区间距: ${minDist|0} – ${maxDist|0} 单位`,
+      `分散度: ${spread.toFixed(1)}x`,
+      `跨社区边: ${edges.filter(e => nodes[e[0]].comm !== nodes[e[1]].comm).length} 条`,
+    ].join(' &middot; ');
+  }
+}
+
+// ══════════════════════════════════
+// Main
+// ══════════════════════════════════
+function main() {
+  document.getElementById('hud').textContent = '力导向布局计算中...';
+  const init = scatterSeed();
+  positions = freeLayout(init);
+  draw();
+  document.getElementById('hud').textContent = '';
+  draw();
+}
+
+main();
+</script>
+</body>
+</html>

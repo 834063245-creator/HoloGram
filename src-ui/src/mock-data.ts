@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Mock data — realistic dependency graph for browser dev mode
 // Models a made-up "Nebula" web framework project with ~40 nodes
 

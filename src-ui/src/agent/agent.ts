@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Agent 循环 — Run() → stream() → executeBatch() → 循环直到模型给出最终答案
 
 import type {

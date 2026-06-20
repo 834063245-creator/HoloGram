@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Settings Panel — 设置模态面板
 // Provider | Agent | 显示 三个标签页
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化

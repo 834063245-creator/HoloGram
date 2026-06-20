@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // WorkspaceHandle — owns all backend state for one open project.
 // Replaces the scattered globals: ACTIVE_PROJECT, SANDBOX, AUDIT_LOGGER,
 // LAST_CHANGED_FILES, WatcherState.

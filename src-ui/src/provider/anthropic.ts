@@ -1,10 +1,13 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
-const DEFAULT_MAX_TOKENS = 32768;
+const DEFAULT_MAX_TOKENS = 200000;
 
 export interface AnthropicConfig {
   name?: string;

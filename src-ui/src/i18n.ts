@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
 // Minimal i18n — zh/en toggle for new UI elements
 // Does NOT cover the full app — only legend, focus banner, color/scale labels.
 

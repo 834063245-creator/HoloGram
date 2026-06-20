@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
 # Python
 __pycache__/
 *.pyc
@@ -34,6 +37,7 @@ hologram_graph_files.json
 # Binaries
 *.dll
 *.exe
+!release-bin/*.exe
 *.pdb
 *.so
 *.dylib
@@ -66,6 +70,17 @@ chat_sessions.json
 test_debug.py
 prototype.html
 preflight/
+
+# ── v4.1+: 核心源码不公开，只发布二进制 ──
+# 引擎源码（分析/解析/存储/MCP）
+engine/src/
+engine/Cargo.toml
+engine/Cargo.lock
+# 力导向布局（参数调教是核心竞争力）
+src-ui/src/ui/graph.ts
+src-ui/src/ui/layout.worker.ts
+src-ui/src/ui/gpu-layout.ts
+src-ui/src/ui/graph-interaction.ts
 
 # Internal project docs (not for public repo)
 PROJECT.md

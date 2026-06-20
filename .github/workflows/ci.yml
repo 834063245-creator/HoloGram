@@ -1,32 +1,18 @@
-name: CI
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
+# CI is disabled — engine source no longer public.
+# Builds happen locally. Binaries published via GitHub Releases.
+# See scripts/release.sh for local build + upload workflow.
+
+name: CI (no-op)
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 jobs:
-  rust:
+  noop:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            engine/target
-          key: cargo-engine-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
-          restore-keys: cargo-engine-${{ runner.os }}-
-
-      - name: Build engine
-        run: cd engine && cargo build
-
-      - name: Run engine tests
-        run: cd engine && cargo test
+      - run: echo "CI skipped — binary-only distribution. Build locally with scripts/release.sh"
