@@ -141,7 +141,7 @@ export class Agent {
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
-    this.contextWindow = opts.contextWindow ?? 0; // 0 = no auto-compaction; 1M era, don't pre-cut context
+    this.contextWindow = opts.contextWindow ?? 1000000; // 1M tokens default — covers all current models, triggers compaction only when truly needed
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
     this.gate = opts.gate || null;
