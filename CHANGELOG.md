@@ -7,17 +7,26 @@ HoloGram 遵循 [Semantic Versioning](https://semver.org/)。
 
 ---
 
-## [Unreleased]
+## [4.1.0] — 2026-06-21 · 边界规则引擎 + 可靠性修复
 
 ### Added
-- **社区感知布局管线（Phase 1 诊断）** — `layout3D` 签名扩展了第4参数 `nodeComm: number[]`，`_renderImpl` 现在优先使用最细粒度社区层级（Level 1 > Level 0），并在社区 ≤1 时自动兜底按顶层目录分组
-- **布局诊断日志** — 控制台 `[StarGraph]` 标签输出 Louvain 社区数 / 目录分组数 / 布局源 (GPU / CPU / CPU(community) / CPU(dirs))
-- **原型 `prototype/layout-prototype.html`** — 纯 Canvas 2D 零依赖，验证社区扇区种子 + 凝聚力 + 社区间互斥 + 去壳布局 vs 均匀 Fibonacci 球面
+- **`hologram_policy_check`** — 自定义架构边界规则引擎，glob/正则匹配 source/target + 边类型，扫描越界依赖
+- **`hologram_constraints.yaml`** — 默认架构约束配置
+- **`community_report` 截断** — 新增 `max_nodes` 参数（默认20，最大200），防止大项目输出超限
+- **`prototype/layout-prototype.html`** — 社区感知布局原型（Canvas 2D 零依赖）
 
 ### Changed
-- **布局管线** — `layout3D` 和 `layout.worker.ts` 的 `layout3D` 签名同步，均接受可选 `nodeComm` 参数（当前忽略，力导向行为不变）
-- **社区层级选择** — `_renderImpl` 不再硬编码 Level 0，改为 Level 1 优先（若存在且数量多于 Level 0）
-- **GPU 管线** — 仅当社区/目录分组 ≤1 时启用 WebGPU 路径（shader 尚无社区力支持）
+- **引擎分发模式** — 源码撤出 git，改为 `release-bin/hologram-engine.exe` 二进制直发
+- **README 重写** — MCP 优先 + token 节省实测 + 文案通俗化
+- **构建脚本收进 `build/`** — `build/build.sh` 一键构建，`build/release.sh` 发版
+- **安装说明** — 源码构建改为直接下载二进制
+- **社区层级** — 布局优先 Level 1 子社区，≤1 社区时兜底目录分组
+- **全源文件补 MIT 版权头**
+
+### Fixed
+- **折叠视图星团消失** — `community_id` 管道三处断裂（引擎不回写 + `as_str()` 读数字 + `direct_analyze` 空占位符）
+- **会话崩溃丢失** — `finishTurn()` 每轮自动 `saveActiveSession`，不再依赖 `beforeunload`
+- **`community_report` 超限** — 默认截断 node_ids 到 20，加 `max_nodes` 参数
 
 ---
 
