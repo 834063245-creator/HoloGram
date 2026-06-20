@@ -360,8 +360,19 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
         "cross_file": e.cross_file, "direction": e.direction,
         "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id,
     })).collect();
-    let comms: Vec<serde_json::Value> = (0..result.community_count).enumerate()
-        .map(|(i, _)| serde_json::json!({"id": format!("comm_{}", i), "size": 0, "node_ids": []}))
+    // Rebuild communities from node.community_id (populated by engine_analyze)
+    let mut comm_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
+    for n in graph.nodes.values() {
+        if let Some(cid) = n.community_id {
+            comm_map.entry(cid).or_default().push(&n.id);
+        }
+    }
+    let comms: Vec<serde_json::Value> = comm_map.iter()
+        .map(|(cid, node_ids)| {
+            let nids: Vec<String> = node_ids.iter().map(|s| s.to_string()).collect();
+            let label = derive_community_label(&nids);
+            serde_json::json!({"id": format!("comm_{}", cid), "size": nids.len(), "node_ids": nids, "label": label})
+        })
         .collect();
 
     // Persist hologram_graph.json for cold-start
@@ -430,16 +441,21 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
         })).collect();
         // Rebuild communities from pre-computed community_id on each node
         // (avoids re-running Louvain, which is O(V·avg_degree·iterations))
+        // community_id is Option<usize> → JSON number, not string
         let mut comm_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         for n in &nodes {
-            if let Some(cid) = n.get("community_id").and_then(|v| v.as_str()) {
+            if let Some(cid) = n.get("community_id").and_then(|v| v.as_u64()) {
                 if let Some(node_id) = n.get("id").and_then(|v| v.as_str()) {
                     comm_map.entry(cid.to_string()).or_default().push(node_id.to_string());
                 }
             }
         }
         let communities_json: Vec<serde_json::Value> = comm_map.iter()
-            .map(|(cid, node_ids)| serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids}))
+            .map(|(cid, node_ids)| {
+                // Derive a readable label from the most common file prefix
+                let label = derive_community_label(node_ids);
+                serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids, "label": label})
+            })
             .collect();
         let meta = serde_json::json!({
             "source_root": source_root,
@@ -449,6 +465,32 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
         serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json})).unwrap_or_default()
     })
     .map_err(|e| format!("Engine error: {}", e))
+}
+
+/// Derive a readable label for a community from its member node IDs.
+/// Uses the most common file path segment from the node IDs.
+fn derive_community_label(node_ids: &[String]) -> String {
+    use std::collections::HashMap;
+    let mut prefix_counts: HashMap<String, usize> = HashMap::new();
+    for nid in node_ids {
+        // Node IDs are typically "file_path:line" or "file_path::symbol"
+        // Extract top-level directory or file stem
+        let file = nid.split(':').next().unwrap_or(nid);
+        let parts: Vec<&str> = file.split(['/', '\\']).collect();
+        // Try to get a meaningful prefix: first 1-2 segments of the path
+        let prefix = if parts.len() >= 2 {
+            format!("{}/{}", parts[parts.len().saturating_sub(2)], parts[parts.len() - 1])
+        } else {
+            file.to_string()
+        };
+        *prefix_counts.entry(prefix).or_default() += 1;
+    }
+    // Pick the most common prefix, or fall back to first node
+    prefix_counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(prefix, _)| prefix)
+        .unwrap_or_else(|| "社区".to_string())
 }
 
 /// 返回 CACHED_GRAPH 的完整 JSON — 前端唯一数据来源（冷启动除外）。
