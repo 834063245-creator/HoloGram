@@ -141,7 +141,7 @@ export class Agent {
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
-    this.contextWindow = opts.contextWindow ?? 131072; // default 128K tokens — prevents unbounded growth
+    this.contextWindow = opts.contextWindow ?? 0; // 0 = no auto-compaction; 1M era, don't pre-cut context
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
     this.gate = opts.gate || null;
