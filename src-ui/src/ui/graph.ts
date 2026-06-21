@@ -4042,22 +4042,8 @@ export class StarGraph {
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
-    // One label per community — its highest-degree node (the "anchor star")
-    const commBest = new Map<string, { deg: number; idx: number }>();
-    for (let i = 0; i < nodes.length; i++) {
-      const cid = this.nodeCommMap.get(i);
-      if (!cid) continue;
-      const best = commBest.get(cid);
-      if (!best || deg[i] > best.deg) commBest.set(cid, { deg: deg[i], idx: i });
-    }
-    this.nodeLabelIdx = [...commBest.values()].map(x => x.idx);
-    for (const i of this.nodeLabelIdx) {
-      const div = document.createElement('div'); div.className = 'node-label';
-      div.dataset['kind'] = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
-      div.textContent = nodes[i].name;
-      div.style.opacity = '0.18';
-      this.labelsContainer.appendChild(div); this.labelDivs.push(div);
-    }
+    // No labels — visual-only rendering. Hover/selection reveals name via tooltip + detail card.
+    this.nodeLabelIdx = [];
   }
 
   // ── Minimap ───────────────────────────────────────────────
