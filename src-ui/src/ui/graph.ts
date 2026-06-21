@@ -1745,9 +1745,10 @@ export class StarGraph {
       if (behind || this.foldMode) { div.style.display = 'none'; continue; }
       const focused = i === hoverI || i === selI;
       const dist = this.camera.position.distanceTo(new THREE.Vector3(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]));
-      const importance = Math.log1p(this.deg[i]) / logMaxDeg;
-      const vrange = this._graphRadius * (0.3 + importance * 2.5);
-      const opacity = focused ? 1 : Math.max(0.06, 1 - dist / vrange);
+      const imp = Math.log1p(this.deg[i]) / logMaxDeg;
+      const importance = imp * imp; // square to widen hub-vs-leaf gap
+      const vrange = this._graphRadius * (0.15 + importance * 3.5);
+      const opacity = focused ? 1 : Math.max(0.04, 1 - dist / vrange);
       div.style.display = '';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
@@ -4046,9 +4047,9 @@ export class StarGraph {
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
     // Sort by degree — hub nodes' labels matter most for navigation
-    // Cap at 300 DOM elements to avoid frame-rate death (16k divs = 16k DOM updates/frame)
+    // Cap at 600 for wider magnitude range (more leaf nodes visible up close)
     const sorted = deg.map((d, i) => ({ d, i })).sort((a, b) => b.d - a.d);
-    const maxCount = 300;
+    const maxCount = 600;
     this.nodeLabelIdx = sorted.slice(0, maxCount).filter(x => x.d >= 0).map(x => x.i);
     for (const i of this.nodeLabelIdx) {
       const div = document.createElement('div'); div.className = 'node-label';
