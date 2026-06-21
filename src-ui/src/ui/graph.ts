@@ -3235,7 +3235,7 @@ export class StarGraph {
         depthWrite: false, transparent: true, opacity: 0.14,
       }));
       glow.position.copy(gm.centroid);
-      glow.scale.setScalar(r * 4.5);
+      glow.scale.setScalar(r * 2.0);
       glow.userData = { galaxyIndex: gi, galaxyId: gm.id };
       this.commFoldGroup.add(glow); this.galaxyGlows.push(glow);
       // ── Central core sprite ──
@@ -3244,7 +3244,7 @@ export class StarGraph {
         depthWrite: false, transparent: true, opacity: 0.35,
       }));
       coreSprite.position.copy(gm.centroid);
-      coreSprite.scale.setScalar(r * 0.7);
+      coreSprite.scale.setScalar(r * 0.35);
       coreSprite.userData = { galaxyIndex: gi, galaxyId: gm.id };
       this.commFoldGroup.add(coreSprite); this.galaxyGlows.push(coreSprite);
     }
@@ -4355,7 +4355,7 @@ export class StarGraph {
           const beat = 0.8 + 0.2 * Math.abs(Math.sin(this.pulseTime * (1.2 + gi * 0.37)));
           (glow.material as THREE.SpriteMaterial).opacity = 0.22 * d * beat * hoverMul;
           const gm_r = 45 + Math.sqrt(gm.memberIndices.length) * 16;
-          const s = gm_r * 0.7 * (0.95 + 0.05 * Math.sin(this.pulseTime * (2 + gi * 0.41))) * (hovered ? 1.3 : 1.0);
+          const s = gm_r * 0.35 * (0.95 + 0.05 * Math.sin(this.pulseTime * (2 + gi * 0.41))) * (hovered ? 1.3 : 1.0);
           glow.scale.setScalar(s);
         }
       }
