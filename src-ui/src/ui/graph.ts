@@ -579,7 +579,7 @@ export class StarGraph {
   private selectedIdx = -1;
 
   // Graph spatial scale — p95 radius from center, set after layout.
-  // All LOD thresholds (label visibility, fog, min/max zoom) normalize against this.
+  // Used for camera zoom range only (no LOD).
   private _graphRadius = 1000;
 
   // Camera reset — store initial view
@@ -662,7 +662,7 @@ export class StarGraph {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(bg);
-    if (true) this.scene.fog = new THREE.FogExp2(bg, 0.12 / this._graphRadius);
+    // No fog — dark-universe rendering handles depth through contrast, not distance blur
 
     this.camera = new THREE.PerspectiveCamera(40, 2, 2, 10000);
 
@@ -1730,27 +1730,24 @@ export class StarGraph {
 
   private updateLabels(): void {
     const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
-    const logMaxDeg = Math.log1p(this.maxDeg);
-    const logMaxMembers = Math.log1p(Math.max(1, ...this.galaxyMeta.map(g => g.memberIndices.length)));
+    // No LOD — all labels visible, just dim. Hover/selection reveals.
+    const hoverI = this.hoveredIdx;
+    const selI = this.selectedIdx;
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
       const i = this.nodeLabelIdx[k], div = this.labelDivs[k];
       if (!div) continue;
       this.tmpVec3.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]);
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
-      const dist = this.camera.position.distanceTo(new THREE.Vector3(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]));
-      // ── Magnitude-based visibility ──
-      // importance = log(1+degree) / log(1+maxDegree) → 0=leaf, 1=top hub
-      // vrange = hub nodes visible 5× further than leaf nodes
-      const importance = Math.log1p(this.deg[i]) / logMaxDeg;
-      const vrange = this._graphRadius * (0.3 + importance * 2.5);
-      const opacity = behind ? 0 : Math.max(0, 1 - dist / vrange);
+      if (behind || this.foldMode) { div.style.display = 'none'; continue; }
+      const focused = i === hoverI || i === selI;
+      div.style.display = '';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
-      div.style.opacity = String(opacity);
-      div.style.display = (opacity > 0.05 && !this.foldMode) ? '' : 'none';
+      div.style.opacity = focused ? '1' : '0.18';
+      div.style.fontSize = focused ? '11px' : '10px';
     }
-    // Galaxy labels in universe fold view — magnitude-scaled by member count
+    // Galaxy labels — no distance fade, hover brightens
     for (let k = 0; k < this.galaxyLabelDivs.length; k++) {
       const div = this.galaxyLabelDivs[k];
       const gIdx = Number(div.dataset['galaxyIndex']);
@@ -1759,18 +1756,14 @@ export class StarGraph {
       this.tmpVec3.copy(gm.centroid);
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
-      const dist = this.camera.position.distanceTo(gm.centroid);
-      const galImportance = Math.log1p(gm.memberIndices.length) / logMaxMembers;
-      const galVrange = this._graphRadius * (0.5 + galImportance * 2.2);
-      const opacity = behind ? 0 : Math.max(0, 1 - dist / galVrange);
+      const hovered = gIdx === this.hoveredGalaxyIdx;
+      div.style.display = (!behind && this.foldMode && !this.enteredGalaxyId) ? '' : 'none';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
-      const hovered = gIdx === this.hoveredGalaxyIdx;
-      div.style.opacity = String(opacity * (hovered ? 1.0 : 0.7));
+      div.style.opacity = hovered ? '0.9' : '0.3';
       div.style.color = hovered ? 'rgba(255,220,160,0.95)' : '';
       div.style.fontSize = hovered ? '12px' : '10px';
       div.style.textShadow = hovered ? '0 0 14px rgba(255,180,60,0.9), 0 0 30px rgba(255,120,20,0.5)' : '';
-      div.style.display = (opacity > 0.03 && this.foldMode && !this.enteredGalaxyId) ? '' : 'none';
     }
   }
 
@@ -3594,7 +3587,7 @@ export class StarGraph {
     dists.sort((a, b) => a - b);
     const radius = dists[Math.floor(dists.length * 0.95)] || 50;
     const absMax = dists[dists.length - 1] || 50;
-    this._graphRadius = radius; // LOD normalization anchor — all visibility thresholds scale from this
+    this._graphRadius = radius; // graph spatial scale — used for camera zoom range only
 
     // FOV-based camera distance — fills frame regardless of project size
     const fovRad = this.camera.fov * Math.PI / 180;
@@ -3605,14 +3598,9 @@ export class StarGraph {
     const isoCount = deg.filter(d => d === 0).length;
     this._diagMsg = `${layoutSource} shellR≈${shellR | 0} radius=${radius | 0} absMax=${absMax | 0} cam=${camDist | 0} iso=${isoCount}/${nodes.length} NaNfix=${fixed}`;
 
-    // ── Scale LOD thresholds to this graph's spatial size ──
-    // Fog: lighter for large graphs (too dense = everything invisible), denser for small ones
-    // density = 0.12 / radius → ~12% fog at graph center, ~22% at far side, consistent across scales
-    if (this.scene.fog) {
-      (this.scene.fog as THREE.FogExp2).density = 0.12 / radius;
-    }
-    this.controls.minDistance = Math.max(1, radius * 0.005);
-    this.controls.maxDistance = Math.max(this.controls.maxDistance, camDist * 3);
+    // ── Camera zoom range — wide open, no LOD clamping ──
+    this.controls.minDistance = Math.max(0.5, radius * 0.001);
+    this.controls.maxDistance = Math.max(this.controls.maxDistance, camDist * 6);
 
     // Flatter camera angle — less top-down, more natural
     const dir = new THREE.Vector3(0.3, 0.25, 1).normalize();
@@ -4042,15 +4030,13 @@ export class StarGraph {
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
-    const sorted = deg.map((d, i) => ({ d, i })).sort((a, b) => b.d - a.d);
-    const pct = 0.5;
-    const maxCount = 120;
-    const count = Math.max(3, Math.min(maxCount, Math.ceil(nodes.length * pct)));
-    this.nodeLabelIdx = sorted.slice(0, count).filter(x => x.d > 0).map(x => x.i);
+    // All nodes get labels — dark-universe: default subtle, hover reveals
+    this.nodeLabelIdx = nodes.map((_, i) => i);
     for (const i of this.nodeLabelIdx) {
       const div = document.createElement('div'); div.className = 'node-label';
       div.dataset['kind'] = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
       div.textContent = nodes[i].name;
+      div.style.opacity = '0.18'; // subtle baseline, hover/select overrides
       this.labelsContainer.appendChild(div); this.labelDivs.push(div);
     }
   }
@@ -4307,7 +4293,7 @@ export class StarGraph {
         const gm = this.galaxyMeta[gi];
         if (!gm) continue;
         const hovered = gi === this.hoveredGalaxyIdx;
-        const d = Math.min(1, Math.max(0.05, this.camera.position.distanceTo(gm.centroid) / Math.max(1, gm.radius * 3)));
+        const d = 1; // no LOD — galaxy glow constant regardless of camera distance
         if (k % 2 === 0) {
           // Ambient glow — slow breathe, boost on hover
           const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
