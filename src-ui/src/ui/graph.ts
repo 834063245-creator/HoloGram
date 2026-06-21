@@ -326,10 +326,10 @@ function pullCommunities(
     cc.cx /= cc.cnt; cc.cy /= cc.cnt; cc.cz /= cc.cnt;
   }
 
-  const compressStr = 0.08;   // intra-community compression
-  const repelStr = shellRadius * 0.004; // inter-community centroid repulsion
+  const compressStr = 0.04;   // intra-community compression
+  const repelStr = shellRadius * 0.002; // inter-community centroid repulsion
 
-  for (let iter = 0; iter < 30; iter++) {
+  for (let iter = 0; iter < 15; iter++) {
     // ── Compress: each node moves 8% toward its community centroid ──
     for (const cc of commArr) {
       for (const i of cc.nodes) {
