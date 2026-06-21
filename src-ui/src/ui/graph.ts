@@ -2017,6 +2017,11 @@ export class StarGraph {
     return 0.6 + (val / maxVal) * 2.8;
   }
 
+  /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. */
+  private _nodeMag(i: number): number {
+    return 0.15 + 0.85 * (Math.log1p(this.deg[i]) / Math.log1p(this.maxDeg));
+  }
+
   /** Toggle node size between degree-based and coupling-risk-based. Returns display label. */
   rescaleByMode(mode: 'degree' | 'coupling'): string {
     this.scaleMode = mode;
@@ -4366,7 +4371,7 @@ export class StarGraph {
           this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
           this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
         } else {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12;
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12 * this._nodeMag(i);
         }
       } else {
         const risk = this.l34Count[i];
@@ -4375,10 +4380,11 @@ export class StarGraph {
           const twinkle = 1 + Math.sin(galTime * this.twinkleSpeeds[i] + this.twinklePhases[i]) * 0.35;
           const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.4 : 0.15);
           const combined = twinkle * wave;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.18 * combined; // dark-universe: dim default
+          const mag = this._nodeMag(i);
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.18 * combined * mag; // magnitude: hub bright, leaf dim
           // Animate outer glow layer too
           if (this.nodeGlows2[i]) {
-            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.04 * combined;
+            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.04 * combined * mag;
             const base = this.getNodeBaseScale(i);
             this.nodeGlows2[i].scale.setScalar(base * 16 * combined);
           }
@@ -4396,7 +4402,7 @@ export class StarGraph {
           const freq = 1 + risk * 0.7;
           const amp = risk > 0 ? Math.min(0.4, risk * 0.13) : 0.06;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.10 * wave; // dark-universe: dim default
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.10 * wave * this._nodeMag(i); // magnitude: hub bright, leaf dim
           const base = this.getNodeBaseScale(i);
           this.nodeGlows[i].scale.setScalar(base * 5.5);
         }
