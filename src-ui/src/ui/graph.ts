@@ -4042,16 +4042,20 @@ export class StarGraph {
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
-    // Sort by degree — hub nodes' labels matter most for navigation
-    // Cap at 600 for wider magnitude range (more leaf nodes visible up close)
-    const sorted = deg.map((d, i) => ({ d, i })).sort((a, b) => b.d - a.d);
-    const maxCount = 600;
-    this.nodeLabelIdx = sorted.slice(0, maxCount).filter(x => x.d >= 0).map(x => x.i);
+    // One label per community — its highest-degree node (the "anchor star")
+    const commBest = new Map<string, { deg: number; idx: number }>();
+    for (let i = 0; i < nodes.length; i++) {
+      const cid = this.nodeCommMap.get(i);
+      if (!cid) continue;
+      const best = commBest.get(cid);
+      if (!best || deg[i] > best.deg) commBest.set(cid, { deg: deg[i], idx: i });
+    }
+    this.nodeLabelIdx = [...commBest.values()].map(x => x.idx);
     for (const i of this.nodeLabelIdx) {
       const div = document.createElement('div'); div.className = 'node-label';
       div.dataset['kind'] = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
       div.textContent = nodes[i].name;
-      div.style.opacity = '0.18'; // subtle baseline, hover/select reveals
+      div.style.opacity = '0.18';
       this.labelsContainer.appendChild(div); this.labelDivs.push(div);
     }
   }
