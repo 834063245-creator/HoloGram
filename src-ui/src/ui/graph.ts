@@ -80,7 +80,7 @@ function edgeColorByType(edgeType: string, direction: string, crossFile = false)
   return new THREE.Color(0x6699cc);
 }
 function edgeOpacityByDepth(depth: number): number {
-  const m = 0.25;
+  const m = 0.10; // dark-universe: subtle web, brightens on hover/highlight
   switch (depth) { case 1: return 0.015 * m; case 2: return 0.11 * m; case 3: return 0.17 * m; case 4: return 0.22 * m; default: return 0.08 * m; }
 }
 
@@ -676,9 +676,9 @@ export class StarGraph {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(container.clientWidth, container.clientHeight),
-      0.6,  // strength
-      0.4,   // radius
-      0.7,   // threshold
+      0.35,  // strength — low default, bright objects still bloom on hover
+      0.3,   // radius — tight bloom, no global glow fog
+      0.85,  // threshold — only bright things bloom (hover highlights)
     );
     this.composer.addPass(this.bloomPass);
 
@@ -2426,8 +2426,8 @@ export class StarGraph {
         if (this.composer.passes.indexOf(this.bloomPass) === -1) {
           this.composer.addPass(this.bloomPass);
         }
-        this.bloomPass.strength = 0.7;
-        this.bloomPass.threshold = 0.55;
+        this.bloomPass.strength = 0.5;
+        this.bloomPass.threshold = 0.7;
       }
       // Standard mode: no bloom, nothing to adjust
       this.applyFoldOverlay();
@@ -2441,8 +2441,8 @@ export class StarGraph {
       if (true) {
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.4;
-        this.bloomPass.strength = 0.6;
-        this.bloomPass.threshold = 0.7;
+        this.bloomPass.strength = 0.35;
+        this.bloomPass.threshold = 0.85;
         if (this.composer.passes.indexOf(this.bloomPass) === -1) {
           this.composer.addPass(this.bloomPass);
         }
@@ -3860,17 +3860,17 @@ export class StarGraph {
     const isFull = true;
     for (let i = 0; i < nodes.length; i++) {
       const kind = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
-      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff); // white-hot core in full mode
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
+      const coreColor = isFull ? glowColor : (NODE_COLORS[kind] || 0x7eb8ff); // dark-universe: type-colored core, white-hot only on hover
       const baseScale = 0.8 + (deg[i] / this.maxDeg) * 2.8;
-      const glowOpacity = false ? 0 : 0.25;
+      const glowOpacity = false ? 0 : 0.08; // dark-universe: subtle halo, brightens on hover
       const glowScaleMul = isFull ? 22 : 16;
 
       // Full mode: large soft outer glow first (behind everything)
       if (isFull) {
         const outerGlow = new THREE.Sprite(new THREE.SpriteMaterial({
           map: this.glowTex, color: glowColor,
-          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.12,
+          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.04,
         }));
         outerGlow.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         outerGlow.scale.setScalar(baseScale * 16);
@@ -4311,12 +4311,12 @@ export class StarGraph {
         if (k % 2 === 0) {
           // Ambient glow — slow breathe, boost on hover
           const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
-          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.45 : 0.24) * d * w;
+          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.35 : 0.14) * d * w; // dark-universe: subtle galaxy halo
         } else {
           // Core sprite — heartbeat pulse, brighten + enlarge on hover
           const hoverMul = hovered ? 1.6 : 1.0;
           const beat = 0.8 + 0.2 * Math.abs(Math.sin(this.pulseTime * (1.2 + gi * 0.37)));
-          (glow.material as THREE.SpriteMaterial).opacity = 0.75 * d * beat * hoverMul;
+          (glow.material as THREE.SpriteMaterial).opacity = 0.25 * d * beat * hoverMul; // dark-universe: subtle galaxy core
           const gm_r = 45 + Math.sqrt(gm.memberIndices.length) * 16;
           const s = gm_r * 0.7 * (0.95 + 0.05 * Math.sin(this.pulseTime * (2 + gi * 0.41))) * (hovered ? 1.3 : 1.0);
           glow.scale.setScalar(s);
@@ -4370,10 +4370,10 @@ export class StarGraph {
           const twinkle = 1 + Math.sin(galTime * this.twinkleSpeeds[i] + this.twinklePhases[i]) * 0.35;
           const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.4 : 0.15);
           const combined = twinkle * wave;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.75 * combined;
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.18 * combined; // dark-universe: dim default
           // Animate outer glow layer too
           if (this.nodeGlows2[i]) {
-            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.12 * combined;
+            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.04 * combined;
             const base = this.getNodeBaseScale(i);
             this.nodeGlows2[i].scale.setScalar(base * 16 * combined);
           }
@@ -4391,7 +4391,7 @@ export class StarGraph {
           const freq = 1 + risk * 0.7;
           const amp = risk > 0 ? Math.min(0.4, risk * 0.13) : 0.06;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55 * wave;
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.10 * wave; // dark-universe: dim default
           const base = this.getNodeBaseScale(i);
           this.nodeGlows[i].scale.setScalar(base * 5.5);
         }
