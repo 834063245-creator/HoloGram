@@ -301,6 +301,47 @@ async function simulateForces(
 // behaviour identical to v4.1.
 // ═══════════════════════════════════════════════════════════════
 
+// ── Community pull post-pass (GPU companion) ───────────────────
+// After GPU N-body, apply O(n) attractive drift toward community centroids.
+// Much cheaper than per-community O(n²) simulations — 10 iterations, no pairwise.
+function pullCommunities(
+  pos: Float32Array,
+  n: number,
+  nodeComm: number[],
+  shellRadius: number,
+): void {
+  // Build centroids
+  const centroids = new Map<number, { cx: number; cy: number; cz: number; cnt: number }>();
+  for (let i = 0; i < n; i++) {
+    const c = nodeComm[i];
+    if (c < 0) continue;
+    let cc = centroids.get(c);
+    if (!cc) { cc = { cx: 0, cy: 0, cz: 0, cnt: 0 }; centroids.set(c, cc); }
+    cc.cx += pos[i * 3]; cc.cy += pos[i * 3 + 1]; cc.cz += pos[i * 3 + 2];
+    cc.cnt++;
+  }
+  for (const cc of centroids.values()) {
+    cc.cx /= cc.cnt; cc.cy /= cc.cnt; cc.cz /= cc.cnt;
+  }
+  // Pull toward centroid — 10 light iterations
+  const pull = shellRadius * 0.02;
+  for (let iter = 0; iter < 10; iter++) {
+    for (let i = 0; i < n; i++) {
+      const c = nodeComm[i];
+      if (c < 0) continue;
+      const cc = centroids.get(c)!;
+      const dx = cc.cx - pos[i * 3];
+      const dy = cc.cy - pos[i * 3 + 1];
+      const dz = cc.cz - pos[i * 3 + 2];
+      const d = Math.max(0.1, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      const f = pull * (d / shellRadius);
+      pos[i * 3] += (dx / d) * f;
+      pos[i * 3 + 1] += (dy / d) * f;
+      pos[i * 3 + 2] += (dz / d) * f;
+    }
+  }
+}
+
 async function layout3D(
   n: number,
   edgePairs: [number, number][],
@@ -3541,9 +3582,8 @@ export class StarGraph {
     }
 
     let rawPos: Float32Array;
-    // GPU path only when no community/directory grouping (≤1 group = uniform mode)
-    const effectiveGroups = new Set(nodeCommArr.filter(c => c >= 0)).size;
-    if (gpuLayout.ready && effectiveGroups <= 1) {
+    // GPU path: always try GPU if available. Communities get a lightweight CPU pull post-pass.
+    if (gpuLayout.ready) {
       const initPos = fibonacciSphere(nodes.length, shellRadius);
       const gpuResult = await gpuLayout.compute(nodes.length, pairs, initPos, {
         n: nodes.length,
@@ -3557,6 +3597,12 @@ export class StarGraph {
       if (gpuResult) {
         rawPos = gpuResult;
         layoutSource = 'GPU';
+        // Community pull: nudge nodes toward their community centroid (O(n), not O(n²))
+        const effGroups = new Set(nodeCommArr.filter(c => c >= 0));
+        if (effGroups.size > 1) {
+          pullCommunities(rawPos, nodes.length, nodeCommArr, shellRadius);
+          layoutSource = 'GPU+community';
+        }
       } else {
         rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
         layoutSource = 'CPU(fallback)';
