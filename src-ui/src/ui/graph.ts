@@ -1767,13 +1767,11 @@ export class StarGraph {
     // Standard / constellation view: raycast all cores (ignore .visible)
     const newIdx = this._raycastNode();
     if (newIdx !== this.hoveredIdx) {
-      // Restore previous hovered node
+      // Restore previous hovered node — brightness only, no scale change
       if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
-        const prevBase = this.getNodeBaseScale(this.hoveredIdx);
-        const isFull = true;
-        this.nodeCores[this.hoveredIdx].scale.setScalar(isFull ? prevBase * 0.4 : prevBase);
+        // Restore original core color
+        (this.nodeCores[this.hoveredIdx].material as THREE.MeshBasicMaterial).color.set(this.nodeCoreColors[this.hoveredIdx]);
         if (this.nodeGlows[this.hoveredIdx]) {
-          this.nodeGlows[this.hoveredIdx].scale.setScalar(prevBase * (isFull ? 9 : 7.0));
           (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55;
         }
       }
@@ -4351,17 +4349,17 @@ export class StarGraph {
       try { this.updateFocus(); } catch { /* ditto */ }
     }
 
-    // Hover effects
+    // Hover effects — brightness-only, no size inflation
     this.hoverScale += (this.targetHoverScale - this.hoverScale) * 0.18;
     const neighborSet = new Set(this.hoveredIdx >= 0 ? this.neighborMap[this.hoveredIdx] || [] : []);
     if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
-      const base = this.getNodeBaseScale(this.hoveredIdx);
-      const s = 1 + this.hoverScale * 1.2;
-      this.nodeCores[this.hoveredIdx].scale.setScalar(base * s);
       if (this.nodeGlows[this.hoveredIdx]) {
-        this.nodeGlows[this.hoveredIdx].scale.setScalar(base * (isFull ? 7 : 7.0) * s);
-        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.65 + this.hoverScale * 0.25;
+        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.65 + this.hoverScale * 0.35;
       }
+      // Brighten core color toward white on hover
+      const origColor = this.nodeCoreColors[this.hoveredIdx];
+      const brightColor = new THREE.Color(origColor).lerp(new THREE.Color(0xffffff), this.hoverScale * 0.6);
+      (this.nodeCores[this.hoveredIdx].material as THREE.MeshBasicMaterial).color.set(brightColor);
       for (const ni of neighborSet) {
         if (ni !== this.hoveredIdx && ni < this.nodeGlows.length) {
           (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.10;
