@@ -301,20 +301,24 @@ async function simulateForces(
 // behaviour identical to v4.1.
 // ═══════════════════════════════════════════════════════════════
 
-// ── Community clustering post-pass (GPU companion) ────────────
-// After GPU N-body, compress intra-community + repel inter-community.
-// O(n) per iteration, not O(n²). Gives tight clusters like CPU layout.
-function pullCommunities(
+// ── Procedural spiral galaxy generation (GPU companion) ──────
+// After GPU N-body sets community centroids, each community's nodes
+// are placed in a spiral-arm pattern — hubs at center, leaves in arms.
+// O(n) total, no iterations. Game-engine-style procedural generation.
+function spiralGalaxies(
   pos: Float32Array,
   n: number,
   nodeComm: number[],
+  nodeDeg: number[],
   shellRadius: number,
 ): void {
-  // Build community info
-  const comms = new Map<number, { cx: number; cy: number; cz: number; cnt: number; nodes: number[] }>();
+  // ── Build communities + compute centroids from GPU output ──
+  type Comm = { cx: number; cy: number; cz: number; cnt: number; nodes: number[] };
+  const comms = new Map<number, Comm>();
+  const unassigned: number[] = [];
   for (let i = 0; i < n; i++) {
     const c = nodeComm[i];
-    if (c < 0) continue;
+    if (c < 0) { unassigned.push(i); continue; }
     let cc = comms.get(c);
     if (!cc) { cc = { cx: 0, cy: 0, cz: 0, cnt: 0, nodes: [] }; comms.set(c, cc); }
     cc.cx += pos[i * 3]; cc.cy += pos[i * 3 + 1]; cc.cz += pos[i * 3 + 2];
@@ -326,54 +330,68 @@ function pullCommunities(
     cc.cx /= cc.cnt; cc.cy /= cc.cnt; cc.cz /= cc.cnt;
   }
 
-  const compressStr = 0.06;   // intra-community compression
-  const repelStr = shellRadius * 0.003; // inter-community centroid repulsion
+  // ── Per-community spiral generation ──
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // ~137.5° — sunflower seed pattern
+  for (const cc of commArr) {
+    const m = cc.nodes.length;
+    // Sort by degree descending — hub at center
+    cc.nodes.sort((a, b) => nodeDeg[b] - nodeDeg[a]);
+    // Community radius scales with member count
+    const commR = Math.cbrt(m) * shellRadius * 0.04;
+    // Arm count: 2 for small, 3 for medium, 4 for large
+    const arms = m < 15 ? 2 : m < 40 ? 3 : 4;
+    // Spiral twist: how tightly arms wind
+    const twist = 1.2 + (m % 7) * 0.3;
+    // Disk flattening
+    const flat = 0.15 + (m % 5) * 0.04;
+    // Random tilt per community
+    const tiltA = (cc.cx * 7.3 + cc.cy * 3.1) % (Math.PI * 2);
+    const tiltB = (cc.cz * 5.7 + cc.cx * 2.3) % (Math.PI * 0.6);
+    const ctA = Math.cos(tiltA), stA = Math.sin(tiltA);
+    const ctB = Math.cos(tiltB), stB = Math.sin(tiltB);
 
-  for (let iter = 0; iter < 22; iter++) {
-    // ── Compress: each node moves 8% toward its community centroid ──
-    for (const cc of commArr) {
-      for (const i of cc.nodes) {
-        const dx = cc.cx - pos[i * 3];
-        const dy = cc.cy - pos[i * 3 + 1];
-        const dz = cc.cz - pos[i * 3 + 2];
-        pos[i * 3] += dx * compressStr;
-        pos[i * 3 + 1] += dy * compressStr;
-        pos[i * 3 + 2] += dz * compressStr;
-      }
+    for (let j = 0; j < m; j++) {
+      // Radius: hub at ~0, leaves at commR
+      const t = j / Math.max(1, m - 1); // 0=hub, 1=leaf
+      const r = commR * Math.pow(t, 0.55); // nonlinear — denser near center
+      // Angle: spiral + arm offset
+      const armIdx = j % arms;
+      const armAngle = (armIdx / arms) * Math.PI * 2;
+      const spiralAngle = r * twist + armAngle;
+      // Scatter: leaves have more scatter than hubs
+      const scatter = commR * 0.06 * (0.3 + t * 1.2);
+      const gauss = () => {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+      };
+      // Position in local disk frame
+      let px = Math.cos(spiralAngle) * r + gauss() * scatter;
+      let py = gauss() * r * flat * 0.5;
+      let pz = Math.sin(spiralAngle) * r + gauss() * scatter;
+      // Apply tilt rotation
+      let rx = px * ctA - pz * stA;
+      let rz = px * stA + pz * ctA;
+      let ry = py * ctB - rz * stB;
+      rz = py * stB + rz * ctB;
+      // Place at centroid
+      const i = cc.nodes[j];
+      pos[i * 3] = cc.cx + rx;
+      pos[i * 3 + 1] = cc.cy + ry;
+      pos[i * 3 + 2] = cc.cz + rz;
     }
-    // ── Recompute centroids after compression ──
-    for (const cc of commArr) {
-      cc.cx = 0; cc.cy = 0; cc.cz = 0;
-      for (const i of cc.nodes) {
-        cc.cx += pos[i * 3]; cc.cy += pos[i * 3 + 1]; cc.cz += pos[i * 3 + 2];
-      }
-      cc.cx /= cc.cnt; cc.cy /= cc.cnt; cc.cz /= cc.cnt;
-    }
-    // ── Repel centroids apart (O(C²) centroid-level, O(n) node apply) ──
-    const dxArr = new Float32Array(commArr.length);
-    const dyArr = new Float32Array(commArr.length);
-    const dzArr = new Float32Array(commArr.length);
-    for (let a = 0; a < commArr.length; a++) {
-      let fx = 0, fy = 0, fz = 0;
-      for (let b = 0; b < commArr.length; b++) {
-        if (a === b) continue;
-        const dx = commArr[a].cx - commArr[b].cx;
-        const dy = commArr[a].cy - commArr[b].cy;
-        const dz = commArr[a].cz - commArr[b].cz;
-        const d = Math.max(0.1, Math.sqrt(dx * dx + dy * dy + dz * dz));
-        const f = repelStr / (d + 1);
-        fx += (dx / d) * f; fy += (dy / d) * f; fz += (dz / d) * f;
-      }
-      dxArr[a] = fx; dyArr[a] = fy; dzArr[a] = fz;
-    }
-    // Apply accumulated centroid displacement to all nodes once
-    for (let a = 0; a < commArr.length; a++) {
-      for (const i of commArr[a].nodes) {
-        pos[i * 3] += dxArr[a];
-        pos[i * 3 + 1] += dyArr[a];
-        pos[i * 3 + 2] += dzArr[a];
-      }
-    }
+  }
+
+  // Unassigned nodes stay near origin with slight scatter
+  for (let j = 0; j < unassigned.length; j++) {
+    const i = unassigned[j];
+    const r = shellRadius * 0.1 * Math.cbrt(j + 1);
+    const th = goldenAngle * j;
+    const ph = Math.acos(1 - 2 * (j + 0.5) / Math.max(1, unassigned.length));
+    pos[i * 3] = Math.cos(th) * Math.sin(ph) * r;
+    pos[i * 3 + 1] = Math.cos(ph) * r;
+    pos[i * 3 + 2] = Math.sin(th) * Math.sin(ph) * r;
   }
 }
 
@@ -3630,11 +3648,11 @@ export class StarGraph {
       if (gpuResult) {
         rawPos = gpuResult;
         layoutSource = 'GPU';
-        // Community pull: nudge nodes toward their community centroid (O(n), not O(n²))
+        // Procedural spiral galaxies — hubs at center, leaves in arms
         const effGroups = new Set(nodeCommArr.filter(c => c >= 0));
         if (effGroups.size > 1) {
-          pullCommunities(rawPos, nodes.length, nodeCommArr, shellRadius);
-          layoutSource = 'GPU+community';
+          spiralGalaxies(rawPos, nodes.length, nodeCommArr, deg, shellRadius);
+          layoutSource = 'GPU+spiral';
         }
       } else {
         rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
