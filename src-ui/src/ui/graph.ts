@@ -1730,6 +1730,8 @@ export class StarGraph {
 
   private updateLabels(): void {
     const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
+    const logMaxDeg = Math.log1p(this.maxDeg);
+    const logMaxMembers = Math.log1p(Math.max(1, ...this.galaxyMeta.map(g => g.memberIndices.length)));
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
       const i = this.nodeLabelIdx[k], div = this.labelDivs[k];
       if (!div) continue;
@@ -1737,13 +1739,18 @@ export class StarGraph {
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
       const dist = this.camera.position.distanceTo(new THREE.Vector3(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]));
-      const opacity = behind ? 0 : Math.max(0, 1 - dist / (this._graphRadius * 2));
+      // ── Magnitude-based visibility ──
+      // importance = log(1+degree) / log(1+maxDegree) → 0=leaf, 1=top hub
+      // vrange = hub nodes visible 5× further than leaf nodes
+      const importance = Math.log1p(this.deg[i]) / logMaxDeg;
+      const vrange = this._graphRadius * (0.3 + importance * 2.5);
+      const opacity = behind ? 0 : Math.max(0, 1 - dist / vrange);
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       div.style.opacity = String(opacity);
       div.style.display = (opacity > 0.05 && !this.foldMode) ? '' : 'none';
     }
-    // Galaxy labels in universe fold view — brighter on hover
+    // Galaxy labels in universe fold view — magnitude-scaled by member count
     for (let k = 0; k < this.galaxyLabelDivs.length; k++) {
       const div = this.galaxyLabelDivs[k];
       const gIdx = Number(div.dataset['galaxyIndex']);
@@ -1753,7 +1760,9 @@ export class StarGraph {
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
       const dist = this.camera.position.distanceTo(gm.centroid);
-      const opacity = behind ? 0 : Math.max(0, 1 - dist / (this._graphRadius * 2));
+      const galImportance = Math.log1p(gm.memberIndices.length) / logMaxMembers;
+      const galVrange = this._graphRadius * (0.5 + galImportance * 2.2);
+      const opacity = behind ? 0 : Math.max(0, 1 - dist / galVrange);
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       const hovered = gIdx === this.hoveredGalaxyIdx;
