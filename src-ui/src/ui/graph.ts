@@ -2578,9 +2578,13 @@ export class StarGraph {
       if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
     }
-    // Dim all edges + hide edge flow particles
+    // Dim all edges + hide highlight edges + hide edge flow particles
     for (const lines of this.edgeLineGroups) {
       (lines.material as THREE.LineBasicMaterial).opacity = 0.02;
+    }
+    // Kill hover/blast highlight edges — they have their own group
+    while (this.highlightEdgeGroup.children.length) {
+      this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     }
     if (this.edgeParticles) this.edgeParticles.visible = false;
     if (this.enteredGalaxyId) {
@@ -3296,14 +3300,14 @@ export class StarGraph {
       pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
       pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
       pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
-      // Mix of cyan, gold, and warm white for visual variety
+      // Dark-universe: dim flow colors
       const colorChoice = Math.random();
       if (colorChoice < 0.4) {
-        cArr[i * 3] = 0.4; cArr[i * 3 + 1] = 0.9; cArr[i * 3 + 2] = 1.0; // cyan
+        cArr[i * 3] = 0.12; cArr[i * 3 + 1] = 0.28; cArr[i * 3 + 2] = 0.32; // dim cyan
       } else if (colorChoice < 0.8) {
-        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.8; cArr[i * 3 + 2] = 0.3; // gold
+        cArr[i * 3] = 0.30; cArr[i * 3 + 1] = 0.24; cArr[i * 3 + 2] = 0.10; // dim gold
       } else {
-        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.95; cArr[i * 3 + 2] = 0.85; // warm white
+        cArr[i * 3] = 0.28; cArr[i * 3 + 1] = 0.26; cArr[i * 3 + 2] = 0.24; // dim warm
       }
       this.crossFlowData.push({ segIdx, t, speed: 0.004 + Math.random() * 0.012 });
     }
