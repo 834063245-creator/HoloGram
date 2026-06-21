@@ -1730,10 +1730,6 @@ export class StarGraph {
 
   private updateLabels(): void {
     const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
-    // ── Magnitude system: hub nodes = bright stars visible from afar ──
-    // importance = log(1+degree) / log(1+maxDegree) → 0=leaf, 1=top hub
-    // vrange = _graphRadius * (0.3 + importance * 2.5) → hub visible 5× further than leaf
-    const logMaxDeg = Math.log1p(this.maxDeg);
     const hoverI = this.hoveredIdx;
     const selI = this.selectedIdx;
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
@@ -1744,15 +1740,10 @@ export class StarGraph {
       const behind = this.tmpVec3.z > 1;
       if (behind || this.foldMode) { div.style.display = 'none'; continue; }
       const focused = i === hoverI || i === selI;
-      const dist = this.camera.position.distanceTo(new THREE.Vector3(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]));
-      const imp = Math.log1p(this.deg[i]) / logMaxDeg;
-      const importance = imp * imp; // square to widen hub-vs-leaf gap
-      const vrange = this._graphRadius * (0.15 + importance * 3.5);
-      const opacity = focused ? 1 : Math.max(0.04, 1 - dist / vrange);
       div.style.display = '';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
-      div.style.opacity = String(opacity);
+      div.style.opacity = focused ? '1' : '0.18';
       div.style.fontSize = focused ? '11px' : '10px';
     }
     // Galaxy labels — no distance fade, hover brightens
@@ -3872,14 +3863,14 @@ export class StarGraph {
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = isFull ? glowColor : (NODE_COLORS[kind] || 0x7eb8ff); // dark-universe: type-colored core, white-hot only on hover
       const baseScale = 0.8 + (deg[i] / this.maxDeg) * 2.8;
-      const glowOpacity = false ? 0 : 0.08; // dark-universe: subtle halo, brightens on hover
+      const glowOpacity = false ? 0 : 0.24; // ×3 baseline
       const glowScaleMul = isFull ? 22 : 16;
 
       // Full mode: large soft outer glow first (behind everything)
       if (isFull) {
         const outerGlow = new THREE.Sprite(new THREE.SpriteMaterial({
           map: this.glowTex, color: glowColor,
-          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.04,
+          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.12,
         }));
         outerGlow.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         outerGlow.scale.setScalar(baseScale * 16);
@@ -4371,7 +4362,7 @@ export class StarGraph {
           this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
           this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
         } else {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12 * this._nodeMag(i);
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.36 * this._nodeMag(i); // ×3 baseline
         }
       } else {
         const risk = this.l34Count[i];
@@ -4381,10 +4372,10 @@ export class StarGraph {
           const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.4 : 0.15);
           const combined = twinkle * wave;
           const mag = this._nodeMag(i);
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.18 * combined * mag; // magnitude: hub bright, leaf dim
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.54 * combined * mag; // ×3 baseline
           // Animate outer glow layer too
           if (this.nodeGlows2[i]) {
-            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.04 * combined * mag;
+            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.12 * combined * mag;
             const base = this.getNodeBaseScale(i);
             this.nodeGlows2[i].scale.setScalar(base * 16 * combined);
           }
@@ -4402,7 +4393,7 @@ export class StarGraph {
           const freq = 1 + risk * 0.7;
           const amp = risk > 0 ? Math.min(0.4, risk * 0.13) : 0.06;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.10 * wave * this._nodeMag(i); // magnitude: hub bright, leaf dim
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.30 * wave * this._nodeMag(i); // ×3 baseline
           const base = this.getNodeBaseScale(i);
           this.nodeGlows[i].scale.setScalar(base * 5.5);
         }
