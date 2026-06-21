@@ -3181,7 +3181,7 @@ export class StarGraph {
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
         size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.24,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.17,
       })));
       // ── Sparse outer halo particles with spiral arm structure ──
       const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
@@ -3224,7 +3224,7 @@ export class StarGraph {
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
         size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.20,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.14,
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
       // Tag halo particles with galaxy index for potential future use
@@ -3232,7 +3232,7 @@ export class StarGraph {
       // ── Soft ambient glow sprite ──
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.20,
+        depthWrite: false, transparent: true, opacity: 0.14,
       }));
       glow.position.copy(gm.centroid);
       glow.scale.setScalar(r * 4.5);
@@ -3241,7 +3241,7 @@ export class StarGraph {
       // ── Central core sprite ──
       const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.50,
+        depthWrite: false, transparent: true, opacity: 0.35,
       }));
       coreSprite.position.copy(gm.centroid);
       coreSprite.scale.setScalar(r * 0.7);
@@ -3909,7 +3909,7 @@ export class StarGraph {
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = isFull ? glowColor : (NODE_COLORS[kind] || 0x7eb8ff); // dark-universe: type-colored core, white-hot only on hover
       const baseScale = 0.8 + (deg[i] / this.maxDeg) * 2.8;
-      const glowOpacity = false ? 0 : 1.0;
+      const glowOpacity = false ? 0 : 0.75;
       const glowScaleMul = isFull ? 22 : 16;
 
       // Full mode: large soft outer glow first (behind everything)
@@ -4325,11 +4325,11 @@ export class StarGraph {
       this.nodeCores[this.hoveredIdx].scale.setScalar(base * s);
       if (this.nodeGlows[this.hoveredIdx]) {
         this.nodeGlows[this.hoveredIdx].scale.setScalar(base * (isFull ? 7 : 7.0) * s);
-        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.75 + this.hoverScale * 0.25;
+        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.65 + this.hoverScale * 0.25;
       }
       for (const ni of neighborSet) {
         if (ni !== this.hoveredIdx && ni < this.nodeGlows.length) {
-          (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.65 + this.hoverScale * 0.10;
+          (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.10;
         }
       }
     }
@@ -4348,12 +4348,12 @@ export class StarGraph {
         if (k % 2 === 0) {
           // Ambient glow — slow breathe, boost on hover
           const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
-          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.36 : 0.16) * d * w;
+          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.26 : 0.12) * d * w;
         } else {
           // Core sprite — heartbeat pulse, brighten + enlarge on hover
           const hoverMul = hovered ? 1.6 : 1.0;
           const beat = 0.8 + 0.2 * Math.abs(Math.sin(this.pulseTime * (1.2 + gi * 0.37)));
-          (glow.material as THREE.SpriteMaterial).opacity = 0.30 * d * beat * hoverMul;
+          (glow.material as THREE.SpriteMaterial).opacity = 0.22 * d * beat * hoverMul;
           const gm_r = 45 + Math.sqrt(gm.memberIndices.length) * 16;
           const s = gm_r * 0.7 * (0.95 + 0.05 * Math.sin(this.pulseTime * (2 + gi * 0.41))) * (hovered ? 1.3 : 1.0);
           glow.scale.setScalar(s);
@@ -4398,7 +4398,7 @@ export class StarGraph {
           this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
           this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
         } else {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 1.0 * this._nodeMag(i));
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 0.75 * this._nodeMag(i));
         }
       } else {
         const risk = this.l34Count[i];
@@ -4408,7 +4408,7 @@ export class StarGraph {
           const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.4 : 0.15);
           const combined = twinkle * wave;
           const mag = this._nodeMag(i);
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 2.0 * combined * mag);
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 1.5 * combined * mag);
           // Animate outer glow layer too
           if (this.nodeGlows2[i]) {
             (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.48 * combined * mag;
@@ -4429,7 +4429,7 @@ export class StarGraph {
           const freq = 1 + risk * 0.7;
           const amp = risk > 0 ? Math.min(0.4, risk * 0.13) : 0.06;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 1.2 * wave * this._nodeMag(i));
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 0.9 * wave * this._nodeMag(i));
           const base = this.getNodeBaseScale(i);
           this.nodeGlows[i].scale.setScalar(base * 5.5);
         }
