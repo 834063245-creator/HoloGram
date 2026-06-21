@@ -2578,11 +2578,10 @@ export class StarGraph {
       if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
     }
-    // Dim all edges + hide highlight edges + hide edge flow particles
+    // Hide ALL edges — additive blending makes even 0.02 accumulate to bright
     for (const lines of this.edgeLineGroups) {
-      (lines.material as THREE.LineBasicMaterial).opacity = 0.02;
+      lines.visible = false;
     }
-    // Kill hover/blast highlight edges — they have their own group
     while (this.highlightEdgeGroup.children.length) {
       this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     }
@@ -2609,8 +2608,7 @@ export class StarGraph {
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
     }
     for (const lines of this.edgeLineGroups) {
-      const depth = (lines.userData['edgeDepth'] as number) ?? 0;
-      (lines.material as THREE.LineBasicMaterial).opacity = edgeOpacityByDepth(depth);
+      lines.visible = true;
     }
     if (this.edgeParticles) this.edgeParticles.visible = true;
     this._disposeFoldChildren();
