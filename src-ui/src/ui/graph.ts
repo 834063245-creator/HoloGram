@@ -4030,13 +4030,16 @@ export class StarGraph {
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
-    // All nodes get labels — dark-universe: default subtle, hover reveals
-    this.nodeLabelIdx = nodes.map((_, i) => i);
+    // Sort by degree — hub nodes' labels matter most for navigation
+    // Cap at 300 DOM elements to avoid frame-rate death (16k divs = 16k DOM updates/frame)
+    const sorted = deg.map((d, i) => ({ d, i })).sort((a, b) => b.d - a.d);
+    const maxCount = 300;
+    this.nodeLabelIdx = sorted.slice(0, maxCount).filter(x => x.d >= 0).map(x => x.i);
     for (const i of this.nodeLabelIdx) {
       const div = document.createElement('div'); div.className = 'node-label';
       div.dataset['kind'] = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
       div.textContent = nodes[i].name;
-      div.style.opacity = '0.18'; // subtle baseline, hover/select overrides
+      div.style.opacity = '0.18'; // subtle baseline, hover/select reveals
       this.labelsContainer.appendChild(div); this.labelDivs.push(div);
     }
   }
