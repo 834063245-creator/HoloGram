@@ -2413,14 +2413,14 @@ export class StarGraph {
     if (on) {
       // Dark-universe fold: subdued exposure + bloom
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 0.9;
+      this.renderer.toneMappingExposure = 0.6;
       // Full mode: subtle bloom for fold view
       if (true) {
         if (this.composer.passes.indexOf(this.bloomPass) === -1) {
           this.composer.addPass(this.bloomPass);
         }
-        this.bloomPass.strength = 0.3;
-        this.bloomPass.threshold = 0.8;
+        this.bloomPass.strength = 0.2;
+        this.bloomPass.threshold = 0.9;
       }
       // Standard mode: no bloom, nothing to adjust
       this.applyFoldOverlay();
@@ -2598,8 +2598,8 @@ export class StarGraph {
     const isFull = true;
     for (let i = 0; i < this.graphNodes.length; i++) {
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
-      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
+      const coreColor = glowColor; // dark-universe: type-colored core, not white-hot
       if (this.nodeCores[i]) { this.nodeCores[i].visible = true; (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor); }
       if (this.nodeGlows[i]) { this.nodeGlows[i].visible = true; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
@@ -2638,7 +2638,7 @@ export class StarGraph {
     for (const mi of gm.memberIndices) {
       if (this.nodeCores[mi]) {
         this.nodeCores[mi].visible = true;
-        (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(isFull ? 0xffffff : StarGraph.CONSTELLATION_COLOR);
+        (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(StarGraph.CONSTELLATION_COLOR);
       }
       if (this.nodeGlows[mi]) {
         this.nodeGlows[mi].visible = true;
@@ -2660,7 +2660,7 @@ export class StarGraph {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
       geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.5,
+        vertexColors: true, transparent: true, opacity: 0.15,
         depthWrite: false, blending: THREE.AdditiveBlending,
       })));
     }
@@ -3311,8 +3311,8 @@ export class StarGraph {
     geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
     const mat = new THREE.PointsMaterial({
-      size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.18, // dark-universe
+      size: 2.0, map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.10, // dark-universe
     });
     this.crossFlowParticles = new THREE.Points(geo, mat);
     this.commFoldGroup.add(this.crossFlowParticles);
