@@ -2662,7 +2662,7 @@ export class StarGraph {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
       geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.15,
+        vertexColors: true, transparent: true, opacity: 0.06,
         depthWrite: false, blending: THREE.AdditiveBlending,
       })));
     }
@@ -3081,7 +3081,7 @@ export class StarGraph {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.5,
+      vertexColors: true, transparent: true, opacity: 0.08,
       depthWrite: false, blending: THREE.AdditiveBlending,
     })));
   }
@@ -3136,7 +3136,7 @@ export class StarGraph {
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
         size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.18, // dark-universe
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.06,
       })));
       // ── Sparse outer halo particles with spiral arm structure ──
       const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
@@ -3179,24 +3179,24 @@ export class StarGraph {
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
         size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.14, // dark-universe
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.05,
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
       // Tag halo particles with galaxy index for potential future use
       haloCloud.userData = { galaxyIndex: gi, galaxyId: gm.id };
-      // ── Soft ambient glow sprite (ACES tone mapping prevents washout) ──
+      // ── Soft ambient glow sprite ──
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.20,
+        depthWrite: false, transparent: true, opacity: 0.05,
       }));
       glow.position.copy(gm.centroid);
       glow.scale.setScalar(r * 4.5);
       glow.userData = { galaxyIndex: gi, galaxyId: gm.id };
       this.commFoldGroup.add(glow); this.galaxyGlows.push(glow);
-      // ── Bright central core (additive — the focal point of each galaxy) ──
+      // ── Central core sprite ──
       const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.75,
+        depthWrite: false, transparent: true, opacity: 0.15,
       }));
       coreSprite.position.copy(gm.centroid);
       coreSprite.scale.setScalar(r * 0.7);
@@ -3255,7 +3255,7 @@ export class StarGraph {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.38,
+      vertexColors: true, transparent: true, opacity: 0.08,
       depthWrite: false, blending: THREE.AdditiveBlending,
     })));
   }
@@ -3314,7 +3314,7 @@ export class StarGraph {
     geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
     const mat = new THREE.PointsMaterial({
       size: 2.0, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.10, // dark-universe
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.03,
     });
     this.crossFlowParticles = new THREE.Points(geo, mat);
     this.commFoldGroup.add(this.crossFlowParticles);
@@ -4308,12 +4308,12 @@ export class StarGraph {
         if (k % 2 === 0) {
           // Ambient glow — slow breathe, boost on hover
           const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
-          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.35 : 0.14) * d * w; // dark-universe: subtle galaxy halo
+          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.10 : 0.04) * d * w;
         } else {
           // Core sprite — heartbeat pulse, brighten + enlarge on hover
           const hoverMul = hovered ? 1.6 : 1.0;
           const beat = 0.8 + 0.2 * Math.abs(Math.sin(this.pulseTime * (1.2 + gi * 0.37)));
-          (glow.material as THREE.SpriteMaterial).opacity = 0.25 * d * beat * hoverMul; // dark-universe: subtle galaxy core
+          (glow.material as THREE.SpriteMaterial).opacity = 0.08 * d * beat * hoverMul;
           const gm_r = 45 + Math.sqrt(gm.memberIndices.length) * 16;
           const s = gm_r * 0.7 * (0.95 + 0.05 * Math.sin(this.pulseTime * (2 + gi * 0.41))) * (hovered ? 1.3 : 1.0);
           glow.scale.setScalar(s);
