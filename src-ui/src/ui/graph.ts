@@ -2411,16 +2411,16 @@ export class StarGraph {
     this.foldMode = on;
     this.enteredGalaxyId = null;
     if (on) {
-      // Enable HDR tone mapping (both modes)
+      // Dark-universe fold: subdued exposure + bloom
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.1;
+      this.renderer.toneMappingExposure = 0.9;
       // Full mode: subtle bloom for fold view
       if (true) {
         if (this.composer.passes.indexOf(this.bloomPass) === -1) {
           this.composer.addPass(this.bloomPass);
         }
-        this.bloomPass.strength = 0.5;
-        this.bloomPass.threshold = 0.7;
+        this.bloomPass.strength = 0.3;
+        this.bloomPass.threshold = 0.8;
       }
       // Standard mode: no bloom, nothing to adjust
       this.applyFoldOverlay();
@@ -3134,7 +3134,7 @@ export class StarGraph {
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
         size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.55,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.18, // dark-universe
       })));
       // ── Sparse outer halo particles with spiral arm structure ──
       const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
@@ -3177,7 +3177,7 @@ export class StarGraph {
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
         size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.40,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.14, // dark-universe
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
       // Tag halo particles with galaxy index for potential future use
@@ -3311,8 +3311,8 @@ export class StarGraph {
     geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
     const mat = new THREE.PointsMaterial({
-      size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.9,
+      size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.18, // dark-universe
     });
     this.crossFlowParticles = new THREE.Points(geo, mat);
     this.commFoldGroup.add(this.crossFlowParticles);
