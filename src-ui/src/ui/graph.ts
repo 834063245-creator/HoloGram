@@ -4439,8 +4439,8 @@ export class StarGraph {
         const risk = this.l34Count[i];
         if (isFull) {
           // Full mode: individual twinkle + color cycling
-          const twinkle = 1 + Math.sin(galTime * this.twinkleSpeeds[i] + this.twinklePhases[i]) * 0.35;
-          const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.4 : 0.15);
+          const twinkle = 1 + Math.sin(galTime * this.twinkleSpeeds[i] + this.twinklePhases[i]) * 0.10;
+          const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.15 : 0.06);
           const combined = twinkle * wave;
           const mag = this._nodeMag(i);
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 1.5 * combined * mag);
@@ -4462,7 +4462,7 @@ export class StarGraph {
           this.nodeGlows[i].scale.setScalar(base * 9 * combined);
         } else {
           const freq = 1 + risk * 0.7;
-          const amp = risk > 0 ? Math.min(0.4, risk * 0.13) : 0.06;
+          const amp = risk > 0 ? Math.min(0.18, risk * 0.06) : 0.03;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 0.9 * wave * this._nodeMag(i));
           const base = this.getNodeBaseScale(i);
