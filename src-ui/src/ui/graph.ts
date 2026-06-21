@@ -664,7 +664,7 @@ export class StarGraph {
     this.scene.background = new THREE.Color(bg);
     // No fog — dark-universe rendering handles depth through contrast, not distance blur
 
-    this.camera = new THREE.PerspectiveCamera(40, 2, 2, 10000);
+    this.camera = new THREE.PerspectiveCamera(40, 2, 0.5, 500000); // near/far widened after layout
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -2890,6 +2890,9 @@ export class StarGraph {
     this.controls.enablePan = true;
     this.controls.minDistance = Math.max(1, this._graphRadius * 0.005);
     this.controls.maxDistance = this._graphRadius * 6;
+    this.camera.near = Math.max(0.1, this.controls.minDistance * 0.5);
+    this.camera.far = this.controls.maxDistance * 2;
+    this.camera.updateProjectionMatrix();
     this._disposeFoldChildren();
     // Re-hide all nodes AND restore their original kind-based colors
     const isFull = true;
@@ -3601,6 +3604,9 @@ export class StarGraph {
     // ── Camera zoom range — wide open, no LOD clamping ──
     this.controls.minDistance = Math.max(0.5, radius * 0.001);
     this.controls.maxDistance = Math.max(this.controls.maxDistance, camDist * 6);
+    // Clip planes: match the actual zoom range so nothing gets hardware-culled
+    this.camera.near = Math.max(0.05, this.controls.minDistance * 0.5);
+    this.camera.far = this.controls.maxDistance * 2;
 
     // Flatter camera angle — less top-down, more natural
     const dir = new THREE.Vector3(0.3, 0.25, 1).normalize();
