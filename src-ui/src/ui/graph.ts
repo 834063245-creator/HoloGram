@@ -312,7 +312,7 @@ async function layout3D(
   // ── Count real communities ──
   const groupIds = nodeComm ? [...new Set(nodeComm.filter(c => c >= 0))] : [];
 
-  // Degenerate: ≤1 community → old single-ball behaviour (unchanged)
+  // Degenerate: ≤1 community → single-ball
   if (groupIds.length <= 1) {
     return simulateForces(n, edgePairs, Math.cbrt(n) * 14, signal);
   }
