@@ -323,9 +323,9 @@ function pullCommunities(
   for (const cc of centroids.values()) {
     cc.cx /= cc.cnt; cc.cy /= cc.cnt; cc.cz /= cc.cnt;
   }
-  // Pull toward centroid — 10 light iterations
-  const pull = shellRadius * 0.02;
-  for (let iter = 0; iter < 10; iter++) {
+  // Pull toward centroid — stronger to match CPU community tightness
+  const pull = shellRadius * 0.06;
+  for (let iter = 0; iter < 20; iter++) {
     for (let i = 0; i < n; i++) {
       const c = nodeComm[i];
       if (c < 0) continue;
