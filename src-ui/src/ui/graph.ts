@@ -1730,7 +1730,10 @@ export class StarGraph {
 
   private updateLabels(): void {
     const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
-    // No LOD — all labels visible, just dim. Hover/selection reveals.
+    // ── Magnitude system: hub nodes = bright stars visible from afar ──
+    // importance = log(1+degree) / log(1+maxDegree) → 0=leaf, 1=top hub
+    // vrange = _graphRadius * (0.3 + importance * 2.5) → hub visible 5× further than leaf
+    const logMaxDeg = Math.log1p(this.maxDeg);
     const hoverI = this.hoveredIdx;
     const selI = this.selectedIdx;
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
@@ -1741,10 +1744,14 @@ export class StarGraph {
       const behind = this.tmpVec3.z > 1;
       if (behind || this.foldMode) { div.style.display = 'none'; continue; }
       const focused = i === hoverI || i === selI;
+      const dist = this.camera.position.distanceTo(new THREE.Vector3(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]));
+      const importance = Math.log1p(this.deg[i]) / logMaxDeg;
+      const vrange = this._graphRadius * (0.3 + importance * 2.5);
+      const opacity = focused ? 1 : Math.max(0.06, 1 - dist / vrange);
       div.style.display = '';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
-      div.style.opacity = focused ? '1' : '0.18';
+      div.style.opacity = String(opacity);
       div.style.fontSize = focused ? '11px' : '10px';
     }
     // Galaxy labels — no distance fade, hover brightens
