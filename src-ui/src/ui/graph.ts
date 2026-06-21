@@ -3759,18 +3759,9 @@ export class StarGraph {
 
     let rawPos: Float32Array;
     const effGroups = new Set(nodeCommArr.filter(c => c >= 0));
-    if (effGroups.size > 1) {
-      // ── Procedural: zero force simulation ──
-      const crossEdges: Array<{ s: number; t: number }> = [];
-      for (const [s, t] of pairs) {
-        if (nodeCommArr[s] >= 0 && nodeCommArr[t] >= 0 && nodeCommArr[s] !== nodeCommArr[t]) {
-          crossEdges.push({ s, t });
-        }
-      }
-      rawPos = proceduralLayout(nodes.length, nodeCommArr, deg, crossEdges, shellRadius);
-      layoutSource = 'Procedural';
-    } else if (gpuLayout.ready) {
-      // ── GPU single-ball (no communities) ──
+    // GPU path: N-body for macro structure, spiral for micro
+    if (gpuLayout.ready) {
+      // ── GPU N-body: macro structure from edge forces, spiral for micro ──
       const initPos = fibonacciSphere(nodes.length, shellRadius);
       const gpuResult = await gpuLayout.compute(nodes.length, pairs, initPos, {
         n: nodes.length,
@@ -3784,6 +3775,10 @@ export class StarGraph {
       if (gpuResult) {
         rawPos = gpuResult;
         layoutSource = 'GPU';
+        if (effGroups.size > 1) {
+          spiralGalaxies(rawPos, nodes.length, nodeCommArr, deg, shellRadius);
+          layoutSource = 'GPU+spiral';
+        }
       } else {
         rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
         layoutSource = 'CPU(fallback)';
