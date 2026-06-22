@@ -355,7 +355,7 @@
     #toolbar .spacer { flex: 1; }
 
     /* Toolbar buttons */
-    #toolbar button:not(.mode-btn) {
+    #toolbar button {
       height: 26px; padding: 0 8px;
       font-family: var(--font-body); font-size: 11px;
       background: transparent; color: rgba(185, 208, 238, 0.72);
@@ -365,35 +365,13 @@
       transition: all var(--snap);
       user-select: none;
     }
-    #toolbar button:not(.mode-btn):hover {
+    #toolbar button:hover {
       color: var(--starlight);
       background: rgba(40, 70, 120, 0.2);
     }
-    #toolbar button:not(.mode-btn):active { background: rgba(50, 90, 150, 0.3); }
-    #toolbar button:not(.mode-btn):disabled { opacity: 0.4; cursor: default; }
+    #toolbar button:active { background: rgba(50, 90, 150, 0.3); }
+    #toolbar button:disabled { opacity: 0.4; cursor: default; }
 
-    /* Mode switch — orbital selector */
-    #mode-switch {
-      display: flex; gap: 0;
-      background: rgba(10, 20, 38, 0.6);
-      border-radius: 3px;
-      padding: 2px;
-    }
-    .mode-btn {
-      width: 26px; height: 22px; padding: 0;
-      font-family: var(--font-hud); font-size: 9px;
-      font-weight: 600; letter-spacing: 0.5px;
-      background: transparent; color: rgba(120, 160, 215, 0.55);
-      border: none; cursor: pointer; border-radius: 2px;
-      transition: all var(--snap);
-      display: flex; align-items: center; justify-content: center;
-    }
-    .mode-btn:hover { color: rgba(155, 190, 235, 0.74); }
-    .mode-btn.active {
-      color: var(--signal-bright);
-      background: rgba(40, 80, 150, 0.3);
-      box-shadow: 0 0 6px rgba(60, 110, 200, 0.25);
-    }
 
     /* Search */
     #search-wrap {
@@ -2986,11 +2964,6 @@
        TOOLBAR
        ═══════════════════════════════════════════════════════════════ -->
   <div id="toolbar">
-    <div id="mode-switch">
-      <button class="mode-btn" data-mode="files" data-icon="mode-minimal" title="文件视图"></button>
-      <button class="mode-btn active" data-mode="standard" data-icon="mode-standard" title="标准星图"></button>
-      <button class="mode-btn" data-mode="full" data-icon="mode-full" title="观赏模式"></button>
-    </div>
     <span class="sep"></span>
     <button id="btn-color-mode" data-icon="chart" title="着色: 按类型"></button>
     <button id="btn-scale-mode" data-icon="blast" title="缩放: 按度"></button>

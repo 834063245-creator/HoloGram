@@ -7,7 +7,7 @@
 
 import '@xterm/xterm/css/xterm.css';
 import { invoke, listen, isMockMode } from './bridge';
-import { StarGraph, VisualMode } from './ui/graph';
+import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { FileViewer } from './ui/file-viewer';
@@ -110,7 +110,7 @@ const btnTerminal = document.getElementById('btn-terminal') as HTMLButtonElement
 
 // ── State ──
 let workspace: Workspace | null = null;
-let starGraph: StarGraph = new StarGraph(graphEl, 'standard');
+let starGraph: StarGraph = new StarGraph(graphEl);
 let agentViz: AgentVisualizer | null = null;
 
 // Panel singletons
@@ -119,62 +119,6 @@ let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
 let hotspotsPanel: HotspotsPanel;
 let conflictPanel: ConflictPanel;
-
-// ── Mode switch ──
-
-const MODE_BUTTONS = () => document.querySelectorAll<HTMLButtonElement>('#mode-switch .mode-btn');
-
-function setModeButtonsEnabled(enabled: boolean): void {
-  MODE_BUTTONS().forEach(b => {
-    const m = (b as HTMLElement).dataset['mode'];
-    if (m === 'files') return;
-    b.disabled = !enabled;
-    b.style.opacity = enabled ? '' : '0.35';
-    b.style.cursor = enabled ? '' : 'not-allowed';
-    b.title = enabled ? '' : '项目节点数超过渲染上限，星图已禁用';
-  });
-}
-
-function setupModeSwitch(): void {
-  const buttons = MODE_BUTTONS();
-  const savedMode = loadSettings().display?.defaultViewMode || 'standard';
-  const validModes: VisualMode[] = ['standard', 'full', 'files'];
-  const mode = validModes.includes(savedMode as VisualMode) ? (savedMode as VisualMode) : 'standard';
-  if (mode !== 'standard' && workspace) {
-    workspace.mode = mode;
-    buttons.forEach(b => {
-      b.classList.toggle('active', (b as HTMLElement).dataset['mode'] === savedMode);
-    });
-  }
-
-  buttons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (btn.disabled || !workspace) return;
-      const mode = btn.dataset['mode'] as VisualMode;
-      if (mode === workspace.mode) return;
-      workspace.mode = mode;
-      buttons.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      const settings = loadSettings();
-      settings.display.defaultViewMode = mode;
-      saveSettings(settings);
-
-      starGraph.destroy();
-      starGraph = new StarGraph(graphEl, workspace.mode);
-      chatPanel.setStarGraph(starGraph);
-      agentViz?.setGraph(starGraph);
-      hotspotsPanel.setGraph(starGraph);
-      const graphForMode = (workspace.mode === 'files' && workspace.fileGraphData)
-        ? workspace.fileGraphData : workspace.graphData;
-      if (graphForMode) starGraph.render(graphForMode);
-
-      if (searchInput.value.trim()) {
-        setTimeout(() => starGraph.focusNode(searchInput.value.trim()), 300);
-      }
-    });
-  });
-}
 
 // ── Folder picker ──
 
@@ -262,7 +206,6 @@ function notifyAllPanels(ws: Workspace): void {
   graphEl.classList.remove('hidden');
   btnOpen.disabled = false;
   btnOpen.innerHTML = `${iconSvg('folder-open')} 打开文件夹`;
-  setModeButtonsEnabled(true);
   chatPanel.setProjectPath(ws.path);
   timelinePanel.setProjectPath(ws.path);
   hotspotsPanel.setProjectPath(ws.path);
@@ -364,7 +307,6 @@ async function init(): Promise<void> {
   })();
 
   setupIcons();
-  setupModeSwitch();
 
   // Chat panel
   chatPanel = new ChatPanel(document.body);

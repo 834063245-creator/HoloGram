@@ -238,22 +238,7 @@ export class SettingsPanel {
       </div>`;
   }
 
-  private renderDisplayTab(viewMode: string, language: string): string {
-    const modes: Array<{ id: string; label: string; desc: string }> = [
-      { id: 'files', label: '文件视图', desc: '文件级聚合（大项目防崩）' },
-      { id: 'standard', label: '标准星图', desc: '完整依赖图 + 社区星系' },
-      { id: 'full', label: '观赏模式', desc: '全量渲染，所有边可见' },
-    ];
-    let opts = '';
-    for (const m of modes) {
-      const checked = m.id === viewMode ? 'checked' : '';
-      opts += `<label class="sp-radio">
-        <input type="radio" name="viewMode" value="${m.id}" ${checked}>
-        <span class="sp-radio-label">${m.label}</span>
-        <span class="sp-radio-desc">${m.desc}</span>
-      </label>`;
-    }
-
+  private renderDisplayTab(_viewMode: string, language: string): string {
     const langOpts = [
       { id: 'zh', label: '中文' },
       { id: 'en', label: 'English' },
@@ -269,10 +254,6 @@ export class SettingsPanel {
 
     return `
       <div class="sp-tab-content" data-tab="display" style="${this.activeTab === 'display' ? '' : 'display:none'}">
-        <div class="sp-section">
-          <div class="sp-section-title">默认视角</div>
-          <div class="sp-radio-group">${opts}</div>
-        </div>
         <div class="sp-section">
           <div class="sp-section-title">语言 / Language</div>
           <div class="sp-radio-group">${langRadios}</div>
@@ -524,10 +505,6 @@ export class SettingsPanel {
     if (ctxWinEl) s.agent.contextWindow = parseInt(ctxWinEl.value) || 0;
 
     // Read display form values
-    const viewModeEl = this.panel.querySelector('input[name="viewMode"]:checked') as HTMLInputElement;
-    if (viewModeEl) {
-      s.display.defaultViewMode = viewModeEl.value as 'standard' | 'full' | 'files';
-    }
     const langEl = this.panel.querySelector('input[name="language"]:checked') as HTMLInputElement;
     if (langEl) {
       s.display.language = langEl.value as Lang;
