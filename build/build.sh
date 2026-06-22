@@ -11,9 +11,9 @@ cd "$(dirname "$0")/.."
 build_engine() {
     echo "═══ 编译引擎 ═══"
     cd engine && cargo build --release && cd ..
-    mkdir -p release-bin
-    cp -f engine/target/release/hologram-engine.exe release-bin/
-    echo "  ✓ release-bin/hologram-engine.exe"
+    mkdir -p engine-bin
+    cp -f engine/target/release/hologram-engine.exe engine-bin/
+    echo "  ✓ engine-bin/hologram-engine.exe"
 }
 
 build_app() {
