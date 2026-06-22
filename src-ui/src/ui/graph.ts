@@ -81,7 +81,7 @@ function edgeColorByType(edgeType: string, direction: string, crossFile = false)
 }
 function edgeOpacityByDepth(depth: number): number {
   const m = 0.10; // dark-universe: subtle web, brightens on hover/highlight
-  switch (depth) { case 1: return 0.015 * m; case 2: return 0.11 * m; case 3: return 0.17 * m; case 4: return 0.22 * m; default: return 0.08 * m; }
+  switch (depth) { case 1: return 0.04 * m; case 2: return 0.11 * m; case 3: return 0.17 * m; case 4: return 0.22 * m; default: return 0.08 * m; }
 }
 
 function hexToCSS(hex: number): string { return '#' + hex.toString(16).padStart(6, '0'); }
@@ -767,10 +767,14 @@ export class StarGraph {
   private nodeGlows2: THREE.Sprite[] = []; // second glow layer (full mode)
 
   // Minimap
+  private minimapContainer!: HTMLDivElement;
   private minimapCanvas!: HTMLCanvasElement;
   private minimapCtx!: CanvasRenderingContext2D;
+  private minimapTooltip!: HTMLDivElement;
   private _mmDragging = false;
   private _mmOffX = 0; private _mmOffY = 0;
+  private _mmHoveredNode = -1;
+  private _mmNodeColors: string[] = [];  // precomputed rgba color strings per node
 
   // Diagnostics
   private _diagMsg = '';
@@ -942,14 +946,34 @@ export class StarGraph {
     if (false) this.labelsContainer.style.display = 'none';
     this.container.appendChild(this.labelsContainer);
 
-    // Minimap — draggable radar overview
-    this.minimapCanvas = document.createElement('canvas');
-    this.minimapCanvas.id = 'graph-minimap';
-    this.minimapCanvas.width = 260; this.minimapCanvas.height = 180;
-    this.minimapCanvas.style.cssText = 'position:absolute;bottom:12px;right:12px;border:1px solid rgba(255,255,255,0.18);border-radius:6px;background:rgba(3,8,18,0.85);cursor:grab;z-index:10;';
-    this.container.appendChild(this.minimapCanvas);
+    // Minimap — draggable radar overview with title bar + hover tooltip
+    const mmc = document.createElement('div');
+    mmc.id = 'graph-minimap-container';
+    mmc.style.cssText = 'position:absolute;bottom:12px;right:12px;z-index:10;transition:opacity 0.25s;';
+    // Title bar
+    const mmTitle = document.createElement('div');
+    mmTitle.id = 'minimap-titlebar';
+    mmTitle.innerHTML = `${iconHtml('focus', 11)} <span style="font-size:10px;letter-spacing:0.04em;">小地图</span>`;
+    mmTitle.style.cssText = 'display:flex;align-items:center;gap:4px;padding:3px 8px;color:rgba(255,255,255,0.55);background:rgba(3,8,18,0.75);border:1px solid rgba(255,255,255,0.1);border-bottom:none;border-radius:8px 8px 0 0;font-family:system-ui,sans-serif;pointer-events:none;';
+    // Canvas
+    const mmCanvas = document.createElement('canvas');
+    mmCanvas.id = 'graph-minimap';
+    mmCanvas.width = 280; mmCanvas.height = 190;
+    mmCanvas.style.cssText = 'display:block;border:1px solid rgba(255,255,255,0.12);border-radius:0 0 8px 8px;background:radial-gradient(ellipse at center,rgba(6,16,36,0.92) 0%,rgba(2,6,16,0.96) 100%);cursor:grab;box-shadow:0 0 12px rgba(60,120,220,0.12),0 0 2px rgba(0,0,0,0.6);';
+    // Tooltip
+    const mmTip = document.createElement('div');
+    mmTip.id = 'minimap-tooltip';
+    mmTip.style.cssText = 'position:absolute;pointer-events:none;padding:2px 7px;font-size:10px;color:#eef;background:rgba(2,5,16,0.9);border:1px solid rgba(255,255,255,0.18);border-radius:4px;white-space:nowrap;display:none;font-family:system-ui,sans-serif;top:0;left:0;';
+    mmc.appendChild(mmTitle);
+    mmc.appendChild(mmCanvas);
+    mmc.appendChild(mmTip);
+    this.container.appendChild(mmc);
+    this.minimapContainer = mmc;
+    this.minimapCanvas = mmCanvas;
+    this.minimapCtx = mmCanvas.getContext('2d')!;
+    this.minimapTooltip = mmTip;
     this._setupMinimapDrag();
-    this.minimapCtx = this.minimapCanvas.getContext('2d')!;
+    this._setupMinimapInteraction();
 
     this.buildLegend();
     this.buildFocusBanner();
@@ -1914,7 +1938,7 @@ export class StarGraph {
       // Restore previous hovered node — brightness only, no scale change
       if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
         // Restore original core color
-        (this.nodeCores[this.hoveredIdx].material as THREE.MeshBasicMaterial).color.set(this.nodeCoreColors[this.hoveredIdx]);
+        this._setCoreColor(this.hoveredIdx, this.nodeCoreColors[this.hoveredIdx]);
         if (this.nodeGlows[this.hoveredIdx]) {
           (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55;
         }
@@ -1927,6 +1951,27 @@ export class StarGraph {
 
   private rebuildHighlightEdges(nodeIdx: number): void {
     if (this.blastMode) return;
+    // In focus subgraph mode, rebuild both focus edges + hover edges together
+    if (this.focusSubgraphActive) {
+      this._buildFocusSubgraphEdges();
+      if (nodeIdx >= 0 && nodeIdx < this.graphNodes.length) {
+        const edges = this.edgeIndexOf[nodeIdx];
+        if (edges.length > 0) {
+          const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
+          for (const ei of edges) {
+            const d = this.edgeDataList[ei];
+            verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
+            const c = edgeColorByType(d.edgeType, d.direction, d.crossFile), bright = 2.5;
+            colors.push(Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright), Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright));
+          }
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+          geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+          this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending })));
+        }
+      }
+      return;
+    }
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     if (nodeIdx < 0 || nodeIdx >= this.graphNodes.length) return;
     const edges = this.edgeIndexOf[nodeIdx];
@@ -2059,9 +2104,7 @@ export class StarGraph {
       (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
       (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
-      (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(
-        0xffffff
-      );
+      this._setCoreColor(i, 0xffffff);
     }
     const st = document.getElementById('status-text');
     if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
@@ -2077,7 +2120,7 @@ export class StarGraph {
         if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(c);
         (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
-        (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(c);
+        this._setCoreColor(i, c);
         const base = this.getNodeBaseScale(i);
         this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
         this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
@@ -2208,7 +2251,7 @@ export class StarGraph {
         glowColor = coreColor;
       }
 
-      (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor);
+      this._setCoreColor(i, coreColor);
       (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor);
       this.nodeCoreColors[i] = coreColor;
       this.nodeGlowColors[i] = glowColor;
@@ -2224,6 +2267,12 @@ export class StarGraph {
     const val = this.scaleMode === 'degree' ? this.deg[i] : (this.l34Count[i] || 0);
     const maxVal = this.scaleMode === 'degree' ? this.maxDeg : Math.max(1, ...this.l34Count);
     return 0.6 + (val / maxVal) * 2.8;
+  }
+
+  private _setCoreColor(i: number, c: number | THREE.Color): void {
+    const core = this.nodeCores[i];
+    if (!core) return;
+    (core.userData._shaderMat as THREE.ShaderMaterial).uniforms.uColor.value.set(c);
   }
 
   /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. */
@@ -2721,7 +2770,7 @@ export class StarGraph {
       }
       if (this.nodeCores[i]) {
         const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-        (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor);
+        this._setCoreColor(i, coreColor);
         const baseScale = this.getNodeBaseScale(i);
         this.nodeCores[i].scale.setScalar(isFull ? baseScale * 0.4 : baseScale);
       }
@@ -2825,7 +2874,7 @@ export class StarGraph {
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = glowColor; // dark-universe: type-colored core, not white-hot
-      if (this.nodeCores[i]) { this.nodeCores[i].visible = true; (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor); }
+      if (this.nodeCores[i]) { this.nodeCores[i].visible = true; this._setCoreColor(i, coreColor); }
       if (this.nodeGlows[i]) { this.nodeGlows[i].visible = true; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
     }
@@ -2862,7 +2911,7 @@ export class StarGraph {
     for (const mi of gm.memberIndices) {
       if (this.nodeCores[mi]) {
         this.nodeCores[mi].visible = true;
-        (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(StarGraph.CONSTELLATION_COLOR);
+        this._setCoreColor(mi, StarGraph.CONSTELLATION_COLOR);
       }
       if (this.nodeGlows[mi]) {
         this.nodeGlows[mi].visible = true;
@@ -2915,7 +2964,7 @@ export class StarGraph {
         // Highlight sub-community nodes with distinct color (override full mode white)
         for (const mi of subMembers) {
           if (this.nodeCores[mi]) {
-            (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(subColor);
+            this._setCoreColor(mi, subColor);
           }
           if (this.nodeGlows[mi]) {
             (this.nodeGlows[mi].material as THREE.SpriteMaterial).color.set(subColor);
@@ -3118,19 +3167,10 @@ export class StarGraph {
     this.camera.far = this.controls.maxDistance * 2;
     this.camera.updateProjectionMatrix();
     this._disposeFoldChildren();
-    // Re-hide all nodes AND restore their original kind-based colors
-    const isFull = true;
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
-      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-      const glowColor = GLOW_COLORS[kind] || 0x4488cc;
-      if (this.nodeCores[i]) { this.nodeCores[i].visible = false; (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor); }
-      if (this.nodeGlows[i]) { this.nodeGlows[i].visible = false; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
-      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
-    }
-    // Restore original galaxyMeta
+    // Restore original galaxyMeta BEFORE applyFoldOverlay (it calls buildGalaxyClouds)
     if (this._savedGalaxyMeta) { this.galaxyMeta = this._savedGalaxyMeta; this._savedGalaxyMeta = null; }
-    this.buildGalaxyClouds();
+    // Properly restore fold overlay — hides all nodes/edges, shows galaxy clouds
+    this.applyFoldOverlay();
     const st = document.getElementById('status-text');
     if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
   }
@@ -3181,7 +3221,7 @@ export class StarGraph {
           shownIndices.push(idx);
           if (this.nodeCores[idx]) {
             this.nodeCores[idx].visible = true;
-            (this.nodeCores[idx].material as THREE.MeshBasicMaterial).color.set(0xffaa44);
+            this._setCoreColor(idx, 0xffaa44);
           }
           if (this.nodeGlows[idx]) {
             this.nodeGlows[idx].visible = true;
@@ -3253,7 +3293,7 @@ export class StarGraph {
           const idx = this.graphNodes.findIndex(n => n.id === nid);
           if (idx >= 0) {
             shownIndices.push(idx);
-            if (this.nodeCores[idx]) { this.nodeCores[idx].visible = true; (this.nodeCores[idx].material as THREE.MeshBasicMaterial).color.set(0xffaa44); }
+            if (this.nodeCores[idx]) { this.nodeCores[idx].visible = true; this._setCoreColor(idx, 0xffaa44); }
             if (this.nodeGlows[idx]) { this.nodeGlows[idx].visible = true; (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0xffaa44); (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.7; }
           }
         }
@@ -3358,7 +3398,7 @@ export class StarGraph {
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
         size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.17,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.28,
       })));
       // ── Sparse outer halo particles with spiral arm structure ──
       const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
@@ -3401,7 +3441,7 @@ export class StarGraph {
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
         size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.14,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.22,
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
       // Tag halo particles with galaxy index for potential future use
@@ -3409,7 +3449,7 @@ export class StarGraph {
       // ── Soft ambient glow sprite ──
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.14,
+        depthWrite: false, transparent: true, opacity: 0.24,
       }));
       glow.position.copy(gm.centroid);
       glow.scale.setScalar(r * 2.0);
@@ -3418,7 +3458,7 @@ export class StarGraph {
       // ── Central core sprite ──
       const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.35,
+        depthWrite: false, transparent: true, opacity: 0.55,
       }));
       coreSprite.position.copy(gm.centroid);
       coreSprite.scale.setScalar(r * 0.35);
@@ -3594,6 +3634,11 @@ export class StarGraph {
       this.controls.target.lerpVectors(this.focusStartLook, this.focusTarget, t);
     }
     if (this.focusNodeIdx >= 0 && this.focusNodeIdx < this.nodeGlows.length) {
+      // Snapshot original scales on first flash frame so restore is exact
+      if (this.focusFlash === 1) {
+        this._savedFocusGlowScale = this.nodeGlows[this.focusNodeIdx].scale.x;
+        this._savedFocusCoreScale = this.nodeCores[this.focusNodeIdx].scale.x;
+      }
       const base = this.getNodeBaseScale(this.focusNodeIdx);
       const flashScale = 1 + Math.sin(this.focusProgress * 20) * 0.5 * this.focusFlash;
       this.nodeGlows[this.focusNodeIdx].scale.setScalar(base * 5.5 * flashScale);
@@ -3604,12 +3649,16 @@ export class StarGraph {
     if (t >= 1) { this.focusActive = false; this._resettingCamera = false; if (this.enteredGalaxyId === null && !this._resettingCamera) setTimeout(() => this.restoreFocusNode(), 800); }
   }
 
+  private _savedFocusGlowScale = 0;
+  private _savedFocusCoreScale = 0;
+
   private restoreFocusNode(): void {
     if (this.focusNodeIdx < 0 || this.focusNodeIdx >= this.nodeGlows.length) return;
-    const base = this.getNodeBaseScale(this.focusNodeIdx);
-    this.nodeGlows[this.focusNodeIdx].scale.setScalar(base * 5.5);
+    this.nodeGlows[this.focusNodeIdx].scale.setScalar(this._savedFocusGlowScale || 1);
     (this.nodeGlows[this.focusNodeIdx].material as THREE.SpriteMaterial).opacity = 0.55;
-    this.nodeCores[this.focusNodeIdx].scale.setScalar(base);
+    this.nodeCores[this.focusNodeIdx].scale.setScalar(this._savedFocusCoreScale || 1);
+    this._savedFocusGlowScale = 0;
+    this._savedFocusCoreScale = 0;
     this.focusNodeIdx = -1;
   }
 
@@ -3671,7 +3720,8 @@ export class StarGraph {
     }
 
     // ── Parse communities & build node→community index ──────
-    this.communities = ((graph as any).communities || []) as CommunityData[];
+    // Prefer hierarchical (multi-level) over flat communities
+    this.communities = ((graph as any).hierarchical_communities || (graph as any).communities || []) as CommunityData[];
     this.nodeCommMap.clear();
     // Debug: log community data
     const level0Comms = this.communities.filter(c => !c.level || c.level === 0);
@@ -4115,11 +4165,43 @@ export class StarGraph {
       tmpC.getHSL(hsl);
       this._nodeBaseHSL.push(hsl);
 
-      // Core — small bright white center in full mode, colored in standard
-      const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: coreColor }));
+      // Core — luminous plasma sphere (fresnel: white-hot center, colored edge glow)
+      const coreMat = new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Color(coreColor) } },
+        vertexShader: /* glsl */ `
+          varying vec3 vNormal;
+          varying vec3 vViewDir;
+          void main() {
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+            vNormal = normalize(normalMatrix * normal);
+            vViewDir = normalize(-mvPosition.xyz);
+          }
+        `,
+        fragmentShader: /* glsl */ `
+          uniform vec3 uColor;
+          varying vec3 vNormal;
+          varying vec3 vViewDir;
+          void main() {
+            float fresnel = 1.0 - abs(dot(normalize(vNormal), normalize(vViewDir)));
+            float edgeGlow = pow(fresnel, 3.5);
+            // Center white-hot, edges tinted with node color
+            vec3 color = mix(vec3(1.0), uColor, edgeGlow);
+            // Brightness falls off toward edges
+            float brightness = 1.0 - edgeGlow * 0.65;
+            // Soft alpha: opaque center, translucent edge
+            float alpha = 1.0 - fresnel * 0.55;
+            gl_FragColor = vec4(color * brightness, alpha);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.NormalBlending,
+      });
+      const core = new THREE.Mesh(this.sphereGeo, coreMat);
       core.position.copy(glow.position);
       core.scale.setScalar(isFull ? baseScale * 0.35 : baseScale);
-      core.userData = { nodeIndex: i };
+      core.userData = { nodeIndex: i, _shaderMat: coreMat };
       this.nodeGroup.add(core); this.nodeCores.push(core);
     }
   }
@@ -4277,12 +4359,14 @@ export class StarGraph {
   // ── Minimap ───────────────────────────────────────────────
 
   private _setupMinimapDrag(): void {
-    const c = this.minimapCanvas;
+    const c = this.minimapContainer;
+    const canvas = this.minimapCanvas;
     const onDown = (e: PointerEvent) => {
+      if ((e.target as HTMLElement)?.id === 'minimap-titlebar') return;
       this._mmDragging = true;
       this._mmOffX = e.clientX - c.offsetLeft;
       this._mmOffY = e.clientY - c.offsetTop;
-      c.style.cursor = 'grabbing';
+      c.style.cursor = 'grabbing'; canvas.style.cursor = 'grabbing';
       c.setPointerCapture(e.pointerId);
     };
     const onMove = (e: PointerEvent) => {
@@ -4293,7 +4377,7 @@ export class StarGraph {
     };
     const onUp = () => {
       this._mmDragging = false;
-      c.style.cursor = 'grab';
+      c.style.cursor = ''; canvas.style.cursor = 'grab';
     };
     c.addEventListener('pointerdown', onDown);
     c.addEventListener('pointermove', onMove);
@@ -4304,12 +4388,14 @@ export class StarGraph {
   private updateMinimap(): void {
     if (!this.minimapCtx || !this.nodePositions || this.nodePositions.length === 0) return;
     const ctx = this.minimapCtx;
-    const W = 260, H = 180;
+    const W = 280, H = 190;
+    const PAD = 14;
     ctx.clearRect(0, 0, W, H);
 
     // Compute 2D bounds (top-down: XZ plane → minimap XY)
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    const n = this.graphNodes.length;
+    for (let i = 0; i < n; i++) {
       const x = this.nodePositions[i * 3], z = this.nodePositions[i * 3 + 2];
       if (isFinite(x) && isFinite(z)) {
         if (x < minX) minX = x; if (x > maxX) maxX = x;
@@ -4317,48 +4403,207 @@ export class StarGraph {
       }
     }
     const bw = maxX - minX || 1, bh = maxZ - minZ || 1;
-    const scale = Math.min((W - 20) / bw, (H - 20) / bh);
+    const scale = Math.min((W - PAD * 2) / bw, (H - PAD * 2) / bh);
     const ox = (W - bw * scale) / 2, oy = (H - bh * scale) / 2;
     const proj = (px: number, pz: number) => ({
       u: ox + (px - minX) * scale,
       v: oy + (pz - minZ) * scale,
     });
 
-    // Draw nodes as tiny dots
-    ctx.fillStyle = 'rgba(150,200,255,0.5)';
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      const { u, v } = proj(this.nodePositions[i * 3], this.nodePositions[i * 3 + 2]);
-      if (u > 2 && u < W - 2 && v > 2 && v < H - 2) {
-        ctx.fillRect(u - 0.6, v - 0.6, 1.2, 1.2);
+    // ── Ensure color cache ──
+    if (this._mmNodeColors.length !== n) {
+      this._mmNodeColors = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const kind = this.graphNodes[i]?.kind || this.graphNodes[i]?.type || 'symbol';
+        const hex = NODE_COLORS[kind] ?? NODE_COLORS['symbol']!;
+        const r = (hex >> 16) & 0xff, g = (hex >> 8) & 0xff, b = hex & 0xff;
+        this._mmNodeColors[i] = `${r},${g},${b}`;
       }
     }
 
-    // Draw camera frustum indicator
+    // ── Subtle grid dots ──
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    for (let gx = PAD; gx <= W - PAD; gx += 18) {
+      for (let gy = PAD; gy <= H - PAD; gy += 14) {
+        ctx.fillRect(gx, gy, 0.6, 0.6);
+      }
+    }
+
+    // ── Edge lines (sampled, faint) ──
+    const edges = this.edgeDataList;
+    const maxEdges = 350;
+    const edgeStride = edges.length > maxEdges ? Math.floor(edges.length / maxEdges) : 1;
+    ctx.lineWidth = 0.4;
+    for (let ei = 0; ei < edges.length; ei += edgeStride) {
+      const e = edges[ei];
+      const su = proj(this.nodePositions[e.s * 3], this.nodePositions[e.s * 3 + 2]);
+      const tu = proj(this.nodePositions[e.t * 3], this.nodePositions[e.t * 3 + 2]);
+      if (su.u < -4 && tu.u < -4) continue;
+      const ec = e.edgeType.toLowerCase();
+      let alpha = 0.08;
+      if (ec === 'reads') { ctx.strokeStyle = `rgba(102,221,102,${alpha})`; }
+      else if (ec === 'writes') { ctx.strokeStyle = `rgba(255,130,130,${alpha})`; }
+      else if (ec === 'shares') { ctx.strokeStyle = `rgba(255,170,68,${alpha})`; }
+      else if (ec === 'temporal' || ec === 'TEMPORAL') { ctx.strokeStyle = `rgba(192,152,255,${alpha})`; }
+      else { ctx.strokeStyle = `rgba(120,160,220,${alpha * 0.7})`; }
+      ctx.beginPath();
+      ctx.moveTo(su.u, su.v);
+      ctx.lineTo(tu.u, tu.v);
+      ctx.stroke();
+    }
+
+    // ── Nodes: glow halo + colored core, sized by degree ──
+    const maxD = Math.max(this.maxDeg, 1);
+    for (let i = 0; i < n; i++) {
+      const { u, v } = proj(this.nodePositions[i * 3], this.nodePositions[i * 3 + 2]);
+      if (u < -2 || u > W + 2 || v < -2 || v > H + 2) continue;
+      const r = 1.0 + 2.8 * Math.log1p(this.deg[i] || 0) / Math.log1p(maxD);
+      const rgb = this._mmNodeColors[i] || '126,184,255';
+      // Glow halo
+      ctx.fillStyle = `rgba(${rgb},0.18)`;
+      ctx.beginPath(); ctx.arc(u, v, r * 2.0, 0, Math.PI * 2); ctx.fill();
+      // Soft middle
+      ctx.fillStyle = `rgba(${rgb},0.45)`;
+      ctx.beginPath(); ctx.arc(u, v, r * 1.15, 0, Math.PI * 2); ctx.fill();
+      // Core
+      ctx.fillStyle = `rgba(${rgb},0.85)`;
+      ctx.beginPath(); ctx.arc(u, v, r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // ── Camera frustum (filled gradient trapezoid) ──
     const cam = this.camera.position;
     const target = this.controls.target;
     const { u: cx, v: cz } = proj(cam.x, cam.z);
     const { u: tx, v: tz } = proj(target.x, target.z);
-    // Camera view direction on XZ plane
     const dx = tx - cx, dz = tz - cz;
     const dist = Math.sqrt(dx * dx + dz * dz) || 1;
     const ndx = dx / dist, ndz = dz / dist;
-    // Frustum width at target
     const halfFov = (this.camera.fov * Math.PI / 180) / 2;
     const fw = Math.tan(halfFov) * dist * 0.35;
     const px = -ndz * fw, pz = ndx * fw;
 
-    ctx.strokeStyle = 'rgba(255,200,100,0.7)';
-    ctx.lineWidth = 1;
+    // Frustum fill gradient (camera→target fade)
+    const grad = ctx.createLinearGradient(cx, cz, tx, tz);
+    grad.addColorStop(0, 'rgba(255,200,100,0.22)');
+    grad.addColorStop(0.6, 'rgba(255,180,60,0.10)');
+    grad.addColorStop(1, 'rgba(255,160,40,0.03)');
+    ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.moveTo(cx - px, cz - pz);
     ctx.lineTo(cx + px, cz + pz);
     ctx.lineTo(tx + px, tz + pz);
     ctx.lineTo(tx - px, tz - pz);
     ctx.closePath();
+    ctx.fill();
+    // Frustum outline
+    ctx.strokeStyle = 'rgba(255,200,100,0.5)';
+    ctx.lineWidth = 0.8;
     ctx.stroke();
-    // Camera dot
-    ctx.fillStyle = 'rgba(255,200,100,0.9)';
-    ctx.beginPath(); ctx.arc(cx, cz, 2.5, 0, Math.PI * 2); ctx.fill();
+
+    // Camera dot with glow
+    ctx.fillStyle = 'rgba(255,200,100,0.22)';
+    ctx.beginPath(); ctx.arc(cx, cz, 3.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,220,140,0.9)';
+    ctx.beginPath(); ctx.arc(cx, cz, 2.2, 0, Math.PI * 2); ctx.fill();
+    // Small bright center
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath(); ctx.arc(cx, cz, 0.9, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // ── Minimap Interaction (hover tooltip + click-to-navigate) ──
+
+  private _setupMinimapInteraction(): void {
+    const canvas = this.minimapCanvas;
+    const tip = this.minimapTooltip;
+    const container = this.minimapContainer;
+
+    // Recompute the projection to map between screen coords and world XZ
+    const getProj = () => {
+      const W = 280, H = 190, PAD = 14;
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (let i = 0; i < this.graphNodes.length; i++) {
+        const x = this.nodePositions[i * 3], z = this.nodePositions[i * 3 + 2];
+        if (isFinite(x) && isFinite(z)) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; }
+      }
+      const bw = maxX - minX || 1, bh = maxZ - minZ || 1;
+      const scale = Math.min((W - PAD * 2) / bw, (H - PAD * 2) / bh);
+      const ox = (W - bw * scale) / 2, oy = (H - bh * scale) / 2;
+      return (px: number, pz: number) => ({
+        u: ox + (px - minX) * scale,
+        v: oy + (pz - minZ) * scale,
+      });
+    };
+
+    canvas.addEventListener('mousemove', (e: MouseEvent) => {
+      if (this._mmDragging || this.graphNodes.length === 0) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const proj = getProj();
+      // Find nearest visible node
+      let bestI = -1, bestD2 = 64; // 8px threshold
+      for (let i = 0; i < this.graphNodes.length; i++) {
+        const { u, v } = proj(this.nodePositions[i * 3], this.nodePositions[i * 3 + 2]);
+        const d2 = (u - mx) ** 2 + (v - my) ** 2;
+        if (d2 < bestD2) { bestD2 = d2; bestI = i; }
+      }
+      if (bestI >= 0) {
+        this._mmHoveredNode = bestI;
+        const node = this.graphNodes[bestI];
+        const kind = node.kind || node.type || 'symbol';
+        const deg = this.deg[bestI] || 0;
+        tip.textContent = `${node.name} · ${kind} · 度${deg}`;
+        tip.style.display = '';
+        tip.style.left = `${Math.min(mx + 12, 280 - 120)}px`;
+        tip.style.top = `${Math.max(my - 20, 0)}px`;
+        canvas.style.cursor = 'pointer';
+      } else {
+        this._mmHoveredNode = -1;
+        tip.style.display = 'none';
+        canvas.style.cursor = this._mmDragging ? 'grabbing' : 'grab';
+      }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      if (!this._mmDragging) {
+        this._mmHoveredNode = -1;
+        tip.style.display = 'none';
+        canvas.style.cursor = 'grab';
+      }
+    });
+
+    canvas.addEventListener('click', (e: MouseEvent) => {
+      if (this._mmDragging || this._mmHoveredNode < 0) return;
+      const idx = this._mmHoveredNode;
+      const nx = this.nodePositions[idx * 3];
+      const ny = this.nodePositions[idx * 3 + 1];
+      const nz = this.nodePositions[idx * 3 + 2];
+      if (!isFinite(nx) || !isFinite(ny) || !isFinite(nz)) return;
+      // Animate camera to look at this node from a reasonable distance
+      const dist = 80 + (this.deg[idx] || 0) * 4;
+      const camTarget = new THREE.Vector3(nx, ny, nz);
+      const camPos = new THREE.Vector3(nx + dist * 0.6, ny + dist * 0.55, nz + dist * 0.5);
+      this._flyCameraTo(camPos, camTarget, 600);
+    });
+  }
+
+  /** Smooth camera flight using GSAP-like tween with easing */
+  private _flyCameraTo(targetPos: THREE.Vector3, lookTarget: THREE.Vector3, durationMs: number): void {
+    const startPos = this.camera.position.clone();
+    const startTarget = this.controls.target.clone();
+    const startTime = performance.now();
+    const animate = () => {
+      const elapsed = performance.now() - startTime;
+      let t = Math.min(elapsed / durationMs, 1.0);
+      // Ease-out cubic
+      t = 1 - Math.pow(1 - t, 3);
+      this.camera.position.lerpVectors(startPos, targetPos, t);
+      this.controls.target.lerpVectors(startTarget, lookTarget, t);
+      this.controls.update();
+      if (t < 1.0) {
+        requestAnimationFrame(animate);
+      }
+    };
+    requestAnimationFrame(animate);
   }
 
   // ── Status ───────────────────────────────────────────────
@@ -4401,8 +4646,8 @@ export class StarGraph {
     const isMinimal = false;
     if (isMinimal) return; // no particles in minimal mode
 
-    // Many small subtle particles — ambient data flow, not flashy dots
-    const count = isFull ? Math.min(2000, data.length * 4) : Math.min(1000, data.length * 2);
+    // Dense visible flow particles — data pulse along edges
+    const count = isFull ? Math.min(5000, data.length * 6) : Math.min(2000, data.length * 3);
     const pPos = new Float32Array(count * 3);
     const pCol = new Float32Array(count * 3);
 
@@ -4414,16 +4659,16 @@ export class StarGraph {
       pPos[i * 3 + 1] = pos[d.s * 3 + 1] + (pos[d.t * 3 + 1] - pos[d.s * 3 + 1]) * t;
       pPos[i * 3 + 2] = pos[d.s * 3 + 2] + (pos[d.t * 3 + 2] - pos[d.s * 3 + 2]) * t;
 
-      // Subtle color: match edge type, occasional gentle warm accent
+      // Visible but not overpowering
       const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-      const bright = 0.6 + Math.random() * 0.6;
+      const bright = 0.5 + Math.random() * 0.7;
       pCol[i * 3] = Math.min(1, c.r * bright);
       pCol[i * 3 + 1] = Math.min(1, c.g * bright);
       pCol[i * 3 + 2] = Math.min(1, c.b * bright);
 
       this.edgeParticleData.push({
         edgeIdx: ei, t,
-        speed: (isFull ? 0.002 : 0.001) + Math.random() * (isFull ? 0.008 : 0.003),
+        speed: (isFull ? 0.004 : 0.002) + Math.random() * (isFull ? 0.014 : 0.006),
         dir: Math.random() > 0.5 ? 1 : -1,
       });
     }
@@ -4432,10 +4677,10 @@ export class StarGraph {
     geo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
     const mat = new THREE.PointsMaterial({
-      size: isFull ? 1.2 : 0.7,
+      size: isFull ? 2.2 : 1.3,
       map: this.glowTex, blending: THREE.AdditiveBlending,
       depthWrite: false, vertexColors: true, transparent: true,
-      opacity: isFull ? 0.6 : 0.45,
+      opacity: isFull ? 0.85 : 0.6,
     });
     this.edgeParticles = new THREE.Points(geo, mat);
     this.galaxyGroup.add(this.edgeParticles);
@@ -4508,7 +4753,7 @@ export class StarGraph {
       // Brighten core color toward white on hover
       const origColor = this.nodeCoreColors[this.hoveredIdx];
       const brightColor = new THREE.Color(origColor).lerp(new THREE.Color(0xffffff), this.hoverScale * 0.6);
-      (this.nodeCores[this.hoveredIdx].material as THREE.MeshBasicMaterial).color.set(brightColor);
+      this._setCoreColor(this.hoveredIdx, brightColor);
       for (const ni of neighborSet) {
         if (ni !== this.hoveredIdx && ni < this.nodeGlows.length) {
           (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.10;
@@ -4575,7 +4820,7 @@ export class StarGraph {
           if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
           (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(c);
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
-          (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(c);
+          this._setCoreColor(i, c);
           const base = this.getNodeBaseScale(i);
           this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
           this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
@@ -4640,7 +4885,7 @@ export class StarGraph {
 
   destroy(): void {
     cancelAnimationFrame(this.animId);
-    this.minimapCanvas?.remove();
+    this.minimapContainer?.remove();
     this.communityRingGroup.clear();
     // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
     this._revealCancelled = true;
