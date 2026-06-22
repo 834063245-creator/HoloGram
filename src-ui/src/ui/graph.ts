@@ -761,6 +761,7 @@ export class StarGraph {
   // Full-FX extras
   private twinklePhases: number[] = [];
   private twinkleSpeeds: number[] = [];
+  private _nodeBaseHSL: Array<{ h: number; s: number; l: number }> = [];
   private edgeParticles!: THREE.Points;
   private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
   private nodeGlows2: THREE.Sprite[] = []; // second glow layer (full mode)
@@ -4017,7 +4018,7 @@ export class StarGraph {
     for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
-    this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.nodeCoreColors = []; this.colorMode = 'type'; this.edgeLineGroups = [];
+    this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = []; this.colorMode = 'type'; this.edgeLineGroups = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = []; this.communityRingGroup.clear(); this._communityGlowSprites = []; this._hoveredCommunityIdx = -1;
     this.foldMode = false; this.enteredGalaxyId = null; this.enteredSubCommunityId = null;
@@ -4108,6 +4109,11 @@ export class StarGraph {
       glow.scale.setScalar(baseScale * glowScaleMul);
       this.nodeGroup.add(glow); this.nodeGlows.push(glow); this.nodeGlowColors.push(glowColor);
       this.nodeCoreColors.push(coreColor);
+      // Pre-compute base HSL for twinkle — avoids per-frame THREE.Color allocations
+      const tmpC = new THREE.Color(glowColor);
+      const hsl = { h: 0, s: 0, l: 0 };
+      tmpC.getHSL(hsl);
+      this._nodeBaseHSL.push(hsl);
 
       // Core — small bright white center in full mode, colored in standard
       const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: coreColor }));
@@ -4591,14 +4597,12 @@ export class StarGraph {
             const base = this.getNodeBaseScale(i);
             this.nodeGlows2[i].scale.setScalar(base * 16 * combined);
           }
-          // Hue shift
+          // Hue shift — uses pre-computed HSL to avoid per-frame allocations
           const hueShift = (Math.sin(galTime * 0.3 + this.twinklePhases[i]) * 0.05);
-          const origColor = new THREE.Color(this.nodeGlowColors[i]);
-          const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-          origColor.getHSL(hsl);
-          const newColor = new THREE.Color();
-          newColor.setHSL((hsl.h + hueShift + 1) % 1, Math.min(1, hsl.s * 1.2), Math.min(1, hsl.l * 1.3));
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(newColor);
+          const bh = this._nodeBaseHSL[i];
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).color.setHSL(
+            (bh.h + hueShift + 1) % 1, Math.min(1, bh.s * 1.2), Math.min(1, bh.l * 1.3),
+          );
           const base = this.getNodeBaseScale(i);
           this.nodeGlows[i].scale.setScalar(base * 9 * combined);
         } else {
