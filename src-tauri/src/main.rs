@@ -326,7 +326,7 @@ use engine::engine as engine_api;
 use engine::graph::Graph;
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
-use engine::community::detect_communities;
+use engine::community::{detect_communities, detect_hierarchical_communities};
 use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 
@@ -374,6 +374,16 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
             serde_json::json!({"id": format!("comm_{}", cid), "size": nids.len(), "node_ids": nids, "label": label})
         })
         .collect();
+    // Hierarchical communities (Level 0 + Level 1+ super-communities)
+    let hcomms: Vec<serde_json::Value> = result.hierarchical_communities.iter()
+        .map(|hc| serde_json::json!({
+            "id": hc.id,
+            "label": hc.label,
+            "node_ids": hc.node_ids,
+            "level": hc.level,
+            "parent_id": hc.parent_id,
+        }))
+        .collect();
 
     // Persist hologram_graph.json for cold-start
     let graph_path = format!("{}/hologram_graph.json", path);
@@ -382,6 +392,7 @@ pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
             "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
             "version": "0.1.0", "node_count": nc, "edge_count": ec },
         "nodes": nodes, "edges": edges, "communities": comms,
+        "hierarchical_communities": hcomms,
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
     // Seed briefing baseline on first analyze so open-project check doesn't diff against empty graph.
@@ -457,12 +468,23 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
                 serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids, "label": label})
             })
             .collect();
+        // Hierarchical communities (Level 0 + Level 1+ super-communities)
+        let hcommunities = detect_hierarchical_communities(g, 42);
+        let hcommunities_json: Vec<serde_json::Value> = hcommunities.iter()
+            .map(|hc| serde_json::json!({
+                "id": hc.id,
+                "label": hc.label,
+                "node_ids": hc.node_ids,
+                "level": hc.level,
+                "parent_id": hc.parent_id,
+            }))
+            .collect();
         let meta = serde_json::json!({
             "source_root": source_root,
             "node_count": g.node_count(),
             "edge_count": g.edge_count(),
         });
-        serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json})).unwrap_or_default()
+        serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json, "hierarchical_communities": hcommunities_json})).unwrap_or_default()
     })
     .map_err(|e| format!("Engine error: {}", e))
 }
