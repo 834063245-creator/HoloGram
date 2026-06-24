@@ -3,7 +3,7 @@
 
 // Check Panel — 简报面板
 // 消费 hologram check --json 的输出，渲染变更摘要面板
-// 底部抽屉，保存时自动刷新
+// 右侧边栏，保存时自动刷新
 
 import { bus } from './events';
 import { iconHtml } from './icons';
@@ -122,10 +122,15 @@ export class CheckPanel {
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.panel.appendChild(brackets);
 
-    // Tab handle (always visible when results exist)
+    // Resize handle (left edge — horizontal resize)
+    const resize = document.createElement('div');
+    resize.className = 'check-resize';
+    this.panel.appendChild(resize);
+    this.setupResize(resize);
+
+    // Header bar
     const tab = document.createElement('div');
     tab.className = 'check-tab';
-    tab.addEventListener('click', () => this.toggle());
 
     this.headerStatus = document.createElement('span');
     this.headerStatus.className = 'check-tab-status';
@@ -137,10 +142,15 @@ export class CheckPanel {
     tabLabel.textContent = '简报';
     tab.appendChild(tabLabel);
 
-    const tabArrow = document.createElement('span');
-    tabArrow.className = 'check-tab-arrow';
-    tabArrow.innerHTML = iconHtml('chevron-up', 10);
-    tab.appendChild(tabArrow);
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'check-close-btn';
+    closeBtn.innerHTML = iconHtml('close', 16);
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.close();
+    });
+    tab.appendChild(closeBtn);
 
     this.panel.appendChild(tab);
 
@@ -150,6 +160,34 @@ export class CheckPanel {
     this.panel.appendChild(this.content);
 
     container.appendChild(this.panel);
+  }
+
+  private setupResize(handle: HTMLElement): void {
+    let dragging = false;
+    let startX = 0;
+    let startW = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startW = this.panel.offsetWidth;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const w = Math.max(280, Math.min(600, startW + (startX - e.clientX)));
+      this.panel.style.width = w + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
   }
 
   // ── Render ──

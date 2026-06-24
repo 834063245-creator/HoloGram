@@ -383,9 +383,11 @@ async function init(): Promise<void> {
   const updateTabs = () => {
     const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
       || GitPanel.get().isOpen() || hotspotsPanel.isOpen();
-    const hideRight = chatPanel.isOpen() || ConstraintsPanel.get().isOpen();
+    const hideRight = checkPanel.isOpen() || ConstraintsPanel.get().isOpen();
+    const hideBottom = chatPanel.isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
+    bottomTabs.style.display = hideBottom ? 'none' : '';
     leftTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
       const active = (p === 'explorer' && FileTreePanel.get().isOpen())
@@ -396,12 +398,12 @@ async function init(): Promise<void> {
     });
     rightTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'chat' && chatPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
+      const active = (p === 'check' && checkPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
       t.classList.toggle('active', !!active);
     });
     bottomTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'check' && checkPanel.isOpen()) || (p === 'terminal' && TerminalPanel.get().isOpen());
+      const active = (p === 'chat' && chatPanel.isOpen()) || (p === 'terminal' && TerminalPanel.get().isOpen());
       t.classList.toggle('active', !!active);
     });
   };
@@ -444,13 +446,14 @@ async function init(): Promise<void> {
     const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
     if (!tab) return;
     const p = tab.dataset['panel'];
-    if (p === 'chat') {
+    if (p === 'check') {
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
       if (conflictPanel.isOpen()) conflictPanel.close();
-      chatPanel.toggle();
+      if (workspace?.path) runCheck();
+      checkPanel.toggle();
     } else if (p === 'constraints') {
       if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
-      if (chatPanel.isOpen()) chatPanel.close();
+      if (checkPanel.isOpen()) checkPanel.close();
       if (conflictPanel.isOpen()) conflictPanel.close();
       ConstraintsPanel.get().toggle();
     }
@@ -459,14 +462,14 @@ async function init(): Promise<void> {
 
   const btnChat = document.getElementById('btn-chat') as HTMLButtonElement;
   btnChat.addEventListener('click', () => {
-    if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+    if (TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
     chatPanel.toggle();
     updateTabs();
   });
 
   // Bottom dock
   const closeBottomSiblings = (except: string) => {
-    if (except !== 'check' && checkPanel.isOpen()) checkPanel.close();
+    if (except !== 'chat' && chatPanel.isOpen()) chatPanel.close();
     if (except !== 'terminal' && TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
   };
 
@@ -474,13 +477,14 @@ async function init(): Promise<void> {
     const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
     if (!tab) return;
     const p = tab.dataset['panel'];
-    if (p === 'check') { closeBottomSiblings('check'); checkPanel.toggle(); }
+    if (p === 'chat') { closeBottomSiblings('chat'); chatPanel.toggle(); }
     else if (p === 'terminal') { closeBottomSiblings('terminal'); TerminalPanel.get().toggle(); }
     updateTabs();
   });
 
   btnCheck.addEventListener('click', () => {
-    closeBottomSiblings('check');
+    if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+    if (conflictPanel.isOpen()) conflictPanel.close();
     checkPanel.toggle();
     if (checkPanel.isOpen() && workspace?.path) runCheck();
     updateTabs();
@@ -528,7 +532,7 @@ async function init(): Promise<void> {
   // Constraints
   btnConstraints.addEventListener('click', () => {
     if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
-    if (chatPanel.isOpen()) chatPanel.close();
+    if (checkPanel.isOpen()) checkPanel.close();
     ConstraintsPanel.get().toggle();
     updateTabs();
   });
@@ -582,6 +586,7 @@ async function init(): Promise<void> {
     if (isEditing()) return;
     if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
+      if (checkPanel.isOpen()) checkPanel.close();
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
       if (conflictPanel.isOpen()) conflictPanel.close();
       chatPanel.toggle();
@@ -704,6 +709,8 @@ async function init(): Promise<void> {
       else if (GitPanel.get().isOpen()) { GitPanel.get().close(); updateTabs(); }
       else if (hotspotsPanel.isOpen()) { hotspotsPanel.close(); updateTabs(); }
       else if (conflictPanel.isOpen()) { conflictPanel.close(); updateTabs(); }
+      else if (checkPanel.isOpen()) { checkPanel.close(); updateTabs(); }
+      else if (chatPanel.isOpen()) { chatPanel.close(); updateTabs(); }
       else if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); updateTabs(); }
       else if (FileViewer.get().isOpen) FileViewer.get().close();
       else starGraph.clearAgentHighlight();
