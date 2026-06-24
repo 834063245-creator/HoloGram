@@ -56,6 +56,23 @@ export class FileTreePanel {
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.el.appendChild(brackets);
 
+    // ── Inline stylesheet for tree guides & open-file highlight ──
+    const treeCSS = document.createElement('style');
+    treeCSS.textContent = `
+      .ft-row { position: relative; border-left: 2px solid transparent; }
+      .ft-row.ft-open {
+        background: rgba(50, 90, 150, 0.25) !important;
+        border-left-color: rgba(80, 140, 220, 0.55);
+      }
+      .ft-row.ft-open .ft-name-file {
+        color: var(--starlight, #e6edf3);
+      }
+      .ft-guide { pointer-events: none; z-index: 0; }
+      .ft-connector { pointer-events: none; z-index: 1; }
+      .ft-arrow, .ft-icon, .ft-name, .ft-ask-btn { position: relative; z-index: 2; }
+    `;
+    this.el.appendChild(treeCSS);
+
     // Header
     this.headerEl = document.createElement('div');
     this.headerEl.className = 'ft-header';
@@ -292,18 +309,42 @@ export class FileTreePanel {
     }
   }
 
+  // Track currently open file for highlight in tree
+  private openFilePath = '';
+
+  setOpenFilePath(path: string): void {
+    if (this.openFilePath === path) return;
+    // Remove old highlight
+    const old = this.treeEl.querySelector('.ft-row.ft-open');
+    if (old) old.classList.remove('ft-open');
+    this.openFilePath = path;
+    // Add new highlight
+    const rows = this.treeEl.querySelectorAll<HTMLElement>('.ft-row');
+    for (const row of rows) {
+      const fp = (row.dataset['filePath'] || '').replace(/\\/g, '/');
+      if (fp === path.replace(/\\/g, '/')) {
+        row.classList.add('ft-open');
+        break;
+      }
+    }
+  }
+
   // ── Tree rendering ──
 
-  private renderTree(entries: DirEntry[], parent: HTMLElement, basePath: string, depth: number = 0): void {
+  // lastFlags[d] = the ancestor entry at depth d was the last child in its parent
+  private renderTree(entries: DirEntry[], parent: HTMLElement, basePath: string, depth: number = 0, lastFlags: boolean[] = []): void {
     parent.innerHTML = '';
-    for (const entry of entries) {
-      const row = this.buildRow(entry, basePath, depth);
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const isLast = i === entries.length - 1;
+      const row = this.buildRow(entry, basePath, depth, lastFlags, isLast);
       parent.appendChild(row);
 
       if (entry.children && entry.children.length > 0) {
         const childContainer = document.createElement('div');
         childContainer.style.display = 'none';
-        this.renderTree(entry.children, childContainer, basePath, depth + 1);
+        const childFlags = [...lastFlags, isLast];
+        this.renderTree(entry.children, childContainer, basePath, depth + 1, childFlags);
         parent.appendChild(childContainer);
 
         row.addEventListener('click', (e) => {
@@ -323,7 +364,6 @@ export class FileTreePanel {
           }
         });
       } else if (entry.is_dir) {
-        // Empty directory — brief flash feedback, no expand/collapse
         row.addEventListener('click', (e) => {
           e.stopPropagation();
           row.style.background = 'rgba(48, 60, 80, 0.35)';
@@ -332,6 +372,7 @@ export class FileTreePanel {
       } else {
         row.addEventListener('click', () => {
           FileViewer.get().open(entry.path);
+          this.setOpenFilePath(entry.path);
           dbg('FileTree.clickFile', entry.path);
           bus.emit('highlight:file', entry.path);
         });
@@ -339,11 +380,51 @@ export class FileTreePanel {
     }
   }
 
-  private buildRow(entry: DirEntry, basePath: string, depth: number): HTMLElement {
+  private buildRow(entry: DirEntry, _basePath: string, depth: number, lastFlags: boolean[], isLast: boolean): HTMLElement {
     const row = document.createElement('div');
     row.className = 'ft-row';
     row.style.setProperty('--indent', `${12 + depth * 16}px`);
     row.dataset['filePath'] = entry.path;
+
+    // Check if this file is currently open
+    const normalizedEntryPath = entry.path.replace(/\\/g, '/');
+    if (this.openFilePath.replace(/\\/g, '/') === normalizedEntryPath) {
+      row.classList.add('ft-open');
+    }
+
+    // ── Indent guide lines ──
+    // For each ancestor level (0..depth-1): draw a vertical continuation line
+    // unless that ancestor was the last child (its branch ended).
+    for (let lvl = 0; lvl < depth; lvl++) {
+      const guide = document.createElement('span');
+      guide.className = 'ft-guide';
+      const left = 12 + lvl * 16 + 7; // center of parent arrow
+      if (lastFlags[lvl]) {
+        // Ancestor was last child → no line, just empty spacer
+        guide.style.cssText = `position:absolute;left:${left}px;top:0;width:0;height:100%;`;
+      } else {
+        // Vertical continuation line │
+        guide.style.cssText = `position:absolute;left:${left}px;top:0;bottom:0;width:1px;background:rgba(48,60,80,0.35);`;
+      }
+      row.appendChild(guide);
+    }
+
+    // Branch connector at current depth (├ or └)
+    if (depth > 0) {
+      const conn = document.createElement('span');
+      conn.className = 'ft-connector';
+      const left = 12 + depth * 16 + 7;
+      if (isLast) {
+        // └─ last child
+        conn.innerHTML = `<svg width="12" height="20" style="position:absolute;left:${left-6}px;top:-4px;pointer-events:none;"><line x1="6" y1="10" x2="6" y2="14" stroke="rgba(48,60,80,0.4)" stroke-width="1"/><line x1="6" y1="14" x2="11" y2="14" stroke="rgba(48,60,80,0.4)" stroke-width="1"/></svg>`;
+      } else {
+        // ├─ non-last child
+        conn.innerHTML = `<svg width="12" height="20" style="position:absolute;left:${left-6}px;top:-4px;pointer-events:none;"><line x1="6" y1="0" x2="6" y2="14" stroke="rgba(48,60,80,0.4)" stroke-width="1"/><line x1="6" y1="14" x2="11" y2="14" stroke="rgba(48,60,80,0.4)" stroke-width="1"/></svg>`;
+      }
+      row.appendChild(conn);
+    }
+
+    // ── Row content ──
 
     // Arrow / spacer
     const arrow = document.createElement('span');
