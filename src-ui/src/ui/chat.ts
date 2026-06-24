@@ -20,9 +20,6 @@ import hljs from 'highlight.js';
 
 // ── Constants ──
 
-const DEFAULT_WIDTH = 380;
-const MIN_WIDTH = 280;
-const MAX_WIDTH = 600;
 const PANEL_ID = 'chat-panel';
 
 // ── ChatPanel ──
@@ -1001,22 +998,26 @@ export class ChatPanel {
 
   private setupResize(handle: HTMLElement): void {
     let dragging = false;
-    let startX = 0;
-    let startW = 0;
+    let startY = 0;
+    let startH = 0;
+
+    const MIN_HEIGHT = 180;
+    const MAX_HEIGHT_PCT = 0.7; // 70vh max
 
     handle.addEventListener('mousedown', (e) => {
       dragging = true;
-      startX = e.clientX;
-      startW = this.panel.offsetWidth;
-      document.body.style.cursor = 'col-resize';
+      startY = e.clientY;
+      startH = this.panel.offsetHeight;
+      document.body.style.cursor = 'row-resize';
       document.body.style.userSelect = 'none';
       e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      const w = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + (startX - e.clientX)));
-      this.panel.style.width = w + 'px';
+      const maxH = Math.floor(window.innerHeight * MAX_HEIGHT_PCT);
+      const h = Math.max(MIN_HEIGHT, Math.min(maxH, startH + (startY - e.clientY)));
+      this.panel.style.height = h + 'px';
     });
 
     document.addEventListener('mouseup', () => {
