@@ -126,6 +126,14 @@ const icons: Record<string, IconDef> = {
     label: '保存',
     path: '<path d="M4 2 L4 14 L12 14 L14 12 L14 2 Z"/><line x1="7" y1="2" x2="7" y2="7"/><line x1="5" y1="7" x2="12" y2="7"/>',
   },
+  undo: {
+    label: '撤销',
+    path: '<path d="M4 9 A5 5 0 0 1 14 5"/><polyline points="4,9 8,9 8,5"/><line x1="8" y1="9" x2="15" y2="9"/>',
+  },
+  redo: {
+    label: '重做',
+    path: '<path d="M14 9 A5 5 0 0 1 4 5"/><polyline points="14,9 10,9 10,5"/><line x1="10" y1="9" x2="3" y2="9"/>',
+  },
   reset: {
     label: '重置',
     path: '<path d="M3 5 A6 6 0 0 1 13 3"/><polyline points="3,5 7,5 7,1"/>',

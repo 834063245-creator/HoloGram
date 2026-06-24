@@ -6,11 +6,12 @@
 // 支持拖拽移动、调整大小、多标签页、Ctrl+S 保存
 
 import { invoke } from '../bridge';
-import { iconHtml } from './icons';
+import { iconHtml, iconSvg } from './icons';
 import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
 import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 import { FileTranslator } from './file-translator';
+import { FileTreePanel } from './file-tree';
 
 // Monaco workers — Vite ?worker syntax bundles them as separate chunks
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
@@ -66,6 +67,13 @@ export class FileViewer {
   private resizeHandle!: HTMLElement;
   private windowCloseBtn!: HTMLElement;
   private translator!: FileTranslator;
+  // ── New chrome ──
+  private breadcrumb!: HTMLElement;
+  private toolbar!: HTMLElement;
+  private statusBar!: HTMLElement;
+  private statusLsp!: HTMLElement;
+  private statusCursor!: HTMLElement;
+  private toolbarBtns: Record<string, HTMLButtonElement> = {};
 
   private tabs: TabData[] = [];
   private activeIdx = -1;
@@ -98,6 +106,7 @@ export class FileViewer {
   }
 
   private buildDOM(): void {
+    // ── Outer shell ──
     this.el = document.createElement('div');
     this.el.id = 'file-viewer';
     this.el.className = 'file-viewer';
@@ -112,105 +121,215 @@ export class FileViewer {
       borderRadius: '8px',
       boxShadow: '0 12px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(88,120,180,0.08) inset',
       flexDirection: 'column', overflow: 'hidden',
-      minWidth: '360px', minHeight: '240px',
+      minWidth: '420px', minHeight: '320px',
     });
 
-    // Corner brackets
     const brackets = document.createElement('div');
     brackets.className = 'corner-brackets';
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.el.appendChild(brackets);
 
-    // Header — tab bar + window close
+    // ═══════════════════════════════════════════════
+    // LAYER 1: Titlebar — breadcrumb + window actions
+    // ═══════════════════════════════════════════════
     this.header = document.createElement('div');
-    this.header.className = 'fv-header';
+    this.header.className = 'fv-titlebar';
     Object.assign(this.header.style, {
-      display: 'flex', alignItems: 'center', gap: '4px',
-      padding: '4px 6px',
-      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.4))',
-      cursor: 'move', userSelect: 'none', flexShrink: '0',
-      background: 'var(--panel-bg, rgba(14, 22, 38, 0.9))',
-      minHeight: '34px', overflow: 'hidden',
+      display: 'flex', alignItems: 'center', gap: '6px',
+      height: '30px', padding: '0 6px', flexShrink: '0',
+      cursor: 'move', userSelect: 'none',
+      background: 'rgba(14, 22, 38, 0.7)',
+      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.25))',
     });
 
+    // Breadcrumb
+    this.breadcrumb = document.createElement('div');
+    this.breadcrumb.className = 'fv-breadcrumb';
+    Object.assign(this.breadcrumb.style, {
+      display: 'flex', alignItems: 'center', gap: '2px', flex: '1',
+      overflow: 'hidden', fontSize: '10px', fontFamily: 'var(--font-mono, monospace)',
+      color: 'var(--text-muted)', minWidth: '0',
+    });
+    this.header.appendChild(this.breadcrumb);
+
+    // Window action buttons
+    const winActions = document.createElement('div');
+    winActions.className = 'fv-win-actions';
+    Object.assign(winActions.style, {
+      display: 'flex', alignItems: 'center', gap: '2px', flexShrink: '0',
+    });
+    for (const { id, icon, tip, colorVar } of [
+      { id: 'agent', icon: 'agent', tip: '问 Agent 分析当前文件', colorVar: 'var(--signal, #7eb8ff)' },
+      { id: 'translate', icon: 'translate', tip: '翻译当前文件', colorVar: 'var(--nebula, #a088e0)' },
+      { id: 'close', icon: 'close', tip: '关闭', colorVar: 'var(--text-muted)' },
+    ]) {
+      const btn = document.createElement('button');
+      btn.className = `fv-title-btn`;
+      btn.innerHTML = iconHtml(icon, 13);
+      btn.title = tip;
+      Object.assign(btn.style, {
+        width: '22px', height: '22px', padding: '0', border: 'none', cursor: 'pointer',
+        background: 'none', color: 'var(--text-muted)', borderRadius: '4px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px',
+      });
+      btn.addEventListener('mouseenter', () => { btn.style.color = colorVar; btn.style.background = 'rgba(255,255,255,0.05)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-muted)'; btn.style.background = 'none'; });
+      if (id === 'agent') {
+        btn.addEventListener('click', () => {
+          const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+          if (tab) askAgent(`分析文件 "${tab.filePath}" 的依赖关系和耦合状况。它和其他模块的关联是什么？如果修改它会影响哪些模块？`);
+        });
+      } else if (id === 'translate') {
+        btn.addEventListener('click', () => {
+          const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+          if (tab && !tab.diffModels) this.translator.translateFile(tab.filePath);
+        });
+      } else if (id === 'close') {
+        this.windowCloseBtn = btn;
+        btn.addEventListener('click', () => this.closeAll());
+      }
+      winActions.appendChild(btn);
+    }
+    this.header.appendChild(winActions);
+
+    // Drag from titlebar (not from buttons)
+    this.header.addEventListener('pointerdown', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      this.onDragStart(e);
+    });
+
+    // ═══════════════════════════════════════════════
+    // LAYER 2: Toolbar — save / undo / redo / format
+    // ═══════════════════════════════════════════════
+    this.toolbar = document.createElement('div');
+    this.toolbar.className = 'fv-toolbar';
+    Object.assign(this.toolbar.style, {
+      display: 'flex', alignItems: 'center', gap: '1px',
+      height: '26px', padding: '0 4px', flexShrink: '0',
+      background: 'rgba(10, 18, 32, 0.5)',
+      borderBottom: '1px solid rgba(48, 60, 80, 0.2)',
+    });
+
+    const btnDefs: [string, string, string, () => void][] = [
+      ['save', '保存 (Ctrl+S)', 'var(--starlight-dim)', () => this.saveActiveTab()],
+      ['undo', '撤销 (Ctrl+Z)', 'var(--text-muted)', () => this.editor.trigger('', 'undo', null)],
+      ['redo', '重做 (Ctrl+Y)', 'var(--text-muted)', () => this.editor.trigger('', 'redo', null)],
+      ['search', '查找 (Ctrl+F)', 'var(--text-muted)', () => this.editor.getAction('actions.find')?.run()],
+    ];
+
+    for (const [icon, tip, _color, action] of btnDefs) {
+      const btn = document.createElement('button');
+      btn.innerHTML = iconHtml(icon, 12);
+      btn.title = tip;
+      Object.assign(btn.style, {
+        width: '22px', height: '20px', padding: '0', border: 'none', cursor: 'pointer',
+        background: 'none', color: 'var(--text-muted)', borderRadius: '3px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      });
+      btn.addEventListener('mouseenter', () => { btn.style.color = 'var(--starlight-dim)'; btn.style.background = 'rgba(255,255,255,0.04)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-muted)'; btn.style.background = 'none'; });
+      btn.addEventListener('click', action);
+      this.toolbarBtns[icon] = btn;
+      this.toolbar.appendChild(btn);
+    }
+
+    // Separator
+    const sep = document.createElement('div');
+    sep.style.cssText = 'width:1px;height:14px;background:rgba(48,60,80,0.35);margin:0 4px;';
+    this.toolbar.appendChild(sep);
+
+    // Format button
+    const fmtBtn = document.createElement('button');
+    fmtBtn.innerHTML = iconHtml('edit', 12);
+    fmtBtn.title = '格式化文档';
+    Object.assign(fmtBtn.style, {
+      width: '22px', height: '20px', padding: '0', border: 'none', cursor: 'pointer',
+      background: 'none', color: 'var(--text-muted)', borderRadius: '3px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    });
+    fmtBtn.addEventListener('mouseenter', () => { fmtBtn.style.color = 'var(--signal, #7eb8ff)'; fmtBtn.style.background = 'rgba(255,255,255,0.04)'; });
+    fmtBtn.addEventListener('mouseleave', () => { fmtBtn.style.color = 'var(--text-muted)'; fmtBtn.style.background = 'none'; });
+    fmtBtn.addEventListener('click', () => this.editor.getAction('editor.action.formatDocument')?.run());
+    this.toolbarBtns['format'] = fmtBtn;
+    this.toolbar.appendChild(fmtBtn);
+
+    // ═══════════════════════════════════════════════
+    // LAYER 3: Tab bar — file tabs (clean, separate row)
+    // ═══════════════════════════════════════════════
     this.tabBar = document.createElement('div');
+    this.tabBar.className = 'fv-tabbar';
     Object.assign(this.tabBar.style, {
-      display: 'flex', flex: '1', gap: '2px', overflow: 'auto', minWidth: '0',
+      display: 'flex', alignItems: 'flex-end', gap: '0',
+      height: '30px', padding: '0 4px', flexShrink: '0', overflowX: 'auto', overflowY: 'hidden',
+      background: 'rgba(8, 14, 26, 0.6)',
+      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
+      minHeight: '30px',
     });
 
-    this.windowCloseBtn = document.createElement('button');
-    this.windowCloseBtn.className = 'fv-close';
-    this.windowCloseBtn.innerHTML = iconHtml('close', 14);
-    Object.assign(this.windowCloseBtn.style, {
-      width: '22px', height: '22px', padding: '0', flexShrink: '0',
-      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    });
-    this.windowCloseBtn.addEventListener('mouseenter', () => {
-      this.windowCloseBtn.style.color = 'var(--starlight-dim)';
-      this.windowCloseBtn.style.background = 'rgba(255,255,255,0.05)';
-    });
-    this.windowCloseBtn.addEventListener('mouseleave', () => {
-      this.windowCloseBtn.style.color = 'var(--text-muted)';
-      this.windowCloseBtn.style.background = 'none';
-    });
-    this.windowCloseBtn.addEventListener('click', () => this.closeAll());
-
-    // "Ask Agent" button — analyze the current file
-    const askBtn = document.createElement('button');
-    askBtn.className = 'fv-ask-btn';
-    askBtn.innerHTML = iconHtml('agent', 13);
-    askBtn.title = '问 Agent 分析当前文件';
-    Object.assign(askBtn.style, {
-      width: '22px', height: '22px', padding: '0', flexShrink: '0',
-      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      transition: 'color var(--snap, 0.12s)',
-    });
-    askBtn.addEventListener('mouseenter', () => { askBtn.style.color = 'var(--signal, #7eb8ff)'; });
-    askBtn.addEventListener('mouseleave', () => { askBtn.style.color = 'var(--text-muted, #4a5568)'; });
-    askBtn.addEventListener('click', () => {
-      const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
-      if (tab) {
-        askAgent(`分析文件 "${tab.filePath}" 的依赖关系和耦合状况。它和其他模块的关联是什么？如果修改它会影响哪些模块？`);
-      }
-    });
-
-    // "Translate" button — translate current file
-    const translateBtn = document.createElement('button');
-    translateBtn.className = 'fv-translate-btn';
-    translateBtn.innerHTML = iconHtml('translate', 14);
-    translateBtn.title = '翻译当前文件';
-    Object.assign(translateBtn.style, {
-      width: '22px', height: '22px', padding: '0', flexShrink: '0',
-      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      transition: 'color var(--snap, 0.12s)',
-    });
-    translateBtn.addEventListener('mouseenter', () => { translateBtn.style.color = 'var(--nebula, #a088e0)'; });
-    translateBtn.addEventListener('mouseleave', () => { translateBtn.style.color = 'var(--text-muted, #4a5568)'; });
-    translateBtn.addEventListener('click', () => {
-      const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
-      if (tab && !tab.diffModels) {
-        this.translator.translateFile(tab.filePath);
-      }
-    });
-
-    this.header.appendChild(this.tabBar);
-    this.header.appendChild(askBtn);
-    this.header.appendChild(translateBtn);
-    this.header.appendChild(this.windowCloseBtn);
-
-    // Editor container
+    // ═══════════════════════════════════════════════
+    // LAYER 4: Editor area
+    // ═══════════════════════════════════════════════
     this.editorContainer = document.createElement('div');
     Object.assign(this.editorContainer.style, { flex: '1', overflow: 'hidden' });
-
-    // Diff editor container (hidden by default)
     this.diffEditorContainer = document.createElement('div');
     Object.assign(this.diffEditorContainer.style, { flex: '1', overflow: 'hidden', display: 'none' });
+
+    // ═══════════════════════════════════════════════
+    // LAYER 5: Status bar — LSP · language · cursor
+    // ═══════════════════════════════════════════════
+    this.statusBar = document.createElement('div');
+    this.statusBar.className = 'fv-statusbar';
+    Object.assign(this.statusBar.style, {
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      height: '22px', padding: '0 8px', flexShrink: '0',
+      background: 'rgba(8, 14, 26, 0.8)',
+      borderTop: '1px solid rgba(48, 60, 80, 0.3)',
+      fontSize: '10px', fontFamily: 'var(--font-mono, monospace)',
+      color: 'var(--text-muted)',
+    });
+
+    // Left: LSP status + language
+    const statusLeft = document.createElement('div');
+    statusLeft.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+    this.statusLsp = document.createElement('span');
+    this.statusLsp.className = 'fv-lsp-status';
+    this.statusLsp.title = 'LSP 状态';
+    this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
+    this.statusLsp.style.cssText = 'display:flex;align-items:center;gap:3px;opacity:0.5;';
+    statusLeft.appendChild(this.statusLsp);
+
+    const statusLang = document.createElement('span');
+    statusLang.className = 'fv-lang-badge';
+    statusLang.style.cssText = 'text-transform:uppercase;letter-spacing:0.5px;';
+    statusLeft.appendChild(statusLang);
+
+    // Right: cursor position + encoding
+    const statusRight = document.createElement('div');
+    statusRight.style.cssText = 'display:flex;align-items:center;gap:10px;';
+
+    this.statusCursor = document.createElement('span');
+    this.statusCursor.className = 'fv-cursor';
+    this.statusCursor.textContent = 'Ln 1, Col 1';
+    statusRight.appendChild(this.statusCursor);
+
+    const statusEnc = document.createElement('span');
+    statusEnc.textContent = 'UTF-8';
+    statusEnc.style.opacity = '0.5';
+    statusRight.appendChild(statusEnc);
+
+    this.statusBar.appendChild(statusLeft);
+    this.statusBar.appendChild(statusRight);
+
+    // ═══════════════════════════════════════════════
+    // Assemble
+    // ═══════════════════════════════════════════════
+    this.el.appendChild(this.header);
+    this.el.appendChild(this.toolbar);
+    this.el.appendChild(this.tabBar);
+    this.el.appendChild(this.editorContainer);
+    this.el.appendChild(this.diffEditorContainer);
+    this.el.appendChild(this.statusBar);
 
     // Resize handle
     this.resizeHandle = document.createElement('div');
@@ -219,21 +338,11 @@ export class FileViewer {
       position: 'absolute', right: '0', bottom: '0',
       width: '14px', height: '14px', cursor: 'nwse-resize', zIndex: '2',
     });
-
-    this.el.appendChild(this.header);
-    this.el.appendChild(this.editorContainer);
-    this.el.appendChild(this.diffEditorContainer);
     this.el.appendChild(this.resizeHandle);
 
-    // Drag — only on empty header area
-    this.header.addEventListener('pointerdown', (e) => {
-      if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('.fv-tab')) return;
-      this.onDragStart(e);
-    });
+    // Global drag/resize listeners
     window.addEventListener('pointermove', (e) => this.onDragMove(e));
     window.addEventListener('pointerup', () => this.onDragEnd());
-
-    // Resize
     this.resizeHandle.addEventListener('pointerdown', (e) => this.onResizeStart(e));
     window.addEventListener('pointermove', (e) => this.onResizeMove(e));
     window.addEventListener('pointerup', () => this.onResizeEnd());
@@ -253,12 +362,10 @@ export class FileViewer {
       lineNumbers: 'on',
       renderWhitespace: 'selection',
       tabSize: 4,
-      automaticLayout: false, // we handle resize manually
+      automaticLayout: false,
       wordWrap: 'off',
-      // Match our deep-space theme
       overviewRulerBorder: false,
       hideCursorInOverviewRuler: true,
-      // ── Enabled Monaco IDE features ──
       bracketPairColorization: { enabled: true },
       cursorSmoothCaretAnimation: 'on',
       linkedEditing: true,
@@ -269,6 +376,19 @@ export class FileViewer {
 
     // Ctrl+S → save
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => this.saveActiveTab());
+
+    // ── Cursor position → status bar ──
+    this.editor.onDidChangeCursorPosition((e) => {
+      this.statusCursor.textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+    });
+
+    // ── Editor focus → update breadcrumb & status ──
+    this.editor.onDidFocusEditorText(() => {
+      const pos = this.editor.getPosition();
+      if (pos) this.statusCursor.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
+      this.updateBreadcrumb();
+      this.updateStatusBar();
+    });
 
     // LSP diagnostics listener
     listenForDiagnostics(this.editor, monaco);
@@ -313,39 +433,54 @@ export class FileViewer {
     this.tabBar.innerHTML = '';
     for (let i = 0; i < this.tabs.length; i++) {
       const tab = this.tabs[i];
+      const isActive = i === this.activeIdx;
+      const isDiff = !!tab.diffModels;
+
       const tabEl = document.createElement('div');
       tabEl.className = 'fv-tab';
-      const isActive = i === this.activeIdx;
-      Object.assign(tabEl.style, {
-        display: 'inline-flex', alignItems: 'center', gap: '4px',
-        padding: '3px 8px', borderRadius: '4px', cursor: 'pointer',
-        fontSize: '11px', fontFamily: 'var(--font-mono, monospace)',
-        whiteSpace: 'nowrap', flexShrink: '0', maxWidth: '160px',
-        background: isActive ? 'rgba(30, 55, 100, 0.45)' : 'transparent',
-        color: isActive ? 'var(--starlight, #e6edf3)' : 'var(--text-muted)',
-        border: isActive ? '1px solid rgba(60, 100, 170, 0.3)' : '1px solid transparent',
-      });
       tabEl.title = tab.filePath;
+      Object.assign(tabEl.style, {
+        display: 'inline-flex', alignItems: 'center', gap: '5px',
+        height: '26px', padding: '0 10px', cursor: 'pointer',
+        fontSize: '11px', fontFamily: 'var(--font-mono, monospace)',
+        whiteSpace: 'nowrap', flexShrink: '0', maxWidth: '170px',
+        borderTop: isActive ? '2px solid rgba(80, 140, 220, 0.7)' : '2px solid transparent',
+        background: isActive ? 'rgba(22, 40, 70, 0.55)' : 'transparent',
+        color: isActive ? 'var(--starlight, #e6edf3)' : 'var(--text-muted)',
+        borderRadius: '3px 3px 0 0',
+      });
 
-      // Dirty indicator
+      // File icon
+      const ficon = document.createElement('span');
+      ficon.innerHTML = isDiff ? iconHtml('diff', 12) : fileIconSvg(tab.fileName, 12);
+      ficon.style.cssText = 'display:flex;align-items:center;flex-shrink:0;opacity:0.7;';
+      tabEl.appendChild(ficon);
+
+      // Dirty dot
+      if (tab.dirty) {
+        const dot = document.createElement('span');
+        dot.className = 'fv-tab-dirty';
+        dot.style.cssText = 'width:7px;height:7px;border-radius:50%;background:rgba(235,180,80,0.9);flex-shrink:0;';
+        tabEl.appendChild(dot);
+      }
+
+      // Label
       const label = document.createElement('span');
       label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;';
-      label.textContent = tab.dirty ? `● ${tab.fileName}` : tab.fileName;
+      label.textContent = tab.fileName;
 
+      // Close button — hidden until hover
       const closeBtn = document.createElement('button');
       closeBtn.innerHTML = iconHtml('close', 10);
       Object.assign(closeBtn.style, {
         background: 'none', border: 'none', cursor: 'pointer',
         color: 'inherit', padding: '0', fontSize: '10px',
         display: 'flex', alignItems: 'center', flexShrink: '0',
-        opacity: '0.5',
+        opacity: '0', borderRadius: '2px',
       });
-      closeBtn.addEventListener('mouseenter', () => { closeBtn.style.opacity = '1'; });
-      closeBtn.addEventListener('mouseleave', () => { closeBtn.style.opacity = '0.5'; });
-      closeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.closeTab(i);
-      });
+      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closeTab(i); });
+      tabEl.addEventListener('mouseenter', () => { closeBtn.style.opacity = '0.6'; });
+      tabEl.addEventListener('mouseleave', () => { closeBtn.style.opacity = '0'; });
 
       tabEl.appendChild(label);
       tabEl.appendChild(closeBtn);
@@ -356,7 +491,6 @@ export class FileViewer {
 
   private switchTab(idx: number): void {
     if (idx < 0 || idx >= this.tabs.length) return;
-    // Detach translator panel from old tab (keep API running, hide panel)
     this.translator.detach();
     this.activeIdx = idx;
     const tab = this.tabs[idx];
@@ -371,6 +505,94 @@ export class FileViewer {
       this.editor.focus();
     }
     this.renderTabs();
+    this.updateBreadcrumb();
+    this.updateStatusBar();
+  }
+
+  // ── Breadcrumb: clickable path segments ──
+
+  private updateBreadcrumb(): void {
+    const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+    this.breadcrumb.innerHTML = '';
+    if (!tab || !tab.filePath) {
+      this.breadcrumb.textContent = '未打开文件';
+      return;
+    }
+    const parts = tab.filePath.replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts.length === 0) return;
+
+    // Build clickable segments
+    parts.forEach((seg, i) => {
+      if (i > 0) {
+        const arrow = document.createElement('span');
+        arrow.innerHTML = iconHtml('chevron-right', 10);
+        arrow.style.opacity = '0.4';
+        this.breadcrumb.appendChild(arrow);
+      }
+      const span = document.createElement('span');
+      span.textContent = seg;
+      span.style.cssText = 'cursor:pointer;padding:0 2px;border-radius:2px;';
+      span.title = parts.slice(0, i + 1).join('/');
+      span.addEventListener('mouseenter', () => {
+        span.style.color = 'var(--signal, #7eb8ff)';
+        span.style.background = 'rgba(80,140,220,0.12)';
+      });
+      span.addEventListener('mouseleave', () => {
+        span.style.color = '';
+        span.style.background = '';
+      });
+      span.addEventListener('click', () => {
+        const partial = parts.slice(0, i + 1).join('/');
+        FileTreePanel.get().highlightPath(partial);
+      });
+      this.breadcrumb.appendChild(span);
+    });
+  }
+
+  // ── Status bar: LSP indicator + language + cursor ──
+
+  private updateStatusBar(): void {
+    const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+    if (!tab) {
+      this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
+      this.statusLsp.style.opacity = '0.5';
+      (this.statusBar.querySelector('.fv-lang-badge') as HTMLElement).textContent = '';
+      this.statusCursor.textContent = 'Ln 1, Col 1';
+      return;
+    }
+
+    // Language badge
+    const langSpan = this.statusBar.querySelector('.fv-lang-badge') as HTMLElement;
+    if (langSpan) {
+      langSpan.textContent = tab.model.getLanguageId();
+    }
+
+    // LSP status indicator
+    const lang = tab.model.getLanguageId();
+    const lspActive = lspSessions.has(lang);
+    if (lspActive) {
+      this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
+      this.statusLsp.style.color = '#6ebf70';
+      this.statusLsp.style.opacity = '1';
+      this.statusLsp.title = `${lang} LSP 已连接`;
+    } else if (lang === 'typescript' || lang === 'javascript' || lang === 'json' || lang === 'css' || lang === 'html') {
+      // Monaco native support
+      this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
+      this.statusLsp.style.color = '#80a4c0';
+      this.statusLsp.style.opacity = '1';
+      this.statusLsp.title = `${lang} 使用 Monaco 内置支持`;
+    } else {
+      this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
+      this.statusLsp.style.color = '';
+      this.statusLsp.style.opacity = '0.5';
+      this.statusLsp.title = 'LSP 未启动';
+    }
+
+    // Cursor
+    const pos = this.editor.getPosition();
+    if (pos) {
+      this.statusCursor.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
+    }
   }
 
   private async closeTab(idx: number): Promise<void> {
@@ -471,6 +693,7 @@ export class FileViewer {
             registerDefinitionProvider(language, sid, monaco);
             registerReferencesProvider(language, sid, monaco);
             didOpen(sid, uri.toString(), language, content);
+            this.updateStatusBar();
           }
         });
       } else {
@@ -482,6 +705,8 @@ export class FileViewer {
       this.activeIdx = this.tabs.length - 1;
       this.editor.setModel(model);
       this.renderTabs();
+      // Notify file tree to highlight the opened file
+      FileTreePanel.get().setOpenFilePath(filePath);
     } catch (err: any) {
       loadingModel.dispose();
       const errMsg = `❌ 读取失败: ${err}`;
@@ -705,6 +930,25 @@ export class FileViewer {
     }
     this.resizing = false;
   }
+}
+
+// ── File icon by extension (module-level, shared by renderTabs + FileTreePanel) ──
+
+function fileIconSvg(fileName: string, size: number): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  const map: Record<string, string> = {
+    ts: 'code', tsx: 'code', mts: 'code', cts: 'code',
+    js: 'code', jsx: 'code', mjs: 'code', cjs: 'code',
+    py: 'code-py', rs: 'code-rs', go: 'code-go', java: 'code',
+    c: 'code', cpp: 'code', h: 'code', hpp: 'code',
+    cs: 'code', rb: 'code', php: 'code',
+    kt: 'code', kts: 'code', swift: 'code', lua: 'code',
+    html: 'code', htm: 'code', css: 'code', scss: 'code',
+    json: 'file', yaml: 'file', yml: 'file', toml: 'file',
+    md: 'file', txt: 'file', log: 'file',
+    svg: 'file', png: 'file', jpg: 'file', gif: 'file', ico: 'file',
+  };
+  return iconSvg(map[ext] || 'file', size);
 }
 
 // ── Language detection ──
