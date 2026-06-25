@@ -11,6 +11,7 @@ import { setLang } from '../i18n';
 import type { Lang } from '../i18n';
 import { iconHtml } from './icons';
 import { bus } from './events';
+import { shell } from './app-shell';
 
 const PANEL_ID = 'settings-panel';
 
@@ -60,7 +61,7 @@ export class SettingsPanel {
     this.render();
     this.overlay.classList.add('sp-open');
     this.panel.classList.add('sp-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   close(): void {

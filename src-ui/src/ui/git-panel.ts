@@ -8,6 +8,7 @@
 import { invoke } from '../bridge';
 import { iconSvg } from './icons';
 import { bus } from './events';
+import { shell } from './app-shell';
 import { FileViewer } from './file-viewer';
 import { showContextMenu, type ContextMenuItem } from './context-menu';
 
@@ -57,9 +58,6 @@ export class GitPanel {
 
   constructor() {
     this.buildDOM();
-    bus.on('workspace:files-changed', () => {
-      if (this.openState && this.projectPath) this.refresh();
-    });
   }
 
   // ── DOM ────────────────────────────────────────────────
@@ -323,13 +321,13 @@ export class GitPanel {
     this.el.classList.add('git-open');
     if (this.projectPath) this.refresh();
     else this.render(); // show empty state
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   close(): void {
     this.openState = false;
     this.el.classList.remove('git-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   toggle(): void {

@@ -9,6 +9,7 @@
 
 import type { StarGraph } from './graph';
 import { bus } from './events';
+import { shell } from './app-shell';
 import { dbg } from './debug';
 
 /**
@@ -16,7 +17,7 @@ import { dbg } from './debug';
  * Use this from any UI panel to let the user ask Agent about something.
  */
 export function askAgent(question: string): void {
-  bus.emit('agent:query', question);
+  shell.queryAgent(question);
 }
 
 export class AgentVisualizer {

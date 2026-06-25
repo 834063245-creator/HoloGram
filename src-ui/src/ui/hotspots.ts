@@ -5,7 +5,7 @@
 // 同一文件多次触发 L4 警报 → 星图着色升级
 
 import { invoke } from '../bridge';
-import { bus } from './events';
+import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import type { StarGraph } from './graph';
@@ -138,7 +138,7 @@ export class HotspotsPanel {
       this.panel.classList.remove('hs-open');
       this.starGraph?.clearHotspots();
     }
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   isOpen(): boolean { return this.openState; }
@@ -192,7 +192,7 @@ export class HotspotsPanel {
         if (target.closest('.hs-ask-btn')) return;
         const file = (el as HTMLElement).dataset['file'] || '';
         if (file) {
-          bus.emit('navigate:file', file);
+          shell.navigateToFile(file);
           // Also highlight on graph
           this.starGraph?.highlightHotspots(this.hotspots);
         }

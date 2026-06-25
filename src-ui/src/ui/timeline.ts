@@ -6,6 +6,7 @@
 
 import { invoke } from '../bridge';
 import { bus } from './events';
+import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import type { CheckResult } from './check';
@@ -176,7 +177,7 @@ export class TimelinePanel {
     } else {
       this.panel.classList.remove('tl-open');
     }
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   isOpen(): boolean { return this.openState; }
@@ -258,7 +259,7 @@ export class TimelinePanel {
       el.addEventListener('click', () => {
         const nodeName = (el as HTMLElement).dataset['node'];
         if (nodeName) {
-          bus.emit('navigate:node', nodeName);
+          shell.navigateToNode(nodeName);
         }
       });
     });

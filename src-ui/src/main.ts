@@ -20,6 +20,7 @@ import { SettingsPanel } from './ui/settings-panel';
 import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
+import { shell } from './ui/app-shell';
 import { initLogger, log } from './agent/logger';
 import { loadSettings, saveSettings } from './settings';
 import { t, setLang } from './i18n';
@@ -264,7 +265,7 @@ async function init(): Promise<void> {
     console.log('[Unity]', evt, payload);
     if (evt === 'node_double_clicked') {
       const parts = (payload as string).split('|');
-      if (parts.length > 1 && parts[1]) eventBus.emit('navigate:file', parts[1]);
+      if (parts.length > 1 && parts[1]) shell.navigateToFile(parts[1]);
     }
     if (evt === 'path_selected') {
       const parts = (payload as string).split('|');
@@ -332,24 +333,35 @@ async function init(): Promise<void> {
   conflictPanel = new ConflictPanel(document.body);
   conflictPanel.setGraph(starGraph);
 
-  // Event wiring
+  // ── AppShell wiring — replaces bus commands with explicit dispatch ──
+  // Register all panels so shell knows who's open
+  shell.register({ id: 'check', isOpen: () => checkPanel.isOpen() });
+  shell.register({ id: 'chat', isOpen: () => chatPanel.isOpen() });
+  shell.register({ id: 'explorer', isOpen: () => FileTreePanel.get().isOpen() });
+  shell.register({ id: 'timeline', isOpen: () => timelinePanel.isOpen() });
+  shell.register({ id: 'git', isOpen: () => GitPanel.get().isOpen() });
+  shell.register({ id: 'hotspots', isOpen: () => hotspotsPanel.isOpen() });
+  shell.register({ id: 'conflict', isOpen: () => conflictPanel.isOpen() });
+  shell.register({ id: 'constraints', isOpen: () => ConstraintsPanel.get().isOpen() });
+  shell.register({ id: 'terminal', isOpen: () => TerminalPanel.get().isOpen() });
+
+  // Wire navigation / highlight / agent-query commands
+  shell.wire({
+    navigateToNode: (name) => starGraph.focusNode(name),
+    navigateToFile: (path) => FileViewer.get().open(path),
+    highlightFile:   (path) => starGraph.highlightFile(path),
+    highlightFolder: (path) => starGraph.highlightFolder(path),
+    clearHighlight:  ()    => starGraph.clearFileHighlight(),
+    queryAgent: (question) => {
+      if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+      chatPanel.ask(question);
+    },
+  });
+
+  // ── Bus notifications (pure notification — sender doesn't care who listens) ──
   bus.on('check:history', ({ checkData, timestamp }: { checkData: CheckResult; timestamp: string }) => {
     if (TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
     checkPanel.showHistory(checkData, timestamp);
-    updateTabs();
-  });
-
-  bus.on('navigate:node', (nodeName: string) => { starGraph.focusNode(nodeName); });
-
-  bus.on('navigate:file', async (filePath: string) => { FileViewer.get().open(filePath); });
-
-  bus.on('highlight:file', (filePath: string) => { starGraph.highlightFile(filePath); });
-  bus.on('highlight:folder', (folderPath: string) => { starGraph.highlightFolder(folderPath); });
-  bus.on('highlight:clear', () => { starGraph.clearFileHighlight(); });
-
-  bus.on('agent:query', (question: string) => {
-    if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-    chatPanel.ask(question);
     updateTabs();
   });
 
@@ -378,16 +390,12 @@ async function init(): Promise<void> {
   leftTabs.style.display = '';
   rightTabs.style.display = '';
   bottomTabs.style.display = '';
-  bus.on('panel:toggle', () => updateTabs());
-
   const updateTabs = () => {
     const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
       || GitPanel.get().isOpen() || hotspotsPanel.isOpen();
     const hideRight = checkPanel.isOpen() || ConstraintsPanel.get().isOpen();
-    const hideBottom = chatPanel.isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
-    bottomTabs.style.display = hideBottom ? 'none' : '';
     leftTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
       const active = (p === 'explorer' && FileTreePanel.get().isOpen())
@@ -403,10 +411,11 @@ async function init(): Promise<void> {
     });
     bottomTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'chat' && chatPanel.isOpen()) || (p === 'terminal' && TerminalPanel.get().isOpen());
+      const active = (p === 'terminal' && TerminalPanel.get().isOpen());
       t.classList.toggle('active', !!active);
     });
   };
+  shell.onPanelChanged = updateTabs;
 
   // Left dock
   leftTabs.addEventListener('click', (e) => {
@@ -460,16 +469,8 @@ async function init(): Promise<void> {
     updateTabs();
   });
 
-  const btnChat = document.getElementById('btn-chat') as HTMLButtonElement;
-  btnChat.addEventListener('click', () => {
-    if (TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
-    chatPanel.toggle();
-    updateTabs();
-  });
-
   // Bottom dock
   const closeBottomSiblings = (except: string) => {
-    if (except !== 'chat' && chatPanel.isOpen()) chatPanel.close();
     if (except !== 'terminal' && TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
   };
 
@@ -477,8 +478,7 @@ async function init(): Promise<void> {
     const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
     if (!tab) return;
     const p = tab.dataset['panel'];
-    if (p === 'chat') { closeBottomSiblings('chat'); chatPanel.toggle(); }
-    else if (p === 'terminal') { closeBottomSiblings('terminal'); TerminalPanel.get().toggle(); }
+    if (p === 'terminal') { closeBottomSiblings('terminal'); TerminalPanel.get().toggle(); }
     updateTabs();
   });
 
@@ -823,7 +823,6 @@ function startGitIndicator(): void {
   }
   updateGitIndicator();
   _gitStatusTimer = setInterval(updateGitIndicator, 3000);
-  bus.on('workspace:files-changed', () => updateGitIndicator());
 }
 
 init();

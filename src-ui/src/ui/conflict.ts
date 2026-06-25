@@ -5,7 +5,7 @@
 // 双工作区 diff 叠加耦合分析，标记共同波及节点
 
 import { invoke } from '../bridge';
-import { bus } from './events';
+import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import type { StarGraph } from './graph';
@@ -83,7 +83,7 @@ export class ConflictPanel {
   open(): void {
     this.openState = true;
     this.panel.classList.add('cf-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
     if (!this.lastData) this.renderInput();
   }
 
@@ -91,7 +91,7 @@ export class ConflictPanel {
     this.openState = false;
     this.panel.classList.remove('cf-open');
     this.starGraph?.clearAgentHighlight();
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   isOpen(): boolean { return this.openState; }
@@ -213,7 +213,7 @@ export class ConflictPanel {
         const target = e.target as HTMLElement;
         if (target.closest('.cf-ask-btn')) return;
         const nodeName = (el as HTMLElement).dataset['node'] || '';
-        if (nodeName) bus.emit('navigate:node', nodeName);
+        if (nodeName) shell.navigateToNode(nodeName);
       });
     });
 
