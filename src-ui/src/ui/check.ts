@@ -5,7 +5,7 @@
 // 消费 hologram check --json 的输出，渲染变更摘要面板
 // 右侧边栏，保存时自动刷新
 
-import { bus } from './events';
+import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 
@@ -97,13 +97,13 @@ export class CheckPanel {
   open(): void {
     this.openState = true;
     this.panel.classList.add('check-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   close(): void {
     this.openState = false;
     this.panel.classList.remove('check-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   isOpen(): boolean {
@@ -237,7 +237,7 @@ export class CheckPanel {
       item.title = f;
       item.style.cursor = 'pointer';
       item.addEventListener('click', () => {
-        bus.emit('navigate:file', f);
+        shell.navigateToFile(f);
       });
       filesList.appendChild(item);
     }
@@ -352,7 +352,7 @@ export class CheckPanel {
           nodeLink.title = gid ? `节点ID: ${gid}\n点击跳转到星图` : '点击跳转到星图';
           nodeLink.addEventListener('click', (e) => {
             e.stopPropagation();
-            bus.emit('navigate:node', name);
+            shell.navigateToNode(name);
             this.close();
           });
           aff.appendChild(nodeLink);

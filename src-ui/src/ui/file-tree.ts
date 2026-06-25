@@ -8,7 +8,7 @@
 import { invoke } from '../bridge';
 import { iconSvg } from './icons';
 import { FileViewer } from './file-viewer';
-import { bus } from './events';
+import { shell } from './app-shell';
 import { askAgent } from './agent-visualizer';
 import { dbg } from './debug';
 import { showContextMenu } from './context-menu';
@@ -127,13 +127,8 @@ export class FileTreePanel {
     this.el.appendChild(this.treeEl);
     this.setupFilter();
 
-    // ── Auto-refresh on workspace file changes (debounced) ──
+    // ── Auto-refresh debounce timer ──
     let refreshTimer: ReturnType<typeof setTimeout>;
-    bus.on('workspace:files-changed', () => {
-      if (!this.open || !this.rootPath) return;
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => this.refresh(), 1500);
-    });
 
     document.body.appendChild(this.el);
   }
@@ -171,7 +166,7 @@ export class FileTreePanel {
     });
     // Unlock after transition completes
     setTimeout(() => { this._transitioning = false; }, 300);
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   close(): void {
@@ -184,7 +179,7 @@ export class FileTreePanel {
       this._transitioning = false;
       this._closeTimer = null;
     }, 300);
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   isOpen(): boolean { return this.open; }
@@ -355,12 +350,12 @@ export class FileTreePanel {
             childContainer.style.display = 'none';
             if (icon) icon.textContent = '▸';
             dbg('FileTree.collapse', entry.path);
-            bus.emit('highlight:clear');
+            shell.clearHighlight();
           } else {
             childContainer.style.display = 'block';
             if (icon) icon.textContent = '▾';
             dbg('FileTree.expand', entry.path);
-            bus.emit('highlight:folder', entry.path);
+            shell.highlightFolder(entry.path);
           }
         });
       } else if (entry.is_dir) {
@@ -374,7 +369,7 @@ export class FileTreePanel {
           FileViewer.get().open(entry.path);
           this.setOpenFilePath(entry.path);
           dbg('FileTree.clickFile', entry.path);
-          bus.emit('highlight:file', entry.path);
+          shell.highlightFile(entry.path);
         });
       }
     }

@@ -8,6 +8,7 @@ import { invoke } from '../bridge';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import { bus } from './events';
+import { shell } from './app-shell';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;
@@ -154,13 +155,13 @@ export class ConstraintsPanel {
   open(): void {
     this.openState = true;
     this.panel.classList.add('cs-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   close(): void {
     this.openState = false;
     this.panel.classList.remove('cs-open');
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
   isOpen(): boolean { return this.openState; }

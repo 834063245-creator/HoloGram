@@ -10,6 +10,7 @@ import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
+import { shell } from './app-shell';
 import { cancelPendingApprovals } from '../agent/permission';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
@@ -17,6 +18,7 @@ import type { Message } from '../provider/types';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
+import gsap from 'gsap';
 
 // ── Constants ──
 
@@ -69,7 +71,11 @@ export class ChatPanel {
   // Per-session message cache (DOM elements)
   private sessionMessages = new Map<number, HTMLElement[]>();
 
-  private openState = false;
+  // Panel mode: pill (44px circle) → panel (summoned) → hud (faded) → input (collapsed bar)
+  // All states are CSS classes on the SAME element — one morphing container, zero jump.
+  private mode: 'pill' | 'input' | 'panel' | 'hud' = 'pill';
+  private graphClickCleanup: (() => void) | null = null;
+
   private lastUsageText = '';
   private projectPath = '';
   private onOpenSettings: (() => void) | null = null;
@@ -106,10 +112,12 @@ export class ChatPanel {
     // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
       this.lastAgentDiag = d.text;
-      if (!d.ready && this.openState) {
+      if (!d.ready && this.isOpen()) {
         this.refreshHint();
       }
     });
+    // ── Detect graph interaction to auto-dismiss the panel ──
+    this.setupGraphClickHandler();
   }
 
   // ── Public API ──
@@ -135,40 +143,265 @@ export class ChatPanel {
   setStarGraph(g: StarGraph): void { this.starGraph = g; }
   setProjectPath(p: string): void { this.projectPath = p; }
 
-  toggle(): void { this.openState ? this.close() : this.open(); }
-
-  open(): void {
-    this.openState = true;
-    this.panel.classList.add('chat-open');
-    this.updateFooter();
-    setTimeout(() => this.inputArea.focus(), 200);
-    bus.emit('panel:toggle');
+  toggle(): void {
+    switch (this.mode) {
+      case 'pill':  this.summonPanel(); break;
+      case 'input': this.summonPanel(); break;
+      case 'panel': this.collapseToInput(); break;
+      case 'hud':   this.restoreFromHud(); break;
+    }
   }
 
-  /** Programmatically ask the agent a question. Opens the panel and sends. */
+  open(): void {
+    this.summonPanel();
+  }
+
+  /** Programmatically ask the agent a question. Summons panel and sends. */
   ask(question: string): void {
-    if (!this.openState) this.open();
+    this.summonPanel();
     this.inputArea.value = question;
     this.inputArea.style.height = 'auto';
     this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
     // Small delay to let panel animate open before sending
-    setTimeout(() => this.sendMessage(), 150);
+    setTimeout(() => this.sendMessage(), 200);
   }
 
   close(): void {
-    this.openState = false;
-    this.panel.classList.remove('chat-open');
+    // Panel/HUD → input; input → pill
+    if (this.mode === 'panel' || this.mode === 'hud') {
+      this.collapseToInput();
+    } else if (this.mode === 'input') {
+      this.collapseToPill();
+    }
+  }
+
+  isOpen(): boolean { return this.mode === 'panel' || this.mode === 'hud'; }
+
+  // ── State transitions (GSAP-powered) ──
+
+  // Content elements that participate in morph animations
+  private static readonly CONTENT_SEL =
+    '.chat-header, .chat-messages, .chat-input-area, .chat-footer, .chat-expand-handle, .corner-brackets, .chat-resize';
+
+  private contentEls(): HTMLElement[] {
+    return gsap.utils.toArray(ChatPanel.CONTENT_SEL, this.panel);
+  }
+
+  private killPanelTweens(): void {
+    gsap.killTweensOf(this.panel);
+    gsap.killTweensOf(this.contentEls());
+  }
+
+  /** Strip all modal classes from the panel */
+  private removeAllPanelClasses(): void {
+    this.panel.classList.remove('chat-pill', 'chat-input-mode', 'chat-open', 'chat-hud');
+  }
+
+  /** Animation guard — check if GSAP is actively tweening panel or content */
+  private get _animating(): boolean {
+    return gsap.isTweening(this.panel) || gsap.isTweening(this.contentEls());
+  }
+
+  /**
+   * Snapshot CSS-computed opacities BEFORE GSAP touches inline styles.
+   * `gsap.fromTo` applies `fromVars` (opacity:0) immediately, then evaluates
+   * function-based `toVars` — at that point getComputedStyle returns 0, not the
+   * CSS value. We save targets upfront to avoid the self-shadowing.
+   */
+  private snapshotContentOpacities(): number[] {
+    return this.contentEls().map(el => parseFloat(getComputedStyle(el).opacity));
+  }
+
+  /** Fade content in from 0 → current CSS opacities. For elements that were display:none. */
+  private fadeContentIn(delay = 0.12, duration = 0.2): void {
+    const c = this.contentEls();
+    const targets = this.snapshotContentOpacities();
+    gsap.fromTo(c,
+      { opacity: 0 },
+      { opacity: (i) => targets[i], duration, ease: 'power2.out', delay },
+    );
+  }
+
+  /**
+   * Cross-fade content between two visible modes (panel ↔ hud).
+   * Snapshot current inline opacities BEFORE class change, apply new mode's CSS,
+   * then tween from old → new CSS values. No flash to 0.
+   */
+  private crossfadeContent(fromOpacities: number[], duration = 0.2, ease = 'power2.out'): void {
+    const c = this.contentEls();
+    const targets = this.snapshotContentOpacities(); // new mode's CSS opacities
+    gsap.fromTo(c,
+      { opacity: (i) => fromOpacities[i] },
+      { opacity: (i) => targets[i], duration, ease },
+    );
+  }
+
+  /** Pill → Input: 44px circle morphs into floating input bar */
+  private expandToInput(): void {
+    if (this._animating) return;
+    this.mode = 'input';
+    this.killPanelTweens();
+    this.removeAllPanelClasses();
+    this.panel.classList.add('chat-input-mode');
+    this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+    this.updateFooter();
+
+    gsap.to(this.panel, { width: 560, borderRadius: 0, duration: 0.35, ease: 'power2.out' });
+    this.fadeContentIn();
+
+    setTimeout(() => this.inputArea.focus(), 350);
+    shell.notifyPanelChanged();
+  }
+
+  /** Any state → Panel: summon the full conversation card */
+  private summonPanel(): void {
+    if (this._animating) return;
+    this.mode = 'panel';
+    this.killPanelTweens();
+    this.removeAllPanelClasses();
+    this.panel.classList.add('chat-open');
+    this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+    this.updateFooter();
+
+    gsap.to(this.panel, { width: 560, borderRadius: 0, duration: 0.35, ease: 'power2.out' });
+    this.fadeContentIn();
+
+    setTimeout(() => this.inputArea.focus(), 350);
+    shell.notifyPanelChanged();
+    this.scrollBottom();
+  }
+
+  /** Panel/HUD → Input: collapse card, keep floating input bar */
+  private collapseToInput(): void {
+    if (this._animating) return;
+    this.killPanelTweens();
+    const c = this.contentEls();
+    // Snapshot target opacities BEFORE the fade-out, while inline styles are clean
+    // (panel mode has no opacity tweens running, so computed === CSS)
+    const targets = this.snapshotContentOpacities();
+
+    // Restore panel from any HUD transform (scale/y/opacity) before morphing
+    gsap.to(this.panel, { scale: 1, y: 0, opacity: 1, duration: 0.15, ease: 'power2.out' });
+
+    gsap.to(c, {
+      opacity: 0, duration: 0.15, ease: 'power2.in',
+      onComplete: () => {
+        this.mode = 'input';
+        this.removeAllPanelClasses();
+        this.panel.classList.add('chat-input-mode');
+        this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+        // Clean up GSAP inline transform/opacity so CSS takes over
+        gsap.set(this.panel, { clearProps: 'scale,y,opacity' });
+        // Now fade in from 0 → target opacities captured before the fade-out
+        gsap.fromTo(c,
+          { opacity: 0 },
+          { opacity: (i) => targets[i], duration: 0.15, ease: 'power2.out' },
+        );
+      },
+    });
+
     if (this.running) this.abort();
-    // Save before closing — prevents data loss if app crashes while panel is closed
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
-    // Dismiss any pending permission modal
     cancelPendingApprovals();
-    bus.emit('panel:toggle');
+    shell.notifyPanelChanged();
   }
 
-  isOpen(): boolean { return this.openState; }
+  /** Input → Pill: collapse to 44px star circle — works from HUD too */
+  private collapseToPill(): void {
+    if (this._animating) return;
+    this.killPanelTweens();
+    const c = this.contentEls();
+
+    // Restore panel to full presence before shrinking to pill
+    gsap.to(this.panel, { scale: 1, y: 0, opacity: 1, duration: 0.15, ease: 'power2.in' });
+
+    gsap.to(c, {
+      opacity: 0, duration: 0.15, ease: 'power2.in',
+      onComplete: () => {
+        this.mode = 'pill';
+        this.removeAllPanelClasses();
+        this.panel.classList.add('chat-pill');
+        this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+        gsap.set(c, { clearProps: 'opacity' });
+        gsap.set(this.panel, { clearProps: 'scale,y,opacity' });
+      },
+    });
+    gsap.to(this.panel, { width: 44, borderRadius: '50%', duration: 0.35, ease: 'power2.in', delay: 0.15 });
+
+    if (this.running) this.abort();
+    if (this.projectPath && this.activeIdx >= 0) {
+      this.saveActiveSession(this.projectPath).catch(() => {});
+    }
+    cancelPendingApprovals();
+    shell.notifyPanelChanged();
+  }
+
+  /** Panel → HUD: ghost the card — panel retreats into star field, messages dissolve bottom→top */
+  private fadeToHud(): void {
+    if (this.mode !== 'panel' || this._animating) return;
+    this.killPanelTweens();
+    // Snapshot current content opacities BEFORE changing classes
+    const fromOpacities = this.snapshotContentOpacities();
+    this.mode = 'hud';
+    this.removeAllPanelClasses();
+    this.panel.classList.add('chat-hud');
+    this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+
+    // Panel retreat: scale down, push back, go translucent
+    gsap.to(this.panel, {
+      scale: 0.96, y: 14, opacity: 0.62,
+      duration: 0.45, ease: 'power2.out',
+    });
+    // Content elements fade to HUD opacities
+    this.crossfadeContent(fromOpacities, 0.4);
+  }
+
+  /** HUD → Panel: restore the full card — reverse retreat animation */
+  private restoreFromHud(): void {
+    if (this.mode !== 'hud' || this._animating) return;
+    this.killPanelTweens();
+    const fromOpacities = this.snapshotContentOpacities();
+    this.mode = 'panel';
+    this.removeAllPanelClasses();
+    this.panel.classList.add('chat-open');
+    this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+
+    // Reverse the retreat
+    gsap.to(this.panel, {
+      scale: 1, y: 0, opacity: 1,
+      duration: 0.35, ease: 'power2.out',
+      onComplete: () => {
+        // Clear GSAP inline transform so CSS translateX(-50%) takes over cleanly
+        gsap.set(this.panel, { clearProps: 'scale,y,opacity' });
+      },
+    });
+    this.crossfadeContent(fromOpacities, 0.3);
+    setTimeout(() => this.inputArea.focus(), 150);
+  }
+
+  // ── Graph click detection — dismiss panel when user interacts with the star field ──
+
+  private setupGraphClickHandler(): void {
+    const graphEl = document.getElementById('graph');
+    if (!graphEl) return;
+
+    const handler = (e: MouseEvent) => {
+      // Use 'click' (not mousedown) so camera drag/rotate doesn't dismiss the panel.
+      // 'click' only fires on completed clicks without significant pointer movement.
+      if (this.mode === 'panel') {
+        this.fadeToHud();
+      } else if (this.mode === 'hud') {
+        this.collapseToPill(); // ghosted → pill directly, no intermediate input bar
+      } else if (this.mode === 'input') {
+        this.collapseToPill();
+      }
+    };
+
+    graphEl.addEventListener('click', handler);
+    this.graphClickCleanup = () => graphEl.removeEventListener('click', handler);
+  }
 
   // ── Session management ──
 
@@ -869,7 +1102,7 @@ export class ChatPanel {
         position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
         width: '20px', height: '20px', padding: '0', fontSize: '14px',
         background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-        cursor: 'pointer', borderRadius: '3px', lineHeight: '1',
+        cursor: 'pointer', borderRadius: '0', lineHeight: '1',
       });
       delBtn.addEventListener('mouseenter', () => { delBtn.style.color = '#e53e3e'; delBtn.style.background = 'rgba(229,62,62,0.1)'; });
       delBtn.addEventListener('mouseleave', () => { delBtn.style.color = 'var(--text-muted)'; delBtn.style.background = 'none'; });
@@ -950,6 +1183,20 @@ export class ChatPanel {
       : this.hintText();
     this.msgList.appendChild(hint);
 
+    // Expand handle — pull tab to summon panel (visible in input-only mode)
+    const expandHandle = document.createElement('div');
+    expandHandle.className = 'chat-expand-handle';
+    expandHandle.title = '展开对话面板';
+    const expandHandleInner = document.createElement('div');
+    expandHandleInner.className = 'chat-expand-handle-inner';
+    expandHandle.appendChild(expandHandleInner);
+    expandHandle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.mode === 'input') this.summonPanel();
+      else if (this.mode === 'panel') this.collapseToInput();
+    });
+    this.panel.appendChild(expandHandle);
+
     // Input area
     const inputWrap = document.createElement('div');
     inputWrap.className = 'chat-input-area';
@@ -991,7 +1238,31 @@ export class ChatPanel {
     this.footerEl.className = 'chat-footer';
     this.panel.appendChild(this.footerEl);
 
+    // ── Pill star — four-pointed lens flare, lives inside the panel ──
+    const pillStar = document.createElement('div');
+    pillStar.className = 'chat-pill-star';
+    const starSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    starSvg.setAttribute('viewBox', '0 0 32 32');
+    starSvg.setAttribute('width', '16');
+    starSvg.setAttribute('height', '16');
+    starSvg.innerHTML = '<path d="M16 1.5 L17.5 13.5 L31 15 L17.5 16.5 L16 28.5 L14.5 16.5 L1 15 L14.5 13.5 Z" fill="currentColor"/>';
+    pillStar.appendChild(starSvg);
+    this.panel.appendChild(pillStar);
+
     this.container.appendChild(this.panel);
+    // Ensure initial mode class matches this.mode = 'pill'
+    this.panel.classList.add('chat-pill');
+
+    // ── Click on panel: HUD restores, pill expands to input bar ──
+    this.panel.addEventListener('click', (e) => {
+      if (this.mode === 'hud') {
+        e.stopPropagation();
+        this.restoreFromHud();
+      } else if (this.mode === 'pill') {
+        e.stopPropagation();
+        this.expandToInput();
+      }
+    });
   }
 
   // ── Resize ──
@@ -1017,7 +1288,8 @@ export class ChatPanel {
       if (!dragging) return;
       const maxH = Math.floor(window.innerHeight * MAX_HEIGHT_PCT);
       const h = Math.max(MIN_HEIGHT, Math.min(maxH, startH + (startY - e.clientY)));
-      this.panel.style.height = h + 'px';
+      this.panel.style.maxHeight = h + 'px';
+      this.panel.style.minHeight = h + 'px'; // lock both so the card respects the drag
     });
 
     document.addEventListener('mouseup', () => {
@@ -1167,6 +1439,11 @@ export class ChatPanel {
         session.label = text.length > 28 ? text.slice(0, 27) + '…' : text;
         this.renderSessionTabs();
       }
+    }
+
+    // If we're in the floating input bar, summon the full panel before sending
+    if (this.mode === 'input') {
+      this.summonPanel();
     }
 
     this.inputArea.value = '';

@@ -13,6 +13,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { iconHtml } from './icons';
 import { bus } from './events';
+import { shell } from './app-shell';
 import { t, getLang, setLang } from '../i18n';
 import { gpuLayout } from './gpu-layout';
 
@@ -1354,7 +1355,7 @@ export class StarGraph {
           const loc = node.location;
           const lastColon = loc.lastIndexOf(':');
           const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
-          import('./events').then(m => m.bus.emit('navigate:file', filePath)).catch(() => {});
+          shell.navigateToFile(filePath);
         }
       }
     });
@@ -1365,7 +1366,7 @@ export class StarGraph {
         const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
         const question = `分析节点 "${node.name}" (${TYPE_LABELS[kind] || kind}, 度=${this.deg[this.selectedIdx]}, ${node.location || '未知位置'})。它和其他模块的关系如何？改它会有什么影响？`;
         // Emit event to ChatPanel via bus
-        import('./events').then(m => m.bus.emit('agent:query', question)).catch(() => {});
+        shell.queryAgent(question);
       }
     });
   }
@@ -1820,7 +1821,7 @@ export class StarGraph {
     this._promptBtnEl.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this._promptQuestion) {
-        bus.emit('agent:query', this._promptQuestion);
+        shell.queryAgent(this._promptQuestion);
       }
       this._hidePrompt();
     });
