@@ -18,6 +18,9 @@ export interface AgentSettings {
   maxSteps: number;
   contextWindow: number;
   chatMode: ChatModeId;
+  disabledTools: string[];
+  customSystemPrompt: string;
+  permissionDefault: 'ask' | 'allowReads' | 'allowAll';
 }
 
 export type ChatModeId = 'general' | 'code' | 'architect' | 'fast';
@@ -78,6 +81,9 @@ const DEFAULTS: AppSettings = {
     maxSteps: 50,
     contextWindow: 0,
     chatMode: 'general',
+    disabledTools: [],
+    customSystemPrompt: '',
+    permissionDefault: 'ask',
   },
   display: {
     defaultViewMode: 'standard',

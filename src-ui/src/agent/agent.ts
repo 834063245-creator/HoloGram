@@ -248,6 +248,12 @@ export class Agent {
       if (signal.aborted) throw new Error('aborted');
       if (this.sessionGen !== genAtStart) throw new Error('aborted');
 
+      bus.emit('agent:progress', {
+        step: step + 1,
+        maxSteps: this.maxSteps,
+        toolName: 'thinking',
+      });
+
       // ---- Stream ----
       const { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1);
       if (err) {
@@ -533,6 +539,15 @@ export class Agent {
         }
       }
       bus.emit('agent:tool-started', { toolName: call.name, args });
+      bus.emit('agent:progress', {
+        step: 0, // tool execution phase — step=0 means "in tool"
+        maxSteps: this.maxSteps,
+        toolName: call.name,
+      });
+      // ponytail: inject _callId for sub-agent tool to emit agent:sub-* events
+      if (call.name === 'agent_spawn') {
+        args['_callId'] = call.id;
+      }
       const toolStart = performance.now();
       result = await t.execute(args, (chunk) => {
         this.sink({
