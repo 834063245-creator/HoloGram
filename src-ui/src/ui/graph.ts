@@ -1804,7 +1804,7 @@ export class StarGraph {
     this._promptBtnEl.textContent = 'Ask Agent';
     // Mirror detail-card button template (dc-agent-btn)
     this._promptBtnEl.style.cssText =
-      'font-family:var(--font-hud);font-size:7px;font-weight:600;' +
+      'font-family:var(--font-hud);font-size:8px;font-weight:600;' +
       'letter-spacing:0.5px;text-transform:uppercase;' +
       'padding:3px 8px;border-radius:2px;cursor:pointer;' +
       'transition:all var(--snap);' +
@@ -2008,7 +2008,7 @@ export class StarGraph {
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       div.style.opacity = focused ? '1' : '0.18';
-      div.style.fontSize = focused ? '11px' : '10px';
+      div.style.fontSize = focused ? '13px' : '11px';
     }
     // Galaxy labels — no distance fade, hover brightens
     for (let k = 0; k < this.galaxyLabelDivs.length; k++) {
@@ -4359,8 +4359,22 @@ export class StarGraph {
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
-    // No labels — visual-only rendering. Hover/selection reveals name via tooltip + detail card.
-    this.nodeLabelIdx = [];
+    // ponytail: ambient labels for top nodes by degree — subtle (opacity 0.18 default),
+    // brightens on hover/select. Cap at 500 to avoid DOM bloat.
+    const MAX_LABELS = 500;
+    const indices = nodes.map((_, i) => i).sort((a, b) => deg[b] - deg[a]);
+    const count = Math.min(MAX_LABELS, nodes.length);
+    for (let k = 0; k < count; k++) {
+      const i = indices[k];
+      const kind = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
+      const div = document.createElement('div');
+      div.className = 'node-label';
+      div.dataset['kind'] = kind;
+      div.textContent = nodes[i].name;
+      this.labelsContainer.appendChild(div);
+      this.labelDivs.push(div);
+      this.nodeLabelIdx.push(i);
+    }
   }
 
   // ── Minimap ───────────────────────────────────────────────
