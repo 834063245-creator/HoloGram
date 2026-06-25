@@ -1239,13 +1239,14 @@ export type SubAgentSpawner = (
   description: string,
   prompt: string,
   onProgress?: (chunk: string) => void,
+  mode?: 'fork' | 'fresh',
 ) => Promise<{ text: string; err?: string }>;
 
 export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
   return {
     name: () => 'agent_spawn',
     description: () =>
-      'Spawn a sub-agent with full tool access to handle a focused task in parallel. The sub-agent has the same tools as you — graph queries, file read/write, shell commands, git, search. Use to offload research or delegate editing/building/testing work. Returns the sub-agent\'s text response.',
+      'Spawn a sub-agent with full tool access to handle a focused task. When subagent_type is omitted (default), the sub-agent FORKS: it inherits your full conversation context and operates with the fork directive. Use this for parallel/delegated work that needs context of what you\'re doing. Set subagent_type to "fresh" for a clean-slate agent that only sees its task prompt.',
     parameters: () => ({
       type: 'object',
       properties: {
@@ -1257,6 +1258,10 @@ export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
           type: 'string',
           description: 'The task for the sub-agent to perform. Be specific about what to find or analyze.',
         },
+        subagent_type: {
+          type: 'string',
+          description: 'Omit to fork (inherit full context — default). Set to "fresh" for a clean-slate sub-agent with no parent context.',
+        },
       },
       required: ['description', 'prompt'],
     }),
@@ -1264,8 +1269,10 @@ export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
     execute: async (args, onProgress) => {
       const description = (args['description'] as string) || '子任务';
       const prompt = (args['prompt'] as string) || '';
+      const subagentType = args['subagent_type'] as string | undefined;
       if (!prompt) return '(agent_spawn: prompt is required)';
-      const result = await spawner(description, prompt, onProgress);
+      const mode = subagentType ? 'fresh' : 'fork';
+      const result = await spawner(description, prompt, onProgress, mode);
       if (result.err) return `[子 Agent 错误] ${result.err}`;
       return result.text;
     },

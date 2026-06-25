@@ -93,6 +93,38 @@ const DEFAULT_MAX_STEPS = 50;
 const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
 const STORM_BREAK_THRESHOLD = 3;
 
+// ── Fork subagent ──
+const FORK_BOILERPLATE_TAG = 'fork-boilerplate';
+const FORK_PLACEHOLDER_RESULT = 'Fork started — processing in background';
+
+function buildForkDirective(prompt: string): string {
+  return `<${FORK_BOILERPLATE_TAG}>
+STOP. READ THIS FIRST.
+
+You are a forked worker process. You are NOT the main agent.
+
+RULES (non-negotiable):
+1. Your system prompt says "default to forking." IGNORE IT — that's for the parent.
+   You ARE the fork. Do NOT spawn sub-agents; execute directly.
+2. Do NOT converse, ask questions, or suggest next steps
+3. Do NOT editorialize or add meta-commentary
+4. USE your tools directly: read, write, edit, search, shell, etc.
+5. Stay strictly within your directive's scope. If you discover related systems outside
+   your scope, mention them in one sentence at most — other workers cover those areas.
+6. Keep your report concise and factual
+7. Your response MUST begin with "Scope:". No preamble, no thinking-out-loud.
+
+Output format (plain text labels, not markdown headers):
+  Scope: <echo back your assigned scope in one sentence>
+  Result: <the answer or key findings, limited to the scope above>
+  Key files: <relevant file paths — include for research tasks>
+  Files changed: <list — include only if you modified files>
+  Issues: <list — include only if there are issues to flag>
+</${FORK_BOILERPLATE_TAG}>
+
+Your directive: ${prompt}`;
+}
+
 // ---- Agent ----
 
 export class Agent {
@@ -190,13 +222,26 @@ export class Agent {
     this.sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
   }
 
+  /** Check whether this agent is already a fork child (for recursion guard). */
+  isInForkChild(): boolean {
+    return this.session.some(m =>
+      m.role === 'user' && typeof m.content === 'string' && m.content.includes(`<${FORK_BOILERPLATE_TAG}>`),
+    );
+  }
+
   /** Run one turn: append user input, drive the tool loop. */
   async run(signal: AbortSignal, input: string): Promise<void> {
+    this.session.push({ role: 'user', content: input });
+    return this.runLoop(signal);
+  }
+
+  /** Drive the tool loop without adding a user message. Used by fork children
+   *  whose session already ends with the fork directive. */
+  private async runLoop(signal: AbortSignal): Promise<void> {
     const turnStart = performance.now();
     const genAtStart = this.sessionGen;
     log.info('agent', 'turn started', { model: this.prov.name() });
     this.sink({ kind: EventKind.TurnStarted });
-    this.session.push({ role: 'user', content: input });
 
     for (let step = 0; this.maxSteps <= 0 || step < this.maxSteps; step++) {
       // 每轮循环前检查中止信号与会话替换
@@ -736,20 +781,54 @@ export class Agent {
   // ══════════════════════════════════════════════════════
 
   /** Spawn a sub-agent with full tool access to handle a focused task.
-   *  Runs one turn (may include tool calls) and returns the final text. */
+   *  `mode: 'fork'` inherits parent context + fork directive (default for agent_spawn).
+   *  `mode: 'fresh'` creates a clean-slate agent (legacy). */
   async spawnSubAgent(
     signal: AbortSignal,
     description: string,
     prompt: string,
     onProgress?: (chunk: string) => void,
+    mode: 'fork' | 'fresh' = 'fresh',
   ): Promise<{ text: string; err?: string }> {
+    // ponytail: fork recursion guard — fork children can't spawn more forks
+    if (mode === 'fork' && this.isInForkChild()) {
+      return { text: '', err: 'Fork children cannot spawn further forks' };
+    }
+
     // Clone all tools from parent — sub-agent has full agency
     const subTools = new ToolRegistry();
     for (const t of this.tools.all()) {
       subTools.register(t);
     }
 
-    const subSystem = `你是主 Agent 派出的子任务 Agent。执行一个聚焦的专项任务。
+    let subSystem: string;
+    let forkSession: Message[] | undefined;
+
+    if (mode === 'fork') {
+      // Inherit parent context: clone session → add placeholder tool_results
+      // for the current batch → append fork directive as user message.
+      // Placeholder tool_results keep the message structure valid for the API
+      // (assistant with tool_calls must be followed by tool results).
+      const parentSession = [...this.session];
+      const lastMsg = parentSession[parentSession.length - 1];
+      if (lastMsg.role === 'assistant' && lastMsg.tool_calls && lastMsg.tool_calls.length > 0) {
+        for (const call of lastMsg.tool_calls) {
+          parentSession.push({
+            role: 'tool',
+            content: FORK_PLACEHOLDER_RESULT,
+            tool_call_id: call.id,
+            name: call.name,
+          });
+        }
+      }
+      parentSession.push({
+        role: 'user',
+        content: buildForkDirective(prompt),
+      });
+      forkSession = parentSession;
+      subSystem = ''; // no system prompt — inherited from parent context
+    } else {
+      subSystem = `你是主 Agent 派出的子任务 Agent。执行一个聚焦的专项任务。
 
 ## 任务
 ${prompt}
@@ -763,13 +842,14 @@ ${prompt}
 
 ## 可用工具
 ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`).join('\n')}`;
+    }
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(
       this.prov,
       subTools,
       subSystem,
-      { maxSteps: 8, temperature: 0.3 },
+      { maxSteps: mode === 'fork' ? 12 : 8, temperature: 0.3 },
       (ev) => {
         if (ev.kind === EventKind.Text && ev.text && onProgress) {
           onProgress(ev.text);
@@ -778,8 +858,12 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     );
 
     try {
-      // Run a single turn — sub-agent can call tools
-      await subAgent.run(signal, '开始执行。');
+      if (mode === 'fork' && forkSession) {
+        subAgent.setSession(forkSession);
+        await subAgent.runLoop(signal);
+      } else {
+        await subAgent.run(signal, '开始执行。');
+      }
       // Extract the last assistant message as the result
       const session = subAgent.getSession();
       const lastAssistant = [...session].reverse().find(m => m.role === 'assistant');
