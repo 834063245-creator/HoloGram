@@ -84,6 +84,10 @@ src-ui/src/ui/gpu-layout.ts
 src-ui/src/ui/graph-interaction.ts
 
 # Internal project docs (not for public repo)
+AGENTS.md
+BUGS.md
+CONTRIBUTING.md
+SECURITY.md
 PROJECT.md
 ARCHITECTURE_PLAN.md
 CLAUDE.md
@@ -97,8 +101,10 @@ V4_CONSTRUCTION_PLAN.md
 GRAPH_ALGORITHMS.md
 GSAP_GUIDE.md
 LOG_SYSTEM_PLAN.md
+SPEC_AGENT_PANEL_UPGRADE.md
 docs_archive/
 specs/
+docs/
 
 # One-off internal scripts (not for public repo)
 src-ui/test-once.ts
