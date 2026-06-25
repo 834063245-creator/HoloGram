@@ -83,6 +83,28 @@ export class ChatPanel {
   private footerClickCleanup: (() => void) | null = null;
   private lastAgentDiag = '';
 
+  // ── New: input history navigation (item 1) ──
+  private inputHistory: string[] = [];
+  private historyIdx = 0;
+  private draftText = '';
+
+  // ── New: message retry (item 4) ──
+  private turnPairs: Array<{ userText: string; assistantBubble: HTMLElement | null }> = [];
+
+  // ── New: progress bar (item 3) ──
+  private progressBar: HTMLElement | null = null;
+
+  // ── New: @ autocomplete (item 5) ──
+  private atPopup: HTMLElement | null = null;
+  private atFileCache: { data: string; ts: number } | null = null;
+  private atIdx = 0;
+
+  // ── New: token accumulation (item 12) ──
+  private totalTokensUsed = 0;
+
+  // ── New: slash auto-popup ref (item 14) ──
+  private _slashPopup: HTMLElement | null = null;
+
   private hintText(): string {
     const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
     return this.lastAgentDiag ? `${base}\n\n诊断: ${this.lastAgentDiag}` : base;
@@ -118,6 +140,28 @@ export class ChatPanel {
     });
     // ── Detect graph interaction to auto-dismiss the panel ──
     this.setupGraphClickHandler();
+    // ── Agent progress feedback (item 3) ──
+    bus.on('agent:progress', (data: { step: number; maxSteps: number; toolName: string }) => {
+      if (!this.progressBar || !this.running) return;
+      const label = this.progressBar.querySelector('.chat-progress-label');
+      const fill = this.progressBar.querySelector('.chat-progress-fill') as HTMLElement;
+      if (label) label.textContent = data.step > 0
+        ? `步骤 ${data.step}/${data.maxSteps}  ·  ${data.toolName}`
+        : `正在执行 ${data.toolName}`;
+      if (fill && data.maxSteps > 0) {
+        fill.style.width = `${(data.step / data.maxSteps) * 100}%`;
+      }
+    });
+    // ── Sub-agent events (item 10) ──
+    bus.on('agent:sub-spawn', (data: { id: string; description: string; prompt: string; mode: string }) => {
+      this.handleSubSpawn(data);
+    });
+    bus.on('agent:sub-progress', (data: { parentToolId: string; text: string }) => {
+      this.handleSubProgress(data);
+    });
+    bus.on('agent:sub-done', (data: { parentToolId: string; summary: any }) => {
+      this.handleSubDone(data);
+    });
   }
 
   // ── Public API ──
@@ -513,6 +557,11 @@ export class ChatPanel {
     this.renderSessionTabs();
     // Clear displayed messages for the new session
     this.msgList.innerHTML = '';
+    this.inputHistory = [];
+    this.historyIdx = 0;
+    this.draftText = '';
+    this.turnPairs = [];
+    this.totalTokensUsed = 0;
     this.addNotice('新会话已创建 — 可以开始对话', 'info');
     this.lastUsageText = '';
     this.updateFooter();
@@ -1206,18 +1255,94 @@ export class ChatPanel {
     this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
     this.inputArea.rows = 2;
     this.inputArea.addEventListener('keydown', (e) => {
+      // ── @ popup keyboard nav ──
+      if (this.atPopup?.classList.contains('open')) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const items = this.atPopup.querySelectorAll('.at-item');
+          this.atIdx = Math.min(this.atIdx + 1, items.length - 1);
+          this.updateAtSelection();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          this.atIdx = Math.max(this.atIdx - 1, 0);
+          this.updateAtSelection();
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          this.confirmAtSelection();
+          return;
+        }
+        if (e.key === 'Escape') {
+          this.atPopup.classList.remove('open');
+          return;
+        }
+      }
+      // ── / slash popup keyboard nav ──
+      if (this._slashPopup?.classList.contains('open')) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Escape') {
+          // handled by existing sp-item click logic — only close on Escape here
+          if (e.key === 'Escape') {
+            this._slashPopup.classList.remove('open');
+          }
+          return;
+        }
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
+        return;
+      }
+      // ── Input history navigation ──
+      if (e.key === 'ArrowUp' && this.inputHistory.length > 0) {
+        const cursorAtStart = this.inputArea.selectionStart === 0 && this.inputArea.selectionEnd === 0;
+        if (cursorAtStart) {
+          e.preventDefault();
+          if (this.historyIdx === this.inputHistory.length) {
+            this.draftText = this.inputArea.value;
+          }
+          if (this.historyIdx > 0) {
+            this.historyIdx--;
+            this.inputArea.value = this.inputHistory[this.historyIdx];
+            this.inputArea.style.height = 'auto';
+            this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+          }
+          return;
+        }
+      }
+      if (e.key === 'ArrowDown' && this.inputHistory.length > 0) {
+        const cursorAtEnd = this.inputArea.selectionStart === this.inputArea.value.length;
+        if (cursorAtEnd) {
+          e.preventDefault();
+          if (this.historyIdx < this.inputHistory.length - 1) {
+            this.historyIdx++;
+            this.inputArea.value = this.inputHistory[this.historyIdx];
+          } else {
+            this.historyIdx = this.inputHistory.length;
+            this.inputArea.value = this.draftText;
+          }
+          this.inputArea.style.height = 'auto';
+          this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+          return;
+        }
       }
       if (e.key === 'Escape') {
+        // Close popups first
+        if (this._slashPopup?.classList.contains('open')) {
+          this._slashPopup.classList.remove('open');
+          return;
+        }
         this.close();
       }
     });
-    // Auto-resize textarea
+    // Auto-resize + @/slash detection
     this.inputArea.addEventListener('input', () => {
       this.inputArea.style.height = 'auto';
       this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+      this.handleAtInput();
+      this.handleSlashInput();
     });
 
     this.sendBtn = document.createElement('button');
@@ -1312,8 +1437,13 @@ export class ChatPanel {
     // Save current messages before clearing
     if (this.activeIdx >= 0) this.saveCurrentMessages();
     this.agent.newSession(); // 递增 sessionGen，旧 run 检测到 gen 变化自动丢弃
-    // Clear message list UI
+    // Clear message list UI and accumulated state
     this.msgList.innerHTML = '';
+    this.inputHistory = [];
+    this.historyIdx = 0;
+    this.draftText = '';
+    this.turnPairs = [];
+    this.totalTokensUsed = 0;
     this.addNotice('已开启新会话 — 上下文已清空', 'info');
     this.finishTurn();
     this.updateFooter();
@@ -1432,6 +1562,14 @@ export class ChatPanel {
       return;
     }
 
+    // Detect /export command
+    if (text === '/export') {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.exportSession();
+      return;
+    }
+
     // Auto-label session on first user message
     if (this.activeIdx >= 0) {
       const session = this.sessions[this.activeIdx];
@@ -1446,6 +1584,11 @@ export class ChatPanel {
       this.summonPanel();
     }
 
+    // Push input history (item 1)
+    this.inputHistory.push(text);
+    this.historyIdx = this.inputHistory.length;
+    this.draftText = '';
+
     this.inputArea.value = '';
     this.inputArea.style.height = 'auto';
     this.setRunning(true);
@@ -1453,6 +1596,9 @@ export class ChatPanel {
     // Remove hint if present
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
+
+    // Turn pair for retry (item 4)
+    this.turnPairs.push({ userText: text, assistantBubble: null });
 
     // User bubble (original text, focus context is for Agent eyes only)
     this.appendUserBubble(text);
@@ -1483,7 +1629,12 @@ export class ChatPanel {
       } else if (err.message?.includes('paused after')) {
         this.addNotice(err.message, 'warn');
       } else {
-        this.addNotice(`错误: ${err.message || err}`, 'error');
+        // Error card with actions (item 8)
+        this.addErrorNotice(err.message || String(err), '', [
+          { label: '重试本次请求', onClick: () => { this.inputArea.value = text; this.sendMessage(); } },
+          { label: '压缩上下文', onClick: () => { this.inputArea.value = '/compact'; this.sendMessage(); } },
+          { label: '新建会话', onClick: () => { this.newSession(); } },
+        ]);
       }
     } finally {
       this.setRunning(false);
@@ -1532,9 +1683,22 @@ export class ChatPanel {
     this.stopBtn.classList.toggle('hidden', !r);
     if (r) {
       this.inputArea.placeholder = 'Agent 思考中…';
+      // Insert progress bar (item 3)
+      if (!this.progressBar) {
+        this.progressBar = document.createElement('div');
+        this.progressBar.className = 'chat-progress';
+        this.progressBar.innerHTML =
+          '<span class="chat-progress-label">准备中…</span><div class="chat-progress-bar"><div class="chat-progress-fill"></div></div>';
+        this.headerEl.after(this.progressBar);
+      }
     } else {
       this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
       this.inputArea.focus();
+      // Remove progress bar
+      if (this.progressBar) {
+        this.progressBar.remove();
+        this.progressBar = null;
+      }
     }
   }
 
@@ -1688,6 +1852,7 @@ export class ChatPanel {
     this._streamTextBuf = '';
     if (this.currentBubble) {
       this.addMessageActions(this.currentBubble);
+      this.injectCodeBlockButtons(this.currentBubble);
     }
     this.currentTextEl = null;
     this.currentBubble = null;
@@ -1726,36 +1891,110 @@ export class ChatPanel {
     this.currentBubble!.appendChild(el);
     this.currentTextEl = el;
     this._streamTextBuf = '';
+    if (this.currentBubble) {
+      this.addMessageActions(this.currentBubble);
+      this.injectCodeBlockButtons(this.currentBubble);
+    }
     this.scrollBottom();
   }
 
   // ── Message actions (copy button) ──
 
   private addMessageActions(bubble: HTMLElement): void {
-    // Only for assistant bubbles
-    if (!bubble.classList.contains('assistant')) return;
     const textEl = bubble.querySelector('.msg-text');
     if (!textEl) return;
 
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
 
-    // Copy button
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'msg-action-btn';
-    copyBtn.innerHTML = iconHtml('copy', 12);
-    copyBtn.title = '复制回复';
-    copyBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const txt = textEl.textContent || '';
-      navigator.clipboard.writeText(txt).then(() => {
-        copyBtn.innerHTML = iconHtml('check-circle', 12);
-        setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 12); }, 1500);
-      }).catch(() => {});
-    });
+    if (bubble.classList.contains('assistant')) {
+      // Copy button
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'msg-action-btn';
+      copyBtn.innerHTML = iconHtml('copy', 12);
+      copyBtn.title = '复制回复';
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const txt = textEl.textContent || '';
+        navigator.clipboard.writeText(txt).then(() => {
+          copyBtn.innerHTML = iconHtml('check-circle', 12);
+          setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 12); }, 1500);
+        }).catch(() => {});
+      });
+      actions.append(copyBtn);
 
-    actions.append(copyBtn);
-    bubble.appendChild(actions);
+      // Retry button (item 4) — find matching turn pair
+      for (let i = this.turnPairs.length - 1; i >= 0; i--) {
+        if (this.turnPairs[i].assistantBubble === bubble) {
+          const pair = this.turnPairs[i];
+          const retryBtn = document.createElement('button');
+          retryBtn.className = 'msg-action-btn';
+          retryBtn.innerHTML = iconHtml('refresh', 12);
+          retryBtn.title = '重试此回复';
+          retryBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!this.agent) return;
+            this.inputArea.value = '';
+            this.setRunning(true);
+            this.addTurnSep();
+            this.turnPairs.push({ userText: pair.userText, assistantBubble: null });
+            this.abortCtrl = new AbortController();
+            this.agent.run(this.abortCtrl.signal, pair.userText)
+              .catch((err: any) => {
+                if (!err.message?.includes('aborted')) {
+                  this.addErrorNotice(err.message || String(err), '', [
+                    { label: '重试', onClick: () => { this.inputArea.value = pair.userText; this.sendMessage(); } },
+                  ]);
+                }
+              })
+              .finally(() => {
+                this.setRunning(false);
+                this.abortCtrl = null;
+                this.finishTurn();
+              });
+          });
+          actions.append(retryBtn);
+          break;
+        }
+      }
+    }
+
+    if (bubble.classList.contains('user')) {
+      // Edit button (item 2)
+      const editBtn = document.createElement('button');
+      editBtn.className = 'msg-action-btn';
+      editBtn.innerHTML = iconHtml('edit', 12);
+      editBtn.title = '编辑消息';
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const txt = textEl.textContent || '';
+        this.inputArea.value = txt;
+        this.inputArea.style.height = 'auto';
+        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+        this.inputArea.focus();
+        this.inputArea.selectionStart = this.inputArea.selectionEnd = txt.length;
+      });
+      actions.append(editBtn);
+
+      // Resend button (item 2)
+      const resendBtn = document.createElement('button');
+      resendBtn.className = 'msg-action-btn';
+      resendBtn.innerHTML = iconHtml('refresh', 12);
+      resendBtn.title = '重新发送';
+      resendBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const txt = textEl.textContent || '';
+        if (txt && !this.running) {
+          this.inputArea.value = txt;
+          this.sendMessage();
+        }
+      });
+      actions.append(resendBtn);
+    }
+
+    if (actions.children.length > 0) {
+      bubble.appendChild(actions);
+    }
   }
 
   // ── Tool cards ──
@@ -1785,9 +2024,12 @@ export class ChatPanel {
     const header = document.createElement('div');
     header.className = 'msg-tool-header';
 
-    const icon = tool.read_only
-      ? iconHtml('search', 13) // read-only → magnifying glass
-      : iconHtml('chevron-right', 13); // write → action arrow
+    const isSubAgent = tool.name === 'agent_spawn';
+    const icon = isSubAgent
+      ? iconHtml('puzzle', 13)
+      : tool.read_only
+        ? iconHtml('search', 13)
+        : iconHtml('chevron-right', 13);
     const nameEl = document.createElement('span');
     nameEl.className = 'tool-name';
     nameEl.innerHTML = `${icon} ${tool.name}`;
@@ -1849,7 +2091,7 @@ export class ChatPanel {
     const resultEl = card.querySelector('.msg-tool-result') as HTMLElement;
     if (resultEl) {
       const text = tool.err || tool.output || '(无输出)';
-      resultEl.innerHTML = formatToolResult(tool.name, text, !!tool.truncated);
+      resultEl.innerHTML = formatToolResult(tool.name, text, !!tool.truncated, tool.args);
       // Syntax highlight code blocks in the result
       resultEl.querySelectorAll('pre code').forEach((block) => {
         hljs.highlightElement(block as HTMLElement);
@@ -1885,6 +2127,7 @@ export class ChatPanel {
     this.lastUsageText = label;
     pill.textContent = label;
     this.currentBubble!.appendChild(pill);
+    this.totalTokensUsed += total; // accumulate for token bar (item 12)
     this.scrollBottom();
     this.updateFooter();
   }
@@ -1912,6 +2155,21 @@ export class ChatPanel {
     const usageStr = this.lastUsageText ? ` · ${this.lastUsageText}` : '';
     const mode = CHAT_MODES.find(m => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
 
+    // Token bar (item 12)
+    let tokenBarHtml = '';
+    const ctxWin = settings.agent?.contextWindow || 0;
+    if (ctxWin > 0 && this.totalTokensUsed > 0) {
+      const pct = Math.min((this.totalTokensUsed / ctxWin) * 100, 100);
+      let cls = '';
+      if (pct >= 90) cls = 'danger';
+      else if (pct >= 80) cls = 'warn';
+      const labelK = `${(this.totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k`;
+      tokenBarHtml = `<div class="chat-token-bar-wrap" title="上下文窗口用量">
+        <span>${labelK}</span>
+        <div class="chat-token-bar"><div class="chat-token-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
+      </div>`;
+    }
+
     this.footerEl.innerHTML = `
       <div class="chat-footer-left">
         <button class="chat-model-badge chat-model-clickable" title="点击切换模型 · ${active?.name} / ${active?.model}">
@@ -1920,9 +2178,11 @@ export class ChatPanel {
         <button class="chat-mode-badge" id="chat-mode-badge" title="切换模式 · 当前: ${mode.label}">
           ${iconHtml('agent', 10)} ${mode.label}
         </button>
+        ${tokenBarHtml}
         <span class="chat-usage-badge">${usageStr}</span>
       </div>
       <div class="chat-footer-right">
+        <button class="chat-shortcuts-btn" data-tooltip="Ctrl+L    打开/关闭面板&#10;Enter     发送 (输入框)&#10;Shift+Enter  换行&#10;Esc       关闭面板&#10;Ctrl+Y    始终允许 (权限)&#10;↑↓        历史导航 (输入框)">${iconHtml('keyboard', 13)}</button>
         <button class="chat-slash-trigger" title="命令菜单">
           ${iconHtml('code', 12)}<span class="chat-slash-label">/</span>
         </button>
@@ -1941,6 +2201,7 @@ export class ChatPanel {
         <button class="sp-item" data-cmd="compact">${iconHtml('save', 10)} 压缩上下文<span class="sp-key">/compact</span></button>
         <button class="sp-item" data-cmd="memory">${iconHtml('bookmark', 10)} 查看记忆<span class="sp-key">/memory</span></button>
         <button class="sp-item" data-cmd="remember">${iconHtml('save', 10)} 记住一件事<span class="sp-key">/remember</span></button>
+        <button class="sp-item" data-cmd="export">${iconHtml('export-file', 10)} 导出对话<span class="sp-key">/export</span></button>
       </div>
       <div class="sp-group">
         <div class="sp-group-title">查询</div>
@@ -1950,6 +2211,7 @@ export class ChatPanel {
         <button class="sp-item" data-cmd="q" data-text="" data-placeholder="追踪从 ">${iconHtml('link', 10)} 依赖路径查询</button>
       </div>`;
     this.footerEl.appendChild(popup);
+    this._slashPopup = popup;
 
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
@@ -1999,6 +2261,10 @@ export class ChatPanel {
         if (cmd === 'remember') {
           this.inputArea.value = '/remember ';
           this.inputArea.focus();
+          return;
+        }
+        if (cmd === 'export') {
+          this.exportSession();
           return;
         }
         // Query commands — fill input text
@@ -2085,6 +2351,8 @@ export class ChatPanel {
     p.className = 'msg-text';
     p.textContent = text;
     el.appendChild(p);
+    // Item 2: edit/resend actions for user bubbles
+    this.addMessageActions(el);
     this.msgList.appendChild(el);
   }
 
@@ -2097,6 +2365,10 @@ export class ChatPanel {
   private finishTurn(): void {
     this.flushReasoning();
     this.flushText();
+    // Backfill turnPairs for retry (item 4)
+    if (this.turnPairs.length > 0) {
+      this.turnPairs[this.turnPairs.length - 1].assistantBubble = this.currentBubble;
+    }
     this.pendingToolCards.clear();
     // Auto-save after every turn so sessions survive crash / force-close
     if (this.projectPath) {
@@ -2169,6 +2441,364 @@ export class ChatPanel {
     }
   }
 
+  // ── Error card (item 8) ──
+
+  private addErrorNotice(text: string, detail: string, actions: Array<{ label: string; onClick: () => void }>): void {
+    const el = document.createElement('div');
+    el.className = 'msg-error-card';
+    const title = document.createElement('div');
+    title.className = 'msg-error-card-title';
+    title.innerHTML = `${iconHtml('alert', 13)} ${escapeHtml(text)}`;
+    el.appendChild(title);
+
+    if (detail) {
+      const detailEl = document.createElement('div');
+      detailEl.className = 'msg-error-card-detail';
+      detailEl.textContent = detail;
+      // Expand toggle
+      const expandBtn = document.createElement('button');
+      expandBtn.className = 'msg-error-card-btn';
+      expandBtn.textContent = '展开详情';
+      expandBtn.addEventListener('click', () => {
+        detailEl.classList.toggle('expanded');
+        expandBtn.textContent = detailEl.classList.contains('expanded') ? '收起' : '展开详情';
+      });
+      el.appendChild(detailEl);
+      el.appendChild(expandBtn);
+    }
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'msg-error-card-actions';
+    for (const a of actions) {
+      const btn = document.createElement('button');
+      btn.className = 'msg-error-card-btn';
+      btn.textContent = a.label;
+      btn.addEventListener('click', a.onClick);
+      actionsRow.appendChild(btn);
+    }
+    el.appendChild(actionsRow);
+    this.msgList.appendChild(el);
+    this.scrollBottom();
+  }
+
+  // ── @ file reference autocomplete (item 5) ──
+
+  private async handleAtInput(): Promise<void> {
+    const val = this.inputArea.value;
+    const cursorPos = this.inputArea.selectionStart || 0;
+    // Find last @ that starts a token (preceded by space or line start, only ASCII @)
+    const textBefore = val.slice(0, cursorPos);
+    const atIdx = (() => {
+      for (let i = textBefore.length - 1; i >= 0; i--) {
+        if (textBefore[i] === '@' && (i === 0 || textBefore[i - 1] === ' ' || textBefore[i - 1] === '\n')) {
+          // Ensure it's ASCII @ (not Chinese full-width)
+          return i;
+        }
+      }
+      return -1;
+    })();
+
+    if (atIdx < 0) {
+      if (this.atPopup) this.atPopup.classList.remove('open');
+      return;
+    }
+
+    const query = textBefore.slice(atIdx + 1).toLowerCase();
+    await this.buildAtPopup(query);
+    this.atIdx = 0;
+    this.updateAtSelection();
+  }
+
+  private async buildAtPopup(query: string): Promise<void> {
+    if (!this.atPopup) {
+      this.atPopup = document.createElement('div');
+      this.atPopup.className = 'chat-at-popup';
+      this.panel.querySelector('.chat-input-area')?.appendChild(this.atPopup);
+    }
+
+    // Cache glob results for 30s
+    const CACHE_TTL = 30000;
+    if (!this.atFileCache || Date.now() - this.atFileCache.ts > CACHE_TTL) {
+      try {
+        const data = await invoke<string>('glob', {
+          pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',
+          path: this.projectPath || '.',
+        });
+        this.atFileCache = { data, ts: Date.now() };
+      } catch {
+        // glob failed — use empty list
+        this.atFileCache = { data: '[]', ts: Date.now() };
+      }
+    }
+
+    // Parse cached results
+    let files: string[] = [];
+    try {
+      const parsed = JSON.parse(this.atFileCache.data);
+      files = (parsed.results || []).map((r: any) => r.path).slice(0, 100);
+    } catch {}
+
+    // Also get node names from starGraph
+    const nodeNames = this.starGraph?.getNodeNames?.() || [];
+
+    // Build combined results
+    const allItems: Array<{ kind: string; name: string }> = [];
+    for (const f of files) {
+      const base = f.replace(/\\/g, '/').split('/').pop() || f;
+      allItems.push({ kind: '文件', name: f });
+    }
+    for (const n of nodeNames) {
+      allItems.push({ kind: '节点', name: n });
+    }
+
+    // Filter by query (substring match)
+    const filtered = query
+      ? allItems.filter(item => item.name.toLowerCase().includes(query))
+      : allItems;
+
+    const top = filtered.slice(0, 10);
+    this.atPopup.innerHTML = top.length > 0
+      ? top.map((item, i) => `<div class="at-item${i === 0 ? ' active' : ''}">
+          <span class="at-kind">${escapeHtml(item.kind)}</span>
+          <span>${escapeHtml(item.name)}</span>
+        </div>`).join('')
+      : '<div class="at-item" style="opacity:0.4">无匹配结果</div>';
+
+    this.atPopup.classList.toggle('open', top.length > 0);
+  }
+
+  private updateAtSelection(): void {
+    if (!this.atPopup) return;
+    const items = this.atPopup.querySelectorAll('.at-item');
+    items.forEach((item, i) => {
+      item.classList.toggle('active', i === this.atIdx);
+    });
+  }
+
+  private confirmAtSelection(): void {
+    if (!this.atPopup || !this.atPopup.classList.contains('open')) return;
+    const items = this.atPopup.querySelectorAll('.at-item');
+    const selected = items[this.atIdx];
+    if (!selected) return;
+
+    const kindEl = selected.querySelector('.at-kind');
+    const kind = kindEl?.textContent || '';
+    const nameEl = selected.querySelector('span:last-child');
+    const name = nameEl?.textContent || '';
+
+    // Find the @ position before cursor
+    const val = this.inputArea.value;
+    const cursorPos = this.inputArea.selectionStart || 0;
+    const textBefore = val.slice(0, cursorPos);
+    let atIdx = -1;
+    for (let i = textBefore.length - 1; i >= 0; i--) {
+      if (textBefore[i] === '@' && (i === 0 || textBefore[i - 1] === ' ' || textBefore[i - 1] === '\n')) {
+        atIdx = i;
+        break;
+      }
+    }
+    if (atIdx < 0) return;
+
+    const token = kind === '节点' ? `\`${name}\`` : `[@${name.split('/').pop()?.replace(/\.\w+$/, '') || name}](${name})`;
+    this.inputArea.value = val.slice(0, atIdx) + token + val.slice(cursorPos);
+    this.atPopup.classList.remove('open');
+    this.inputArea.focus();
+  }
+
+  // ── Slash auto-popup (item 14) ──
+
+  private handleSlashInput(): void {
+    const val = this.inputArea.value;
+    const cursorPos = this.inputArea.selectionStart || 0;
+    const textBefore = val.slice(0, cursorPos);
+
+    // Show on / at line start or after space
+    const showPopup = /(?:^|\s)\/$/.test(textBefore);
+
+    if (showPopup && this._slashPopup) {
+      this._slashPopup.classList.add('open');
+      // Filter items by text after /
+      const query = textBefore.slice(textBefore.lastIndexOf('/') + 1).toLowerCase();
+      this._slashPopup.querySelectorAll('.sp-item').forEach((item) => {
+        const el = item as HTMLElement;
+        const cmd = el.dataset['cmd'] || '';
+        const text = (el.textContent || '').toLowerCase();
+        const match = !query || cmd.includes(query) || text.includes(query);
+        el.style.display = match ? '' : 'none';
+      });
+    } else if (!showPopup && this._slashPopup && !textBefore.includes('/')) {
+      this._slashPopup.classList.remove('open');
+    }
+  }
+
+  // ── Sub-agent event handlers (item 10) ──
+
+  private handleSubSpawn(data: { id: string; description: string; prompt: string; mode: string }): void {
+    // Find the pending agent_spawn tool card and add sub-agent wrapper
+    this.flushReasoning();
+    this.flushText();
+    this.ensureAssistantBubble();
+
+    const subEl = document.createElement('div');
+    subEl.className = 'msg-sub-agent';
+    subEl.dataset['subId'] = data.id;
+    subEl.innerHTML = `
+      <div class="msg-sub-agent-header">
+        ${iconHtml('puzzle', 12)} 子 Agent: ${escapeHtml(data.description)}
+        <span style="font-size:8px;opacity:0.5">${data.mode === 'fork' ? '继承上下文' : '独立'}</span>
+      </div>
+      <div class="msg-sub-agent-body open"></div>`;
+    this.currentBubble!.appendChild(subEl);
+    this.scrollBottom();
+  }
+
+  private handleSubProgress(data: { parentToolId: string; text: string }): void {
+    const subEl = this.currentBubble?.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
+    if (!subEl) return;
+    const body = subEl.querySelector('.msg-sub-agent-body');
+    if (body) {
+      body.textContent += data.text;
+      body.scrollTop = body.scrollHeight;
+    }
+  }
+
+  private handleSubDone(data: { parentToolId: string; summary: any }): void {
+    const subEl = this.currentBubble?.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
+    if (!subEl) return;
+    const body = subEl.querySelector('.msg-sub-agent-body') as HTMLElement;
+    const header = subEl.querySelector('.msg-sub-agent-header') as HTMLElement;
+    if (body) body.classList.remove('open');
+
+    // Collapse and show summary
+    subEl.innerHTML = `
+      <div class="msg-sub-agent-summary">
+        ${iconHtml('puzzle', 12)} 子 Agent 完成 · ${data.summary?.steps || '?'} 步 · ${data.summary?.elapsedMs ? (data.summary.elapsedMs / 1000).toFixed(1) + 's' : ''}
+        ${data.summary?.hasError ? ` · ${iconHtml('alert', 10)} 有错误` : ''}
+        · <button class="pre-code-btn" style="display:inline">查看输出</button>
+      </div>`;
+
+    // Toggle body visibility
+    const toggleBtn = subEl.querySelector('button');
+    const origBody = body;
+    toggleBtn?.addEventListener('click', () => {
+      if (subEl.contains(origBody)) {
+        origBody.remove();
+      } else {
+        subEl.appendChild(origBody);
+        origBody.classList.add('open');
+      }
+    });
+  }
+
+  // ── Code block action buttons (item 6) ──
+
+  /** Inject copy + view-file buttons into code blocks. Called from flushText/renderMarkdownText. */
+  private injectCodeBlockButtons(bubble: HTMLElement): void {
+    bubble.querySelectorAll('.msg-markdown pre').forEach((pre) => {
+      // Already injected
+      if (pre.querySelector('.pre-code-actions')) return;
+
+      const codeEl = pre.querySelector('code');
+      if (!codeEl) return;
+
+      const actions = document.createElement('div');
+      actions.className = 'pre-code-actions';
+
+      // Copy button
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'pre-code-btn';
+      copyBtn.innerHTML = iconHtml('copy', 10);
+      copyBtn.title = '复制代码';
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const code = codeEl.textContent || '';
+        navigator.clipboard.writeText(code).then(() => {
+          copyBtn.innerHTML = iconHtml('check-circle', 10);
+          setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 10); }, 1500);
+        }).catch(() => {});
+      });
+      actions.appendChild(copyBtn);
+
+      // View file button — only if first line looks like a file path
+      const firstLine = codeEl.textContent?.split('\n')[0]?.trim() || '';
+      const isFilePath = /^[\w./\\-]+\.[\w]+(?::\d+)?$/.test(firstLine) && firstLine.includes('/');
+      if (isFilePath) {
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'pre-code-btn';
+        viewBtn.innerHTML = iconHtml('folder-open', 10);
+        viewBtn.title = `打开: ${firstLine}`;
+        viewBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          shell.navigateToFile(firstLine);
+        });
+        actions.appendChild(viewBtn);
+      }
+
+      pre.appendChild(actions);
+    });
+  }
+
+  // ── Conversation export (item 13) ──
+
+  private async exportSession(): Promise<void> {
+    const agent = this.agent;
+    if (!agent) { this.addNotice('没有可导出的会话', 'info'); return; }
+
+    const msgs = agent.getSession();
+    const settings = loadSettings();
+    const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
+    const mode = CHAT_MODES.find(m => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    let md = `# HoloGram 会话 — ${dateStr}\n`;
+    md += `> 模型: ${active?.model || 'unknown'} · 模式: ${mode.label} · 总 token: ${this.totalTokensUsed.toLocaleString()}\n\n`;
+
+    for (const m of msgs) {
+      if (m.role === 'system') continue;
+      if (m.role === 'user') {
+        if (m.content?.startsWith('<compacted-context>')) {
+          md += `> *[上下文压缩]*\n\n`;
+          continue;
+        }
+        md += `## 用户\n${m.content || ''}\n\n`;
+      }
+      if (m.role === 'assistant') {
+        md += `## Agent\n${m.content || ''}\n`;
+        if ((m as any).tool_calls && (m as any).tool_calls.length > 0) {
+          for (const tc of (m as any).tool_calls) {
+            md += `\n### 工具调用: ${tc.name}\n`;
+            md += `> 参数: \`${tc.arguments || ''}\`\n`;
+          }
+        }
+        md += '\n';
+      }
+    }
+
+    // Try Tauri save dialog, fallback to browser download
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await save({
+        defaultPath: `hologram-session-${now.toISOString().slice(0, 10)}.md`,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (filePath) {
+        await invoke('write_file_content', { path: filePath, content: md });
+        this.addNotice(`会话已导出: ${filePath}`, 'info');
+      }
+    } catch {
+      // Browser fallback
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `hologram-session-${now.toISOString().slice(0, 10)}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      this.addNotice('会话已下载', 'info');
+    }
+  }
+
   // ── Sink getter (used by main.ts to wire Agent) ──
 
   get sink() {
@@ -2179,7 +2809,7 @@ export class ChatPanel {
 // ── Static helpers ──
 
 /** Format tool output for display — JSON gets pretty-printed, code gets highlighted. */
-function formatToolResult(toolName: string, text: string, truncated: boolean): string {
+function formatToolResult(toolName: string, text: string, truncated: boolean, args?: string): string {
   let body = text;
   if (truncated) body += '\n…[截断]…';
 
@@ -2194,21 +2824,17 @@ function formatToolResult(toolName: string, text: string, truncated: boolean): s
   if (!body.trim()) return escapeHtml('(无输出)');
   if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
 
-  // ── Code: read_file_content, run_shell, search_content → code block ──
-  if (toolName === 'read_file_content') {
-    // Detect language from path? For now, generic code block
-    return `<pre><code>${escapeHtml(body)}</code></pre>`;
+  // ── Diff view for edit_file / write_file / read_file_content (item 7) ──
+  if (toolName === 'edit_file' || toolName === 'write_file' || toolName === 'write_file_content' || toolName === 'read_file_content') {
+    return formatDiffResult(body, args);
   }
+
+  // ── Code: run_shell, search_content → code block ──
   if (toolName === 'run_shell') {
     return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
   }
   if (toolName === 'search_content') {
     return `<pre><code>${escapeHtml(body)}</code></pre>`;
-  }
-
-  // ── Edit / write ──
-  if (toolName === 'edit_file' || toolName === 'write_file') {
-    return `<div class="tool-result-edit">${escapeHtml(body)}</div>`;
   }
 
   // ── Glob / list_directory — compact list ──
@@ -2239,6 +2865,98 @@ function escapeHtml(s: string): string {
 function truncateArgs(args: string, max = 60): string {
   if (args.length <= max) return args;
   return args.slice(0, max) + '…';
+}
+
+/** Simple line-based diff for edit_file results (item 7). */
+function formatDiffResult(body: string, argsJson?: string): string {
+  // Extract file path from args if available
+  let filePath = '';
+  if (argsJson) {
+    try {
+      const args = JSON.parse(argsJson);
+      filePath = args['file_path'] || args['path'] || '';
+    } catch {}
+  }
+
+  // Try to extract old/new from args for real diff
+  let oldStr = '';
+  let newStr = '';
+  if (argsJson) {
+    try {
+      const args = JSON.parse(argsJson);
+      oldStr = args['old_string'] || args['old_text'] || '';
+      newStr = args['new_string'] || args['new_text'] || args['content'] || '';
+    } catch {}
+  }
+
+  let headerHtml = filePath ? `<div class="diff-header">📄 ${escapeHtml(filePath)}</div>` : '';
+  const MAX_LINES = 40;
+
+  if (oldStr && newStr) {
+    // Real diff: compare old vs new
+    const oldLines = oldStr.split('\n');
+    const newLines = newStr.split('\n');
+    const diffLines = computeSimpleDiff(oldLines, newLines);
+    const totalLines = diffLines.length;
+    const collapsed = totalLines > MAX_LINES;
+
+    let html = headerHtml;
+    const linesToShow = collapsed ? diffLines.slice(0, MAX_LINES) : diffLines;
+    const visibleLines = collapsed
+      ? linesToShow.map(d => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('')
+      : diffLines.map(d => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('');
+
+    html += `<div class="diff-lines${collapsed ? ' diff-folded' : ''}">${visibleLines}</div>`;
+    if (collapsed) {
+      html += `<button class="diff-collapsed" onclick="this.previousElementSibling.classList.remove('diff-folded');this.previousElementSibling.querySelectorAll('.diff-line').forEach(d=>d.style.display='');this.remove();">展开全部 (${totalLines} 行)</button>`;
+    }
+    return html;
+  }
+
+  // Fallback: show full body with + / - line detection
+  const lines = body.split('\n');
+  if (lines.length > MAX_LINES) {
+    const visible = lines.slice(0, MAX_LINES).map(l => {
+      if (l.startsWith('+')) return `<div class="diff-line diff-added">${escapeHtml(l)}</div>`;
+      if (l.startsWith('-')) return `<div class="diff-line diff-removed">${escapeHtml(l)}</div>`;
+      return `<div class="diff-line">${escapeHtml(l)}</div>`;
+    }).join('');
+    return headerHtml + visible + `<button class="diff-collapsed" onclick="this.previousElementSibling.querySelectorAll('.diff-line').forEach(d=>d.style.display='');const next=this.nextElementSibling;if(next)next.style.display='';this.remove();">展开全部 (${lines.length} 行)</button>`;
+  }
+  return headerHtml + `<pre><code>${escapeHtml(body)}</code></pre>`;
+}
+
+/** Compute simple line-by-line diff — marks added/removed lines. ponytail: O(n*m), fine for <100 lines. */
+function computeSimpleDiff(oldLines: string[], newLines: string[]): Array<{ kind: string; prefix: string; text: string }> {
+  // LCS-based diff
+  const m = oldLines.length;
+  const n = newLines.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+  // Backtrack
+  const result: Array<{ kind: string; prefix: string; text: string }> = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.unshift({ kind: '', prefix: ' ', text: oldLines[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ kind: 'diff-added', prefix: '+', text: newLines[j - 1] });
+      j--;
+    } else {
+      result.unshift({ kind: 'diff-removed', prefix: '-', text: oldLines[i - 1] });
+      i--;
+    }
+  }
+  return result;
 }
 
 function computeCostStr(pricing: AgentEvent['pricing'], usage: AgentEvent['usage']): string {

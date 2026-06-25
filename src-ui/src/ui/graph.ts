@@ -2151,6 +2151,11 @@ export class StarGraph {
     this._resettingCamera = true;
   }
 
+  /** Return all visible node names for autocomplete / search. */
+  getNodeNames(): string[] {
+    return this.graphNodes.map(n => n.name);
+  }
+
   focusNode(query: string): boolean {
     const q = query.trim().toLowerCase();
     if (!q || this.graphNodes.length === 0) return false;

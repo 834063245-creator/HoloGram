@@ -276,6 +276,18 @@ const icons: Record<string, IconDef> = {
     label: '权限',
     path: '<path d="M9 2 L4 4.5 L4 10 C4 13.5 6.5 16.5 9 17 C11.5 16.5 14 13.5 14 10 L14 4.5 Z"/>',
   },
+  puzzle: {
+    label: '子Agent',
+    path: '<path d="M5 3 L5 6 L8 6 L8 4.5 A1.5 1.5 0 0 1 11 4.5 L11 6 L14 6 L14 12 L11 12 L11 13.5 A1.5 1.5 0 0 1 8 13.5 L8 12 L5 12 L5 15 L15 15 L15 3 Z"/>',
+  },
+  keyboard: {
+    label: '快捷键',
+    path: '<rect x="2" y="4" width="14" height="10" rx="1.5"/><line x1="5" y1="7" x2="5" y2="11"/><line x1="8" y1="7" x2="8" y2="11"/><line x1="11" y1="7" x2="11" y2="11"/><line x1="14" y1="7" x2="14" y2="9"/>',
+  },
+  'export-file': {
+    label: '导出',
+    path: '<path d="M5 3 L5 15 L13 15 L13 7 L10 3 Z"/><polyline points="10,3 10,7 13,7"/><line x1="9" y1="12" x2="9" y2="8"/><polyline points="7,10 9,8 11,10"/><line x1="5" y1="12" x2="4" y2="14"/>',
+  },
   trash: {
     label: '删除',
     path: '<polyline points="4,6 5,6 14,6"/><path d="M6,6 L6,15 L12,15 L12,6"/><line x1="8" y1="9" x2="8" y2="12"/><line x1="10" y1="9" x2="10" y2="12"/>',

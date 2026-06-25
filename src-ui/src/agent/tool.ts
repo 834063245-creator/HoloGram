@@ -4,6 +4,7 @@
 // Tool 系统 — Tool 接口 + Registry 注册表 + Hologram 工具定义
 
 import type { ToolSchema } from '../provider/types';
+import { bus } from '../ui/events';
 
 // ---- Tool 接口 ----
 
@@ -1272,7 +1273,31 @@ export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
       const subagentType = args['subagent_type'] as string | undefined;
       if (!prompt) return '(agent_spawn: prompt is required)';
       const mode = subagentType ? 'fresh' : 'fork';
-      const result = await spawner(description, prompt, onProgress, mode);
+      const callId = (args['_callId'] as string) || `sub_${Date.now()}`;
+      const startTime = performance.now();
+      let stepCount = 0;
+
+      bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
+
+      const wrappedProgress = (chunk: string) => {
+        stepCount++;
+        onProgress?.(chunk);
+        bus.emit('agent:sub-progress', { parentToolId: callId, text: chunk });
+      };
+
+      const result = await spawner(description, prompt, wrappedProgress, mode);
+      const elapsed = Math.round(performance.now() - startTime);
+
+      bus.emit('agent:sub-done', {
+        parentToolId: callId,
+        summary: {
+          description,
+          steps: stepCount,
+          elapsedMs: elapsed,
+          hasError: !!result.err,
+        },
+      });
+
       if (result.err) return `[子 Agent 错误] ${result.err}`;
       return result.text;
     },

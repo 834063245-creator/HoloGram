@@ -28,6 +28,7 @@ export class SettingsPanel {
   private onSave: (() => void) | null = null;
 
   private static instance: SettingsPanel | null = null;
+  private toolNames: string[] = [];
 
   static get(): SettingsPanel {
     if (!SettingsPanel.instance) {
@@ -43,6 +44,10 @@ export class SettingsPanel {
   }
 
   // ── Public API ──
+
+  setToolNames(names: string[]): void {
+    this.toolNames = names;
+  }
 
   setOnSave(fn: () => void): void {
     this.onSave = fn;
@@ -207,6 +212,12 @@ export class SettingsPanel {
 
   private renderAgentTab(agent: AgentSettings): string {
     const tempPct = Math.round(((agent.temperature || 0.7) / 2) * 100);
+    const permOpts = [
+      { v: 'ask', l: '始终询问' },
+      { v: 'allowReads', l: '自动允许读取' },
+      { v: 'allowAll', l: '全部自动允许' },
+    ];
+    const disabledTools = agent.disabledTools || [];
     return `
       <div class="sp-tab-content" data-tab="agent" style="${this.activeTab === 'agent' ? '' : 'display:none'}">
         <div class="sp-section">
@@ -231,6 +242,30 @@ export class SettingsPanel {
             <input type="number" class="sp-input sp-input-num" data-field="contextWindow"
                    value="${agent.contextWindow || 0}" min="0" step="1000"
                    placeholder="0 = 不限制">
+          </div>
+        </div>
+        <div class="sp-section">
+          <div class="sp-section-title">工具管理</div>
+          <div class="sp-field">
+            <input class="sp-input" data-field="toolSearch" placeholder="搜索工具…" autocomplete="off">
+          </div>
+          <div class="sp-tool-list" id="sp-tool-list">
+            ${this.buildToolListHtml()}
+          </div>
+        </div>
+        <div class="sp-section">
+          <div class="sp-section-title">自定义提示词</div>
+          <div class="sp-field">
+            <textarea class="sp-textarea" data-field="customSystemPrompt" rows="4"
+              placeholder="追加到默认 System Prompt 之后&#10;留空则使用默认">${escapeAttr(agent.customSystemPrompt || '')}</textarea>
+          </div>
+        </div>
+        <div class="sp-section">
+          <div class="sp-section-title">权限默认策略</div>
+          <div class="sp-field">
+            <select class="sp-select" data-field="permissionDefault">
+              ${permOpts.map(o => `<option value="${o.v}"${(agent.permissionDefault || 'ask') === o.v ? ' selected' : ''}>${o.l}</option>`).join('\n              ')}
+            </select>
           </div>
         </div>
         <div class="sp-hint">
@@ -402,6 +437,39 @@ export class SettingsPanel {
 
     // ── Permission events ──
     this.wirePermissionEvents();
+
+    // ── Tool search filtering ──
+    this.wireToolSearch();
+  }
+
+  private buildToolListHtml(): string {
+    const disabled = this.workingSettings.agent.disabledTools || [];
+    if (this.toolNames.length === 0) {
+      return '<div class="sp-hint" style="padding:8px">工具列表在 Agent 初始化后可用</div>';
+    }
+    return this.toolNames
+      .map(name => {
+        const checked = !disabled.includes(name) ? ' checked' : '';
+        return `<label class="sp-tool-item" data-tool="${escapeAttr(name)}">
+          <input type="checkbox" data-tool-check="${escapeAttr(name)}"${checked}>
+          <span>${escapeHtml(name)}</span>
+        </label>`;
+      })
+      .join('');
+  }
+
+  private wireToolSearch(): void {
+    const searchEl = this.panel.querySelector('[data-field="toolSearch"]') as HTMLInputElement;
+    const listEl = this.panel.querySelector('#sp-tool-list') as HTMLElement;
+    if (!searchEl || !listEl) return;
+
+    searchEl.addEventListener('input', () => {
+      const q = searchEl.value.toLowerCase();
+      listEl.querySelectorAll('.sp-tool-item').forEach((item) => {
+        const tool = (item as HTMLElement).dataset['tool'] || '';
+        (item as HTMLElement).style.display = !q || tool.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
   }
 
   private wirePermissionEvents(): void {
@@ -504,6 +572,21 @@ export class SettingsPanel {
     if (tempEl) s.agent.temperature = parseFloat(tempEl.value) || 0.7;
     if (stepsEl) s.agent.maxSteps = parseInt(stepsEl.value) || 10;
     if (ctxWinEl) s.agent.contextWindow = parseInt(ctxWinEl.value) || 0;
+
+    // Read new agent fields
+    const permEl = this.panel.querySelector('[data-field="permissionDefault"]') as HTMLSelectElement;
+    const promptEl = this.panel.querySelector('[data-field="customSystemPrompt"]') as HTMLTextAreaElement;
+    if (permEl) s.agent.permissionDefault = permEl.value as 'ask' | 'allowReads' | 'allowAll';
+    if (promptEl) s.agent.customSystemPrompt = promptEl.value;
+
+    // Read disabled tools from checkboxes
+    const disabledTools: string[] = [];
+    this.panel.querySelectorAll('[data-tool-check]').forEach((cb) => {
+      if (!(cb as HTMLInputElement).checked) {
+        disabledTools.push((cb as HTMLElement).dataset['toolCheck'] || '');
+      }
+    });
+    s.agent.disabledTools = disabledTools;
 
     // Read display form values
     const langEl = this.panel.querySelector('input[name="language"]:checked') as HTMLInputElement;
