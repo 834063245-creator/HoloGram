@@ -394,8 +394,8 @@ export class Workspace {
     try {
       const agentRef = this.agent;
       registry.register(createSubAgentTool(
-        async (description, prompt, onProgress) =>
-          agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress),
+        async (description, prompt, onProgress, mode) =>
+          agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress, mode),
       ));
     } catch (e) { console.error('[setupAgent] sub-agent tool registration failed:', e); }
 
