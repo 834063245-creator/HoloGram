@@ -18,9 +18,6 @@ export interface AgentSettings {
   maxSteps: number;
   contextWindow: number;
   chatMode: ChatModeId;
-  disabledTools: string[];
-  customSystemPrompt: string;
-  permissionDefault: 'ask' | 'allowReads' | 'allowAll';
 }
 
 export type ChatModeId = 'general' | 'code' | 'architect' | 'fast';
@@ -41,7 +38,6 @@ export const CHAT_MODES: ChatMode[] = [
 ];
 
 export interface DisplaySettings {
-  defaultViewMode: 'standard' | 'full' | 'files';
   language: 'zh' | 'en';
 }
 
@@ -81,12 +77,8 @@ const DEFAULTS: AppSettings = {
     maxSteps: 50,
     contextWindow: 0,
     chatMode: 'general',
-    disabledTools: [],
-    customSystemPrompt: '',
-    permissionDefault: 'ask',
   },
   display: {
-    defaultViewMode: 'standard',
     language: 'zh',
   },
 };

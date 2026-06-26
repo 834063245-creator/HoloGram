@@ -128,7 +128,7 @@ export class SettingsPanel {
       <div class="sp-content">
         ${this.renderProviderTab(active)}
         ${this.renderAgentTab(s.agent)}
-        ${this.renderDisplayTab(s.display.defaultViewMode, s.display.language)}
+        ${this.renderDisplayTab(s.display.language)}
         ${this.renderPermissionsTab()}
       </div>
 
@@ -212,12 +212,6 @@ export class SettingsPanel {
 
   private renderAgentTab(agent: AgentSettings): string {
     const tempPct = Math.round(((agent.temperature || 0.7) / 2) * 100);
-    const permOpts = [
-      { v: 'ask', l: '始终询问' },
-      { v: 'allowReads', l: '自动允许读取' },
-      { v: 'allowAll', l: '全部自动允许' },
-    ];
-    const disabledTools = agent.disabledTools || [];
     return `
       <div class="sp-tab-content" data-tab="agent" style="${this.activeTab === 'agent' ? '' : 'display:none'}">
         <div class="sp-section">
@@ -253,28 +247,13 @@ export class SettingsPanel {
             ${this.buildToolListHtml()}
           </div>
         </div>
-        <div class="sp-section">
-          <div class="sp-section-title">自定义提示词</div>
-          <div class="sp-field">
-            <textarea class="sp-textarea" data-field="customSystemPrompt" rows="4"
-              placeholder="追加到默认 System Prompt 之后&#10;留空则使用默认">${escapeAttr(agent.customSystemPrompt || '')}</textarea>
-          </div>
-        </div>
-        <div class="sp-section">
-          <div class="sp-section-title">权限默认策略</div>
-          <div class="sp-field">
-            <select class="sp-select" data-field="permissionDefault">
-              ${permOpts.map(o => `<option value="${o.v}"${(agent.permissionDefault || 'ask') === o.v ? ' selected' : ''}>${o.l}</option>`).join('\n              ')}
-            </select>
-          </div>
-        </div>
         <div class="sp-hint">
           高 Temperature → 更有创意但可能胡说。小窗口 → 旧消息会被压缩。
         </div>
       </div>`;
   }
 
-  private renderDisplayTab(_viewMode: string, language: string): string {
+  private renderDisplayTab(language: string): string {
     const langOpts = [
       { id: 'zh', label: '中文' },
       { id: 'en', label: 'English' },
@@ -443,13 +422,12 @@ export class SettingsPanel {
   }
 
   private buildToolListHtml(): string {
-    const disabled = this.workingSettings.agent.disabledTools || [];
     if (this.toolNames.length === 0) {
       return '<div class="sp-hint" style="padding:8px">工具列表在 Agent 初始化后可用</div>';
     }
     return this.toolNames
       .map(name => {
-        const checked = !disabled.includes(name) ? ' checked' : '';
+        const checked = ' checked';
         return `<label class="sp-tool-item" data-tool="${escapeAttr(name)}">
           <input type="checkbox" data-tool-check="${escapeAttr(name)}"${checked}>
           <span>${escapeHtml(name)}</span>
@@ -572,21 +550,6 @@ export class SettingsPanel {
     if (tempEl) s.agent.temperature = parseFloat(tempEl.value) || 0.7;
     if (stepsEl) s.agent.maxSteps = parseInt(stepsEl.value) || 10;
     if (ctxWinEl) s.agent.contextWindow = parseInt(ctxWinEl.value) || 0;
-
-    // Read new agent fields
-    const permEl = this.panel.querySelector('[data-field="permissionDefault"]') as HTMLSelectElement;
-    const promptEl = this.panel.querySelector('[data-field="customSystemPrompt"]') as HTMLTextAreaElement;
-    if (permEl) s.agent.permissionDefault = permEl.value as 'ask' | 'allowReads' | 'allowAll';
-    if (promptEl) s.agent.customSystemPrompt = promptEl.value;
-
-    // Read disabled tools from checkboxes
-    const disabledTools: string[] = [];
-    this.panel.querySelectorAll('[data-tool-check]').forEach((cb) => {
-      if (!(cb as HTMLInputElement).checked) {
-        disabledTools.push((cb as HTMLElement).dataset['toolCheck'] || '');
-      }
-    });
-    s.agent.disabledTools = disabledTools;
 
     // Read display form values
     const langEl = this.panel.querySelector('input[name="language"]:checked') as HTMLInputElement;

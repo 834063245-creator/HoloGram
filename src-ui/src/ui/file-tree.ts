@@ -271,36 +271,47 @@ export class FileTreePanel {
     }
   }
 
+  private _hlTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** Highlight and scroll to a file path in the tree. Used by graph→tree reverse linking. */
   highlightPath(filePath: string): void {
-    const normalized = filePath.replace(/\\/g, '/');
-    // Find all row elements and look for matching file path
+    const normalized = filePath.replace(/\\/g, '/').toLowerCase();
     const rows = this.treeEl.querySelectorAll<HTMLElement>('div[data-file-path]');
     for (const row of rows) {
-      const rowPath = (row.dataset['filePath'] || '').replace(/\\/g, '/');
-      if (rowPath === normalized || rowPath.endsWith('/' + normalized) || normalized.endsWith('/' + rowPath)) {
-        // Expand parent containers
-        let parent = row.parentElement;
-        while (parent && parent !== this.treeEl) {
-          if (parent.style.display === 'none') {
-            parent.style.display = 'block';
-            // Update parent arrow icon
-            const parentRow = parent.previousElementSibling as HTMLElement;
-            const arrow = parentRow?.querySelector('.ft-arrow') as HTMLElement;
-            if (arrow) arrow.textContent = '▾';
-          }
-          parent = parent.parentElement;
+      const rowPath = (row.dataset['filePath'] || '').replace(/\\/g, '/').toLowerCase();
+      // ponytail: 精确相等，去掉双向 endsWith 防止 a/b.ts 误命中 x/a/b.ts
+      if (rowPath !== normalized) continue;
+      // Expand parent containers
+      let parent = row.parentElement;
+      while (parent && parent !== this.treeEl) {
+        if (parent.style.display === 'none') {
+          parent.style.display = 'block';
+          const parentRow = parent.previousElementSibling as HTMLElement;
+          const arrow = parentRow?.querySelector('.ft-arrow') as HTMLElement;
+          if (arrow) arrow.textContent = '▾';
         }
-        // Scroll into view and highlight
-        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        parent = parent.parentElement;
+      }
+      // ponytail: 面板未打开时先打开，再滚面板内部，不滚整页
+      const doScroll = () => {
+        const rowTop = row.offsetTop;
+        const view = this.treeEl;
+        view.scrollTop = rowTop - view.clientHeight / 2 + row.clientHeight / 2;
         row.style.background = 'rgba(60, 100, 170, 0.45)';
         row.style.borderLeftColor = 'rgba(100, 160, 240, 0.8)';
-        setTimeout(() => {
+        if (this._hlTimer) clearTimeout(this._hlTimer);
+        this._hlTimer = setTimeout(() => {
           row.style.background = '';
           row.style.borderLeftColor = 'transparent';
         }, 2000);
-        break;
+      };
+      if (!this.open) {
+        this.show();
+        requestAnimationFrame(doScroll);
+      } else {
+        doScroll();
       }
+      break;
     }
   }
 

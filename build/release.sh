@@ -18,19 +18,17 @@ echo "=========================================="
 echo " HoloGram Release Builder"
 echo "=========================================="
 
-# ── Step 1: Build Engine ──
+# ── Step 1: Build Engine (via build.sh) ──
 echo ""
 echo "[1/3] Building hologram-engine.exe..."
-cd engine
-cargo build --release
-echo "  ✓ engine/target/release/hologram-engine.exe"
-cd "$ROOT"
+./build/build.sh engine
+echo "  ✓ engine-bin/hologram-engine.exe"
 
 # ── Step 2: Copy .exe to release-bin/ ──
 echo ""
 echo "[2/3] Copying .exe to release-bin/..."
 mkdir -p "$RELEASE_DIR"
-cp -f engine/target/release/hologram-engine.exe "$RELEASE_DIR/"
+cp -f engine-bin/hologram-engine.exe "$RELEASE_DIR/"
 echo "  ✓ release-bin/hologram-engine.exe"
 ls -lh "$RELEASE_DIR/hologram-engine.exe"
 

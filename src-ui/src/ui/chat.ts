@@ -105,6 +105,20 @@ export class ChatPanel {
   // ── New: slash auto-popup ref (item 14) ──
   private _slashPopup: HTMLElement | null = null;
 
+  // ── New: agent panel tabs + status bar ──
+  private _activeTab: 'chat' | 'tools' | 'context' = 'chat';
+  private tabBar!: HTMLElement;
+  private tabContent!: HTMLElement;
+  private chatPanel!: HTMLElement;
+  private toolsPanel!: HTMLElement;
+  private contextPanel!: HTMLElement;
+  private statusBar!: HTMLElement;
+  private statusDot!: HTMLElement;
+  private statusText!: HTMLElement;
+  private statusTokens!: HTMLElement;
+  private toolUsage: Map<string, number> = new Map();
+  private toolHistory: Array<{ name: string; args: string; ts: number }> = [];
+
   private hintText(): string {
     const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
     return this.lastAgentDiag ? `${base}\n\n诊断: ${this.lastAgentDiag}` : base;
@@ -220,6 +234,209 @@ export class ChatPanel {
   }
 
   isOpen(): boolean { return this.mode === 'panel' || this.mode === 'hud'; }
+
+  // ── Tab switching ──
+
+  private switchTab(tab: 'chat' | 'tools' | 'context'): void {
+    if (this._activeTab === tab) return;
+    this._activeTab = tab;
+
+    // Update tab buttons
+    this.tabBar.querySelectorAll('.chat-panel-tab').forEach(btn => {
+      const el = btn as HTMLElement;
+      el.classList.toggle('active', el.dataset['tab'] === tab);
+    });
+
+    // Update panels
+    this.tabContent.querySelectorAll('.chat-tab-panel').forEach(p => {
+      const el = p as HTMLElement;
+      el.classList.toggle('active', el.dataset['panel'] === tab);
+    });
+
+    // Render on switch
+    if (tab === 'tools') this.renderToolsView();
+    else if (tab === 'context') this.renderContextView();
+  }
+
+  // ── Agent status bar ──
+
+  private _updateStatusBar(state: 'idle' | 'thinking' | 'running' | 'error', detail?: string): void {
+    this.statusDot.className = 'chat-status-dot ' + state;
+    this.statusText.textContent = detail || (state === 'idle' ? '就绪' : state === 'thinking' ? '思考中…' : state === 'running' ? '执行工具' : '错误');
+    // Update model in status
+    const settings = loadSettings();
+    const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
+    const modelEl = this.statusBar.querySelector('#chat-status-model') as HTMLElement;
+    if (modelEl && active) {
+      let ml = active.model || '';
+      if (ml.length > 20) ml = ml.slice(0, 19) + '…';
+      modelEl.textContent = active.name ? `${active.name}/${ml}` : ml;
+    }
+    if (this.totalTokensUsed > 0) {
+      this.statusTokens.textContent = `${(this.totalTokensUsed / 1000).toFixed(1)}k tok`;
+    }
+  }
+
+  // ── Tool usage tracking ──
+
+  private _recordToolUsage(toolName: string, args: string): void {
+    this.toolUsage.set(toolName, (this.toolUsage.get(toolName) || 0) + 1);
+    this.toolHistory.unshift({ name: toolName, args, ts: Date.now() });
+    if (this.toolHistory.length > 50) this.toolHistory.length = 50;
+    // Update badge on tools tab
+    const toolsTab = this.tabBar.querySelector('[data-tab="tools"]') as HTMLElement;
+    if (toolsTab) {
+      const total = Array.from(this.toolUsage.values()).reduce((a, b) => a + b, 0);
+      let badge = toolsTab.querySelector('.tab-badge') as HTMLElement;
+      if (total > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'tab-badge';
+          toolsTab.appendChild(badge);
+        }
+        badge.textContent = String(total);
+      } else if (badge) {
+        badge.remove();
+      }
+    }
+  }
+
+  /** Categorize a tool name for visual grouping. */
+  private static toolCategory(name: string): 'read' | 'write' | 'exec' | 'holo' {
+    if (name.startsWith('hologram_')) return 'holo';
+    if (/^(read|search|grep|glob|list|view|show|get|find|cat|head|tail)/i.test(name)) return 'read';
+    if (/^(write|edit|create|delete|remove|mv|cp|rename|save)/i.test(name)) return 'write';
+    if (/^(run|exec|bash|shell|cmd|build|test|cargo|npm|git|python|node)/i.test(name)) return 'exec';
+    return 'read';
+  }
+
+  // ── Tools view ──
+
+  private renderToolsView(): void {
+    const TOOLS_INFO: Array<{ name: string; desc: string; cat: 'read' | 'write' | 'exec' | 'holo' }> = [
+      { name: 'hologram_explore', desc: '依赖波及范围查询', cat: 'holo' },
+      { name: 'hologram_impact', desc: '改动影响分析', cat: 'holo' },
+      { name: 'hologram_path', desc: '依赖路径追踪', cat: 'holo' },
+      { name: 'hologram_neighbors', desc: '邻接节点查询', cat: 'holo' },
+      { name: 'hologram_fragile', desc: '脆弱模块检测', cat: 'holo' },
+      { name: 'hologram_cycle', desc: '循环依赖检测', cat: 'holo' },
+      { name: 'hologram_coupling_report', desc: '耦合度报告', cat: 'holo' },
+      { name: 'hologram_community', desc: '社区结构分析', cat: 'holo' },
+      { name: 'hologram_blindspots', desc: '盲点扫描', cat: 'holo' },
+      { name: 'hologram_diff', desc: '变更差异对比', cat: 'holo' },
+      { name: 'hologram_run_check', desc: '运行健康检查', cat: 'holo' },
+      { name: 'hologram_history', desc: '文件变更历史', cat: 'holo' },
+      { name: 'hologram_changes', desc: '最近变更查询', cat: 'holo' },
+      { name: 'read_file', desc: '读取文件内容', cat: 'read' },
+      { name: 'glob', desc: '文件名模式匹配', cat: 'read' },
+      { name: 'grep', desc: '内容正则搜索', cat: 'read' },
+      { name: 'list_directory', desc: '目录列表', cat: 'read' },
+      { name: 'edit_file', desc: '精确文本替换', cat: 'write' },
+      { name: 'write_file', desc: '写入文件', cat: 'write' },
+      { name: 'run_shell', desc: '执行 Shell 命令', cat: 'exec' },
+    ];
+
+    const maxUsage = Math.max(1, ...Array.from(this.toolUsage.values()));
+
+    let html = '<div class="chat-tools-view">';
+    html += '<div class="chat-tools-section-title">工具清单</div>';
+    html += '<div class="chat-tools-grid">';
+    for (const t of TOOLS_INFO) {
+      const count = this.toolUsage.get(t.name) || 0;
+      const pct = (count / maxUsage) * 100;
+      html += `<div class="chat-tool-card tool-cat-${t.cat}" title="${t.name} — ${t.desc}">
+        <div class="chat-tool-card-name">${t.name}</div>
+        <div class="chat-tool-card-desc">${t.desc}</div>
+        ${count > 0 ? `<div class="chat-tool-card-meta"><span>${count} 次调用</span></div>
+        <div class="tool-usage-bar"><div class="tool-usage-fill" style="width:${pct}%"></div></div>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+
+    // Recent tool calls
+    if (this.toolHistory.length > 0) {
+      html += '<div class="chat-tools-section-title" style="margin-top:4px">最近调用</div>';
+      html += '<div class="chat-tools-recent">';
+      for (const h of this.toolHistory.slice(0, 10)) {
+        const argsShort = h.args ? (h.args.length > 40 ? h.args.slice(0, 39) + '…' : h.args) : '';
+        html += `<div class="chat-tool-recent-item">
+          <span class="chat-tool-recent-name">${h.name}</span>
+          <span class="chat-tool-recent-args">${argsShort}</span>
+          <span class="chat-tool-recent-count">${new Date(h.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    html += '</div>';
+    this.toolsPanel.innerHTML = html;
+  }
+
+  // ── Context view ──
+
+  private renderContextView(): void {
+    const settings = loadSettings();
+    const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
+    const ctxWin = settings.agent?.contextWindow || 0;
+    const pct = ctxWin > 0 ? Math.min((this.totalTokensUsed / ctxWin) * 100, 100) : 0;
+    let meterClass = 'safe';
+    if (pct >= 90) meterClass = 'danger';
+    else if (pct >= 80) meterClass = 'warn';
+
+    let html = '<div class="chat-context-view">';
+
+    // Context window meter
+    html += '<div class="chat-context-section">';
+    html += '<div class="chat-context-section-label">上下文窗口</div>';
+    html += `<div class="chat-context-meter">
+      <div class="chat-context-meter-bar"><div class="chat-context-meter-fill ${meterClass}" style="width:${pct}%"></div></div>
+      <span class="chat-context-meter-val">${ctxWin > 0 ? `${(this.totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k` : '未配置'}</span>
+    </div>`;
+    html += '</div>';
+
+    // Model info
+    html += '<div class="chat-context-section">';
+    html += '<div class="chat-context-section-label">当前模型</div>';
+    html += `<div style="font-family:var(--font-mono);font-size:10px;color:var(--signal)">
+      ${active?.name || '未知'} / ${active?.model || '未配置'}
+      ${active?.thinking ? ' · 思考模式' : ''}
+    </div>`;
+    html += '</div>';
+
+    // System prompt preview
+    html += '<div class="chat-context-section">';
+    html += '<div class="chat-context-section-label">系统提示词</div>';
+    const sysMsg = this.agent?.getSession()?.find(m => m.role === 'system');
+    if (sysMsg?.content) {
+      const preview = sysMsg.content.length > 500 ? sysMsg.content.slice(0, 500) + '…' : sysMsg.content;
+      html += `<div class="chat-context-system-prompt">${escapeHtml(preview)}</div>`;
+    } else {
+      html += '<div class="chat-context-empty">Agent 未就绪</div>';
+    }
+    html += '</div>';
+
+    // Memory items
+    html += '<div class="chat-context-section">';
+    html += '<div class="chat-context-section-label">已配置工具</div>';
+    html += '<div class="chat-context-empty">使用默认工具集</div>';
+    html += '</div>';
+
+    // Session stats
+    html += '<div class="chat-context-section">';
+    html += '<div class="chat-context-section-label">会话统计</div>';
+    const msgCount = this.agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
+    const turnCount = this.turnPairs.length;
+    const toolTotal = Array.from(this.toolUsage.values()).reduce((a, b) => a + b, 0);
+    html += `<div style="font-family:var(--font-mono);font-size:9px;color:rgba(145,180,225,0.55);display:flex;gap:16px">
+      <span>${msgCount} 条消息</span>
+      <span>${turnCount} 轮对话</span>
+      <span>${toolTotal} 次工具调用</span>
+    </div>`;
+    html += '</div>';
+
+    html += '</div>';
+    this.contextPanel.innerHTML = html;
+  }
 
   // ── State transitions (GSAP-powered) ──
 
@@ -1194,6 +1411,24 @@ export class ChatPanel {
     closeBtn.addEventListener('click', () => this.close());
     this.headerEl.append(title);
 
+    // ── Panel tabs (Chat | Tools | Context) ──
+    this.tabBar = document.createElement('div');
+    this.tabBar.className = 'chat-panel-tabs';
+    const tabs: Array<{ id: 'chat' | 'tools' | 'context'; label: string }> = [
+      { id: 'chat', label: '对话' },
+      { id: 'tools', label: '工具' },
+      { id: 'context', label: '上下文' },
+    ];
+    for (const t of tabs) {
+      const btn = document.createElement('button');
+      btn.className = 'chat-panel-tab';
+      btn.dataset['tab'] = t.id;
+      btn.textContent = t.label;
+      btn.addEventListener('click', () => this.switchTab(t.id));
+      this.tabBar.appendChild(btn);
+    }
+    this.headerEl.appendChild(this.tabBar);
+
     // Session tabs
     this.sessionTabs = document.createElement('div');
     this.sessionTabs.className = 'chat-session-tabs';
@@ -1218,10 +1453,35 @@ export class ChatPanel {
     this.headerEl.appendChild(closeBtn);
     this.panel.appendChild(this.headerEl);
 
+    // ── Agent status bar ──
+    this.statusBar = document.createElement('div');
+    this.statusBar.className = 'chat-status-bar';
+    this.statusDot = document.createElement('span');
+    this.statusDot.className = 'chat-status-dot idle';
+    this.statusText = document.createElement('span');
+    this.statusText.className = 'chat-status-text';
+    this.statusText.textContent = '就绪';
+    const statusModel = document.createElement('span');
+    statusModel.className = 'chat-status-model';
+    statusModel.id = 'chat-status-model';
+    this.statusTokens = document.createElement('span');
+    this.statusTokens.className = 'chat-status-tokens';
+    this.statusBar.append(this.statusDot, this.statusText, this.statusTokens, statusModel);
+    this.panel.appendChild(this.statusBar);
+
+    // ── Tab content container ──
+    this.tabContent = document.createElement('div');
+    this.tabContent.className = 'chat-tab-content';
+
+    // Chat panel
+    this.chatPanel = document.createElement('div');
+    this.chatPanel.className = 'chat-tab-panel active';
+    this.chatPanel.dataset['panel'] = 'chat';
+
     // Messages
     this.msgList = document.createElement('div');
     this.msgList.className = 'chat-messages';
-    this.panel.appendChild(this.msgList);
+    this.chatPanel.appendChild(this.msgList);
 
     // Welcome hint
     const hint = document.createElement('div');
@@ -1231,6 +1491,22 @@ export class ChatPanel {
       ? '向我提问代码库的问题，或直接聊天'
       : this.hintText();
     this.msgList.appendChild(hint);
+
+    this.tabContent.appendChild(this.chatPanel);
+
+    // Tools panel
+    this.toolsPanel = document.createElement('div');
+    this.toolsPanel.className = 'chat-tab-panel';
+    this.toolsPanel.dataset['panel'] = 'tools';
+    this.tabContent.appendChild(this.toolsPanel);
+
+    // Context panel
+    this.contextPanel = document.createElement('div');
+    this.contextPanel.className = 'chat-tab-panel';
+    this.contextPanel.dataset['panel'] = 'context';
+    this.tabContent.appendChild(this.contextPanel);
+
+    this.panel.appendChild(this.tabContent);
 
     // Expand handle — pull tab to summon panel (visible in input-only mode)
     const expandHandle = document.createElement('div');
@@ -1683,6 +1959,7 @@ export class ChatPanel {
     this.stopBtn.classList.toggle('hidden', !r);
     if (r) {
       this.inputArea.placeholder = 'Agent 思考中…';
+      this._updateStatusBar('thinking', '分析中…');
       // Insert progress bar (item 3)
       if (!this.progressBar) {
         this.progressBar = document.createElement('div');
@@ -1694,6 +1971,7 @@ export class ChatPanel {
     } else {
       this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
       this.inputArea.focus();
+      this._updateStatusBar('idle');
       // Remove progress bar
       if (this.progressBar) {
         this.progressBar.remove();
@@ -2002,6 +2280,10 @@ export class ChatPanel {
   private handleToolDispatch(tool: AgentEvent['tool']): void {
     if (!tool) return;
 
+    // Track usage
+    this._recordToolUsage(tool.name, tool.args || '');
+    this._updateStatusBar('running', `执行 ${tool.name}`);
+
     // Update existing card (partial → complete args)
     if (this.pendingToolCards.has(tool.id)) {
       const card = this.pendingToolCards.get(tool.id)!;
@@ -2020,6 +2302,9 @@ export class ChatPanel {
     const card = document.createElement('div');
     card.className = 'msg-tool-card';
     card.dataset['toolId'] = tool.id;
+
+    const cat = ChatPanel.toolCategory(tool.name);
+    card.classList.add(`tool-cat-${cat}`);
 
     const header = document.createElement('div');
     header.className = 'msg-tool-header';

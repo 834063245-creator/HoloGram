@@ -307,33 +307,8 @@ export function iconSvg(name: string, size = 15, cls = ''): string {
 }
 
 /**
- * Create a DOM element for an icon.
- * @param name Icon key
- * @param size In pixels
- * @param color CSS color value (applied via stroke)
- */
-export function iconEl(name: string, size = 15, color = ''): SVGSVGElement {
-  const def = icons[name];
-  if (!def) {
-    const span = document.createElement('span');
-    span.textContent = '?';
-    span.style.color = 'var(--fail)';
-    return span as unknown as SVGSVGElement;
-  }
-  const parser = new DOMParser();
-  const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" class="hg-icon" width="${size}" height="${size}" viewBox="0 0 18 18" fill="none" stroke="${color || 'currentColor'}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-label="${def.label}" role="img">${def.path}</svg>`;
-  const doc = parser.parseFromString(svgStr, 'image/svg+xml');
-  const svg = doc.documentElement as unknown as SVGSVGElement;
-  return svg;
-}
-
-/**
  * Returns the SVG string for a given icon name — used in innerHTML contexts.
  */
 export function iconHtml(name: string, size = 15): string {
   return iconSvg(name, size);
-}
-
-export function hasIcon(name: string): boolean {
-  return name in icons;
 }

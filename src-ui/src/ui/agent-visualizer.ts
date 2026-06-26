@@ -179,21 +179,21 @@ export class AgentVisualizer {
     const node = String(args['node_id'] || args['nodeId'] || '');
     dbg('agent-viz.impact', `node="${node}"`);
     if (!node) return;
-    this.graph.focusNode(node);
+    this.graph.highlightNodeNames([node], '#60a0ff');
   }
 
   private _handleNeighbors(args: Record<string, unknown>): void {
     const node = String(args['node_id'] || args['nodeId'] || '');
     dbg('agent-viz.neighbors', `node="${node}"`);
     if (!node) return;
-    this.graph.focusNode(node);
+    this.graph.highlightNodeNames([node], '#60a0ff');
   }
 
   private _handleCouplingReport(args: Record<string, unknown>): void {
     const module = String(args['module'] || args['module_name'] || args['moduleName'] || '');
     dbg('agent-viz.coupling', `module="${module}"`);
     if (!module) return;
-    this.graph.focusNode(module);
+    this.graph.highlightNodeNames([module], '#60a0ff');
   }
 
   private _handleFragile(resultText: string): void {
@@ -250,7 +250,7 @@ export class AgentVisualizer {
     const node = String(args['node_id'] || args['nodeId'] || '');
     dbg('agent-viz.history', `node="${node}"`);
     if (!node) return;
-    this.graph.focusNode(node);
+    this.graph.highlightNodeNames([node], '#60a0ff');
   }
 
   private _handleCommunity(resultText: string): void {

@@ -79,8 +79,3 @@ export const log = {
     console.error(`[${m}] ${msg}`, ctx ?? '');
   },
 };
-
-export function shutdownLogger(): void {
-  if (flushTimer) clearInterval(flushTimer);
-  flush();
-}
