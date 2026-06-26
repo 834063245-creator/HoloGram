@@ -67,9 +67,12 @@ chat_sessions.json
 /package.json
 /package-lock.json
 
-# One-off debug scripts
+# One-off debug scripts / logs
 test_debug.py
+debug-*.log
 prototype.html
+prototype-permission.html
+gen_files_graph.py
 preflight/
 
 # ── v4.1+: 核心源码不公开，只发布二进制 ──
@@ -103,6 +106,9 @@ SPEC_AGENT_PANEL_UPGRADE.md
 docs_archive/
 specs/
 docs/
+# Temporary fix notes / backups
+FIX-*.md
+.mcp.json.bak
 
 # One-off internal scripts (not for public repo)
 src-ui/test-once.ts
