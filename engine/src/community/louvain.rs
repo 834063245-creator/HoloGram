@@ -168,6 +168,20 @@ fn detect_hierarchical_from_base(
 
     if base.len() <= 1 { return result; }
 
+    // Build dense node-ID → index mapping ONCE (all leaf nodes are in base communities).
+    // ponytail: one HashMap for string→dense lookup, amortized across condensation iterations.
+    // The hot-path HashMaps (node_to_ci, edge_counts) become Vecs below.
+    let mut all_node_ids: Vec<&str> = base.iter()
+        .flat_map(|c| c.iter().map(|s| s.as_str()))
+        .collect();
+    all_node_ids.sort();
+    all_node_ids.dedup();
+    let node_count = all_node_ids.len();
+    let node_to_dense: HashMap<&str, usize> = all_node_ids.iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect();
+
     // Phase 2 loop: condensation → Phase 1 → next level
     let mut current_communities: Vec<Vec<String>> = base.to_vec();
     let mut level = 0usize;
@@ -175,34 +189,48 @@ fn detect_hierarchical_from_base(
     loop {
         let n = current_communities.len();
 
-        // Build leaf-node → community-index map for this level
-        let mut node_to_ci: HashMap<&str, usize> = HashMap::new();
+        // Build leaf-node → community-index map for this level.
+        // ponytail: Vec<usize> indexed by dense node index (was HashMap<&str, usize>).
+        // 773K-entry HashMap rebuilt each iteration → O(n) Vec fill.
+        let mut node_to_ci: Vec<usize> = vec![0; node_count];
         for (ci, members) in current_communities.iter().enumerate() {
-            for nid in members { node_to_ci.insert(nid.as_str(), ci); }
+            for nid in members {
+                if let Some(&dense) = node_to_dense.get(nid.as_str()) {
+                    node_to_ci[dense] = ci;
+                }
+            }
         }
 
         // Condensed graph: each current community is a super-node
         let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
         let mut degrees = vec![0.0f64; n];
         let mut m = 0.0f64;
-        let mut edge_counts: HashMap<(usize, usize), f64> = HashMap::new();
 
         // Sum cross-community edge weights — O(E), not O(C²×size²).
-        // Walk leaf edges once; each edge's endpoints map to communities
-        // via node_to_ci. Cross-community edges accumulate into edge_counts.
+        // ponytail: accumulate into Vec then sort+merge (was HashMap<(usize,usize), f64>).
+        // No per-edge hashing, contiguous memory, merge pass is O(E).
+        let mut edge_pairs: Vec<((usize, usize), f64)> = Vec::new();
         for (src, dst) in leaf_edges {
-            let ci = node_to_ci.get(src.as_str()).copied();
-            let cj = node_to_ci.get(dst.as_str()).copied();
+            let ci = node_to_dense.get(src.as_str()).map(|&d| node_to_ci[d]);
+            let cj = node_to_dense.get(dst.as_str()).map(|&d| node_to_ci[d]);
             if let (Some(ci), Some(cj)) = (ci, cj) {
                 if ci != cj {
                     let (a, b) = if ci < cj { (ci, cj) } else { (cj, ci) };
-                    *edge_counts.entry((a, b)).or_default() += 1.0;
+                    edge_pairs.push(((a, b), 1.0));
                 }
             }
         }
+        edge_pairs.sort_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-        let mut sorted_edges: Vec<((usize, usize), f64)> = edge_counts.into_iter().collect();
-        sorted_edges.sort_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        // Merge adjacent entries with same (a,b) key
+        let mut sorted_edges: Vec<((usize, usize), f64)> = Vec::new();
+        for ((a, b), w) in edge_pairs {
+            if let Some(last) = sorted_edges.last_mut() {
+                if last.0 == (a, b) { last.1 += w; continue; }
+            }
+            sorted_edges.push(((a, b), w));
+        }
+        // edge_pairs consumed by for loop above; sorted_edges holds merged result
         for ((a, b), w) in sorted_edges {
             adj[a].push((b, w));
             adj[b].push((a, w));

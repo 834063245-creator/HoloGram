@@ -1125,12 +1125,27 @@ fn language_for_lsp(ext: &str) -> Option<tree_sitter::Language> {
     }
 }
 
+// Thread-local LSP parser cache — reuses parser across files of the same language.
+// ponytail: avoids Parser::new() + set_language() overhead for 64K files.
+// Each rayon worker thread gets its own cached parser via thread_local.
+thread_local! {
+    static TL_LSP_PARSER: std::cell::RefCell<Option<(tree_sitter::Parser, String)>> = std::cell::RefCell::new(None);
+}
+
 /// Re-parse source to a tree-sitter Tree. Returns None if language not supported or parse fails.
 fn reparse_for_lsp(source: &str, ext: &str) -> Option<tree_sitter::Tree> {
     let lang = language_for_lsp(ext)?;
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&lang).ok()?;
-    parser.parse(source, None)
+    TL_LSP_PARSER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let reuse = borrow.as_ref().map_or(false, |(_, cached)| cached == ext);
+        if !reuse {
+            let mut parser = tree_sitter::Parser::new();
+            parser.set_language(&lang).ok()?;
+            *borrow = Some((parser, ext.to_string()));
+        }
+        let (ref mut parser, _) = borrow.as_mut().unwrap();
+        parser.parse(source, None)
+    })
 }
 
 /// Run LSP type-aware call resolution on all source files in the project.
@@ -1521,11 +1536,13 @@ def order_view():
 
         let mut total_resolved = 0usize;
 
-        for (abs_path, (source, tree_opt)) in &result.parse_cache {
+        for (abs_path, (source, _tree_opt)) in &result.parse_cache {
             if !abs_path.ends_with(".py") {
                 continue;
             }
-            if let Some(tree) = tree_opt {
+            // ponytail: parse_cache stores source only (streaming LSP), re-parse here
+            let tree_opt = reparse_for_lsp(source, "py");
+            if let Some(ref tree) = tree_opt {
                 let rel = abs_path
                     .strip_prefix(&format!("{}", test_dir.display()))
                     .unwrap_or(abs_path)
