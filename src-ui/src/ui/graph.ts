@@ -552,6 +552,87 @@ function spiralGalaxies(
   }
 }
 
+// ponytail: 社区质心斥力+跨边引力后处理 — 推开无依赖社区, 拉近有跨边的社区, 结构感来自耦合关系
+function repelCommunityCentroids(
+  pos: Float32Array,
+  n: number,
+  nodeComm: number[],
+  shellRadius: number,
+  edgePairs: [number, number][],
+): void {
+  const commMap = new Map<number, { cx: number; cy: number; cz: number; nodes: number[]; r: number; idx: number }>();
+  for (let i = 0; i < n; i++) {
+    const c = nodeComm[i];
+    if (c < 0) continue;
+    let cc = commMap.get(c);
+    if (!cc) { cc = { cx: 0, cy: 0, cz: 0, nodes: [], r: 0, idx: 0 }; commMap.set(c, cc); }
+    cc.cx += pos[i * 3]; cc.cy += pos[i * 3 + 1]; cc.cz += pos[i * 3 + 2];
+    cc.nodes.push(i);
+  }
+  const comms = [...commMap.values()];
+  if (comms.length < 2) return;
+  for (let a = 0; a < comms.length; a++) comms[a].idx = a;
+  for (const cc of comms) {
+    cc.cx /= cc.nodes.length; cc.cy /= cc.nodes.length; cc.cz /= cc.nodes.length;
+    const dists: number[] = [];
+    for (const i of cc.nodes) {
+      const dx = pos[i * 3] - cc.cx, dy = pos[i * 3 + 1] - cc.cy, dz = pos[i * 3 + 2] - cc.cz;
+      dists.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    dists.sort((a, b) => a - b);
+    cc.r = dists[Math.floor(dists.length * 0.9)] || 20;
+  }
+  // 跨社区边权重矩阵
+  const C = comms.length;
+  const crossW = new Array(C).fill(0).map(() => new Array(C).fill(0));
+  for (const [s, t] of edgePairs) {
+    const sc = nodeComm[s], tc = nodeComm[t];
+    if (sc < 0 || tc < 0 || sc === tc) continue;
+    const sa = commMap.get(sc)?.idx, ta = commMap.get(tc)?.idx;
+    if (sa === undefined || ta === undefined) continue;
+    crossW[sa][ta]++; crossW[ta][sa]++;
+  }
+  const FACTOR = 2.1;
+  const ITERS = 40;
+  const ATT_STR = 0.008; // 跨边引力强度
+  for (let iter = 0; iter < ITERS; iter++) {
+    const deltas = comms.map(() => ({ dx: 0, dy: 0, dz: 0 }));
+    let hadOverlap = false;
+    for (let a = 0; a < C; a++) {
+      for (let b = a + 1; b < C; b++) {
+        const ca = comms[a], cb = comms[b];
+        const dx = cb.cx - ca.cx, dy = cb.cy - ca.cy, dz = cb.cz - ca.cz;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < 0.01) continue;
+        const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+        // 斥力: 重叠时推开
+        const minDist = (ca.r + cb.r) * FACTOR;
+        if (dist < minDist) {
+          hadOverlap = true;
+          const push = (minDist - dist) / 2;
+          deltas[a].dx -= nx * push; deltas[a].dy -= ny * push; deltas[a].dz -= nz * push;
+          deltas[b].dx += nx * push; deltas[b].dy += ny * push; deltas[b].dz += nz * push;
+        }
+        // 引力: 有跨边的关系拉近, 力度随边数增长但封顶防塌
+        const w = crossW[a][b];
+        if (w > 0) {
+          const pull = Math.min(w * ATT_STR, dist * 0.3);
+          deltas[a].dx += nx * pull; deltas[a].dy += ny * pull; deltas[a].dz += nz * pull;
+          deltas[b].dx -= nx * pull; deltas[b].dy -= ny * pull; deltas[b].dz -= nz * pull;
+        }
+      }
+    }
+    if (!hadOverlap && iter > 10) break;
+    for (let a = 0; a < C; a++) {
+      const cc = comms[a], d = deltas[a];
+      cc.cx += d.dx; cc.cy += d.dy; cc.cz += d.dz;
+      for (const i of cc.nodes) {
+        pos[i * 3] += d.dx; pos[i * 3 + 1] += d.dy; pos[i * 3 + 2] += d.dz;
+      }
+    }
+  }
+}
+
 async function layout3D(
   n: number,
   edgePairs: [number, number][],
@@ -3941,6 +4022,10 @@ export class StarGraph {
       }
     } else {
       rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
+    }
+    // ponytail: 社区质心斥力后处理 — 推开重叠社区, 不碰内部布局
+    if (effGroups.size > 1) {
+      repelCommunityCentroids(rawPos, nodes.length, nodeCommArr, shellRadius, pairs);
     }
     // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
