@@ -22,6 +22,8 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
+use hologram_engine::engine as engine_api;
+
 use crate::sandbox::{Sandbox, SandboxResult};
 use crate::audit::{AuditEntry, AuditLogger, now_iso};
 
@@ -70,13 +72,17 @@ impl WorkspaceHandle {
     /// Deactivate this workspace: stop the file watcher and clear transient state.
     /// Called before switching to a new workspace or closing the app.
     pub fn deactivate(&mut self) {
-        // Signal the watcher thread to stop
+        // Signal the watcher thread to stop.
         self.watcher_running.store(false, Ordering::SeqCst);
 
-        // Join the watcher thread — guaranteed exit within 1 poll interval (1s)
-        if let Some(handle) = self.watcher_thread.take() {
-            let _ = handle.join();
-        }
+        // Detach the watcher thread — do NOT join. The watcher checks the
+        // running flag each poll interval and exits on its own. Joining here
+        // blocks the caller while a mid-flight analysis finishes, and since
+        // deactivate() runs under the state mutex (workspace_deactivate),
+        // it blocks every other state-dependent command.
+        // ponytail: 上限 — 旧 watcher 最迟 1s 后退出；若它正持有 analyze_lock，
+        // 用户的新分析会在 engine.analyze() 排队等锁释放，不会丢数据。
+        self.watcher_thread.take();
 
         // Clear changed files
         if let Ok(mut files) = self.changed_files.lock() {
@@ -88,11 +94,10 @@ impl WorkspaceHandle {
     /// Must be called after activate(). Safe to call if a watcher is already
     /// running — the old one will be stopped and joined first.
     pub fn start_watcher(&mut self, app_handle: AppHandle) {
-        // Ensure any previous watcher is fully stopped
+        // Signal any previous watcher to stop, then detach (don't join —
+        // same reason as deactivate(): avoid blocking under the state mutex).
         self.watcher_running.store(false, Ordering::SeqCst);
-        if let Some(handle) = self.watcher_thread.take() {
-            let _ = handle.join();
-        }
+        self.watcher_thread.take();
 
         let path = self.path.clone();
         let running = self.watcher_running.clone();
@@ -103,7 +108,12 @@ impl WorkspaceHandle {
         let handle = thread::spawn(move || {
             let mut last_mtimes = collect_file_mtimes(&path);
             let poll_interval = Duration::from_secs(1);
+            // Debounce: wait for a quiet window after the last change before
+            // analyzing. Coalesces save-storms into one analysis pass.
+            let debounce = Duration::from_secs(2);
             let mut consecutive_failures: u32 = 0;
+            let mut pending_changed: Vec<String> = Vec::new();
+            let mut last_change_at: Option<std::time::Instant> = None;
 
             while running.load(Ordering::SeqCst) {
                 thread::sleep(poll_interval);
@@ -131,38 +141,72 @@ impl WorkspaceHandle {
                 }
 
                 if !changed.is_empty() {
-                    if let Some(_json) = run_engine_analysis(&path, &changed) {
-                        last_mtimes = current_mtimes;
-                        consecutive_failures = 0;
-
-                        // Update changed_files for check/gate commands
-                        if let Ok(mut last) = changed_files.lock() {
-                            *last = changed.clone();
+                    // Accumulate and (re)start the debounce window.
+                    for fp in &changed {
+                        if !pending_changed.contains(fp) {
+                            pending_changed.push(fp.clone());
                         }
+                    }
+                    last_change_at = Some(std::time::Instant::now());
+                    // Don't update last_mtimes yet — wait until we actually
+                    // analyze, otherwise a debounce reset would lose pending
+                    // changes.
+                }
 
-                        // Emit graph-updated event to frontend
-                        // The frontend will call get_full_graph to retrieve the updated data
-                        let summary = serde_json::json!({
-                            "total_nodes": 0,  // frontend ignores this, re-fetches via get_full_graph
-                            "node_count": 0,
-                            "meta": { "source_root": &path }
-                        });
-                        if let Err(e) = app_handle.emit("graph-updated", summary.to_string()) {
-                            eprintln!("[hologram] emit graph-updated failed: {e}");
+                // Only analyze when changes have settled (no new change for
+                // `debounce`).
+                let settled = last_change_at
+                    .map(|t| t.elapsed() >= debounce)
+                    .unwrap_or(false);
+                if !settled || pending_changed.is_empty() {
+                    continue;
+                }
+
+                // Yield to an in-flight user-triggered analysis (open folder
+                // / reanalyze). The user took the lock first; retry next tick
+                // after it frees. This is what stops the "卡点" — watcher no
+                // longer blocks user analyzes.
+                if engine_api::engine_state().is_analyzing() {
+                    continue;
+                }
+
+                let changed = std::mem::take(&mut pending_changed);
+                last_change_at = None;
+
+                if let Some(_json) = run_engine_analysis(&path, &changed) {
+                    last_mtimes = current_mtimes;
+                    consecutive_failures = 0;
+
+                    // Update changed_files for check/gate commands
+                    if let Ok(mut last) = changed_files.lock() {
+                        *last = changed.clone();
+                    }
+
+                    // Emit graph-updated event to frontend
+                    let summary = serde_json::json!({
+                        "total_nodes": 0,
+                        "node_count": 0,
+                        "meta": { "source_root": &path }
+                    });
+                    if let Err(e) = app_handle.emit("graph-updated", summary.to_string()) {
+                        eprintln!("[hologram] emit graph-updated failed: {e}");
+                    }
+                } else {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= 3 {
+                        // Give up on this batch — update mtimes to break the loop.
+                        last_mtimes = current_mtimes;
+                        let msg = format!(
+                            r#"{{"error":"分析失败 (已重试{}次)，实时更新已暂停。保存文件后将重新尝试。"}}"#,
+                            consecutive_failures
+                        );
+                        if let Err(e) = app_handle.emit("graph-updated", msg) {
+                            eprintln!("[hologram] emit graph-updated error failed: {e}");
                         }
                     } else {
-                        consecutive_failures += 1;
-                        // After 3 consecutive failures, update mtimes anyway to break retry loop
-                        if consecutive_failures >= 3 {
-                            last_mtimes = current_mtimes;
-                            let msg = format!(
-                                r#"{{"error":"分析失败 (已重试{}次)，实时更新已暂停。保存文件后将重新尝试。"}}"#,
-                                consecutive_failures
-                            );
-                            if let Err(e) = app_handle.emit("graph-updated", msg) {
-                                eprintln!("[hologram] emit graph-updated error failed: {e}");
-                            }
-                        }
+                        // Re-queue for retry next tick.
+                        pending_changed = changed;
+                        last_change_at = Some(std::time::Instant::now());
                     }
                 }
             }
@@ -231,9 +275,27 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
     let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs",
                  ".go", ".rs", ".java", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
                  ".rb", ".cs", ".kt", ".kts", ".swift", ".php", ".lua"];
+    // Skip generated/dependency dirs — changes here (e.g. vite build output
+    // in build/*.mjs) would otherwise trigger a full re-analyze and steal
+    // analyze_lock from user-triggered analyses.
+    const IGNORE_DIRS: &[&str] = &[
+        ".git", "node_modules", "target", "build", "dist", "out",
+        ".venv", "venv", ".hologram", "engine-bin", "release-bin",
+        "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+        ".next", ".nuxt", ".svelte-kit", ".turbo",
+        ".cursor", ".idea", ".vscode", ".coverage",
+    ];
     for entry in walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|e| {
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy();
+                !IGNORE_DIRS.iter().any(|d| name.as_ref() == *d)
+            } else {
+                true
+            }
+        })
         .filter_map(|e| e.ok())
     {
         let path = entry.path();

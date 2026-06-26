@@ -291,10 +291,17 @@ async fn workspace_activate(
 async fn workspace_deactivate(
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<(), String> {
-    if let Some(ref mut handle) = *state.lock().unwrap() {
-        handle.deactivate();
+    // Take the handle out while briefly holding the lock, then RELEASE the
+    // lock before deactivating. deactivate() stops the watcher; doing that
+    // under the state mutex blocks every other command that needs state
+    // (workspace_activate, get_full_graph, …) for the whole stop duration.
+    let handle = {
+        let mut guard = state.lock().map_err(|e| format!("工作区状态错误: {e}"))?;
+        guard.take() // take() 同时把 state 内的 Option 置 None
+    };
+    if let Some(mut h) = handle {
+        h.deactivate();
     }
-    *state.lock().unwrap() = None;
     Ok(())
 }
 
@@ -326,7 +333,7 @@ use engine::engine as engine_api;
 use engine::graph::Graph;
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
-use engine::community::{detect_communities, detect_hierarchical_communities};
+use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
 use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 
@@ -468,8 +475,17 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
                 serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids, "label": label})
             })
             .collect();
-        // Hierarchical communities (Level 0 + Level 1+ super-communities)
-        let hcommunities = detect_hierarchical_communities(g, 42);
+        // Hierarchical communities — rebuild base from node.community_id
+        // (already set during analyze), then run only Phase 2 condensation.
+        // Avoids re-running Phase 1 detect_communities on every serialize.
+        let mut base_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+        for n in g.nodes.values() {
+            if let Some(cid) = n.community_id {
+                base_map.entry(cid).or_default().push(n.id.clone());
+            }
+        }
+        let base: Vec<Vec<String>> = base_map.values().cloned().collect();
+        let hcommunities = detect_hierarchical_communities_with_base(g, base, 42);
         let hcommunities_json: Vec<serde_json::Value> = hcommunities.iter()
             .map(|hc| serde_json::json!({
                 "id": hc.id,
