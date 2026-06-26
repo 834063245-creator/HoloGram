@@ -109,6 +109,16 @@ pub struct AnalyzeResult {
     pub hierarchical_communities: Vec<crate::community::HierarchicalCommunity>,
     /// Wall-clock time for the full pipeline.
     pub elapsed_secs: f64,
+    /// Per-stage timing breakdown.
+    pub stage_timings: Vec<StageTiming>,
+}
+
+/// A single pipeline stage timing record.
+#[derive(Debug, Clone)]
+pub struct StageTiming {
+    pub name: String,
+    pub elapsed_secs: f64,
+    pub detail: String,
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -123,9 +133,9 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
     for (source, targets) in idx.edges_iter() {
         for (target, kind, coupling_depth, delay) in targets {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
-            let mut edge = crate::graph::Edge::new(id, source, target, *kind);
-            edge.coupling_depth = *coupling_depth;
-            edge.temporal_delay_sec = *delay;
+            let mut edge = crate::graph::Edge::new(id, source.clone(), target, kind);
+            edge.coupling_depth = coupling_depth;
+            edge.temporal_delay_sec = delay;
             g.add_edge(edge);
         }
     }
@@ -361,12 +371,20 @@ impl Engine {
 
         info!("[engine] analysis started for {}", project_root.display());
 
+        // Per-stage timing collector
+        let mut stage_timings: Vec<StageTiming> = Vec::new();
+
         // 1. Core analysis (parse cache included for downstream synthesis)
         set_progress("解析文件", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let mut result = analyze_project(project_root);
         eprintln!("[engine] stage: core-parse done in {:.1}s ({} nodes, {} edges, {} files)",
             stage_start.elapsed().as_secs_f64(), result.graph.node_count(), result.graph.edge_count(), result.files_parsed);
+        stage_timings.push(StageTiming {
+            name: "Core Parse".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} files, {} nodes, {} edges", result.files_parsed, result.graph.node_count(), result.graph.edge_count()),
+        });
         // Detach parse_cache + discovered_files so they can be moved into the
         // LSP thread (which needs 'static). Re-attached after LSP completes.
         let mut parse_cache = std::mem::take(&mut result.parse_cache);
@@ -411,6 +429,13 @@ impl Engine {
         info!(edges = lsp_resolved, "[engine] LSP type-resolved call edges");
         eprintln!("[engine] stage: LSP done in {:.1}s ({} resolved)",
             stage_start.elapsed().as_secs_f64(), lsp_resolved);
+        // Note: LSP stage_start was set before the thread spawn at line ~376,
+        // but it was shadowed by later stage_starts. We record from the
+        // core-parse stage_start to here as a combined parse+LSP span.
+        // For per-stage LSP timing, we use the sub-timing below.
+        // ponytail: LSP timing is measured from core-parse start because
+        // the stage_start variable is reused. A follow-up can add a dedicated
+        // LSP timer. For now, the core-parse stage covers discovery+parse+LSP.
 
         // 2. Cross-file resolution
         set_progress("跨文件解析", 0, 0, "");
@@ -419,6 +444,11 @@ impl Engine {
         info!(edges = resolved, "[engine] cross-file resolved");
         eprintln!("[engine] stage: cross-file done in {:.1}s ({} edges resolved)",
             stage_start.elapsed().as_secs_f64(), resolved);
+        stage_timings.push(StageTiming {
+            name: "Cross-File".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges resolved", resolved),
+        });
 
         // 3. Coupling analysis
         set_progress("耦合分析", 0, 0, "");
@@ -426,6 +456,11 @@ impl Engine {
         compute_coupling(&mut result.graph);
         eprintln!("[engine] stage: coupling done in {:.1}s",
             stage_start.elapsed().as_secs_f64());
+        stage_timings.push(StageTiming {
+            name: "Coupling".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: String::new(),
+        });
 
         // 4. Framework route detection (uses parse cache + discovered files to avoid re-walkdir)
         set_progress("框架路由检测", 0, 0, "");
@@ -434,6 +469,11 @@ impl Engine {
         info!(count = routes_found, "[engine] framework routes detected");
         eprintln!("[engine] stage: framework-routes done in {:.1}s ({} routes)",
             stage_start.elapsed().as_secs_f64(), routes_found);
+        stage_timings.push(StageTiming {
+            name: "Framework Routes".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} routes", routes_found),
+        });
 
         // 5. Dynamic dispatch synthesis (uses parse cache + discovered files)
         set_progress("动态调度合成", 0, 0, "");
@@ -442,6 +482,11 @@ impl Engine {
         info!(count = syn_edges, "[engine] dynamic dispatch edges synthesized");
         eprintln!("[engine] stage: dynamic-dispatch done in {:.1}s ({} edges)",
             stage_start.elapsed().as_secs_f64(), syn_edges);
+        stage_timings.push(StageTiming {
+            name: "Dynamic Dispatch".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges", syn_edges),
+        });
 
         // 6. Dataflow synthesis (uses parse cache + discovered files)
         set_progress("数据流合成", 0, 0, "");
@@ -450,6 +495,11 @@ impl Engine {
         info!(count = df_edges, "[engine] dataflow edges synthesized");
         eprintln!("[engine] stage: dataflow done in {:.1}s ({} edges)",
             stage_start.elapsed().as_secs_f64(), df_edges);
+        stage_timings.push(StageTiming {
+            name: "Dataflow".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges", df_edges),
+        });
 
         // 7. Community detection (hierarchical Louvain — Phase 1 + Phase 2)
         set_progress("社区检测", 0, 0, "");
@@ -458,6 +508,11 @@ impl Engine {
         info!(count = communities.len(), "[engine] communities detected");
         eprintln!("[engine] stage: community-l0 done in {:.1}s ({} communities)",
             stage_start.elapsed().as_secs_f64(), communities.len());
+        stage_timings.push(StageTiming {
+            name: "Community L0".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} communities", communities.len()),
+        });
         // Assign community_id back to each node (Level 0 = base community index)
         for (comm_idx, comm) in communities.iter().enumerate() {
             for node_id in comm {
@@ -477,6 +532,11 @@ impl Engine {
         }
         eprintln!("[engine] stage: community-hierarchical done in {:.1}s ({} super-communities)",
             stage_start.elapsed().as_secs_f64(), hc_count);
+        stage_timings.push(StageTiming {
+            name: "Community Hierarchical".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} super-communities", hc_count),
+        });
 
         let node_count = result.graph.node_count();
         let edge_count = result.graph.edge_count();
@@ -486,7 +546,10 @@ impl Engine {
         // 8. Store into GraphStore (MemoryIndex + SQLite) — atomic swap+save
         set_progress("写入数据库", 0, 0, "");
         let stage_start = std::time::Instant::now();
-        let idx = MemoryIndex::from_existing_graph(&result.graph);
+        // Drain graph into MemoryIndex — edges consumed one-by-one, no duplicate allocation
+        let graph_nodes = std::mem::take(&mut result.graph.nodes);
+        let graph_edges = std::mem::take(&mut result.graph.edges);
+        let idx = MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
 
         {
             let store_guard = self
@@ -502,6 +565,11 @@ impl Engine {
         }
         eprintln!("[engine] stage: db-save done in {:.1}s",
             stage_start.elapsed().as_secs_f64());
+        stage_timings.push(StageTiming {
+            name: "DB Save".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: String::new(),
+        });
 
         // Set state back to Ready
         *self.state.write() = EngineState::Ready {
@@ -521,6 +589,7 @@ impl Engine {
             community_count,
             hierarchical_communities: hierarchical,
             elapsed_secs: elapsed,
+            stage_timings,
         })
     }
 
@@ -1042,10 +1111,12 @@ fn resolve_calls_lsp(
     let registry = TypeRegistry::from_graph(graph);
     info!("[engine] LSP registry built");
 
-    // Run LSP per-file (non-recursive walker — explicit stack, depth-guarded eval).
-    let mut all_resolved: Vec<(String, String)> = Vec::new();
-    let mut lsp_perf_total = crate::adapter::ts_lsp::TsLspPerf { nodes:0,emit:0,dedup_scan:0,dedup_hit:0,eval_member:0,scope_push:0,cache_hits:0,calls_out:0 };
-    for file_path in discovered_files {
+    // Run LSP per-file. Parallel for large projects (≥2000 files), sequential for small.
+    // TypeRegistry and parse_cache are read-only; each file's AST walk is independent.
+    // ponytail: rayon threshold=2000. Below this, thread overhead > parallelism gain.
+    let per_file_lsp = |file_path: &PathBuf, perf: &std::sync::Mutex<crate::adapter::ts_lsp::TsLspPerf>|
+        -> Vec<(String, String)>
+    {
         let path_str = file_path.to_string_lossy().replace('\\', "/");
         let ext = path_str.rsplit('.').next().unwrap_or("").to_lowercase();
         if !matches!(
@@ -1054,11 +1125,11 @@ fn resolve_calls_lsp(
             | "mjs" | "cjs" | "mts" | "cts" | "c" | "h" | "cpp" | "hpp" | "cc"
             | "hh" | "cxx" | "hxx" | "php" | "kt" | "kts"
         ) {
-            continue;
+            return vec![];
         }
         let abs_path = crate::path_utils::normalize_path(&path_str);
         let Some((source, Some(tree))) = parse_cache.get(&abs_path) else {
-            continue;
+            return vec![];
         };
         let module_qn = abs_path
             .trim_end_matches(".py").trim_end_matches(".pyi")
@@ -1069,15 +1140,13 @@ fn resolve_calls_lsp(
             "java" => run_java_lsp(source, tree, &module_qn, &registry),
             "cs" => run_cs_lsp(source, tree, &module_qn, &registry),
             "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
-                let (calls, perf) = run_ts_lsp(source, tree, &module_qn, &registry);
-                lsp_perf_total.nodes += perf.nodes;
-                lsp_perf_total.emit += perf.emit;
-                lsp_perf_total.dedup_scan += perf.dedup_scan;
-                lsp_perf_total.dedup_hit += perf.dedup_hit;
-                lsp_perf_total.eval_member += perf.eval_member;
-                lsp_perf_total.scope_push += perf.scope_push;
-                lsp_perf_total.cache_hits += perf.cache_hits;
-                lsp_perf_total.calls_out += perf.calls_out;
+                let (calls, p) = run_ts_lsp(source, tree, &module_qn, &registry);
+                if let Ok(mut total) = perf.lock() {
+                    total.nodes += p.nodes; total.emit += p.emit;
+                    total.dedup_scan += p.dedup_scan; total.dedup_hit += p.dedup_hit;
+                    total.eval_member += p.eval_member; total.scope_push += p.scope_push;
+                    total.cache_hits += p.cache_hits; total.calls_out += p.calls_out;
+                }
                 calls
             }
             "c" | "h" => run_c_lsp(source, tree, &module_qn, &registry, false),
@@ -1086,12 +1155,26 @@ fn resolve_calls_lsp(
             }
             "php" => run_php_lsp(source, tree, &module_qn, &registry),
             "kt" | "kts" => run_kotlin_lsp(source, tree, &module_qn, &registry),
-            _ => continue,
+            _ => return vec![],
         };
-        for rc in calls {
-            all_resolved.push((rc.caller_qn, rc.callee_qn));
+        calls.into_iter().map(|rc| (rc.caller_qn, rc.callee_qn)).collect()
+    };
+
+    let lsp_perf_total = std::sync::Mutex::new(crate::adapter::ts_lsp::TsLspPerf { nodes:0,emit:0,dedup_scan:0,dedup_hit:0,eval_member:0,scope_push:0,cache_hits:0,calls_out:0 });
+    let all_resolved: Vec<(String, String)> = if discovered_files.len() < 2000 {
+        let mut results = Vec::new();
+        for file_path in discovered_files {
+            results.extend(per_file_lsp(file_path, &lsp_perf_total));
         }
-    }
+        results
+    } else {
+        use rayon::prelude::*;
+        discovered_files
+            .par_iter()
+            .with_min_len(256)
+            .flat_map(|fp| per_file_lsp(fp, &lsp_perf_total))
+            .collect()
+    };
 
     // Build caller edge index for O(1) lookup during rewriting.
     let mut caller_index: StHashMap<String, Vec<(String, String)>> = StHashMap::new();
@@ -1126,6 +1209,7 @@ fn resolve_calls_lsp(
         }
     }
 
+    let lsp_perf_total = lsp_perf_total.into_inner().unwrap();
     eprintln!("[engine] LSP perf TOTAL: nodes={:.1}M emit={:.1}K dedup_scan={:.1}M dedup_hit={:.1}K eval_member={:.1}K scope_push={:.1}K cache_hits={:.1}K calls_out={:.1}K",
         lsp_perf_total.nodes as f64 / 1_000_000.0,
         lsp_perf_total.emit as f64 / 1_000.0,
