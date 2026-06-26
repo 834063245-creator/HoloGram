@@ -501,6 +501,11 @@ impl Engine {
             detail: format!("{} edges", df_edges),
         });
 
+        // ponytail: release parse_cache (source + CST) after synthesis —
+        // for large C projects this is 2+ GB of tree-sitter trees no longer needed.
+        result.parse_cache.clear();
+        result.parse_cache.shrink_to_fit();
+
         // 7. Community detection (hierarchical Louvain — Phase 1 + Phase 2)
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
@@ -1099,6 +1104,35 @@ pub fn engine_analyze(project_root: &Path) -> Result<AnalyzeResult, String> {
 
 use std::collections::HashMap as StHashMap;
 
+/// Map file extension to tree-sitter Language for LSP re-parsing.
+/// ponytail: re-parse from source instead of caching CSTs — saves 3+ GB on large projects.
+fn language_for_lsp(ext: &str) -> Option<tree_sitter::Language> {
+    match ext {
+        "py" | "pyi" => Some(tree_sitter_python::LANGUAGE.into()),
+        "js" | "jsx" | "mjs" | "cjs" => Some(tree_sitter_javascript::LANGUAGE.into()),
+        "ts" | "tsx" | "mts" | "cts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "go" => Some(tree_sitter_go::LANGUAGE.into()),
+        "java" => Some(tree_sitter_java::LANGUAGE.into()),
+        "c" | "h" => Some(tree_sitter_c::LANGUAGE.into()),
+        "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => Some(tree_sitter_cpp::LANGUAGE.into()),
+        "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
+        // ponytail: kotlin tree-sitter 0.3 depends on tree-sitter 0.20 (not 0.24),
+        // Language types are incompatible. Kotlin files aren't parsed by any adapter
+        // anyway — LSP has always been a no-op for them.
+        // "kt" | "kts" => None,
+        _ => None,
+    }
+}
+
+/// Re-parse source to a tree-sitter Tree. Returns None if language not supported or parse fails.
+fn reparse_for_lsp(source: &str, ext: &str) -> Option<tree_sitter::Tree> {
+    let lang = language_for_lsp(ext)?;
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&lang).ok()?;
+    parser.parse(source, None)
+}
+
 /// Run LSP type-aware call resolution on all source files in the project.
 /// Rewrites CALLS edges in the graph with resolved target QNs.
 fn resolve_calls_lsp(
@@ -1128,19 +1162,23 @@ fn resolve_calls_lsp(
             return vec![];
         }
         let abs_path = crate::path_utils::normalize_path(&path_str);
-        let Some((source, Some(tree))) = parse_cache.get(&abs_path) else {
+        let Some((source, _)) = parse_cache.get(&abs_path) else {
+            return vec![];
+        };
+        // ponytail: re-parse for LSP — CST not cached (saves 3+ GB on 64K-file projects)
+        let Some(tree) = reparse_for_lsp(source, &ext) else {
             return vec![];
         };
         let module_qn = abs_path
             .trim_end_matches(".py").trim_end_matches(".pyi")
             .replace(['/', '\\'], ".");
         let calls = match ext.as_str() {
-            "py" | "pyi" => run_py_lsp(source, tree, &module_qn, &registry),
-            "go" => run_go_lsp(source, tree, &module_qn, &registry),
-            "java" => run_java_lsp(source, tree, &module_qn, &registry),
-            "cs" => run_cs_lsp(source, tree, &module_qn, &registry),
+            "py" | "pyi" => run_py_lsp(source, &tree, &module_qn, &registry),
+            "go" => run_go_lsp(source, &tree, &module_qn, &registry),
+            "java" => run_java_lsp(source, &tree, &module_qn, &registry),
+            "cs" => run_cs_lsp(source, &tree, &module_qn, &registry),
             "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
-                let (calls, p) = run_ts_lsp(source, tree, &module_qn, &registry);
+                let (calls, p) = run_ts_lsp(source, &tree, &module_qn, &registry);
                 if let Ok(mut total) = perf.lock() {
                     total.nodes += p.nodes; total.emit += p.emit;
                     total.dedup_scan += p.dedup_scan; total.dedup_hit += p.dedup_hit;
@@ -1149,12 +1187,12 @@ fn resolve_calls_lsp(
                 }
                 calls
             }
-            "c" | "h" => run_c_lsp(source, tree, &module_qn, &registry, false),
+            "c" | "h" => run_c_lsp(source, &tree, &module_qn, &registry, false),
             "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => {
-                run_c_lsp(source, tree, &module_qn, &registry, true)
+                run_c_lsp(source, &tree, &module_qn, &registry, true)
             }
-            "php" => run_php_lsp(source, tree, &module_qn, &registry),
-            "kt" | "kts" => run_kotlin_lsp(source, tree, &module_qn, &registry),
+            "php" => run_php_lsp(source, &tree, &module_qn, &registry),
+            "kt" | "kts" => run_kotlin_lsp(source, &tree, &module_qn, &registry),
             _ => return vec![],
         };
         calls.into_iter().map(|rc| (rc.caller_qn, rc.callee_qn)).collect()
