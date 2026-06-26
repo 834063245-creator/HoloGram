@@ -113,6 +113,9 @@ const btnTerminal = document.getElementById('btn-terminal') as HTMLButtonElement
 let workspace: Workspace | null = null;
 let starGraph: StarGraph = new StarGraph(graphEl);
 let agentViz: AgentVisualizer | null = null;
+// Reentry guard for switchWorkspace — prevents stacked concurrent switches
+// when deactivate() stalls on watcher teardown.
+let _switching = false;
 
 // Panel singletons
 let chatPanel: ChatPanel;
@@ -141,49 +144,59 @@ async function switchWorkspace(
   path?: string,
   opts?: { skipAnalysis?: boolean; cachedGraph?: any },
 ): Promise<void> {
-  const folder = path || (await pickFolder());
-  if (!folder) return;
+  if (_switching) { statusText.textContent = '正在切换工作区，请稍候…'; return; }
+  _switching = true;
+  try {
+    const folder = path || (await pickFolder());
+    if (!folder) return;
 
-  if (workspace?.active && isSamePath(workspace.path, folder)) {
-    statusText.textContent = '已在当前工作区';
-    return;
+    if (workspace?.active && isSamePath(workspace.path, folder)) {
+      statusText.textContent = '已在当前工作区';
+      return;
+    }
+
+    // Disable the open button BEFORE the possibly-slow deactivate() await.
+    // Otherwise the button stays clickable while the watcher is being torn
+    // down and repeated clicks stack concurrent switches.
+    setLoading(true, folder);
+
+    // Deactivate old
+    if (workspace) {
+      await workspace.deactivate(chatPanel);
+      workspace = null;
+    }
+
+    resetCheckPanelState();
+    if (_gitStatusTimer) { clearInterval(_gitStatusTimer); _gitStatusTimer = null; }
+
+    // Create new
+    const ws = await Workspace.open(folder, starGraph, chatPanel, checkPanel, opts);
+    ws.onStatusChange = (msg) => { statusText.textContent = msg; };
+    ws.onLoadingChange = (loading) => { setLoading(loading, loading ? folder : undefined); };
+
+    workspace = ws;
+    notifyAllPanels(ws);
+
+    const nodeCount = Array.isArray(ws.graphData.nodes) ? ws.graphData.nodes.length : Object.keys(ws.graphData.nodes || {}).length;
+    const genTime = ws.graphData.meta?.generated_at ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString() : '';
+    statusText.textContent = `✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`;
+    log.info('main', 'project loaded', {
+      nodes: nodeCount,
+      edges: Array.isArray(ws.graphData.edges) ? ws.graphData.edges.length : Object.keys(ws.graphData.edges || {}).length,
+    });
+    setLoading(false);
+    startGitIndicator();
+
+    try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[switchWorkspace] setupAgent failed:', e); }
+
+    chatPanel.setProjectPath(folder);
+    chatPanel.autoRestoreLastSession(folder).catch(() => {});
+    if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
+    ws.runCheck(checkPanel);
+    await invoke('workspace_start_watcher').catch(() => {});
+  } finally {
+    _switching = false;
   }
-
-  // Deactivate old
-  if (workspace) {
-    await workspace.deactivate(chatPanel);
-    workspace = null;
-  }
-
-  resetCheckPanelState();
-  if (_gitStatusTimer) { clearInterval(_gitStatusTimer); _gitStatusTimer = null; }
-  setLoading(true, folder);
-
-  // Create new
-  const ws = await Workspace.open(folder, starGraph, chatPanel, checkPanel, opts);
-  ws.onStatusChange = (msg) => { statusText.textContent = msg; };
-  ws.onLoadingChange = (loading) => { setLoading(loading, loading ? folder : undefined); };
-
-  workspace = ws;
-  notifyAllPanels(ws);
-
-  const nodeCount = Array.isArray(ws.graphData.nodes) ? ws.graphData.nodes.length : Object.keys(ws.graphData.nodes || {}).length;
-  const genTime = ws.graphData.meta?.generated_at ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString() : '';
-  statusText.textContent = `✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`;
-  log.info('main', 'project loaded', {
-    nodes: nodeCount,
-    edges: Array.isArray(ws.graphData.edges) ? ws.graphData.edges.length : Object.keys(ws.graphData.edges || {}).length,
-  });
-  setLoading(false);
-  startGitIndicator();
-
-  try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[switchWorkspace] setupAgent failed:', e); }
-
-  chatPanel.setProjectPath(folder);
-  chatPanel.autoRestoreLastSession(folder).catch(() => {});
-  if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
-  ws.runCheck(checkPanel);
-  await invoke('workspace_start_watcher').catch(() => {});
 }
 
 function setLoading(active: boolean, folder?: string): void {
@@ -625,19 +638,27 @@ async function init(): Promise<void> {
 
   // Re-analyze — runs analysis in-place without workspace switch
   btnReanalyze.addEventListener('click', async () => {
-    if (!workspace?.path) { statusText.textContent = '请先打开项目'; return; }
+    if (_switching) { statusText.textContent = '正在切换工作区，请稍候…'; return; }
+    const ws = workspace;
+    if (!ws?.path) { statusText.textContent = '请先打开项目'; return; }
     btnReanalyze.disabled = true;
     btnReanalyze.textContent = '分析中…';
     statusText.textContent = '重新分析中…';
     try {
-      console.log('[reanalyze] step 1: calling analyze_and_load', workspace.path);
-      const raw = await invoke<string>('analyze_and_load', { path: workspace.path, force: true });
+      console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
+      const raw = await invoke<string>('analyze_and_load', { path: ws.path, force: true });
       console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
-      workspace.graphData = JSON.parse(raw);
-      console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(workspace.graphData.nodes || {}).length);
-      starGraph.render(workspace.graphData);
+      // Guard against workspace switch during the long await.
+      if (workspace !== ws) {
+        console.log('[reanalyze] workspace switched during analysis — discarding result');
+        statusText.textContent = '工作区已切换，重分析已取消';
+        return;
+      }
+      ws.graphData = JSON.parse(raw);
+      console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(ws.graphData.nodes || {}).length);
+      starGraph.render(ws.graphData);
       console.log('[reanalyze] step 4: render done');
-      const nc = Array.isArray(workspace.graphData.nodes) ? workspace.graphData.nodes.length : Object.keys(workspace.graphData.nodes || {}).length;
+      const nc = Array.isArray(ws.graphData.nodes) ? ws.graphData.nodes.length : Object.keys(ws.graphData.nodes || {}).length;
       statusText.textContent = `✨ ${nc} 节点已就绪`;
       console.log('[reanalyze] step 5: done');
     } catch (e: any) {
