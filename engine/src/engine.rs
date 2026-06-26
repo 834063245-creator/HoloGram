@@ -33,7 +33,7 @@ use crate::analysis::coupling::compute_coupling;
 use crate::analysis::dataflow_synthesis::synthesize_dataflow_edges;
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::framework_routes::detect_framework_routes;
-use crate::community::{detect_communities, detect_hierarchical_communities_with_base};
+use crate::community::detect_communities_and_hierarchy;
 use crate::graph::resolver::CrossFileResolver;
 use crate::graph::{EdgeKind, Graph};
 use crate::pipeline::runner::analyze_project;
@@ -506,17 +506,20 @@ impl Engine {
         result.parse_cache.clear();
         result.parse_cache.shrink_to_fit();
 
-        // 7. Community detection (hierarchical Louvain — Phase 1 + Phase 2)
+        // 7. Community detection (Leiden — single pass for flat + hierarchical)
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
-        let communities = detect_communities(&result.graph, 42);
-        info!(count = communities.len(), "[engine] communities detected");
-        eprintln!("[engine] stage: community-l0 done in {:.1}s ({} communities)",
-            stage_start.elapsed().as_secs_f64(), communities.len());
+        let (communities, hierarchical) = detect_communities_and_hierarchy(&result.graph, 42);
+        let community_count = communities.len();
+        let hc_count = hierarchical.iter().filter(|c| c.level > 0).count();
+        let leiden_elapsed = stage_start.elapsed().as_secs_f64();
+        info!(count = community_count, super_levels = hc_count, "[engine] Leiden communities detected");
+        eprintln!("[engine] stage: community done in {:.1}s ({} communities, {} super)",
+            leiden_elapsed, community_count, hc_count);
         stage_timings.push(StageTiming {
-            name: "Community L0".into(),
-            elapsed_secs: stage_start.elapsed().as_secs_f64(),
-            detail: format!("{} communities", communities.len()),
+            name: "Community (Leiden)".into(),
+            elapsed_secs: leiden_elapsed,
+            detail: format!("{} communities, {} super", community_count, hc_count),
         });
         // Assign community_id back to each node (Level 0 = base community index)
         for (comm_idx, comm) in communities.iter().enumerate() {
@@ -526,26 +529,9 @@ impl Engine {
                 }
             }
         }
-        // Hierarchical communities for multi-level fold layout.
-        // Reuse the communities we just detected — avoids a redundant Phase 1
-        // run_louvain pass that was doubling the community detection cost.
-        let stage_start = std::time::Instant::now();
-        let hierarchical = detect_hierarchical_communities_with_base(&result.graph, communities.clone(), 42);
-        let hc_count = hierarchical.iter().filter(|c| c.level > 0).count();
-        if hc_count > 0 {
-            info!(level0 = communities.len(), super_levels = hc_count, "[engine] hierarchical communities built");
-        }
-        eprintln!("[engine] stage: community-hierarchical done in {:.1}s ({} super-communities)",
-            stage_start.elapsed().as_secs_f64(), hc_count);
-        stage_timings.push(StageTiming {
-            name: "Community Hierarchical".into(),
-            elapsed_secs: stage_start.elapsed().as_secs_f64(),
-            detail: format!("{} super-communities", hc_count),
-        });
 
         let node_count = result.graph.node_count();
         let edge_count = result.graph.edge_count();
-        let community_count = communities.len();
         let elapsed = started_at.elapsed().as_secs_f64();
 
         // 8. Store into GraphStore (MemoryIndex + SQLite) — atomic swap+save
