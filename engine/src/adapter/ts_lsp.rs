@@ -14,6 +14,13 @@ pub struct TsLspContext<'a> {
     pub enclosing_func_qn: Option<String>, pub enclosing_class_qn: Option<String>,
     pub resolved_calls: Vec<ResolvedCall>,
     eval_cache: HashMap<usize, Type>,
+    // perf counters
+    pub emit_calls: u64,
+    pub emit_dedup_scanned: u64,
+    pub emit_dedup_hits: u64,
+    pub eval_member_calls: u64,
+    pub scope_pushes: u64,
+    pub tree_nodes_visited: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -24,7 +31,9 @@ impl<'a> TsLspContext<'a> {
     pub fn new(source: &'a str, registry: &'a TypeRegistry, module_qn: &str) -> Self {
         Self { source, registry, current_scope: Scope::new_root(), module_qn: module_qn.to_string(),
             imports: HashMap::new(), enclosing_func_qn: None, enclosing_class_qn: None,
-            resolved_calls: Vec::new(), eval_cache: HashMap::new() }
+            resolved_calls: Vec::new(), eval_cache: HashMap::new(),
+            emit_calls: 0, emit_dedup_scanned: 0, emit_dedup_hits: 0,
+            eval_member_calls: 0, scope_pushes: 0, tree_nodes_visited: 0 }
     }
     fn node_text(&self, n: Node) -> Option<&str> { n.utf8_text(self.source.as_bytes()).ok() }
     pub fn add_import(&mut self, local: &str, module_path: &str, is_default: bool, is_namespace: bool) {
@@ -32,8 +41,15 @@ impl<'a> TsLspContext<'a> {
     }
     fn emit(&mut self, callee_qn: &str, strategy: &str, confidence: f32) {
         let Some(ref caller) = self.enclosing_func_qn.clone() else { return };
+        self.emit_calls += 1;
         let start = self.resolved_calls.len().saturating_sub(256);
-        for rc in &self.resolved_calls[start..] { if rc.caller_qn == *caller && rc.callee_qn == callee_qn { return; } }
+        for rc in &self.resolved_calls[start..] {
+            self.emit_dedup_scanned += 1;
+            if rc.caller_qn == *caller && rc.callee_qn == callee_qn {
+                self.emit_dedup_hits += 1;
+                return;
+            }
+        }
         self.resolved_calls.push(ResolvedCall { caller_qn: caller.clone(), callee_qn: callee_qn.to_string(), strategy: strategy.to_string(), confidence });
     }
 
@@ -70,8 +86,8 @@ impl<'a> TsLspContext<'a> {
                 let prop = node.child_by_field_name("property");
                 let (Some(obj), Some(prop)) = (obj, prop) else { return Type::Unknown; };
                 let obj_type = self.eval_expr_type(obj);
-                let pname = self.node_text(prop).unwrap_or("");
-                self.eval_member(&obj_type, pname)
+                let pname = self.node_text(prop).unwrap_or("").to_string();
+                self.eval_member(&obj_type, &pname)
             }
             "call_expression" => {
                 let fn_node = node.child_by_field_name("function");
@@ -125,7 +141,8 @@ impl<'a> TsLspContext<'a> {
         }
     }
 
-    fn eval_member(&self, obj_type: &Type, mname: &str) -> Type {
+    fn eval_member(&mut self, obj_type: &Type, mname: &str) -> Type {
+        self.eval_member_calls += 1;
         let qn = match obj_type {
             Type::Named { qn } | Type::Template { name: qn, .. } => qn.clone(),
             Type::Builtin { name } if name != "null" && name != "undefined" => format!("builtins.{}", name),
@@ -271,6 +288,7 @@ pub fn process_ts_statement(ctx: &mut TsLspContext, node: Node) {
 
 pub fn resolve_ts_calls(ctx: &mut TsLspContext, node: Node) {
     if node.kind().is_empty() { return; }
+    ctx.tree_nodes_visited += 1;
     let k = node.kind();
     process_ts_statement(ctx, node);
     if k == "call_expression" { emit_ts_call(ctx, node); }
@@ -323,6 +341,7 @@ pub fn process_ts_function(ctx: &mut TsLspContext, func_node: Node, class_qn: Op
     ctx.enclosing_func_qn = Some(format!("{}.{}", base, fname));
     let saved = ctx.current_scope.clone();
     ctx.current_scope = ctx.current_scope.push();
+    ctx.scope_pushes += 1;
     if let Some(params) = func_node.child_by_field_name("parameters") {
         let nc = params.named_child_count();
         for i in 0..nc {
@@ -400,11 +419,37 @@ pub fn process_ts_class(ctx: &mut TsLspContext, class_node: Node) {
     ctx.enclosing_class_qn = prev;
 }
 
-pub fn run_ts_lsp(source: &str, tree: &tree_sitter::Tree, module_qn: &str, registry: &TypeRegistry) -> Vec<ResolvedCall> {
+pub struct TsLspPerf {
+    pub nodes: u64,
+    pub emit: u64,
+    pub dedup_scan: u64,
+    pub dedup_hit: u64,
+    pub eval_member: u64,
+    pub scope_push: u64,
+    pub cache_hits: u64,
+    pub calls_out: u64,
+}
+
+pub fn run_ts_lsp(source: &str, tree: &tree_sitter::Tree, module_qn: &str, registry: &TypeRegistry) -> (Vec<ResolvedCall>, TsLspPerf) {
     let mut ctx = TsLspContext::new(source, registry, module_qn);
     extract_ts_imports(&mut ctx, tree.root_node());
     process_ts_file(&mut ctx, tree.root_node());
-    ctx.resolved_calls
+    let perf = TsLspPerf {
+        nodes: ctx.tree_nodes_visited,
+        emit: ctx.emit_calls,
+        dedup_scan: ctx.emit_dedup_scanned,
+        dedup_hit: ctx.emit_dedup_hits,
+        eval_member: ctx.eval_member_calls,
+        scope_push: ctx.scope_pushes,
+        cache_hits: ctx.eval_cache.len() as u64,
+        calls_out: ctx.resolved_calls.len() as u64,
+    };
+    if perf.emit > 500 || perf.nodes > 10_000 {
+        eprintln!("[engine] LSP perf {}: nodes={} emit={} dedup_scan={} dedup_hit={} eval_member={} scope_push={} cache_hits={} calls_out={}",
+            module_qn, perf.nodes, perf.emit, perf.dedup_scan, perf.dedup_hit,
+            perf.eval_member, perf.scope_push, perf.cache_hits, perf.calls_out);
+    }
+    (ctx.resolved_calls, perf)
 }
 
 fn extract_ts_imports(ctx: &mut TsLspContext, root: Node) {

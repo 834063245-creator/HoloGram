@@ -1044,6 +1044,7 @@ fn resolve_calls_lsp(
 
     // Run LSP per-file (non-recursive walker — explicit stack, depth-guarded eval).
     let mut all_resolved: Vec<(String, String)> = Vec::new();
+    let mut lsp_perf_total = crate::adapter::ts_lsp::TsLspPerf { nodes:0,emit:0,dedup_scan:0,dedup_hit:0,eval_member:0,scope_push:0,cache_hits:0,calls_out:0 };
     for file_path in discovered_files {
         let path_str = file_path.to_string_lossy().replace('\\', "/");
         let ext = path_str.rsplit('.').next().unwrap_or("").to_lowercase();
@@ -1068,7 +1069,16 @@ fn resolve_calls_lsp(
             "java" => run_java_lsp(source, tree, &module_qn, &registry),
             "cs" => run_cs_lsp(source, tree, &module_qn, &registry),
             "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
-                run_ts_lsp(source, tree, &module_qn, &registry)
+                let (calls, perf) = run_ts_lsp(source, tree, &module_qn, &registry);
+                lsp_perf_total.nodes += perf.nodes;
+                lsp_perf_total.emit += perf.emit;
+                lsp_perf_total.dedup_scan += perf.dedup_scan;
+                lsp_perf_total.dedup_hit += perf.dedup_hit;
+                lsp_perf_total.eval_member += perf.eval_member;
+                lsp_perf_total.scope_push += perf.scope_push;
+                lsp_perf_total.cache_hits += perf.cache_hits;
+                lsp_perf_total.calls_out += perf.calls_out;
+                calls
             }
             "c" | "h" => run_c_lsp(source, tree, &module_qn, &registry, false),
             "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => {
@@ -1115,6 +1125,16 @@ fn resolve_calls_lsp(
             }
         }
     }
+
+    eprintln!("[engine] LSP perf TOTAL: nodes={:.1}M emit={:.1}K dedup_scan={:.1}M dedup_hit={:.1}K eval_member={:.1}K scope_push={:.1}K cache_hits={:.1}K calls_out={:.1}K",
+        lsp_perf_total.nodes as f64 / 1_000_000.0,
+        lsp_perf_total.emit as f64 / 1_000.0,
+        lsp_perf_total.dedup_scan as f64 / 1_000_000.0,
+        lsp_perf_total.dedup_hit as f64 / 1_000.0,
+        lsp_perf_total.eval_member as f64 / 1_000.0,
+        lsp_perf_total.scope_push as f64 / 1_000.0,
+        lsp_perf_total.cache_hits as f64 / 1_000.0,
+        lsp_perf_total.calls_out as f64 / 1_000.0);
 
     total_resolved
 }
