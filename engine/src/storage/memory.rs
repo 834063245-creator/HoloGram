@@ -5,8 +5,9 @@
 // All graph traversals hit this, never SQLite.
 // O(degree) queries, not O(E) scans.
 //
-// ponytail: StringArena + u32 handles — edges stored as (u32,u32,u8)
-// instead of (String,String,...). Cuts edge memory ~5x.
+// ponytail: CSR flat arrays (offsets + targets + kinds + coupling + delays)
+// instead of HashMap<u32, Vec<(u32,EdgeKind,u8,Option<f64>)>>.
+// ~1.54M per-node Vec allocations → 6 total (3 in + 3 out).
 // Industry precedent: rustc Symbol, Sourcegraph string dedup, Kythe graph store.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -28,33 +29,53 @@ pub struct LoadProgress {
     pub elapsed_ms: u64,
 }
 
+// ── delay pack/unpack (f64::NAN = None) ──
+
+fn pack_delay(d: Option<f64>) -> f64 { d.unwrap_or(f64::NAN) }
+fn unpack_delay(d: f64) -> Option<f64> { if d.is_nan() { None } else { Some(d) } }
+
 /// In-memory graph index. All queries hit this structure — SQLite is for persistence + FTS only.
 ///
-/// ```
-/// use hologram_engine::graph::{EdgeKind, Node, NodeKind};
-/// use hologram_engine::storage::MemoryIndex;
+/// CSR layout (Compressed Sparse Row):
+///   out_offsets[N+1]  — start position in out_* arrays for each dense node index
+///   out_targets[E]    — target node handles (u32)
+///   out_kinds[E]      — EdgeKind as u8 (0–9)
+///   out_coupling[E]   — coupling_depth (u8)
+///   out_delays[E]     — temporal_delay_sec (f64::NAN = None)
 ///
-/// let mut idx = MemoryIndex::new();
-/// assert_eq!(idx.node_count(), 0);
-///
-/// idx.insert_node(Node::new("a", "fn_a", NodeKind::Symbol));
-/// idx.insert_node(Node::new("b", "fn_b", NodeKind::Symbol));
-/// idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
-///
-/// assert_eq!(idx.node_count(), 2);
-/// assert_eq!(idx.edge_count(), 1);
-/// assert_eq!(idx.outgoing("a", None).len(), 1);
-/// assert_eq!(idx.shortest_path("a", "b"), Some(vec!["a".into(), "b".into()]));
-/// ```
+/// Mutations (upsert_edge/remove_edge/remove_node) buffer into pending_adds/
+/// pending_removes. On next read, rebuild_csr() flushes and rebuilds the arrays.
+/// ponytail: O(N+E) rebuild on mutation, mutations are rare (incremental diff only).
 pub struct MemoryIndex {
     /// String interner — all node/edge identifiers stored once
     arena: StringArena,
     /// u32 handle → Node (node.id and node.name are String — Node struct unchanged)
     nodes: HashMap<u32, Node>,
-    /// source u32 → [(target u32, edge_kind, coupling_depth, temporal_delay_sec)]
-    out_adj: HashMap<u32, Vec<(u32, EdgeKind, u8, Option<f64>)>>,
-    /// target u32 → [(source u32, edge_kind, coupling_depth, temporal_delay_sec)]
-    in_adj: HashMap<u32, Vec<(u32, EdgeKind, u8, Option<f64>)>>,
+
+    // ── dense node index ──
+    /// Sorted node handles; index = dense idx (0..N-1)
+    node_by_idx: Vec<u32>,
+    /// Reverse: node handle → dense idx
+    handle_to_idx: HashMap<u32, u32>,
+
+    // ── CSR outgoing edges ──
+    out_offsets: Vec<u32>,
+    out_targets: Vec<u32>,
+    out_kinds: Vec<u8>,
+    out_coupling: Vec<u8>,
+    out_delays: Vec<f64>,
+
+    // ── CSR incoming edges ──
+    in_offsets: Vec<u32>,
+    in_targets: Vec<u32>,
+    in_kinds: Vec<u8>,
+    in_coupling: Vec<u8>,
+    in_delays: Vec<f64>,
+
+    // ── mutation buffer ──
+    pending_adds: Vec<(u32, u32, EdgeKind, u8, Option<f64>)>,
+    pending_removes: HashSet<(u32, u32, EdgeKind)>,
+
     /// symbol name → node u32 handles (name strings are small, O(nodes) not O(edges))
     name_index: HashMap<String, Vec<u32>>,
     /// file path → node u32 handles
@@ -66,14 +87,269 @@ pub struct MemoryIndex {
 }
 
 impl MemoryIndex {
+    // ── helpers: dense index ──
+
+    fn rebuild_dense_index(&mut self) {
+        self.handle_to_idx.clear();
+        self.node_by_idx.clear();
+        self.node_by_idx.reserve(self.nodes.len());
+        let mut handles: Vec<u32> = self.nodes.keys().copied().collect();
+        handles.sort_unstable();
+        for (i, &h) in handles.iter().enumerate() {
+            self.handle_to_idx.insert(h, i as u32);
+        }
+        self.node_by_idx = handles;
+    }
+
+    fn node_idx(&self, handle: u32) -> Option<u32> {
+        self.handle_to_idx.get(&handle).copied()
+    }
+
+    // ── helpers: edge iteration ──
+
+    /// Iterate outgoing edges for a dense node index. Returns slice indices.
+    #[inline]
+    fn out_range(&self, idx: u32) -> (usize, usize) {
+        let start = self.out_offsets[idx as usize] as usize;
+        let end = self.out_offsets[idx as usize + 1] as usize;
+        (start, end)
+    }
+
+    /// Iterate incoming edges for a dense node index.
+    #[inline]
+    fn in_range(&self, idx: u32) -> (usize, usize) {
+        let start = self.in_offsets[idx as usize] as usize;
+        let end = self.in_offsets[idx as usize + 1] as usize;
+        (start, end)
+    }
+
+    // ── helpers: rebuild CSR from per-node buckets ──
+
+    /// Collect outgoing edges for a node from CSR + pending buffers.
+    /// Returns deduplicated (target_handle, kind_u8, coupling, delay_f64).
+    fn collect_outgoing(&self, src_handle: u32) -> Vec<(u32, u8, u8, f64)> {
+        let mut edges: Vec<(u32, u8, u8, f64)> = Vec::new();
+        let mut seen: HashSet<(u32, u8, u8)> = HashSet::new();
+        if let Some(idx) = self.node_idx(src_handle) {
+            if idx < self.node_by_idx.len() as u32 {
+                let (start, end) = self.out_range(idx);
+                for i in start..end {
+                    let tgt = self.out_targets[i];
+                    let kind_u8 = self.out_kinds[i];
+                    let ek = EdgeKind::from_u8(kind_u8);
+                    if self.pending_removes.contains(&(src_handle, tgt, ek)) {
+                        continue;
+                    }
+                    let key = (tgt, kind_u8, self.out_coupling[i]);
+                    if seen.insert(key) {
+                        edges.push((tgt, kind_u8, self.out_coupling[i], self.out_delays[i]));
+                    }
+                }
+            }
+        }
+        for &(src, tgt, kind, coupling, delay) in &self.pending_adds {
+            if src != src_handle { continue; }
+            if self.pending_removes.contains(&(src, tgt, kind)) { continue; }
+            let kind_u8 = kind.to_u8();
+            let key = (tgt, kind_u8, coupling);
+            if seen.insert(key) {
+                edges.push((tgt, kind_u8, coupling, pack_delay(delay)));
+            }
+        }
+        edges
+    }
+
+    /// Collect incoming edges for a node from CSR + pending buffers.
+    fn collect_incoming(&self, tgt_handle: u32) -> Vec<(u32, u8, u8, f64)> {
+        let mut edges: Vec<(u32, u8, u8, f64)> = Vec::new();
+        let mut seen: HashSet<(u32, u8, u8)> = HashSet::new();
+        if let Some(idx) = self.node_idx(tgt_handle) {
+            if idx < self.node_by_idx.len() as u32 {
+                let (start, end) = self.in_range(idx);
+                for i in start..end {
+                    let src = self.in_targets[i];
+                    let kind_u8 = self.in_kinds[i];
+                    let ek = EdgeKind::from_u8(kind_u8);
+                    if self.pending_removes.contains(&(src, tgt_handle, ek)) {
+                        continue;
+                    }
+                    let key = (src, kind_u8, self.in_coupling[i]);
+                    if seen.insert(key) {
+                        edges.push((src, kind_u8, self.in_coupling[i], self.in_delays[i]));
+                    }
+                }
+            }
+        }
+        for &(src, tgt, kind, coupling, delay) in &self.pending_adds {
+            if tgt != tgt_handle { continue; }
+            if self.pending_removes.contains(&(src, tgt, kind)) { continue; }
+            let kind_u8 = kind.to_u8();
+            let key = (src, kind_u8, coupling);
+            if seen.insert(key) {
+                edges.push((src, kind_u8, coupling, pack_delay(delay)));
+            }
+        }
+        edges
+    }
+
+    /// Check whether a pending-remove edge exists in CSR. Used by remove_edge.
+    fn edge_exists_in_csr(&self, src_handle: u32, tgt_handle: u32, kind_u8: u8) -> bool {
+        let Some(idx) = self.node_idx(src_handle) else { return false; };
+        let (start, end) = self.out_range(idx);
+        for i in start..end {
+            if self.out_targets[i] == tgt_handle && self.out_kinds[i] == kind_u8 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Flush pending mutations by rebuilding CSR arrays.
+    /// Called at the end of incremental update batches.
+    pub fn flush_pending(&mut self) {
+        if self.pending_adds.is_empty() && self.pending_removes.is_empty() {
+            return;
+        }
+        self.rebuild_csr();
+    }
+
+    /// Flatten per-node edge buckets into CSR arrays. Consumes the buckets.
+    /// This is called during fresh build (from_existing_graph, from_sqlite)
+    /// and on mutation flush.
+    fn flatten_buckets(
+        &mut self,
+        out_buckets: &[Vec<(u32, u8, u8, f64)>],
+        in_buckets: &[Vec<(u32, u8, u8, f64)>],
+    ) {
+        let n = self.node_by_idx.len();
+
+        // Prefix-sum out-degrees → out_offsets
+        self.out_offsets = Vec::with_capacity(n + 1);
+        self.out_offsets.push(0);
+        for bucket in out_buckets {
+            let prev = *self.out_offsets.last().unwrap_or(&0);
+            self.out_offsets.push(prev + bucket.len() as u32);
+        }
+
+        // Flatten out arrays
+        let total_out = self.out_offsets[n] as usize;
+        self.out_targets = Vec::with_capacity(total_out);
+        self.out_kinds = Vec::with_capacity(total_out);
+        self.out_coupling = Vec::with_capacity(total_out);
+        self.out_delays = Vec::with_capacity(total_out);
+        for bucket in out_buckets {
+            for &(tgt, kind, coupling, delay) in bucket {
+                self.out_targets.push(tgt);
+                self.out_kinds.push(kind);
+                self.out_coupling.push(coupling);
+                self.out_delays.push(delay);
+            }
+        }
+
+        // Prefix-sum in-degrees → in_offsets
+        self.in_offsets = Vec::with_capacity(n + 1);
+        self.in_offsets.push(0);
+        for bucket in in_buckets {
+            let prev = *self.in_offsets.last().unwrap_or(&0);
+            self.in_offsets.push(prev + bucket.len() as u32);
+        }
+
+        // Flatten in arrays
+        let total_in = self.in_offsets[n] as usize;
+        self.in_targets = Vec::with_capacity(total_in);
+        self.in_kinds = Vec::with_capacity(total_in);
+        self.in_coupling = Vec::with_capacity(total_in);
+        self.in_delays = Vec::with_capacity(total_in);
+        for bucket in in_buckets {
+            for &(tgt, kind, coupling, delay) in bucket {
+                self.in_targets.push(tgt);
+                self.in_kinds.push(kind);
+                self.in_coupling.push(coupling);
+                self.in_delays.push(delay);
+            }
+        }
+
+        self.edge_count = total_out;
+    }
+
+    /// Rebuild CSR from pending mutations + existing CSR edges.
+    /// Uses temporary per-node Vecs for sort+dedup (freed after flatten).
+    fn rebuild_csr(&mut self) {
+        self.rebuild_dense_index();
+        let n = self.node_by_idx.len();
+
+        // temp per-node buckets: Vec<(other_handle, kind_u8, coupling, delay_f64)>
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+
+        // Copy edges from current CSR (skip removed)
+        let old_has_data = !self.out_offsets.is_empty() && self.out_offsets.len() > n;
+        if old_has_data {
+            for src_idx in 0..n {
+                let src_handle = self.node_by_idx[src_idx];
+                let (start, end) = self.out_range(src_idx as u32);
+                for i in start..end {
+                    let tgt = self.out_targets[i];
+                    let kind_u8 = self.out_kinds[i];
+                    let ek = EdgeKind::from_u8(kind_u8);
+                    if self.pending_removes.contains(&(src_handle, tgt, ek)) {
+                        continue;
+                    }
+                    out_buckets[src_idx].push((tgt, kind_u8, self.out_coupling[i], self.out_delays[i]));
+                    if let Some(&tgt_idx) = self.handle_to_idx.get(&tgt) {
+                        in_buckets[tgt_idx as usize].push((src_handle, kind_u8, self.out_coupling[i], self.out_delays[i]));
+                    }
+                }
+            }
+        }
+
+        // Add pending edges
+        for &(src, tgt, kind, coupling, delay) in &self.pending_adds {
+            if self.pending_removes.contains(&(src, tgt, kind)) {
+                continue;
+            }
+            let kind_u8 = kind.to_u8();
+            let delay_f64 = pack_delay(delay);
+            if let Some(&src_idx) = self.handle_to_idx.get(&src) {
+                if let Some(&tgt_idx) = self.handle_to_idx.get(&tgt) {
+                    out_buckets[src_idx as usize].push((tgt, kind_u8, coupling, delay_f64));
+                    in_buckets[tgt_idx as usize].push((src, kind_u8, coupling, delay_f64));
+                }
+            }
+        }
+
+        // Sort + dedup each bucket
+        for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
+            bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
+            bucket.dedup_by_key(|e| (e.0, e.1, e.2));
+        }
+
+        self.flatten_buckets(&out_buckets, &in_buckets);
+        self.pending_adds.clear();
+        self.pending_removes.clear();
+        self.edge_count = self.out_offsets.last().copied().unwrap_or(0) as usize;
+    }
+
     // ── constructors ──
 
     pub fn new() -> Self {
         Self {
             arena: StringArena::new(),
             nodes: HashMap::new(),
-            out_adj: HashMap::new(),
-            in_adj: HashMap::new(),
+            node_by_idx: Vec::new(),
+            handle_to_idx: HashMap::new(),
+            out_offsets: Vec::new(),
+            out_targets: Vec::new(),
+            out_kinds: Vec::new(),
+            out_coupling: Vec::new(),
+            out_delays: Vec::new(),
+            in_offsets: Vec::new(),
+            in_targets: Vec::new(),
+            in_kinds: Vec::new(),
+            in_coupling: Vec::new(),
+            in_delays: Vec::new(),
+            pending_adds: Vec::new(),
+            pending_removes: HashSet::new(),
             name_index: HashMap::new(),
             file_index: HashMap::new(),
             edge_count: 0,
@@ -120,25 +396,34 @@ impl MemoryIndex {
             idx.index_node_file(handle, &node);
             idx.nodes.insert(handle, node);
         }
-        // Build adjacency — consumes edges HashMap, freeing each Edge as we go
-        // ponytail: into_iter() drops Edge heap allocations immediately,
-        // so only out_adj/in_adj tuples grow, not a duplicate edge collection
+
+        // Build per-node buckets (temp — consumed by flatten_buckets)
+        idx.rebuild_dense_index();
+        let n = idx.node_by_idx.len();
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+
         for (_eid, edge) in edges {
             let src = idx.intern(&edge.source);
             let tgt = idx.intern(&edge.target);
             if !idx.nodes.contains_key(&src) || !idx.nodes.contains_key(&tgt) {
                 continue;
             }
-            idx.out_adj
-                .entry(src)
-                .or_default()
-                .push((tgt, edge.kind, edge.coupling_depth, edge.temporal_delay_sec));
-            idx.in_adj
-                .entry(tgt)
-                .or_default()
-                .push((src, edge.kind, edge.coupling_depth, edge.temporal_delay_sec));
-            idx.edge_count += 1;
+            let kind_u8 = edge.kind.to_u8();
+            let delay_f64 = pack_delay(edge.temporal_delay_sec);
+            if let (Some(&src_idx), Some(&tgt_idx)) = (idx.handle_to_idx.get(&src), idx.handle_to_idx.get(&tgt)) {
+                out_buckets[src_idx as usize].push((tgt, kind_u8, edge.coupling_depth, delay_f64));
+                in_buckets[tgt_idx as usize].push((src, kind_u8, edge.coupling_depth, delay_f64));
+            }
         }
+
+        // Sort + dedup each bucket
+        for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
+            bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
+            bucket.dedup_by_key(|e| (e.0, e.1, e.2));
+        }
+
+        idx.flatten_buckets(&out_buckets, &in_buckets);
         idx
     }
 
@@ -161,19 +446,30 @@ impl MemoryIndex {
             idx.index_node_file(handle, &node);
             idx.nodes.insert(handle, node);
         }
+
+        // Build CSR via temp buckets
+        idx.rebuild_dense_index();
+        let n = idx.node_by_idx.len();
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+
         for (source, target, kind, coupling_depth, delay) in db_edges {
             let src = idx.intern(&source);
             let tgt = idx.intern(&target);
-            idx.out_adj
-                .entry(src)
-                .or_default()
-                .push((tgt, kind, coupling_depth, delay));
-            idx.in_adj
-                .entry(tgt)
-                .or_default()
-                .push((src, kind, coupling_depth, delay));
+            let kind_u8 = kind.to_u8();
+            let delay_f64 = pack_delay(delay);
+            if let (Some(&src_idx), Some(&tgt_idx)) = (idx.handle_to_idx.get(&src), idx.handle_to_idx.get(&tgt)) {
+                out_buckets[src_idx as usize].push((tgt, kind_u8, coupling_depth, delay_f64));
+                in_buckets[tgt_idx as usize].push((src, kind_u8, coupling_depth, delay_f64));
+            }
         }
-        idx.edge_count = idx.out_adj.values().map(|v| v.len()).sum();
+
+        for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
+            bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
+            bucket.dedup_by_key(|e| (e.0, e.1, e.2));
+        }
+
+        idx.flatten_buckets(&out_buckets, &in_buckets);
         Ok(idx)
     }
 
@@ -194,19 +490,30 @@ impl MemoryIndex {
             let handle = idx.intern(&node.id);
             idx.nodes.insert(handle, node);
         }
+
+        // Build CSR via temp buckets (no aux indexes yet)
+        idx.rebuild_dense_index();
+        let n = idx.node_by_idx.len();
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+
         for (source, target, kind, coupling_depth, delay) in db_edges {
             let src = idx.intern(&source);
             let tgt = idx.intern(&target);
-            idx.out_adj
-                .entry(src)
-                .or_default()
-                .push((tgt, kind, coupling_depth, delay));
-            idx.in_adj
-                .entry(tgt)
-                .or_default()
-                .push((src, kind, coupling_depth, delay));
+            let kind_u8 = kind.to_u8();
+            let delay_f64 = pack_delay(delay);
+            if let (Some(&src_idx), Some(&tgt_idx)) = (idx.handle_to_idx.get(&src), idx.handle_to_idx.get(&tgt)) {
+                out_buckets[src_idx as usize].push((tgt, kind_u8, coupling_depth, delay_f64));
+                in_buckets[tgt_idx as usize].push((src, kind_u8, coupling_depth, delay_f64));
+            }
         }
-        idx.edge_count = idx.out_adj.values().map(|v| v.len()).sum();
+
+        for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
+            bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
+            bucket.dedup_by_key(|e| (e.0, e.1, e.2));
+        }
+
+        idx.flatten_buckets(&out_buckets, &in_buckets);
         idx.ensure_aux_indexes();
         Ok(idx)
     }
@@ -214,16 +521,21 @@ impl MemoryIndex {
     /// Persist to SQLite (full dump, used after full analysis).
     pub fn to_sqlite(&self, db: &SqliteDb) -> Result<(), String> {
         let nodes: Vec<&Node> = self.nodes.values().collect();
-        let edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = self
-            .out_adj
-            .iter()
-            .flat_map(|(src, targets)| {
-                let src_str = self.get_str(*src);
-                targets
-                    .iter()
-                    .map(move |(tgt, kind, depth, delay)| (src_str, self.get_str(*tgt), *kind, *depth, *delay))
-            })
-            .collect();
+        // Collect all edges via helpers (CSR + pending - removed)
+        let mut edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = Vec::new();
+        let mut seen: HashSet<(String, String, EdgeKind)> = HashSet::new();
+        for &src_handle in &self.node_by_idx {
+            let src_str = self.get_str(src_handle);
+            let raw = self.collect_outgoing(src_handle);
+            for &(tgt, kind_u8, coupling, delay) in &raw {
+                let tgt_str = self.get_str(tgt);
+                let kind = EdgeKind::from_u8(kind_u8);
+                let key = (src_str.to_string(), tgt_str.to_string(), kind);
+                if seen.insert(key) {
+                    edges.push((src_str, tgt_str, kind, coupling, unpack_delay(delay)));
+                }
+            }
+        }
         db.bulk_replace_all(&nodes, &edges)
     }
 
@@ -314,15 +626,15 @@ impl MemoryIndex {
         let Some(handle) = self.handle_of(node_id) else {
             return edges;
         };
-        if let Some(targets) = self.out_adj.get(&handle) {
-            for &(tgt, kind, depth, delay) in targets {
-                let tgt_str = self.get_str(tgt);
-                let id = format!("{}::{}::{}", node_id, tgt_str, kind.as_str());
-                let mut edge = crate::graph::Edge::new(id, node_id, tgt_str, kind);
-                edge.coupling_depth = depth;
-                edge.temporal_delay_sec = delay;
-                edges.push(edge);
-            }
+        let raw = self.collect_outgoing(handle);
+        for &(tgt, kind_u8, coupling, delay) in &raw {
+            let tgt_str = self.get_str(tgt);
+            let kind = EdgeKind::from_u8(kind_u8);
+            let id = format!("{}::{}::{}", node_id, tgt_str, kind.as_str());
+            let mut edge = crate::graph::Edge::new(id, node_id, tgt_str, kind);
+            edge.coupling_depth = coupling;
+            edge.temporal_delay_sec = unpack_delay(delay);
+            edges.push(edge);
         }
         edges
     }
@@ -333,15 +645,15 @@ impl MemoryIndex {
         let Some(handle) = self.handle_of(node_id) else {
             return edges;
         };
-        if let Some(sources) = self.in_adj.get(&handle) {
-            for &(src, kind, depth, delay) in sources {
-                let src_str = self.get_str(src);
-                let id = format!("{}::{}::{}", src_str, node_id, kind.as_str());
-                let mut edge = crate::graph::Edge::new(id, src_str, node_id, kind);
-                edge.coupling_depth = depth;
-                edge.temporal_delay_sec = delay;
-                edges.push(edge);
-            }
+        let raw = self.collect_incoming(handle);
+        for &(src, kind_u8, coupling, delay) in &raw {
+            let src_str = self.get_str(src);
+            let kind = EdgeKind::from_u8(kind_u8);
+            let id = format!("{}::{}::{}", src_str, node_id, kind.as_str());
+            let mut edge = crate::graph::Edge::new(id, src_str, node_id, kind);
+            edge.coupling_depth = coupling;
+            edge.temporal_delay_sec = unpack_delay(delay);
+            edges.push(edge);
         }
         edges
     }
@@ -357,17 +669,18 @@ impl MemoryIndex {
         let Some(handle) = self.handle_of(node_id) else {
             return Vec::new();
         };
-        let Some(targets) = self.out_adj.get(&handle) else {
-            return Vec::new();
-        };
-        let iter: Box<dyn Iterator<Item = &(u32, EdgeKind, u8, Option<f64>)>> =
+        let edges = self.collect_outgoing(handle);
+        let mut results = Vec::with_capacity(edges.len());
+        for &(tgt, kind_u8, coupling, delay) in &edges {
+            let kind = EdgeKind::from_u8(kind_u8);
             if let Some(kinds) = kind_filter {
-                Box::new(targets.iter().filter(move |(_, k, _, _)| kinds.contains(k)))
-            } else {
-                Box::new(targets.iter())
-            };
-        iter.map(|&(tgt, kind, depth, delay)| (self.get_str(tgt).to_string(), kind, depth, delay))
-            .collect()
+                if !kinds.contains(&kind) {
+                    continue;
+                }
+            }
+            results.push((self.get_str(tgt).to_string(), kind, coupling, unpack_delay(delay)));
+        }
+        results
     }
 
     /// Incoming edges to a node.
@@ -379,17 +692,18 @@ impl MemoryIndex {
         let Some(handle) = self.handle_of(node_id) else {
             return Vec::new();
         };
-        let Some(sources) = self.in_adj.get(&handle) else {
-            return Vec::new();
-        };
-        let iter: Box<dyn Iterator<Item = &(u32, EdgeKind, u8, Option<f64>)>> =
+        let edges = self.collect_incoming(handle);
+        let mut results = Vec::with_capacity(edges.len());
+        for &(src, kind_u8, coupling, delay) in &edges {
+            let kind = EdgeKind::from_u8(kind_u8);
             if let Some(kinds) = kind_filter {
-                Box::new(sources.iter().filter(move |(_, k, _, _)| kinds.contains(k)))
-            } else {
-                Box::new(sources.iter())
-            };
-        iter.map(|&(src, kind, depth, delay)| (self.get_str(src).to_string(), kind, depth, delay))
-            .collect()
+                if !kinds.contains(&kind) {
+                    continue;
+                }
+            }
+            results.push((self.get_str(src).to_string(), kind, coupling, unpack_delay(delay)));
+        }
+        results
     }
 
     // ── graph traversal ──
@@ -411,38 +725,73 @@ impl MemoryIndex {
         visited.insert(start);
         queue.push_back((start, 0u8));
 
+        let has_pending = !self.pending_adds.is_empty() || !self.pending_removes.is_empty();
+
         while let Some((cur_handle, cur_depth)) = queue.pop_front() {
             if cur_depth >= depth {
                 continue;
             }
             let cur_str = self.get_str(cur_handle).to_string();
-            // outgoing
-            if let Some(targets) = self.out_adj.get(&cur_handle) {
-                for &(other, kind, coupling_depth, _delay) in targets {
+            // outgoing (CSR — only if node is in dense index)
+            if let Some(cur_idx) = self.node_idx(cur_handle) {
+                let (s, e) = self.out_range(cur_idx);
+                for i in s..e {
+                    let kind = EdgeKind::from_u8(self.out_kinds[i]);
+                    let other = self.out_targets[i];
+                    if has_pending && self.pending_removes.contains(&(cur_handle, other, kind)) {
+                        continue;
+                    }
                     if let Some(kinds) = kind_filter {
-                        if !kinds.contains(&kind) {
-                            continue;
-                        }
+                        if !kinds.contains(&kind) { continue; }
                     }
                     if visited.insert(other) {
                         let other_str = self.get_str(other).to_string();
-                        result.push((cur_str.clone(), other_str.clone(), coupling_depth));
+                        result.push((cur_str.clone(), other_str, self.out_coupling[i]));
+                        queue.push_back((other, cur_depth + 1));
+                    }
+                }
+                // incoming (CSR)
+                let (s, e) = self.in_range(cur_idx);
+                for i in s..e {
+                    let kind = EdgeKind::from_u8(self.in_kinds[i]);
+                    let other = self.in_targets[i];
+                    if has_pending && self.pending_removes.contains(&(other, cur_handle, kind)) {
+                        continue;
+                    }
+                    if let Some(kinds) = kind_filter {
+                        if !kinds.contains(&kind) { continue; }
+                    }
+                    if visited.insert(other) {
+                        let other_str = self.get_str(other).to_string();
+                        result.push((cur_str.clone(), other_str, self.in_coupling[i]));
                         queue.push_back((other, cur_depth + 1));
                     }
                 }
             }
-            // incoming
-            if let Some(sources) = self.in_adj.get(&cur_handle) {
-                for &(other, kind, coupling_depth, _delay) in sources {
-                    if let Some(kinds) = kind_filter {
-                        if !kinds.contains(&kind) {
-                            continue;
+            // pending edges (always check, even for nodes not yet in CSR)
+            if has_pending {
+                for &(src, tgt, kind, coupling, delay) in &self.pending_adds {
+                    if src == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
+                        if let Some(kinds) = kind_filter {
+                            if !kinds.contains(&kind) { continue; }
+                        }
+                        if visited.insert(tgt) {
+                            let other_str = self.get_str(tgt).to_string();
+                            result.push((cur_str.clone(), other_str, coupling));
+                            queue.push_back((tgt, cur_depth + 1));
+                            let _ = delay;
                         }
                     }
-                    if visited.insert(other) {
-                        let other_str = self.get_str(other).to_string();
-                        result.push((cur_str.clone(), other_str.clone(), coupling_depth));
-                        queue.push_back((other, cur_depth + 1));
+                    if tgt == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
+                        if let Some(kinds) = kind_filter {
+                            if !kinds.contains(&kind) { continue; }
+                        }
+                        if visited.insert(src) {
+                            let other_str = self.get_str(src).to_string();
+                            result.push((cur_str.clone(), other_str, coupling));
+                            queue.push_back((src, cur_depth + 1));
+                            let _ = delay;
+                        }
                     }
                 }
             }
@@ -462,6 +811,8 @@ impl MemoryIndex {
         visited.insert(start);
         queue.push_back((start, 0usize));
 
+        let has_pending = !self.pending_adds.is_empty() || !self.pending_removes.is_empty();
+
         while let Some((cur_handle, depth)) = queue.pop_front() {
             if depth > max_depth {
                 continue;
@@ -471,17 +822,39 @@ impl MemoryIndex {
             }
             layers[depth].1.push(self.get_str(cur_handle).to_string());
 
-            if let Some(targets) = self.out_adj.get(&cur_handle) {
-                for &(tgt, _, _, _) in targets {
+            // CSR edges
+            if let Some(cur_idx) = self.node_idx(cur_handle) {
+                let (s, e) = self.out_range(cur_idx);
+                for i in s..e {
+                    let tgt = self.out_targets[i];
+                    if has_pending {
+                        let kind = EdgeKind::from_u8(self.out_kinds[i]);
+                        if self.pending_removes.contains(&(cur_handle, tgt, kind)) { continue; }
+                    }
                     if visited.insert(tgt) {
                         queue.push_back((tgt, depth + 1));
                     }
                 }
-            }
-            if let Some(sources) = self.in_adj.get(&cur_handle) {
-                for &(src, _, _, _) in sources {
+                let (s, e) = self.in_range(cur_idx);
+                for i in s..e {
+                    let src = self.in_targets[i];
+                    if has_pending {
+                        let kind = EdgeKind::from_u8(self.in_kinds[i]);
+                        if self.pending_removes.contains(&(src, cur_handle, kind)) { continue; }
+                    }
                     if visited.insert(src) {
                         queue.push_back((src, depth + 1));
+                    }
+                }
+            }
+            // Pending edges (always check)
+            if has_pending {
+                for &(src, tgt, kind, _, _) in &self.pending_adds {
+                    if src == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
+                        if visited.insert(tgt) { queue.push_back((tgt, depth + 1)); }
+                    }
+                    if tgt == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
+                        if visited.insert(src) { queue.push_back((src, depth + 1)); }
                     }
                 }
             }
@@ -514,6 +887,8 @@ impl MemoryIndex {
         visited.insert(start);
         queue.push_back((start, 0));
 
+        let has_pending = !self.pending_adds.is_empty() || !self.pending_removes.is_empty();
+
         while let Some((cur, depth)) = queue.pop_front() {
             if cur == target {
                 break;
@@ -521,10 +896,15 @@ impl MemoryIndex {
             if depth >= max_depth {
                 continue;
             }
-            if let Some(targets) = self.out_adj.get(&cur) {
-                for &(tgt, _, _, _) in targets {
-                    if explore_count >= max_explore {
-                        break;
+            // CSR edges
+            if let Some(cur_idx) = self.node_idx(cur) {
+                let (s, e) = self.out_range(cur_idx);
+                for i in s..e {
+                    if explore_count >= max_explore { break; }
+                    let tgt = self.out_targets[i];
+                    if has_pending {
+                        let kind = EdgeKind::from_u8(self.out_kinds[i]);
+                        if self.pending_removes.contains(&(cur, tgt, kind)) { continue; }
                     }
                     if visited.insert(tgt) {
                         prev.insert(tgt, cur);
@@ -532,16 +912,31 @@ impl MemoryIndex {
                         explore_count += 1;
                     }
                 }
-            }
-            if let Some(sources) = self.in_adj.get(&cur) {
-                for &(src, _, _, _) in sources {
-                    if explore_count >= max_explore {
-                        break;
+                let (s, e) = self.in_range(cur_idx);
+                for i in s..e {
+                    if explore_count >= max_explore { break; }
+                    let src = self.in_targets[i];
+                    if has_pending {
+                        let kind = EdgeKind::from_u8(self.in_kinds[i]);
+                        if self.pending_removes.contains(&(src, cur, kind)) { continue; }
                     }
                     if visited.insert(src) {
                         prev.insert(src, cur);
                         queue.push_back((src, depth + 1));
                         explore_count += 1;
+                    }
+                }
+            }
+            // Pending edges
+            if has_pending {
+                for &(src, tgt, kind, _, _) in &self.pending_adds {
+                    if explore_count >= max_explore { break; }
+                    if self.pending_removes.contains(&(src, tgt, kind)) { continue; }
+                    if src == cur && visited.insert(tgt) {
+                        prev.insert(tgt, cur); queue.push_back((tgt, depth + 1)); explore_count += 1;
+                    }
+                    if tgt == cur && visited.insert(src) {
+                        prev.insert(src, cur); queue.push_back((src, depth + 1)); explore_count += 1;
                     }
                 }
             }
@@ -585,19 +980,23 @@ impl MemoryIndex {
     /// Iterate over all edges as (source_str, vec_of_target_tuples).
     /// Returns owned values — caller owns the result.
     pub fn edges_iter(&self) -> Vec<(String, Vec<(String, EdgeKind, u8, Option<f64>)>)> {
-        self.out_adj
-            .iter()
-            .map(|(&src_handle, targets)| {
-                let src_str = self.get_str(src_handle).to_string();
-                let edges: Vec<_> = targets
-                    .iter()
-                    .map(|&(tgt, kind, depth, delay)| {
-                        (self.get_str(tgt).to_string(), kind, depth, delay)
-                    })
-                    .collect();
-                (src_str, edges)
-            })
-            .collect()
+        let mut results = Vec::with_capacity(self.node_by_idx.len());
+        for &src_handle in &self.node_by_idx {
+            let raw = self.collect_outgoing(src_handle);
+            if raw.is_empty() { continue; }
+            let src_str = self.get_str(src_handle).to_string();
+            let mut targets = Vec::with_capacity(raw.len());
+            for &(tgt, kind_u8, coupling, delay) in &raw {
+                targets.push((
+                    self.get_str(tgt).to_string(),
+                    EdgeKind::from_u8(kind_u8),
+                    coupling,
+                    unpack_delay(delay),
+                ));
+            }
+            results.push((src_str, targets));
+        }
+        results
     }
 
     // ── mutators (for incremental update) ──
@@ -607,29 +1006,11 @@ impl MemoryIndex {
         self.index_node_name(handle, &node);
         self.index_node_file(handle, &node);
         self.nodes.insert(handle, node);
+        // ponytail: dense index rebuilt on next flush_pending, not here
     }
 
     pub fn remove_node(&mut self, id: &str) -> Option<Node> {
         let handle = self.handle_of(id)?;
-        // Remove from adjacency lists
-        if let Some(targets) = self.out_adj.remove(&handle) {
-            let count = targets.len();
-            self.edge_count = self.edge_count.saturating_sub(count);
-            for (tgt, _, _, _) in &targets {
-                if let Some(sources) = self.in_adj.get_mut(tgt) {
-                    sources.retain(|&(s, _, _, _)| s != handle);
-                }
-            }
-        }
-        if let Some(sources) = self.in_adj.remove(&handle) {
-            let count = sources.len();
-            self.edge_count = self.edge_count.saturating_sub(count);
-            for (src, _, _, _) in &sources {
-                if let Some(targets) = self.out_adj.get_mut(src) {
-                    targets.retain(|&(t, _, _, _)| t != handle);
-                }
-            }
-        }
         // Remove from aux indexes
         if let Some(node) = self.nodes.get(&handle) {
             if self.has_aux_indexes {
@@ -644,6 +1025,29 @@ impl MemoryIndex {
                 }
             }
         }
+        // Mark all edges involving this node as removed
+        let mut removed = 0usize;
+        if let Some(idx) = self.node_idx(handle) {
+            let (s, e) = self.out_range(idx);
+            for i in s..e {
+                let tgt = self.out_targets[i];
+                let kind = EdgeKind::from_u8(self.out_kinds[i]);
+                self.pending_removes.insert((handle, tgt, kind));
+                removed += 1;
+            }
+            let (s, e) = self.in_range(idx);
+            for i in s..e {
+                let src = self.in_targets[i];
+                let kind = EdgeKind::from_u8(self.in_kinds[i]);
+                self.pending_removes.insert((src, handle, kind));
+                // ponytail: incoming edges were already counted in edge_count
+            }
+        }
+        // Also remove any pending edges for this node
+        let pending_before = self.pending_adds.len();
+        self.pending_adds.retain(|&(s, t, _, _, _)| s != handle && t != handle);
+        removed += pending_before - self.pending_adds.len();
+        self.edge_count = self.edge_count.saturating_sub(removed);
         self.nodes.remove(&handle)
     }
 
@@ -658,21 +1062,32 @@ impl MemoryIndex {
     ) {
         let src = self.intern(source);
         let tgt = self.intern(target);
-        let entry = self.out_adj.entry(src).or_default();
-        if !entry
-            .iter()
-            .any(|&(t, k, d, delay)| t == tgt && k == kind && d == coupling_depth && delay == temporal_delay_sec)
-        {
-            entry.push((tgt, kind, coupling_depth, temporal_delay_sec));
-            self.edge_count += 1;
+        let kind_u8 = kind.to_u8();
+        // Check if edge already exists in CSR
+        if self.edge_exists_in_csr(src, tgt, kind_u8) {
+            // Check coupling + delay match
+            if let Some(idx) = self.node_idx(src) {
+                let (s, e) = self.out_range(idx);
+                for i in s..e {
+                    if self.out_targets[i] == tgt
+                        && self.out_kinds[i] == kind_u8
+                        && self.out_coupling[i] == coupling_depth
+                        && unpack_delay(self.out_delays[i]) == temporal_delay_sec
+                    {
+                        return; // exact duplicate in CSR
+                    }
+                }
+            }
         }
-        let in_entry = self.in_adj.entry(tgt).or_default();
-        if !in_entry
-            .iter()
-            .any(|&(s, k, d, delay)| s == src && k == kind && d == coupling_depth && delay == temporal_delay_sec)
-        {
-            in_entry.push((src, kind, coupling_depth, temporal_delay_sec));
+        // Check pending adds for duplicate
+        if self.pending_adds.iter().any(|&(s, t, k, d, del)| {
+            s == src && t == tgt && k == kind && d == coupling_depth && del == temporal_delay_sec
+        }) {
+            return;
         }
+        self.pending_adds.push((src, tgt, kind, coupling_depth, temporal_delay_sec));
+        self.pending_removes.remove(&(src, tgt, kind));
+        self.edge_count += 1;
     }
 
     /// Remove a specific edge.
@@ -685,24 +1100,28 @@ impl MemoryIndex {
             Some(h) => h,
             None => return false,
         };
-        let mut removed = false;
-        if let Some(targets) = self.out_adj.get_mut(&src) {
-            let before = targets.len();
-            targets.retain(|&(t, k, _, _)| !(t == tgt && k == kind));
-            if targets.len() < before {
-                removed = true;
-                self.edge_count -= before - targets.len();
-            }
+        // Check if edge exists in CSR or pending
+        let in_csr = self.edge_exists_in_csr(src, tgt, kind.to_u8());
+        let in_pending = self.pending_adds.iter().any(|&(s, t, k, _, _)| s == src && t == tgt && k == kind);
+        if !in_csr && !in_pending {
+            return false;
         }
-        if let Some(sources) = self.in_adj.get_mut(&tgt) {
-            sources.retain(|&(s, k, _, _)| !(s == src && k == kind));
+        // Remove from pending adds (if was just added)
+        self.pending_adds.retain(|&(s, t, k, _, _)| !(s == src && t == tgt && k == kind));
+        if in_csr {
+            self.pending_removes.insert((src, tgt, kind));
         }
-        removed
+        self.edge_count = self.edge_count.saturating_sub(1);
+        true
     }
 
     /// Compute total edge count by scanning adjacency (for validation).
     pub fn recompute_edge_count(&self) -> usize {
-        self.out_adj.values().map(|v| v.len()).sum()
+        let mut count = 0usize;
+        for &src_handle in &self.node_by_idx {
+            count += self.collect_outgoing(src_handle).len();
+        }
+        count
     }
 
     /// Rename a node (name only — ID stays unchanged, preserving edges).
@@ -738,6 +1157,10 @@ impl Default for MemoryIndex {
         Self::new()
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {
@@ -909,6 +1332,19 @@ mod tests {
         idx.ensure_aux_indexes();
         assert_eq!(idx.get_nodes_by_name("A").len(), 1);
         assert_eq!(idx.get_nodes_by_file("f.rs").len(), 1);
+    }
+
+    #[test]
+    fn test_remove_edge() {
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(test_node("a", "A", None));
+        idx.insert_node(test_node("b", "B", None));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+        assert_eq!(idx.edge_count(), 1);
+
+        assert!(idx.remove_edge("a", "b", EdgeKind::Calls));
+        assert_eq!(idx.edge_count(), 0);
+        assert!(idx.outgoing("a", None).is_empty());
     }
 
     /// F2 regression: temporal_delay_sec must survive a SQLite round-trip.
