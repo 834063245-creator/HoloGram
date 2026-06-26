@@ -102,31 +102,6 @@ export class PermissionPolicy {
     };
   }
 
-  /** Set rules from a flat config (e.g. from settings) */
-  configure(cfg: { allow?: string[]; ask?: string[]; deny?: string[]; defaultMode?: Decision }): void {
-    this.data.defaultMode = cfg.defaultMode || 'ask';
-    this.data.allow = parseRules(cfg.allow || []);
-    this.data.ask = parseRules(cfg.ask || []);
-    this.data.deny = parseRules(cfg.deny || []);
-  }
-
-  /** Add a remembered allow rule */
-  rememberAllow(toolName: string, subject: string): void {
-    const rule: Rule = subject ? { tool: toolName, subject } : { tool: toolName };
-    // Remove from ask/deny first, then add to allow
-    this.data.ask = this.data.ask.filter(r => !isSameRule(r, rule));
-    this.data.deny = this.data.deny.filter(r => !isSameRule(r, rule));
-    this.data.allow.push(rule);
-  }
-
-  /** Export rules for persistence */
-  exportRules(): { allow: string[]; deny: string[] } {
-    return {
-      allow: this.data.allow.map(r => r.subject ? `${r.tool}(${r.subject})` : r.tool),
-      deny: this.data.deny.map(r => r.subject ? `${r.tool}(${r.subject})` : r.tool),
-    };
-  }
-
   /** Load rules from persisted format */
   importRules(rules: { allow?: string[]; deny?: string[] }): void {
     this.data.allow = parseRules(rules.allow || []);
@@ -396,15 +371,6 @@ export function showApprovalDialog(
     // Notify chat panel (so it can log / show awareness — not for rendering)
     bus.emit('agent:permission-request', { id, toolName, description, args });
   });
-}
-
-/** Called by external code to resolve a pending approval by ID. */
-export function resolveApproval(id: string, result: { allow: boolean; remember: boolean }): void {
-  const entry = pending.get(id);
-  if (entry) {
-    entry.cleanup();
-    entry.resolve(result);
-  }
 }
 
 /** Dismiss all pending permission dialogs with "deny" — called on abort/stop. */

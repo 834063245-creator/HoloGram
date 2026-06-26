@@ -513,29 +513,6 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
 // ═══════════════════════════════════════════════════════
 // MCP 动态工具工厂 — Step 1: 从 MCP tools/list 自动生成
 // ═══════════════════════════════════════════════════════
-
-/** MCP tools/list 返回的 schema 格式（inputSchema 而非 parameters）。 */
-interface McpToolSchema {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-/**
- * 从 MCP Server 的工具列表动态创建 Tool 对象。
- * 老硬编码 createHologramTools() 保留作 CLI fallback。
- */
-export function createHologramToolsFromSchemas(schemas: McpToolSchema[], exec: ToolExecutor): Tool[] {
-  return schemas.map((schema) => ({
-    name: () => schema.name,
-    description: () => schema.description,
-    parameters: () => schema.inputSchema,
-    readOnly: () => true,
-    execute: (args: Record<string, unknown>) => exec(schema.name, args),
-  }));
-}
-
-// ═══════════════════════════════════════════════════════
 // Coding Tools — 文件 / Shell / 搜索 / Git / Web
 // ═══════════════════════════════════════════════════════
 
