@@ -4,6 +4,7 @@
 use crate::adapter::traits::LanguageAdapter;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use std::cell::RefCell;
+use crate::engine::GRAMMAR_LOADER;
 use tree_sitter::{Language, Parser};
 
 // Thread-local parser cache — reuses parser across files of the same language.
@@ -20,53 +21,14 @@ impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
 
     fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
-        // Two macro variants because tree-sitter crates use 3 different API patterns:
-        //   do_parse!    → $crate::LANGUAGE         (old-style static const)
-        //   do_parse_fn! → $crate::language()       (function returning Language)
-        //   do_parse_k!  → $crate::$const.into()    (named LanguageFn constant)
-        macro_rules! do_parse { ($ts_crate:ident, $lang_key:expr) => {{
-            let lang: Language = $ts_crate::LANGUAGE.into();
-            parse_with_lang(lang, $lang_key, source, file_id)
-        }}; }
-        macro_rules! do_parse_k { ($ts_crate:ident, $konst:ident, $lang_key:expr) => {{
-            let lang: Language = $ts_crate::$konst.into();
-            parse_with_lang(lang, $lang_key, source, file_id)
-        }}; }
-
-        match ext {
-            // ── old-style: LANGUAGE const ──
-            "go" => do_parse!(tree_sitter_go, "go"),
-            "rs" => do_parse!(tree_sitter_rust, "rs"),
-            "java" => do_parse!(tree_sitter_java, "java"),
-            "c" | "h" => do_parse!(tree_sitter_c, "c"),
-            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => do_parse!(tree_sitter_cpp, "cpp"),
-            "rb" => do_parse!(tree_sitter_ruby, "rb"),
-            "lua" => do_parse!(tree_sitter_lua, "lua"),
-            "cs" => do_parse!(tree_sitter_c_sharp, "cs"),
-            "swift" => do_parse!(tree_sitter_swift, "swift"),
-            "dart" => do_parse!(tree_sitter_dart, "dart"),
-            "scala" | "sc" => do_parse!(tree_sitter_scala, "scala"),
-            "hs" => do_parse!(tree_sitter_haskell, "hs"),
-            "json" => do_parse!(tree_sitter_json, "json"),
-            "html" | "htm" => do_parse!(tree_sitter_html, "html"),
-            "css" => do_parse!(tree_sitter_css, "css"),
-            "r" | "R" => do_parse!(tree_sitter_r, "r"),
-            "nix" => do_parse!(tree_sitter_nix, "nix"),
-            "sh" | "bash" => do_parse!(tree_sitter_bash, "bash"),
-            "yaml" | "yml" => do_parse!(tree_sitter_yaml, "yaml"),
-            "zig" => do_parse!(tree_sitter_zig, "zig"),
-            "ex" | "exs" => do_parse!(tree_sitter_elixir, "elixir"),
-            "erl" | "hrl" => do_parse!(tree_sitter_erlang, "erlang"),
-            // ── new-style: named LanguageFn constants ──
-            "php" => do_parse_k!(tree_sitter_php, LANGUAGE_PHP, "php"),
-            "ml" => do_parse_k!(tree_sitter_ocaml, LANGUAGE_OCAML, "ocaml"),
-            "mli" => do_parse_k!(tree_sitter_ocaml, LANGUAGE_OCAML_INTERFACE, "ocaml_interface"),
-            _ => (vec![], vec![], None),
+        match GRAMMAR_LOADER.get(ext) {
+            Some(lang) => parse_with_lang(lang, ext, source, file_id),
+            None => (vec![], vec![], None),
         }
     }
 }
 
-/// Shared parse driver — reused by all macro variants above.
+/// Shared parse driver — get Language from the global loader, then parse.
 fn parse_with_lang(lang: Language, lang_key: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
     TL_PARSER.with(|cell| {
         let mut borrow = cell.borrow_mut();
@@ -91,11 +53,7 @@ fn parse_with_lang(lang: Language, lang_key: &str, source: &str, file_id: &str) 
 
 impl LanguageAdapter for TreeSitterAdapter {
     fn extensions(&self) -> Vec<String> {
-        vec!["go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
-            "cs","swift","dart","scala","sc","hs","json","html","htm","css",
-            "php","ml","mli","r","R","nix","sh","bash",
-            "yaml","yml","zig","ex","exs","erl","hrl"]
-            .into_iter().map(|s| s.into()).collect()
+        GRAMMAR_LOADER.supported_extensions()
     }
 
     fn analyze(&self, file_path: &str, source: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {

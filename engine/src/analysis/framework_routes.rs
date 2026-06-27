@@ -7,6 +7,7 @@
 //!
 //! Currently supports: Django, Express, FastAPI, Flask, Rails, Spring, Gin, NestJS
 
+use crate::engine::GRAMMAR_LOADER;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -128,7 +129,7 @@ fn detect_django_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {
@@ -297,11 +298,8 @@ fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
 
     // Determine which tree-sitter language to use
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
-    let lang: tree_sitter::Language = if is_ts {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-    } else {
-        tree_sitter_javascript::LANGUAGE.into()
-    };
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
@@ -414,7 +412,7 @@ fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {
@@ -539,7 +537,7 @@ fn detect_flask_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {
@@ -666,7 +664,7 @@ fn detect_rails_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_ruby::LANGUAGE.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("rb").expect("ruby grammar")).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {
@@ -821,7 +819,7 @@ fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
         // Kotlin tree-sitter isn't wired yet, skip
         return result;
     } else {
-        tree_sitter_java::LANGUAGE.into()
+        GRAMMAR_LOADER.get("java").expect("java grammar")
     };
 
     let mut parser = tree_sitter::Parser::new();
@@ -961,7 +959,7 @@ fn detect_gin_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_go::LANGUAGE.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("go").expect("go grammar")).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {
@@ -1064,7 +1062,7 @@ fn detect_nestjs_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("ts").expect("typescript grammar")).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {

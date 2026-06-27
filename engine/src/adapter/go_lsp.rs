@@ -640,7 +640,7 @@ mod tests {
 
     fn parse_go(source: &str) -> tree_sitter::Tree {
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok();
+        parser.set_language(&crate::engine::GRAMMAR_LOADER.get("go").expect("go grammar")).ok();
         parser.parse(source, None).expect("parse failed")
     }
 

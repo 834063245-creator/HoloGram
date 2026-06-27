@@ -1253,7 +1253,7 @@ mod tests {
     fn parse_python(source: &str) -> tree_sitter::Tree {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .set_language(&crate::engine::GRAMMAR_LOADER.get("py").expect("python grammar"))
             .expect("failed to load python grammar");
         parser.parse(source, None).expect("parse failed")
     }

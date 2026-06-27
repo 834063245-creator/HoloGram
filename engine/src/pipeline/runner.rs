@@ -13,6 +13,7 @@ use tracing::info;
 use crate::graph::merge::GraphMerger;
 use crate::graph::Graph;
 use crate::path_utils::normalize_path;
+use crate::engine::GRAMMAR_LOADER;
 use crate::pipeline::discovery::discover_files;
 use crate::pipeline::parser::ParallelParser;
 
@@ -42,11 +43,9 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     let start = Instant::now();
 
     // Step 1: Discovery
-    let files = discover_files(root, &[
-        "py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
-        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
-        "cs","swift","dart","scala","sc","hs","html","htm","css",
-    ]);
+    let exts: Vec<String> = GRAMMAR_LOADER.supported_extensions();
+    let ext_strs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+    let files = discover_files(root, &ext_strs);
     info!("[pipeline] discovered {} source files", files.len());
 
     // Step 2: Parallel parse + stream-merge (no intermediate Vec<FileData>).
