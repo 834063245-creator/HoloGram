@@ -20,6 +20,7 @@ pub struct EngineClient {
 }
 
 impl EngineClient {
+    #[allow(dead_code)] // ponytail: used via CONN static, new() shape for future pooled clients
     pub fn new(addr: &str) -> Self {
         Self { addr: addr.to_string() }
     }

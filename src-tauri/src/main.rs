@@ -22,13 +22,11 @@ use mcp_manager::McpManager;
 use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
 use lsp_manager::{lsp_start, lsp_request, lsp_stop};
 use unity_manager::UnityManager;
-use sandbox::Sandbox;
-use audit::{AuditEntry, AuditLogger, now_iso};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -2021,42 +2019,6 @@ async fn load_binary_graph(
     Err("No cached binary graph found".into())
 }
 
-/// Check if cached graph JSON is fresher than all source files — instant load.
-fn is_graph_fresh(graph_path: &str, project_path: &str) -> bool {
-    let graph_meta = match std::fs::metadata(graph_path) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-    let graph_mtime = match graph_meta.modified() {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-
-    // If any source file is newer than the graph, it's stale
-    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs",
-                 ".go", ".rs", ".java", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
-                 ".rb", ".cs", ".kt", ".kts", ".swift", ".php", ".lua"];
-    for entry in walkdir::WalkDir::new(project_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() { continue; }
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let ext_with_dot = format!(".{}", ext);
-        if exts.contains(&ext_with_dot.as_str()) {
-            if let Ok(meta) = path.metadata() {
-                if let Ok(mtime) = meta.modified() {
-                    if mtime > graph_mtime {
-                        return false; // stale — at least one file changed
-                    }
-                }
-            }
-        }
-    }
-    true // fresh — no source file newer than graph
-}
 
 /// Generate hologram_graph_files.json from an existing hologram_graph.json.
 /// Pure Rust — no Python dependency. Groups nodes by file, aggregates edge counts.
@@ -2130,18 +2092,6 @@ fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
     std::fs::write(&files_path, serde_json::to_string(&file_graph).unwrap_or_default())
         .map_err(|e| format!("Cannot write file graph: {}", e))?;
     Ok("ok".to_string())
-}
-
-fn find_node_file(g: &serde_json::Value, node_id: &str) -> String {
-    if let Some(nodes) = g.get("nodes").and_then(|v| v.as_array()) {
-        for n in nodes {
-            if n.get("id").and_then(|v| v.as_str()) == Some(node_id) {
-                let loc = n.get("location").and_then(|v| v.as_str()).unwrap_or("");
-                return loc.split(':').next().unwrap_or("").to_string();
-            }
-        }
-    }
-    String::new()
 }
 
 /// 分析项目并返回完整图 JSON（从 CACHED_GRAPH 序列化）。
@@ -2533,28 +2483,6 @@ fn handle_unity_connection(stream: &mut StdTcpStream, app: &tauri::AppHandle) {
 static UNITY_MANAGER: std::sync::LazyLock<UnityManager> =
     std::sync::LazyLock::new(|| UnityManager::new(UnityManager::default_exe_path()));
 
-fn start_engine() {
-    std::thread::spawn(|| {
-        let path = engine_binary();
-        let p = std::path::Path::new(&path);
-        if !p.exists() {
-            eprintln!("[engine] binary not found at {} — run 'cd engine && cargo build --release'", path);
-            return;
-        }
-        let mut cmd = std::process::Command::new(&path);
-        cmd.stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(NO_WINDOW);
-        }
-        match cmd.spawn() {
-            Ok(_child) => println!("[engine] auto-started: {}", path),
-            Err(e) => eprintln!("[engine] failed to start {}: {}", path, e),
-        }
-    });
-}
 #[tauri::command]
 fn start_unity() -> Result<String, String> {
     match UNITY_MANAGER.start() {
@@ -2682,8 +2610,10 @@ fn main() {
             hologram_impact,
             hologram_path,
             hologram_diff,
+            hologram_explore,
             hologram_fragile,
             hologram_search,
+            hologram_status,
             hologram_cycle,
             hologram_coupling_report,
             hologram_blindspots,

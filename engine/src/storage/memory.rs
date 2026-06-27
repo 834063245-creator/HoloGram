@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::Serialize;
 
-use crate::graph::{EdgeKind, Graph, Node};
+use crate::graph::{EdgeKind, Node};
 use crate::storage::sqlite::SqliteDb;
 use crate::storage::string_arena::StringArena;
 

@@ -75,53 +75,36 @@ prototype-permission.html
 gen_files_graph.py
 preflight/
 
-# ── v4.1+: 核心源码不公开，只发布二进制 ──
-# 引擎源码（分析/解析/存储/MCP）
-engine/src/
-engine/Cargo.toml
-engine/Cargo.lock
-# 力导向布局（参数调教是核心竞争力）
-src-ui/src/ui/graph.ts
-src-ui/src/ui/layout.worker.ts
-src-ui/src/ui/gpu-layout.ts
-src-ui/src/ui/graph-interaction.ts
+# ── Project docs (markdown specs, plans, guides) ──
+docs_archive/
+specs/
+docs/
 
-# Internal project docs (not for public repo)
+# Internal design notes — not for public
 AGENTS.md
 BUGS.md
 PROJECT.md
 ARCHITECTURE_PLAN.md
-CLAUDE.md
 COMPARISON_REPORT.md
 CSS_MIGRATION.md
 STARGRAPH_SPEC.md
-TEST_SPEC.md
 CODE_AUDIT_CHECKLIST.md
 FRONTEND_AUDIT_CHECKLIST.md
 V4_CONSTRUCTION_PLAN.md
 GRAPH_ALGORITHMS.md
-GSAP_GUIDE.md
 LOG_SYSTEM_PLAN.md
 SPEC_AGENT_PANEL_UPGRADE.md
-docs_archive/
-specs/
-docs/
-# Temporary fix notes / backups
 FIX-*.md
+AGENT_MEMORY_SYSTEM.txt
 .mcp.json.bak
 
-# Temp worktrees / stress output
+# Temp / stress / debug
 engine/tmplinux-stress/
-
-# One-off internal scripts (not for public repo)
-src-ui/test-once.ts
-src-ui/test-agent.ts
+test-results/
+_check_debug.log
 test_mcp_protocol.sh
 
-# Generated docs — not for source control
-AGENT_MEMORY_SYSTEM.txt
+# Embedded Python runtime
 src-tauri/python/*
 !src-tauri/python/.gitkeep
 scripts/python-3.14.4-embed-amd64.zip
-_check_debug.log
-test-results/

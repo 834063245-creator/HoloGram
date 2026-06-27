@@ -127,6 +127,7 @@ fn run_louvain(
 /// well-connected communities. Without refinement Louvain can produce
 /// disconnected communities (node connected to C via an edge but not
 /// reachable from all members within C).
+#[allow(dead_code)] // ponytail: WIP community detection, will be wired after layout research
 fn run_leiden(
     node_ids: &[String],
     n: usize,
@@ -287,6 +288,7 @@ fn compact_communities(
 ///
 /// ponytail: swap_remove + node_pos avoids O(C²) from retain(). Single pass
 /// (not iterative) — refinement costs ≤1 extra local-moving pass total.
+#[allow(dead_code)] // ponytail: WIP community refinement, will be wired after layout research
 fn refine_communities(
     n: usize,
     adj: &[Vec<(usize, f64)>],

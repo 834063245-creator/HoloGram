@@ -402,8 +402,8 @@ impl Engine {
         });
         // Detach parse_cache + discovered_files so they can be moved into the
         // LSP thread (which needs 'static). Re-attached after LSP completes.
-        let mut parse_cache = std::mem::take(&mut result.parse_cache);
-        let mut discovered_files = std::mem::take(&mut result.discovered_files);
+        let parse_cache = std::mem::take(&mut result.parse_cache);
+        let discovered_files = std::mem::take(&mut result.discovered_files);
         set_progress("解析完成", result.files_parsed, result.files_parsed, "");
 
         // 1.5. Type-aware LSP call resolution (before cross-file resolution)

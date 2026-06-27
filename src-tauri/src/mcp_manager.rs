@@ -96,6 +96,7 @@ impl McpManager {
 
     /// Send a tools/call request and return the result text.
     /// On failure (broken pipe, process died), record the crash and return an error.
+    #[allow(dead_code)] // ponytail: persistent MCP path, will replace per-call spawn
     pub fn call(&mut self, tool_name: &str, args_json: &str) -> Result<String, String> {
         if self.degraded {
             return Err("MCP 已永久降级".into());
@@ -134,6 +135,7 @@ impl McpManager {
     }
 
     /// Request the tool list from the MCP server.
+    #[allow(dead_code)] // ponytail: persistent MCP path, will replace per-call spawn
     pub fn list_tools(&mut self) -> Result<String, String> {
         if self.degraded {
             return Err("MCP 已永久降级".into());
@@ -298,6 +300,7 @@ impl McpManager {
         Ok(serde_json::to_string(result).unwrap_or_default())
     }
 
+    #[allow(dead_code)] // ponytail: transitively dead via call(), unflag when call() is wired
     fn record_crash(&mut self) {
         let now = Instant::now();
         match self.crash_window_start {
