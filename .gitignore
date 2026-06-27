@@ -36,6 +36,7 @@ hologram_graph_files.json
 
 # Binaries
 *.dll
+!grammars/*.dll
 *.exe
 !release-bin/*.exe
 *.pdb
@@ -96,6 +97,9 @@ SPEC_AGENT_PANEL_UPGRADE.md
 FIX-*.md
 AGENT_MEMORY_SYSTEM.txt
 .mcp.json.bak
+
+# Grammar build artifacts
+grammars/build/
 
 # Temp / stress / debug
 engine/tmplinux-stress/
