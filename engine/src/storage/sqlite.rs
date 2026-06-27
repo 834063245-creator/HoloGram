@@ -575,3 +575,107 @@ fn edge_kind_from_str(s: &str) -> Result<EdgeKind, String> {
         other => Err(format!("unknown edge kind: '{}'", other)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Node, NodeKind, EdgeKind};
+
+    fn make_test_node(id: &str, kind: NodeKind) -> Node {
+        let mut n = Node::new(id, id, kind);
+        n.location = Some(format!("src/{}.rs:1", id));
+        n.out_degree = 1;
+        n.in_degree = 0;
+        n.position = Some([1.0, 2.0, 3.0]);
+        n.community_id = Some(42);
+        n
+    }
+
+    #[test]
+    fn test_all_node_kinds_survive_sqlite_roundtrip() {
+        let tmp = std::env::temp_dir().join("hologram_test_node_kinds");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap();
+
+        // Write one node of each NodeKind variant
+        let all_kinds = vec![
+            NodeKind::Symbol,
+            NodeKind::Function,
+            NodeKind::Class,
+            NodeKind::Module,
+            NodeKind::File,
+            NodeKind::Interface,
+            NodeKind::Medium,
+            NodeKind::Temporal,
+        ];
+        let nodes: Vec<Node> = all_kinds.iter()
+            .map(|k| make_test_node(k.as_str(), *k))
+            .collect();
+        let edges = vec![
+            ("symbol", "function", EdgeKind::Calls, 1u8, None::<f64>),
+        ];
+
+        db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
+
+        // Read back and verify every kind is preserved
+        let loaded = db.load_all_nodes().unwrap();
+        assert_eq!(loaded.len(), 8, "all 8 nodes should survive round-trip");
+
+        for node in &loaded {
+            let expected_kind_str = node.id.as_str(); // we named nodes by their kind string
+            let expected_kind = match expected_kind_str {
+                "symbol" => NodeKind::Symbol,
+                "function" => NodeKind::Function,
+                "class" => NodeKind::Class,
+                "module" => NodeKind::Module,
+                "file" => NodeKind::File,
+                "interface" => NodeKind::Interface,
+                "medium" => NodeKind::Medium,
+                "temporal" => NodeKind::Temporal,
+                _ => panic!("unexpected node id: {}", node.id),
+            };
+            assert_eq!(std::mem::discriminant(&node.kind), std::mem::discriminant(&expected_kind),
+                "node '{}' loaded as {:?}, expected {:?}", node.id, node.kind, expected_kind);
+            // Verify other fields survived
+            assert_eq!(node.out_degree, 1);
+            assert_eq!(node.in_degree, 0);
+            assert_eq!(node.position, Some([1.0, 2.0, 3.0]));
+            assert_eq!(node.community_id, Some(42));
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_edge_fields_survive_sqlite_roundtrip() {
+        let tmp = std::env::temp_dir().join("hologram_test_edge_fields");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap();
+
+        let nodes: Vec<Node> = vec![
+            make_test_node("a", NodeKind::Symbol),
+            make_test_node("b", NodeKind::Symbol),
+        ];
+        let edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
+            ("a", "b", EdgeKind::Calls, 3u8, Some(0.5)),
+            ("a", "b", EdgeKind::Reads, 2u8, None),
+        ];
+
+        db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
+
+        let loaded = db.load_all_edges().unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        let calls = loaded.iter().find(|(_, _, k, _, _)| *k == EdgeKind::Calls).unwrap();
+        assert_eq!(calls.3, 3); // coupling_depth
+        assert_eq!(calls.4, Some(0.5)); // temporal_delay_sec
+
+        let reads = loaded.iter().find(|(_, _, k, _, _)| *k == EdgeKind::Reads).unwrap();
+        assert_eq!(reads.3, 2);
+        assert!(reads.4.is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

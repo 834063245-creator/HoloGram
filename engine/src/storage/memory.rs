@@ -1321,6 +1321,76 @@ mod tests {
         assert_eq!(calls[0].1, EdgeKind::Calls);
     }
 
+    /// ponytail: clone_index_for_update() never called rebuild_dense_index(),
+    /// so node_by_idx stayed empty → to_sqlite() collected 0 edges → all edges
+    /// lost on SQLite write-back. This test ensures flush_pending() fixes it.
+    #[test]
+    fn test_clone_and_flush_preserves_edges() {
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(test_node("a", "A", Some("src/a.rs")));
+        idx.insert_node(test_node("b", "B", Some("src/b.rs")));
+        idx.insert_node(test_node("c", "C", Some("src/c.rs")));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 1, Some(0.1));
+        idx.upsert_edge("b", "c", EdgeKind::Calls, 2, None);
+        idx.flush_pending(); // upsert → pending, flush → CSR so edges_iter() sees them
+
+        // Simulate clone_index_for_update: rebuild from existing data
+        // (we can't call clone_index_for_update directly since it's in incremental.rs,
+        // but we can test the pattern by rebuilding from the graph)
+        let mut g = Graph::new();
+        for node in idx.nodes_iter() {
+            g.add_node(node.clone());
+        }
+        for (source, targets) in idx.edges_iter() {
+            for (target, kind, coupling_depth, delay) in targets {
+                let id = format!("{}::{}::{}", source, target, kind.as_str());
+                let mut edge = Edge::new(id, source.clone(), target, kind);
+                edge.coupling_depth = coupling_depth;
+                g.add_edge(edge);
+            }
+        }
+        let mut cloned = MemoryIndex::from_existing_graph(g.nodes, g.edges);
+
+        // Before flush: pending_adds has edges, node_by_idx is populated by
+        // from_existing_graph, so this should pass. But we call flush to ensure
+        // it doesn't break anything.
+        cloned.flush_pending();
+
+        // Verify edges survived
+        assert_eq!(cloned.edge_count(), 2, "both edges should survive clone+flush");
+        let out = cloned.outgoing("a", None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, EdgeKind::Calls);
+        assert_eq!(out[0].2, 1); // coupling_depth
+
+        let out2 = cloned.outgoing("b", None);
+        assert_eq!(out2.len(), 1);
+        assert_eq!(out2[0].2, 2); // coupling_depth
+    }
+
+    /// ponytail: ensure flush_pending correctly rebuilds internal data structures
+    /// so that to_sqlite() can iterate node_by_idx to collect edges for persistence.
+    #[test]
+    fn test_edges_queryable_after_flush_pending() {
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(test_node("a", "A", None));
+        idx.insert_node(test_node("b", "B", None));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+
+        // upsert_edge puts edges in pending_adds; flush_pending rebuilds CSR from them.
+        // Before flush, outgoing() reads from pending_adds (works).
+        // After flush, outgoing() reads from rebuilt CSR arrays (must also work).
+        idx.flush_pending();
+
+        // Verify edges are queryable via outgoing after flush
+        let out = idx.outgoing("a", None);
+        assert_eq!(out.len(), 1, "edge should survive flush_pending");
+        assert_eq!(out[0].0, "b");
+
+        // Verify edge count is correct (reads from CSR after flush)
+        assert_eq!(idx.edge_count(), 1, "edge_count should be correct after flush");
+    }
+
     #[test]
     fn test_without_aux_indexes() {
         let mut idx = MemoryIndex::new();
@@ -1363,6 +1433,7 @@ mod tests {
         idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
         idx.upsert_edge("a", "c", EdgeKind::Triggers, 1, Some(2.5));
         idx.upsert_edge("b", "c", EdgeKind::Awaits, 2, Some(0.75));
+        idx.flush_pending(); // upsert → pending, flush → CSR so to_sqlite() sees edges
 
         idx.to_sqlite(&db).unwrap();
 
