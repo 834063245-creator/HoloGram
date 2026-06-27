@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
-use super::Graph;
+use super::{Edge, EdgeKind, Graph, Node};
 
 /// Persistent graph merger with incremental index.
 ///
@@ -13,10 +14,36 @@ use super::Graph;
 ///
 /// Fix: keep the index alive across merges, update it incrementally.
 /// Each merge is O(|incoming|) instead of O(|existing| + |incoming|).
+///
+/// v4 edge dedup: `edge_index` mirrors `loc_index` — a persistent
+/// (source, target, kind) dedup set that prevents redundant call-site
+/// edges from flooding the edge HashMap. Without this, every
+/// call_expression in a TS/JS file generates an edge (14K+/file),
+/// causing repeated HashMap rehash storms at millions of entries.
 pub struct GraphMerger {
     graph: Graph,
     /// "location::name::kind" → node ID
     loc_index: HashMap<String, String>,
+    /// "(source, target, edge_kind_discriminant)" — global edge dedup.
+    /// ponytail: persists across merge calls, mirrors loc_index pattern.
+    /// One edge per unique (source, target, kind) across the entire project.
+    edge_index: HashSet<(String, String, u8)>,
+}
+
+// ponytail: encode EdgeKind as u8 discriminant for cheap Hash+Eq in the index.
+fn edge_kind_id(k: &EdgeKind) -> u8 {
+    match k {
+        EdgeKind::Imports => 0,
+        EdgeKind::Calls => 1,
+        EdgeKind::Inherits => 2,
+        EdgeKind::Defines => 3,
+        EdgeKind::Reads => 4,
+        EdgeKind::Writes => 5,
+        EdgeKind::Shares => 6,
+        EdgeKind::Triggers => 7,
+        EdgeKind::Awaits => 8,
+        EdgeKind::Sequences => 9,
+    }
 }
 
 impl GraphMerger {
@@ -24,38 +51,98 @@ impl GraphMerger {
         Self {
             graph: Graph::new(),
             loc_index: HashMap::new(),
+            edge_index: HashSet::new(),
+        }
+    }
+
+    pub fn with_capacity(estimated_nodes: usize, estimated_edges: usize) -> Self {
+        let mut graph = Graph::new();
+        graph.nodes.reserve(estimated_nodes);
+        graph.edges.reserve(estimated_edges);
+        Self {
+            graph,
+            loc_index: HashMap::with_capacity(estimated_nodes),
+            edge_index: HashSet::with_capacity(estimated_edges),
+        }
+    }
+
+    /// Insert an edge only if (source, target, kind) hasn't been seen before.
+    /// Returns true if the edge was actually added.
+    fn add_edge_deduped(&mut self, edge: Edge) -> bool {
+        let key = (
+            edge.source.clone(),
+            edge.target.clone(),
+            edge_kind_id(&edge.kind),
+        );
+        if self.edge_index.insert(key) {
+            self.graph.add_edge(edge);
+            true
+        } else {
+            false
         }
     }
 
     /// Merge another graph into the accumulator. O(|other.nodes| + |other.edges|).
     pub fn merge(&mut self, other: Graph) -> usize {
-        let mut added = 0;
+        let mut added = 0usize;
+        let mut seen: HashMap<String, ()> = HashMap::new();
 
-        // Build internal dedup map for `other` first (sub-graph may have duplicates)
-        let mut other_seen: HashMap<String, String> = HashMap::new();
-
-        for (id, node) in other.nodes {
-            // When location is None, use node id to avoid merging unrelated nodes
-            let key = node.location.as_ref()
-                .map(|loc| format!("{}::{}::{}", loc, node.name, node.kind.as_str()))
-                .unwrap_or_else(|| format!("{}::{}::{}", node.id, node.name, node.kind.as_str()));
-
-            // Check global index AND intra-graph dedup
-            if self.loc_index.contains_key(&key) || other_seen.contains_key(&key) {
+        for (_, node) in other.nodes {
+            let key = node_key(&node);
+            if seen.contains_key(&key) {
                 continue;
             }
-
-            self.loc_index.insert(key.clone(), id.clone());
-            other_seen.insert(key, id.clone());
-            self.graph.add_node(node);
-            added += 1;
+            match self.loc_index.entry(key) {
+                Entry::Occupied(_) => continue,
+                Entry::Vacant(e) => {
+                    seen.insert(e.key().clone(), ());
+                    e.insert(node.id.clone());
+                    self.graph.add_node(node);
+                    added += 1;
+                }
+            }
         }
-
-        // Edges — accept all, resolver will fix cross-file targets later
         for (_, edge) in other.edges {
-            self.graph.add_edge(edge);
+            self.add_edge_deduped(edge);
         }
+        added
+    }
 
+    /// Merge directly from slices — avoids intermediate Graph allocation.
+    /// ponytail: skips build_file_graph() → saves per-file HashMap alloc/drop.
+    pub fn merge_slices(&mut self, nodes: &[Node], edges: &[Edge]) -> usize {
+        let mut added = 0usize;
+        let mut seen: HashMap<String, ()> = HashMap::with_capacity(nodes.len());
+
+        for node in nodes {
+            let key = node_key(node);
+            if seen.contains_key(&key) {
+                continue;
+            }
+            match self.loc_index.entry(key) {
+                Entry::Occupied(_) => continue,
+                Entry::Vacant(e) => {
+                    seen.insert(e.key().clone(), ());
+                    e.insert(node.id.clone());
+                    self.graph.add_node(node.clone());
+                    added += 1;
+                }
+            }
+        }
+        // ponytail: two-level edge dedup.
+        // Level 1 (fast): intra-file dedup with borrowed &str, zero clones.
+        //    A React component calling console.log 100× → 99 hits skip here.
+        // Level 2 (slow): global persistent index, clones source+target.
+        //    Only the 1 unique (src,tgt,kind) per file reaches this level.
+        let cap = edges.len().min(5000);
+        let mut local_dedup: HashSet<(&str, &str, u8)> = HashSet::with_capacity(cap);
+        for edge in edges {
+            let ek = edge_kind_id(&edge.kind);
+            if !local_dedup.insert((&edge.source, &edge.target, ek)) {
+                continue; // intra-file duplicate — skip without cloning
+            }
+            self.add_edge_deduped(edge.clone());
+        }
         added
     }
 
@@ -71,6 +158,32 @@ impl GraphMerger {
 
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
+    }
+}
+
+/// Build dedup key: "location::name::kind"
+fn node_key(node: &Node) -> String {
+    if let Some(loc) = &node.location {
+        // ponytail: String::with_capacity avoids format!() realloc churn.
+        // Format overhead per-node adds up at 300K+ nodes.
+        let cap = loc.len() + node.name.len() + node.kind.as_str().len() + 6;
+        let mut key = String::with_capacity(cap);
+        key.push_str(loc);
+        key.push_str("::");
+        key.push_str(&node.name);
+        key.push_str("::");
+        key.push_str(node.kind.as_str());
+        key
+    } else {
+        // No location — use node id (unique per file)
+        let cap = node.id.len() + node.name.len() + node.kind.as_str().len() + 6;
+        let mut key = String::with_capacity(cap);
+        key.push_str(&node.id);
+        key.push_str("::");
+        key.push_str(&node.name);
+        key.push_str("::");
+        key.push_str(node.kind.as_str());
+        key
     }
 }
 
@@ -205,5 +318,113 @@ mod tests {
         let added = merger.merge(Graph::new());
         assert_eq!(added, 0);
         assert_eq!(merger.node_count(), 0);
+    }
+
+    #[test]
+    fn test_merge_slices_edge_dedup() {
+        // ponytail: verify intra-file (source, target, kind) dedup.
+        // Same function calling the same target 3 times → 1 edge, not 3.
+        let mut merger = GraphMerger::new();
+
+        // Add source and target nodes so add_edge can update degrees
+        let src = Node::new("a.foo", "foo", NodeKind::Function);
+        let tgt = Node::new("b.helper", "helper", NodeKind::Function);
+        merger.graph.add_node(src);
+        merger.graph.add_node(tgt);
+
+        let nodes: Vec<Node> = vec![];
+        let edges: Vec<Edge> = vec![
+            Edge::new("call_1", "a.foo", "b.helper", EdgeKind::Calls),
+            Edge::new("call_2", "a.foo", "b.helper", EdgeKind::Calls),  // dup: same (src, tgt, kind)
+            Edge::new("call_3", "a.foo", "b.helper", EdgeKind::Calls),  // dup
+            Edge::new("call_4", "a.foo", "c.other", EdgeKind::Calls),   // different target
+        ];
+
+        merger.merge_slices(&nodes, &edges);
+        assert_eq!(merger.graph().edge_count(), 2, "should dedup 3 foo→helper calls into 1, keep foo→other");
+    }
+
+    #[test]
+    fn test_merge_slices_edge_dedup_different_source() {
+        // Different source → different edge, no dedup
+        let mut merger = GraphMerger::new();
+
+        merger.graph.add_node(Node::new("a.foo", "foo", NodeKind::Function));
+        merger.graph.add_node(Node::new("a.bar", "bar", NodeKind::Function));
+        merger.graph.add_node(Node::new("b.helper", "helper", NodeKind::Function));
+
+        let nodes: Vec<Node> = vec![];
+        let edges: Vec<Edge> = vec![
+            Edge::new("call_1", "a.foo", "b.helper", EdgeKind::Calls),
+            Edge::new("call_2", "a.bar", "b.helper", EdgeKind::Calls),
+        ];
+
+        merger.merge_slices(&nodes, &edges);
+        assert_eq!(merger.graph().edge_count(), 2, "different sources should NOT be deduped");
+    }
+
+    #[test]
+    fn test_merge_slices_edge_dedup_different_kind() {
+        // Same (source, target) but different kind → no dedup
+        let mut merger = GraphMerger::new();
+
+        merger.graph.add_node(Node::new("mod", "mod", NodeKind::File));
+        merger.graph.add_node(Node::new("fn", "fn", NodeKind::Function));
+
+        let nodes: Vec<Node> = vec![];
+        let edges: Vec<Edge> = vec![
+            Edge::new("e1", "mod", "fn", EdgeKind::Defines),
+            Edge::new("e2", "mod", "fn", EdgeKind::Calls),
+        ];
+
+        merger.merge_slices(&nodes, &edges);
+        assert_eq!(merger.graph().edge_count(), 2, "different kinds should NOT be deduped");
+    }
+
+    #[test]
+    fn test_merge_slices_edge_dedup_cross_call() {
+        // Global dedup: same (source, target, kind) across TWO merge_slices calls → 1 edge
+        let mut merger = GraphMerger::new();
+
+        merger.graph.add_node(Node::new("a.foo", "foo", NodeKind::Function));
+        merger.graph.add_node(Node::new("b.helper", "helper", NodeKind::Function));
+
+        let nodes1: Vec<Node> = vec![];
+        let edges1: Vec<Edge> = vec![
+            Edge::new("call_1", "a.foo", "b.helper", EdgeKind::Calls),
+        ];
+        merger.merge_slices(&nodes1, &edges1);
+        assert_eq!(merger.graph().edge_count(), 1);
+
+        // Second file (different edge IDs, same semantic edge)
+        let nodes2: Vec<Node> = vec![];
+        let edges2: Vec<Edge> = vec![
+            Edge::new("call_file2_1", "a.foo", "b.helper", EdgeKind::Calls),
+        ];
+        merger.merge_slices(&nodes2, &edges2);
+        assert_eq!(merger.graph().edge_count(), 1, "cross-call global dedup: same (src,tgt,kind) should be skipped");
+    }
+
+    #[test]
+    fn test_merge_slices_edge_dedup_cross_call_different_scope() {
+        // Different scope (source) → NOT deduped across calls
+        let mut merger = GraphMerger::new();
+
+        merger.graph.add_node(Node::new("a.foo", "foo", NodeKind::Function));
+        merger.graph.add_node(Node::new("a.bar", "bar", NodeKind::Function));
+        merger.graph.add_node(Node::new("b.helper", "helper", NodeKind::Function));
+
+        let nodes1: Vec<Node> = vec![];
+        let edges1: Vec<Edge> = vec![
+            Edge::new("call_1", "a.foo", "b.helper", EdgeKind::Calls),
+        ];
+        merger.merge_slices(&nodes1, &edges1);
+
+        let nodes2: Vec<Node> = vec![];
+        let edges2: Vec<Edge> = vec![
+            Edge::new("call_2", "a.bar", "b.helper", EdgeKind::Calls),
+        ];
+        merger.merge_slices(&nodes2, &edges2);
+        assert_eq!(merger.graph().edge_count(), 2, "different sources across calls should NOT be deduped");
     }
 }

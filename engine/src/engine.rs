@@ -394,18 +394,25 @@ impl Engine {
         set_progress("解析文件", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let mut result = analyze_project(project_root);
-        eprintln!("[engine] stage: core-parse done in {:.1}s ({} nodes, {} edges, {} files)",
-            stage_start.elapsed().as_secs_f64(), result.graph.node_count(), result.graph.edge_count(), result.files_parsed);
+        let failed_note = if result.files_failed > 0 {
+            format!(", {} failed", result.files_failed)
+        } else { String::new() };
+        eprintln!("[engine] stage: core-parse done in {:.1}s ({} nodes, {} edges, {}/{} files{})",
+            stage_start.elapsed().as_secs_f64(), result.graph.node_count(), result.graph.edge_count(),
+            result.files_parsed, result.files_discovered, failed_note);
         stage_timings.push(StageTiming {
             name: "Core Parse".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
-            detail: format!("{} files, {} nodes, {} edges", result.files_parsed, result.graph.node_count(), result.graph.edge_count()),
+            detail: format!("{}/{} files{} → {} nodes, {} edges",
+                result.files_parsed, result.files_discovered, failed_note,
+                result.graph.node_count(), result.graph.edge_count()),
         });
         // Detach parse_cache + discovered_files so they can be moved into the
         // LSP thread (which needs 'static). Re-attached after LSP completes.
         let parse_cache = std::mem::take(&mut result.parse_cache);
         let discovered_files = std::mem::take(&mut result.discovered_files);
-        set_progress("解析完成", result.files_parsed, result.files_parsed, "");
+        set_progress("解析完成", result.files_parsed, result.files_discovered,
+            &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
         // 1.5. Type-aware LSP call resolution (before cross-file resolution)
         // Run on a dedicated thread with a large stack: process_function and
@@ -1156,11 +1163,11 @@ thread_local! {
 
 /// Re-parse source to a tree-sitter Tree. Returns None if language not supported or parse fails.
 fn reparse_for_lsp(source: &str, ext: &str) -> Option<tree_sitter::Tree> {
-    let lang = language_for_lsp(ext)?;
     TL_LSP_PARSER.with(|cell| {
         let mut borrow = cell.borrow_mut();
         let reuse = borrow.as_ref().map_or(false, |(_, cached)| cached == ext);
         if !reuse {
+            let lang = language_for_lsp(ext)?; // ponytail: inside cache check — RwLock once per ext per thread
             let mut parser = tree_sitter::Parser::new();
             parser.set_language(&lang).ok()?;
             *borrow = Some((parser, ext.to_string()));

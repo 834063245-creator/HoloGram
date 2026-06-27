@@ -10,7 +10,9 @@ use tree_sitter::{Language, Parser};
 // Thread-local parser cache — reuses parser across files of the same language.
 // Avoids Parser::new() + set_language() allocation overhead for thousands of files.
 thread_local! {
-    static TL_PARSER: RefCell<Option<(Parser, String)>> = RefCell::new(None);
+    // ponytail: cached (Parser, Language, ext). Language is stored so GRAMMAR_LOADER
+    // RwLock is hit only once per extension per thread, not once per file.
+    static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = RefCell::new(None);
 }
 
 /// Generic tree-sitter adapter covering all languages beyond Python and JS/TS.
@@ -21,34 +23,35 @@ impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
 
     fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
-        match GRAMMAR_LOADER.get(ext) {
-            Some(lang) => parse_with_lang(lang, ext, source, file_id),
-            None => (vec![], vec![], None),
-        }
+        TL_PARSER.with(|cell| {
+            let mut borrow = cell.borrow_mut();
+            // ponytail: resolve Language inside the TL cache check.
+            // GrammarLoader commit (d3d373d) moved per-file Language resolution through
+            // RwLock<HashMap> — 1468 files × 6 threads contending = memory barrier storm.
+            // Cache Language in TL_PARSER so GRAMMAR_LOADER is called once per extension
+            // per thread (~10 calls total instead of 1468×6).
+            let reuse = borrow.as_ref().map_or(false, |(_, _, cached_ext)| cached_ext == ext);
+            if !reuse {
+                let lang = match GRAMMAR_LOADER.get(ext) {
+                    Some(l) => l,
+                    None => return (vec![], vec![], None),
+                };
+                let mut p = Parser::new();
+                if p.set_language(&lang).is_err() {
+                    return (vec![], vec![], None);
+                }
+                *borrow = Some((p, lang, ext.to_string()));
+            }
+            let (ref mut parser, _, _) = borrow.as_mut().unwrap();
+            match parser.parse(source, None) {
+                Some(t) => {
+                    let (nodes, edges) = generic_walk(&t, source, file_id);
+                    (nodes, edges, Some(t))
+                }
+                None => (vec![], vec![], None),
+            }
+        })
     }
-}
-
-/// Shared parse driver — get Language from the global loader, then parse.
-fn parse_with_lang(lang: Language, lang_key: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
-    TL_PARSER.with(|cell| {
-        let mut borrow = cell.borrow_mut();
-        let reuse = borrow.as_ref().map_or(false, |(_, cached)| cached == lang_key);
-        if !reuse {
-            let mut p = Parser::new();
-            if p.set_language(&lang).is_err() {
-                return (vec![], vec![], None);
-            }
-            *borrow = Some((p, lang_key.to_string()));
-        }
-        let (ref mut parser, _) = borrow.as_mut().unwrap();
-        match parser.parse(source, None) {
-            Some(t) => {
-                let (nodes, edges) = generic_walk(&t, source, file_id);
-                (nodes, edges, Some(t))
-            }
-            None => (vec![], vec![], None),
-        }
-    })
 }
 
 impl LanguageAdapter for TreeSitterAdapter {
