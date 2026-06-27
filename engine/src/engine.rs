@@ -1644,4 +1644,62 @@ def order_view():
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    /// ponytail: graph_from_index lost edge metadata (cross_file in particular)
+    /// because MemoryIndex CSR doesn't store those fields. The fix re-derives
+    /// cross_file from node locations.
+    #[test]
+    fn test_graph_from_index_cross_file() {
+        use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
+        use crate::storage::memory::MemoryIndex;
+
+        let mut idx = MemoryIndex::new();
+
+        // Same file
+        let mut n1 = Node::new("n1", "fn_a", NodeKind::Function);
+        n1.location = Some("src/lib.rs:10".into());
+        idx.insert_node(n1);
+
+        let mut n2 = Node::new("n2", "fn_b", NodeKind::Function);
+        n2.location = Some("src/lib.rs:50".into());
+        idx.insert_node(n2);
+
+        // Different file
+        let mut n3 = Node::new("n3", "fn_c", NodeKind::Function);
+        n3.location = Some("src/main.rs:5".into());
+        idx.insert_node(n3);
+
+        idx.upsert_edge("n1", "n2", EdgeKind::Calls, 0, None); // same file
+        idx.upsert_edge("n1", "n3", EdgeKind::Calls, 0, None); // cross-file
+        idx.flush_pending(); // upsert_edge → pending_adds, flush → CSR so graph_from_index sees them
+
+        let g = graph_from_index(&idx);
+        assert_eq!(g.node_count(), 3);
+        assert_eq!(g.edge_count(), 2);
+
+        // Edge n1→n2: same file → cross_file=false
+        let e1 = g.edges.values().find(|e| e.source == "n1" && e.target == "n2").unwrap();
+        assert!(!e1.cross_file, "n1→n2 should be same-file (both in src/lib.rs), got cross_file={}", e1.cross_file);
+
+        // Edge n1→n3: different files → cross_file=true
+        let e2 = g.edges.values().find(|e| e.source == "n1" && e.target == "n3").unwrap();
+        assert!(e2.cross_file, "n1→n3 should be cross-file (lib.rs vs main.rs), got cross_file={}", e2.cross_file);
+    }
+
+    /// Edge without location info should default to cross_file=false.
+    #[test]
+    fn test_graph_from_index_no_location() {
+        use crate::graph::{EdgeKind, Node, NodeKind};
+        use crate::storage::memory::MemoryIndex;
+
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(Node::new("a", "A", NodeKind::Symbol));
+        idx.insert_node(Node::new("b", "B", NodeKind::Symbol));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
+        idx.flush_pending();
+
+        let g = graph_from_index(&idx);
+        let e = g.edges.values().next().unwrap();
+        assert!(!e.cross_file, "edges without locations should default cross_file=false");
+    }
 }
