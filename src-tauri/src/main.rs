@@ -596,7 +596,7 @@ async fn get_full_graph(
 #[tauri::command]
 async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    run_analyze_with_progress(target, app).await
+    run_analyze_with_progress(target, app, true).await
 }
 
 /// Run engine analysis while polling progress and emitting frontend events.
