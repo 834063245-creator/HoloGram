@@ -20,6 +20,7 @@ use parking_lot::RwLock;
 use rusqlite::Connection;
 use tracing::{info, warn};
 
+use crate::adapter::grammar_loader::{find_grammar_dir, GrammarLoader};
 use crate::adapter::c_lsp::run_c_lsp;
 use crate::adapter::cs_lsp::run_cs_lsp;
 use crate::adapter::go_lsp::run_go_lsp;
@@ -956,6 +957,41 @@ impl Engine {
 // Process-wide ENGINE global
 // ═══════════════════════════════════════════════════════════════
 
+/// Global grammar loader — static + dynamic grammars, lazy-initialized on first access.
+pub static GRAMMAR_LOADER: std::sync::LazyLock<GrammarLoader> =
+    std::sync::LazyLock::new(|| {
+        let loader = GrammarLoader::new(&find_grammar_dir());
+        // Core languages — statically linked via Cargo deps
+        loader.register_static(tree_sitter_python::LANGUAGE.into(), "python", &["py","pyi","pyx"]);
+        loader.register_static(tree_sitter_javascript::LANGUAGE.into(), "javascript", &["js","jsx","mjs","cjs"]);
+        loader.register_static(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), "typescript", &["ts","tsx","mts","cts"]);
+        loader.register_static(tree_sitter_go::LANGUAGE.into(), "go", &["go"]);
+        loader.register_static(tree_sitter_rust::LANGUAGE.into(), "rust", &["rs"]);
+        loader.register_static(tree_sitter_java::LANGUAGE.into(), "java", &["java"]);
+        loader.register_static(tree_sitter_c::LANGUAGE.into(), "c", &["c","h"]);
+        loader.register_static(tree_sitter_cpp::LANGUAGE.into(), "cpp", &["cpp","hpp","cc","hh","cxx","hxx"]);
+        loader.register_static(tree_sitter_ruby::LANGUAGE.into(), "ruby", &["rb"]);
+        loader.register_static(tree_sitter_lua::LANGUAGE.into(), "lua", &["lua"]);
+        loader.register_static(tree_sitter_c_sharp::LANGUAGE.into(), "c_sharp", &["cs"]);
+        loader.register_static(tree_sitter_php::LANGUAGE_PHP.into(), "php", &["php"]);
+        loader.register_static(tree_sitter_swift::LANGUAGE.into(), "swift", &["swift"]);
+        loader.register_static(tree_sitter_dart::LANGUAGE.into(), "dart", &["dart"]);
+        loader.register_static(tree_sitter_scala::LANGUAGE.into(), "scala", &["scala","sc"]);
+        loader.register_static(tree_sitter_ocaml::LANGUAGE_OCAML.into(), "ocaml", &["ml"]);
+        loader.register_static(tree_sitter_haskell::LANGUAGE.into(), "haskell", &["hs"]);
+        loader.register_static(tree_sitter_r::LANGUAGE.into(), "r", &["r","R"]);
+        loader.register_static(tree_sitter_nix::LANGUAGE.into(), "nix", &["nix"]);
+        loader.register_static(tree_sitter_bash::LANGUAGE.into(), "bash", &["sh","bash"]);
+        loader.register_static(tree_sitter_json::LANGUAGE.into(), "json", &["json"]);
+        loader.register_static(tree_sitter_html::LANGUAGE.into(), "html", &["html","htm"]);
+        loader.register_static(tree_sitter_css::LANGUAGE.into(), "css", &["css"]);
+        loader.register_static(tree_sitter_yaml::LANGUAGE.into(), "yaml", &["yaml","yml"]);
+        loader.register_static(tree_sitter_zig::LANGUAGE.into(), "zig", &["zig"]);
+        loader.register_static(tree_sitter_elixir::LANGUAGE.into(), "elixir", &["ex","exs"]);
+        loader.register_static(tree_sitter_erlang::LANGUAGE.into(), "erlang", &["erl","hrl"]);
+        loader
+    });
+
 /// Global engine instance.
 ///
 /// Outer RwLock allows replacing the entire Engine on workspace switch.
@@ -1108,22 +1144,7 @@ use std::collections::HashMap as StHashMap;
 /// Map file extension to tree-sitter Language for LSP re-parsing.
 /// ponytail: re-parse from source instead of caching CSTs — saves 3+ GB on large projects.
 fn language_for_lsp(ext: &str) -> Option<tree_sitter::Language> {
-    match ext {
-        "py" | "pyi" => Some(tree_sitter_python::LANGUAGE.into()),
-        "js" | "jsx" | "mjs" | "cjs" => Some(tree_sitter_javascript::LANGUAGE.into()),
-        "ts" | "tsx" | "mts" | "cts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
-        "go" => Some(tree_sitter_go::LANGUAGE.into()),
-        "java" => Some(tree_sitter_java::LANGUAGE.into()),
-        "c" | "h" => Some(tree_sitter_c::LANGUAGE.into()),
-        "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => Some(tree_sitter_cpp::LANGUAGE.into()),
-        "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
-        "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
-        // ponytail: kotlin tree-sitter 0.3 depends on tree-sitter 0.20 (not 0.24),
-        // Language types are incompatible. Kotlin files aren't parsed by any adapter
-        // anyway — LSP has always been a no-op for them.
-        // "kt" | "kts" => None,
-        _ => None,
-    }
+    GRAMMAR_LOADER.get(ext)
 }
 
 // Thread-local LSP parser cache — reuses parser across files of the same language.

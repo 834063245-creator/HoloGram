@@ -10,6 +10,7 @@ pub struct ResolvedCall {
     pub confidence: f32,
 }
 
+pub mod grammar_loader;
 pub mod traits;
 pub mod python;
 pub mod typescript;

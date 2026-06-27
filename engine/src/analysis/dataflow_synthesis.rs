@@ -4,6 +4,7 @@
 //! Dataflow synthesis — produces Reads/Writes/Shares/Triggers/Awaits/Sequences edges
 //! from tree-sitter AST data.
 
+use crate::engine::GRAMMAR_LOADER;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -168,7 +169,7 @@ fn synthesize_sequences(
 
 fn synthesize_py_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut p = tree_sitter::Parser::new();
-    if p.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() { return 0; }
+    if p.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() { return 0; }
     let tree = match p.parse(source, None) { Some(t) => t, None => return 0 };
     walk_py_dataflow_tree(graph, file, &tree, source)
 }
@@ -392,8 +393,8 @@ fn py_await_target_expr(node: &tree_sitter::Node, source: &str) -> Option<String
 
 fn synthesize_js_ts_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
-    let lang: tree_sitter::Language = if is_ts { tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into() }
-        else { tree_sitter_javascript::LANGUAGE.into() };
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
     let mut p = tree_sitter::Parser::new();
     if p.set_language(&lang).is_err() { return 0; }
     let tree = match p.parse(source, None) { Some(t) => t, None => return 0 };

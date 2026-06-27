@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::engine::GRAMMAR_LOADER;
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
 /// Parsed source held in the pipeline parse cache.
@@ -86,11 +87,8 @@ fn synthesize_js_from_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tr
 /// Fallback: parse from source for files not in parse cache.
 fn synthesize_js_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
-    let lang: tree_sitter::Language = if is_ts {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-    } else {
-        tree_sitter_javascript::LANGUAGE.into()
-    };
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
         return 0;
@@ -259,7 +257,7 @@ fn synthesize_py_from_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tr
 /// Fallback: parse from source for files not in parse cache.
 fn synthesize_py_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {
