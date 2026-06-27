@@ -338,15 +338,62 @@ use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 
 /// Run analysis via Engine and cache result. Returns JSON summary.
-pub(crate) fn direct_analyze(path: &str) -> Result<String, String> {
+pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> {
     let root = std::path::PathBuf::from(path);
     if !root.exists() {
         return Err(format!("路径不存在: {path}"));
     }
 
-    // Initialize engine (idempotent) and run analysis
+    // Initialize engine (idempotent — loads SQLite cache into memory)
     engine_api::engine_init(&root)
         .map_err(|e| format!("Engine init failed: {e}"))?;
+
+    // ponytail: if SQLite cache already has graph data AND reanalysis not
+    // forced, skip the full pipeline. Cold-start wins ~420s; warm reload <1s.
+    if !force {
+        let cached_node_count = engine_api::engine_read(|idx| idx.node_count())
+            .unwrap_or(0);
+        if cached_node_count > 0 {
+            eprintln!("[direct_analyze] Using cached graph ({cached_node_count} nodes), skipping full analysis");
+        // Serialize from cache inside callback — avoids cloning the entire Graph
+        return engine_api::engine_read_graph(|graph| {
+            let nc = graph.node_count();
+            let ec = graph.edge_count();
+            let nodes: Vec<serde_json::Value> = graph.nodes.values().map(|n| serde_json::json!({
+                "id": n.id, "name": n.name, "type": n.kind.as_str(),
+                "location": n.location, "in_degree": n.in_degree,
+                "out_degree": n.out_degree, "properties": n.properties,
+                "position": n.position, "community_id": n.community_id,
+            })).collect();
+            let edges: Vec<serde_json::Value> = graph.edges.values().map(|e| serde_json::json!({
+                "id": e.id, "source": e.source, "target": e.target,
+                "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+                "cross_file": e.cross_file, "direction": e.direction,
+                "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id,
+            })).collect();
+            let mut comm_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
+            for n in graph.nodes.values() {
+                if let Some(cid) = n.community_id {
+                    comm_map.entry(cid).or_default().push(&n.id);
+                }
+            }
+            let comms: Vec<serde_json::Value> = comm_map.iter()
+                .map(|(cid, node_ids)| {
+                    let nids: Vec<String> = node_ids.iter().map(|s| s.to_string()).collect();
+                    let label = derive_community_label(&nids);
+                    serde_json::json!({"id": format!("comm_{}", cid), "size": nids.len(), "node_ids": nids, "label": label})
+                })
+                .collect();
+            serde_json::json!({
+                "ok": true, "node_count": nc, "edge_count": ec,
+                "nodes": nodes, "edges": edges, "communities": comms,
+                "hierarchical_communities": [],
+                "cached": true,
+            }).to_string()
+        }).map_err(|e| format!("Read cached graph failed: {e}"));
+    }
+    } // if !force
+
     let result = engine_api::engine_analyze(&root)
         .map_err(|e| format!("Analyze failed: {e}"))?;
 
@@ -553,14 +600,14 @@ async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle) -> Result
 }
 
 /// Run engine analysis while polling progress and emitting frontend events.
-async fn run_analyze_with_progress(target: String, app: tauri::AppHandle) -> Result<String, String> {
+async fn run_analyze_with_progress(target: String, app: tauri::AppHandle, force: bool) -> Result<String, String> {
     let target_clone = target.clone();
     let app_clone = app.clone();
     let scheduled = std::time::Instant::now();
 
     // Spawn analysis in a blocking thread
     let mut analyze_handle = tokio::task::spawn_blocking(move || {
-        direct_analyze(&target_clone)
+        direct_analyze(&target_clone, force)
     });
 
     // Poll progress until the blocking task finishes (don't exit early on Ready —
@@ -840,12 +887,12 @@ async fn hologram_run_check(
                     if g.node_count() > 0 || g.edge_count() > 0 {
                         g
                     } else {
-                        direct_analyze(&target)?;
+                        direct_analyze(&target, true)?;
                         engine_api::engine_read_graph(|g| g.clone())
                             .map_err(|e| format!("分析后无图谱: {}", e))?
                     }
                 } else {
-                    direct_analyze(&target)?;
+                    direct_analyze(&target, true)?;
                     engine_api::engine_read_graph(|g| g.clone())
                         .map_err(|e| format!("分析后无图谱: {}", e))?
                 }
@@ -2101,7 +2148,7 @@ fn find_node_file(g: &serde_json::Value, node_id: &str) -> String {
 /// 唯一入口 —— 前端拿图数据的唯一途径（冷启动引导除外）。
 #[tauri::command]
 async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHandle) -> Result<String, String> {
-    let _ = force;
+    let force = force.unwrap_or(false);
     // Persist .last_project for cold-start recovery (workspace_activate has already set the handle)
     let _ = std::fs::write(project_root().join(".last_project"), &path);
 
@@ -2110,7 +2157,7 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
     }
 
     // Run analysis with progress (reuses the polling helper)
-    let analyze_future = run_analyze_with_progress(path.clone(), app.clone());
+    let analyze_future = run_analyze_with_progress(path.clone(), app.clone(), force);
     analyze_future.await.map_err(|e| format!("Rust 引擎分析失败: {e}"))?;
 
     if let Some(window) = app.get_webview_window("main") {
@@ -2142,7 +2189,7 @@ async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<St
     let app2 = app.clone();
     let path2 = path.clone();
     std::thread::spawn(move || {
-        match direct_analyze(&path2) {
+        match direct_analyze(&path2, true) {
             Ok(_) => {
                 let _ = std::fs::write(project_root().join(".last_project"), &path2);
                 let _ = app2.emit("analysis-complete", serde_json::json!({"path": path2}));

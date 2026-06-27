@@ -870,7 +870,12 @@ export class StarGraph {
   private _coreScales: Float32Array = new Float32Array(0);
   private _glowRgba: Float32Array = new Float32Array(0);
   private _glow2Rgba: Float32Array = new Float32Array(0);
+  private _glowSizes: Float32Array = new Float32Array(0);   // per-point size (twinkle variation)
+  private _glow2Sizes: Float32Array = new Float32Array(0);  // outer glow size
+  private _nodeMagCache: Float32Array = new Float32Array(0); // pre-computed log1p ratio
   private _nodeCount = 0;
+  // Reusable Color for animate loop hue shift (ponytail: avoid per-frame allocation)
+  private _animColor = new THREE.Color();
   // Reference colors (unchanged API)
   private nodeGlowColors: number[] = [];
   private nodeCoreColors: number[] = [];
@@ -1005,6 +1010,9 @@ export class StarGraph {
   private tmpVec3 = new THREE.Vector3();
   // Idle detection — throttle expensive per-frame work when nothing changes
   private _idleCounter = 0;
+  // ponytail: throttle GPU buffer upload to every 3rd frame — twinkle at 20fps
+  // is imperceptible vs 60fps, but cuts PCIe bus pressure by 2/3 and avoids pipeline stalls
+  private _glowUploadTick = 0;
   private _lastCamPos = new THREE.Vector3();
   private _lastCamTarget = new THREE.Vector3();
 
@@ -1550,7 +1558,7 @@ export class StarGraph {
 
     // Intersect ALL node cores (ignore .visible — hover/click should always work)
     const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
-    const idx = hits.length > 0 ? hits.length > 0 ? (hits[0].instanceId ?? -1) : -1 : -1;
+    const idx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
 
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
     else if (idx < 0) this.hideDetail();
@@ -2021,10 +2029,11 @@ export class StarGraph {
   /** Raycast against node cores; returns index or -1. Uses ALL cores regardless of .visible. */
   private _raycastNode(): number {
     if (this._nodeCount === 0) return -1;
+    if (!this.nodeCoresInstanced) return -1;
     this.raycaster.setFromCamera(this.mouse, this.camera);
     const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
     if (hits.length === 0) return -1;
-    return hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
+    return hits[0].instanceId ?? -1;
   }
 
   private updateHover(): void {
@@ -2032,8 +2041,7 @@ export class StarGraph {
     if (!isFinite(this.mouse.x) || !isFinite(this.mouse.y)) return;
 
     // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
-    const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0
-      && false /* batched */;
+    const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0;
     if (cloudViewActive) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
       this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -2093,11 +2101,20 @@ export class StarGraph {
         const edges = this.edgeIndexOf[nodeIdx];
         if (edges.length > 0) {
           const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
+          const degNorm = 1 / Math.pow(edges.length, 0.25);
           for (const ei of edges) {
             const d = this.edgeDataList[ei];
             verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-            const c = edgeColorByType(d.edgeType, d.direction, d.crossFile), bright = 2.5;
-            colors.push(Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright), Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright));
+            const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
+            const nearB = 2.5 * degNorm * 0.3;
+            const farB  = 2.5 * degNorm;
+            if (d.s === nodeIdx) {
+              colors.push(Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB),
+                          Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB));
+            } else {
+              colors.push(Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB),
+                          Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB));
+            }
           }
           const geo = new THREE.BufferGeometry();
           geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
@@ -2112,11 +2129,23 @@ export class StarGraph {
     const edges = this.edgeIndexOf[nodeIdx];
     if (edges.length === 0) return;
     const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
+    // ponytail: degree-normalized brightness + per-vertex gradient.
+    // Dim at hovered node (30%), bright at far end (100%). Prevents hub
+    // over-exposure while keeping low-degree nodes clearly visible.
+    const degNorm = 1 / Math.pow(edges.length, 0.25);
     for (const ei of edges) {
       const d = this.edgeDataList[ei];
       verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile), bright = 2.5;
-      colors.push(Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright), Math.min(1, c.r * bright), Math.min(1, c.g * bright), Math.min(1, c.b * bright));
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
+      const nearB = 2.5 * degNorm * 0.3;
+      const farB  = 2.5 * degNorm;
+      if (d.s === nodeIdx) {
+        colors.push(Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB),
+                    Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB));
+      } else {
+        colors.push(Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB),
+                    Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB));
+      }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
@@ -2516,6 +2545,7 @@ export class StarGraph {
     const p = new THREE.Vector3(); m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
     m.compose(p, new THREE.Quaternion(), new THREE.Vector3(s, s, s));
     this.nodeCoresInstanced.setMatrixAt(i, m);
+    this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
   }
 
   private _setCoreVisible(i: number, v: boolean): void {
@@ -2557,14 +2587,20 @@ export class StarGraph {
     if (this.nodeGlowsPoints?.geometry.attributes['color']) {
       this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
     }
+    if (this.nodeGlowsPoints?.geometry.attributes['size']) {
+      this.nodeGlowsPoints.geometry.attributes['size'].needsUpdate = true;
+    }
     if (this.nodeGlows2Points?.geometry.attributes['color']) {
       this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
     }
+    if (this.nodeGlows2Points?.geometry.attributes['size']) {
+      this.nodeGlows2Points.geometry.attributes['size'].needsUpdate = true;
+    }
   }
 
-  /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. */
+  /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. Pre-computed cache. */
   private _nodeMag(i: number): number {
-    return 0.15 + 0.85 * (Math.log1p(this.deg[i]) / Math.log1p(this.maxDeg));
+    return this._nodeMagCache[i] ?? 0.15;
   }
 
   /** Toggle node size between degree-based and coupling-risk-based. Returns display label. */
@@ -4143,11 +4179,15 @@ export class StarGraph {
 
     this.nodeCoresInstanced = new THREE.InstancedMesh(
       this.sphereGeo,
-      new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.NormalBlending }),
+      this._makeCoreFresnelMaterial(),
       nodes.length,
     );
     this.nodeCoresInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.nodeCoresInstanced.count = 0;
+    // ponytail: 10K+ instances spread across large volume → bounding sphere covers
+    // the entire graph; frustum culling at the object level is harmful (entire mesh
+    // disappears when camera zooms into a region far from the bounding sphere center).
+    this.nodeCoresInstanced.frustumCulled = false;
     this.nodeGroup.add(this.nodeCoresInstanced);
 
     // ── Build scene geometry ──
@@ -4263,6 +4303,10 @@ export class StarGraph {
 
       if (revealedNodes >= totalNodes && revealedEdges >= totalEdgeGroups) {
         this._revealRevealed = true;
+        // ponytail: force bounding-sphere recompute now that count==totalNodes.
+        // First raycaster call happens during reveal (count=0→partial), caches an
+        // empty/partial sphere; without this, all subsequent raycasts return 0 hits.
+        this.nodeCoresInstanced.boundingSphere = null;
         this.labelsContainer.style.transition = 'opacity 0.4s ease-in';
         this.labelsContainer.style.opacity = '1';
         setTimeout(() => { this.labelsContainer.style.transition = ''; }, 500);
@@ -4374,9 +4418,11 @@ export class StarGraph {
     const N = nodes.length;
     const isFull = true;
 
-    // Glow Points geometry buffers (RGBA color per point)
+    // Glow Points geometry buffers (RGBA color + per-point size)
     const glowPosArr = new Float32Array(N * 3);
     const glow2PosArr = isFull ? new Float32Array(N * 3) : new Float32Array(0);
+    this._glowSizes = new Float32Array(N);
+    this._glow2Sizes = isFull ? new Float32Array(N) : new Float32Array(0);
 
     const _m = new THREE.Matrix4();
     const _v = new THREE.Vector3();
@@ -4410,15 +4456,22 @@ export class StarGraph {
       this._nodeBaseHSL[i] = { h: 0, s: 0, l: 0 };
       gc.getHSL(this._nodeBaseHSL[i]);
 
-      // Outer glow RGBA
+      // Outer glow RGBA + size
       if (isFull) {
         glow2PosArr[i * 3] = px; glow2PosArr[i * 3 + 1] = py; glow2PosArr[i * 3 + 2] = pz;
         this._glow2Rgba[i * 4] = gc.r;
         this._glow2Rgba[i * 4 + 1] = gc.g;
         this._glow2Rgba[i * 4 + 2] = gc.b;
         this._glow2Rgba[i * 4 + 3] = 0.48;
+        this._glow2Sizes[i] = 0.8; // base outer glow size, twinkle modulates
       }
+      this._glowSizes[i] = 1.0; // base inner glow size, twinkle modulates
     }
+
+    // Pre-compute _nodeMag cache (ponytail: log1p ratio is static, avoid per-frame recalc)
+    this._nodeMagCache = new Float32Array(N);
+    const logMax = Math.log1p(this.maxDeg);
+    for (let i = 0; i < N; i++) this._nodeMagCache[i] = 0.15 + 0.85 * (Math.log1p(this.deg[i]) / logMax);
 
     // Upload + create Points objects
     this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
@@ -4427,15 +4480,20 @@ export class StarGraph {
     const glowGeo = new THREE.BufferGeometry();
     glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPosArr, 3));
     glowGeo.setAttribute('color', new THREE.BufferAttribute(this._glowRgba, 4));
+    glowGeo.setAttribute('size', new THREE.BufferAttribute(this._glowSizes, 1));
     this.nodeGlowsPoints = new THREE.Points(glowGeo, this._makeGlowPointMaterial());
+    this.nodeGlowsPoints.frustumCulled = false;
+    this.nodeGlowsPoints.renderOrder = 1;
     this.nodeGroup.add(this.nodeGlowsPoints);
 
     if (isFull) {
       const g2Geo = new THREE.BufferGeometry();
       g2Geo.setAttribute('position', new THREE.BufferAttribute(glow2PosArr, 3));
       g2Geo.setAttribute('color', new THREE.BufferAttribute(this._glow2Rgba, 4));
+      g2Geo.setAttribute('size', new THREE.BufferAttribute(this._glow2Sizes, 1));
       this.nodeGlows2Points = new THREE.Points(g2Geo, this._makeGlowPointMaterial());
-      this.nodeGlows2Points.renderOrder = -1;
+      this.nodeGlows2Points.frustumCulled = false;
+      this.nodeGlows2Points.renderOrder = 1;
       this.nodeGroup.add(this.nodeGlows2Points);
     }
   }
@@ -4443,13 +4501,62 @@ export class StarGraph {
   private _makeGlowPointMaterial(): THREE.ShaderMaterial {
     return new THREE.ShaderMaterial({
       uniforms: { uTex: { value: this.glowTex } },
-      vertexShader: `attribute vec4 color; varying vec4 vColor;
+      vertexShader: `attribute vec4 color; attribute float size; varying vec4 vColor;
         void main() { vec4 mv = modelViewMatrix * vec4(position,1.0);
-          gl_PointSize = 18.0 * (300.0 / -mv.z); gl_Position = projectionMatrix * mv; vColor = color; }`,
+          gl_PointSize = size * 22.0 * (300.0 / -mv.z); gl_Position = projectionMatrix * mv; vColor = color; }`,
       fragmentShader: `uniform sampler2D uTex; varying vec4 vColor;
         void main() { gl_FragColor = vColor * texture2D(uTex, gl_PointCoord); }`,
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
     });
+  }
+
+  /** ponytail: restores Fresnel rim on InstancedMesh via onBeforeCompile injection.
+   *  Uses sphere pos→normal trick (unit sphere: localNormal = normalize(position)),
+   *  so we don't depend on a 'normal' attribute that MeshBasicMaterial may omit. */
+  private _makeCoreFresnelMaterial(): THREE.MeshBasicMaterial {
+    const mat = new THREE.MeshBasicMaterial({
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+    });
+    mat.onBeforeCompile = (shader) => {
+      // ── Vertex: add varyings + world-normal computation ──
+      shader.vertexShader = shader.vertexShader.replace(
+        'void main()',
+        `varying vec3 vFresnelWorldNormal;
+         varying vec3 vFresnelWorldPos;
+         void main()`,
+      );
+      // Insert after project_vertex: compute world normal from sphere position
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <project_vertex>',
+        `// Fresnel: sphere pos IS the local normal (unit sphere geometry)
+         vec3 _fLocalN = normalize(position);
+         vFresnelWorldNormal = normalize(mat3(instanceMatrix) * _fLocalN);
+         vFresnelWorldPos = (instanceMatrix * vec4(position, 1.0)).xyz;
+         #include <project_vertex>`,
+      );
+
+      // ── Fragment: add varyings + rim blend before final output ──
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'void main()',
+        `varying vec3 vFresnelWorldNormal;
+         varying vec3 vFresnelWorldPos;
+         void main()`,
+      );
+      // Inject Fresnel rim before opaque_fragment (which outputs gl_FragColor).
+      // ponytail: target the #include, not the expanded gl_FragColor line — the
+      // literal text is inside opaque_fragment which is expanded at compile time.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        `// Fresnel rim: center=node color, edge=slightly brighter (ponytail: white-center
+         // approach washes out color on small spheres; rim preserves hue at all sizes)
+         vec3 _fViewDir = normalize(cameraPosition - vFresnelWorldPos);
+         float _fNdotV = abs(dot(normalize(vFresnelWorldNormal), _fViewDir));
+         float _fRim = pow(1.0 - _fNdotV, 4.0);
+         outgoingLight = outgoingLight * (1.0 + _fRim * 0.4);
+         #include <opaque_fragment>`,
+      );
+    };
+    return mat;
   }
 
   // ── Legend (color key) ────────────────────────────────────
@@ -4613,12 +4720,22 @@ export class StarGraph {
     const colors: number[] = [];
     const pos = this.nodePositions;
 
+    // ponytail: count edges first for degree-normalization — prevents
+    // hub over-exposure when focus node has hundreds of neighbors.
+    let edgeCount = 0;
+    for (const d of this.edgeDataList) {
+      if (visible.has(d.s) && visible.has(d.t)) edgeCount++;
+    }
+    if (edgeCount === 0) return;
+    const degNorm = 1 / Math.pow(edgeCount, 0.2);
+
     for (const d of this.edgeDataList) {
       if (visible.has(d.s) && visible.has(d.t)) {
         verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2],
                     pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
         const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-        colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+        colors.push(c.r * degNorm, c.g * degNorm, c.b * degNorm,
+                    c.r * degNorm, c.g * degNorm, c.b * degNorm);
       }
     }
     if (verts.length === 0) return;
@@ -5076,6 +5193,23 @@ export class StarGraph {
     for (let i = 0; i < this._nodeCount; i++) {
       if (this.focusSubgraphActive && !this.focusSubgraphVisibleIndices.has(i)) continue;
       if (i === this.focusSubgraphIdx || i === this.hoveredIdx || neighborSet.has(i) || i === this.focusNodeIdx) continue;
+      // ponytail: node kind filter gate — keep filtered-out nodes invisible,
+      // overriding per-frame twinkle/glow to prevent filter from leaking through.
+      if (this._nodeKindFilter !== null) {
+        const fk = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
+        let fmatch: boolean;
+        const f = this._nodeKindFilter;
+        if (f === 'function' || f === 'method') fmatch = fk === 'function' || fk === 'method';
+        else if (f === 'medium') fmatch = ['file', 'database', 'cache', 'queue', 'medium'].includes(fk);
+        else if (f === 'temporal') fmatch = ['thread', 'timer', 'trigger', 'temporal'].includes(fk);
+        else fmatch = fk === f;
+        if (!fmatch) {
+          this._setGlowAlpha(i, 0);
+          this._setCoreVisible(i, false);
+          if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0);
+          continue;
+        }
+      }
       // Path mode: keep path nodes highlighted, non-path nodes dimmed
       if (inPathMode) {
         if (this._pathNodes.has(i) || i === this._pathSource) continue; // path node — keep highlight
@@ -5107,27 +5241,38 @@ export class StarGraph {
           const combined = twinkle * wave;
           const mag = this._nodeMag(i);
           this._setGlowAlpha(i, Math.min(1, 1.5 * combined * mag));
-          // Animate outer glow layer too
+          // Animate outer glow layer too; per-point sizes follow twinkle
+          this._glowSizes[i] = combined;
           if (this._glow2Rgba.length > 0) {
             this._setGlow2Alpha(i, 0.48 * combined * mag);
-            const base = this.getNodeBaseScale(i);
+            this._glow2Sizes[i] = 0.85 * combined;
           }
-          // Hue shift — uses pre-computed HSL to avoid per-frame allocations
+          // ponytail: hue shift reuses pre-allocated _animColor to avoid per-frame GC
           const hueShift = (Math.sin(galTime * 0.3 + this.twinklePhases[i]) * 0.05);
           const bh = this._nodeBaseHSL[i];
-// batched: glow HSL via _setGlowColor
-          const _hc = new THREE.Color(); _hc.setHSL((bh.h + hueShift + 1) % 1, Math.min(1, bh.s * 1.2), Math.min(1, bh.l * 1.3)); this._setGlowColor(i, _hc);
-          const base = this.getNodeBaseScale(i);
+          this._animColor.setHSL((bh.h + hueShift + 1) % 1, Math.min(1, bh.s * 1.2), Math.min(1, bh.l * 1.3)); this._setGlowColor(i, this._animColor);
         } else {
           const freq = 1 + risk * 0.7;
           const amp = risk > 0 ? Math.min(0.18, risk * 0.06) : 0.03;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
           this._setGlowAlpha(i, Math.min(1, 0.9 * wave * this._nodeMag(i)));
-          const base = this.getNodeBaseScale(i);
         }
       }
     }
     } // end IDLE-guarded per-node glow loop
+    // Flush glow buffers to GPU every 3rd frame (ponytail: 20fps upload is
+    // imperceptible for ambient twinkle, but avoids PCIe pipeline stalls at 60fps)
+    this._glowUploadTick++;
+    if (this._glowUploadTick % 3 === 0) {
+      if (this.nodeGlowsPoints) {
+        this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+        this.nodeGlowsPoints.geometry.attributes['size'].needsUpdate = true;
+      }
+      if (this.nodeGlows2Points) {
+        this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+        this.nodeGlows2Points.geometry.attributes['size'].needsUpdate = true;
+      }
+    }
 
     if (!IDLE || this._idleCounter % 3 === 0) {
       this.updateTooltip(); this.updateLabels(); this._updateCommunityRingHover();

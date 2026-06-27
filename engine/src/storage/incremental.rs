@@ -155,6 +155,12 @@ impl IncrementalUpdater {
             ));
         }
 
+        // ── Flush pending mutations → rebuild dense index + CSR → THEN persist ──
+        // ponytail: clone_index_for_update() never calls rebuild_dense_index(),
+        // so node_by_idx is empty. to_sqlite() iterates node_by_idx to collect
+        // edges → would write 0 edges to SQLite (all old edges lost on restart).
+        new_index.flush_pending();
+
         // ── Write-back to SQLite ──
         if let Err(e) = new_index.to_sqlite(db) {
             warn!("[incr] SQLite write-back failed: {}", e);
