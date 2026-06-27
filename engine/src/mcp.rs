@@ -169,6 +169,7 @@ impl McpServer {
     }
 
     /// Update the project root (called by tool_analyze when switching projects).
+    #[allow(dead_code)] // ponytail: called when project switches, not yet wired from serve entry
     fn set_project_root(&self, path: &Path) {
         if let Ok(mut root) = self.project_root.lock() {
             *root = path.to_path_buf();
