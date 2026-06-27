@@ -1,101 +1,99 @@
-# Handoff — HoloGram（2026-06-27）
+# Handoff — HoloGram（2026-06-27 session 3）
 
 ## 当前状态
 
-- **引擎**：全量分析首次 ~420s，后续 <1s（SQLite 缓存命中）；增量更新边完整性已修复
-- **前端**：InstancedMesh + Points 渲染，draw call 210K→3；交互全恢复（hover/click/filter/fold）
-- **构建**：引擎 `cargo build --release` 通过，前端 `npm run build` 通过，测试 14/14 相关新增+修改全绿
+- **引擎**：27 门静态语言 + GrammarLoader 动态加载架构；338 测试 passed
+- **前端**：无变更
+- **构建**：`cargo tauri build` 通过，MSI + NSIS 产物正常
+- **源码**：已恢复公开推送，移除 v4.1 隐藏规则
 
 ---
 
-## 本次变更（2026-06-27 session 2）
+## 本次变更（2026-06-27 session 3）
 
-### 前端：交互修复 + 视觉调优
+### 核心：GrammarLoader 动态语法加载
 
-**文件：`src-ui/src/ui/graph.ts`**
+**问题**：27 门语言静态链接进 exe，每加一门要改代码+Cargo.toml+重编译。kotlin/toml/markdown 因 tree-sitter 版本冲突无法静态链接。
 
-1. **Fresnel 效果**：白中心在小球体上不可行（可见像素全在 NdotV≈1，全白）。改为 rim lighting：
-   - `outgoingLight * (1.0 + pow(1.0 - NdotV, 4.0) * 0.4)` — 中心本色，边缘微亮
+**方案**：核心语言保持 Cargo 静态链接（零回归），其余从 `.dll` 运行时加载。
 
-2. **辉光被核心球盖死**：renderOrder 修正
-   - `nodeGlowsPoints.renderOrder = 1`、`nodeGlows2Points.renderOrder = 1`（核心球默认 0，辉光在核心之后叠加）
+**API 链**：
+```
+libloading::Library::new("tree-sitter-php.dll")
+  → lib.get(b"tree_sitter_php") → Symbol<fn() -> *const ()>
+  → LanguageFn::from_raw(ptr) → Language::new(fn) → parser.set_language()
+```
 
-3. **hover/click 全部不响应**：`InstancedMesh.boundingSphere` 在 count=0 时首次计算并永久缓存（空球）
-   - 渐进 revel 完成后 `boundingSphere = null` 强制重算
+**新文件**：
 
-4. **筛选面板不生效**：
-   - `_setCoreScale` 补 `instanceMatrix.needsUpdate = true`（GPU 永远看不到 scale 变化）
-   - `animate()` per-node 循环加 `_nodeKindFilter` gate，防帧循环覆盖筛选的 alpha=0
+| 文件 | 说明 |
+|------|------|
+| `engine/src/adapter/grammar_loader.rs` | GrammarLoader 进程级单例。LazyLock<RwLock<HashMap>>，并发读/串行写。register_static() 注入 27 门静态语言，get(ext) 懒加载 DLL，scan_dir() 按命名约定自动发现 |
+| `grammars/build.ps1` | 编译脚本：git clone → gcc/g++ → .dll |
+| `grammars/grammars.txt` | 待编译清单 |
+| `grammars/tree-sitter-kotlin.dll` | 4.2 MB |
+| `grammars/tree-sitter-markdown.dll` | 515 KB（需 `-DTREE_SITTER_MARKDOWN_AVOID_CRASH`） |
+| `grammars/tree-sitter-toml.dll` | 119 KB |
 
-5. **折叠视图 hover 不生效**：`&& false /* batched */` 硬关 → 恢复（galaxy glows 是独立 Sprite）
+**替换的硬编码引用（14 处）**：
 
-6. **hub 节点 hover 边过曝**：`rebuildHighlightEdges` + `_buildFocusSubgraphEdges`
-   - degree 归一化：`bright /= edgeCount^0.25`（5 条边 ×1.67，500 条边 ×0.53）
-   - 近暗远亮渐变：hover 端 30% 亮度，远端 100%（星芒/喷泉效果）
+| 文件 | 变更 |
+|------|------|
+| `engine/src/adapter/tree_sitter.rs` | 30 行 match → `GRAMMAR_LOADER.get(ext)`，删 do_parse!/do_parse_k! 宏 |
+| `engine/src/engine.rs` | language_for_lsp() 10行 match → 1行；+GRAMMAR_LOADER LazyLock 初始化（27 门 register_static） |
+| `engine/src/analysis/framework_routes.rs` | 7 处 `tree_sitter_xxx::LANGUAGE.into()` → GRAMMAR_LOADER.get() |
+| `engine/src/analysis/dataflow_synthesis.rs` | 2 处 |
+| `engine/src/analysis/dynamic_dispatch.rs` | 2 处 |
+| `engine/src/adapter/python_lsp.rs` | 1 处 |
+| `engine/src/adapter/go_lsp.rs` | 1 处 |
+| `engine/src/pipeline/runner.rs` | 硬编码扩展名列表 → `GRAMMAR_LOADER.supported_extensions()` |
 
-### 引擎：SQLite 缓存完整性
+**不改的文件**：`PythonAdapter`/`TypeScriptAdapter`（核心语言保持专用适配器）、`generic_walk()`、所有 LSP adapter（它们只消费 `tree_sitter::Node`）
 
-**文件：`engine/src/storage/sqlite.rs`**
-- `load_all_nodes` NodeKind 解析补全 8 种（原只映射 3 种：symbol/medium/temporal，function/class/module/file/interface 全掉进 Symbol）
+### 其他清理
 
-**文件：`engine/src/storage/incremental.rs`**
-- `to_sqlite` 前加 `new_index.flush_pending()`。clone 从不调 `rebuild_dense_index`，`node_by_idx` 为空 → `to_sqlite` 遍历空 vec 收集 0 条边 → `DELETE FROM edges` 后插入空集 → 边全部丢失
+| 操作 | 说明 |
+|------|------|
+| 源码恢复公开 | 移除 `.gitignore` v4.1 隐藏规则，engine/src + layout 源码重新追踪 |
+| dead code 清理 | cargo fix 自动修 7 warnings；删 is_graph_fresh/find_node_file/start_engine；WIP 函数加 #[allow(dead_code)] |
+| hologram_explore/status | 补注册到 generate_handler!（之前只定义了 #[tauri::command] 但没接线） |
+| engine-bin 移除 | 引擎从 engine/ 源码编译，engine_binary() 搜索路径无此目录 |
+| README 更新 | 测试数 287→315，语言 18→27，"从源码构建"改用 cargo build，"一句话安装"回归 Releases |
+| tauri.conf.json | beforeBuildCommand 路径修复（相对→绝对）；grammars/*.dll 加入 bundle resources |
+| workspace.rs | 移除 engine-bin 排除规则 |
 
-**文件：`engine/src/engine.rs`**
-- `graph_from_index` 从 node location 反推 `cross_file`（MemoryIndex CSR 不存此字段，缓存命中时丢失 → 全部默认 false → 所有边同色）
+### 依赖变更
 
-**文件：`engine/src/storage/memory.rs`**
-- 补 `test_temporal_delay` 预存测试的 `flush_pending`（同一根因）
-
-### 引擎：缓存命中跳过全量流水线
-
-**文件：`src-tauri/src/main.rs`**
-- `direct_analyze(path, force)`：`engine_init()` 后检测 `node_count > 0 && !force` → 直接从 SQLite 序列化返回
-- `analyze_and_load` 透传 `force` → `run_analyze_with_progress` → `direct_analyze`
-- "重分析" 按钮传 `force: true` → 走完整流水线
-- watcher fallback + MCP 工具调用 `force: true`
+- `engine/Cargo.toml`：+`libloading = "0.8"`, +`tree-sitter-language = "0.1"`；-`tree-sitter-kotlin`, -`tree-sitter-toml`, -`tree-sitter-markdown`（转为 DLL）
 
 ---
 
 ## 测试
 
-| 测试 | 覆盖 |
-|------|------|
-| `test_node_kind_as_str_roundtrip` | 8 种 NodeKind 写→读一致性 |
-| `test_all_node_kinds_survive_sqlite_roundtrip` | SQLite 读写 8 种 kind |
-| `test_edge_fields_survive_sqlite_roundtrip` | coupling_depth + delay 读写 |
-| `test_clone_and_flush_preserves_edges` | clone → flush → edge_count 不丢 |
-| `test_edges_queryable_after_flush_pending` | flush 后 CSR outgo​ing 可查 |
-| `test_graph_from_index_cross_file` | 同文件 false / 跨文件 true / 无 location 不崩 |
-| `test_temporal_delay`（预存修复） | 补 flush_pending |
-
-- `cargo test --release`：相关 14 测试全绿
-- ⚠️ MCP 测试有预存的全局 ENGINE 状态并行污染（单独跑全过，合跑部分挂），与本次改动无关
-- TypeScript: `npx tsc --noEmit` 零错误
-- 前端构建: `npm run build` 通过
+- **338 passed, 18 failed**（18 个全预存 MCP 测试，与本次无关）
+- +8 新增 GrammarLoader 单元测试全绿：register_static、multi_ext、supported_extensions、resolve_extensions、find_grammar_dir_env、scan_dir_empty、scan_dir_with_dlls
+- `cargo tauri build` release 编译零错误零警告
 
 ---
 
-## 文件变动
+## 架构（更新）
 
-| 文件 | 变更 |
-|------|------|
-| `src-ui/src/ui/graph.ts` | Fresnel rim light + glow renderOrder + boundingSphere 重算 + needsUpdate + filter gate + 自适应边亮度 + fold hover 恢复 |
-| `engine/src/storage/sqlite.rs` | NodeKind 8种映射补全 + SQLite 读写测试 |
-| `engine/src/storage/incremental.rs` | flush_pending 修复增量更新丢边 |
-| `engine/src/storage/memory.rs` | clone/flush 测试 + 预存测试修复 |
-| `engine/src/engine.rs` | graph_from_index cross_file + 测试 |
-| `src-tauri/src/main.rs` | direct_analyze cache skip + force 透传 |
-| `src-tauri/src/workspace.rs` | direct_analyze force 传参 |
-| `engine/src/graph/node.rs` | test_node_kind_as_str 补全 + roundtrip 测试 |
+```
+引擎启动 → LazyLock<GrammarLoader>
+  ├── register_static() ← 27 门 Cargo 依赖静态注入
+  └── scan_dir()       ← 扫 grammars/ 目录，按 tree-sitter-{name}.dll 约定映射
+         ↓
+  get("php") → RwLock 读检查 → miss → Library::new() → 写锁插入
+         ↓
+  parse_with_lang(lang, "php", source, file_id)  ← 现有逻辑不变
+```
 
 ---
 
 ## 下一步
 
-1. **视觉验证**：启动 app，hover hub 节点验证边亮度自适应，筛选节点类型，折叠视图 hover
-2. **缓存验证**：打开已分析项目第二次，终端应显示 `[direct_analyze] Using cached graph`，秒开
-3. **重分析验证**：点"重分析"按钮 → 不走缓存，全流水线重跑
-4. **增量更新验证**：修改源文件后等待 watcher → 重启 app 验证边数不丢失
-5. **Leiden refinement 调优（可选）**：`louvain.rs` 中 refinement 代码保留但未启用
-6. **LSP 优化（低优先级）**：LSP 阶段 ~140s 还有空间
+1. **动态加载验证**：引擎目录下放 `grammars/tree-sitter-kotlin.dll`，分析含 `.kt` 文件的项目，验证 kotlin 文件被解析
+2. **Cargo feature 开关**（后续）：`static-grammars` feature，关掉后所有 grammar 纯动态加载，exe 瘦身
+3. **批量编译**：`grammars/build.ps1 -All` 批量产出更多 DLL，随 Releases 分发
+4. **Leiden refinement 调优**：`louvain.rs` refinement 代码保留未启用
+5. **LSP 优化**：LSP 阶段 ~140s 还有空间
