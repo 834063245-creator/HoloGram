@@ -110,6 +110,9 @@ docs/
 FIX-*.md
 .mcp.json.bak
 
+# Temp worktrees / stress output
+engine/tmplinux-stress/
+
 # One-off internal scripts (not for public repo)
 src-ui/test-once.ts
 src-ui/test-agent.ts

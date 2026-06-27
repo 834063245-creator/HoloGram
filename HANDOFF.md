@@ -43,6 +43,6 @@ Community 自身 171s，比老 Louvain 188s 快 9%。
 
 ## 下一步
 
-1. **rayon 上限调优**：N-2 对并行阶段影响大（+41% Core Parse, +47% LSP）。改成 N-1 或去掉上限可回到 ~420s。机器扛得住就不需要上限。
+1. ~~**rayon 上限调优**~~ ✅ 已改自适应：N-1（日常）/ N（stress），根据机器核数等比缩放。预计恢复 ~420s。
 2. **refinement 调优**：如果想要 Leiden 的 well-connected 保证，调高 γ（减少分裂）或只在最终层 refine。当前 L0 refine 产出 2.5x 社区 → 层次凝聚负担重。
 3. LSP ~140s 还有空间，但目前不是主要瓶颈。

@@ -22,13 +22,17 @@ use tracing::{info, debug, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ponytail: cap rayon at N-2 cores so the machine stays usable during stress tests.
+    // ponytail: adaptive rayon pool — leave 1 core for UI responsiveness.
+    // Stress mode uses all cores (benchmark accuracy > interactivity).
+    // On 4-core: 3 threads (75%). On 32-core: 31 threads (97%).
     // rayon's global pool is lazily initialized; we must build it before any par_iter().
     let n_cores = std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(2).max(1))
+        .map(|n| n.get())
         .unwrap_or(4);
+    let is_stress = std::env::args().any(|a| a == "--stress" || a == "--stress-real" || a == "--stress-suite");
+    let n_threads = if is_stress { n_cores } else { n_cores.saturating_sub(1).max(1) };
     rayon::ThreadPoolBuilder::new()
-        .num_threads(n_cores)
+        .num_threads(n_threads)
         .build_global()
         .expect("rayon global pool already initialized — move this call earlier");
 
