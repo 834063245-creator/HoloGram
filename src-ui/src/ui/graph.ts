@@ -4449,7 +4449,7 @@ export class StarGraph {
       this._glowRgba[i * 4] = gc.r;
       this._glowRgba[i * 4 + 1] = gc.g;
       this._glowRgba[i * 4 + 2] = gc.b;
-      this._glowRgba[i * 4 + 3] = 0.75;
+      this._glowRgba[i * 4 + 3] = 0.85;
       this.nodeGlowColors[i] = glowColor;
 
       // HSL cache for twinkle
@@ -4462,7 +4462,7 @@ export class StarGraph {
         this._glow2Rgba[i * 4] = gc.r;
         this._glow2Rgba[i * 4 + 1] = gc.g;
         this._glow2Rgba[i * 4 + 2] = gc.b;
-        this._glow2Rgba[i * 4 + 3] = 0.48;
+        this._glow2Rgba[i * 4 + 3] = 0.55;
         this._glow2Sizes[i] = 0.8; // base outer glow size, twinkle modulates
       }
       this._glowSizes[i] = 1.0; // base inner glow size, twinkle modulates
@@ -4503,7 +4503,7 @@ export class StarGraph {
       uniforms: { uTex: { value: this.glowTex } },
       vertexShader: `attribute vec4 color; attribute float size; varying vec4 vColor;
         void main() { vec4 mv = modelViewMatrix * vec4(position,1.0);
-          gl_PointSize = size * 22.0 * (300.0 / -mv.z); gl_Position = projectionMatrix * mv; vColor = color; }`,
+          gl_PointSize = size * 28.0 * (300.0 / -mv.z); gl_Position = projectionMatrix * mv; vColor = color; }`,
       fragmentShader: `uniform sampler2D uTex; varying vec4 vColor;
         void main() { gl_FragColor = vColor * texture2D(uTex, gl_PointCoord); }`,
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
@@ -4518,41 +4518,45 @@ export class StarGraph {
       transparent: true, depthWrite: false, blending: THREE.NormalBlending,
     });
     mat.onBeforeCompile = (shader) => {
-      // ── Vertex: add varyings + world-normal computation ──
+      // ── Vertex: varyings for world-normal, UV, world-pos ──
       shader.vertexShader = shader.vertexShader.replace(
         'void main()',
         `varying vec3 vFresnelWorldNormal;
          varying vec3 vFresnelWorldPos;
+         varying vec2 vCoreUv;
          void main()`,
       );
-      // Insert after project_vertex: compute world normal from sphere position
       shader.vertexShader = shader.vertexShader.replace(
         '#include <project_vertex>',
         `// Fresnel: sphere pos IS the local normal (unit sphere geometry)
          vec3 _fLocalN = normalize(position);
          vFresnelWorldNormal = normalize(mat3(instanceMatrix) * _fLocalN);
          vFresnelWorldPos = (instanceMatrix * vec4(position, 1.0)).xyz;
+         vCoreUv = uv;
          #include <project_vertex>`,
       );
 
-      // ── Fragment: add varyings + rim blend before final output ──
+      // ── Fragment: center-glow (star-like) + crystalline surface detail ──
+      shader.uniforms.uSpikeTex = { value: this.glowTex };
       shader.fragmentShader = shader.fragmentShader.replace(
         'void main()',
         `varying vec3 vFresnelWorldNormal;
          varying vec3 vFresnelWorldPos;
+         varying vec2 vCoreUv;
+         uniform sampler2D uSpikeTex;
          void main()`,
       );
-      // Inject Fresnel rim before opaque_fragment (which outputs gl_FragColor).
-      // ponytail: target the #include, not the expanded gl_FragColor line — the
-      // literal text is inside opaque_fragment which is expanded at compile time.
+      // ponytail: inverted Fresnel — luminous core, not plastic rim.
+      // NdotV ≈ 1 at sphere center (normal faces camera), ≈ 0 at edge.
+      // Center: white-hot 2.5x brighter; Edge: 0.45x dimmer → glowing orb illusion.
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <opaque_fragment>',
-        `// Fresnel rim: center=node color, edge=slightly brighter (ponytail: white-center
-         // approach washes out color on small spheres; rim preserves hue at all sizes)
-         vec3 _fViewDir = normalize(cameraPosition - vFresnelWorldPos);
+        `vec3 _fViewDir = normalize(cameraPosition - vFresnelWorldPos);
          float _fNdotV = abs(dot(normalize(vFresnelWorldNormal), _fViewDir));
-         float _fRim = pow(1.0 - _fNdotV, 4.0);
-         outgoingLight = outgoingLight * (1.0 + _fRim * 0.4);
+         float _fCore = pow(_fNdotV, 2.5);
+         // Crystalline surface: subtle spike texture overlay for faceted sparkle
+         float _fSpike = texture2D(uSpikeTex, vCoreUv * 2.5).r;
+         outgoingLight = outgoingLight * (0.45 + _fCore * 2.1) * (1.0 + _fSpike * 0.12);
          #include <opaque_fragment>`,
       );
     };
@@ -5244,7 +5248,7 @@ export class StarGraph {
           // Animate outer glow layer too; per-point sizes follow twinkle
           this._glowSizes[i] = combined;
           if (this._glow2Rgba.length > 0) {
-            this._setGlow2Alpha(i, 0.48 * combined * mag);
+            this._setGlow2Alpha(i, 0.55 * combined * mag);
             this._glow2Sizes[i] = 0.85 * combined;
           }
           // ponytail: hue shift reuses pre-allocated _animColor to avoid per-frame GC
