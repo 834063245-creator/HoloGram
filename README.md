@@ -42,7 +42,7 @@
 | **给 Agent 省 token** | Claude Code / Cursor 里直接用。Agent 不用读源文件猜依赖，一次调用拿答案，省 **70%** token。 |
 | **3D 代码地图** | 代码库变星图，谁依赖谁、谁在调用谁，一眼看穿。5000 个文件不卡。 |
 | **保存即刷新** | 代码改了保存 → 图自动更新。什么都不用点。 |
-| **18 门语言，零配置** | Python · TS · Go · Rust · Java · C · C++ · Ruby · Lua · C# · Swift · Dart · Scala · Haskell · JSON · HTML · CSS。打开项目直接出图。 |
+| **27 门语言，零配置** | Python · TS · Go · Rust · Java · C · C++ · Ruby · Lua · C# · Swift · Dart · Scala · Haskell · JSON · HTML · CSS。打开项目直接出图。 |
 
 ---
 
@@ -50,7 +50,7 @@
 
 | **🌍 跨语言统一 IR** | **🤖 图为 Agent 而生** | **🔬 自举验证** |
 |---|---|---|
-| 18 门语言全部映射到同一张图——不是分别解析再拼接，而是一个统一中间表示。TypeScript 调 Python、Rust 调 Go，跨语言依赖链照样追踪。引擎内置 tree-sitter 适配器，每种语言的 import / call / 符号定义统一建模。 | 不是"把源文件丢给 LLM 让它自己看"。全库依赖提前算好，存进 MemoryIndex（邻接表 + 倒排索引）+ SQLite FTS5。Agent 调工具拿的是**结构化依赖数据**，不是源文件。一次调用几十行 JSON = 原本要读十几个文件才能拼出的依赖全景。 | HoloGram 用自己的引擎分析自己的代码库。项目根目录下的依赖图随时可查——既是质量保障，也是活样本。315 个 Rust 测试，每次提交前引擎自检。 |
+| 27 门语言全部映射到同一张图——不是分别解析再拼接，而是一个统一中间表示。TypeScript 调 Python、Rust 调 Go，跨语言依赖链照样追踪。引擎内置 tree-sitter 适配器，每种语言的 import / call / 符号定义统一建模。 | 不是"把源文件丢给 LLM 让它自己看"。全库依赖提前算好，存进 MemoryIndex（邻接表 + 倒排索引）+ SQLite FTS5。Agent 调工具拿的是**结构化依赖数据**，不是源文件。一次调用几十行 JSON = 原本要读十几个文件才能拼出的依赖全景。 | HoloGram 用自己的引擎分析自己的代码库。项目根目录下的依赖图随时可查——既是质量保障，也是活样本。315 个 Rust 测试，每次提交前引擎自检。 |
 
 ---
 
@@ -372,7 +372,15 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 |---|---|---|---|---|---|
 | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
 
-> 18 门语言。Grammar 编译时静态链接，无需下载。框架路由自动检测见<a href="#技术规格">技术规格</a>。
+| PHP | OCaml | R | Nix | Bash | YAML |
+|---|---|---|---|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter | tree-sitter |
+
+| Zig | Elixir | Erlang |
+|---|---|---|
+| tree-sitter | tree-sitter | tree-sitter |
+
+> 27 门语言，grammar 编译时静态链接，零外部依赖，无需下载。（Kotlin / TOML / Markdown 待上游 crate 升级 tree-sitter → 0.24+）
 
 ---
 

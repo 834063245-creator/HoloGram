@@ -574,8 +574,8 @@ fn unframe(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hologram_engine::graph::{Edge, EdgeKind, Node, NodeKind};
-    use hologram_engine::mcp;
+    use hologram_engine::graph::{EdgeKind, Node, NodeKind};
+    
 
     // Mutex to serialize CACHED_GRAPH access in bin tests
     static BIN_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());

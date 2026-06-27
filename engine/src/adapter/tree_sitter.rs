@@ -20,32 +20,21 @@ impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
 
     fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
+        // Two macro variants because tree-sitter crates use 3 different API patterns:
+        //   do_parse!    → $crate::LANGUAGE         (old-style static const)
+        //   do_parse_fn! → $crate::language()       (function returning Language)
+        //   do_parse_k!  → $crate::$const.into()    (named LanguageFn constant)
         macro_rules! do_parse { ($ts_crate:ident, $lang_key:expr) => {{
             let lang: Language = $ts_crate::LANGUAGE.into();
-            // Reuse thread-local parser when language matches; alloc new parser on lang switch
-            let result = TL_PARSER.with(|cell| {
-                let mut borrow = cell.borrow_mut();
-                let reuse = borrow.as_ref().map_or(false, |(_, cached)| cached == $lang_key);
-                if !reuse {
-                    let mut p = Parser::new();
-                    if p.set_language(&lang).is_err() {
-                        return (vec![], vec![], None);
-                    }
-                    *borrow = Some((p, $lang_key.to_string()));
-                }
-                let (ref mut parser, _) = borrow.as_mut().unwrap();
-                match parser.parse(source, None) {
-                    Some(t) => {
-                        let (nodes, edges) = generic_walk(&t, source, file_id);
-                        (nodes, edges, Some(t))
-                    }
-                    None => (vec![], vec![], None),
-                }
-            });
-            result
+            parse_with_lang(lang, $lang_key, source, file_id)
+        }}; }
+        macro_rules! do_parse_k { ($ts_crate:ident, $konst:ident, $lang_key:expr) => {{
+            let lang: Language = $ts_crate::$konst.into();
+            parse_with_lang(lang, $lang_key, source, file_id)
         }}; }
 
         match ext {
+            // ── old-style: LANGUAGE const ──
             "go" => do_parse!(tree_sitter_go, "go"),
             "rs" => do_parse!(tree_sitter_rust, "rs"),
             "java" => do_parse!(tree_sitter_java, "java"),
@@ -61,15 +50,51 @@ impl TreeSitterAdapter {
             "json" => do_parse!(tree_sitter_json, "json"),
             "html" | "htm" => do_parse!(tree_sitter_html, "html"),
             "css" => do_parse!(tree_sitter_css, "css"),
+            "r" | "R" => do_parse!(tree_sitter_r, "r"),
+            "nix" => do_parse!(tree_sitter_nix, "nix"),
+            "sh" | "bash" => do_parse!(tree_sitter_bash, "bash"),
+            "yaml" | "yml" => do_parse!(tree_sitter_yaml, "yaml"),
+            "zig" => do_parse!(tree_sitter_zig, "zig"),
+            "ex" | "exs" => do_parse!(tree_sitter_elixir, "elixir"),
+            "erl" | "hrl" => do_parse!(tree_sitter_erlang, "erlang"),
+            // ── new-style: named LanguageFn constants ──
+            "php" => do_parse_k!(tree_sitter_php, LANGUAGE_PHP, "php"),
+            "ml" => do_parse_k!(tree_sitter_ocaml, LANGUAGE_OCAML, "ocaml"),
+            "mli" => do_parse_k!(tree_sitter_ocaml, LANGUAGE_OCAML_INTERFACE, "ocaml_interface"),
             _ => (vec![], vec![], None),
         }
     }
 }
 
+/// Shared parse driver — reused by all macro variants above.
+fn parse_with_lang(lang: Language, lang_key: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
+    TL_PARSER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let reuse = borrow.as_ref().map_or(false, |(_, cached)| cached == lang_key);
+        if !reuse {
+            let mut p = Parser::new();
+            if p.set_language(&lang).is_err() {
+                return (vec![], vec![], None);
+            }
+            *borrow = Some((p, lang_key.to_string()));
+        }
+        let (ref mut parser, _) = borrow.as_mut().unwrap();
+        match parser.parse(source, None) {
+            Some(t) => {
+                let (nodes, edges) = generic_walk(&t, source, file_id);
+                (nodes, edges, Some(t))
+            }
+            None => (vec![], vec![], None),
+        }
+    })
+}
+
 impl LanguageAdapter for TreeSitterAdapter {
     fn extensions(&self) -> Vec<String> {
         vec!["go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
-            "cs","swift","dart","scala","sc","hs","json","html","htm","css"]
+            "cs","swift","dart","scala","sc","hs","json","html","htm","css",
+            "php","ml","mli","r","R","nix","sh","bash",
+            "yaml","yml","zig","ex","exs","erl","hrl"]
             .into_iter().map(|s| s.into()).collect()
     }
 

@@ -1332,7 +1332,7 @@ urlpatterns = [
 "#;
         let routes = detect_django_routes("api/urls.py", source);
         assert!(!routes.is_empty(), "Should detect path() call");
-        let (method, url, handler, file, _line) = &routes[0];
+        let (_method, url, handler, _file, _line) = &routes[0];
         assert_eq!(url, "api/users/");
         assert!(handler.contains("user_list"), "Handler should reference user_list, got: {}", handler);
         // Note: handler might be "views.user_list" or "user_list" depending on AST parsing
@@ -1375,7 +1375,7 @@ urlpatterns = [
 def hello():
     path("not/a/route", some_func)
 "#;
-        let routes = detect_django_routes("models.py", source);
+        let _routes = detect_django_routes("models.py", source);
         // path() is still found (pattern match is on AST node names, not file content)
         // The file filter happens at the caller level
         // So this might still detect it — that's fine, callers filter by file name
@@ -1407,7 +1407,7 @@ router.post('/api/orders', createOrder);
 "#;
         let routes = detect_express_routes("routes.js", source);
         assert!(!routes.is_empty(), "Should detect router.post()");
-        let (method, url, _handler, _file, _line) = &routes[0];
+        let (method, _url, _handler, _file, _line) = &routes[0];
         assert_eq!(method, "POST");
     }
 
@@ -1418,7 +1418,7 @@ app.use('/api/v2', v2Router);
 "#;
         let routes = detect_express_routes("app.js", source);
         assert!(!routes.is_empty(), "Should detect app.use()");
-        let (method, url, _handler, _file, _line) = &routes[0];
+        let (method, _url, _handler, _file, _line) = &routes[0];
         assert_eq!(method, "USE");
     }
 

@@ -196,7 +196,7 @@ mod tests {
         g.add_node(Node::new("views.index", "index", NodeKind::Symbol));
         g.add_edge(Edge::new("e1", "views.index", "models.User", EdgeKind::Calls));
 
-        let resolved = CrossFileResolver::resolve(&mut g);
+        let _resolved = CrossFileResolver::resolve(&mut g);
         // Should resolve to auth.models.User (first registered, or best match)
         let e = g.get_edge("e1_resolved");
         assert!(e.is_some(), "should resolve even with ambiguity");
