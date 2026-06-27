@@ -280,7 +280,7 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
     // analyze_lock from user-triggered analyses.
     const IGNORE_DIRS: &[&str] = &[
         ".git", "node_modules", "target", "build", "dist", "out",
-        ".venv", "venv", ".hologram", "engine-bin", "release-bin",
+        ".venv", "venv", ".hologram", "release-bin",
         "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
         ".next", ".nuxt", ".svelte-kit", ".turbo",
         ".cursor", ".idea", ".vscode", ".coverage",

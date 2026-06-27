@@ -38,7 +38,6 @@ hologram_graph_files.json
 *.dll
 *.exe
 !release-bin/*.exe
-!engine-bin/*.exe
 *.pdb
 *.so
 *.dylib
