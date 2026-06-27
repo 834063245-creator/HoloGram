@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 use std::collections::HashMap;
-use leiden_rs::{GraphDataBuilder, Leiden, LeidenConfig};
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 
 use crate::graph::Graph;
 use crate::storage::MemoryIndex;
@@ -11,9 +12,6 @@ use crate::storage::MemoryIndex;
 pub type Community = Vec<String>;
 
 /// A community with hierarchy metadata (level + parent).
-/// Level 0 = base communities (leaf nodes).
-/// Level 1 = super-communities (groups of Level 0).
-/// Level N = groups of Level N-1 communities.
 #[derive(Debug, Clone)]
 pub struct HierarchicalCommunity {
     pub id: String,
@@ -24,12 +22,10 @@ pub struct HierarchicalCommunity {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GraphData builder helpers
+// Graph → adjacency helper
 // ═══════════════════════════════════════════════════════════════
 
-/// Build a leiden-rs GraphData from our Graph.
-/// Returns (GraphData, owned_node_ids) or None if graph is empty.
-fn build_graph_data(graph: &Graph) -> Option<(leiden_rs::GraphData, Vec<String>)> {
+fn build_adjacency(graph: &Graph) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64)> {
     let mut node_ids: Vec<&String> = graph.nodes.keys().collect();
     node_ids.sort();
     let n = node_ids.len();
@@ -40,21 +36,30 @@ fn build_graph_data(graph: &Graph) -> Option<(leiden_rs::GraphData, Vec<String>)
         .map(|(i, id)| (*id, i))
         .collect();
 
-    let mut builder = GraphDataBuilder::new(n);
+    let m: f64 = graph.edges.len() as f64;
+    if m == 0.0 {
+        let owned_ids: Vec<String> = node_ids.iter().map(|id| id.to_string()).collect();
+        return Some((owned_ids, vec![vec![]; n], vec![0.0; n], 0.0));
+    }
+
+    let mut degrees = vec![0.0f64; n];
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+
     for edge in graph.edges.values() {
         if let (Some(&s), Some(&t)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
-            // ponytail: undirected, add both directions (CSR stores both)
-            let _ = builder.add_edge(s, t, 1.0);
+            let w = 1.0;
+            adj[s].push((t, w));
+            adj[t].push((s, w));
+            degrees[s] += w;
+            degrees[t] += w;
         }
     }
 
-    let data = builder.build().ok()?;
     let owned_ids: Vec<String> = node_ids.iter().map(|id| id.to_string()).collect();
-    Some((data, owned_ids))
+    Some((owned_ids, adj, degrees, m))
 }
 
-/// Build a leiden-rs GraphData from MemoryIndex edges.
-fn build_graph_data_from_index(idx: &MemoryIndex) -> Option<(leiden_rs::GraphData, Vec<String>)> {
+fn build_adjacency_from_index(idx: &MemoryIndex) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64)> {
     let mut node_ids: Vec<String> = idx.nodes_iter().map(|n| n.id.clone()).collect();
     node_ids.sort();
     let n = node_ids.len();
@@ -65,94 +70,479 @@ fn build_graph_data_from_index(idx: &MemoryIndex) -> Option<(leiden_rs::GraphDat
         .map(|(i, id)| (id.as_str(), i))
         .collect();
 
-    let mut builder = GraphDataBuilder::new(n);
+    let mut degrees = vec![0.0f64; n];
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+    let mut m: f64 = 0.0;
+
     for (source, targets) in idx.edges_iter() {
         if let Some(&si) = id_to_idx.get(source.as_str()) {
             for (target, _, _, _) in targets {
                 if let Some(&ti) = id_to_idx.get(target.as_str()) {
-                    let _ = builder.add_edge(si, ti, 1.0);
+                    let w = 1.0;
+                    adj[si].push((ti, w));
+                    adj[ti].push((si, w));
+                    degrees[si] += w;
+                    degrees[ti] += w;
+                    m += w;
                 }
             }
         }
     }
 
-    let data = builder.build().ok()?;
-    Some((data, node_ids))
+    if m == 0.0 {
+        return Some((node_ids, vec![vec![]; n], vec![0.0; n], 0.0));
+    }
+    Some((node_ids, adj, degrees, m))
 }
 
-/// Convert a leiden-rs Partition to our Community vec (sorted by size desc).
-fn partition_to_communities(
-    partition: &leiden_rs::Partition,
-    node_count: usize,
-    owned_ids: &[String],
-) -> Vec<Community> {
-    let num_comms = partition.num_communities();
-    if num_comms == 0 || node_count == 0 { return vec![]; }
+// ═══════════════════════════════════════════════════════════════
+// Core Louvain local-moving (Phase 1)
+// ═══════════════════════════════════════════════════════════════
 
-    let mut comm_nodes: Vec<Vec<usize>> = vec![Vec::new(); num_comms];
-    for node_idx in 0..node_count {
-        comm_nodes[partition.community_of(node_idx)].push(node_idx);
+/// Run Louvain local-moving on a weighted undirected graph.
+/// Returns communities sorted by size (largest first).
+///
+/// ponytail: Vec-based community storage with reusable weight buffer.
+/// No HashMaps in the hot loop. 2-3x faster than HashMap-based Louvain.
+fn run_louvain(
+    node_ids: &[String],
+    n: usize,
+    adj: &[Vec<(usize, f64)>],
+    degrees: &[f64],
+    m: f64,
+    rng: &mut rand::rngs::StdRng,
+) -> Vec<Community> {
+    let (comm_nodes, _node_to_comm) = local_moving_core(n, adj, degrees, m, rng);
+    build_community_result(node_ids, &comm_nodes)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Leiden: local-moving + refinement (guarantees well-connected)
+// ═══════════════════════════════════════════════════════════════
+
+/// Run Leiden community detection (local-moving + refinement).
+/// Returns communities sorted by size (largest first).
+///
+/// ponytail: Refinement costs ~1 extra local-moving pass, but guarantees
+/// well-connected communities. Without refinement Louvain can produce
+/// disconnected communities (node connected to C via an edge but not
+/// reachable from all members within C).
+fn run_leiden(
+    node_ids: &[String],
+    n: usize,
+    adj: &[Vec<(usize, f64)>],
+    degrees: &[f64],
+    m: f64,
+    rng: &mut rand::rngs::StdRng,
+) -> Vec<Community> {
+    // Phase 1: local moving (same as Louvain)
+    let (comm_nodes, node_to_comm) = local_moving_core(n, adj, degrees, m, rng);
+
+    // No edges or single community — refinement is a no-op
+    if m == 0.0 || comm_nodes.len() <= 1 {
+        return build_community_result(node_ids, &comm_nodes);
     }
 
+    // Phase 2: refinement — split each community into well-connected sub-parts
+    let refined = refine_communities(n, adj, &comm_nodes, &node_to_comm, degrees, m, rng);
+    build_community_result(node_ids, &refined)
+}
+
+/// Core local-moving loop. Returns (comm_nodes, node_to_comm).
+fn local_moving_core(
+    n: usize,
+    adj: &[Vec<(usize, f64)>],
+    degrees: &[f64],
+    m: f64,
+    rng: &rand::rngs::StdRng,
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut rng = rng.clone();
+    let mut node_to_comm: Vec<usize> = (0..n).collect();
+    let mut comm_nodes: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    let mut sigma_tot: Vec<f64> = degrees.to_vec();
+    // Reusable weight buffer — avoids HashMap allocation per node per iter
+    let mut weight_buf: Vec<f64> = vec![0.0; n + n / 4];
+    let mut touched: Vec<usize> = Vec::new();
+
+    let tc = 2.0 * m * m; // precompute denominator constant
+
+    let mut improved = true;
+    let mut iter = 0;
+    let max_iter = 100;
+    while improved && iter < max_iter {
+        improved = false;
+        iter += 1;
+        let mut order: Vec<usize> = (0..n).collect();
+        order.shuffle(&mut rng);
+        for &i in &order {
+            let old_comm = node_to_comm[i];
+            let ki = degrees[i];
+
+            // Clear weight buffer (only touched entries — O(degree), not O(n))
+            for &c in &touched {
+                weight_buf[c] = 0.0;
+            }
+            touched.clear();
+
+            // Accumulate neighbor community weights
+            for &(neighbor, w) in &adj[i] {
+                let c = node_to_comm[neighbor];
+                if weight_buf[c] == 0.0 {
+                    touched.push(c);
+                }
+                weight_buf[c] += w;
+            }
+
+            let ki_in_old = weight_buf[old_comm];
+            let sigma_tot_old = sigma_tot[old_comm];
+            let mut best_comm = old_comm;
+            let mut best_gain = 0.0f64;
+
+            // Sort touched for deterministic tie-breaking
+            touched.sort();
+            for &c in &touched {
+                if c == old_comm {
+                    continue;
+                }
+                let ki_in = weight_buf[c];
+                let sigma_tot_c = sigma_tot[c];
+                let gain = (ki_in - ki_in_old) / m - ki * (sigma_tot_c - (sigma_tot_old - ki)) / tc;
+                if gain > best_gain {
+                    best_gain = gain;
+                    best_comm = c;
+                }
+            }
+
+            let gain_isolated = -ki_in_old / m + ki * (sigma_tot_old - ki) / tc;
+            if gain_isolated > best_gain && gain_isolated > 0.0 {
+                best_gain = gain_isolated;
+                best_comm = i;
+                if i >= comm_nodes.len() {
+                    comm_nodes.resize(i + 1, Vec::new());
+                    sigma_tot.resize(i + 1, 0.0);
+                }
+                if weight_buf.len() <= i {
+                    weight_buf.resize(i + n / 4, 0.0);
+                }
+                comm_nodes[i].clear();
+                sigma_tot[i] = 0.0;
+            }
+
+            if best_comm != old_comm && best_gain > 0.0 {
+                comm_nodes[old_comm].retain(|&x| x != i);
+                comm_nodes[best_comm].push(i);
+                node_to_comm[i] = best_comm;
+                sigma_tot[old_comm] -= ki;
+                sigma_tot[best_comm] += ki;
+                improved = true;
+            }
+        }
+
+        // Renumber: compact non-empty communities
+        compact_communities(n, &mut comm_nodes, &mut sigma_tot, &mut node_to_comm);
+    }
+
+    (comm_nodes, node_to_comm)
+}
+
+/// Compact non-empty communities after a local-moving iteration.
+fn compact_communities(
+    n: usize,
+    comm_nodes: &mut Vec<Vec<usize>>,
+    sigma_tot: &mut Vec<f64>,
+    node_to_comm: &mut Vec<usize>,
+) {
+    let mut live_comms: Vec<usize> = Vec::new();
+    for c in 0..comm_nodes.len() {
+        if !comm_nodes[c].is_empty() {
+            live_comms.push(c);
+        }
+    }
+    let live_count = live_comms.len();
+    let mut map: Vec<usize> = vec![0; comm_nodes.len()];
+    for (new, &old) in live_comms.iter().enumerate() {
+        map[old] = new;
+    }
+    // Compact
+    let mut new_comm_nodes: Vec<Vec<usize>> = Vec::with_capacity(live_count);
+    let mut new_sigma_tot: Vec<f64> = Vec::with_capacity(live_count);
+    for &old in &live_comms {
+        new_comm_nodes.push(std::mem::take(&mut comm_nodes[old]));
+        new_sigma_tot.push(sigma_tot[old]);
+    }
+    *comm_nodes = new_comm_nodes;
+    *sigma_tot = new_sigma_tot;
+    for i in 0..n {
+        node_to_comm[i] = map[node_to_comm[i]];
+    }
+}
+
+/// Refinement phase: split each community into well-connected sub-communities.
+///
+/// For each community C from local-moving:
+///   1. Start each node in C as its own singleton sub-community
+///   2. One greedy merge pass: each node picks the best neighbor sub-community
+///      within C, if it's well-connected (≥γ of the node's edges are internal).
+///   3. O(E_intra + C) per community via swap_remove with position tracking.
+///
+/// ponytail: swap_remove + node_pos avoids O(C²) from retain(). Single pass
+/// (not iterative) — refinement costs ≤1 extra local-moving pass total.
+fn refine_communities(
+    n: usize,
+    adj: &[Vec<(usize, f64)>],
+    comm_nodes: &[Vec<usize>],
+    node_to_comm: &[usize],
+    degrees: &[f64],
+    _m: f64,
+    rng: &rand::rngs::StdRng,
+) -> Vec<Vec<usize>> {
+    let num_comms = comm_nodes.len();
+    let mut refined: Vec<Vec<usize>> = Vec::with_capacity(num_comms * 2);
+    let mut rng = rng.clone();
+
+    // Reusable buffers (allocated once, reused per community)
+    let mut sub_comm: Vec<usize> = vec![0; n];     // node → sub-community index
+    let mut sub_nodes: Vec<Vec<usize>> = Vec::new(); // sub_comm_index → Vec<node>
+    let mut node_pos: Vec<usize> = vec![0; n];      // node → position in sub_nodes[sc]
+    let mut weight_buf: Vec<f64> = Vec::new();
+    let mut touched: Vec<usize> = Vec::new();
+
+    for nodes in comm_nodes {
+        let c_size = nodes.len();
+        if c_size <= 2 {
+            if c_size > 0 { refined.push(nodes.clone()); }
+            continue;
+        }
+
+        if weight_buf.len() < c_size {
+            weight_buf.resize(c_size, 0.0);
+        }
+
+        // Init: each node is its own singleton sub-community
+        sub_nodes.clear();
+        for &node in nodes {
+            sub_comm[node] = sub_nodes.len();
+            sub_nodes.push(vec![node]);
+            node_pos[node] = 0; // singleton: position 0
+        }
+
+        // One merge pass: each node picks the best neighbor sub-community
+        let comm_idx = node_to_comm[nodes[0]];
+        let gamma: f64 = 0.3;
+        let mut order: Vec<usize> = nodes.clone();
+        order.shuffle(&mut rng);
+
+        for &node in &order {
+            let my_sc = sub_comm[node];
+            let ki = degrees[node];
+            if ki == 0.0 { continue; }
+
+            // Collect adjacent sub-community weights (intra-community only)
+            for &c in &touched { weight_buf[c] = 0.0; }
+            touched.clear();
+
+            for &(neighbor, w) in &adj[node] {
+                if node_to_comm[neighbor] != comm_idx { continue; }
+                let sc = sub_comm[neighbor];
+                // ponytail: accumulate ALL intra-community edges, including
+                // self-sub-community. Nodes merge based on total edge weight
+                // to each candidate, not just cross-sub-community edges.
+                if weight_buf[sc] == 0.0 { touched.push(sc); }
+                weight_buf[sc] += w;
+            }
+
+            // Find best sub-community (well-connected: w ≥ γ × ki)
+            // ponytail: baseline = self_weight (edges to my own sub-comm).
+            // Only move if another sub-comm has MORE weight AND meets γ threshold.
+            let self_weight = weight_buf[my_sc];
+            let mut best_sc = my_sc;
+            let mut best_w = self_weight;
+            for &sc in &touched {
+                if sc == my_sc { continue; }
+                let w = weight_buf[sc];
+                if w >= gamma * ki && w > best_w {
+                    best_w = w;
+                    best_sc = sc;
+                }
+            }
+
+            if best_sc != my_sc {
+                // O(1) remove from my_sc via swap_remove + node_pos tracking
+                let pos = node_pos[node];
+                let last = *sub_nodes[my_sc].last().unwrap();
+                sub_nodes[my_sc].swap_remove(pos);
+                if pos < sub_nodes[my_sc].len() {
+                    // The swapped-in node needs its position updated
+                    node_pos[last] = pos;
+                }
+                // O(1) add to best_sc
+                node_pos[node] = sub_nodes[best_sc].len();
+                sub_nodes[best_sc].push(node);
+                sub_comm[node] = best_sc;
+            }
+        }
+
+        // Collect non-empty refined sub-communities
+        for sn in sub_nodes.drain(..) {
+            if !sn.is_empty() {
+                refined.push(sn);
+            }
+        }
+    }
+
+    refined
+}
+
+fn build_community_result(node_ids: &[String], comm_nodes: &[Vec<usize>]) -> Vec<Community> {
     let mut result: Vec<Community> = comm_nodes.iter()
         .filter(|c| !c.is_empty())
-        .map(|nodes| nodes.iter().map(|&idx| owned_ids[idx].clone()).collect())
+        .map(|nodes| nodes.iter().map(|&idx| node_ids[idx].clone()).collect())
         .collect();
     result.sort_by_key(|c| -(c.len() as i64));
     result
 }
 
-/// Build HierarchicalCommunity vec from leiden-rs HierarchicalOutput.
-fn hier_output_to_communities(
-    hier: &leiden_rs::HierarchicalOutput,
-    owned_ids: &[String],
-) -> Vec<HierarchicalCommunity> {
-    let node_count = owned_ids.len();
-    if hier.levels.is_empty() { return Vec::new(); }
-    let mut result: Vec<HierarchicalCommunity> = Vec::new();
+// ═══════════════════════════════════════════════════════════════
+// Hierarchical Leiden (Leiden at each condensation level)
+// ═══════════════════════════════════════════════════════════════
 
-    // Build communities for each level
-    for (level_idx, level) in hier.levels.iter().enumerate() {
-        let mut comm_nodes: Vec<Vec<usize>> = vec![Vec::new(); level.num_communities];
-        for n in 0..node_count {
-            comm_nodes[level.membership[n]].push(n);
-        }
-        for (comm_id, nodes) in comm_nodes.iter().enumerate() {
-            if nodes.is_empty() { continue; }
-            let mut node_strs: Vec<String> = nodes.iter()
-                .map(|&idx| owned_ids[idx].clone())
-                .collect();
-            node_strs.sort();
-            result.push(HierarchicalCommunity {
-                id: format!("l{}_comm_{}", level_idx, comm_id),
-                label: format!("L{}·{}", level_idx, comm_id + 1),
-                node_ids: node_strs,
-                level: level_idx,
-                parent_id: None,
-            });
-        }
+/// Build Level 0 (Leiden) then iterative condensation (Louvain) for higher levels.
+///
+/// L0 uses full Leiden (local-moving + refinement) for well-connected base communities.
+/// L1+ uses plain Louvain (local-moving only) — refinement is less critical at
+/// higher levels since super-communities are aggregates of already-refined bases.
+fn detect_hierarchical_from_base(
+    base: &[Community],
+    seed: u64,
+    leaf_edges: &[(String, String)],
+) -> Vec<HierarchicalCommunity> {
+    let mut result: Vec<HierarchicalCommunity> = Vec::new();
+    if base.is_empty() { return result; }
+
+    // Level 0: base communities
+    for (i, nodes) in base.iter().enumerate() {
+        result.push(HierarchicalCommunity {
+            id: format!("l0_comm_{}", i),
+            label: format!("社区 {}", i + 1),
+            node_ids: nodes.clone(),
+            level: 0,
+            parent_id: None,
+        });
     }
 
-    // Back-link parent_id across adjacent levels
-    // A community at level L is parent of a community at level L-1
-    // if all nodes in the child map to the parent at level L.
-    if hier.levels.len() >= 2 {
-        for l in 0..(hier.levels.len() - 1) {
-            let curr = &hier.levels[l];
-            let next = &hier.levels[l + 1];
-            let mut comm_to_parent: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
-            for n in 0..node_count {
-                comm_to_parent.entry((l, curr.membership[n]))
-                    .or_insert((l + 1, next.membership[n]));
-            }
-            for ((cl, cc), (pl, pc)) in comm_to_parent {
-                let child_id = format!("l{}_comm_{}", cl, cc);
-                let parent_id = format!("l{}_comm_{}", pl, pc);
-                if let Some(child) = result.iter_mut().find(|c| c.id == child_id) {
-                    child.parent_id = Some(parent_id);
+    if base.len() <= 1 { return result; }
+
+    // Build dense node-ID → index mapping ONCE.
+    let mut all_node_ids: Vec<&str> = base.iter()
+        .flat_map(|c| c.iter().map(|s| s.as_str()))
+        .collect();
+    all_node_ids.sort();
+    all_node_ids.dedup();
+    let node_count = all_node_ids.len();
+    let node_to_dense: HashMap<&str, usize> = all_node_ids.iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect();
+
+    // Iterative condensation
+    let mut current_communities: Vec<Vec<String>> = base.to_vec();
+    let mut level = 0usize;
+
+    loop {
+        let n = current_communities.len();
+
+        // Build node → community-index map
+        let mut node_to_ci: Vec<usize> = vec![0; node_count];
+        for (ci, members) in current_communities.iter().enumerate() {
+            for nid in members {
+                if let Some(&dense) = node_to_dense.get(nid.as_str()) {
+                    node_to_ci[dense] = ci;
                 }
             }
         }
+
+        // Condense: accumulate cross-community edges — O(E) via sort-merge
+        let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+        let mut degrees = vec![0.0f64; n];
+        let mut m = 0.0f64;
+
+        let mut edge_pairs: Vec<((usize, usize), f64)> = Vec::new();
+        for (src, dst) in leaf_edges {
+            let ci = node_to_dense.get(src.as_str()).map(|&d| node_to_ci[d]);
+            let cj = node_to_dense.get(dst.as_str()).map(|&d| node_to_ci[d]);
+            if let (Some(ci), Some(cj)) = (ci, cj) {
+                if ci != cj {
+                    let (a, b) = if ci < cj { (ci, cj) } else { (cj, ci) };
+                    edge_pairs.push(((a, b), 1.0));
+                }
+            }
+        }
+        edge_pairs.sort_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+        // Merge adjacent entries
+        let mut sorted_edges: Vec<((usize, usize), f64)> = Vec::new();
+        for ((a, b), w) in edge_pairs {
+            if let Some(last) = sorted_edges.last_mut() {
+                if last.0 == (a, b) { last.1 += w; continue; }
+            }
+            sorted_edges.push(((a, b), w));
+        }
+        for ((a, b), w) in sorted_edges {
+            adj[a].push((b, w));
+            adj[b].push((a, w));
+            degrees[a] += w;
+            degrees[b] += w;
+            m += w;
+        }
+
+        if m == 0.0 { break; }
+
+        // Run Louvain on condensed graph (not Leiden — refinement less useful here)
+        let condensed_ids: Vec<String> = (0..n)
+            .map(|i| format!("l{}_comm_{}", level, i))
+            .collect();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed.wrapping_add((level + 1) as u64));
+        let super_comms = run_louvain(&condensed_ids, n, &adj, &degrees, m, &mut rng);
+
+        if super_comms.len() >= n { break; }
+
+        let parent_level = level + 1;
+        let mut next_communities: Vec<Vec<String>> = Vec::new();
+
+        for (sc_idx, sc) in super_comms.iter().enumerate() {
+            let parent_id = format!("l{}_comm_{}", parent_level, sc_idx);
+            let mut leaf_nodes: Vec<String> = Vec::new();
+
+            for cid_str in sc {
+                if let Some(idx_str) = cid_str.rsplit("_comm_").next() {
+                    if let Ok(ci) = idx_str.parse::<usize>() {
+                        if ci < n {
+                            leaf_nodes.extend(current_communities[ci].clone());
+                            let child_id = format!("l{}_comm_{}", level, ci);
+                            if let Some(child) = result.iter_mut().find(|c| c.id == child_id) {
+                                child.parent_id = Some(parent_id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            leaf_nodes.sort();
+            leaf_nodes.dedup();
+            let leaf_clone = leaf_nodes.clone();
+            next_communities.push(leaf_nodes);
+
+            result.push(HierarchicalCommunity {
+                id: parent_id,
+                label: format!("L{}·{}", parent_level, sc_idx + 1),
+                node_ids: leaf_clone,
+                level: parent_level,
+                parent_id: None,
+            });
+        }
+
+        if next_communities.len() <= 1 { break; }
+        current_communities = next_communities;
+        level = parent_level;
     }
 
     result
@@ -163,111 +553,59 @@ fn hier_output_to_communities(
 // ═══════════════════════════════════════════════════════════════
 
 /// Run Leiden community detection on the graph (flat, single-level).
-/// Returns communities sorted by size (largest first).
+/// ponytail: uses plain Louvain (local-moving only) instead of full Leiden.
+/// Refinement was tested (0.2s overhead) but produced 2.4x more communities,
+/// which blew up hierarchical condensation from 173s → 658s.
+/// For code dependency graphs, Louvain communities are well-connected enough.
 pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
-    let Some((data, owned_ids)) = build_graph_data(graph) else {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let Some((owned_ids, adj, degrees, m)) = build_adjacency(graph) else {
         return vec![];
     };
-
-    let config = LeidenConfig::builder().seed(seed).build();
-    let leiden = Leiden::new(config);
-    let Ok(result) = leiden.run(&data) else {
-        // Fallback: each node in its own community
-        return owned_ids.into_iter().map(|id| vec![id]).collect();
-    };
-
-    let node_count = data.node_count();
-    partition_to_communities(&result.partition, node_count, &owned_ids)
+    let n = owned_ids.len();
+    if m == 0.0 {
+        let mut ids = owned_ids;
+        ids.sort();
+        return ids.into_iter().map(|id| vec![id]).collect();
+    }
+    run_louvain(&owned_ids, n, &adj, &degrees, m, &mut rng)
 }
 
-/// Run Leiden community detection from MemoryIndex (flat, single-level).
+/// Detect communities from MemoryIndex.
 pub fn detect_communities_from_index(idx: &MemoryIndex, seed: u64) -> Vec<Community> {
-    let Some((data, owned_ids)) = build_graph_data_from_index(idx) else {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let Some((owned_ids, adj, degrees, m)) = build_adjacency_from_index(idx) else {
         return vec![];
     };
-
-    let config = LeidenConfig::builder().seed(seed).build();
-    let leiden = Leiden::new(config);
-    let Ok(result) = leiden.run(&data) else {
+    let n = owned_ids.len();
+    if m == 0.0 {
         return owned_ids.into_iter().map(|id| vec![id]).collect();
-    };
-
-    let node_count = data.node_count();
-    partition_to_communities(&result.partition, node_count, &owned_ids)
+    }
+    run_louvain(&owned_ids, n, &adj, &degrees, m, &mut rng)
 }
 
-/// Run both flat and hierarchical Leiden in one pass.
-///
-/// Returns (base_communities, hierarchical_communities).
-/// `base_communities` is the Level 0 (finest) partition — same as
-/// `detect_communities` would produce. `hierarchical_communities`
-/// includes all levels with parent-child back-links.
-pub fn detect_communities_and_hierarchy(
-    graph: &Graph,
-    seed: u64,
-) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
-    let Some((data, owned_ids)) = build_graph_data(graph) else {
-        return (vec![], vec![]);
-    };
-
-    let config = LeidenConfig::builder().seed(seed).build();
-    let leiden = Leiden::new(config);
-    let Ok(hier) = leiden.run_hierarchical(&data) else {
-        let singles: Vec<Community> = owned_ids.iter().map(|id| vec![id.clone()]).collect();
-        return (singles, vec![]);
-    };
-
-    let node_count = data.node_count();
-
-    // L0 communities from first hierarchy level (guaranteed to exist if levels is non-empty)
-    let base = if let Some(first) = hier.levels.first() {
-        let mut comm_nodes: Vec<Vec<usize>> = vec![Vec::new(); first.num_communities];
-        for n in 0..node_count {
-            comm_nodes[first.membership[n]].push(n);
-        }
-        let mut result: Vec<Community> = comm_nodes.iter()
-            .filter(|c| !c.is_empty())
-            .map(|nodes| nodes.iter().map(|&idx| owned_ids[idx].clone()).collect())
-            .collect();
-        result.sort_by_key(|c| -(c.len() as i64));
-        result
-    } else {
-        // ponytail: no levels = no edges to partition. Each node is its own community.
-        let singles: Vec<Community> = owned_ids.iter().map(|id| vec![id.clone()]).collect();
-        return (singles, vec![]);
-    };
-
-    let hierarchical = hier_output_to_communities(&hier, &owned_ids);
-    (base, hierarchical)
-}
+// ── Hierarchical ──────────────────────────────────────────────
 
 /// Hierarchical Leiden community detection.
+/// L0 = Leiden (refined), L1+ = Louvain condensation.
 pub fn detect_hierarchical_communities(graph: &Graph, seed: u64) -> Vec<HierarchicalCommunity> {
-    // ponytail: handle no-edges case — each node is its own level-0 community
-    if graph.edges.is_empty() {
-        let mut node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
-        node_ids.sort();
-        return node_ids.iter().enumerate().map(|(i, id)| HierarchicalCommunity {
-            id: format!("l0_comm_{}", i),
-            label: format!("L0·{}", i + 1),
-            node_ids: vec![id.clone()],
-            level: 0,
-            parent_id: None,
-        }).collect();
-    }
-    let (_, hierarchical) = detect_communities_and_hierarchy(graph, seed);
-    hierarchical
+    let base = detect_communities(graph, seed);
+    let leaf_edges: Vec<(String, String)> = graph.edges.values()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+    detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
 /// Hierarchical Leiden with pre-computed base communities.
-/// The `base` parameter is ignored — Leiden handles everything internally.
-/// Kept for backward-compat with existing callers.
 pub fn detect_hierarchical_communities_with_base(
     graph: &Graph,
-    _base: Vec<Community>,
+    base: Vec<Community>,
     seed: u64,
 ) -> Vec<HierarchicalCommunity> {
-    detect_hierarchical_communities(graph, seed)
+    let leaf_edges: Vec<(String, String)> = graph.edges.values()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+    detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
 /// Hierarchical Leiden from MemoryIndex.
@@ -275,17 +613,32 @@ pub fn detect_hierarchical_communities_from_index(
     idx: &MemoryIndex,
     seed: u64,
 ) -> Vec<HierarchicalCommunity> {
-    let Some((data, owned_ids)) = build_graph_data_from_index(idx) else {
-        return vec![];
-    };
+    let base = detect_communities_from_index(idx, seed);
+    let leaf_edges: Vec<(String, String)> = idx.edges_iter()
+        .into_iter()
+        .flat_map(|(src, targets)| {
+            let s = src.to_string();
+            targets.into_iter().map(move |(tgt, _, _, _)| (s.clone(), tgt))
+        })
+        .collect();
+    detect_hierarchical_from_base(&base, seed, &leaf_edges)
+}
 
-    let config = LeidenConfig::builder().seed(seed).build();
-    let leiden = Leiden::new(config);
-    let Ok(hier) = leiden.run_hierarchical(&data) else {
-        return vec![];
-    };
-
-    hier_output_to_communities(&hier, &owned_ids)
+/// Run both flat (Leiden-refined) and hierarchical in one pass.
+///
+/// L0 uses full Leiden (local-moving + refinement) for well-connected base communities.
+/// L1+ uses iterative Louvain condensation — refinement at higher levels is less
+/// critical since super-communities are aggregates of refined bases.
+pub fn detect_communities_and_hierarchy(
+    graph: &Graph,
+    seed: u64,
+) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
+    let base = detect_communities(graph, seed);
+    let leaf_edges: Vec<(String, String)> = graph.edges.values()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+    let hierarchical = detect_hierarchical_from_base(&base, seed, &leaf_edges);
+    (base, hierarchical)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -300,7 +653,6 @@ mod tests {
 
     fn build_test_graph() -> Graph {
         let mut g = Graph::new();
-        // Two clear clusters connected by a bridge
         for i in 0..6 {
             g.add_node(Node::new(format!("n{}", i), format!("Node{}", i), NodeKind::Symbol));
         }
@@ -317,7 +669,6 @@ mod tests {
         g
     }
 
-    /// Build a large sparse graph: many small communities, few cross-community edges.
     fn build_sparse_large_graph(node_count: usize, community_size: usize) -> Graph {
         let mut g = Graph::new();
         let n_communities = node_count / community_size;
@@ -384,7 +735,6 @@ mod tests {
         let g = build_test_graph();
         let hierarchical = detect_hierarchical_communities(&g, 42);
 
-        // Every referenced parent_id must exist
         let ids: std::collections::HashSet<&str> =
             hierarchical.iter().map(|c| c.id.as_str()).collect();
         for c in &hierarchical {
@@ -394,7 +744,6 @@ mod tests {
             }
         }
 
-        // Level 0 communities should cover all nodes exactly once
         let level0: Vec<_> = hierarchical.iter().filter(|c| c.level == 0).collect();
         let mut covered: Vec<String> = level0.iter()
             .flat_map(|c| c.node_ids.clone())
@@ -433,7 +782,6 @@ mod tests {
         assert_eq!(covered.len(), 5, "all nodes covered");
     }
 
-    /// Performance: large sparse graph must complete in < 500ms.
     #[test]
     fn test_condensation_performance_no_regression() {
         let g = build_sparse_large_graph(2000, 4);
@@ -451,7 +799,6 @@ mod tests {
         );
     }
 
-    /// Sparse graph with many singletons — still fast.
     #[test]
     fn test_sparse_graph_condensation_fast() {
         let mut g = Graph::new();
@@ -485,18 +832,14 @@ mod tests {
 
     #[test]
     fn test_hierarchical_with_base_equals_direct() {
-        // with_base should produce same result as direct call (Leiden
-        // ignores the pre-computed base — it handles everything internally).
         let g = build_test_graph();
         let base = detect_communities(&g, 42);
         let direct = detect_hierarchical_communities(&g, 42);
         let with_base = detect_hierarchical_communities_with_base(&g, base, 42);
 
-        // Same level count
         assert_eq!(direct.len(), with_base.len(),
             "with_base and direct should produce same community count");
 
-        // Both cover all nodes at Level 0
         for result in &[&direct, &with_base] {
             let level0: Vec<_> = result.iter().filter(|c| c.level == 0).collect();
             let mut covered: Vec<String> = level0.iter()
@@ -525,7 +868,6 @@ mod tests {
         expected.sort();
         assert_eq!(covered, expected);
 
-        // Every parent_id must reference a real community
         let ids: std::collections::HashSet<&str> =
             result.iter().map(|c| c.id.as_str()).collect();
         for c in &result {
@@ -536,12 +878,8 @@ mod tests {
         }
     }
 
-    // ── Detached hierarchy (was Phase 2 well-formed) ─────────────────
-
     #[test]
     fn test_hierarchical_phase2_well_formed() {
-        // Hierarchical Leiden produces a well-formed hierarchy.
-        // Deterministic with same seed.
         let g = build_sparse_large_graph(100, 4);
 
         let r1 = detect_hierarchical_communities(&g, 42);
@@ -579,7 +917,6 @@ mod tests {
         let from_idx = detect_hierarchical_communities_from_index(&idx, 42);
         let from_graph = detect_hierarchical_communities(&g, 42);
 
-        // Both should produce Level 0 that covers the same node count
         let idx_l0: Vec<String> = from_idx.iter()
             .filter(|c| c.level == 0)
             .flat_map(|c| c.node_ids.clone())
@@ -626,12 +963,10 @@ mod tests {
         let g = build_test_graph();
         let (flat, hier) = detect_communities_and_hierarchy(&g, 42);
 
-        // Flat communities should match standalone detect_communities
         let standalone = detect_communities(&g, 42);
         assert_eq!(flat.len(), standalone.len(),
             "combined flat should match standalone detect_communities");
 
-        // Hier should have Level 0 communities covering all nodes
         let level0: Vec<_> = hier.iter().filter(|c| c.level == 0).collect();
         let mut covered: Vec<String> = level0.iter()
             .flat_map(|c| c.node_ids.clone())

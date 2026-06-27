@@ -55,4 +55,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 notify = "6"
 mimalloc = "0.1"
-leiden-rs = "0.8.1"
