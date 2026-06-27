@@ -3,8 +3,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -15,12 +13,14 @@ use crate::graph::Graph;
 use crate::path_utils::normalize_path;
 use crate::engine::GRAMMAR_LOADER;
 use crate::pipeline::discovery::discover_files;
-use crate::pipeline::parser::ParallelParser;
+use crate::pipeline::parser::{FileData, ParallelParser};
 
 /// Analysis pipeline result.
 pub struct PipelineResult {
     pub graph: Graph,
+    pub files_discovered: usize,
     pub files_parsed: usize,
+    pub files_failed: usize,
     pub nodes_total: usize,
     pub edges_total: usize,
     pub elapsed_secs: f64,
@@ -48,50 +48,102 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     let files = discover_files(root, &ext_strs);
     info!("[pipeline] discovered {} source files", files.len());
 
-    // Step 2: Parallel parse + stream-merge (no intermediate Vec<FileData>).
-    // ponytail: FileData Vec peaked at ~4.4 GB for 64K files (nodes + edges + source + trees).
-    // Streaming through rayon par_iter + Mutex cuts peak RSS by 2-3 GB.
+    // Step 2: Batched parallel parse + serial merge.
+    // ponytail: v1 collected all parses into Vec (memory explosion: 4.4 GB for 64K files).
+    // v2 streamed through par_iter+filter_map+for_each with merger.lock() (mutex contention
+    // → superlinear slowdown). v3 batches: parse N files in parallel, merge serially,
+    // drop batch memory, repeat. No locks, bounded memory, linear merge.
+    const BATCH: usize = 200;
     let parser = ParallelParser::new();
     let file_count = files.len();
-    let files_parsed = AtomicUsize::new(0);
-    let merger = Mutex::new(GraphMerger::new());
-    let parse_cache = Mutex::new(HashMap::with_capacity(file_count));
-    let trees_to_drop = Mutex::new(Vec::with_capacity(file_count));
+    let parse_start = std::time::Instant::now();
 
-    files
-        .par_iter()
-        .filter_map(|path| parser.parse_one(path))
-        .for_each(|result| {
-            files_parsed.fetch_add(1, Ordering::Relaxed);
-            let file_graph = build_file_graph(&result);
-            merger.lock().unwrap().merge(file_graph);
+    eprintln!(
+        "[pipeline] parsing {} files in batches of {} with {} rayon threads…",
+        file_count, BATCH, rayon::current_num_threads()
+    );
+
+    let mut merger = GraphMerger::with_capacity(file_count * 40, file_count * 150);
+    let mut parse_cache = HashMap::with_capacity(file_count);
+    let mut files_parsed = 0usize;
+    let mut files_failed = 0usize;
+
+    for batch in files.chunks(BATCH) {
+        // ── Parse batch in parallel (no locks) ──
+        let t0 = Instant::now();
+        let batch_results: Vec<(std::path::PathBuf, Option<FileData>)> = batch
+            .par_iter()
+            .map(|path| (path.clone(), parser.parse_one(path)))
+            .collect();
+        let parse_ms = t0.elapsed().as_millis();
+
+        // ── Merge batch serially (single thread, no lock) ──
+        let t1 = Instant::now();
+        let mut batch_trees: Vec<tree_sitter::Tree> = Vec::with_capacity(BATCH);
+        for (path, result) in batch_results {
+            let result = match result {
+                Some(r) => r,
+                None => {
+                    files_failed += 1;
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("?");
+                    tracing::warn!(ext, path = %path.display(), "[pipeline] parse failed — no adapter, I/O error, or unsupported language");
+                    continue;
+                }
+            };
+            files_parsed += 1;
+            merger.merge_slices(&result.nodes, &result.edges);
             let abs_path = normalize_path(&result.path.to_string_lossy());
-            parse_cache.lock().unwrap().insert(abs_path, (result.source, None)); // source only — LSP re-parses
-            if let Some(tree) = result.tree {
-                trees_to_drop.lock().unwrap().push(tree);
+            parse_cache.insert(abs_path, (result.source, None));
+            // ponytail: collect CST trees per-batch, drop on background thread.
+            // ts_tree_delete() is O(tree.nodes) — synchronous drop of 200 large-file
+            // trees blocks the merge loop for 10s+. Background drop frees memory
+            // without blocking, at cost of ~2×BATCH trees in flight at worst.
+            if let Some(t) = result.tree {
+                batch_trees.push(t);
             }
-        });
+        }
+        let merge_ms = t1.elapsed().as_millis();
+        // batch_results dropped here → batch memory fully released (nodes, edges, source)
 
-    let files_parsed = files_parsed.load(Ordering::Relaxed);
-    let merger = merger.into_inner().unwrap();
-    let parse_cache = parse_cache.into_inner().unwrap();
-    let trees_to_drop = trees_to_drop.into_inner().unwrap();
+        // Drop CST trees on background thread — ts_tree_delete is O(nodes) and
+        // can take 100-500ms per large file. This runs while next batch parses.
+        if !batch_trees.is_empty() {
+            std::thread::spawn(move || drop(batch_trees));
+        }
 
-    // Step 3: Drop trees on background thread — frees 2-3 GB while LSP runs concurrently.
-    // Tree::drop() calls ts_tree_delete which is O(nodes) and adds ~300s
-    // to Core Parse if done synchronously (64K files × 5ms avg).
-    if !trees_to_drop.is_empty() {
-        std::thread::spawn(move || drop(trees_to_drop));
+        eprintln!(
+            "[pipeline] batch {}/{} files — parse {}ms, merge {}ms | total {} nodes, {} edges",
+            files_parsed + files_failed, file_count,
+            parse_ms, merge_ms,
+            merger.node_count(), merger.graph().edge_count()
+        );
     }
+
+    let parse_elapsed = parse_start.elapsed().as_secs_f64();
+    eprintln!(
+        "[pipeline] parse+merge done in {:.2}s — {} parsed, {} failed, {} nodes, {} edges",
+        parse_elapsed, files_parsed, files_failed, merger.node_count(), merger.graph().edge_count()
+    );
 
     let graph = merger.into_graph();
     let nodes_total = graph.node_count();
     let edges_total = graph.edge_count();
     let elapsed = start.elapsed();
 
+    // Health assertion: if >5% of discovered files failed, warn loudly.
+    if files_failed > 0 && files_failed > file_count / 20 {
+        tracing::warn!(
+            "[pipeline] HEALTH: {}/{} files failed to parse ({:.1}%) — analysis may be incomplete. \
+             Check logs above for [parser] warnings (missing adapters, I/O errors).",
+            files_failed, file_count, files_failed as f64 / file_count as f64 * 100.0
+        );
+    }
+
     let result = PipelineResult {
         graph,
+        files_discovered: file_count,
         files_parsed,
+        files_failed,
         nodes_total,
         edges_total,
         elapsed_secs: elapsed.as_secs_f64(),
@@ -100,23 +152,12 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     };
 
     info!(
-        "[pipeline] done: {} files → {} nodes, {} edges in {:.2}s",
-        result.files_parsed, result.nodes_total, result.edges_total, result.elapsed_secs
+        "[pipeline] done: {}/{} files parsed ({} failed) → {} nodes, {} edges in {:.2}s",
+        result.files_parsed, result.files_discovered, result.files_failed,
+        result.nodes_total, result.edges_total, result.elapsed_secs
     );
 
     result
-}
-
-/// Build a temporary Graph from a single file's parse result.
-fn build_file_graph(result: &crate::pipeline::parser::FileData) -> Graph {
-    let mut g = Graph::new();
-    for node in &result.nodes {
-        g.add_node(node.clone());
-    }
-    for edge in &result.edges {
-        g.add_edge(edge.clone());
-    }
-    g
 }
 
 #[cfg(test)]

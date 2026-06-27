@@ -8,23 +8,37 @@ use walkdir::WalkDir;
 /// Respects .gitignore-like exclusions.
 pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let mut files = Vec::new();
+    let mut skipped_entries = 0u64;
 
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| !is_excluded(e))
-        .filter_map(|e| e.ok())
     {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        if let Some(ext) = path.extension() {
-            let ext_str = ext.to_str().unwrap_or("");
-            if extensions.contains(&ext_str) {
-                files.push(path.to_path_buf());
+        match entry {
+            Ok(entry) => {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    let ext_str = ext.to_str().unwrap_or("");
+                    if extensions.contains(&ext_str) {
+                        files.push(path.to_path_buf());
+                    }
+                }
+            }
+            Err(e) => {
+                skipped_entries += 1;
+                if skipped_entries <= 5 {
+                    tracing::warn!("[discovery] cannot access entry: {} (further errors suppressed)", e);
+                }
             }
         }
+    }
+
+    if skipped_entries > 0 {
+        tracing::warn!("[discovery] {} directory entries skipped (permission errors / broken links)", skipped_entries);
     }
 
     files

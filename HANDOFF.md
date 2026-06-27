@@ -1,99 +1,87 @@
-# Handoff — HoloGram（2026-06-27 session 3）
+# Handoff — HoloGram（2026-06-28 session 5）
 
 ## 当前状态
 
-- **引擎**：27 门静态语言 + GrammarLoader 动态加载架构；338 测试 passed
-- **前端**：无变更
-- **构建**：`cargo tauri build` 通过，MSI + NSIS 产物正常
-- **源码**：已恢复公开推送，移除 v4.1 隐藏规则
+- **引擎**：27 门语言；合并管线 v3 分批 + v4 全局边去重；已编译通过，20/20 核心测试 passed
+- **前端**：节点核心球视觉效果修复（session 4）
+- **未验证**：本次改动尚未用 `cargo tauri dev` 完整跑通 1468 文件项目
 
 ---
 
-## 本次变更（2026-06-27 session 3）
+## 本次变更（2026-06-28 session 5）
 
-### 核心：GrammarLoader 动态语法加载
+### 根因：边数爆炸 + Tree 同步释放
 
-**问题**：27 门语言静态链接进 exe，每加一门要改代码+Cargo.toml+重编译。kotlin/toml/markdown 因 tree-sitter 版本冲突无法静态链接。
+**问题 1 — 边数爆炸**：`generic_walk` 对每个 `call_expression` AST 节点生成一条边。React/TS 项目里一个组件调用 `console.log` 100 次 = 100 条边，全部打入全局 `HashMap<String, Edge>`。600 个 TS 文件产生 **8.5M 条边**，HashMap 从预分配 220K 一路 rehash 到千万级，每次 rehash 对所有 key 重算哈希 + 搬家。
 
-**方案**：核心语言保持 Cargo 静态链接（零回归），其余从 `.dll` 运行时加载。
+**问题 2 — Tree 同步释放**：`drop(result.tree)` 在主线程 merge 循环里同步执行。`ts_tree_delete()` 是 O(tree.nodes)，大文件（`grammar.json` 52KB, `node-types.json` 81KB）的 CST 含几十万节点，逐个释放阻塞 merge 循环 10s+/批。
 
-**API 链**：
+### 修复
+
+#### 1. 全局边去重（`merge.rs`）
+
+`GraphMerger` 新增持久 `edge_index: HashSet<(String, String, u8)>`，对标已有的 `loc_index`。去重维度：`(source, target, edge_kind)`。
+
+```rust
+pub struct GraphMerger {
+    graph: Graph,
+    loc_index: HashMap<String, String>,       // 节点去重
+    edge_index: HashSet<(String, String, u8)>, // 边去重（新增）
+}
 ```
-libloading::Library::new("tree-sitter-php.dll")
-  → lib.get(b"tree_sitter_php") → Symbol<fn() -> *const ()>
-  → LanguageFn::from_raw(ptr) → Language::new(fn) → parser.set_language()
+
+**二级去重**：
+- **Level 1（快）**：`merge_slices` 内 `HashSet<(&str, &str, u8)>` — 借用引用，零 clone。同文件内同一函数重复调同一目标 → 99% 在此跳过。
+- **Level 2（慢）**：`add_edge_deduped()` → clone source/target 查全局 `edge_index`。仅每文件 ~200 条唯一边到达此层。
+
+**效果**：边数 8.5M → 13.6K（**625×** 减少）。
+
+#### 2. 逐批后台 Tree 释放（`runner.rs`）
+
+```rust
+// 每批收集 Tree，后台线程释放，不阻塞 merge 循环
+let mut batch_trees: Vec<tree_sitter::Tree> = Vec::with_capacity(BATCH);
+// ... merge loop: batch_trees.push(result.tree) ...
+if !batch_trees.is_empty() {
+    std::thread::spawn(move || drop(batch_trees));
+}
 ```
 
-**新文件**：
+之前同步 `drop(result.tree)` 在 merge 循环内阻塞 → 改为收集后批量后台释放。
 
-| 文件 | 说明 |
+#### 3. `edge_kind_id()` 辅助函数
+
+`EdgeKind` 枚举 → u8 判别值（0-9），Hash 比 `&EdgeKind` 指针更稳定（跨平台/编译器版本）。
+
+### 改动文件清单
+
+| 文件 | 改动 |
 |------|------|
-| `engine/src/adapter/grammar_loader.rs` | GrammarLoader 进程级单例。LazyLock<RwLock<HashMap>>，并发读/串行写。register_static() 注入 27 门静态语言，get(ext) 懒加载 DLL，scan_dir() 按命名约定自动发现 |
-| `grammars/build.ps1` | 编译脚本：git clone → gcc/g++ → .dll |
-| `grammars/grammars.txt` | 待编译清单 |
-| `grammars/tree-sitter-kotlin.dll` | 4.2 MB |
-| `grammars/tree-sitter-markdown.dll` | 515 KB（需 `-DTREE_SITTER_MARKDOWN_AVOID_CRASH`） |
-| `grammars/tree-sitter-toml.dll` | 119 KB |
+| `engine/src/graph/merge.rs` | 全局 `edge_index` 持久去重 + 二级快路径 + `edge_kind_id()` + `add_edge_deduped()` |
+| `engine/src/pipeline/runner.rs` | 移除全局 `trees_to_drop` → 逐批后台线程释放 + 移除末尾 `std::thread::spawn(drop)` |
 
-**替换的硬编码引用（14 处）**：
+### 历史变更（session 1-4 已合并）
 
-| 文件 | 变更 |
-|------|------|
-| `engine/src/adapter/tree_sitter.rs` | 30 行 match → `GRAMMAR_LOADER.get(ext)`，删 do_parse!/do_parse_k! 宏 |
-| `engine/src/engine.rs` | language_for_lsp() 10行 match → 1行；+GRAMMAR_LOADER LazyLock 初始化（27 门 register_static） |
-| `engine/src/analysis/framework_routes.rs` | 7 处 `tree_sitter_xxx::LANGUAGE.into()` → GRAMMAR_LOADER.get() |
-| `engine/src/analysis/dataflow_synthesis.rs` | 2 处 |
-| `engine/src/analysis/dynamic_dispatch.rs` | 2 处 |
-| `engine/src/adapter/python_lsp.rs` | 1 处 |
-| `engine/src/adapter/go_lsp.rs` | 1 处 |
-| `engine/src/pipeline/runner.rs` | 硬编码扩展名列表 → `GRAMMAR_LOADER.supported_extensions()` |
-
-**不改的文件**：`PythonAdapter`/`TypeScriptAdapter`（核心语言保持专用适配器）、`generic_walk()`、所有 LSP adapter（它们只消费 `tree_sitter::Node`）
-
-### 其他清理
-
-| 操作 | 说明 |
-|------|------|
-| 源码恢复公开 | 移除 `.gitignore` v4.1 隐藏规则，engine/src + layout 源码重新追踪 |
-| dead code 清理 | cargo fix 自动修 7 warnings；删 is_graph_fresh/find_node_file/start_engine；WIP 函数加 #[allow(dead_code)] |
-| hologram_explore/status | 补注册到 generate_handler!（之前只定义了 #[tauri::command] 但没接线） |
-| engine-bin 移除 | 引擎从 engine/ 源码编译，engine_binary() 搜索路径无此目录 |
-| README 更新 | 测试数 287→315，语言 18→27，"从源码构建"改用 cargo build，"一句话安装"回归 Releases |
-| tauri.conf.json | beforeBuildCommand 路径修复（相对→绝对）；grammars/*.dll 加入 bundle resources |
-| workspace.rs | 移除 engine-bin 排除规则 |
-
-### 依赖变更
-
-- `engine/Cargo.toml`：+`libloading = "0.8"`, +`tree-sitter-language = "0.1"`；-`tree-sitter-kotlin`, -`tree-sitter-toml`, -`tree-sitter-markdown`（转为 DLL）
+- Node 核心球视觉修复（Fresnel 反向 + spike 纹理）
+- 静默吞错修复（discovery/runner 失败计数 + 健康告警）
+- GrammarLoader RwLock 性能回归修复（TL_PARSER 缓存 Language）
+- 合并管线 v3 分批架构（200 文件/批，entry API，`merge_slices`，`node_key` 优化）
 
 ---
 
 ## 测试
 
-- **338 passed, 18 failed**（18 个全预存 MCP 测试，与本次无关）
-- +8 新增 GrammarLoader 单元测试全绿：register_static、multi_ext、supported_extensions、resolve_extensions、find_grammar_dir_env、scan_dir_empty、scan_dir_with_dlls
-- `cargo tauri build` release 编译零错误零警告
-
----
-
-## 架构（更新）
-
-```
-引擎启动 → LazyLock<GrammarLoader>
-  ├── register_static() ← 27 门 Cargo 依赖静态注入
-  └── scan_dir()       ← 扫 grammars/ 目录，按 tree-sitter-{name}.dll 约定映射
-         ↓
-  get("php") → RwLock 读检查 → miss → Library::new() → 写锁插入
-         ↓
-  parse_with_lang(lang, "php", source, file_id)  ← 现有逻辑不变
-```
+- **graph::merge: 14/14 passed**（含 5 个边去重测试：同调用内、跨调用、不同 source、不同 kind、跨文件全局）
+- **pipeline::runner: 6/6 passed**
+- `cargo check` 零错误零警告
 
 ---
 
 ## 下一步
 
-1. **动态加载验证**：引擎目录下放 `grammars/tree-sitter-kotlin.dll`，分析含 `.kt` 文件的项目，验证 kotlin 文件被解析
-2. **Cargo feature 开关**（后续）：`static-grammars` feature，关掉后所有 grammar 纯动态加载，exe 瘦身
-3. **批量编译**：`grammars/build.ps1 -All` 批量产出更多 DLL，随 Releases 分发
-4. **Leiden refinement 调优**：`louvain.rs` refinement 代码保留未启用
-5. **LSP 优化**：LSP 阶段 ~140s 还有空间
+1. `cargo tauri dev` 打开 `D:\codebase\codebase-memory-mcp`，观察终端输出：
+   - merge 时间是否回到秒级（不再 56s/批）
+   - 边数是否稳定（~3K-4K/批，总计 ~20K 而非 8.5M）
+   - 总时间是否可接受（预计 < 120s 全量 1468 文件）
+2. 如果 merge 仍然慢 → 问题可能在 `add_edge()` 的 `HashMap::insert`。考虑边存储从 `HashMap<String, Edge>` 改为 `Vec<Edge>`（边 ID 已唯一，不需要 HashMap key）
+3. 如果 parse 仍然慢（大批文件 >30s/批）→ 问题在这些文件本身确实大（JSON grammar 文件），非 bug
