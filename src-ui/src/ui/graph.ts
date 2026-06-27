@@ -862,11 +862,19 @@ export class StarGraph {
   private nodeLabelIdx: number[] = [];
   private l34Count: number[] = [];
 
-  // Meshes
-  private nodeCores: THREE.Mesh[] = [];
-  private nodeGlows: THREE.Sprite[] = [];
+  // Batched rendering (ponytail: 1 InstancedMesh + 2 Points = 3 draw calls vs 210K individual objects)
+  private nodeCoresInstanced!: THREE.InstancedMesh;
+  private nodeGlowsPoints!: THREE.Points;
+  private nodeGlows2Points!: THREE.Points;
+  // CPU-side buffers (uploaded to GPU each frame)
+  private _coreScales: Float32Array = new Float32Array(0);
+  private _glowRgba: Float32Array = new Float32Array(0);
+  private _glow2Rgba: Float32Array = new Float32Array(0);
+  private _nodeCount = 0;
+  // Reference colors (unchanged API)
   private nodeGlowColors: number[] = [];
   private nodeCoreColors: number[] = [];
+  // Edge rendering (unchanged)
   private edgeLineGroups: LineSegments2[] = [];
   private colorMode: 'type' | 'community' | 'coupling' = 'type';
   private scaleMode: 'degree' | 'coupling' = 'degree';
@@ -877,7 +885,6 @@ export class StarGraph {
   private _nodeBaseHSL: Array<{ h: number; s: number; l: number }> = [];
   private edgeParticles!: THREE.Points;
   private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
-  private nodeGlows2: THREE.Sprite[] = []; // second glow layer (full mode)
 
   // Minimap
   private minimapContainer!: HTMLDivElement;
@@ -1115,7 +1122,7 @@ export class StarGraph {
       // Remove old DOM elements before rebuilding
       if (this.legendEl) { this.legendEl.remove(); }
       this.buildLegend();
-      if (this.graphNodes.length > 0) this.legendEl.style.display = '';
+      if (this._nodeCount > 0) this.legendEl.style.display = '';
       if (this.focusSubgraphBanner) { this.focusSubgraphBanner.remove(); }
       this.buildFocusBanner();
       if (this.focusSubgraphActive && this.focusSubgraphIdx >= 0) {
@@ -1385,7 +1392,7 @@ export class StarGraph {
   private updateTooltip(): void {
     // Galaxy hover takes priority — tooltip already set by updateHover()
     if (this.foldMode && this.hoveredGalaxyIdx >= 0) return;
-    if (this.hoveredIdx < 0 || this.hoveredIdx >= this.graphNodes.length) { this.tooltipEl.classList.remove('visible'); return; }
+    if (this.hoveredIdx < 0 || this.hoveredIdx >= this._nodeCount) { this.tooltipEl.classList.remove('visible'); return; }
     const node = this.graphNodes[this.hoveredIdx];
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
     this.tooltipEl.querySelector('.tt-name')!.textContent = node.name;
@@ -1502,7 +1509,7 @@ export class StarGraph {
   }
 
   private onClick(e: MouseEvent): void {
-    if (this.nodeCores.length === 0) return;
+    if (this._nodeCount === 0) return;
     const rect = this.container.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1542,15 +1549,15 @@ export class StarGraph {
     }
 
     // Intersect ALL node cores (ignore .visible — hover/click should always work)
-    const hits = this.raycaster.intersectObjects(this.nodeCores);
-    const idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
+    const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
+    const idx = hits.length > 0 ? hits.length > 0 ? (hits[0].instanceId ?? -1) : -1 : -1;
 
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
     else if (idx < 0) this.hideDetail();
     else if (idx < 0) this.hideDetail();
 
     // Step 3: Emit graph:node-clicked (for external interaction handlers)
-    if (idx >= 0 && idx < this.graphNodes.length) {
+    if (idx >= 0 && idx < this._nodeCount) {
       const node = this.graphNodes[idx];
       bus.emit('graph:node-clicked', {
         nodeName: node.name,
@@ -1663,7 +1670,7 @@ export class StarGraph {
     const src = this._pathSource, dst = this._pathTarget;
     if (src < 0 || dst < 0) return;
     // BFS with parent tracking
-    const n = this.graphNodes.length;
+    const n = this._nodeCount;
     const visited = new Array<boolean>(n).fill(false);
     const parent = new Array<number>(n).fill(-1);
     const parentEdge = new Array<number>(n).fill(-1);
@@ -1700,18 +1707,17 @@ export class StarGraph {
   private highlightPathNodes(): void {
     const src = this._pathSource;
     // Update all node glows: path nodes bright cyan, others dim
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const onPath = this._pathNodes.has(i) || i === src;
-      if (this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity =
-          onPath ? 0.9 : (this._pathNodes.size > 0 ? 0.06 : 0.55);
+      if (i < this._nodeCount) {
+        this._setGlowAlpha(i, onPath ? 0.9 : (this._pathNodes.size > 0 ? 0.06 : 0.55));
         if (onPath) {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(
+          this._setGlowColor(i, 
             i === src ? 0x44ffdd : i === this._pathTarget ? 0xff8844 : 0x44ddff);
         }
       }
-      if (this.nodeCores[i]) {
-        this.nodeCores[i].visible = onPath || this._pathNodes.size === 0;
+      if (i < this._nodeCount) {
+        { let _v=onPath || this._pathNodes.size === 0; this._setCoreVisible(i, _v); }
       }
     }
     // Dim/hide non-path edges
@@ -1747,12 +1753,12 @@ export class StarGraph {
     this._pathNodes.clear();
     this._pathEdges.clear();
     // Restore normal appearance
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
+    for (let i = 0; i < this._nodeCount; i++) {
+      if (i < this._nodeCount) {
+        this._setGlowAlpha(i, false ? 0 : 0.55);
+        this._setGlowColor(i, this.nodeGlowColors[i]);
       }
-      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      this._setCoreVisible(i, true);
     }
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).opacity =
@@ -1767,13 +1773,13 @@ export class StarGraph {
 
   /** Get node index from a pointer event, or -1 if no node hit. Checks ALL cores. */
   private _hitNode(e: PointerEvent | MouseEvent): number {
-    if (this.nodeCores.length === 0) return -1;
+    if (this._nodeCount === 0) return -1;
     const rect = this.container.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
-    const hits = this.raycaster.intersectObjects(this.nodeCores);
-    return hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
+    const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
+    return hits.length > 0 ? hits.length > 0 ? (hits[0].instanceId ?? -1) : -1 : -1;
   }
 
   private _handleShiftClick(e: PointerEvent): void {
@@ -1790,9 +1796,9 @@ export class StarGraph {
       const st = document.getElementById('status-text');
       if (st) st.innerHTML = `${iconHtml('link', 11)} 路径起点: ${node.name} · Shift+点击目标节点完成 · ESC 取消`;
       // Briefly pulse the source node
-      if (this.nodeGlows[idx]) {
-        (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0x44ffdd);
-        (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.9;
+      if (idx < this._nodeCount) {
+        this._setGlowColor(idx, 0x44ffdd);
+        this._setGlowAlpha(idx, 0.9);
       }
     } else if (idx === this._shiftSourceIdx) {
       // Same node → cancel
@@ -1820,10 +1826,8 @@ export class StarGraph {
   }
 
   private _clearShiftPath(): void {
-    if (this._shiftSourceIdx >= 0 && this._shiftSourceIdx < this.nodeGlows.length) {
-      (this.nodeGlows[this._shiftSourceIdx].material as THREE.SpriteMaterial).color.set(
-        this.nodeGlowColors[this._shiftSourceIdx]);
-      (this.nodeGlows[this._shiftSourceIdx].material as THREE.SpriteMaterial).opacity = 0.55;
+    if (this._shiftSourceIdx >= 0 && this._shiftSourceIdx < this._nodeCount) {
+      this._setGlowColor(this._shiftSourceIdx, this.nodeGlowColors[this._shiftSourceIdx], 0.55);
     }
     this._shiftSourceIdx = -1;
     const st = document.getElementById('status-text');
@@ -1878,8 +1882,8 @@ export class StarGraph {
     const halfH = rect.height * 0.5;
     const nodeNames: string[] = [];
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      if (!this.nodeCores[i]?.visible) continue;
+    for (let i = 0; i < this._nodeCount; i++) {
+      if (!(this._coreScales[i] > 0)) continue;
       // Project node position to screen space
       this.tmpVec3.set(
         this.nodePositions[i * 3],
@@ -2016,20 +2020,20 @@ export class StarGraph {
 
   /** Raycast against node cores; returns index or -1. Uses ALL cores regardless of .visible. */
   private _raycastNode(): number {
-    if (this.nodeCores.length === 0) return -1;
+    if (this._nodeCount === 0) return -1;
     this.raycaster.setFromCamera(this.mouse, this.camera);
-    const hits = this.raycaster.intersectObjects(this.nodeCores);
+    const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
     if (hits.length === 0) return -1;
-    return this.nodeCores.indexOf(hits[0].object as THREE.Mesh);
+    return hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
   }
 
   private updateHover(): void {
-    if (this.nodeCores.length === 0) return;
+    if (this._nodeCount === 0) return;
     if (!isFinite(this.mouse.x) || !isFinite(this.mouse.y)) return;
 
     // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
     const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0
-      && !this.nodeCores.some(c => c.visible);
+      && false /* batched */;
     if (cloudViewActive) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
       this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -2067,11 +2071,11 @@ export class StarGraph {
     const newIdx = this._raycastNode();
     if (newIdx !== this.hoveredIdx) {
       // Restore previous hovered node — brightness only, no scale change
-      if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
+      if (this.hoveredIdx >= 0 && this.hoveredIdx < this._nodeCount) {
         // Restore original core color
         this._setCoreColor(this.hoveredIdx, this.nodeCoreColors[this.hoveredIdx]);
-        if (this.nodeGlows[this.hoveredIdx]) {
-          (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55;
+        if (this.hoveredIdx >= 0 && this.hoveredIdx < this._nodeCount) {
+          this._setGlowAlpha(this.hoveredIdx, 0.55);
         }
       }
       this.hoveredIdx = newIdx;
@@ -2085,7 +2089,7 @@ export class StarGraph {
     // In focus subgraph mode, rebuild both focus edges + hover edges together
     if (this.focusSubgraphActive) {
       this._buildFocusSubgraphEdges();
-      if (nodeIdx >= 0 && nodeIdx < this.graphNodes.length) {
+      if (nodeIdx >= 0 && nodeIdx < this._nodeCount) {
         const edges = this.edgeIndexOf[nodeIdx];
         if (edges.length > 0) {
           const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
@@ -2104,7 +2108,7 @@ export class StarGraph {
       return;
     }
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    if (nodeIdx < 0 || nodeIdx >= this.graphNodes.length) return;
+    if (nodeIdx < 0 || nodeIdx >= this._nodeCount) return;
     const edges = this.edgeIndexOf[nodeIdx];
     if (edges.length === 0) return;
     const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
@@ -2171,7 +2175,7 @@ export class StarGraph {
   }
 
   private computeBlastDistances(): void {
-    const n = this.graphNodes.length;
+    const n = this._nodeCount;
     this.blastDistances = new Array(n).fill(-1);
     if (this.blastSource < 0) return;
     this.blastDistances[this.blastSource] = 0;
@@ -2231,9 +2235,9 @@ export class StarGraph {
   private exitBlastMode(): void {
     this.blastMode = false; this.blastSource = -1; this.blastDistances = [];
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    for (let i = 0; i < this.nodeGlows.length; i++) {
-      (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
-      (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
+    for (let i = 0; i < this._nodeCount; i++) {
+      this._setGlowColor(i, this.nodeGlowColors[i]);
+      this._setGlowAlpha(i, false ? 0 : 0.55);
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
       this._setCoreColor(i, 0xffffff);
     }
@@ -2244,19 +2248,18 @@ export class StarGraph {
   private updateBlastNodeColors(): void {
     if (!this.blastMode) return;
     const isFull = true;
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const d = this.blastDistances[i];
       if (d >= 0) {
         const c = new THREE.Color();
         if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(c);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
+        this._setGlowColor(i, c);
+        this._setGlowAlpha(i, 0.7);
         this._setCoreColor(i, c);
         const base = this.getNodeBaseScale(i);
-        this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
-        this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
+        this._setCoreScale(i, base * (d === 0 ? 2 : 1));
       } else {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12;
+        this._setGlowAlpha(i, 0.12);
       }
     }
   }
@@ -2312,7 +2315,7 @@ export class StarGraph {
 
   focusNode(query: string): boolean {
     const q = query.trim().toLowerCase();
-    if (!q || this.graphNodes.length === 0) return false;
+    if (!q || this._nodeCount === 0) return false;
     let idx = this.graphNodes.findIndex(n => n.name.toLowerCase() === q);
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
@@ -2337,7 +2340,7 @@ export class StarGraph {
 
     const normalized = filePath.replace(/\\/g, '/');
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
       const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
       if (f === normalized) {
@@ -2361,7 +2364,7 @@ export class StarGraph {
     this._fileHighlightIndices.clear();
     this._fileOpacityOriginal.clear();
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
       const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
       if (f.startsWith(prefix)) {
@@ -2406,11 +2409,10 @@ export class StarGraph {
   setNodeKindFilter(filter: string | null): void {
     this._nodeKindFilter = filter;
     if (filter === null) {
-      for (let i = 0; i < this.nodeGlows.length; i++) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
-        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
-        if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
-      }
+      for (let i = 0; i < this._nodeCount; i++) {
+        this._setGlowAlpha(i, 0.55);
+        this._setCoreVisible(i, true);
+              }
       this._updateLegendActive(this._edgeTypeFilter, null);
       return;
     }
@@ -2422,16 +2424,16 @@ export class StarGraph {
       if (filter === 'temporal') return ['thread', 'timer', 'trigger', 'temporal'].includes(k);
       return k === filter;
     };
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string);
       const hit = matches(kind);
       // ponytail: 未命中直接 visible=false 全隐藏, 比 opacity 极低值更彻底且省 GPU
-      if (this.nodeGlows[i]) {
-        this.nodeGlows[i].visible = hit;
-        if (hit) (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.88;
+      if (i < this._nodeCount) {
+        this._setGlowAlpha(i, hit ? 0.55 : 0);
+        if (hit) this._setGlowAlpha(i, 0.88);
       }
-      if (this.nodeCores[i]) this.nodeCores[i].visible = hit;
-      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = hit;
+      if (i < this._nodeCount) { let _v=hit; this._setCoreVisible(i, _v); }
+      if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, hit ? 0.48 : 0);
     }
     this._updateLegendActive(this._edgeTypeFilter, filter);
   }
@@ -2454,10 +2456,10 @@ export class StarGraph {
   /** Cycle node coloring mode. Returns the new mode's display label. */
   recolorByMode(mode: 'type' | 'community' | 'coupling'): string {
     this.colorMode = mode;
-    if (this.graphNodes.length === 0) return mode === 'type' ? '按类型' : mode === 'community' ? '按社区' : '按耦合';
+    if (this._nodeCount === 0) return mode === 'type' ? '按类型' : mode === 'community' ? '按社区' : '按耦合';
 
     const isFull = true;
-    for (let i = 0; i < this.nodeCores.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       let coreColor: number;
       let glowColor: number;
@@ -2480,7 +2482,7 @@ export class StarGraph {
       }
 
       this._setCoreColor(i, coreColor);
-      (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor);
+      this._setGlowColor(i, glowColor);
       this.nodeCoreColors[i] = coreColor;
       this.nodeGlowColors[i] = glowColor;
     }
@@ -2497,10 +2499,67 @@ export class StarGraph {
     return 0.6 + (val / maxVal) * 2.8;
   }
 
+  // ── Batched GPU helpers (ponytail: write to InstancedMesh/Points buffers) ──
+
   private _setCoreColor(i: number, c: number | THREE.Color): void {
-    const core = this.nodeCores[i];
-    if (!core) return;
-    (core.userData._shaderMat as THREE.ShaderMaterial).uniforms.uColor.value.set(c);
+    if (!this.nodeCoresInstanced || i >= this._nodeCount) return;
+    const cc = c instanceof THREE.Color ? c : new THREE.Color(c);
+    this.nodeCoresInstanced.setColorAt(i, cc);
+    if (this.nodeCoresInstanced.instanceColor) this.nodeCoresInstanced.instanceColor.needsUpdate = true;
+  }
+
+  private _setCoreScale(i: number, s: number): void {
+    if (!this.nodeCoresInstanced || i >= this._nodeCount) return;
+    this._coreScales[i] = s;
+    const m = new THREE.Matrix4();
+    this.nodeCoresInstanced.getMatrixAt(i, m);
+    const p = new THREE.Vector3(); m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
+    m.compose(p, new THREE.Quaternion(), new THREE.Vector3(s, s, s));
+    this.nodeCoresInstanced.setMatrixAt(i, m);
+  }
+
+  private _setCoreVisible(i: number, v: boolean): void {
+    this._setCoreScale(i, v ? (this._coreScales[i] || this._getCoreBaseScale(i)) : 0);
+  }
+
+  private _getCoreBaseScale(i: number): number { return this.getNodeBaseScale(i) * 0.35; }
+
+  private _setGlowRgba(i: number, r: number, g: number, b: number, a: number): void {
+    if (!this.nodeGlowsPoints || i >= this._nodeCount) return;
+    this._glowRgba[i * 4] = r; this._glowRgba[i * 4 + 1] = g;
+    this._glowRgba[i * 4 + 2] = b; this._glowRgba[i * 4 + 3] = a;
+  }
+
+  private _setGlowColor(i: number, c: THREE.Color | number, a?: number): void {
+    const cc = c instanceof THREE.Color ? c : new THREE.Color(c);
+    this._setGlowRgba(i, cc.r, cc.g, cc.b, a ?? this._glowRgba[i * 4 + 3]);
+  }
+
+  private _setGlowAlpha(i: number, a: number): void {
+    if (i < this._nodeCount) this._glowRgba[i * 4 + 3] = a;
+  }
+
+  private _setGlow2Rgba(i: number, r: number, g: number, b: number, a: number): void {
+    if (!this.nodeGlows2Points || i >= this._nodeCount) return;
+    this._glow2Rgba[i * 4] = r; this._glow2Rgba[i * 4 + 1] = g;
+    this._glow2Rgba[i * 4 + 2] = b; this._glow2Rgba[i * 4 + 3] = a;
+  }
+
+  private _setGlow2Alpha(i: number, a: number): void {
+    if (i < this._nodeCount && this._glow2Rgba.length > 0) this._glow2Rgba[i * 4 + 3] = a;
+  }
+
+  private _flushBatch(): void {
+    if (this.nodeCoresInstanced) {
+      this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
+      if (this.nodeCoresInstanced.instanceColor) this.nodeCoresInstanced.instanceColor.needsUpdate = true;
+    }
+    if (this.nodeGlowsPoints?.geometry.attributes['color']) {
+      this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+    }
+    if (this.nodeGlows2Points?.geometry.attributes['color']) {
+      this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+    }
   }
 
   /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. */
@@ -2511,18 +2570,16 @@ export class StarGraph {
   /** Toggle node size between degree-based and coupling-risk-based. Returns display label. */
   rescaleByMode(mode: 'degree' | 'coupling'): string {
     this.scaleMode = mode;
-    if (this.graphNodes.length === 0) return mode === 'degree' ? '按度' : '按耦合风险';
+    if (this._nodeCount === 0) return mode === 'degree' ? '按度' : '按耦合风险';
 
     this.maxDeg = Math.max(1, ...this.deg);
     const isFull = true;
-    for (let i = 0; i < this.nodeCores.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const base = this.getNodeBaseScale(i);
-      this.nodeCores[i].scale.setScalar(isFull ? base * 0.4 : base);
-      if (this.nodeGlows[i]) {
-        this.nodeGlows[i].scale.setScalar(base * (isFull ? 9 : 7.0));
+      this._setCoreScale(i, isFull ? base * 0.4 : base);
+      if (i < this._nodeCount) {
       }
-      if (this.nodeGlows2[i]) {
-        this.nodeGlows2[i].scale.setScalar(base * 16);
+      if (this._glow2Rgba.length > 0) {
       }
     }
     return mode === 'degree' ? t('scale.degree') : t('scale.coupling');
@@ -2534,12 +2591,12 @@ export class StarGraph {
   highlightNodeNames(names: string[], colorHex?: string): void {
     if (this.focusSubgraphActive) this.exitFocusSubgraph();
     this._clearAgentHighlightState();
-    if (!names.length || this.graphNodes.length === 0) return;
+    if (!names.length || this._nodeCount === 0) return;
 
     const color = colorHex ? parseInt(colorHex.replace('#', ''), 16) : 0xf0b848; // default sol
     const lowerNames = names.map(n => n.trim().toLowerCase());
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const nodeName = (this.graphNodes[i].name || '').toLowerCase();
       const shortName = nodeName.split('.').pop() || '';
       const found = lowerNames.some(q =>
@@ -2553,15 +2610,14 @@ export class StarGraph {
     if (this._agentHighlightIndices.size === 0) return;
 
     // Apply: dim non-highlighted, recolor highlighted
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       if (this._agentHighlightIndices.has(i)) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(color);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.88;
-        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+        this._setGlowColor(i, color);
+        this._setGlowAlpha(i, 0.88);
+        this._setCoreVisible(i, true);
       } else {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.025;
-        if (false &&this.nodeCores[i]) this.nodeCores[i].visible = false;
-      }
+        this._setGlowAlpha(i, 0.025);
+              }
     }
     // Dim non-path edges
     for (const lines of this.edgeLineGroups) {
@@ -2593,17 +2649,17 @@ export class StarGraph {
     if (this._agentHighlightIndices.size === 0) return;
     // Restore original glows for previously highlighted nodes
     for (const i of this._agentHighlightIndices) {
-      if (this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
+      if (i < this._nodeCount) {
+        this._setGlowColor(i, this.nodeGlowColors[i]);
+        this._setGlowAlpha(i, false ? 0 : 0.55);
       }
-      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      this._setCoreVisible(i, true);
     }
     // Restore non-highlighted dimmed nodes (opacity + visibility)
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       if (!this._agentHighlightIndices.has(i)) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
-        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+        this._setGlowAlpha(i, 0.55);
+        this._setCoreVisible(i, true);
       }
     }
     // Restore edge opacities
@@ -2621,7 +2677,7 @@ export class StarGraph {
   /** Color nodes belonging to hotspot files with intensity proportional to L4 recurrence count. */
   highlightHotspots(hotspots: Array<{ file: string; count: number }>): void {
     this.clearHotspots();
-    if (!hotspots.length || this.graphNodes.length === 0) return;
+    if (!hotspots.length || this._nodeCount === 0) return;
 
     // Build a map of filename → count
     for (const hs of hotspots) {
@@ -2631,7 +2687,7 @@ export class StarGraph {
     }
 
     // Apply coloring: intensity from 0.3 (count=2) to 1.0 (count≥8)
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const loc = (this.graphNodes[i].location || '').toLowerCase();
       if (!loc) continue;
       // Match any hotspot file path against node location
@@ -2639,15 +2695,13 @@ export class StarGraph {
         if (loc.includes(hsPath) || hsPath.includes(loc)) {
           const intensity = Math.min(1, 0.3 + (count - 2) * 0.12);
           // Tint glow toward fail/warn color
-          if (this.nodeGlows[i]) {
+          if (i < this._nodeCount) {
             const r = 0.85, g = 0.2 + (1 - intensity) * 0.3, b = 0.2 + (1 - intensity) * 0.3;
-            (this.nodeGlows[i].material as THREE.SpriteMaterial).color.setRGB(r, g, b);
-            (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.35 + intensity * 0.55;
+            this._setGlowRgba(i, r, g, b, 0.35 + intensity * 0.55);
           }
           // Pulse larger glows for high-count hotspots
-          if (this.nodeGlows[i] && count >= 5) {
+          if (i < this._nodeCount && count >= 5) {
             const s = 1.0 + (count - 4) * 0.12;
-            this.nodeGlows[i].scale.setScalar(s);
           }
           break;
         }
@@ -2659,13 +2713,12 @@ export class StarGraph {
     if (this._hotspotFiles.size === 0) return;
     this._hotspotFiles.clear();
     // Restore original glow colors and opacities
-    for (let i = 0; i < this.nodeGlows.length; i++) {
-      if (this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(
+    for (let i = 0; i < this._nodeCount; i++) {
+      if (i < this._nodeCount) {
+        this._setGlowColor(i, 
           this.nodeGlowColors[i] || 0x5588cc,
         );
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
-        this.nodeGlows[i].scale.setScalar(1.0);
+        this._setGlowAlpha(i, 0.55);
       }
     }
   }
@@ -2674,7 +2727,7 @@ export class StarGraph {
 
   /** Dim all nodes except those matching the given names to 1% opacity. */
   setAgentLens(nodeNames: Set<string>): void {
-    if (!nodeNames || nodeNames.size === 0 || this.graphNodes.length === 0) {
+    if (!nodeNames || nodeNames.size === 0 || this._nodeCount === 0) {
       this.clearAgentLens();
       return;
     }
@@ -2683,7 +2736,7 @@ export class StarGraph {
     const lensIndices = new Set<number>();
     const lowerNames = Array.from(nodeNames).map(n => n.trim().toLowerCase());
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const nodeName = (this.graphNodes[i].name || '').toLowerCase();
       const shortName = nodeName.split('.').pop() || '';
       const found = lowerNames.some(q =>
@@ -2700,17 +2753,14 @@ export class StarGraph {
     }
 
     // Apply lens: visited nodes stay bright, others dim to 1%
-    for (let i = 0; i < this.nodeGlows.length; i++) {
-      const mat = this.nodeGlows[i].material as THREE.SpriteMaterial;
+    for (let i = 0; i < this._nodeCount; i++) {
       if (lensIndices.has(i)) {
-        mat.opacity = 0.88;
-        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+        if (!this._lensOriginalOpacities.has(i)) this._lensOriginalOpacities.set(i, this._glowRgba[i * 4 + 3]);
+        this._setGlowAlpha(i, 0.88);
+        this._setCoreVisible(i, true);
       } else {
-        if (!this._lensOriginalOpacities.has(i)) {
-          this._lensOriginalOpacities.set(i, mat.opacity);
-        }
-        mat.opacity = 0.01;
-        if (false &&this.nodeCores[i]) this.nodeCores[i].visible = false;
+        if (!this._lensOriginalOpacities.has(i)) this._lensOriginalOpacities.set(i, this._glowRgba[i * 4 + 3]);
+        this._setGlowAlpha(i, 0.01);
       }
     }
 
@@ -2727,14 +2777,14 @@ export class StarGraph {
     if (!this._lensActive && !this._lensOriginalOpacities) return;
     this._lensActive = false;
 
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const orig = this._lensOriginalOpacities?.get(i);
       if (orig !== undefined) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = orig;
+        this._setGlowAlpha(i, orig);
       } else {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.55;
+        this._setGlowAlpha(i, 0.55);
       }
-      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      this._setCoreVisible(i, true);
     }
 
     // Restore edge opacities
@@ -2756,7 +2806,7 @@ export class StarGraph {
   updateAgentTrail(nodeNames: string[]): void {
     this._clearTrailLine();
 
-    if (!nodeNames || nodeNames.length < 2 || this.graphNodes.length === 0) return;
+    if (!nodeNames || nodeNames.length < 2 || this._nodeCount === 0) return;
 
     // Map names to indices (fuzzy match), skip consecutive duplicates
     const indices: number[] = [];
@@ -2816,7 +2866,7 @@ export class StarGraph {
   /** Find a node's array index by name (fuzzy). Returns -1 if not found. */
   private _findNodeIndexByName(query: string): number {
     const q = query.trim().toLowerCase();
-    if (!q || this.graphNodes.length === 0) return -1;
+    if (!q || this._nodeCount === 0) return -1;
     let idx = this.graphNodes.findIndex(n => n.name.toLowerCase() === q);
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
@@ -2848,15 +2898,13 @@ export class StarGraph {
     const idxs = this._fileHighlightIndices;
 
     // Nodes: dim non-highlighted
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const visible = !hl || idxs.has(i);
-      if (hl && !visible && this.nodeGlows[i].visible) {
-        this._fileOpacityOriginal.set(i, (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.03;
-        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = 0.03;
+      if (hl && !visible && (this._glowRgba[i*4+3] > 0.01)) {
+        this._fileOpacityOriginal.set(i, this._glowRgba[i * 4 + 3]);
+        this._setGlowAlpha(i, 0.03);
       } else if (!hl && this._fileOpacityOriginal.has(i)) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)!;
-        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)! * 0.6;
+        this._setGlowAlpha(i, this._fileOpacityOriginal.get(i)!);
         this._fileOpacityOriginal.delete(i);
       }
     }
@@ -2967,23 +3015,23 @@ export class StarGraph {
 
     const GREEN = 0x44dd44, RED = 0xee4444, ORANGE = 0xf0a020;
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const nid = this.graphNodes[i].id;
       let diffColor: number | null = null;
       if (this.diffAddedIds.has(nid)) diffColor = GREEN;
       else if (this.diffRemovedIds.has(nid)) diffColor = RED;
       else if (this.diffModifiedIds.has(nid)) diffColor = ORANGE;
 
-      if (diffColor !== null && this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(diffColor);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.85;
+      if (diffColor !== null && i < this._nodeCount) {
+        this._setGlowColor(i, diffColor);
+        this._setGlowAlpha(i, 0.85);
       }
     }
 
     // Pulse effect on diff nodes: slightly increase scale
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this.diffAddedIds.has(this.graphNodes[i].id) && this.nodeCores[i]) {
-        this.nodeCores[i].scale.setScalar((this.nodeCores[i].scale.x || 1) * 1.3);
+    for (let i = 0; i < this._nodeCount; i++) {
+      if (this.diffAddedIds.has(this.graphNodes[i].id) && i < this._nodeCount) {
+        this._setCoreScale(i, (this._coreScales[i] || 1) * 1.3);
       }
     }
   }
@@ -2997,18 +3045,18 @@ export class StarGraph {
     this.diffModifiedIds.clear();
 
     const isFull = true;
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
-      if (this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
+      if (i < this._nodeCount) {
+        this._setGlowColor(i, glowColor);
+        this._setGlowAlpha(i, false ? 0 : 0.55);
       }
-      if (this.nodeCores[i]) {
+      if (i < this._nodeCount) {
         const coreColor = NODE_COLORS[kind] || 0x6ab0ff;
         this._setCoreColor(i, coreColor);
         const baseScale = this.getNodeBaseScale(i);
-        this.nodeCores[i].scale.setScalar(isFull ? baseScale * 0.4 : baseScale);
+        this._setCoreScale(i, isFull ? baseScale * 0.4 : baseScale);
       }
     }
   }
@@ -3063,7 +3111,7 @@ export class StarGraph {
   private _updateCommunityRingHover(): void {
     const prev = this._hoveredCommunityIdx;
     let next = -1;
-    if (this.hoveredIdx >= 0 && this.hoveredIdx < this.graphNodes.length) {
+    if (this.hoveredIdx >= 0 && this.hoveredIdx < this._nodeCount) {
       for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
         if (this.galaxyMeta[gi].memberIndices.includes(this.hoveredIdx)) { next = gi; break; }
       }
@@ -3080,10 +3128,10 @@ export class StarGraph {
 
   private applyFoldOverlay(): void {
     // Hide all nodes
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
-      if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
-      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
+    for (let i = 0; i < this._nodeCount; i++) {
+      this._setCoreVisible(i, false);
+      if (i < this._nodeCount) this._setGlowAlpha(i, 0);
+      if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0);
     }
     // Hide ALL edges — additive blending makes even 0.02 accumulate to bright
     for (const lines of this.edgeLineGroups) {
@@ -3106,14 +3154,13 @@ export class StarGraph {
     this.hoveredGalaxyIdx = -1;
     this.hideGalaxyTitle();
     const isFull = true;
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = glowColor; // dark-universe: type-colored core, not white-hot
-      if (this.nodeCores[i]) { this.nodeCores[i].visible = true; this._setCoreColor(i, coreColor); }
-      if (this.nodeGlows[i]) { this.nodeGlows[i].visible = true; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
-      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
-    }
+      if (i < this._nodeCount) { this._setCoreVisible(i, true); this._setCoreColor(i, coreColor); }
+      if (i < this._nodeCount) { this._setGlowAlpha(i, 0.55); this._setGlowColor(i, glowColor); }
+          }
     for (const lines of this.edgeLineGroups) {
       lines.visible = true;
       (lines.material as any).opacity =
@@ -3147,13 +3194,13 @@ export class StarGraph {
     const isFull = true;
     const cc = new THREE.Color(StarGraph.CONSTELLATION_COLOR);
     for (const mi of gm.memberIndices) {
-      if (this.nodeCores[mi]) {
-        this.nodeCores[mi].visible = true;
+      if (mi < this._nodeCount) {
+        this._setCoreVisible(mi, true);
         this._setCoreColor(mi, StarGraph.CONSTELLATION_COLOR);
       }
-      if (this.nodeGlows[mi]) {
-        this.nodeGlows[mi].visible = true;
-        (this.nodeGlows[mi].material as THREE.SpriteMaterial).color.set(StarGraph.CONSTELLATION_COLOR);
+      if (mi < this._nodeCount) {
+        this._setGlowAlpha(mi, 0.55);
+        this._setGlowColor(mi, StarGraph.CONSTELLATION_COLOR);
       }
     }
     // Internal edges for this galaxy only
@@ -3201,11 +3248,11 @@ export class StarGraph {
         if (subMembers.length > 0) subCount++;
         // Highlight sub-community nodes with distinct color (override full mode white)
         for (const mi of subMembers) {
-          if (this.nodeCores[mi]) {
+          if (mi < this._nodeCount) {
             this._setCoreColor(mi, subColor);
           }
-          if (this.nodeGlows[mi]) {
-            (this.nodeGlows[mi].material as THREE.SpriteMaterial).color.set(subColor);
+          if (mi < this._nodeCount) {
+            this._setGlowColor(mi, subColor);
           }
         }
       });
@@ -3302,9 +3349,9 @@ export class StarGraph {
       });
     }
     // Hide all nodes
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
-      if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+    for (let i = 0; i < this._nodeCount; i++) {
+      this._setCoreVisible(i, false);
+      if (i < this._nodeCount) this._setGlowAlpha(i, 0);
     }
     // Save original galaxyMeta if not already saved, then swap for cloud rendering
     if (!this._savedGalaxyMeta) this._savedGalaxyMeta = this.galaxyMeta;
@@ -3449,9 +3496,9 @@ export class StarGraph {
     } else {
       // Leaf sub-community → show constellation (nodes with edges)
       // Hide all nodes first
-      for (let i = 0; i < this.graphNodes.length; i++) {
-        if (this.nodeCores[i]) this.nodeCores[i].visible = false;
-        if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+      for (let i = 0; i < this._nodeCount; i++) {
+        this._setCoreVisible(i, false);
+        if (i < this._nodeCount) this._setGlowAlpha(i, 0);
       }
       // Show only sub-community members
       const shownIndices: number[] = [];
@@ -3459,14 +3506,14 @@ export class StarGraph {
         const idx = this.graphNodes.findIndex(n => n.id === nid);
         if (idx >= 0) {
           shownIndices.push(idx);
-          if (this.nodeCores[idx]) {
-            this.nodeCores[idx].visible = true;
+          if (idx < this._nodeCount) {
+            this._setCoreVisible(idx, true);
             this._setCoreColor(idx, 0xffaa44);
           }
-          if (this.nodeGlows[idx]) {
-            this.nodeGlows[idx].visible = true;
-            (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0xffaa44);
-            (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.7;
+          if (idx < this._nodeCount) {
+            this._setGlowAlpha(idx, 0.55);
+            this._setGlowColor(idx, 0xffaa44);
+            this._setGlowAlpha(idx, 0.7);
           }
         }
       }
@@ -3525,17 +3572,17 @@ export class StarGraph {
         if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
       } else {
         // Leaf — show constellation for this sub-community
-        for (let i = 0; i < this.graphNodes.length; i++) {
-          if (this.nodeCores[i]) this.nodeCores[i].visible = false;
-          if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+        for (let i = 0; i < this._nodeCount; i++) {
+          this._setCoreVisible(i, false);
+          if (i < this._nodeCount) this._setGlowAlpha(i, 0);
         }
         const shownIndices: number[] = [];
         for (const nid of parentSub.node_ids) {
           const idx = this.graphNodes.findIndex(n => n.id === nid);
           if (idx >= 0) {
             shownIndices.push(idx);
-            if (this.nodeCores[idx]) { this.nodeCores[idx].visible = true; this._setCoreColor(idx, 0xffaa44); }
-            if (this.nodeGlows[idx]) { this.nodeGlows[idx].visible = true; (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0xffaa44); (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.7; }
+            if (idx < this._nodeCount) { this._setCoreVisible(idx, true); this._setCoreColor(idx, 0xffaa44); }
+            if (idx < this._nodeCount) { this._setGlowAlpha(idx, 0.55); this._setGlowColor(idx, 0xffaa44); this._setGlowAlpha(idx, 0.7); }
           }
         }
         this._buildSubCommunityEdges(parentSub.node_ids);
@@ -3815,16 +3862,16 @@ export class StarGraph {
       this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget, t);
       this.controls.target.lerpVectors(this.focusStartLook, this._focusLookTarget, t);
     }
-    if (this.focusNodeIdx >= 0 && this.focusNodeIdx < this.nodeGlows.length) {
+    if (this.focusNodeIdx >= 0 && this.focusNodeIdx < this._nodeCount) {
       if (this.focusFlash === 1) {
-        this._savedFocusGlowScale = this.nodeGlows[this.focusNodeIdx].scale.x;
-        this._savedFocusCoreScale = this.nodeCores[this.focusNodeIdx].scale.x;
+        this._savedFocusGlowScale = 1.0 /* was glow scale */;
+        this._savedFocusCoreScale = this._coreScales[this.focusNodeIdx];
       }
       const base = this.getNodeBaseScale(this.focusNodeIdx);
       const flashScale = 1 + Math.sin(t * Math.PI * 2) * 0.5 * this.focusFlash;
-      this.nodeGlows[this.focusNodeIdx].scale.setScalar(base * 5.5 * flashScale);
-      (this.nodeGlows[this.focusNodeIdx].material as THREE.SpriteMaterial).opacity = 0.55 + 0.45 * this.focusFlash;
-      this.nodeCores[this.focusNodeIdx].scale.setScalar(base * flashScale);
+      
+      this._setGlowAlpha(this.focusNodeIdx, 0.55 + 0.45 * this.focusFlash);
+      this._setCoreScale(this.focusNodeIdx, base * flashScale);
       this.focusFlash *= 0.97;
     }
     if (t >= 1) {
@@ -3839,10 +3886,10 @@ export class StarGraph {
   private _savedFocusCoreScale = 0;
 
   private restoreFocusNode(): void {
-    if (this.focusNodeIdx < 0 || this.focusNodeIdx >= this.nodeGlows.length) return;
-    this.nodeGlows[this.focusNodeIdx].scale.setScalar(this._savedFocusGlowScale || 1);
-    (this.nodeGlows[this.focusNodeIdx].material as THREE.SpriteMaterial).opacity = 0.55;
-    this.nodeCores[this.focusNodeIdx].scale.setScalar(this._savedFocusCoreScale || 1);
+    if (this.focusNodeIdx < 0 || this.focusNodeIdx >= this._nodeCount) return;
+    
+    this._setGlowAlpha(this.focusNodeIdx, 0.55);
+    this._setCoreScale(this.focusNodeIdx, this._savedFocusCoreScale || 1);
     this._savedFocusGlowScale = 0;
     this._savedFocusCoreScale = 0;
     this.focusNodeIdx = -1;
@@ -4088,7 +4135,22 @@ export class StarGraph {
 
     // (standard mode: no bloom — bloom is full-mode only)
 
-    // ── Build scene geometry (all invisible initially for progressive reveal) ──
+    // ── Create batched GPU objects (1 InstancedMesh + 2 Points = 3 draw calls) ──
+    this._nodeCount = nodes.length;
+    this._coreScales = new Float32Array(nodes.length);
+    this._glowRgba = new Float32Array(nodes.length * 4);
+    this._glow2Rgba = true ? new Float32Array(nodes.length * 4) : new Float32Array(0);
+
+    this.nodeCoresInstanced = new THREE.InstancedMesh(
+      this.sphereGeo,
+      new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.NormalBlending }),
+      nodes.length,
+    );
+    this.nodeCoresInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.nodeCoresInstanced.count = 0;
+    this.nodeGroup.add(this.nodeCoresInstanced);
+
+    // ── Build scene geometry ──
     this.buildEdges(rawPos, eData);
     this.buildNodes(nodes, rawPos, deg);
     this.buildLabels(nodes, deg);
@@ -4147,80 +4209,60 @@ export class StarGraph {
 
   private _startProgressiveReveal(nodeCount: number): void {
     this._revealCancelled = false;
-    const BATCH_SIZE = Math.max(50, Math.floor(nodeCount / 40)); // ~40 frames total, min 50 per batch
-    const totalNodes = this.nodeCores.length;
+    const BATCH_SIZE = Math.max(50, Math.floor(nodeCount / 40));
+    const totalNodes = this._nodeCount;
     const totalEdgeGroups = this.edgeLineGroups.length;
 
-    // Save target opacities, then set everything invisible
-    const coreTargetOpacities: number[] = [];
-    const glowTargetOpacities: number[] = [];
-    const glow2TargetOpacities: number[] = [];
+    // Hide all batched objects
+    this.nodeCoresInstanced.count = 0;
+    this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
+    // Zero all glow alpha
+    this._glowRgba.fill(0);
+    this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+    if (this._glow2Rgba.length > 0) {
+      this._glow2Rgba.fill(0);
+      this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+    }
+    // Save & clear edge opacities
     const edgeTargetOpacities: number[] = [];
-
-    for (const core of this.nodeCores) {
-      const mat = core.material as THREE.MeshBasicMaterial;
-      coreTargetOpacities.push(mat.opacity);
-      mat.transparent = true;
-      mat.opacity = 0;
-    }
-    for (const glow of this.nodeGlows) {
-      const mat = glow.material as THREE.SpriteMaterial;
-      glowTargetOpacities.push(mat.opacity);
-      mat.opacity = 0;
-    }
-    for (const glow2 of this.nodeGlows2) {
-      const mat = glow2.material as THREE.SpriteMaterial;
-      glow2TargetOpacities.push(mat.opacity);
-      mat.opacity = 0;
-    }
     for (const lines of this.edgeLineGroups) {
       const mat = lines.material as LineMaterial;
       edgeTargetOpacities.push(mat.opacity);
       mat.opacity = 0;
     }
-    // Hide labels during reveal
     this.labelsContainer.style.opacity = '0';
 
     this._revealRevealed = false;
     let revealedNodes = 0;
     let revealedEdges = 0;
-    const edgeRevealBatch = Math.max(1, Math.ceil(totalEdgeGroups / 10)); // edges reveal in ~10 frames
+    const edgeRevealBatch = Math.max(1, Math.ceil(totalEdgeGroups / 10));
 
     const revealFrame = () => {
-      if (this._revealCancelled) return; // clearGraph was called — stop
-      // Reveal a batch of nodes
+      if (this._revealCancelled) return;
       const nodeEnd = Math.min(revealedNodes + BATCH_SIZE, totalNodes);
+      // Reveal cores via InstancedMesh.count
+      this.nodeCoresInstanced.count = nodeEnd;
+      this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
+      // Restore glow alpha for revealed batch
+      const gCol = this.nodeGlowsPoints.geometry.attributes['color'].array as Float32Array;
+      const g2Col = this.nodeGlows2Points?.geometry.attributes['color']?.array as Float32Array;
       for (let i = revealedNodes; i < nodeEnd; i++) {
-        const core = this.nodeCores[i];
-        if (core) {
-          const mat = core.material as THREE.MeshBasicMaterial;
-          mat.opacity = coreTargetOpacities[i];
-        }
-        const glow = this.nodeGlows[i];
-        if (glow) {
-          (glow.material as THREE.SpriteMaterial).opacity = glowTargetOpacities[i];
-        }
-        // nodeGlows2 is indexed by totalNodes (only exists in full mode)
-        if (i < this.nodeGlows2.length) {
-          (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = glow2TargetOpacities[i];
-        }
+        gCol[i * 4 + 3] = 0.75;
+        if (g2Col) g2Col[i * 4 + 3] = 0.48;
       }
+      this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+      if (this.nodeGlows2Points) this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
       revealedNodes = nodeEnd;
 
-      // Reveal edges faster (they're fewer visual groups)
       const edgeEnd = Math.min(revealedEdges + edgeRevealBatch, totalEdgeGroups);
       for (let i = revealedEdges; i < edgeEnd; i++) {
         const lines = this.edgeLineGroups[i];
-        if (lines) {
-          (lines.material as LineMaterial).opacity = edgeTargetOpacities[i];
-        }
+        if (lines) (lines.material as LineMaterial).opacity = edgeTargetOpacities[i];
       }
       revealedEdges = edgeEnd;
 
-      // Check if done
       if (revealedNodes >= totalNodes && revealedEdges >= totalEdgeGroups) {
         this._revealRevealed = true;
-        // Fade in labels
         this.labelsContainer.style.transition = 'opacity 0.4s ease-in';
         this.labelsContainer.style.opacity = '1';
         setTimeout(() => { this.labelsContainer.style.transition = ''; }, 500);
@@ -4252,13 +4294,13 @@ export class StarGraph {
     disposeGroup(this.commFoldGroup);
     // Dispose stored references (prevent GPU leak across re-renders)
     // IMPORTANT: nodeCores share this.sphereGeo — do NOT dispose individual core geometries
-    for (const core of this.nodeCores) { (core.material as THREE.Material)?.dispose(); }
-    for (const g of this.nodeGlows) { g.material && (g.material as THREE.Material).dispose(); }
-    for (const g of this.nodeGlows2) { g.material && (g.material as THREE.Material).dispose(); }
+    if (this.nodeCoresInstanced) { (this.nodeCoresInstanced.material as THREE.Material)?.dispose(); }
+    if (this.nodeGlowsPoints) { (this.nodeGlowsPoints.material as THREE.Material)?.dispose(); this.nodeGlowsPoints.geometry?.dispose(); }
+    if (this.nodeGlows2Points) { (this.nodeGlows2Points.material as THREE.Material)?.dispose(); this.nodeGlows2Points.geometry?.dispose(); }
     for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
-    this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = []; this.colorMode = 'type'; this.edgeLineGroups = [];
+    // batched: nodeCores/nodeGlows/nodeGlows2 replaced by InstancedMesh+Points this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = []; this.colorMode = 'type'; this.edgeLineGroups = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = []; this.communityRingGroup.clear(); this._communityGlowSprites = []; this._hoveredCommunityIdx = -1;
     this.foldMode = false; this.enteredGalaxyId = null; this.enteredSubCommunityId = null;
@@ -4329,80 +4371,85 @@ export class StarGraph {
   // ── Nodes ────────────────────────────────────────────────
 
   private buildNodes(nodes: GraphNode[], pos: Float32Array, deg: number[]): void {
+    const N = nodes.length;
     const isFull = true;
-    for (let i = 0; i < nodes.length; i++) {
+
+    // Glow Points geometry buffers (RGBA color per point)
+    const glowPosArr = new Float32Array(N * 3);
+    const glow2PosArr = isFull ? new Float32Array(N * 3) : new Float32Array(0);
+
+    const _m = new THREE.Matrix4();
+    const _v = new THREE.Vector3();
+    const _q = new THREE.Quaternion();
+
+    for (let i = 0; i < N; i++) {
       const kind = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = NODE_COLORS[kind] || 0x6ab0ff;
       const baseScale = 0.8 + (deg[i] / this.maxDeg) * 2.8;
-      const glowOpacity = false ? 0 : 0.75;
-      const glowScaleMul = isFull ? 22 : 16;
+      const px = pos[i * 3], py = pos[i * 3 + 1], pz = pos[i * 3 + 2];
 
-      // Full mode: large soft outer glow first (behind everything)
+      // Core InstancedMesh: position + scale in matrix, color in instanceColor
+      this._coreScales[i] = baseScale * 0.35;
+      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
+        _v.set(px, py, pz), _q, new THREE.Vector3(1, 1, 1).multiplyScalar(this._coreScales[i]),
+      ));
+      this._setCoreColor(i, coreColor);
+      this.nodeCoreColors[i] = coreColor;
+
+      // Inner glow RGBA
+      const gc = new THREE.Color(glowColor);
+      glowPosArr[i * 3] = px; glowPosArr[i * 3 + 1] = py; glowPosArr[i * 3 + 2] = pz;
+      this._glowRgba[i * 4] = gc.r;
+      this._glowRgba[i * 4 + 1] = gc.g;
+      this._glowRgba[i * 4 + 2] = gc.b;
+      this._glowRgba[i * 4 + 3] = 0.75;
+      this.nodeGlowColors[i] = glowColor;
+
+      // HSL cache for twinkle
+      this._nodeBaseHSL[i] = { h: 0, s: 0, l: 0 };
+      gc.getHSL(this._nodeBaseHSL[i]);
+
+      // Outer glow RGBA
       if (isFull) {
-        const outerGlow = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: this.glowTex, color: glowColor,
-          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.48,
-        }));
-        outerGlow.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-        outerGlow.scale.setScalar(baseScale * 16);
-        this.nodeGroup.add(outerGlow); this.nodeGlows2.push(outerGlow);
+        glow2PosArr[i * 3] = px; glow2PosArr[i * 3 + 1] = py; glow2PosArr[i * 3 + 2] = pz;
+        this._glow2Rgba[i * 4] = gc.r;
+        this._glow2Rgba[i * 4 + 1] = gc.g;
+        this._glow2Rgba[i * 4 + 2] = gc.b;
+        this._glow2Rgba[i * 4 + 3] = 0.48;
       }
-
-      // Inner spike glow (or standard glow)
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.glowTex, color: glowColor,
-        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: glowOpacity,
-      }));
-      glow.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-      glow.scale.setScalar(baseScale * glowScaleMul);
-      this.nodeGroup.add(glow); this.nodeGlows.push(glow); this.nodeGlowColors.push(glowColor);
-      this.nodeCoreColors.push(coreColor);
-      // Pre-compute base HSL for twinkle — avoids per-frame THREE.Color allocations
-      const tmpC = new THREE.Color(glowColor);
-      const hsl = { h: 0, s: 0, l: 0 };
-      tmpC.getHSL(hsl);
-      this._nodeBaseHSL.push(hsl);
-
-      // Core — luminous plasma sphere (fresnel: white-hot center, colored edge glow)
-      const coreMat = new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: new THREE.Color(coreColor) } },
-        vertexShader: /* glsl */ `
-          varying vec3 vNormal;
-          varying vec3 vViewDir;
-          void main() {
-            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-            gl_Position = projectionMatrix * mvPosition;
-            vNormal = normalize(normalMatrix * normal);
-            vViewDir = normalize(-mvPosition.xyz);
-          }
-        `,
-        fragmentShader: /* glsl */ `
-          uniform vec3 uColor;
-          varying vec3 vNormal;
-          varying vec3 vViewDir;
-          void main() {
-            float fresnel = 1.0 - abs(dot(normalize(vNormal), normalize(vViewDir)));
-            float edgeGlow = pow(fresnel, 3.5);
-            // Center white-hot, edges tinted with node color
-            vec3 color = mix(vec3(1.0), uColor, edgeGlow);
-            // Brightness falls off toward edges
-            float brightness = 1.0 - edgeGlow * 0.65;
-            // Soft alpha: opaque center, translucent edge
-            float alpha = 1.0 - fresnel * 0.55;
-            gl_FragColor = vec4(color * brightness, alpha);
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.NormalBlending,
-      });
-      const core = new THREE.Mesh(this.sphereGeo, coreMat);
-      core.position.copy(glow.position);
-      core.scale.setScalar(isFull ? baseScale * 0.35 : baseScale);
-      core.userData = { nodeIndex: i, _shaderMat: coreMat };
-      this.nodeGroup.add(core); this.nodeCores.push(core);
     }
+
+    // Upload + create Points objects
+    this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
+    if (this.nodeCoresInstanced.instanceColor) this.nodeCoresInstanced.instanceColor.needsUpdate = true;
+
+    const glowGeo = new THREE.BufferGeometry();
+    glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPosArr, 3));
+    glowGeo.setAttribute('color', new THREE.BufferAttribute(this._glowRgba, 4));
+    this.nodeGlowsPoints = new THREE.Points(glowGeo, this._makeGlowPointMaterial());
+    this.nodeGroup.add(this.nodeGlowsPoints);
+
+    if (isFull) {
+      const g2Geo = new THREE.BufferGeometry();
+      g2Geo.setAttribute('position', new THREE.BufferAttribute(glow2PosArr, 3));
+      g2Geo.setAttribute('color', new THREE.BufferAttribute(this._glow2Rgba, 4));
+      this.nodeGlows2Points = new THREE.Points(g2Geo, this._makeGlowPointMaterial());
+      this.nodeGlows2Points.renderOrder = -1;
+      this.nodeGroup.add(this.nodeGlows2Points);
+    }
+  }
+
+  private _makeGlowPointMaterial(): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+      uniforms: { uTex: { value: this.glowTex } },
+      vertexShader: `attribute vec4 color; varying vec4 vColor;
+        void main() { vec4 mv = modelViewMatrix * vec4(position,1.0);
+          gl_PointSize = 18.0 * (300.0 / -mv.z); gl_Position = projectionMatrix * mv; vColor = color; }`,
+      fragmentShader: `uniform sampler2D uTex; varying vec4 vColor;
+        void main() { gl_FragColor = vColor * texture2D(uTex, gl_PointCoord); }`,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+    });
   }
 
   // ── Legend (color key) ────────────────────────────────────
@@ -4466,7 +4513,7 @@ export class StarGraph {
   }
 
   private enterFocusSubgraph(idx: number): void {
-    if (idx < 0 || idx >= this.graphNodes.length) return;
+    if (idx < 0 || idx >= this._nodeCount) return;
     if (this.focusSubgraphActive) this.exitFocusSubgraph();
 
     this.focusSubgraphIdx = idx;
@@ -4479,17 +4526,17 @@ export class StarGraph {
     // Save current state
     this.focusSubgraphSavedGlowOpacities = [];
     this.focusSubgraphSavedCoreVisible = [];
-    for (let i = 0; i < this.graphNodes.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       this.focusSubgraphSavedGlowOpacities.push(
-        this.nodeGlows[i] ? (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity : 0.55);
+        (i < this._nodeCount ? this._glowRgba[i*4+3] : 0.55));
       this.focusSubgraphSavedCoreVisible.push(
-        this.nodeCores[i] ? this.nodeCores[i].visible : true);
+        (i < this._nodeCount ? this._coreScales[i] > 0 : true));
 
       if (!this.focusSubgraphVisibleIndices.has(i)) {
-        if (this.nodeGlows[i]) {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.02;
+        if (i < this._nodeCount) {
+          this._setGlowAlpha(i, 0.02);
         }
-        if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+        this._setCoreVisible(i, false);
       }
     }
 
@@ -4504,9 +4551,9 @@ export class StarGraph {
     this._buildFocusSubgraphEdges();
 
     // Highlight the focus node
-    if (this.nodeGlows[idx]) {
-      (this.nodeGlows[idx].material as THREE.SpriteMaterial).opacity = 0.92;
-      (this.nodeGlows[idx].material as THREE.SpriteMaterial).color.set(0xffffff);
+    if (idx < this._nodeCount) {
+      this._setGlowAlpha(idx, 0.92);
+      this._setGlowColor(idx, 0xffffff);
     }
 
     this.focusSubgraphActive = true;
@@ -4526,21 +4573,20 @@ export class StarGraph {
     this.focusFlash = 0;
     this.focusNodeIdx = -1;
 
-    for (let i = 0; i < this.graphNodes.length; i++) {
-      if (i < this.focusSubgraphSavedGlowOpacities.length && this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity =
-          this.focusSubgraphSavedGlowOpacities[i];
+    for (let i = 0; i < this._nodeCount; i++) {
+      if (i < this.focusSubgraphSavedGlowOpacities.length && i < this._nodeCount) {
+        this._setGlowAlpha(i, this.focusSubgraphSavedGlowOpacities[i]);
       }
-      if (i < this.focusSubgraphSavedCoreVisible.length && this.nodeCores[i]) {
-        this.nodeCores[i].visible = this.focusSubgraphSavedCoreVisible[i];
+      if (i < this.focusSubgraphSavedCoreVisible.length && i < this._nodeCount) {
+        { let _v=this.focusSubgraphSavedCoreVisible[i]; this._setCoreVisible(i, _v); }
       }
       // ponytail: 恢复 core color — focus 期间节点可能被 enter 设白或被 hover 循环提白
-      if (this.nodeCores[i] && i < this.nodeCoreColors.length) {
+      if (i < this._nodeCount && i < this.nodeCoreColors.length) {
         this._setCoreColor(i, this.nodeCoreColors[i]);
       }
       // 恢复 glow color — focus 节点被 enter 设成 0xffffff
-      if (this.nodeGlows[i] && i < this.nodeGlowColors.length) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
+      if (i < this._nodeCount && i < this.nodeGlowColors.length) {
+        this._setGlowColor(i, this.nodeGlowColors[i]);
       }
     }
     for (let ei = 0; ei < this.edgeLineGroups.length; ei++) {
@@ -4627,7 +4673,7 @@ export class StarGraph {
 
     // Compute 2D bounds (top-down: XZ plane → minimap XY)
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    const n = this.graphNodes.length;
+    const n = this._nodeCount;
     for (let i = 0; i < n; i++) {
       const x = this.nodePositions[i * 3], z = this.nodePositions[i * 3 + 2];
       if (isFinite(x) && isFinite(z)) {
@@ -4759,7 +4805,7 @@ export class StarGraph {
     const getProj = () => {
       const W = 280, H = 190, PAD = 14;
       let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      for (let i = 0; i < this.graphNodes.length; i++) {
+      for (let i = 0; i < this._nodeCount; i++) {
         const x = this.nodePositions[i * 3], z = this.nodePositions[i * 3 + 2];
         if (isFinite(x) && isFinite(z)) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; }
       }
@@ -4773,13 +4819,13 @@ export class StarGraph {
     };
 
     canvas.addEventListener('mousemove', (e: MouseEvent) => {
-      if (this._mmDragging || this.graphNodes.length === 0) return;
+      if (this._mmDragging || this._nodeCount === 0) return;
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const proj = getProj();
       // Find nearest visible node
       let bestI = -1, bestD2 = 64; // 8px threshold
-      for (let i = 0; i < this.graphNodes.length; i++) {
+      for (let i = 0; i < this._nodeCount; i++) {
         const { u, v } = proj(this.nodePositions[i * 3], this.nodePositions[i * 3 + 2]);
         const d2 = (u - mx) ** 2 + (v - my) ** 2;
         if (d2 < bestD2) { bestD2 = d2; bestI = i; }
@@ -4985,17 +5031,15 @@ export class StarGraph {
     // Hover effects — brightness-only, no size inflation
     this.hoverScale += (this.targetHoverScale - this.hoverScale) * 0.18;
     const neighborSet = new Set(this.hoveredIdx >= 0 ? this.neighborMap[this.hoveredIdx] || [] : []);
-    if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
-      if (this.nodeGlows[this.hoveredIdx]) {
-        (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.65 + this.hoverScale * 0.35;
-      }
+    if (this.hoveredIdx >= 0 && this.hoveredIdx < this._nodeCount) {
+      this._setGlowAlpha(this.hoveredIdx, 0.65 + this.hoverScale * 0.35);
       // Brighten core color toward white on hover
       const origColor = this.nodeCoreColors[this.hoveredIdx];
       const brightColor = new THREE.Color(origColor).lerp(new THREE.Color(0xffffff), this.hoverScale * 0.6);
       this._setCoreColor(this.hoveredIdx, brightColor);
       for (const ni of neighborSet) {
-        if (ni !== this.hoveredIdx && ni < this.nodeGlows.length) {
-          (this.nodeGlows[ni].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.10;
+        if (ni !== this.hoveredIdx && ni < this._nodeCount) {
+          this._setGlowAlpha(ni, 0.55 + this.hoverScale * 0.10);
         }
       }
     }
@@ -5029,15 +5073,15 @@ export class StarGraph {
     if (!IDLE || this._idleCounter % 6 === 0) {
     const inPathMode = this._pathSource >= 0;
     const galTime = performance.now() * 0.001; // galaxy time for color cycling
-    for (let i = 0; i < this.nodeGlows.length; i++) {
+    for (let i = 0; i < this._nodeCount; i++) {
       if (this.focusSubgraphActive && !this.focusSubgraphVisibleIndices.has(i)) continue;
       if (i === this.focusSubgraphIdx || i === this.hoveredIdx || neighborSet.has(i) || i === this.focusNodeIdx) continue;
       // Path mode: keep path nodes highlighted, non-path nodes dimmed
       if (inPathMode) {
         if (this._pathNodes.has(i) || i === this._pathSource) continue; // path node — keep highlight
         if (this._pathNodes.size > 0) {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.05;
-          this.nodeCores[i].visible = false;
+          this._setGlowAlpha(i, 0.05);
+          this._setCoreVisible(i, false);
           continue;
         }
       }
@@ -5046,14 +5090,13 @@ export class StarGraph {
         if (d >= 0) {
           const c = new THREE.Color();
           if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(c);
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
+          this._setGlowColor(i, c);
+          this._setGlowAlpha(i, 0.7);
           this._setCoreColor(i, c);
           const base = this.getNodeBaseScale(i);
-          this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 7.0) * (d === 0 ? 2 : 1.2));
-          this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
+          this._setCoreScale(i, base * (d === 0 ? 2 : 1));
         } else {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 0.75 * this._nodeMag(i));
+          this._setGlowAlpha(i, Math.min(1, 0.75 * this._nodeMag(i)));
         }
       } else {
         const risk = this.l34Count[i];
@@ -5063,28 +5106,24 @@ export class StarGraph {
           const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.15 : 0.06);
           const combined = twinkle * wave;
           const mag = this._nodeMag(i);
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 1.5 * combined * mag);
+          this._setGlowAlpha(i, Math.min(1, 1.5 * combined * mag));
           // Animate outer glow layer too
-          if (this.nodeGlows2[i]) {
-            (this.nodeGlows2[i].material as THREE.SpriteMaterial).opacity = 0.48 * combined * mag;
+          if (this._glow2Rgba.length > 0) {
+            this._setGlow2Alpha(i, 0.48 * combined * mag);
             const base = this.getNodeBaseScale(i);
-            this.nodeGlows2[i].scale.setScalar(base * 16 * combined);
           }
           // Hue shift — uses pre-computed HSL to avoid per-frame allocations
           const hueShift = (Math.sin(galTime * 0.3 + this.twinklePhases[i]) * 0.05);
           const bh = this._nodeBaseHSL[i];
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).color.setHSL(
-            (bh.h + hueShift + 1) % 1, Math.min(1, bh.s * 1.2), Math.min(1, bh.l * 1.3),
-          );
+// batched: glow HSL via _setGlowColor
+          const _hc = new THREE.Color(); _hc.setHSL((bh.h + hueShift + 1) % 1, Math.min(1, bh.s * 1.2), Math.min(1, bh.l * 1.3)); this._setGlowColor(i, _hc);
           const base = this.getNodeBaseScale(i);
-          this.nodeGlows[i].scale.setScalar(base * 9 * combined);
         } else {
           const freq = 1 + risk * 0.7;
           const amp = risk > 0 ? Math.min(0.18, risk * 0.06) : 0.03;
           const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = Math.min(1, 0.9 * wave * this._nodeMag(i));
+          this._setGlowAlpha(i, Math.min(1, 0.9 * wave * this._nodeMag(i)));
           const base = this.getNodeBaseScale(i);
-          this.nodeGlows[i].scale.setScalar(base * 5.5);
         }
       }
     }
@@ -5133,9 +5172,9 @@ export class StarGraph {
     for (const glow of this.galaxyGlows) ((glow as THREE.Mesh).material as THREE.Material).dispose();
     if (this.nebulaDust) { this.nebulaDust.geometry.dispose(); (this.nebulaDust.material as THREE.Material).dispose(); }
     // Dispose InstancedMesh cores + glows
-    for (const core of this.nodeCores) { core.geometry?.dispose(); (core.material as THREE.Material)?.dispose(); }
-    for (const g of this.nodeGlows) { g.material && (g.material as THREE.Material).dispose(); g.geometry?.dispose(); }
-    for (const g of this.nodeGlows2) { g.material && (g.material as THREE.Material).dispose(); g.geometry?.dispose(); }
+    if (this.nodeCoresInstanced) { (this.nodeCoresInstanced.material as THREE.Material)?.dispose(); }
+    if (this.nodeGlowsPoints) { (this.nodeGlowsPoints.material as THREE.Material)?.dispose(); this.nodeGlowsPoints.geometry?.dispose(); }
+    if (this.nodeGlows2Points) { (this.nodeGlows2Points.material as THREE.Material)?.dispose(); this.nodeGlows2Points.geometry?.dispose(); }
     for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
     this.bloomPass?.dispose();
     this.renderer.dispose();
