@@ -51,7 +51,7 @@ fn is_excluded(entry: &walkdir::DirEntry) -> bool {
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::Write;
+    
 
     #[test]
     fn test_discover_python_files() {

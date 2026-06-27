@@ -417,7 +417,7 @@ impl IncrementalUpdater {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use crate::graph::{Node, NodeKind};
 
     fn test_node(id: &str, name: &str, location: Option<&str>) -> Node {
         let mut n = Node::new(id, name, NodeKind::Symbol);

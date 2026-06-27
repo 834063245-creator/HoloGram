@@ -1422,7 +1422,7 @@ mod tests {
     #[test]
     fn test_incremental_update_path_is_reachable() {
         use crate::storage::incremental::IncrementalUpdater;
-        use crate::storage::sqlite::SqliteDb;
+        
 
         let tmp = std::env::temp_dir().join("hologram_test_f1_incr");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1650,7 +1650,7 @@ def order_view():
     /// cross_file from node locations.
     #[test]
     fn test_graph_from_index_cross_file() {
-        use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
+        use crate::graph::{EdgeKind, Node, NodeKind};
         use crate::storage::memory::MemoryIndex;
 
         let mut idx = MemoryIndex::new();

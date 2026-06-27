@@ -1165,6 +1165,7 @@ impl Default for MemoryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::Graph;
     use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 
     fn test_node(id: &str, name: &str, location: Option<&str>) -> Node {
@@ -1342,7 +1343,7 @@ mod tests {
             g.add_node(node.clone());
         }
         for (source, targets) in idx.edges_iter() {
-            for (target, kind, coupling_depth, delay) in targets {
+            for (target, kind, coupling_depth, _delay) in targets {
                 let id = format!("{}::{}::{}", source, target, kind.as_str());
                 let mut edge = Edge::new(id, source.clone(), target, kind);
                 edge.coupling_depth = coupling_depth;
