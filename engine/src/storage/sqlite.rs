@@ -30,9 +30,12 @@ impl SqliteDb {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("open hologram.db: {}", e))?;
 
-        // Essential pragmas
+        // Essential pragmas — set once at connection open.
+        // ponytail: synchronous=NORMAL is safe in WAL mode and ~2x faster for bulk writes.
+        // SQLite forbids changing synchronous inside a transaction, so do it here.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
              PRAGMA foreign_keys=ON;
              PRAGMA auto_vacuum=INCREMENTAL;
              PRAGMA busy_timeout=5000;",
@@ -218,6 +221,11 @@ impl SqliteDb {
                 let kind_str: String = row.get(2)?;
                 let kind = match kind_str.as_str() {
                     "symbol" => NodeKind::Symbol,
+                    "function" => NodeKind::Function,
+                    "class" => NodeKind::Class,
+                    "module" => NodeKind::Module,
+                    "file" => NodeKind::File,
+                    "interface" => NodeKind::Interface,
                     "medium" => NodeKind::Medium,
                     "temporal" => NodeKind::Temporal,
                     _ => NodeKind::Symbol,
@@ -292,12 +300,10 @@ impl SqliteDb {
         let tx = self.conn.unchecked_transaction()
             .map_err(|e| format!("tx: {}", e))?;
 
-        // Speed pragmas inside the transaction
-        tx.execute_batch(
-            "PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=OFF;
-             PRAGMA cache_size=-50000;",
-        ).map_err(|e| format!("pragma: {}", e))?;
+        // Boost cache for bulk write (safe inside transaction).
+        // ponytail: synchronous & foreign_keys can't change inside a tx — set in open().
+        tx.execute_batch("PRAGMA cache_size=-50000;")
+            .map_err(|e| format!("pragma cache: {}", e))?;
 
         // Clear old data
         tx.execute_batch("DELETE FROM edges; DELETE FROM nodes;")
@@ -331,12 +337,9 @@ impl SqliteDb {
             ).map_err(|e| format!("insert edge {}: {}", id, e))?;
         }
 
-        // Restore safe pragmas before commit
-        tx.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             PRAGMA synchronous=FULL;
-             PRAGMA cache_size=-2000;",
-        ).map_err(|e| format!("pragma restore: {}", e))?;
+        // Restore default cache size before commit
+        tx.execute_batch("PRAGMA cache_size=-2000;")
+            .map_err(|e| format!("pragma restore: {}", e))?;
 
         tx.commit().map_err(|e| format!("commit: {}", e))?;
         Ok(())

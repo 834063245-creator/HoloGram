@@ -133,9 +133,24 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
     for (source, targets) in idx.edges_iter() {
         for (target, kind, coupling_depth, delay) in targets {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
+            // ponytail: cross_file is analysis metadata lost in CSR round-trip.
+            // Compute from node locations BEFORE target is moved into Edge::new.
+            let cross_file = {
+                let sf = idx.get_node(&source).and_then(|n| n.location.as_deref());
+                let tf = idx.get_node(&target).and_then(|n| n.location.as_deref());
+                match (sf, tf) {
+                    (Some(s), Some(t)) => {
+                        let s_file = s.rsplit_once(':').map(|(f, _)| f).unwrap_or(s);
+                        let t_file = t.rsplit_once(':').map(|(f, _)| f).unwrap_or(t);
+                        s_file != t_file
+                    }
+                    _ => false,
+                }
+            };
             let mut edge = crate::graph::Edge::new(id, source.clone(), target, kind);
             edge.coupling_depth = coupling_depth;
             edge.temporal_delay_sec = delay;
+            edge.cross_file = cross_file;
             g.add_edge(edge);
         }
     }
