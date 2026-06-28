@@ -292,6 +292,20 @@ const icons: Record<string, IconDef> = {
     label: '删除',
     path: '<polyline points="4,6 5,6 14,6"/><path d="M6,6 L6,15 L12,15 L12,6"/><line x1="8" y1="9" x2="8" y2="12"/><line x1="10" y1="9" x2="10" y2="12"/>',
   },
+
+  // ── File tree header ──
+  'sort-toggle': {
+    label: '排序',
+    path: '<line x1="3" y1="7" x2="7" y2="7"/><line x1="3" y1="11" x2="11" y2="11"/><line x1="3" y1="15" x2="15" y2="15"/><polyline points="14,5 14,11 10,9"/><polyline points="11,9 14,11"/>',
+  },
+  'collapse-all': {
+    label: '折叠全部',
+    path: '<path d="M2 6 L9 12 L16 6"/><path d="M2 12 L9 18 L16 12"/>',
+  },
+  'expand-all': {
+    label: '展开全部',
+    path: '<path d="M2 12 L9 6 L16 12"/><path d="M2 18 L9 12 L16 18"/>',
+  },
 };
 
 /**

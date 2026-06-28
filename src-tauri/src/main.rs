@@ -1465,6 +1465,51 @@ async fn move_file(
         .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))
 }
 
+#[tauri::command]
+async fn open_in_explorer(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let real = with_workspace(&state, |h| h.check_read(&path))?;
+    #[cfg(target_os = "windows")]
+    {
+        if real.is_dir() {
+            std::process::Command::new("explorer")
+                .arg(&real)
+                .spawn()
+                .map_err(|e| format!("无法打开资源管理器: {}", e))?;
+        } else {
+            std::process::Command::new("explorer")
+                .args(["/select,", &real.to_string_lossy()])
+                .spawn()
+                .map_err(|e| format!("无法打开资源管理器: {}", e))?;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if real.is_dir() {
+            std::process::Command::new("open")
+                .arg(&real)
+                .spawn()
+                .map_err(|e| format!("无法打开访达: {}", e))?;
+        } else {
+            std::process::Command::new("open")
+                .args(["-R", &real.to_string_lossy()])
+                .spawn()
+                .map_err(|e| format!("无法打开访达: {}", e))?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let dir = if real.is_dir() { &real } else { real.parent().unwrap_or(&real) };
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("无法打开文件管理器: {}", e))?;
+    }
+    Ok(())
+}
+
 // ═══════════════════════════════════════════════════════
 // Coding Agent: search_code — grep over project files
 // ═══════════════════════════════════════════════════════
@@ -2651,6 +2696,7 @@ fn main() {
             delete_file_or_dir,
             rename_file_or_dir,
             move_file,
+            open_in_explorer,
             read_constraints,
             write_constraints,
             exec_command,
