@@ -405,6 +405,9 @@ export class Workspace {
       ));
     } catch (e) { console.error('[setupAgent] sub-agent tool registration failed:', e); }
 
+    // Wire tool schemas to UI panel — dynamic, not hardcoded
+    chatPanel.setToolSchemas(registry.schemas());
+
     // Graph context hooks
     if (this.graphData) {
       const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(this.graphData);

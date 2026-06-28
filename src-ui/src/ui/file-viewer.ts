@@ -12,6 +12,9 @@ import * as monaco from 'monaco-editor';
 import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 import { FileTranslator } from './file-translator';
 import { FileTreePanel } from './file-tree';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import hljs from 'highlight.js';
 
 // Monaco workers — Vite ?worker syntax bundles them as separate chunks
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
@@ -46,6 +49,7 @@ interface TabData {
   error: string;
   /** If set, this tab is a read-only diff view. */
   diffModels?: { original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel };
+  viewMode?: 'edit' | 'preview';
 }
 
 interface WindowState {
@@ -63,6 +67,7 @@ export class FileViewer {
   private editorContainer!: HTMLElement;
   private editor!: monaco.editor.IStandaloneCodeEditor;
   private diffEditorContainer!: HTMLElement;
+  private previewContainer!: HTMLElement;
   private diffEditor!: monaco.editor.IStandaloneDiffEditor;
   private resizeHandle!: HTMLElement;
   private windowCloseBtn!: HTMLElement;
@@ -253,6 +258,25 @@ export class FileViewer {
     this.toolbarBtns['format'] = fmtBtn;
     this.toolbar.appendChild(fmtBtn);
 
+    // Preview toggle
+    const prevSep = document.createElement('div');
+    prevSep.style.cssText = 'width:1px;height:14px;background:rgba(48,60,80,0.35);margin:0 4px;';
+    this.toolbar.appendChild(prevSep);
+
+    const previewBtn = document.createElement('button');
+    previewBtn.innerHTML = iconHtml('eye', 12);
+    previewBtn.title = '切换预览 (Markdown / 图片)';
+    Object.assign(previewBtn.style, {
+      width: '22px', height: '20px', padding: '0', border: 'none', cursor: 'pointer',
+      background: 'none', color: 'var(--text-muted)', borderRadius: '3px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    });
+    previewBtn.addEventListener('mouseenter', () => { previewBtn.style.color = 'var(--nebula, #a088e0)'; previewBtn.style.background = 'rgba(255,255,255,0.04)'; });
+    previewBtn.addEventListener('mouseleave', () => { previewBtn.style.color = 'var(--text-muted)'; previewBtn.style.background = 'none'; });
+    previewBtn.addEventListener('click', () => this.togglePreview());
+    this.toolbarBtns['preview'] = previewBtn;
+    this.toolbar.appendChild(previewBtn);
+
     // ═══════════════════════════════════════════════
     // LAYER 3: Tab bar — file tabs (clean, separate row)
     // ═══════════════════════════════════════════════
@@ -273,6 +297,17 @@ export class FileViewer {
     Object.assign(this.editorContainer.style, { flex: '1', overflow: 'hidden' });
     this.diffEditorContainer = document.createElement('div');
     Object.assign(this.diffEditorContainer.style, { flex: '1', overflow: 'hidden', display: 'none' });
+
+    // Preview container (markdown / image)
+    this.previewContainer = document.createElement('div');
+    this.previewContainer.className = 'fv-preview';
+    Object.assign(this.previewContainer.style, {
+      flex: '1', overflow: 'auto', display: 'none',
+      padding: '24px 32px',
+      color: 'var(--starlight-dim, #c8d6e5)',
+      fontSize: '13px', lineHeight: '1.7',
+      fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif)',
+    });
 
     // ═══════════════════════════════════════════════
     // LAYER 5: Status bar — LSP · language · cursor
@@ -329,6 +364,7 @@ export class FileViewer {
     this.el.appendChild(this.tabBar);
     this.el.appendChild(this.editorContainer);
     this.el.appendChild(this.diffEditorContainer);
+    this.el.appendChild(this.previewContainer);
     this.el.appendChild(this.statusBar);
 
     // Resize handle
@@ -494,11 +530,24 @@ export class FileViewer {
     this.translator.detach();
     this.activeIdx = idx;
     const tab = this.tabs[idx];
+
+    // Auto-preview images; restore preview for markdown
+    const ext = tab.fileName.split('.').pop()?.toLowerCase() || '';
+    const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
+    if (imgExts.has(ext)) {
+      tab.viewMode = 'preview';
+    }
+
     if (tab.diffModels) {
       if (this.diffEditor) this.diffEditor.setModel(tab.diffModels);
       this.showDiffEditor();
       if (this.diffEditor) this.diffEditor.layout();
+    } else if (tab.viewMode === 'preview' && this.canPreview(tab)) {
+      this.editor.setModel(tab.model); // ensure model is attached
+      this.showPreview(); // show container first for loading state
+      this.renderPreview(tab); // fire-and-forget, async load
     } else {
+      tab.viewMode = 'edit';
       this.editor.setModel(tab.model);
       this.showNormalEditor();
       this.editor.layout();
@@ -507,6 +556,7 @@ export class FileViewer {
     this.renderTabs();
     this.updateBreadcrumb();
     this.updateStatusBar();
+    this.updatePreviewButton();
   }
 
   // ── Breadcrumb: clickable path segments ──
@@ -633,22 +683,59 @@ export class FileViewer {
 
   // ── Public API ──
 
-  async open(filePath: string): Promise<void> {
+  async open(filePath: string, opts?: { noAutoPreview?: boolean }): Promise<void> {
     const existingIdx = this.tabs.findIndex(t => t.filePath === filePath);
     if (existingIdx >= 0) {
       this.activeIdx = existingIdx;
       this.renderTabs();
-      this.editor.setModel(this.tabs[existingIdx].model);
+      const tab = this.tabs[existingIdx];
+      if (tab.viewMode === 'preview' && this.canPreview(tab)) {
+        this.editor.setModel(tab.model);
+        this.renderPreview(tab);
+        this.showPreview();
+      } else {
+        this.editor.setModel(tab.model);
+        this.showNormalEditor();
+        this.editor.layout();
+        this.editor.focus();
+      }
       this.el.classList.add('fv-open');
       this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
       this.centerOnScreen();
-      this.editor.layout();
+      this.updatePreviewButton();
       return;
     }
 
     const fileName = filePath.replace(/\\/g, '/').split('/').pop() || filePath;
     const uri = monaco.Uri.parse(`file:///${filePath.replace(/\\/g, '/')}`);
     const language = detectLanguage(fileName);
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
+
+    // ── Image files: skip text read, show preview directly ──
+    if (imgExts.has(ext)) {
+      this.state.open = true;
+      this.centerOnScreen();
+      this.el.classList.add('fv-open');
+      this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
+
+      const model = monaco.editor.createModel('', 'plaintext', uri);
+      const newTab: TabData = {
+        filePath, fileName, model,
+        dirty: false, originalContent: '',
+        loading: false, error: '',
+        viewMode: 'preview',
+      };
+      this.tabs.push(newTab);
+      this.activeIdx = this.tabs.length - 1;
+      this.editor.setModel(model);
+      this.showPreview();
+      this.renderPreview(newTab); // fire-and-forget, async load
+      this.renderTabs();
+      this.updatePreviewButton();
+      FileTreePanel.get().setOpenFilePath(filePath);
+      return;
+    }
 
     // Show loading state in a temp model
     const loadingModel = monaco.editor.createModel('加载中...', 'plaintext');
@@ -724,6 +811,7 @@ export class FileViewer {
 
     this.editor.layout();
     this.editor.focus();
+    this.updatePreviewButton();
   }
 
   private async saveActiveTab(): Promise<void> {
@@ -822,12 +910,101 @@ export class FileViewer {
 
   private showDiffEditor(): void {
     this.editorContainer.style.display = 'none';
+    this.previewContainer.style.display = 'none';
     this.diffEditorContainer.style.display = '';
   }
 
   private showNormalEditor(): void {
     this.diffEditorContainer.style.display = 'none';
+    this.previewContainer.style.display = 'none';
     this.editorContainer.style.display = '';
+  }
+
+  private showPreview(): void {
+    this.editorContainer.style.display = 'none';
+    this.diffEditorContainer.style.display = 'none';
+    this.previewContainer.style.display = '';
+  }
+
+  // ── Preview mode ──
+
+  private previewableExts = new Set(['md', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
+
+  private canPreview(tab: TabData): boolean {
+    if (tab.diffModels) return false;
+    const ext = tab.fileName.split('.').pop()?.toLowerCase() || '';
+    return this.previewableExts.has(ext);
+  }
+
+  private updatePreviewButton(): void {
+    const btn = this.toolbarBtns['preview'];
+    if (!btn) return;
+    const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+    if (tab && this.canPreview(tab)) {
+      btn.style.display = '';
+      const isPreview = tab.viewMode === 'preview';
+      btn.innerHTML = isPreview ? iconHtml('edit', 12) : iconHtml('eye', 12);
+      btn.title = isPreview ? '返回编辑模式' : '切换预览';
+      btn.style.color = isPreview ? 'var(--nebula, #a088e0)' : 'var(--text-muted)';
+    } else {
+      btn.style.display = 'none';
+    }
+  }
+
+  private async togglePreview(): Promise<void> {
+    const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
+    if (!tab || !this.canPreview(tab)) return;
+
+    if (tab.viewMode === 'preview') {
+      tab.viewMode = 'edit';
+      this.showNormalEditor();
+      this.editor.layout();
+      this.editor.focus();
+      this.updatePreviewButton();
+    } else {
+      tab.viewMode = 'preview';
+      this.showPreview(); // show container first so loading state is visible
+      await this.renderPreview(tab);
+      this.updatePreviewButton();
+    }
+  }
+
+  private async renderPreview(tab: TabData): Promise<void> {
+    const ext = tab.fileName.split('.').pop()?.toLowerCase() || '';
+    const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
+
+    if (imgExts.has(ext)) {
+      await this.renderImagePreview(tab.filePath);
+    } else if (ext === 'md') {
+      this.renderMarkdownPreview(tab.model.getValue());
+    }
+  }
+
+  private renderMarkdownPreview(content: string): void {
+    const rawHtml = marked.parse(content) as string;
+    const safeHtml = DOMPurify.sanitize(rawHtml);
+    this.previewContainer.innerHTML = safeHtml;
+    // Syntax highlight code blocks
+    this.previewContainer.querySelectorAll('pre code').forEach(block => {
+      hljs.highlightElement(block as HTMLElement);
+    });
+  }
+
+  private async renderImagePreview(filePath: string): Promise<void> {
+    this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">加载中...</div>`;
+    try {
+      const b64 = await invoke<string>('read_file_base64', { filePath });
+      const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
+      const mimeMap: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
+        bmp: 'image/bmp', ico: 'image/x-icon',
+      };
+      const mime = mimeMap[ext] || 'image/png';
+      this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:200px;"><img src="data:${mime};base64,${b64}" alt="${filePath.replace(/\\/g, '/').split('/').pop()}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;box-shadow:0 4px 24px rgba(0,0,0,0.4);" /></div>`;
+    } catch (err: any) {
+      this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">⚠ 无法加载图片: ${String(err)}</div>`;
+    }
   }
 
   closeAll(): void {
