@@ -15,7 +15,7 @@
 
 import { bus } from './events';
 
-export interface AppPanel {
+interface AppPanel {
   readonly id: string;
   isOpen(): boolean;
 }

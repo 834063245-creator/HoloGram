@@ -17,7 +17,7 @@ import type { Tool } from './tool';
 
 // ── Types ──
 
-export type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
+type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
 
 /** Parsed entry from MEMORY.md index */
 export interface MemoryEntry {

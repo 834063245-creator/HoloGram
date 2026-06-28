@@ -102,23 +102,16 @@ pub struct Edge {
     /// Cross-file edge?
     #[serde(default)]
     pub cross_file: bool,
-    /// Direction: "forward" | "backward"
-    #[serde(default = "default_direction")]
-    pub direction: String,
+
     /// Temporal delay in seconds (for temporal edges)
     #[serde(default)]
     pub temporal_delay_sec: Option<f64>,
-    /// Medium node ID (for data edges via intermediary)
-    #[serde(default)]
-    pub medium_node_id: Option<String>,
+
     /// Resolved via LSP type analysis (vs. same-name heuristic)
     #[serde(default)]
     pub lsp_resolved: bool,
 }
 
-fn default_direction() -> String {
-    "forward".into()
-}
 
 impl Edge {
     pub fn new(
@@ -134,9 +127,7 @@ impl Edge {
             kind,
             coupling_depth: 0,
             cross_file: false,
-            direction: "forward".into(),
             temporal_delay_sec: None,
-            medium_node_id: None,
             lsp_resolved: false,
         }
     }
@@ -155,9 +146,7 @@ mod tests {
         assert!(matches!(e.kind, EdgeKind::Calls));
         assert_eq!(e.coupling_depth, 0);
         assert!(!e.cross_file);
-        assert_eq!(e.direction, "forward");
         assert!(e.temporal_delay_sec.is_none());
-        assert!(e.medium_node_id.is_none());
     }
 
     #[test]
@@ -218,7 +207,6 @@ mod tests {
         e.coupling_depth = 2;
         e.cross_file = true;
         e.temporal_delay_sec = Some(1.5);
-        e.medium_node_id = Some("medium_1".into());
         let json = serde_json::to_string(&e).unwrap();
         let back: Edge = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "e1");
@@ -228,6 +216,5 @@ mod tests {
         assert_eq!(back.coupling_depth, 2);
         assert!(back.cross_file);
         assert_eq!(back.temporal_delay_sec, Some(1.5));
-        assert_eq!(back.medium_node_id.as_deref(), Some("medium_1"));
     }
 }

@@ -157,7 +157,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 
 /** Parameters for one layout run. Must match the CPU layout3D values exactly. */
-export interface GPULayoutParams {
+interface GPULayoutParams {
   n: number;
   rep: number;
   att: number;

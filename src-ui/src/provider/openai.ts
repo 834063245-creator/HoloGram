@@ -8,7 +8,7 @@ import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing
 
 const DEFAULT_MAX_TOKENS = 200000;
 
-export interface OpenAIConfig {
+interface OpenAIConfig {
   name?: string;
   apiKey: string;
   baseUrl: string; // e.g. "https://api.deepseek.com/v1" or "https://api.openai.com/v1"

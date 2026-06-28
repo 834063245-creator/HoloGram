@@ -10,7 +10,7 @@ import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import type { StarGraph } from './graph';
 
-export interface HotspotItem {
+interface HotspotItem {
   file: string;
   count: number;
   last_details: {

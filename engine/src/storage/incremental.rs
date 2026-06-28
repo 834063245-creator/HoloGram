@@ -35,7 +35,7 @@ struct FileDiff {
     added_nodes: Vec<Node>,
     removed_node_ids: Vec<String>,
     updated_nodes: Vec<Node>,
-    #[allow(dead_code)] new_edges: Vec<Edge>,
+
 }
 
 /// Incremental update engine.
@@ -316,8 +316,7 @@ impl IncrementalUpdater {
             added_nodes,
             removed_node_ids,
             updated_nodes,
-            new_edges: analysis.edges.clone(),
-        }
+            }
     }
 
     /// Check if two locations are "close" (line difference ≤ tolerance).

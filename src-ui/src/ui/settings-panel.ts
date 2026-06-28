@@ -39,7 +39,7 @@ export class SettingsPanel {
 
   constructor() {
     this.originalSettings = loadSettings();
-    this.workingSettings = JSON.parse(JSON.stringify(this.originalSettings));
+    this.workingSettings = structuredClone(this.originalSettings);
     this.buildDOM();
   }
 
@@ -60,7 +60,7 @@ export class SettingsPanel {
   open(): void {
     // Re-read from localStorage in case something else changed
     this.originalSettings = loadSettings();
-    this.workingSettings = JSON.parse(JSON.stringify(this.originalSettings));
+    this.workingSettings = structuredClone(this.originalSettings);
     this.openState = true;
     this.activeTab = 'provider';
     this.render();
@@ -571,7 +571,7 @@ export class SettingsPanel {
     if (st) st.textContent = `[settings] saved, ls verify=${verifyLen}`;
     setLang(s.display.language);
     bus.emit('lang:changed', { lang: s.display.language });
-    this.originalSettings = JSON.parse(JSON.stringify(s));
+    this.originalSettings = structuredClone(s);
     this.dirty = false;
 
     // Flash save button

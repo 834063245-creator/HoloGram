@@ -24,7 +24,7 @@ pub struct TsLspContext<'a> {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // ponytail: stored as HashMap value, fields are type structure not individually read
 pub(crate) struct TsImport { pub(crate) local_name: String, pub(crate) module_path: String, pub(crate) is_default: bool, pub(crate) is_namespace: bool }
 
 impl<'a> TsLspContext<'a> {

@@ -11,7 +11,7 @@ import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import type { CheckResult } from './check';
 
-export interface TimelineEvent {
+interface TimelineEvent {
   id: number;
   timestamp: string;
   event_type: string;

@@ -12,17 +12,16 @@ use crate::adapter::ResolvedCall;
 pub struct CLspContext<'a> {
     pub source: &'a str, pub registry: &'a TypeRegistry, pub current_scope: Scope,
     pub module_qn: String,
-    #[allow(dead_code)] pub is_cpp: bool,
-    #[allow(dead_code)] pub includes: Vec<String>,
+
     pub enclosing_func_qn: Option<String>, pub enclosing_class_qn: Option<String>,
     pub resolved_calls: Vec<ResolvedCall>,
     eval_cache: HashMap<usize, Type>,
 }
 
 impl<'a> CLspContext<'a> {
-    pub fn new(source: &'a str, registry: &'a TypeRegistry, module_qn: &str, is_cpp: bool) -> Self {
+    pub fn new(source: &'a str, registry: &'a TypeRegistry, module_qn: &str) -> Self {
         Self { source, registry, current_scope: Scope::new_root(), module_qn: module_qn.to_string(),
-            is_cpp, includes: Vec::new(), enclosing_func_qn: None, enclosing_class_qn: None,
+            enclosing_func_qn: None, enclosing_class_qn: None,
             resolved_calls: Vec::new(), eval_cache: HashMap::new() }
     }
     fn node_text(&self, n: Node) -> Option<&str> { n.utf8_text(self.source.as_bytes()).ok() }
@@ -279,8 +278,8 @@ pub fn process_c_file(ctx: &mut CLspContext, root: Node) {
     ctx.enclosing_func_qn = prev;
 }
 
-pub fn run_c_lsp(source: &str, tree: &tree_sitter::Tree, module_qn: &str, registry: &TypeRegistry, is_cpp: bool) -> Vec<ResolvedCall> {
-    let mut ctx = CLspContext::new(source, registry, module_qn, is_cpp);
+pub fn run_c_lsp(source: &str, tree: &tree_sitter::Tree, module_qn: &str, registry: &TypeRegistry) -> Vec<ResolvedCall> {
+    let mut ctx = CLspContext::new(source, registry, module_qn);
     process_c_file(&mut ctx, tree.root_node());
     ctx.resolved_calls
 }

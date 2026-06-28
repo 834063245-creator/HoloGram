@@ -9,7 +9,7 @@ import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 
-export interface Violation {
+interface Violation {
   signal?: {
     description?: string;
     file_path?: string;

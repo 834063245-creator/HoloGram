@@ -18,7 +18,7 @@ import './file-translator.css';
 type PanelMode = 'loading' | 'content' | 'error';
 type AuditType = 'bug' | 'risk' | 'smell' | 'ok' | '';
 
-export interface TranslationLine {
+interface TranslationLine {
   code: string;
   human: string;
   audit: string;

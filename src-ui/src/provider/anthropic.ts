@@ -9,7 +9,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MAX_TOKENS = 200000;
 
-export interface AnthropicConfig {
+interface AnthropicConfig {
   name?: string;
   apiKey: string;
   baseUrl?: string;

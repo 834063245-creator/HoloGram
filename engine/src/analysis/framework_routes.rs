@@ -1254,9 +1254,7 @@ fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usize {
             kind: EdgeKind::Calls,
             coupling_depth: 1,
             cross_file: false,
-            direction: "forward".into(),
             temporal_delay_sec: None,
-            medium_node_id: None,
             lsp_resolved: false,
         };
 

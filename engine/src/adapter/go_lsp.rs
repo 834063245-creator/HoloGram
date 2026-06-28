@@ -301,9 +301,7 @@ pub fn go_lookup_field_or_method(registry: &TypeRegistry, type_qn: &str, member:
                 qualified_name: format!("{}.{}", type_qn, member),
                 receiver_type: Some(type_qn.to_string()),
                 short_name: member.to_string(),
-                params: vec![],
                 ret: t.clone(),
-                flags: 0,
             });
         }
     }

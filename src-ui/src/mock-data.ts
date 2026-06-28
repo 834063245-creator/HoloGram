@@ -258,7 +258,7 @@ import { Request } from './request';
 import { Response } from './response';
 import { AuthProvider } from './auth';
 
-export class MiddlewareChain {
+class MiddlewareChain {
   private handlers: Middleware[] = [];
 
   use(handler: Middleware): this {

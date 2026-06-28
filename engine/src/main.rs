@@ -333,8 +333,8 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         serde_json::json!({
             "id": e.id, "source": e.source, "target": e.target,
             "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-            "cross_file": e.cross_file, "direction": e.direction,
-            "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id
+            "cross_file": e.cross_file,
+            "temporal_delay_sec": e.temporal_delay_sec
         })
     }).collect();
 
@@ -537,9 +537,8 @@ fn handle_get_graph() -> Vec<u8> {
             serde_json::json!({
                 "id": e.id, "source": e.source, "target": e.target,
                 "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-                "cross_file": e.cross_file, "direction": e.direction,
+                "cross_file": e.cross_file,
                 "temporal_delay_sec": e.temporal_delay_sec,
-                "medium_node_id": e.medium_node_id,
             })
         }).collect();
         serde_json::json!({"nodes": nodes, "edges": edges})

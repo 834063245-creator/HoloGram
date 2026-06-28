@@ -142,7 +142,7 @@ function isSameRule(a: Rule, b: Rule): boolean {
 
 // ── Gate (Policy + Approver) ──
 
-export type ApproveCallback = (
+type ApproveCallback = (
   toolName: string,
   description: string,
   args: Record<string, unknown>,

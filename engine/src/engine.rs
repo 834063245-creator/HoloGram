@@ -1231,9 +1231,9 @@ fn resolve_calls_lsp(
                 }
                 calls
             }
-            "c" | "h" => run_c_lsp(source, &tree, &module_qn, &registry, false),
+            "c" | "h" => run_c_lsp(source, &tree, &module_qn, &registry),
             "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => {
-                run_c_lsp(source, &tree, &module_qn, &registry, true)
+                run_c_lsp(source, &tree, &module_qn, &registry)
             }
             "php" => run_php_lsp(source, &tree, &module_qn, &registry),
             "kt" | "kts" => run_kotlin_lsp(source, &tree, &module_qn, &registry),
