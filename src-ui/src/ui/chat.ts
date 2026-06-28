@@ -193,20 +193,37 @@ export class ChatPanel {
 
   setAgent(agent: Agent | null): void {
     if (!agent) return;
-    // Add as a new session
-    const s: ChatSession = {
+    // Replace all sessions — setAgent is boot/setup, not session management.
+    // ponytail: clear old sessions (including placeholder) so the workspace
+    // switch always lands on the fresh agent. Old stale sessions caused the
+    // agent to answer with "当前没有加载项目" after a project was loaded.
+    this.sessionMessages.clear();
+    this.sessions = [{
       id: nextSessionId++,
-      label: `会话 ${this.sessions.length + 1}`,
+      label: `会话 1`,
       agent,
-    };
-    this.sessions.push(s);
-    if (this.activeIdx < 0) this.activeIdx = 0;
+    }];
+    this.activeIdx = 0;
+    this.turnPairs = [];
+    this.totalTokensUsed = 0;
+    this.toolUsage.clear();
+    this.toolHistory = [];
     this.renderSessionTabs();
+    this.msgList.innerHTML = '';
+    this.addNotice('已连接到当前项目', 'info');
   }
 
   getAgent(): Agent | null { return this.agent; }
   setStarGraph(g: StarGraph): void { this.starGraph = g; }
-  setProjectPath(p: string): void { this.projectPath = p; }
+  setProjectPath(p: string): void {
+    // ponytail: clear user focus when project changes — stale node/file refs
+    // from the old workspace would misdirect the agent's tool calls.
+    if (p && p !== this.projectPath) {
+      this._userFocusFile = null;
+      this._userFocusNode = null;
+    }
+    this.projectPath = p;
+  }
 
   toggle(): void {
     switch (this.mode) {

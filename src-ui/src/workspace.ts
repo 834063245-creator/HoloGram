@@ -153,8 +153,14 @@ export class Workspace {
 
     try {
       if (opts?.skipAnalysis && opts.cachedGraph) {
-        // Cold-start: use cached graph, skip analysis
+        // Cold-start: use cached graph for instant render.
+        // Still fire analyze_and_load (force=false) so engine_init switches
+        // the backend engine to THIS project. Without this, all hologram_*
+        // tool calls hit the previous session's graph data.
+        // ponytail: fire-and-forget — user sees graph immediately, engine
+        // init finishes in background (~500ms from SQLite).
         ws.graphData = opts.cachedGraph;
+        invoke('analyze_and_load', { path, force: false }).catch(() => {});
       } else {
         // Full analysis
         ws.onLoadingChange?.(true);
