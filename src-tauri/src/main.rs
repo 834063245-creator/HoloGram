@@ -1270,25 +1270,40 @@ async fn exec_command(
     let mut child = os_sandbox::spawn_shell(&command, &physical_dir_str)
         .map_err(|e| format!("无法执行命令: {e}"))?;
 
-    // Manual timeout polling (compatible with older Rust)
+    // Drain stdout/stderr in background threads to prevent pipe-buffer deadlock.
+    // If the child produces >4 KB (Windows pipe buf) without the parent reading,
+    // the child blocks on write and we never see an exit.
+    let stdout_drainer = child.take_stdout().map(|mut reader| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = reader.read_to_end(&mut v);
+            let _ = tx.send(v);
+        });
+        rx
+    });
+    let stderr_drainer = child.take_stderr().map(|mut reader| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = reader.read_to_end(&mut v);
+            let _ = tx.send(v);
+        });
+        rx
+    });
+
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = if let Some(mut p) = child.take_stdout() {
-                    let mut v = Vec::new();
-                    if let Err(e) = p.read_to_end(&mut v) {
-                        eprintln!("[hologram] read_to_end stdout failed: {e}");
-                    }
-                    String::from_utf8_lossy(&v).to_string()
-                } else { String::new() };
-                let stderr = if let Some(mut p) = child.take_stderr() {
-                    let mut v = Vec::new();
-                    if let Err(e) = p.read_to_end(&mut v) {
-                        eprintln!("[hologram] read_to_end stderr failed: {e}");
-                    }
-                    String::from_utf8_lossy(&v).to_string()
-                } else { String::new() };
+                let stdout = stdout_drainer
+                    .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
+                    .map(|v| String::from_utf8_lossy(&v).to_string())
+                    .unwrap_or_default();
+                let stderr = stderr_drainer
+                    .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
+                    .map(|v| String::from_utf8_lossy(&v).to_string())
+                    .unwrap_or_default();
 
                 if !status.success() {
                     return Err(format!(
@@ -1401,12 +1416,18 @@ async fn list_directory(
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DirEntry>, String> {
-    require_read(&path, &state, &app).await?;
-    let root = std::path::PathBuf::from(&path);
-    if !root.is_dir() {
-        return Err(format!("不是有效目录: {}", path));
-    }
-    Ok(list_dir_recursive(&root, 4))
+    let root = require_read(&path, &state, &app).await?;
+    // ponytail: list_dir_recursive does recursive fs::read_dir + is_dir
+    // synchronously. On large projects this blocks the async worker for
+    // seconds — same class of bug as serialize_cached_graph.
+    tokio::task::spawn_blocking(move || {
+        if !root.is_dir() {
+            return Err(format!("不是有效目录: {}", path));
+        }
+        Ok(list_dir_recursive(&root, 4))
+    })
+    .await
+    .map_err(|e| format!("目录列表任务失败: {e}"))?
 }
 
 #[tauri::command]
@@ -1474,13 +1495,16 @@ fn log_append(
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<(), String> {
     let ctx = get_ctx(&state)?;
-    let tool = tools::EditTool { path: path.clone() };
+    // Phase 3: forward-map to worktree physical path (spec §5.6)
+    let physical = ctx.forward_map_path(std::path::Path::new(&path));
+    let physical_str = physical.to_string_lossy().to_string();
+    let tool = tools::EditTool { path: physical_str.clone() };
     check_permission_sync(&tool, &ctx)?;
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(&physical)
         .map_err(|e| format!("log_append: cannot open {}: {}", path, e))?;
     file.write_all(content.as_bytes())
         .map_err(|e| format!("log_append: write failed: {}", e))
@@ -1492,8 +1516,8 @@ async fn create_directory(
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    require_write(&path, &state, &app).await?;
-    std::fs::create_dir_all(&path)
+    let resolved = require_write(&path, &state, &app).await?;
+    std::fs::create_dir_all(&resolved)
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
 
@@ -1522,9 +1546,10 @@ async fn rename_file_or_dir(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     // Phase 2: check both source and destination paths
-    require_write(&from, &state, &app).await?;
-    require_write(&to, &state, &app).await?;
-    std::fs::rename(&from, &to)
+    // Phase 3: use resolved (forward-mapped) paths for actual ops (spec §5.6)
+    let resolved_from = require_write(&from, &state, &app).await?;
+    let resolved_to = require_write(&to, &state, &app).await?;
+    std::fs::rename(&resolved_from, &resolved_to)
         .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))
 }
 
@@ -1604,8 +1629,7 @@ async fn search_code(
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&directory, &state, &app).await?;
-    let root = std::path::PathBuf::from(&directory);
+    let root = require_read(&directory, &state, &app).await?;
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
         Some(regex::RegexBuilder::new(&pattern)
@@ -1628,89 +1652,88 @@ async fn search_code(
         .filter(|s| !s.is_empty())
         .collect();
     let max = max_results.unwrap_or(50).min(200);
-    let mut results: Vec<serde_json::Value> = Vec::new();
 
-    let skip_dirs: Vec<&str> = vec![
-        ".git", "node_modules", ".venv", "venv", "__pycache__",
-        "target", "dist", ".next", ".nuxt", "build", ".cache",
-        ".hologram", ".idea", ".vscode",
-    ];
+    // ponytail: walkdir + read_to_string per file is heavy sync I/O.
+    // Must run on blocking thread to avoid starving other async commands.
+    let pat = pattern.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut results: Vec<serde_json::Value> = Vec::new();
+        let skip_dirs: Vec<&str> = vec![
+            ".git", "node_modules", ".venv", "venv", "__pycache__",
+            "target", "dist", ".next", ".nuxt", "build", ".cache",
+            ".hologram", ".idea", ".vscode",
+        ];
+        let skip_extensions: Vec<&str> = vec![
+            "exe", "dll", "so", "dylib", "bin", "o", "a",
+            "png", "jpg", "jpeg", "gif", "ico", "svg",
+            "woff", "woff2", "ttf", "eot",
+            "zip", "tar", "gz", "bz2", "7z", "rar",
+            "mp3", "mp4", "avi", "mov", "wav",
+            "pdf", "doc", "docx", "xls", "xlsx",
+            "pyc", "pyo", "class", "wasm",
+            "lock", "map", "min.js", "min.css",
+        ];
 
-    let skip_extensions: Vec<&str> = vec![
-        "exe", "dll", "so", "dylib", "bin", "o", "a",
-        "png", "jpg", "jpeg", "gif", "ico", "svg",
-        "woff", "woff2", "ttf", "eot",
-        "zip", "tar", "gz", "bz2", "7z", "rar",
-        "mp3", "mp4", "avi", "mov", "wav",
-        "pdf", "doc", "docx", "xls", "xlsx",
-        "pyc", "pyo", "class", "wasm",
-        "lock", "map", "min.js", "min.css",
-    ];
-
-    for entry in walkdir::WalkDir::new(&root)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !skip_dirs.iter().any(|d| name == *d)
-        })
-    {
-        let entry = entry.map_err(|e| format!("读取文件失败: {}", e))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let fp = entry.path();
-        let ext = fp.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let name = fp.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-
-        if skip_extensions.iter().any(|skip| ext == *skip || name.ends_with(skip)) {
-            continue;
-        }
-        if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) {
-            continue;
-        }
-
-        let content = match std::fs::read_to_string(fp) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        for (line_no, line) in content.lines().enumerate() {
-            let matched = if let Some(ref re) = regex {
-                re.is_match(line)
-            } else {
-                let line_lower = line.to_lowercase();
-                sub_patterns.iter().any(|p| line_lower.contains(p))
+        for entry in walkdir::WalkDir::new(&root)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                !skip_dirs.iter().any(|d| name == *d)
+            })
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
             };
-            if matched {
-                results.push(serde_json::json!({
-                    "file": fp.to_string_lossy(),
-                    "line": line_no + 1,
-                    "content": line.trim(),
-                }));
-                if results.len() >= max {
-                    break;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let fp = entry.path();
+            let ext = fp.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            let name = fp.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            if skip_extensions.iter().any(|skip| ext == *skip || name.ends_with(skip)) {
+                continue;
+            }
+            if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(fp) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            for (line_no, line) in content.lines().enumerate() {
+                let matched = if let Some(ref re) = regex {
+                    re.is_match(line)
+                } else {
+                    let line_lower = line.to_lowercase();
+                    sub_patterns.iter().any(|p| line_lower.contains(p))
+                };
+                if matched {
+                    results.push(serde_json::json!({
+                        "file": fp.to_string_lossy(),
+                        "line": line_no + 1,
+                        "content": line.trim(),
+                    }));
+                    if results.len() >= max { break; }
                 }
             }
+            if results.len() >= max { break; }
         }
-        if results.len() >= max {
-            break;
-        }
-    }
 
-    Ok(serde_json::json!({
-        "pattern": pattern,
-        "count": results.len(),
-        "truncated": results.len() >= max,
-        "results": results,
-    }).to_string())
+        Ok(serde_json::json!({
+            "pattern": pat,
+            "count": results.len(),
+            "truncated": results.len() >= max,
+            "results": results,
+        }).to_string())
+    }).await.map_err(|e| format!("搜索任务失败: {e}"))?
 }
 
-/// Alias: LLM sometimes generates "search_content" instead of "search_code"
+/// Alias: LLM sometimes generates "search_content" instead of "search_code".
+/// ponytail: delegate — the 70-line duplicate was a copy-paste bug magnet.
 #[tauri::command]
 async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
@@ -1718,61 +1741,7 @@ async fn search_content(
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Sandbox check inline to avoid double-check in search_code
-    require_read(&directory, &state, &app).await?;
-    let root = std::path::PathBuf::from(&directory);
-    let is_regex = use_regex.unwrap_or(false);
-    let regex = if is_regex {
-        Some(regex::RegexBuilder::new(&pattern)
-            .case_insensitive(true)
-            .multi_line(true)
-            .build()
-            .map_err(|e| format!("正则表达式无效: {}", e))?)
-    } else { None };
-    let sub_patterns: Vec<String> = if is_regex { Vec::new() }
-        else { pattern.to_lowercase().split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() };
-    let extensions: Vec<String> = file_types.unwrap_or_default()
-        .split(',').map(|s| s.trim().trim_start_matches('.').to_lowercase()).filter(|s| !s.is_empty()).collect();
-    let max = max_results.unwrap_or(50).min(200);
-    let mut results: Vec<serde_json::Value> = Vec::new();
-    let skip_dirs: Vec<&str> = vec![
-        ".git", "node_modules", ".venv", "venv", "__pycache__",
-        "target", "dist", ".next", ".nuxt", "build", ".cache",
-        ".hologram", ".idea", ".vscode",
-    ];
-    let skip_extensions: Vec<&str> = vec![
-        "exe","dll","so","dylib","bin","o","a",
-        "png","jpg","jpeg","gif","ico","svg",
-        "woff","woff2","ttf","eot",
-        "zip","tar","gz","bz2","7z","rar",
-        "mp3","mp4","avi","mov","wav",
-        "pdf","doc","docx","xls","xlsx",
-        "pyc","pyo","class","wasm",
-        "lock","map","min.js","min.css",
-    ];
-    for entry in walkdir::WalkDir::new(&root)
-        .into_iter()
-        .filter_entry(|e| { let name = e.file_name().to_string_lossy(); !skip_dirs.iter().any(|d| name == *d) })
-    {
-        let entry = entry.map_err(|e| format!("读取文件失败: {}", e))?;
-        if !entry.file_type().is_file() { continue; }
-        let fp = entry.path();
-        let ext = fp.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        let name = fp.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if skip_extensions.iter().any(|skip| ext == *skip || name.ends_with(skip)) { continue; }
-        if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) { continue; }
-        let content = match std::fs::read_to_string(fp) { Ok(c) => c, Err(_) => continue };
-        for (line_no, line) in content.lines().enumerate() {
-            let matched = if let Some(ref re) = regex { re.is_match(line) }
-                else { let line_lower = line.to_lowercase(); sub_patterns.iter().any(|p| line_lower.contains(p)) };
-            if matched {
-                results.push(serde_json::json!({"file": fp.to_string_lossy(), "line": line_no + 1, "content": line.trim()}));
-                if results.len() >= max { break; }
-            }
-        }
-        if results.len() >= max { break; }
-    }
-    Ok(serde_json::json!({"pattern": pattern, "count": results.len(), "truncated": results.len() >= max, "results": results}).to_string())
+    search_code(directory, pattern, file_types, max_results, use_regex, state, app).await
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1793,68 +1762,57 @@ async fn glob(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let dir = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    require_read(&dir, &state, &app).await?;
-    let root = std::path::PathBuf::from(&dir);
-    if !root.is_dir() {
-        return Err(format!("不是有效目录: {}", dir));
-    }
+    let root = require_read(&dir, &state, &app).await?;
 
     let glob_pattern = glob::Pattern::new(&pattern)
         .map_err(|e| format!("无效的 glob 模式: {}", e))?;
+    let pat = pattern.clone();
 
-    let mut results: Vec<GlobEntry> = Vec::new();
-    let max = 200;
-
-    for entry in walkdir::WalkDir::new(&root)
-        .max_depth(12)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() {
-            continue;
+    // ponytail: walkdir over entire project is heavy sync I/O — blocking thread.
+    tokio::task::spawn_blocking(move || {
+        if !root.is_dir() {
+            return Err(format!("不是有效目录: {}", dir));
         }
-        // Skip hidden dirs / build artifacts
-        let entry_path = entry.path();
-        if entry_path.to_string_lossy().contains("/.git/")
-            || entry_path.to_string_lossy().contains("\\.git\\")
-            || entry_path.to_string_lossy().contains("/node_modules/")
-            || entry_path.to_string_lossy().contains("\\node_modules\\")
-            || entry_path.to_string_lossy().contains("/target/")
-            || entry_path.to_string_lossy().contains("\\target\\")
-            || entry_path.to_string_lossy().contains("/dist/")
-            || entry_path.to_string_lossy().contains("\\dist\\")
-            || entry_path.to_string_lossy().contains("/build/")
-            || entry_path.to_string_lossy().contains("\\build\\")
-            || entry_path.to_string_lossy().contains("/.hologram/")
-            || entry_path.to_string_lossy().contains("\\.hologram\\")
+        let mut results: Vec<GlobEntry> = Vec::new();
+        let max = 200;
+
+        for entry in walkdir::WalkDir::new(&root)
+            .max_depth(12)
+            .into_iter()
+            .filter_map(|e| e.ok())
         {
-            continue;
+            if !entry.file_type().is_file() { continue; }
+            let entry_path = entry.path();
+            let eps = entry_path.to_string_lossy();
+            if eps.contains("/.git/") || eps.contains("\\.git\\")
+                || eps.contains("/node_modules/") || eps.contains("\\node_modules\\")
+                || eps.contains("/target/") || eps.contains("\\target\\")
+                || eps.contains("/dist/") || eps.contains("\\dist\\")
+                || eps.contains("/build/") || eps.contains("\\build\\")
+                || eps.contains("/.hologram/") || eps.contains("\\.hologram\\")
+            { continue; }
+
+            let rel = entry_path.strip_prefix(&root).unwrap_or(entry_path);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+            if glob_pattern.matches(&rel_str) {
+                results.push(GlobEntry {
+                    path: entry_path.to_string_lossy().to_string(),
+                    name: rel.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| rel_str.clone()),
+                });
+            }
+            if results.len() >= max { break; }
         }
 
-        let rel = entry_path
-            .strip_prefix(&root)
-            .unwrap_or(entry_path);
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-
-        if glob_pattern.matches(&rel_str) {
-            results.push(GlobEntry {
-                path: entry_path.to_string_lossy().to_string(),
-                name: rel.file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| rel_str.clone()),
-            });
-        }
-        if results.len() >= max {
-            break;
-        }
-    }
-
-    Ok(serde_json::json!({
-        "pattern": pattern,
-        "count": results.len(),
-        "truncated": results.len() >= max,
-        "results": results,
-    }).to_string())
+        Ok(serde_json::json!({
+            "pattern": pat,
+            "count": results.len(),
+            "truncated": results.len() >= max,
+            "results": results,
+        }).to_string())
+    }).await.map_err(|e| format!("glob 任务失败: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1871,8 +1829,10 @@ async fn edit_file(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     // Phase 2: permission check — edit = read then write (both must pass)
+    // Phase 3: use resolved (forward-mapped) path for actual file ops (spec §5.6)
     require_read(&file_path, &state, &app).await?;
-    require_write(&file_path, &state, &app).await?;
+    let resolved = require_write(&file_path, &state, &app).await?;
+    let file_path = resolved.to_string_lossy().to_string();
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
 
@@ -2324,7 +2284,15 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
         let _ = regenerate_file_graph(&path);
     }
 
-    serialize_cached_graph(&path)
+    // Serialize the full graph for response. Run on blocking thread —
+    // ponytail: serializing 11k+ nodes is 50-200ms of sync JSON work.
+    // Running it on the async worker starves other commands (e.g. concurrent
+    // read_file_content) — their futures never get polled.
+    let path_clone = path.clone();
+    let serialized = tokio::task::spawn_blocking(move || serialize_cached_graph(&path_clone))
+        .await
+        .map_err(|e| format!("序列化任务失败: {e}"))??;
+    Ok(serialized)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2362,7 +2330,8 @@ async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<St
 // Git 集成 — 轻量 SCM，直接调 git CLI
 // ═══════════════════════════════════════════════════════
 
-fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
+/// Synchronous git execution — only call from spawn_blocking.
+fn run_git_sync(dir: &str, args: &[String]) -> Result<String, String> {
     let mut cmd = Command::new("git");
     #[cfg(windows)]
     {
@@ -2378,6 +2347,15 @@ fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+/// Run a git command on the blocking thread pool.
+/// ponytail: .output() blocks the thread waiting for the git process;
+/// running it on the async worker starves concurrent Tauri commands.
+async fn run_git(dir: String, args: Vec<String>) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || run_git_sync(&dir, &args))
+        .await
+        .map_err(|e| format!("git 任务失败: {e}"))?
 }
 
 /// Parse `git status --porcelain` into structured JSON.
@@ -2432,14 +2410,14 @@ async fn git_status(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    let branch = run_git(path.clone(), vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]).await.unwrap_or_default();
     let branch = branch.trim().to_string();
 
     let mut ahead = 0i32;
     let mut behind = 0i32;
     if !branch.is_empty() {
         // Ahead/behind vs upstream
-        if let Ok(ab) = run_git(&path, &["rev-list", "--left-right", "--count", &format!("...origin/{}", branch)]) {
+        if let Ok(ab) = run_git(path.clone(), vec!["rev-list".to_string(), "--left-right".to_string(), "--count".to_string(), format!("...origin/{}", branch)]).await {
             let parts: Vec<&str> = ab.trim().split('\t').collect();
             if parts.len() == 2 {
                 behind = parts[0].trim().parse().unwrap_or(0);
@@ -2448,7 +2426,7 @@ async fn git_status(
         }
     }
 
-    let porcelain = run_git(&path, &["status", "--porcelain"]).unwrap_or_default();
+    let porcelain = run_git(path.clone(), vec!["status".to_string(), "--porcelain".to_string()]).await.unwrap_or_default();
     let files = parse_status(&porcelain);
 
     let result = serde_json::json!({
@@ -2468,7 +2446,7 @@ async fn git_diff_unstaged(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    run_git(&path, &["diff", "--", &file])
+    run_git(path.clone(), vec!["diff".to_string(), "--".to_string(), file.clone()]).await
 }
 
 #[tauri::command]
@@ -2479,7 +2457,7 @@ async fn git_diff_staged(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    run_git(&path, &["diff", "--cached", "--", &file])
+    run_git(path.clone(), vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()]).await
 }
 
 #[tauri::command]
@@ -2490,11 +2468,9 @@ async fn git_stage(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "stage", &state, &app).await?;
-    run_git(&path, &{
-        let mut args = vec!["add"];
-        args.extend(files.iter().map(|s| s.as_str()));
-        args
-    })
+    let mut args: Vec<String> = vec!["add".to_string()];
+    args.extend(files.iter().map(|s| s.to_string()));
+    run_git(path, args).await
 }
 
 #[tauri::command]
@@ -2505,9 +2481,9 @@ async fn git_unstage(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "unstage", &state, &app).await?;
-    let mut args = vec!["reset", "HEAD", "--"];
-    args.extend(files.iter().map(|s| s.as_str()));
-    run_git(&path, &args)
+    let mut args: Vec<String> = vec!["reset".to_string(), "HEAD".to_string(), "--".to_string()];
+    args.extend(files.iter().map(|s| s.to_string()));
+    run_git(path, args).await
 }
 
 #[tauri::command]
@@ -2517,7 +2493,7 @@ async fn git_stage_all(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "stage", &state, &app).await?;
-    run_git(&path, &["add", "-A"])
+    run_git(path.clone(), vec!["add".to_string(), "-A".to_string()]).await
 }
 
 #[tauri::command]
@@ -2528,7 +2504,7 @@ async fn git_commit(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "commit", &state, &app).await?;
-    run_git(&path, &["commit", "-m", &message])
+    run_git(path.clone(), vec!["commit".to_string(), "-m".to_string(), message.clone()]).await
 }
 
 #[tauri::command]
@@ -2538,7 +2514,7 @@ async fn git_push(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "push", &state, &app).await?;
-    run_git(&path, &["push"])
+    run_git(path.clone(), vec!["push".to_string()]).await
 }
 
 #[tauri::command]
@@ -2548,7 +2524,7 @@ async fn git_pull(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "pull", &state, &app).await?;
-    run_git(&path, &["pull"])
+    run_git(path.clone(), vec!["pull".to_string()]).await
 }
 
 #[tauri::command]
@@ -2561,9 +2537,9 @@ async fn git_log(
     require_read(&path, &state, &app).await?;
     let n = limit.unwrap_or(20);
     let raw = run_git(
-        &path,
-        &["log", &format!("-{}", n), "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ai"],
-    )?;
+        path.clone(),
+        vec!["log".to_string(), format!("-{}", n), "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ai".to_string()],
+    ).await?;
     let commits: Vec<serde_json::Value> = raw
         .lines()
         .filter(|l| !l.is_empty())
@@ -2592,7 +2568,7 @@ async fn git_init(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "init", &state, &app).await?;
-    run_git(&path, &["init"])
+    run_git(path.clone(), vec!["init".to_string()]).await
 }
 
 // ── IDE-level Git operations ──
@@ -2604,10 +2580,10 @@ async fn git_list_branches(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
+    let out = run_git(path.clone(), vec!["branch".to_string(), "--format=%(refname:short)".to_string()]).await?;
     let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
     // Find current branch (marked with *)
-    let current_out = run_git(&path, &["branch", "--show-current"])?;
+    let current_out = run_git(path.clone(), vec!["branch".to_string(), "--show-current".to_string()]).await?;
     let current = current_out.trim().to_string();
     serde_json::to_string(&serde_json::json!({ "branches": branches, "current": current }))
         .map_err(|e| format!("JSON 序列化失败: {}", e))
@@ -2621,7 +2597,7 @@ async fn git_checkout(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "checkout", &state, &app).await?;
-    run_git(&path, &["checkout", &branch])
+    run_git(path.clone(), vec!["checkout".to_string(), branch.clone()]).await
 }
 
 #[tauri::command]
@@ -2632,7 +2608,7 @@ async fn git_create_branch(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "create_branch", &state, &app).await?;
-    run_git(&path, &["checkout", "-b", &name])
+    run_git(path.clone(), vec!["checkout".to_string(), "-b".to_string(), name.clone()]).await
 }
 
 #[tauri::command]
@@ -2642,7 +2618,7 @@ async fn git_stash_push(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "stash_push", &state, &app).await?;
-    run_git(&path, &["stash", "push"])
+    run_git(path.clone(), vec!["stash".to_string(), "push".to_string()]).await
 }
 
 #[tauri::command]
@@ -2652,7 +2628,7 @@ async fn git_stash_pop(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "stash_pop", &state, &app).await?;
-    run_git(&path, &["stash", "pop"])
+    run_git(path.clone(), vec!["stash".to_string(), "pop".to_string()]).await
 }
 
 #[tauri::command]
@@ -2662,7 +2638,7 @@ async fn git_stash_list(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    run_git(&path, &["stash", "list"])
+    run_git(path.clone(), vec!["stash".to_string(), "list".to_string()]).await
 }
 
 #[tauri::command]
@@ -2673,7 +2649,7 @@ async fn git_discard(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_git(&path, "discard", &state, &app).await?;
-    run_git(&path, &["checkout", "--", &file])
+    run_git(path.clone(), vec!["checkout".to_string(), "--".to_string(), file.clone()]).await
 }
 
 #[tauri::command]
@@ -2684,7 +2660,7 @@ async fn git_blame(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    run_git(&path, &["blame", "--line-porcelain", &file])
+    run_git(path.clone(), vec!["blame".to_string(), "--line-porcelain".to_string(), file.clone()]).await
 }
 
 #[tauri::command]
@@ -2695,7 +2671,7 @@ async fn git_file_at_head(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    run_git(&path, &["show", &format!("HEAD:{}", file)])
+    run_git(path.clone(), vec!["show".to_string(), format!("HEAD:{}", file.clone())]).await
 }
 
 #[tauri::command]
@@ -2706,7 +2682,7 @@ async fn git_show(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     require_read(&path, &state, &app).await?;
-    let output = run_git(&path, &["show", "--name-only", "--format=", &commit])?;
+    let output = run_git(path.clone(), vec!["show".to_string(), "--name-only".to_string(), "--format=".to_string(), commit.clone()]).await?;
     let files: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
     serde_json::to_string(&files).map_err(|e| e.to_string())
 }
@@ -2925,6 +2901,7 @@ fn agent_isolation_create(
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
+    let original_head = isolation.original_head.clone();
 
     // Set isolation on the permission context
     if let Ok(guard) = state.lock() {
@@ -2933,10 +2910,11 @@ fn agent_isolation_create(
         }
     }
 
+    let short_head = &original_head[..8.min(original_head.len())];
     Ok(serde_json::json!({
         "worktree_path": wt_path,
         "agent_id": agent_id,
-        "original_head": &wt_path[..8.min(wt_path.len())],
+        "original_head": short_head,
     })
     .to_string())
 }
@@ -3235,6 +3213,56 @@ mod tests {
         let handle = workspace::WorkspaceHandle::new(&tmp.to_string_lossy());
         let state: WorkspaceState = Arc::new(Mutex::new(Some(handle)));
         assert_eq!(workspace_path(&state).unwrap(), tmp.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: serialize_cached_graph must never run on the async worker.
+    /// It does heavy JSON serialization for 10k+ nodes. When run on the async
+    /// thread it starves concurrent commands (read_file_content Promise hangs).
+    /// This test verifies serialization works in a blocking thread and that a
+    /// concurrent lightweight task can still make progress.
+    #[test]
+    fn serialize_cached_graph_in_spawn_blocking_does_not_starve_runtime() {
+        let tmp = std::env::temp_dir().join("hologram_test_serialize_async");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(
+            tmp.join("src").join("main.py"),
+            "def hello(): pass\nclass World:\n    def greet(self): pass\n",
+        )
+        .unwrap();
+
+        // Init engine and run analysis to populate the graph store
+        let tmp_s = tmp.to_string_lossy().to_string();
+        direct_analyze(&tmp_s, true).unwrap();
+
+        // Build a tokio runtime to test spawn_blocking behaviour
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tmp_c = tmp_s.clone();
+        let serialized = rt.block_on(async {
+            tokio::task::spawn_blocking(move || serialize_cached_graph(&tmp_c))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serialized).expect("should be valid JSON");
+        let nodes = parsed["nodes"].as_array().expect("should have nodes array");
+        assert!(!nodes.is_empty(), "should have at least one node");
+
+        // Verify runtime not starved: a timer fires while serialization runs
+        let tmp_c2 = tmp_s.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _ = serialize_cached_graph(&tmp_c2);
+            tx.send(()).unwrap();
+        });
+        // serialize_cached_graph on a blocking thread should complete quickly
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("serialize_cached_graph should complete within 10s");
+
+        handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

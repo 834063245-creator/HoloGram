@@ -289,7 +289,13 @@ pub fn has_permission_to_use_tool(
                 suggestions,
             };
         }
-        PermissionResult::Allow | PermissionResult::Passthrough => {
+        PermissionResult::Allow => {
+            // Tool self-determined this is safe (e.g. project-internal read
+            // after all deny/safety/ask checks passed). Allow immediately
+            // — don't fall through to default Ask.
+            return PermissionDecision::Allow;
+        }
+        PermissionResult::Passthrough => {
             // Continue to mode/allow checks
         }
     }
@@ -297,7 +303,7 @@ pub fn has_permission_to_use_tool(
     // ④ Mode decision (simplified: default mode — reads auto-allowed in project)
     // Ponytail: full mode switching (bypass/acceptEdits) is Phase 3+
 
-    // ⑤ Tool-level Allow
+    // ⑤ Tool-level Allow — bare "Read" / "Bash" / etc without content
     {
         let rules = ctx.rules.read().unwrap();
         if rules.find_allow(tool_name, None).is_some() {
@@ -305,7 +311,7 @@ pub fn has_permission_to_use_tool(
         }
     }
 
-    // ⑥ Passthrough → Ask (default for any unclassified operation)
+    // ⑥ No rule matched, tool has no opinion (Passthrough) → Ask
     PermissionDecision::Ask {
         request_id: gen_ask_id(),
         reason: "此操作需要批准".into(),

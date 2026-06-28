@@ -169,10 +169,23 @@ async function switchWorkspace(
     resetCheckPanelState();
     if (_gitStatusTimer) { clearInterval(_gitStatusTimer); _gitStatusTimer = null; }
 
-    // Create new
-    const ws = await Workspace.open(folder, starGraph, chatPanel, checkPanel, opts);
-    ws.onStatusChange = (msg) => { statusText.textContent = msg; };
-    ws.onLoadingChange = (loading) => { setLoading(loading, loading ? folder : undefined); };
+    // Create new — pass callbacks immediately so progress events during
+    // Workspace.open (analyze + render) push visible status updates.
+    const onStatusChange = (msg: string) => { statusText.textContent = msg; };
+    const onLoadingChange = (loading: boolean) => { setLoading(loading, loading ? folder : undefined); };
+    let ws: Workspace;
+    try {
+      console.log('[switchWorkspace] calling Workspace.open...');
+      ws = await Workspace.open(folder, starGraph, chatPanel, checkPanel, opts, { onStatusChange, onLoadingChange });
+      console.log('[switchWorkspace] Workspace.open returned');
+    } catch (err: any) {
+      console.error('[switchWorkspace] Workspace.open threw:', err);
+      statusText.textContent = `分析失败: ${err}`;
+      setLoading(false);
+      throw err;
+    }
+    ws.onStatusChange = onStatusChange;
+    ws.onLoadingChange = onLoadingChange;
 
     workspace = ws;
     notifyAllPanels(ws);
@@ -800,7 +813,9 @@ async function init(): Promise<void> {
       }
 
       // Use unified switchWorkspace with cached graph
+      console.log('[init] cold start: switching to cached workspace', root);
       await switchWorkspace(root, { skipAnalysis: true, cachedGraph: graph });
+      console.log('[init] cold start: switchWorkspace done');
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       // Engine warm-up happens via runCheck → engine_init (SQLite cache). Do NOT fire
       // hologram_analyze here — it races with runCheck's analyze fallback and blocks workspace switches.

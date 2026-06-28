@@ -10,7 +10,33 @@ pub struct SafetyCheckResult {
     pub message: String,
 }
 
-/// Check if a path is safe to operate on.
+/// Check if a path is safe to READ.
+/// Like check_path_safety but skips the .hologram/ config check — reading
+/// HoloGram's own data files (memory, sessions, logs) is safe and necessary
+/// for normal operation. Only writing them is dangerous.
+pub fn check_path_safety_read(path: &Path) -> SafetyCheckResult {
+    let path_str = path.to_string_lossy();
+
+    // 1. Windows suspicious path patterns
+    #[cfg(windows)]
+    if has_suspicious_windows_path(&path_str) {
+        return SafetyCheckResult { safe: false, message: "可疑的 Windows 路径模式".into() };
+    }
+
+    // 2. Dangerous system config files — protect reads too (credentials)
+    if is_dangerous_file(path) {
+        return SafetyCheckResult { safe: false, message: "系统配置文件受保护".into() };
+    }
+
+    // 3. Dangerous directories
+    if is_dangerous_dir(path) {
+        return SafetyCheckResult { safe: false, message: "受保护的目录".into() };
+    }
+
+    SafetyCheckResult { safe: true, message: String::new() }
+}
+
+/// Check if a path is safe to WRITE (or any operation).
 /// Bypass-immune: rules/mode cannot override this.
 pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
     let path_str = path.to_string_lossy();
@@ -54,8 +80,9 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
     }
 }
 
-/// HoloGram config paths — `.hologram/` directory contents
-/// BUT `.hologram/worktrees/` is exempt (structural exemption, not rule-based).
+/// HoloGram config paths — `.hologram/` directory contents.
+/// Runtime data dirs (memory, sessions, logs, worktrees) are EXEMPT —
+/// HoloGram UI writes to them during normal operation.
 fn is_hologram_config_path(path: &Path) -> bool {
     let components: Vec<&str> = path
         .components()
@@ -63,9 +90,11 @@ fn is_hologram_config_path(path: &Path) -> bool {
         .collect();
     for i in 0..components.len() {
         if components[i] == ".hologram" {
-            // Worktree exemption: .hologram/worktrees/ is not protected
-            if components.get(i + 1) == Some(&"worktrees") {
-                return false;
+            // Runtime data dirs exempt — HoloGram UI writes to these
+            if let Some(sub) = components.get(i + 1) {
+                if *sub == "worktrees" || *sub == "memory" || *sub == "logs" || *sub == "sessions" {
+                    return false;
+                }
             }
             return true;
         }
@@ -190,5 +219,56 @@ mod tests {
     fn test_safety_ssh() {
         let r = check_path_safety(Path::new("/home/user/.ssh/id_rsa"));
         assert!(!r.safe);
+    }
+
+    // ── Read safety (check_path_safety_read) exempts .hologram/ ──
+
+    #[test]
+    fn test_read_safety_allows_hologram() {
+        // Reading .hologram/ files is safe — they're HoloGram's own data
+        let r = check_path_safety_read(Path::new(".hologram/memory/MEMORY.md"));
+        assert!(r.safe, "memory reads should be allowed");
+        let r = check_path_safety_read(Path::new(".hologram/logs/bridge.log"));
+        assert!(r.safe, "log reads should be allowed");
+        let r = check_path_safety_read(Path::new(".hologram/sessions/chat.json"));
+        assert!(r.safe, "session reads should be allowed");
+    }
+
+    #[test]
+    fn test_read_safety_blocks_dangerous() {
+        // Dangerous system files are still blocked for reads
+        let r = check_path_safety_read(Path::new("/home/user/.bashrc"));
+        assert!(!r.safe, "bashrc reads should be blocked");
+        let r = check_path_safety_read(Path::new("/home/user/.ssh/id_rsa"));
+        assert!(!r.safe, "ssh key reads should be blocked");
+        let r = check_path_safety_read(Path::new(".git/config"));
+        assert!(!r.safe, ".git/config reads should be blocked");
+    }
+
+    // ── Write safety exempts runtime dirs (memory/logs/sessions/worktrees) ──
+
+    #[test]
+    fn test_write_safety_exempts_runtime_dirs() {
+        let r = check_path_safety(Path::new(".hologram/memory/fact.md"));
+        assert!(r.safe, "memory writes should be allowed for HoloGram UI");
+        let r = check_path_safety(Path::new(".hologram/logs/bridge.log"));
+        assert!(r.safe, "log writes should be allowed");
+        let r = check_path_safety(Path::new(".hologram/sessions/chat.json"));
+        assert!(r.safe, "session writes should be allowed");
+        let r = check_path_safety(Path::new(".hologram/worktrees/abc/src/main.rs"));
+        assert!(r.safe, "worktree writes should be allowed");
+    }
+
+    #[test]
+    fn test_write_safety_blocks_config() {
+        // Actual config files are still protected
+        let r = check_path_safety(Path::new(".hologram/permissions.json"));
+        assert!(!r.safe, "permissions.json writes should be blocked");
+        let r = check_path_safety(Path::new(".hologram/baseline.json"));
+        assert!(!r.safe, "baseline.json writes should be blocked");
+        let r = check_path_safety(Path::new(".hologram/settings.json"));
+        assert!(!r.safe, "settings.json writes should be blocked");
+        let r = check_path_safety(Path::new(".git/config"));
+        assert!(!r.safe, ".git/config writes should be blocked");
     }
 }

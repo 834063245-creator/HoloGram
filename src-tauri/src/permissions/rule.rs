@@ -62,7 +62,11 @@ pub fn parse_rule_value(raw: &str) -> RuleValue {
 /// Load built-in system rules (spec §4.9).
 pub fn load_system_rules() -> Vec<PermissionRule> {
     let deny_patterns = &[
-        "Edit(.hologram/**)",
+        // Protect config files, not runtime data — HoloGram UI writes to
+        // memory/, sessions/, logs/ for normal operation.
+        "Edit(.hologram/permissions.json)",
+        "Edit(.hologram/baseline.json)",
+        "Edit(.hologram/settings.json)",
         "Edit(.git/config)",
         "Edit(.git/hooks/**)",
         "Edit(~/.ssh/authorized_keys)",
@@ -250,10 +254,10 @@ impl PermissionRules {
 /// - "src/**" glob-matches "src/main.rs"
 /// - "push" substring-matches git subcommand
 fn content_matches(pattern: &str, actual: &str) -> bool {
-    // ":*" suffix: substring match (handles URLs like "0.0.0.0:*" in "http://0.0.0.0:8080/")
-    // and prefix-ish matches like "npm test:*" in "npm test --filter=foo"
+    // ":*" suffix: prefix match (spec §4.3 — "npm test:*" matches "npm test --filter=foo")
+    // Also handles URL patterns like "0.0.0.0:*" matching "http://0.0.0.0:8080/"
     if let Some(prefix) = pattern.strip_suffix(":*") {
-        return actual.contains(prefix);
+        return actual.starts_with(prefix) || actual.contains(&format!("://{prefix}"));
     }
     // Contains glob — convert to regex
     if pattern.contains('*') || pattern.contains('?') {

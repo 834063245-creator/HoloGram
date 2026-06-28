@@ -509,8 +509,9 @@ mod imp {
             let hr = unsafe {
                 DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid)
             };
-            if hr != 0 && !sid.is_null() {
-                // Profile exists, SID derived successfully
+            // HRESULT: S_OK = 0 = success, non-zero = error
+            if hr == 0 && !sid.is_null() {
+                // Profile already exists from previous run, SID derived successfully
                 return Some(sid as isize);
             }
 

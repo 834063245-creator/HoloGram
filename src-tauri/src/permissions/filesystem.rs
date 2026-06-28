@@ -45,9 +45,12 @@ pub fn check_read_permission(
         };
     }
 
-    // 3. Safety check (bypass-immune) — only for paths within project boundary
+    // 3. Safety check (bypass-immune) — only for paths within project boundary.
+    // Reads of .hologram/ files are NOT safety-checked — they're HoloGram's own
+    // data (memory, sessions, logs). Blocking them breaks the memory system and
+    // logger. For writes, the shared safety check protects .hologram/ below.
     if let Some(ref resolved_path) = resolved {
-        let safety = safety::check_path_safety(resolved_path);
+        let safety = safety::check_path_safety_read(resolved_path);
         if !safety.safe {
             return PermissionResult::Ask {
                 reason: format!("安全警告: {}", safety.message),
