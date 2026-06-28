@@ -115,12 +115,21 @@ export class Workspace {
     chatPanel: ChatPanel,
     checkPanel: CheckPanel,
     opts?: { skipAnalysis?: boolean; cachedGraph?: any },
+    callbacks?: { onStatusChange?: (msg: string) => void; onLoadingChange?: (loading: boolean) => void },
   ): Promise<Workspace> {
     const ws = new Workspace(path);
     ws._active = true;
+    // ponytail: wire callbacks immediately so progress listeners inside this
+    // method can push status updates. Without this, the entire analysis phase
+    // is silent — onStatusChange was assigned AFTER open() returned.
+    ws.onStatusChange = callbacks?.onStatusChange ?? null;
+    ws.onLoadingChange = callbacks?.onLoadingChange ?? null;
 
     // 1. Register workspace with backend
+    ws.onStatusChange?.('正在初始化引擎...');
+    console.log('[Workspace.open] step 1: workspace_activate...');
     await invoke('workspace_activate', { path }).catch(() => {});
+    console.log('[Workspace.open] step 1: done');
     initLogger(path);
 
     // 2. Wire progress listeners (scoped to this workspace)
@@ -168,16 +177,32 @@ export class Workspace {
         ws.graphData = JSON.parse(raw);
       }
 
-      // 3. Load file-level graph
+      // 3. Load file-level graph — timeout at 5s, don't block workspace open.
+      // ponytail: read_file_content's async require_read runs on the Tokio runtime
+      // which can be saturated by the fire-and-forget analyze_and_load serializing
+      // 11669-node JSON on the async thread. This is an internal file; if it times
+      // out, file-level graph is null — non-fatal.
+      console.log('[Workspace.open] step 3: read_file_content...');
       try {
         const filesPath = path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
-        ws.fileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
-      } catch { ws.fileGraphData = null; }
+        const raw = await Promise.race([
+          invoke<string>('read_file_content', { filePath: filesPath }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+        ]);
+        ws.fileGraphData = JSON.parse(raw);
+        console.log('[Workspace.open] step 3: done');
+      } catch (e) { console.log('[Workspace.open] step 3: failed', e); ws.fileGraphData = null; }
 
-      // 4. Render
-      starGraph.render(ws.graphData);
+      // 4. Render — defer to next macrotask so DOM status updates paint first.
+      // ponytail: _renderImpl runs heavy sync prep (Map/Array builds for N nodes)
+      // before its first await. Without setTimeout, the main thread is blocked
+      // and "正在渲染图谱..." never paints — user sees stale "正在分析...".
+      console.log('[Workspace.open] step 4: scheduling render...');
+      ws.onStatusChange?.('正在渲染图谱...');
+      setTimeout(() => { console.log('[Workspace.open] render starting'); starGraph.render(ws.graphData); }, 0);
 
       // 5. Wire persistent event listeners (graph-updated, analysis-complete, analysis-failed)
+      console.log('[Workspace.open] step 5: wiring listeners...');
       const unlistenGraphUpdated = await listen<string>('graph-updated', async (event) => {
         if (!ws._active) return;
         try {
@@ -237,8 +262,10 @@ export class Workspace {
       unlistenProgress();
       unlistenPhase();
       unlistenHeartbeat();
+      console.log('[Workspace.open] all done, returning workspace');
 
     } catch (err: any) {
+      console.error('[Workspace.open] FAILED:', err);
       unlistenProgress(); unlistenPhase(); unlistenHeartbeat();
       ws.onStatusChange?.(`分析失败: ${err}`);
       ws.onLoadingChange?.(false);
