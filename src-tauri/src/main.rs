@@ -12,6 +12,8 @@ mod pty_manager;
 mod lsp_manager;
 mod unity_manager;
 mod engine_client;
+mod permissions;
+mod tools;
 mod sandbox;
 mod audit;
 mod credential;
@@ -257,6 +259,7 @@ fn workspace_path(state: &WorkspaceState) -> Result<String, String> {
 }
 
 /// Helper: get a reference to the active WorkspaceHandle.
+#[allow(dead_code)] // ponytail: kept for non-permission workspace access
 fn with_workspace<F, R>(state: &WorkspaceState, f: F) -> Result<R, String>
 where
     F: FnOnce(&workspace::WorkspaceHandle) -> Result<R, String>,
@@ -264,6 +267,102 @@ where
     let guard = state.lock().map_err(|e| format!("工作区状态错误: {e}"))?;
     let handle = guard.as_ref().ok_or("未打开工作区，请先打开项目")?;
     f(handle)
+}
+
+// ═══════════════════════════════════════════════════════
+// Phase 2: Permission helpers — replace old with_workspace sandbox calls
+// ═══════════════════════════════════════════════════════
+
+use crate::permissions::{PermissionContext, PermissionDecision, has_permission_to_use_tool, register_ask};
+
+/// Get the PermissionContext from workspace state, releasing the lock immediately.
+fn get_ctx(state: &WorkspaceState) -> Result<Arc<PermissionContext>, String> {
+    let guard = state.lock().map_err(|e| format!("工作区状态错误: {e}"))?;
+    let handle = guard.as_ref().ok_or("未打开工作区，请先打开项目")?;
+    Ok(handle.permission_ctx.clone())
+}
+
+/// Check permission for a tool. If Ask, emit event and wait for user response.
+async fn check_permission(
+    tool: &dyn permissions::Tool,
+    ctx: &PermissionContext,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    match has_permission_to_use_tool(tool, ctx) {
+        PermissionDecision::Allow => Ok(()),
+        PermissionDecision::Deny { reason } => Err(reason),
+        PermissionDecision::Ask { request_id, reason, suggestions } => {
+            let _ = app.emit("permission-ask", serde_json::json!({
+                "requestId": request_id,
+                "tool": tool.name(),
+                "path": tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                "reason": reason,
+                "suggestions": suggestions.iter().map(|s| serde_json::json!({
+                    "rule": s.rule,
+                    "behavior": s.behavior,
+                })).collect::<Vec<_>>(),
+            }));
+            let rx = register_ask(request_id);
+            match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+                Ok(Ok(true)) => Ok(()),
+                Ok(Ok(false)) | Ok(Err(_)) => Err("用户拒绝了此操作".into()),
+                Err(_) => Err("权限请求超时".into()),
+            }
+        }
+    }
+}
+
+/// Check permission synchronously (no Await — for background tasks: Ask → Deny, spec §4.11).
+fn check_permission_sync(
+    tool: &dyn permissions::Tool,
+    ctx: &PermissionContext,
+) -> Result<(), String> {
+    match has_permission_to_use_tool(tool, ctx) {
+        PermissionDecision::Allow => Ok(()),
+        PermissionDecision::Deny { reason } => Err(reason),
+        PermissionDecision::Ask { reason, .. } => {
+            Err(format!("后台任务需要用户确认但无法交互: {}", reason))
+        }
+    }
+}
+
+async fn require_read(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let ctx = get_ctx(state)?;
+    let tool = tools::ReadTool { path: file_path.to_string() };
+    check_permission(&tool, &ctx, app).await?;
+    ctx.resolve_read(file_path)
+}
+
+async fn require_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let ctx = get_ctx(state)?;
+    let tool = tools::EditTool { path: file_path.to_string() };
+    check_permission(&tool, &ctx, app).await?;
+    ctx.resolve_write(file_path)
+}
+
+async fn require_command(command: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
+    let ctx = get_ctx(state)?;
+    let tool = tools::BashTool { command: command.to_string() };
+    check_permission(&tool, &ctx, app).await
+}
+
+fn require_command_sync(command: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<(), String> {
+    let ctx = get_ctx(state)?;
+    let tool = tools::BashTool { command: command.to_string() };
+    check_permission_sync(&tool, &ctx)
+}
+
+fn require_read_sync(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
+    let ctx = get_ctx(state)?;
+    let tool = tools::ReadTool { path: file_path.to_string() };
+    check_permission_sync(&tool, &ctx)?;
+    ctx.resolve_read(file_path)
+}
+
+async fn require_git(repo_path: &str, subcommand: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
+    let ctx = get_ctx(state)?;
+    let tool = tools::GitTool { repo_path: repo_path.to_string(), subcommand: subcommand.to_string() };
+    check_permission(&tool, &ctx, app).await
 }
 
 /// Open and activate a workspace. Creates sandbox, audit logger, persists .last_project.
@@ -1183,18 +1282,22 @@ async fn exec_command(
     timeout_ms: Option<u64>,
     run_in_background: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let dir = cwd.unwrap_or_else(|| project_root().to_string_lossy().to_string());
 
-    // Phase 1: sandbox check before any execution (foreground + background)
-    with_workspace(&state, |h| {
-        h.check_command(&command)?;
-        // Also verify cwd is within project bounds
-        h.check_read_dir(&dir)?;
-        Ok(())
-    })?;
+    // Phase 2: permission check before any execution (foreground + background)
+    let is_bg = run_in_background.unwrap_or(false);
+    if is_bg {
+        // Background: Ask → Deny (spec §4.11)
+        require_command_sync(&command, &state)?;
+        require_read_sync(&dir, &state)?;
+    } else {
+        require_command(&command, &state, &app).await?;
+        require_read(&dir, &state, &app).await?;
+    }
 
-    if run_in_background.unwrap_or(false) {
+    if is_bg {
         let id = spawn_bg(&command, &dir)?;
         return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_kill({}) 终止任务", id, id, id));
     }
@@ -1353,8 +1456,9 @@ fn list_dir_recursive(root: &std::path::Path, depth: u32) -> Vec<DirEntry> {
 async fn list_directory(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<DirEntry>, String> {
-    with_workspace(&state, |h| { h.check_read_dir(&path)?; Ok(()) })?;
+    require_read(&path, &state, &app).await?;
     let root = std::path::PathBuf::from(&path);
     if !root.is_dir() {
         return Err(format!("不是有效目录: {}", path));
@@ -1368,8 +1472,9 @@ async fn read_file_content(
     offset: Option<usize>,
     limit: Option<usize>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = with_workspace(&state, |h| h.check_read(&file_path))?;
+    let real_path = require_read(&file_path, &state, &app).await?;
     let content = std::fs::read_to_string(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     let lines: Vec<&str> = content.lines().collect();
@@ -1384,8 +1489,9 @@ async fn read_file_content(
 async fn read_file_base64(
     file_path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = with_workspace(&state, |h| h.check_read(&file_path))?;
+    let real_path = require_read(&file_path, &state, &app).await?;
     let bytes = std::fs::read(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
@@ -1396,8 +1502,9 @@ async fn write_file_content(
     file_path: String,
     content: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real_path = with_workspace(&state, |h| h.check_write(&file_path))?;
+    let real_path = require_write(&file_path, &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
         std::fs::create_dir_all(parent)
@@ -1423,7 +1530,9 @@ fn log_append(
     content: String,
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<(), String> {
-    with_workspace(&state, |h| { h.check_write(&path)?; Ok(()) })?;
+    let ctx = get_ctx(&state)?;
+    let tool = tools::EditTool { path: path.clone() };
+    check_permission_sync(&tool, &ctx)?;
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -1438,8 +1547,9 @@ fn log_append(
 async fn create_directory(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    with_workspace(&state, |h| { h.check_write(&path)?; Ok(()) })?;
+    require_write(&path, &state, &app).await?;
     std::fs::create_dir_all(&path)
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
@@ -1448,8 +1558,9 @@ async fn create_directory(
 async fn delete_file_or_dir(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = with_workspace(&state, |h| h.check_write(&path))?; // delete = write-level lock
+    let real = require_write(&path, &state, &app).await?;
     if !real.exists() { return Err(format!("路径不存在: {}", path)); }
     if real.is_dir() {
         std::fs::remove_dir_all(&real)
@@ -1465,13 +1576,11 @@ async fn rename_file_or_dir(
     from: String,
     to: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Phase 1: check both source and destination paths
-    with_workspace(&state, |h| {
-        h.check_write(&from)?;
-        h.check_write(&to)?;
-        Ok(())
-    })?;
+    // Phase 2: check both source and destination paths
+    require_write(&from, &state, &app).await?;
+    require_write(&to, &state, &app).await?;
     std::fs::rename(&from, &to)
         .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))
 }
@@ -1481,9 +1590,10 @@ async fn move_file(
     source: String,
     dest_dir: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let src_real = with_workspace(&state, |h| h.check_read(&source))?;
-    let dest_real = with_workspace(&state, |h| h.check_write(&dest_dir))?;
+    let src_real = require_read(&source, &state, &app).await?;
+    let dest_real = require_write(&dest_dir, &state, &app).await?;
     let name = src_real.file_name()
         .ok_or_else(|| format!("无效路径: {}", source))?;
     let dest = dest_real.join(name);
@@ -1495,8 +1605,9 @@ async fn move_file(
 async fn open_in_explorer(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = with_workspace(&state, |h| h.check_read(&path))?;
+    let real = require_read(&path, &state, &app).await?;
     #[cfg(target_os = "windows")]
     {
         if real.is_dir() {
@@ -1548,8 +1659,9 @@ async fn search_code(
     max_results: Option<usize>,
     use_regex: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| { h.check_read_dir(&directory)?; Ok(()) })?;
+    require_read(&directory, &state, &app).await?;
     let root = std::path::PathBuf::from(&directory);
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
@@ -1661,9 +1773,10 @@ async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
     max_results: Option<usize>, use_regex: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     // Sandbox check inline to avoid double-check in search_code
-    with_workspace(&state, |h| { h.check_read_dir(&directory)?; Ok(()) })?;
+    require_read(&directory, &state, &app).await?;
     let root = std::path::PathBuf::from(&directory);
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
@@ -1734,9 +1847,10 @@ async fn glob(
     pattern: String,
     path: Option<String>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let dir = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    with_workspace(&state, |h| { h.check_read_dir(&dir)?; Ok(()) })?;
+    require_read(&dir, &state, &app).await?;
     let root = std::path::PathBuf::from(&dir);
     if !root.is_dir() {
         return Err(format!("不是有效目录: {}", dir));
@@ -1811,9 +1925,10 @@ async fn edit_file(
     new_string: String,
     replace_all: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Phase 1: sandbox check — edit = read then write, check read to start
-    let _real = with_workspace(&state, |h| h.check_read(&file_path))?;
+    // Phase 2: permission check — edit = read then write
+    require_read(&file_path, &state, &app).await?;
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
 
@@ -1945,7 +2060,18 @@ fn is_private_ip(host: &str) -> bool {
 }
 
 #[tauri::command]
-async fn web_fetch(url: String) -> Result<String, String> {
+async fn web_fetch(
+    url: String,
+    state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    // Phase 2: WebFetch permission check
+    {
+        let ctx = get_ctx(&state)?;
+        let tool = tools::WebFetchTool { url: url.clone() };
+        check_permission(&tool, &ctx, &app).await?;
+    }
+
     let parsed = url::Url::parse(&url).map_err(|e| format!("无效 URL: {}", e))?;
     let scheme = parsed.scheme();
     if scheme != "https" && scheme != "http" {
@@ -2359,8 +2485,9 @@ fn parse_status(raw: &str) -> serde_json::Value {
 async fn git_status(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let branch = branch.trim().to_string();
 
@@ -2394,8 +2521,9 @@ async fn git_diff_unstaged(
     path: String,
     file: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     run_git(&path, &["diff", "--", &file])
 }
 
@@ -2404,66 +2532,79 @@ async fn git_diff_staged(
     path: String,
     file: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     run_git(&path, &["diff", "--cached", "--", &file])
 }
 
 #[tauri::command]
 async fn git_stage(
     path: String,
-    _files: Vec<String>,
+    files: Vec<String>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git stage 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "stage", &state, &app).await?;
+    run_git(&path, &{
+        let mut args = vec!["add"];
+        args.extend(files.iter().map(|s| s.as_str()));
+        args
+    })
 }
 
 #[tauri::command]
 async fn git_unstage(
     path: String,
-    _files: Vec<String>,
+    files: Vec<String>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git unstage 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_read(&path, &state, &app).await?;
+    let mut args = vec!["reset", "HEAD", "--"];
+    args.extend(files.iter().map(|s| s.as_str()));
+    run_git(&path, &args)
 }
 
 #[tauri::command]
 async fn git_stage_all(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git stage all 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "stage", &state, &app).await?;
+    run_git(&path, &["add", "-A"])
 }
 
 #[tauri::command]
 async fn git_commit(
     path: String,
-    _message: String,
+    message: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git commit 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "commit", &state, &app).await?;
+    run_git(&path, &["commit", "-m", &message])
 }
 
 #[tauri::command]
 async fn git_push(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git push 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "push", &state, &app).await?;
+    run_git(&path, &["push"])
 }
 
 #[tauri::command]
 async fn git_pull(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git pull 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "pull", &state, &app).await?;
+    run_git(&path, &["pull"])
 }
 
 #[tauri::command]
@@ -2471,8 +2612,9 @@ async fn git_log(
     path: String,
     limit: Option<i32>,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     let n = limit.unwrap_or(20);
     let raw = run_git(
         &path,
@@ -2503,9 +2645,10 @@ async fn git_log(
 async fn git_init(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git init 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "init", &state, &app).await?;
+    run_git(&path, &["init"])
 }
 
 // ── IDE-level Git operations ──
@@ -2514,8 +2657,9 @@ async fn git_init(
 async fn git_list_branches(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
     let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
     // Find current branch (marked with *)
@@ -2528,58 +2672,64 @@ async fn git_list_branches(
 #[tauri::command]
 async fn git_checkout(
     path: String,
-    _branch: String,
+    branch: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git checkout 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "checkout", &state, &app).await?;
+    run_git(&path, &["checkout", &branch])
 }
 
 #[tauri::command]
 async fn git_create_branch(
     path: String,
-    _name: String,
+    name: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git create branch 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "create_branch", &state, &app).await?;
+    run_git(&path, &["checkout", "-b", &name])
 }
 
 #[tauri::command]
 async fn git_stash_push(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git stash push 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "stash_push", &state, &app).await?;
+    run_git(&path, &["stash", "push"])
 }
 
 #[tauri::command]
 async fn git_stash_pop(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git stash pop 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "stash_pop", &state, &app).await?;
+    run_git(&path, &["stash", "pop"])
 }
 
 #[tauri::command]
 async fn git_stash_list(
     path: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     run_git(&path, &["stash", "list"])
 }
 
 #[tauri::command]
 async fn git_discard(
     path: String,
-    _file: String,
+    file: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
-    return Err("git discard 需用户确认（Phase 2 将支持权限弹窗）".into());
+    require_git(&path, "discard", &state, &app).await?;
+    run_git(&path, &["checkout", "--", &file])
 }
 
 #[tauri::command]
@@ -2587,8 +2737,9 @@ async fn git_blame(
     path: String,
     file: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     run_git(&path, &["blame", "--line-porcelain", &file])
 }
 
@@ -2597,8 +2748,9 @@ async fn git_file_at_head(
     path: String,
     file: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     run_git(&path, &["show", &format!("HEAD:{}", file)])
 }
 
@@ -2607,11 +2759,41 @@ async fn git_show(
     path: String,
     commit: String,
     state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    with_workspace(&state, |h| h.check_read(&path))?;
+    require_read(&path, &state, &app).await?;
     let output = run_git(&path, &["show", "--name-only", "--format=", &commit])?;
     let files: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
     serde_json::to_string(&files).map_err(|e| e.to_string())
+}
+
+// ═══════════════════════════════════════════════════════
+// Phase 2: Permission ask response — frontend dialog callback
+// ═══════════════════════════════════════════════════════
+
+/// Respond to a permission ask dialog. Called by the frontend when the user
+/// clicks "Allow" or "Deny" in the permission dialog.
+/// If `remember` is true, a session rule is added for future auto-allow/deny.
+#[tauri::command]
+async fn permission_ask_response(
+    request_id: String,
+    allow: bool,
+    remember: Option<bool>,
+    rule_to_add: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    // Resolve the pending oneshot channel
+    crate::permissions::resolve_ask(&request_id, allow);
+
+    // If user wants to remember, add a session rule
+    if remember.unwrap_or(false) {
+        if let Some(ref rule_str) = rule_to_add {
+            if let Ok(ctx) = get_ctx(&state) {
+                ctx.add_session_rule(rule_str, if allow { "allow" } else { "deny" });
+            }
+        }
+    }
+    Ok(())
 }
 
 static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
@@ -2930,6 +3112,8 @@ fn main() {
             credential_store,
             credential_get,
             credential_clear,
+            // Phase 2: Permission dialog
+            permission_ask_response,
         ])
         .setup(|app| {
             // v4 Phase 4: server for Unity events
