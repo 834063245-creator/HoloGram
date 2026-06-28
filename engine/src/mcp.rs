@@ -112,7 +112,7 @@ fn tool_definitions() -> Vec<Value> {
         tool_def("hologram_run_health", "Get current project health snapshot (trend requires historical data).",
             &[("path", "string", "Project root directory path"), ("days", "integer", "Days to look back (default 30)")], &["path"]),
         tool_def("hologram_rename", "Safely rename a symbol across all files with atomic rollback.",
-            &[("old_name", "string", "Current name"), ("new_name", "string", "New name"), ("dry_run", "boolean", "Preview only (default false)"), ("node_id", "string", "Optional specific node ID")], &["old_name", "new_name"]),
+            &[("oldName", "string", "Current name"), ("newName", "string", "New name"), ("dryRun", "boolean", "Preview only (default false)"), ("nodeId", "string", "Optional specific node ID")], &["oldName", "newName"]),
         tool_def("hologram_status", "Get engine loading status and memory stats.",
             &[], &[]),
         tool_def("hologram_policy_check", "Check project boundary rules against the dependency graph. Define rules with source/target file patterns (glob or regex) and edge kinds; returns violations where source files have forbidden edges to target files. Use this to enforce architectural boundaries (e.g. 'modules cannot import each other directly').",
@@ -381,6 +381,26 @@ impl McpServer {
             .unwrap_or(default)
     }
 
+    // ── Node ID resolution ──
+    // ponytail: tools accept both full IDs (D:...path...name) and short names.
+    // Resolution order: exact ID → exact name → search → not found.
+
+    /// Resolve node reference in MemoryIndex: exact ID → exact name → not found.
+    fn resolve_in_index(idx: &MemoryIndex, node_id_or_name: &str) -> Option<String> {
+        if idx.get_node(node_id_or_name).is_some() {
+            return Some(node_id_or_name.to_string());
+        }
+        idx.get_nodes_by_name(node_id_or_name).first().cloned()
+    }
+
+    /// Resolve node reference in legacy Graph: exact ID → search → not found.
+    fn resolve_in_graph(g: &Graph, node_id_or_name: &str) -> Option<String> {
+        if g.get_node(node_id_or_name).is_some() {
+            return Some(node_id_or_name.to_string());
+        }
+        query::search_nodes(g, node_id_or_name).first().map(|n| n.id.clone())
+    }
+
     // ── V1 tools ──
 
     fn tool_neighbors(&self, args: &Value, id: &Value) -> Value {
@@ -390,13 +410,14 @@ impl McpServer {
         }
         // Engine MemoryIndex path (primary)
         match engine::engine_read(|idx| {
-            let node = match idx.get_node(&node_id) {
-                Some(n) => n.clone(),
+            let resolved = match Self::resolve_in_index(idx, &node_id) {
+                Some(rid) => rid,
                 None => return json!({"error": format!("Node {} not found", node_id)}),
             };
-            let nb = idx.neighbors(&node_id, 1, None);
-            let incoming = idx.get_incoming_edges(&node_id);
-            let outgoing = idx.get_outgoing_edges(&node_id);
+            let node = idx.get_node(&resolved).unwrap().clone();
+            let nb = idx.neighbors(&resolved, 1, None);
+            let incoming = idx.get_incoming_edges(&resolved);
+            let outgoing = idx.get_outgoing_edges(&resolved);
             json!({
                 "node": node_to_value(&node),
                 "neighbor_count": nb.len(),
@@ -409,13 +430,14 @@ impl McpServer {
             Err(_) => {} // fall through to with_graph fallback
         }
         self.with_graph(id, |g| {
-            let node = match g.get_node(&node_id) {
-                Some(n) => n,
+            let resolved = match Self::resolve_in_graph(g, &node_id) {
+                Some(rid) => rid,
                 None => return json!({"error": format!("Node {} not found", node_id)}),
             };
-            let nb = query::neighbors(g, &node_id, 1);
-            let incoming: Vec<_> = g.incoming_edges(&node_id).iter().map(|e| edge_to_value(e)).collect();
-            let outgoing: Vec<_> = g.outgoing_edges(&node_id).iter().map(|e| edge_to_value(e)).collect();
+            let node = g.get_node(&resolved).unwrap();
+            let nb = query::neighbors(g, &resolved, 1);
+            let incoming: Vec<_> = g.incoming_edges(&resolved).iter().map(|e| edge_to_value(e)).collect();
+            let outgoing: Vec<_> = g.outgoing_edges(&resolved).iter().map(|e| edge_to_value(e)).collect();
             json!({
                 "node": node_to_value(node),
                 "neighbor_count": nb.len(),
@@ -433,13 +455,14 @@ impl McpServer {
         }
         let depth = Self::get_arg_usize(args, "depth", 3);
         self.with_store(id, |idx| {
-            if idx.get_node(&node_id).is_none() {
-                return json!({"error": format!("Node {} not found", node_id)});
-            }
-            let layers = idx.impact(&node_id, depth);
+            let resolved = match Self::resolve_in_index(idx, &node_id) {
+                Some(rid) => rid,
+                None => return json!({"error": format!("Node {} not found", node_id)}),
+            };
+            let layers = idx.impact(&resolved, depth);
             let total_affected: usize = layers.iter().map(|(_, nodes)| nodes.len()).sum();
             json!({
-                "source_node_id": node_id,
+                "source_node_id": resolved,
                 "max_depth": depth,
                 "total_affected_nodes": total_affected.saturating_sub(1),
                 "layers": layers.iter().map(|(d, nodes)| json!({"depth": d, "nodes": nodes})).collect::<Vec<_>>(),
@@ -455,15 +478,17 @@ impl McpServer {
         }
         let depth = Self::get_arg_usize(args, "depth", 20).max(1);
         self.with_store(id, |idx| {
-            if idx.get_node(&from_id).is_none() {
-                return json!({"error": format!("Node {} not found", from_id)});
-            }
-            if idx.get_node(&to_id).is_none() {
-                return json!({"error": format!("Node {} not found", to_id)});
-            }
-            match idx.shortest_path_with_limits(&from_id, &to_id, depth, 5000) {
-                Some(path) => json!({"from_id": from_id, "to_id": to_id, "path_count": 1, "paths": [path]}),
-                None => json!({"from_id": from_id, "to_id": to_id, "path_count": 0, "paths": []}),
+            let resolved_from = match Self::resolve_in_index(idx, &from_id) {
+                Some(rid) => rid,
+                None => return json!({"error": format!("Node {} not found", from_id)}),
+            };
+            let resolved_to = match Self::resolve_in_index(idx, &to_id) {
+                Some(rid) => rid,
+                None => return json!({"error": format!("Node {} not found", to_id)}),
+            };
+            match idx.shortest_path_with_limits(&resolved_from, &resolved_to, depth, 5000) {
+                Some(path) => json!({"from_id": resolved_from, "to_id": resolved_to, "path_count": 1, "paths": [path]}),
+                None => json!({"from_id": resolved_from, "to_id": resolved_to, "path_count": 0, "paths": []}),
             }
         })
     }
@@ -476,12 +501,13 @@ impl McpServer {
         let decision_history = engine::engine_query_timeline(20).unwrap_or_default();
         // Engine MemoryIndex path (primary)
         match engine::engine_read(|idx| {
-            let node = match idx.get_node(&node_id) {
-                Some(n) => n.clone(),
+            let resolved = match Self::resolve_in_index(idx, &node_id) {
+                Some(rid) => rid,
                 None => return json!({"error": format!("Node {} not found", node_id)}),
             };
-            let dep_count = idx.incoming(&node_id, None).len();
-            let out_count = idx.outgoing(&node_id, None).len();
+            let node = idx.get_node(&resolved).unwrap().clone();
+            let dep_count = idx.incoming(&resolved, None).len();
+            let out_count = idx.outgoing(&resolved, None).len();
             json!({
                 "node": node_to_value(&node),
                 "decision_history": decision_history,
@@ -493,12 +519,13 @@ impl McpServer {
             Err(_) => {}
         }
         self.with_graph(id, |g| {
-            let node = match g.get_node(&node_id) {
-                Some(n) => n,
+            let resolved = match Self::resolve_in_graph(g, &node_id) {
+                Some(rid) => rid,
                 None => return json!({"error": format!("Node {} not found", node_id)}),
             };
-            let incoming = g.incoming_edges(&node_id);
-            let outgoing = g.outgoing_edges(&node_id);
+            let node = g.get_node(&resolved).unwrap();
+            let incoming = g.incoming_edges(&resolved);
+            let outgoing = g.outgoing_edges(&resolved);
             json!({
                 "node": node_to_value(node),
                 "decision_history": decision_history,
@@ -514,20 +541,21 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         self.with_store(id, |idx| {
-            if idx.get_node(&node_id).is_none() {
-                return json!({"error": format!("Node {} not found", node_id)});
-            }
+            let resolved = match Self::resolve_in_index(idx, &node_id) {
+                Some(rid) => rid,
+                None => return json!({"error": format!("Node {} not found", node_id)}),
+            };
             // ponytail: read cached community_id instead of re-running full Louvain
-            let cid = match idx.get_node(&node_id).and_then(|n| n.community_id) {
+            let cid = match idx.get_node(&resolved).and_then(|n| n.community_id) {
                 Some(c) => c,
                 None => {
                     // Fallback: community not cached (no analysis run yet) → run Louvain
                     let communities = detect_communities_from_index(idx, 42);
                     for (i, comm) in communities.iter().enumerate() {
-                        if comm.contains(&node_id) {
-                            let siblings: Vec<_> = comm.iter().filter(|nid| *nid != &node_id).cloned().collect();
+                        if comm.contains(&resolved) {
+                            let siblings: Vec<_> = comm.iter().filter(|nid| *nid != &resolved).cloned().collect();
                             return json!({
-                                "node_id": node_id,
+                                "node_id": resolved,
                                 "community": {
                                     "id": format!("comm_{}", i),
                                     "level": 0,
@@ -539,7 +567,7 @@ impl McpServer {
                             });
                         }
                     }
-                    return json!({"node_id": node_id, "community": null, "message": "Node not in any community"});
+                    return json!({"node_id": resolved, "community": null, "message": "Node not in any community"});
                 }
             };
             // Collect community members and siblings in one O(V) pass
@@ -548,13 +576,13 @@ impl McpServer {
             for node in idx.nodes_iter() {
                 if node.community_id == Some(cid) {
                     comm_node_ids.push(node.id.clone());
-                    if node.id != node_id {
+                    if node.id != resolved {
                         siblings.push(node.id.clone());
                     }
                 }
             }
             json!({
-                "node_id": node_id,
+                "node_id": resolved,
                 "community": {
                     "id": format!("comm_{}", cid),
                     "level": 0,
@@ -1086,9 +1114,11 @@ impl McpServer {
     }
 
     fn tool_rename(&self, args: &Value, id: &Value) -> Value {
-        let old_name = args.get("old_name").and_then(|v| v.as_str()).unwrap_or("");
-        let new_name = args.get("new_name").and_then(|v| v.as_str()).unwrap_or("");
-        let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+        // ponytail: accept both snake_case (MCP) and camelCase (Tauri invoke bridge)
+        let old_name = args.get("old_name").or_else(|| args.get("oldName")).and_then(|v| v.as_str()).unwrap_or("");
+        let new_name = args.get("new_name").or_else(|| args.get("newName")).and_then(|v| v.as_str()).unwrap_or("");
+        let dry_run = args.get("dry_run").or_else(|| args.get("dryRun")).and_then(|v| v.as_bool()).unwrap_or(false);
+        let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str());
 
         if old_name.is_empty() || new_name.is_empty() {
             return McpServer::error_response(id, -32602, "old_name and new_name are required");
@@ -1221,12 +1251,13 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         self.with_store(id, |idx| {
-            let node = match idx.get_node(&node_id) {
-                Some(n) => n.clone(),
+            let resolved = match Self::resolve_in_index(idx, &node_id) {
+                Some(rid) => rid,
                 None => return json!({"error": format!("Node '{}' not found in graph", node_id)}),
             };
-            let incoming = idx.get_incoming_edges(&node_id);
-            let outgoing = idx.get_outgoing_edges(&node_id);
+            let node = idx.get_node(&resolved).unwrap().clone();
+            let incoming = idx.get_incoming_edges(&resolved);
+            let outgoing = idx.get_outgoing_edges(&resolved);
 
             // Group edges by kind for readable output
             let group_by_kind = |edges: &[Edge]| -> serde_json::Map<String, Value> {
@@ -1863,7 +1894,7 @@ mod tests {
         let _g = load_test_graph();
         let srv = server();
         let req = serde_json::to_string(&make_tool_call("hologram_rename",
-            json!({"old_name": "mod_a", "new_name": "module_a", "dry_run": true}), 30)).unwrap();
+            json!({"oldName": "mod_a", "newName": "module_a", "dryRun": true}), 30)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let text = v["result"]["content"][0]["text"].as_str().unwrap();

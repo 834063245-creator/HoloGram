@@ -143,7 +143,7 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
             imp::Shell::Bash => format!("bash -c {}", quote_cmd(command)),
             imp::Shell::Cmd => format!("cmd /s /c \"{}\"", command),
         };
-        imp::spawn_sandboxed(&cmdline, cwd, true)
+        imp::spawn_job_only(&cmdline, cwd, true)
     }
     #[cfg(target_os = "macos")]
     {
@@ -292,7 +292,7 @@ mod imp {
     // ── Constants ──
 
     const CREATE_SUSPENDED: u32 = 0x00000004;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const DETACHED_PROCESS: u32 = 0x00000008;
     const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
     const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES: usize = 0x00020009;
     const WAIT_OBJECT_0: u32 = 0;
@@ -417,19 +417,12 @@ mod imp {
     #[derive(Clone, Copy)]
     pub enum Shell { Bash, Cmd }
 
-    static SHELL: OnceLock<Shell> = OnceLock::new();
-
     pub fn detect_shell() -> Shell {
-        *SHELL.get_or_init(|| {
-            let ok = std::process::Command::new("bash")
-                .arg("--version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if ok { Shell::Bash } else { Shell::Cmd }
-        })
+        // ponytail: always Cmd on Windows. Git Bash / MSYS2 bash.exe can't
+        // reliably load msys-2.0.dll under Job Object + CREATE_NO_WINDOW,
+        // dying with STATUS_DLL_INIT_FAILED. If someone needs bash, they can
+        // configure it explicitly (future: per-workspace shell pref).
+        Shell::Cmd
     }
 
     // ── Job Object (Phase 4a) ──
@@ -511,7 +504,9 @@ mod imp {
             };
             // HRESULT: S_OK = 0 = success, non-zero = error
             if hr == 0 && !sid.is_null() {
-                // Profile already exists from previous run, SID derived successfully
+                // Profile already exists from previous run — re-grant ACLs
+                // in case new tool directories have been added since creation
+                grant_appcontainer_fs(sid);
                 return Some(sid as isize);
             }
 
@@ -559,6 +554,8 @@ mod imp {
             r"C:\Program Files\Git\usr\bin",
             r"C:\Program Files\nodejs",
             r"C:\Windows\System32",
+            r"C:\Windows\WinSxS",    // SxS manifests + actual DLLs that cmd.exe loads at startup
+            r"C:\Windows\SysWOW64",  // 32-bit subsystem DLLs on 64-bit Windows (WOW64 layer)
         ];
 
         // Full access (read/write/execute) on project and temp
@@ -806,9 +803,10 @@ mod imp {
                 c.arg(a);
             }
             c.current_dir(cwd)
+                .stdin(std::process::Stdio::null())  // ponytail: Tauri is GUI subsystem — no console stdin; inherit would give a dead handle
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .creation_flags(CREATE_NO_WINDOW);
+                .creation_flags(DETACHED_PROCESS);   // ponytail: DETACHED_PROCESS not CREATE_NO_WINDOW — GUI parent + Job Object + CREATE_NO_WINDOW causes cmd.exe DLL init to fail (STATUS_DLL_INIT_FAILED)
             let child = c.spawn()?;
             job::assign(&child);
             return Ok(super::SandboxedChild {
@@ -896,7 +894,7 @@ mod imp {
         }
 
         // CreateProcessW — suspended so we can assign to Job first
-        let flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
+        let flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS;
         let mut proc_info = ProcInfo { process: 0, thread: 0, pid: 0, tid: 0 };
         let ok = unsafe {
             CreateProcessW(
@@ -941,6 +939,31 @@ mod imp {
                 stdout_read: stdout_r.map(|p| AnonPipeReader { handle: p.read }),
                 stderr_read: stderr_r.map(|p| AnonPipeReader { handle: p.read }),
             },
+        })
+    }
+
+    /// Job Object only spawn — no AppContainer. Used as fallback when
+    /// AppContainer fails (missing DLL paths, SxS, Windows Update drift).
+    /// Same as spawn_sandboxed's ac_sid.is_none() branch.
+    pub fn spawn_job_only(
+        cmdline: &str,
+        cwd: &str,
+        _piped_io: bool,
+    ) -> io::Result<super::SandboxedChild> {
+        let (program, args) = split_cmdline(cmdline);
+        let mut c = std::process::Command::new(&program);
+        for a in &args {
+            c.arg(a);
+        }
+        c.current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .creation_flags(DETACHED_PROCESS);
+        let child = c.spawn()?;
+        job::assign(&child);
+        Ok(super::SandboxedChild {
+            inner: ChildInner::Standard(child),
         })
     }
 

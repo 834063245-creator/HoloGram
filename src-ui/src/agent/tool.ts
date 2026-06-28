@@ -455,12 +455,12 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          old_name: { type: 'string', description: 'Current name of the symbol to rename' },
-          new_name: { type: 'string', description: 'New name for the symbol' },
-          dry_run: { type: 'boolean', description: 'If true, preview changes without modifying files (default: true)', default: true },
-          node_id: { type: 'string', description: 'Optional node ID for disambiguation when multiple symbols share the same name' },
+          oldName: { type: 'string', description: 'Current name of the symbol to rename' },
+          newName: { type: 'string', description: 'New name for the symbol' },
+          dryRun: { type: 'boolean', description: 'If true, preview changes without modifying files (default: true)', default: true },
+          nodeId: { type: 'string', description: 'Optional node ID for disambiguation when multiple symbols share the same name' },
         },
-        required: ['old_name', 'new_name'],
+        required: ['oldName', 'newName'],
       }),
       // TODO: 支持动态 readOnly (dry_run=true 时只读); 当前接口签名 readOnly(): boolean 不支持参数
       readOnly: () => false,
