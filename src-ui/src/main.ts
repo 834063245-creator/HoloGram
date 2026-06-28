@@ -29,6 +29,7 @@ import { AgentVisualizer } from './ui/agent-visualizer';
 import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 import { Workspace, isSamePath } from './workspace';
+import { showApprovalDialog } from './agent/permission';
 
 // ── Worker layout helper ──
 
@@ -300,6 +301,25 @@ async function init(): Promise<void> {
         chatPanel.ask(`分析从 ${parts[0]} 到 ${parts[1]} 的依赖路径。请分析这条依赖链的架构合理性、风险点、以及如果修改起点的潜在影响范围。`);
       }
     }
+  });
+
+  // ── Backend permission-ask → frontend dialog bridge ──
+  await listen('permission-ask', (event: any) => {
+    const p = event.payload as {
+      requestId: string;
+      tool: string;
+      path: string;
+      reason: string;
+      suggestions: Array<{ rule: string; behavior: string }>;
+    };
+    showApprovalDialog(p.tool, p.reason, { path: p.path }).then((result) => {
+      invoke('permission_ask_response', {
+        requestId: p.requestId,
+        allow: result.allow,
+        remember: result.remember || undefined,
+        ruleToAdd: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
+      });
+    });
   });
 
   // Browser shortcut suppression

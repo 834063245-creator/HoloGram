@@ -36,7 +36,9 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
     // 4. Safe read-only subcommands → Passthrough (central engine will allow)
     match subcommand {
         "log" | "status" | "diff_unstaged" | "diff_staged" | "blame"
-        | "show" | "file_at_head" | "list_branches" | "stash_list" => {
+        | "show" | "file_at_head" | "list_branches" | "stash_list"
+        | "pull" | "fetch" | "stage" | "unstage" | "stage_all" | "init"
+        | "create_branch" | "stash_push" => {
             PermissionResult::Passthrough
         }
         // Destructive subcommands → Ask by default

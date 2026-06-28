@@ -850,6 +850,20 @@
       filter: drop-shadow(0 0 8px rgba(100, 160, 240, 0.5));
     }
 
+    /* ── Pill: agent running in background ── */
+    #chat-panel.chat-pill-running .chat-pill-star {
+      color: var(--sol);
+      animation: pill-pulse 1.2s ease-in-out infinite;
+    }
+    #chat-panel.chat-pill-running::before {
+      animation: pill-orbit 3s linear infinite;
+      border-color: rgba(240, 170, 50, 0.25);
+    }
+    @keyframes pill-pulse {
+      0%, 100% { filter: drop-shadow(0 0 4px rgba(240, 170, 50, 0.3)); }
+      50% { filter: drop-shadow(0 0 14px rgba(240, 170, 50, 0.6)); }
+    }
+
     /* ── Pill orbital ring ── */
     #chat-panel::before {
       content: ''; position: absolute; inset: -6px; border-radius: 50%;

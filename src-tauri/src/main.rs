@@ -2420,8 +2420,8 @@ async fn git_status(
         if let Ok(ab) = run_git(path.clone(), vec!["rev-list".to_string(), "--left-right".to_string(), "--count".to_string(), format!("...origin/{}", branch)]).await {
             let parts: Vec<&str> = ab.trim().split('\t').collect();
             if parts.len() == 2 {
-                behind = parts[0].trim().parse().unwrap_or(0);
-                ahead = parts[1].trim().parse().unwrap_or(0);
+                ahead = parts[0].trim().parse().unwrap_or(0);   // left  = HEAD 独有的
+                behind = parts[1].trim().parse().unwrap_or(0);  // right = origin 独有的
             }
         }
     }
@@ -2525,6 +2525,16 @@ async fn git_pull(
 ) -> Result<String, String> {
     require_git(&path, "pull", &state, &app).await?;
     run_git(path.clone(), vec!["pull".to_string()]).await
+}
+
+#[tauri::command]
+async fn git_fetch(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    require_git(&path, "fetch", &state, &app).await?;
+    run_git(path.clone(), vec!["fetch".to_string(), "--all".to_string(), "--prune".to_string()]).await
 }
 
 #[tauri::command]
@@ -3113,6 +3123,7 @@ fn main() {
             git_commit,
             git_push,
             git_pull,
+            git_fetch,
             git_log,
             git_init,
             git_list_branches,
