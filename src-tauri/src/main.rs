@@ -50,7 +50,7 @@ pub(crate) const NO_WINDOW: u32 = 0x08000000;
 // ═══════════════════════════════════════════════════════
 
 struct BgJob {
-    child: std::process::Child,
+    child: os_sandbox::SandboxedChild,
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
     start_time: std::time::Instant,
@@ -61,48 +61,12 @@ static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
 
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
-/// Cached bash availability on Windows — detected once, avoids blocking every shell call.
-static HAS_BASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-
 /// Logging guard — initialized once on first project open, held for process lifetime.
 static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
 
-fn has_bash() -> bool {
-    *HAS_BASH.get_or_init(|| {
-        std::process::Command::new("bash")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
-
 fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
-    let mut child = if cfg!(target_os = "windows") {
-        if has_bash() {
-            let mut c = silent_command("bash");
-            c.arg("-c").arg(cmd);
-            c
-        } else {
-            let mut c = silent_command("cmd");
-            c.arg("/s").arg("/c").arg(cmd);
-            c
-        }
-    } else {
-        let mut c = silent_command("sh");
-        c.arg("-c").arg(sh_escape(cmd));
-        c
-    };
-    let child = child
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let child = os_sandbox::spawn_shell(cmd, cwd)
         .map_err(|e| format!("无法启动后台命令: {e}"))?;
-    // Phase 4a: assign child to Job Object for die-with-parent
-    os_sandbox::assign(&child);
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let job = BgJob {
         child,
@@ -118,10 +82,9 @@ fn read_bg_output(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
     // Drain what's available without blocking
-    if let Some(stdout) = &mut job.child.stdout {
+    if let Some(stdout) = job.child.stdout_reader() {
         let mut buf = [0u8; 4096];
         loop {
-            use std::io::Read;
             match stdout.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => job.stdout_buf.extend_from_slice(&buf[..n]),
@@ -130,10 +93,9 @@ fn read_bg_output(id: u32) -> Result<String, String> {
             }
         }
     }
-    if let Some(stderr) = &mut job.child.stderr {
+    if let Some(stderr) = job.child.stderr_reader() {
         let mut buf = [0u8; 4096];
         loop {
-            use std::io::Read;
             match stderr.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => job.stderr_buf.extend_from_slice(&buf[..n]),
@@ -166,23 +128,6 @@ fn kill_bg(id: u32) -> Result<String, String> {
     jobs.remove(&id);
     Ok(format!("[任务已终止]\n{stdout}{stderr}"))
 }
-
-/// Build a Command that won't flash a console window on Windows.
-fn silent_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(NO_WINDOW);
-    }
-    cmd
-}
-
-/// Safe shell quoting for `sh -c` on Unix — uses single-quote wrapping
-/// with embedded single quotes escaped as '\'' (end quote, escaped quote, start quote).
-fn sh_escape(command: &str) -> String {
-    format!("'{}'", command.replace('\'', "'\\''"))
-}
-
 
 /// Find the Rust engine executable.
 /// Checks: 1) HOLOGRAM_ENGINE env var  2) engine/target/release  3) engine/target/debug
@@ -1322,44 +1267,22 @@ async fn exec_command(
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000)); // default 5 min
 
-    let mut child = if cfg!(target_os = "windows") {
-        // Cached bash detection — avoids blocking the async runtime on every call
-        if has_bash() {
-            let mut c = silent_command("bash");
-            c.arg("-c").arg(&command);
-            c
-        } else {
-            let mut c = silent_command("cmd");
-            c.arg("/s").arg("/c").arg(&command);
-            c
-        }
-    } else {
-        let mut c = silent_command("sh");
-        c.arg("-c").arg(sh_escape(&command));
-        c
-    };
-    let mut child = child
-        .current_dir(&physical_dir_str)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let mut child = os_sandbox::spawn_shell(&command, &physical_dir_str)
         .map_err(|e| format!("无法执行命令: {e}"))?;
-    // Phase 4a: assign child to Job Object for die-with-parent
-    os_sandbox::assign(&child);
 
     // Manual timeout polling (compatible with older Rust)
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = if let Some(mut p) = child.stdout.take() {
+                let stdout = if let Some(mut p) = child.take_stdout() {
                     let mut v = Vec::new();
                     if let Err(e) = p.read_to_end(&mut v) {
                         eprintln!("[hologram] read_to_end stdout failed: {e}");
                     }
                     String::from_utf8_lossy(&v).to_string()
                 } else { String::new() };
-                let stderr = if let Some(mut p) = child.stderr.take() {
+                let stderr = if let Some(mut p) = child.take_stderr() {
                     let mut v = Vec::new();
                     if let Err(e) = p.read_to_end(&mut v) {
                         eprintln!("[hologram] read_to_end stderr failed: {e}");
