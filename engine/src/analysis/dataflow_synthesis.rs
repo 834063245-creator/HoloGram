@@ -20,6 +20,30 @@ thread_local! {
     static NAME_IDX: RefCell<Option<HashMap<String, String>>> = RefCell::new(None);
 }
 
+// ── Fix 1 helper: file-scoped key for node_id_for dedup ──
+// Prevents cross-file name collisions from producing giant artificial SCCs.
+fn scoped_key(file: &str, name: &str) -> String {
+    format!("{}::{}", file, name)
+}
+
+// ── Fix 3: Python built-in name filter ──
+fn is_py_builtin(name: &str) -> bool {
+    matches!(name,
+        "str" | "int" | "float" | "bool" | "bytes" | "bytearray" | "complex" |
+        "list" | "dict" | "tuple" | "set" | "frozenset" | "object" |
+        "True" | "False" | "None" |
+        "len" | "range" | "type" | "print" | "isinstance" | "issubclass" |
+        "super" | "Exception" | "ValueError" | "TypeError" | "KeyError" |
+        "IndexError" | "AttributeError" | "RuntimeError" | "StopIteration" |
+        "map" | "filter" | "zip" | "enumerate" | "sorted" | "reversed" |
+        "any" | "all" | "min" | "max" | "sum" | "abs" | "round" |
+        "chr" | "ord" | "hex" | "oct" | "bin" | "hash" | "id" | "repr" |
+        "input" | "open" | "format" | "staticmethod" | "classmethod" |
+        "property" | "hasattr" | "getattr" | "setattr" | "delattr" |
+        "iter" | "next" | "slice" | "dir" | "vars" | "__name__" | "__file__"
+    )
+}
+
 pub fn synthesize_dataflow_edges(
     graph: &mut Graph,
     project_root: &Path,
@@ -81,23 +105,21 @@ pub fn synthesize_dataflow_edges(
 // ── helpers ──
 
 fn node_id_for(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
-    // O(1) lookup via pre-built name index.
-    if let Some(id) = NAME_IDX.with(|cell| cell.borrow().as_ref().and_then(|idx| idx.get(name).cloned())) {
+    // O(1) lookup — file-scoped key prevents cross-file name collisions
+    // from producing giant artificial SCCs (e.g. db.execute in 100 files).
+    let key = scoped_key(file, name);
+    if let Some(id) = NAME_IDX.with(|cell| cell.borrow().as_ref().and_then(|idx| idx.get(&key).cloned())) {
         return id;
     }
-    // Only create new nodes for variables that don't already exist in the graph.
-    // This prevents dataflow from flooding the graph with 100K+ synthesized nodes
-    // (one per variable per file) on large projects like Django.
-    // The node will still get edges if referenced by synthesis later.
     let nid = format!("df_{}_{}", file.replace(['.', '/', '\\'], "_"), name);
     let mut n = Node::new(&nid, name, NodeKind::Symbol);
     n.location = Some(format!("{}:{}", file, line));
     n.properties = serde_json::json!({"kind":"synthesized","provenance":"dataflow"});
     graph.add_node(n);
-    // Also register in the index so subsequent calls find it in O(1)
+    // Register with file-scoped key so subsequent calls in the same file find it in O(1)
     NAME_IDX.with(|cell| {
         if let Some(ref mut idx) = *cell.borrow_mut() {
-            idx.insert(name.to_string(), nid.clone());
+            idx.insert(key, nid.clone());
         }
     });
     nid
@@ -246,8 +268,8 @@ fn walk_py_dataflow_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree
                     if let Some(target) = py_await_target(&node, source) {
                         let fn_id = node_id_for(graph, &fn_name, file, node.start_position().row + 1);
                         let tgt_id = node_id_for(graph, &target, file, node.start_position().row + 1);
-                        let eid = format!("trg_{}_{}_{}", ff, fn_name, target);
-                        added += insert_edge(graph, &eid, &fn_id, &tgt_id, EdgeKind::Triggers, 3, Some(0.0));
+                        let eid = format!("awt_{}_{}_{}", ff, fn_name, target);
+                        added += insert_edge(graph, &eid, &fn_id, &tgt_id, EdgeKind::Awaits, 3, Some(0.0));
                     }
                 }
             }
@@ -259,8 +281,8 @@ fn walk_py_dataflow_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree
                         if let Some(target) = py_await_target_expr(&node, source) {
                             let fn_id = node_id_for(graph, &fn_name, file, node.start_position().row + 1);
                             let tgt_id = node_id_for(graph, &target, file, node.start_position().row + 1);
-                            let eid = format!("trg_{}_{}_{}", ff, fn_name, target);
-                            added += insert_edge(graph, &eid, &fn_id, &tgt_id, EdgeKind::Triggers, 3, Some(0.0));
+                            let eid = format!("awt_{}_{}_{}", ff, fn_name, target);
+                            added += insert_edge(graph, &eid, &fn_id, &tgt_id, EdgeKind::Awaits, 3, Some(0.0));
                         }
                     }
                 }
@@ -307,7 +329,10 @@ fn py_walk_body(func: &tree_sitter::Node, source: &str, body_vars: &mut HashSet<
             "identifier" => {
                 if py_is_lhs(&node) { continue; }
                 if let Ok(name) = node.utf8_text(source.as_bytes()) {
-                    if name.chars().next().map_or(false, |c| c.is_lowercase()) && name != "self" {
+                    if name.chars().next().map_or(false, |c| c.is_lowercase())
+                        && name != "self"
+                        && !is_py_builtin(name)
+                    {
                         let tgt = node_id_for(graph, name, file, node.start_position().row + 1);
                         let eid = format!("rd_{}_{}_{}", ff, fn_id, name);
                         if *added < 10000 {
@@ -682,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn test_py_triggers() {
+    fn test_py_awaits() {
         let mut g = Graph::new();
         let tmp = std::env::temp_dir().join("_df3");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -690,7 +715,7 @@ mod tests {
         std::fs::write(tmp.join("async_m.py"), "async def fetch():\n    data = await get_data()\n    return data\n").unwrap();
         let n = synthesize_dataflow_edges(&mut g, &tmp, &Default::default(), &[tmp.join("async_m.py")]);
         assert!(n > 0, "got {}", n);
-        assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Triggers)), "no Triggers");
+        assert!(g.edges.values().any(|e| matches!(e.kind, EdgeKind::Awaits)), "no Awaits from Python await");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -166,6 +166,10 @@ const icons: Record<string, IconDef> = {
     label: '编辑',
     path: '<path d="M13 2 L16 5 L9 12 L5 12 L5 8 Z"/><line x1="7" y1="10" x2="12" y2="5"/>',
   },
+  eye: {
+    label: '预览',
+    path: '<path d="M2 9s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="9" cy="9" r="2"/>',
+  },
   bookmark: {
     label: '书签',
     path: '<path d="M5 2 L5 16 L9 12 L13 16 L13 2 Z"/>',

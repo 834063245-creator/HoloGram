@@ -14,7 +14,7 @@ import { shell } from './app-shell';
 import { cancelPendingApprovals } from '../agent/permission';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
-import type { Message } from '../provider/types';
+import type { Message, ToolSchema } from '../provider/types';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
@@ -125,6 +125,9 @@ export class ChatPanel {
   private statusTokens!: HTMLElement;
   private toolUsage: Map<string, number> = new Map();
   private toolHistory: Array<{ name: string; args: string; ts: number }> = [];
+  private _toolSchemas: ToolSchema[] = [];
+
+  setToolSchemas(schemas: ToolSchema[]): void { this._toolSchemas = schemas; }
 
   private hintText(): string {
     const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
@@ -330,42 +333,24 @@ export class ChatPanel {
     if (name.startsWith('hologram_')) return 'holo';
     if (/^(read|search|grep|glob|list|view|show|get|find|cat|head|tail)/i.test(name)) return 'read';
     if (/^(write|edit|create|delete|remove|mv|cp|rename|save)/i.test(name)) return 'write';
-    if (/^(run|exec|bash|shell|cmd|build|test|cargo|npm|git|python|node)/i.test(name)) return 'exec';
+    if (/^(run|exec|bash|shell|cmd|build|test|cargo|npm|git|python|node|web_|ask_|agent_)/i.test(name)) return 'exec';
     return 'read';
   }
 
   // ── Tools view ──
 
   private renderToolsView(): void {
-    const TOOLS_INFO: Array<{ name: string; desc: string; cat: 'read' | 'write' | 'exec' | 'holo' }> = [
-      { name: 'hologram_explore', desc: '依赖波及范围查询', cat: 'holo' },
-      { name: 'hologram_impact', desc: '改动影响分析', cat: 'holo' },
-      { name: 'hologram_path', desc: '依赖路径追踪', cat: 'holo' },
-      { name: 'hologram_neighbors', desc: '邻接节点查询', cat: 'holo' },
-      { name: 'hologram_fragile', desc: '脆弱模块检测', cat: 'holo' },
-      { name: 'hologram_cycle', desc: '循环依赖检测', cat: 'holo' },
-      { name: 'hologram_coupling_report', desc: '耦合度报告', cat: 'holo' },
-      { name: 'hologram_community', desc: '社区结构分析', cat: 'holo' },
-      { name: 'hologram_blindspots', desc: '盲点扫描', cat: 'holo' },
-      { name: 'hologram_diff', desc: '变更差异对比', cat: 'holo' },
-      { name: 'hologram_run_check', desc: '运行健康检查', cat: 'holo' },
-      { name: 'hologram_history', desc: '文件变更历史', cat: 'holo' },
-      { name: 'hologram_changes', desc: '最近变更查询', cat: 'holo' },
-      { name: 'read_file', desc: '读取文件内容', cat: 'read' },
-      { name: 'glob', desc: '文件名模式匹配', cat: 'read' },
-      { name: 'grep', desc: '内容正则搜索', cat: 'read' },
-      { name: 'list_directory', desc: '目录列表', cat: 'read' },
-      { name: 'edit_file', desc: '精确文本替换', cat: 'write' },
-      { name: 'write_file', desc: '写入文件', cat: 'write' },
-      { name: 'run_shell', desc: '执行 Shell 命令', cat: 'exec' },
-    ];
+    // ponytail: read from ToolRegistry instead of hardcoded list — 50 tools, not 19
+    const tools = this._toolSchemas.length > 0
+      ? this._toolSchemas.map(t => ({ name: t.name, desc: (t.description||'').split('\n')[0].slice(0,60), cat: ChatPanel.toolCategory(t.name) }))
+      : [];
 
     const maxUsage = Math.max(1, ...Array.from(this.toolUsage.values()));
 
     let html = '<div class="chat-tools-view">';
     html += '<div class="chat-tools-section-title">工具清单</div>';
     html += '<div class="chat-tools-grid">';
-    for (const t of TOOLS_INFO) {
+    for (const t of tools) {
       const count = this.toolUsage.get(t.name) || 0;
       const pct = (count / maxUsage) * 100;
       html += `<div class="chat-tool-card tool-cat-${t.cat}" title="${t.name} — ${t.desc}">
@@ -521,13 +506,86 @@ export class ChatPanel {
     );
   }
 
-  /** Pill → Input: 44px circle morphs into floating input bar */
-  private expandToInput(): void {
+  // ── Per-bubble entrance animation ──
+  // ponytail: single shared method, reused by restore + streaming paths
+  private animateBubbleIn(el: HTMLElement, delay = 0): gsap.core.Tween {
+    return gsap.fromTo(el,
+      { y: 12, opacity: 0 },
+      { y: 0, opacity: 1, duration: 0.28, ease: 'power2.out', delay, clearProps: 'transform,opacity' },
+    );
+  }
+
+  // ── Tool card expand/collapse (GSAP height) ──
+
+  private toggleToolCard(card: HTMLElement): void {
+    const result = card.querySelector('.msg-tool-result') as HTMLElement;
+    if (!result) return;
+    gsap.killTweensOf(result);
+    const isOpen = card.classList.contains('tool-expanded');
+
+    if (isOpen) {
+      // Collapse → animate to 0, then remove class
+      gsap.to(result, {
+        height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0,
+        duration: 0.2, ease: 'power2.in',
+        onComplete: () => {
+          card.classList.remove('tool-expanded');
+          gsap.set(result, { clearProps: 'all' });
+        },
+      });
+    } else {
+      // Expand → add class (triggers display:block), measure, animate from 0
+      card.classList.add('tool-expanded');
+      const h = result.scrollHeight;
+      gsap.fromTo(result,
+        { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0 },
+        { height: h, opacity: 1, paddingTop: '', paddingBottom: '', duration: 0.25, ease: 'power2.out',
+          onComplete: () => gsap.set(result, { clearProps: 'height,opacity,paddingTop,paddingBottom' }) },
+      );
+    }
+  }
+
+  // ── Reasoning block toggle (GSAP height) ──
+
+  private toggleReasoning(toggleBtn: HTMLElement, content: HTMLElement): void {
+    gsap.killTweensOf(content);
+    const isOpen = content.classList.contains('msg-reasoning-open');
+
+    if (isOpen) {
+      // Collapse
+      gsap.to(content, {
+        height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0,
+        duration: 0.2, ease: 'power2.in',
+        onComplete: () => {
+          content.classList.remove('msg-reasoning-open');
+          gsap.set(content, { clearProps: 'all' });
+          toggleBtn.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
+        },
+      });
+    } else {
+      // Expand
+      content.classList.add('msg-reasoning-open');
+      content.style.display = 'block';
+      const h = content.scrollHeight;
+      content.style.display = '';
+      gsap.fromTo(content,
+        { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0 },
+        { height: h, opacity: 1, paddingTop: '', paddingBottom: '', marginTop: '', duration: 0.28, ease: 'power2.out',
+          onComplete: () => {
+            gsap.set(content, { clearProps: 'height,opacity,paddingTop,paddingBottom,marginTop' });
+          },
+        },
+      );
+      toggleBtn.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
+    }
+  }
+  // ponytail: expandToInput and summonPanel share the same animation, only mode + class differ
+  private morphToMode(mode: 'input' | 'panel', cls: string): void {
     if (this._animating) return;
-    this.mode = 'input';
+    this.mode = mode;
     this.killPanelTweens();
     this.removeAllPanelClasses();
-    this.panel.classList.add('chat-input-mode');
+    this.panel.classList.add(cls);
     this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
     this.updateFooter();
 
@@ -538,21 +596,14 @@ export class ChatPanel {
     shell.notifyPanelChanged();
   }
 
+  /** Pill → Input: 44px circle morphs into floating input bar */
+  private expandToInput(): void {
+    this.morphToMode('input', 'chat-input-mode');
+  }
+
   /** Any state → Panel: summon the full conversation card */
   private summonPanel(): void {
-    if (this._animating) return;
-    this.mode = 'panel';
-    this.killPanelTweens();
-    this.removeAllPanelClasses();
-    this.panel.classList.add('chat-open');
-    this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
-    this.updateFooter();
-
-    gsap.to(this.panel, { width: 560, borderRadius: 0, duration: 0.35, ease: 'power2.out' });
-    this.fadeContentIn();
-
-    setTimeout(() => this.inputArea.focus(), 350);
-    shell.notifyPanelChanged();
+    this.morphToMode('panel', 'chat-open');
     this.scrollBottom();
   }
 
@@ -824,6 +875,12 @@ export class ChatPanel {
       for (const el of cached) {
         this.msgList.appendChild(el.cloneNode(true));
       }
+      // Staggered entrance for restored bubbles
+      const bubbles = this.msgList.querySelectorAll('.msg-bubble');
+      gsap.fromTo(bubbles,
+        { y: 10, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.25, ease: 'power2.out', stagger: 0.04, clearProps: 'transform,opacity' },
+      );
     }
     // Re-wire all interactive handlers lost by cloneNode
     this._reWireHandlers();
@@ -846,21 +903,20 @@ export class ChatPanel {
         }
       });
     });
-    // Tool card expand/collapse
+    // Tool card expand/collapse (GSAP)
     this.msgList.querySelectorAll('.msg-tool-header').forEach((header) => {
-      header.addEventListener('click', () => {
-        header.parentElement?.classList.toggle('tool-expanded');
-      });
+      const card = header.parentElement;
+      if (card) header.addEventListener('click', () => this.toggleToolCard(card));
     });
-    // Reasoning toggle
-    this.msgList.querySelectorAll('.msg-reasoning-toggle').forEach((toggle) => {
-      toggle.addEventListener('click', () => {
-        const reasoning = toggle.parentElement;
-        if (reasoning) reasoning.classList.toggle('reasoning-expanded');
-      });
+    // Reasoning toggle (GSAP)
+    this.msgList.querySelectorAll('.msg-reasoning-toggle').forEach((el) => {
+      const toggle = el as HTMLElement;
+      const content = toggle.parentElement?.querySelector('.msg-reasoning-content') as HTMLElement;
+      if (content) toggle.addEventListener('click', () => this.toggleReasoning(toggle, content));
     });
     // Copy buttons
-    this.msgList.querySelectorAll('.msg-action-btn').forEach((btn) => {
+    this.msgList.querySelectorAll('.msg-action-btn').forEach((el) => {
+      const btn = el as HTMLElement;
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const bubble = btn.closest('.msg-bubble');
@@ -1159,12 +1215,7 @@ export class ChatPanel {
           const content = document.createElement('div');
           content.className = 'msg-reasoning-content';
           content.textContent = m.reasoning_content;
-          toggle.addEventListener('click', () => {
-            const show = content.classList.toggle('msg-reasoning-open');
-            toggle.innerHTML = show
-              ? `${iconHtml('chevron-down')} 收起思考`
-              : `${iconHtml('chevron-right')} 思考过程`;
-          });
+          toggle.addEventListener('click', () => this.toggleReasoning(toggle, content));
           reasoning.append(toggle, content);
           bubble.appendChild(reasoning);
         }
@@ -1209,7 +1260,7 @@ export class ChatPanel {
             status.innerHTML = iconHtml('check-circle', 12);
 
             header.append(nameEl, argsEl, status);
-            header.addEventListener('click', () => card.classList.toggle('tool-expanded'));
+            header.addEventListener('click', () => this.toggleToolCard(card));
 
             const resultEl = document.createElement('div');
             resultEl.className = 'msg-tool-result';
@@ -1236,6 +1287,7 @@ export class ChatPanel {
         bubble.appendChild(actions);
 
         this.msgList.appendChild(bubble);
+        this.animateBubbleIn(bubble);
       }
     }
 
@@ -2057,9 +2109,7 @@ export class ChatPanel {
       toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
       toggle.addEventListener('click', () => {
         const content = toggle.nextElementSibling as HTMLElement;
-        if (!content) return;
-        const show = content.classList.toggle('msg-reasoning-open');
-        toggle.innerHTML = show ? `${iconHtml('chevron-down')} 收起思考` : `${iconHtml('chevron-right')} 思考过程`;
+        if (content) this.toggleReasoning(toggle, content);
       });
 
       this.currentReasoningContent = document.createElement('div');
@@ -2348,9 +2398,7 @@ export class ChatPanel {
     }
 
     header.append(nameEl, argsEl, status);
-    header.addEventListener('click', () => {
-      card.classList.toggle('tool-expanded');
-    });
+    header.addEventListener('click', () => this.toggleToolCard(card));
 
     const resultEl = document.createElement('div');
     resultEl.className = 'msg-tool-result';
@@ -2642,6 +2690,7 @@ export class ChatPanel {
     this.currentBubble = document.createElement('div');
     this.currentBubble.className = 'msg-bubble assistant';
     this.msgList.appendChild(this.currentBubble);
+    this.animateBubbleIn(this.currentBubble);
   }
 
   private appendUserBubble(text: string): void {
@@ -2654,6 +2703,7 @@ export class ChatPanel {
     // Item 2: edit/resend actions for user bubbles
     this.addMessageActions(el);
     this.msgList.appendChild(el);
+    this.animateBubbleIn(el);
   }
 
   private addTurnSep(): void {
