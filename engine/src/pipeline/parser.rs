@@ -62,11 +62,11 @@ impl ParallelParser {
     }
 
     pub fn parse_one(&self, path: &PathBuf) -> Option<FileData> {
-        // ponytail: skip oversized files — typically vendored/generated blobs
-        // (sqlite3.c = 9.3 MB, auto-generated parser.c files = 0.5-1 MB).
-        // tree-sitter parse is O(file_size), generic_walk is O(AST_nodes).
-        // 512 KB catches all known offenders; hand-written source is never this large.
-        const MAX_FILE_SIZE: u64 = 512 * 1024;
+        // ponytail: skip oversized files — vendored/generated blobs that
+        // slip past L0-L2 filters. tree-sitter parse is O(file_size),
+        // generic_walk is O(AST_nodes). 1 MB is generous: hand-written
+        // source never exceeds this (that's ~25,000 lines in one file).
+        const MAX_FILE_SIZE: u64 = 1_048_576; // 1 MB
         if let Ok(meta) = std::fs::metadata(path) {
             if meta.len() > MAX_FILE_SIZE {
                 tracing::warn!(path = %path.display(), size_bytes = meta.len(), "[parser] skipping oversized file");
