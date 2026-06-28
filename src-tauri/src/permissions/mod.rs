@@ -16,6 +16,7 @@ use std::sync::{LazyLock, RwLock};
 
 use tokio::sync::oneshot;
 
+use crate::agent_isolation::AgentIsolation;
 use crate::audit::AuditLogger;
 use crate::sandbox::{Sandbox, SandboxResult};
 
@@ -80,6 +81,8 @@ pub struct PermissionContext {
     pub sandbox: Sandbox,
     rules: RwLock<rule::PermissionRules>,
     audit_logger: AuditLogger,
+    /// Agent isolation state — None = direct repo access, Some(Worktree) = sandboxed.
+    isolation: RwLock<Option<AgentIsolation>>,
 }
 
 impl PermissionContext {
@@ -94,12 +97,14 @@ impl PermissionContext {
 
         let sandbox = Sandbox::new(project_root);
         let audit_logger = AuditLogger::new(project_root);
+        let isolation = AgentIsolation::none(project_root);
 
         Self {
             project_root: project_root.to_path_buf(),
             sandbox,
             rules: RwLock::new(rules),
             audit_logger,
+            isolation: RwLock::new(Some(isolation)),
         }
     }
 
@@ -140,6 +145,65 @@ impl PermissionContext {
     pub fn read_rules(&self) -> std::sync::RwLockReadGuard<'_, rule::PermissionRules> {
         self.rules.read().unwrap()
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Agent isolation — worktree lifecycle + path mapping (spec §5)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Set the active agent isolation (e.g. when an agent starts in worktree mode).
+    pub fn set_isolation(&self, isolation: AgentIsolation) {
+        if let Ok(mut iso) = self.isolation.write() {
+            *iso = Some(isolation);
+        }
+    }
+
+    /// Clear isolation back to None (agent finished, worktree removed).
+    pub fn clear_isolation(&self) {
+        if let Ok(mut iso) = self.isolation.write() {
+            *iso = Some(AgentIsolation::none(&self.project_root));
+        }
+    }
+
+    /// Get the current isolation kind.
+    #[allow(dead_code)] // ponytail: public API for future mode checks
+    pub fn isolation_kind(&self) -> crate::agent_isolation::IsolationKind {
+        self.isolation
+            .read()
+            .ok()
+            .and_then(|iso| iso.as_ref().map(|i| i.kind))
+            .unwrap_or(crate::agent_isolation::IsolationKind::None)
+    }
+
+    /// Get a clone of the current isolation state.
+    pub fn get_isolation(&self) -> Option<AgentIsolation> {
+        self.isolation
+            .read()
+            .ok()
+            .and_then(|iso| iso.clone())
+    }
+
+    /// Reverse-map a path for permission checking: worktree physical path → main repo logical path.
+    /// In None isolation, returns the path unchanged.
+    pub fn reverse_map_path(&self, path: &Path) -> PathBuf {
+        if let Ok(iso) = self.isolation.read() {
+            if let Some(ref isolation) = *iso {
+                return isolation.reverse_map(path);
+            }
+        }
+        path.to_path_buf()
+    }
+
+    /// Forward-map a path for execution: main repo logical path → worktree physical path.
+    /// In None isolation, returns the path unchanged.
+    pub fn forward_map_path(&self, path: &Path) -> PathBuf {
+        if let Ok(iso) = self.isolation.read() {
+            if let Some(ref isolation) = *iso {
+                return isolation.forward_map(path);
+            }
+        }
+        path.to_path_buf()
+    }
+
     /// Log an audit entry for a deny decision.
     pub fn audit_deny(&self, tool_name: &str, target: &str, reason: &str) {
         self.audit_logger.log(&crate::audit::AuditEntry {
