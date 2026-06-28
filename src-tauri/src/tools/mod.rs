@@ -38,7 +38,10 @@ impl Tool for ReadTool {
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
-        filesystem::check_read_permission(&self.path, &ctx.sandbox, &rules)
+        // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
+        let logical = ctx.reverse_map_path(std::path::Path::new(&self.path));
+        let logical_str = logical.to_string_lossy().replace('\\', "/");
+        filesystem::check_read_permission(&self.path, &ctx.sandbox, &rules, Some(&logical_str))
     }
 }
 
@@ -70,7 +73,10 @@ impl Tool for EditTool {
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
-        filesystem::check_write_permission(&self.path, &ctx.sandbox, &rules)
+        // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
+        let logical = ctx.reverse_map_path(std::path::Path::new(&self.path));
+        let logical_str = logical.to_string_lossy().replace('\\', "/");
+        filesystem::check_write_permission(&self.path, &ctx.sandbox, &rules, Some(&logical_str))
     }
 }
 
@@ -145,7 +151,7 @@ impl Tool for GitTool {
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         // First check the repo path is readable
         let rules = ctx.read_rules();
-        let path_check = filesystem::check_read_permission(&self.repo_path, &ctx.sandbox, &rules);
+        let path_check = filesystem::check_read_permission(&self.repo_path, &ctx.sandbox, &rules, None);
         match path_check {
             PermissionResult::Deny { .. } => return path_check,
             _ => {}

@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_isolation;
 mod mcp_manager;
 mod pty_manager;
 mod lsp_manager;
@@ -273,6 +274,7 @@ where
 // Phase 2: Permission helpers — replace old with_workspace sandbox calls
 // ═══════════════════════════════════════════════════════
 
+use crate::agent_isolation::{AgentIsolation, IsolationKind};
 use crate::permissions::{PermissionContext, PermissionDecision, has_permission_to_use_tool, register_ask};
 
 /// Get the PermissionContext from workspace state, releasing the lock immediately.
@@ -328,16 +330,22 @@ fn check_permission_sync(
 
 async fn require_read(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    let tool = tools::ReadTool { path: file_path.to_string() };
+    // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical_str = physical.to_string_lossy().to_string();
+    let tool = tools::ReadTool { path: physical_str.clone() };
     check_permission(&tool, &ctx, app).await?;
-    ctx.resolve_read(file_path)
+    ctx.resolve_read(&physical_str)
 }
 
 async fn require_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    let tool = tools::EditTool { path: file_path.to_string() };
+    // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical_str = physical.to_string_lossy().to_string();
+    let tool = tools::EditTool { path: physical_str.clone() };
     check_permission(&tool, &ctx, app).await?;
-    ctx.resolve_write(file_path)
+    ctx.resolve_write(&physical_str)
 }
 
 async fn require_command(command: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
@@ -354,14 +362,19 @@ fn require_command_sync(command: &str, state: &tauri::State<'_, WorkspaceState>)
 
 fn require_read_sync(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    let tool = tools::ReadTool { path: file_path.to_string() };
+    // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical_str = physical.to_string_lossy().to_string();
+    let tool = tools::ReadTool { path: physical_str.clone() };
     check_permission_sync(&tool, &ctx)?;
-    ctx.resolve_read(file_path)
+    ctx.resolve_read(&physical_str)
 }
 
 async fn require_git(repo_path: &str, subcommand: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
     let ctx = get_ctx(state)?;
-    let tool = tools::GitTool { repo_path: repo_path.to_string(), subcommand: subcommand.to_string() };
+    // Phase 3: forward-map repo path to worktree when isolated (spec §5.6)
+    let physical = ctx.forward_map_path(std::path::Path::new(repo_path));
+    let tool = tools::GitTool { repo_path: physical.to_string_lossy().to_string(), subcommand: subcommand.to_string() };
     check_permission(&tool, &ctx, app).await
 }
 
@@ -1286,19 +1299,21 @@ async fn exec_command(
 ) -> Result<String, String> {
     let dir = cwd.unwrap_or_else(|| project_root().to_string_lossy().to_string());
 
-    // Phase 2: permission check before any execution (foreground + background)
+    // Phase 2+3: permission check before any execution (foreground + background).
+    // Phase 3: use the forward-mapped physical directory (worktree path) for
+    // actual execution, not the original cwd (spec §5.6).
     let is_bg = run_in_background.unwrap_or(false);
-    if is_bg {
-        // Background: Ask → Deny (spec §4.11)
+    let physical_dir = if is_bg {
         require_command_sync(&command, &state)?;
-        require_read_sync(&dir, &state)?;
+        require_read_sync(&dir, &state)?
     } else {
         require_command(&command, &state, &app).await?;
-        require_read(&dir, &state, &app).await?;
-    }
+        require_read(&dir, &state, &app).await?
+    };
+    let physical_dir_str = physical_dir.to_string_lossy().to_string();
 
     if is_bg {
-        let id = spawn_bg(&command, &dir)?;
+        let id = spawn_bg(&command, &physical_dir_str)?;
         return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_kill({}) 终止任务", id, id, id));
     }
 
@@ -1321,7 +1336,7 @@ async fn exec_command(
         c
     };
     let mut child = child
-        .current_dir(&dir)
+        .current_dir(&physical_dir_str)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -2960,6 +2975,120 @@ fn credential_clear() -> Result<(), String> {
     credential::clear_credentials()
 }
 
+// ═══════════════════════════════════════════════════════
+// Phase 3: Agent Isolation — git worktree lifecycle (spec §5)
+// ═══════════════════════════════════════════════════════
+
+/// Create a git worktree for an agent to work in isolation.
+/// Returns the worktree path and head commit info.
+#[tauri::command]
+fn agent_isolation_create(
+    agent_id: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let project_path = workspace_path(&state)?;
+    let main_path = std::path::PathBuf::from(&project_path);
+
+    let isolation =
+        AgentIsolation::create_worktree(&main_path, &agent_id)?;
+
+    let wt_path = isolation
+        .worktree_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Set isolation on the permission context
+    if let Ok(guard) = state.lock() {
+        if let Some(ref handle) = *guard {
+            handle.permission_ctx.set_isolation(isolation);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "worktree_path": wt_path,
+        "agent_id": agent_id,
+        "original_head": &wt_path[..8.min(wt_path.len())],
+    })
+    .to_string())
+}
+
+/// Show the diff of worktree changes (before user decides merge/discard).
+#[tauri::command]
+fn agent_isolation_diff(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let ctx = get_ctx(&state)?;
+    let isolation = ctx
+        .get_isolation()
+        .ok_or("没有活跃的隔离环境")?;
+
+    if isolation.kind == IsolationKind::None {
+        return Err("当前未使用工作树隔离".into());
+    }
+
+    match isolation.cleanup()? {
+        crate::agent_isolation::CleanupResult::NoChanges => Ok(
+            serde_json::json!({"has_changes": false, "diff": ""}).to_string(),
+        ),
+        crate::agent_isolation::CleanupResult::HasChanges {
+            diff,
+            worktree_path,
+        } => Ok(serde_json::json!({
+            "has_changes": true,
+            "diff": diff,
+            "worktree_path": worktree_path.to_string_lossy(),
+        })
+        .to_string()),
+    }
+}
+
+/// Merge worktree changes back to main repo and clean up.
+#[tauri::command]
+fn agent_isolation_merge(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let ctx = get_ctx(&state)?;
+    let isolation = ctx
+        .get_isolation()
+        .ok_or("没有活跃的隔离环境")?;
+
+    let result = isolation.merge_to_main()?;
+    ctx.clear_isolation();
+    Ok(result)
+}
+
+/// Discard worktree changes and clean up.
+#[tauri::command]
+fn agent_isolation_discard(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let ctx = get_ctx(&state)?;
+    let isolation = ctx
+        .get_isolation()
+        .ok_or("没有活跃的隔离环境")?;
+
+    isolation.discard()?;
+    ctx.clear_isolation();
+    Ok("工作树已丢弃".into())
+}
+
+/// Get current isolation status.
+#[tauri::command]
+fn agent_isolation_status(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let ctx = get_ctx(&state)?;
+    let iso = ctx.get_isolation();
+    match iso {
+        Some(i) if i.kind == IsolationKind::Worktree => Ok(serde_json::json!({
+            "isolation": "worktree",
+            "worktree_path": i.worktree_path.map(|p| p.to_string_lossy().to_string()),
+        })
+        .to_string()),
+        _ => Ok(serde_json::json!({"isolation": "none"}).to_string()),
+    }
+}
 
 /// Atomic write: temp file then rename.
 fn write_atomic(file_path: &str, content: &str) -> Result<(), String> {
@@ -3048,6 +3177,11 @@ fn main() {
             workspace_activate,
             workspace_deactivate,
             workspace_start_watcher,
+            agent_isolation_create,
+            agent_isolation_diff,
+            agent_isolation_merge,
+            agent_isolation_discard,
+            agent_isolation_status,
             list_directory,
             read_file_content,
             read_file_base64,
