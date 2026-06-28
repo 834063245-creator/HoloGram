@@ -29,14 +29,6 @@ impl Sandbox {
         }
     }
 
-    /// Add a directory to the read whitelist.
-    #[allow(dead_code)]
-    pub fn allow_read(&mut self, dir: &Path) {
-        if let Ok(canon) = std::fs::canonicalize(dir) {
-            self.read_whitelist.push(canon);
-        }
-    }
-
     /// Validate a read operation against `path`.
     pub fn resolve_read(&self, path: &Path) -> SandboxResult {
         // Resolve canonical path
@@ -128,12 +120,6 @@ impl Sandbox {
         SandboxResult::Allowed(real)
     }
 
-    /// Validate a delete operation. Same as write + confirmation required at UI layer.
-    #[allow(dead_code)]
-    pub fn resolve_delete(&self, path: &Path) -> SandboxResult {
-        // Deleting is the most dangerous — strict write root check
-        self.resolve_write(path)
-    }
 }
 
 /// Walk up the directory tree to find the nearest existing ancestor.

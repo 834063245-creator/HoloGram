@@ -1342,7 +1342,6 @@ dependencies = [
  "libloading 0.8.9",
  "portable-pty",
  "regex",
- "rusqlite",
  "serde",
  "serde_json",
  "tauri",
@@ -1372,7 +1371,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -1406,7 +1404,6 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "tree-sitter-zig",
- "uuid",
  "walkdir",
 ]
 

@@ -20,11 +20,6 @@ pub struct EngineClient {
 }
 
 impl EngineClient {
-    #[allow(dead_code)] // ponytail: used via CONN static, new() shape for future pooled clients
-    pub fn new(addr: &str) -> Self {
-        Self { addr: addr.to_string() }
-    }
-
     /// Send a raw text command and receive the JSON response.
     /// Uses a persistent keep-alive connection; reconnects transparently on failure.
     pub fn send(&self, command: &str) -> Result<String, String> {
@@ -79,9 +74,4 @@ impl EngineClient {
         String::from_utf8(payload).map_err(|e| format!("Invalid UTF-8: {}", e))
     }
 
-    /// Check if the engine is reachable.
-    #[allow(dead_code)]
-    pub fn ping(&self) -> bool {
-        self.send("ping").is_ok()
-    }
 }

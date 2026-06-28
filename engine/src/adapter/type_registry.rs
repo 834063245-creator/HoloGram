@@ -10,21 +10,7 @@ use crate::graph::{Graph, NodeKind};
 
 use super::types::Type;
 
-/// Decorator flags for Python functions/methods.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FuncFlag {
-    None = 0,
-    Property = 1 << 0,
-    ClassMethod = 1 << 1,
-    StaticMethod = 1 << 2,
-    AbstractMethod = 1 << 3,
-    Overload = 1 << 4,
-    Async = 1 << 5,
-    Generator = 1 << 6,
-    Final = 1 << 7,
-}
-
-/// A registered function/method with full type signature.
+/// A registered function/method with type signature.
 #[derive(Debug, Clone)]
 pub struct RegisteredFunc {
     /// Fully qualified: "myapp.models.User.handle"
@@ -33,12 +19,8 @@ pub struct RegisteredFunc {
     pub receiver_type: Option<String>,
     /// Short name: "handle"
     pub short_name: String,
-    /// Parameter types (first = self/cls for methods)
-    pub params: Vec<(String, Type)>,
     /// Return type
     pub ret: Type,
-    /// Decorator flags (Python)
-    pub flags: u32,
 }
 
 /// A registered type (class, interface, protocol).
@@ -149,9 +131,7 @@ impl TypeRegistry {
                     qualified_name: qn.clone(),
                     receiver_type: receiver_type.clone(),
                     short_name: short_name.clone(),
-                    params: Vec::new(),
                     ret: Type::Unknown,
-                    flags: 0,
                 };
 
                 // If it's a method, register in the method index
@@ -230,9 +210,7 @@ impl TypeRegistry {
                 qualified_name: qn.clone(),
                 receiver_type: None,
                 short_name: fname.to_string(),
-                params: Vec::new(),
                 ret: Type::Unknown,
-                flags: 0,
             };
             self.funcs_by_qn.insert(qn, rf);
         }
@@ -257,9 +235,7 @@ impl TypeRegistry {
                 qualified_name: method_qn.clone(),
                 receiver_type: Some(qn.clone()),
                 short_name: method_name.to_string(),
-                params: Vec::new(),
                 ret: Type::Unknown,
-                flags: 0,
             };
             self.funcs_by_qn.insert(method_qn.clone(), rf);
             self.methods_index.insert((qn.clone(), method_name.to_string()), method_qn);
@@ -474,9 +450,7 @@ mod tests {
             qualified_name: "builtins.Base.do_stuff".into(),
             receiver_type: Some("builtins.Base".into()),
             short_name: "do_stuff".into(),
-            params: Vec::new(),
             ret: Type::Unknown,
-            flags: 0,
         });
 
         let mut child = RegisteredType {

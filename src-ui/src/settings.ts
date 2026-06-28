@@ -20,7 +20,7 @@ export interface AgentSettings {
   chatMode: ChatModeId;
 }
 
-export type ChatModeId = 'general' | 'code' | 'architect' | 'fast';
+type ChatModeId = 'general' | 'code' | 'architect' | 'fast';
 
 export interface ChatMode {
   id: ChatModeId;
@@ -37,7 +37,7 @@ export const CHAT_MODES: ChatMode[] = [
   { id: 'fast', label: '极速', description: '简短快速迭代', temperature: 0.2, maxSteps: 25 },
 ];
 
-export interface DisplaySettings {
+interface DisplaySettings {
   language: 'zh' | 'en';
 }
 
@@ -147,7 +147,7 @@ export function getActiveProvider(s: AppSettings): ProviderSettings {
   return active || s.providers[0];
 }
 
-export function setActiveProvider(s: AppSettings, name: string): AppSettings {
+function setActiveProvider(s: AppSettings, name: string): AppSettings {
   if (!s.providers.find((p) => p.name === name)) {
     throw new Error(`Unknown provider: ${name}`);
   }

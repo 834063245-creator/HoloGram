@@ -136,9 +136,7 @@ fn walk_js_ts_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, sour
                             kind: EdgeKind::Calls,
                             coupling_depth: 3,
                             cross_file: false,
-                            direction: "synthesized".into(),
                             temporal_delay_sec: Some(0.0),
-                            medium_node_id: None,
                             lsp_resolved: false,
                         };
                         graph.add_edge(edge);
@@ -301,9 +299,7 @@ fn walk_py_dispatch_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree
                             kind: EdgeKind::Calls,
                             coupling_depth: 3,
                             cross_file: false,
-                            direction: "synthesized".into(),
                             temporal_delay_sec: Some(0.0),
-                            medium_node_id: None,
                             lsp_resolved: false,
                         };
                         graph.add_edge(edge);
@@ -400,24 +396,6 @@ fn find_or_create_node(graph: &mut Graph, name: &str, file: &str, line: usize) -
     node.properties = serde_json::json!({"kind": "synthesized_target", "provenance": "dynamic_dispatch"});
     graph.add_node(node);
     node_id
-}
-
-#[allow(dead_code)]
-fn file_key(loc: &str) -> String {
-    if let Some((p, line_part)) = loc.rsplit_once(':') {
-        if p.len() == 1 && p.as_bytes()[0].is_ascii_alphabetic() {
-            return loc.to_string();
-        }
-        if line_part.chars().all(|c| c.is_ascii_digit()) {
-            return p.replace('\\', "/");
-        }
-    }
-    loc.replace('\\', "/")
-}
-
-#[allow(dead_code)]
-fn file_key_from_path(p: &str) -> String {
-    p.replace('\\', "/")
 }
 
 #[cfg(test)]

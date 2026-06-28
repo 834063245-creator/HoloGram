@@ -366,8 +366,8 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
             let edges: Vec<serde_json::Value> = graph.edges.values().map(|e| serde_json::json!({
                 "id": e.id, "source": e.source, "target": e.target,
                 "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-                "cross_file": e.cross_file, "direction": e.direction,
-                "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id,
+                "cross_file": e.cross_file,
+                "temporal_delay_sec": e.temporal_delay_sec,
             })).collect();
             let mut comm_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
             for n in graph.nodes.values() {
@@ -409,8 +409,8 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
     let edges: Vec<serde_json::Value> = graph.edges.values().map(|e| serde_json::json!({
         "id": e.id, "source": e.source, "target": e.target,
         "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-        "cross_file": e.cross_file, "direction": e.direction,
-        "temporal_delay_sec": e.temporal_delay_sec, "medium_node_id": e.medium_node_id,
+        "cross_file": e.cross_file,
+        "temporal_delay_sec": e.temporal_delay_sec,
     })).collect();
     // Rebuild communities from node.community_id (populated by engine_analyze)
     let mut comm_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
@@ -498,9 +498,8 @@ fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
         let edges: Vec<serde_json::Value> = g.edges.values().map(|e| serde_json::json!({
             "id": e.id, "source": e.source, "target": e.target,
             "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-            "cross_file": e.cross_file, "direction": e.direction,
+            "cross_file": e.cross_file,
             "temporal_delay_sec": e.temporal_delay_sec,
-            "medium_node_id": e.medium_node_id,
         })).collect();
         // Rebuild communities from pre-computed community_id on each node
         // (avoids re-running Louvain, which is O(V·avg_degree·iterations))

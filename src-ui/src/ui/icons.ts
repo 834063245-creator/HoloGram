@@ -4,7 +4,7 @@
 // Icon system — geometric SVG icons for deep-space command console
 // 统一规格: 18x18 viewBox · 1.5px stroke · round caps · 颜色走 CSS currentColor
 
-export interface IconDef {
+interface IconDef {
   /** SVG inner HTML (paths only, no <svg> wrapper) */
   path: string;
   /** Semantic label for screen readers */

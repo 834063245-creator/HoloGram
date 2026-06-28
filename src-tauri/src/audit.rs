@@ -44,14 +44,6 @@ impl AuditLogger {
         }
     }
 
-    /// Read recent entries (for frontend audit panel).
-    #[allow(dead_code)]
-    pub fn recent(&self, limit: usize) -> Vec<String> {
-        let content = fs::read_to_string(&self.log_path).unwrap_or_default();
-        let lines: Vec<&str> = content.lines().collect();
-        let start = if lines.len() > limit { lines.len() - limit } else { 0 };
-        lines[start..].iter().map(|s| s.to_string()).collect()
-    }
 }
 
 /// Helper to build a timestamp string.

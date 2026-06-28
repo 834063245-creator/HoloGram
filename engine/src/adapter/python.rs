@@ -116,9 +116,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                                         kind: EdgeKind::Inherits,
                                         coupling_depth: 2,
                                         cross_file: false,
-                                        direction: "forward".into(),
                                         temporal_delay_sec: None,
-                                        medium_node_id: None,
                                         lsp_resolved: false,
                                     });
                                 }

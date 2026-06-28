@@ -20,6 +20,13 @@ import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import gsap from 'gsap';
 
+/** Copy-to-clipboard with visual feedback. Shows check-circle icon for 1.5s then restores copy icon. */
+function showCopiedFeedback(btn: HTMLElement, iconSize = 12): void {
+  const copyHtml = iconHtml('copy', iconSize);
+  btn.innerHTML = iconHtml('check-circle', iconSize);
+  setTimeout(() => { btn.innerHTML = copyHtml; }, 1500);
+}
+
 // ── Constants ──
 
 const PANEL_ID = 'chat-panel';
@@ -841,10 +848,7 @@ export class ChatPanel {
         e.stopPropagation();
         const bubble = btn.closest('.msg-bubble');
         const txt = bubble?.querySelector('.msg-text')?.textContent || '';
-        navigator.clipboard.writeText(txt).then(() => {
-          btn.innerHTML = iconHtml('check-circle', 12);
-          setTimeout(() => { btn.innerHTML = iconHtml('copy', 12); }, 1500);
-        }).catch(() => {});
+        navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(btn, 12)).catch(() => {});
       });
     });
   }
@@ -1209,10 +1213,7 @@ export class ChatPanel {
         copyBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           const txt = bubble.querySelector('.msg-text')?.textContent || '';
-          navigator.clipboard.writeText(txt).then(() => {
-            copyBtn.innerHTML = iconHtml('check-circle', 12);
-            setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 12); }, 1500);
-          }).catch(() => {});
+          navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
         });
         actions.append(copyBtn);
         bubble.appendChild(actions);
@@ -2194,10 +2195,7 @@ export class ChatPanel {
       copyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const txt = textEl.textContent || '';
-        navigator.clipboard.writeText(txt).then(() => {
-          copyBtn.innerHTML = iconHtml('check-circle', 12);
-          setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 12); }, 1500);
-        }).catch(() => {});
+        navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
       });
       actions.append(copyBtn);
 
@@ -2997,10 +2995,7 @@ export class ChatPanel {
       copyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const code = codeEl.textContent || '';
-        navigator.clipboard.writeText(code).then(() => {
-          copyBtn.innerHTML = iconHtml('check-circle', 10);
-          setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 10); }, 1500);
-        }).catch(() => {});
+        navigator.clipboard.writeText(code).then(() => showCopiedFeedback(copyBtn, 10)).catch(() => {});
       });
       actions.appendChild(copyBtn);
 

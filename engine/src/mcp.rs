@@ -180,14 +180,6 @@ impl McpServer {
         self.project_root.lock().unwrap().clone()
     }
 
-    /// Update the project root (called by tool_analyze when switching projects).
-    #[allow(dead_code)] // ponytail: called when project switches, not yet wired from serve entry
-    fn set_project_root(&self, path: &Path) {
-        if let Ok(mut root) = self.project_root.lock() {
-            *root = path.to_path_buf();
-        }
-    }
-
     // ── JSON-RPC protocol ──
 
     /// Process one JSON-RPC request line, return JSON-RPC response line (or None for notifications).
@@ -1331,9 +1323,7 @@ fn edge_to_value(e: &Edge) -> Value {
         "type": e.kind.as_str(),
         "coupling_depth": e.coupling_depth,
         "cross_file": e.cross_file,
-        "direction": e.direction,
         "temporal_delay_sec": e.temporal_delay_sec,
-        "medium_node_id": e.medium_node_id,
     })
 }
 

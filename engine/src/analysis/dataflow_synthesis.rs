@@ -124,7 +124,7 @@ fn medium_id_for(graph: &mut Graph, name: &str, file: &str, line: usize) -> Stri
 
 fn insert_edge(g: &mut Graph, eid: &str, src: &str, tgt: &str, kind: EdgeKind, depth: u8, delay: Option<f64>) -> usize {
     if g.get_edge(eid).is_none() && src != tgt {
-        g.add_edge(Edge{id:eid.into(),source:src.into(),target:tgt.into(),kind,coupling_depth:depth,cross_file:false,direction:"synthesized".into(),temporal_delay_sec:delay,medium_node_id:None,lsp_resolved:false});
+        g.add_edge(Edge{id:eid.into(),source:src.into(),target:tgt.into(),kind,coupling_depth:depth,cross_file:false,temporal_delay_sec:delay,lsp_resolved:false});
         1
     } else { 0 }
 }

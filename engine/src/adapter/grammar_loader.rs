@@ -18,10 +18,7 @@ use tree_sitter_language::LanguageFn;
 struct LoadedGrammar {
     _lib: libloading::Library,
     language: Language,
-    #[allow(dead_code)]
-    lang_key: String,
-    #[allow(dead_code)]
-    extensions: Vec<String>,
+
 }
 
 /// Process-wide grammar loader. Initialized once as a LazyLock.
@@ -73,13 +70,11 @@ impl GrammarLoader {
 
     /// Pre-register a statically-linked grammar (from Cargo dependency).
     /// Multiple extensions share the same Language.
-    pub fn register_static(&self, lang: Language, lang_key: &str, extensions: &[&str]) {
+    pub fn register_static(&self, lang: Language, _lang_key: &str, extensions: &[&str]) {
         let grammar = Arc::new(LoadedGrammar {
             // ponytail: static grammars don't need a Library handle — data is in .text
             _lib: unsafe { std::mem::zeroed() },
             language: lang,
-            lang_key: lang_key.to_string(),
-            extensions: extensions.iter().map(|s| s.to_string()).collect(),
         });
         let mut loaded = self.loaded.write().unwrap();
         for ext in extensions {
@@ -129,8 +124,6 @@ impl GrammarLoader {
             let grammar = Arc::new(LoadedGrammar {
                 _lib: lib,
                 language: language.clone(),
-                lang_key: symbol_name.clone(),
-                extensions: extensions.clone(),
             });
 
             let mut loaded = self.loaded.write().unwrap();

@@ -141,9 +141,7 @@ impl SqliteDb {
                     kind                TEXT NOT NULL,
                     coupling_depth      INTEGER DEFAULT 0,
                     cross_file          INTEGER DEFAULT 0,
-                    direction           TEXT DEFAULT 'forward',
-                    temporal_delay_sec  REAL,
-                    medium_node_id      TEXT
+                    temporal_delay_sec  REAL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);

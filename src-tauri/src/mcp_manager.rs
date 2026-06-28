@@ -94,58 +94,6 @@ impl McpManager {
         Ok(tools)
     }
 
-    /// Send a tools/call request and return the result text.
-    /// On failure (broken pipe, process died), record the crash and return an error.
-    #[allow(dead_code)] // ponytail: persistent MCP path, will replace per-call spawn
-    pub fn call(&mut self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        if self.degraded {
-            return Err("MCP 已永久降级".into());
-        }
-
-        let child = self.child.as_mut().ok_or("MCP Server 未启动")?;
-
-        // Quick liveness check
-        if let Ok(Some(status)) = child.try_wait() {
-            let code = status.code().unwrap_or(-1);
-            eprintln!("[mcp] 进程已退出 (code={code})，触发崩溃计数");
-            self.record_crash();
-            return Err(format!("MCP 进程已退出 (exit code: {code})"));
-        }
-
-        // Build the JSON-RPC request with the arguments as inline JSON
-        let id = self.request_id;
-        self.request_id += 1;
-
-        let request = format!(
-            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
-            id, tool_name, args_json
-        );
-
-        let result = self.send_raw(&request);
-
-        match result {
-            Ok(text) => Ok(text),
-            Err(e) => {
-                // Process probably died — record crash
-                eprintln!("[mcp] call 失败: {e}");
-                self.record_crash();
-                Err(e)
-            }
-        }
-    }
-
-    /// Request the tool list from the MCP server.
-    #[allow(dead_code)] // ponytail: persistent MCP path, will replace per-call spawn
-    pub fn list_tools(&mut self) -> Result<String, String> {
-        if self.degraded {
-            return Err("MCP 已永久降级".into());
-        }
-        if self.child.is_none() {
-            return Err("MCP Server 未启动".into());
-        }
-        self.send_request("tools/list", "{}")
-    }
-
     /// Stop the MCP server and reset state.
     pub fn stop(&mut self) {
         self.kill_inner();
@@ -300,28 +248,4 @@ impl McpManager {
         Ok(serde_json::to_string(result).unwrap_or_default())
     }
 
-    #[allow(dead_code)] // ponytail: transitively dead via call(), unflag when call() is wired
-    fn record_crash(&mut self) {
-        let now = Instant::now();
-        match self.crash_window_start {
-            Some(start) if now.duration_since(start) < std::time::Duration::from_secs(60) => {
-                self.crash_count += 1;
-                eprintln!(
-                    "[mcp] {} 秒内崩溃 {} 次",
-                    now.duration_since(start).as_secs(),
-                    self.crash_count
-                );
-                if self.crash_count >= 3 {
-                    self.degraded = true;
-                    self.kill_inner();
-                    eprintln!("[mcp] 60 秒内 3 次崩溃 — 永久降级至 CLI 模式");
-                }
-            }
-            _ => {
-                self.crash_window_start = Some(now);
-                self.crash_count = 1;
-                eprintln!("[mcp] 崩溃计数重置: 1/3 (窗口 60s)");
-            }
-        }
-    }
 }
