@@ -69,6 +69,7 @@ impl McpManager {
                 .map_err(|e| format!("无法启动 MCP Server: {e}"))?
         };
 
+        crate::os_sandbox::assign(&child);
         self.child = Some(child);
         self.request_id = 0;
 

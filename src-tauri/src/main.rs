@@ -19,6 +19,7 @@ mod sandbox;
 mod audit;
 mod credential;
 mod logging;
+pub(crate) mod os_sandbox;
 mod workspace;
 
 use mcp_manager::McpManager;
@@ -100,6 +101,8 @@ fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("无法启动后台命令: {e}"))?;
+    // Phase 4a: assign child to Job Object for die-with-parent
+    os_sandbox::assign(&child);
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let job = BgJob {
         child,
@@ -1341,6 +1344,8 @@ async fn exec_command(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("无法执行命令: {e}"))?;
+    // Phase 4a: assign child to Job Object for die-with-parent
+    os_sandbox::assign(&child);
 
     // Manual timeout polling (compatible with older Rust)
     let start = std::time::Instant::now();
@@ -3251,6 +3256,8 @@ fn main() {
             permission_ask_response,
         ])
         .setup(|app| {
+            // Phase 4a: OS sandbox — Job Object for die-with-parent
+            os_sandbox::init();
             // v4 Phase 4: server for Unity events
             start_unity_event_server(app.handle().clone());
             // Engine is started on-demand by start_mcp_server — no auto-start needed
