@@ -244,6 +244,26 @@ impl WorkspaceHandle {
         }
     }
 
+    /// Check if a directory-scope operation (list/glob/search) is within bounds.
+    pub fn check_read_dir(&self, dir: &str) -> Result<PathBuf, String> {
+        let path = Path::new(dir);
+        match self.sandbox.check_read_dir(path) {
+            SandboxResult::Allowed(real) => Ok(real),
+            SandboxResult::Denied(reason) => {
+                self.audit_deny("read_dir", dir, &reason);
+                Err(format!("目录访问被拒绝: {}", reason))
+            }
+        }
+    }
+
+    /// Check a shell command for dangerous patterns and out-of-bounds paths.
+    pub fn check_command(&self, command: &str) -> Result<(), String> {
+        self.sandbox.check_command(command).map_err(|reason| {
+            self.audit_deny("exec_command", command, &reason);
+            reason
+        })
+    }
+
     // ── Audit delegation ────────────────────────────────────────────
 
     pub fn audit_allow(&self, tool: &str, path: &str) {

@@ -29,6 +29,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use base64::Engine;
 use tauri::{Emitter, Manager};
 use tracing_appender::non_blocking::WorkerGuard;
 
@@ -395,38 +396,20 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
     let result = engine_api::engine_analyze(&root)
         .map_err(|e| format!("Analyze failed: {e}"))?;
 
-    let graph = &result.graph;
-    let nc = graph.node_count();
-    let ec = graph.edge_count();
+    // result.graph is drained by engine (nodes/edges moved to MemoryIndex/store).
+    // Use result.node_count / result.edge_count for scalars, and read graph
+    // data from the store for serialization.
+    let nc = result.node_count;
+    let ec = result.edge_count;
 
-    // Serialize for frontend
-    let nodes: Vec<serde_json::Value> = graph.nodes.values().map(|n| serde_json::json!({
-        "id": n.id, "name": n.name, "type": n.kind.as_str(),
-        "location": n.location, "in_degree": n.in_degree,
-        "out_degree": n.out_degree, "properties": n.properties,
-        "position": n.position, "community_id": n.community_id,
-    })).collect();
-    let edges: Vec<serde_json::Value> = graph.edges.values().map(|e| serde_json::json!({
-        "id": e.id, "source": e.source, "target": e.target,
-        "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-        "cross_file": e.cross_file,
-        "temporal_delay_sec": e.temporal_delay_sec,
-    })).collect();
-    // Rebuild communities from node.community_id (populated by engine_analyze)
-    let mut comm_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
-    for n in graph.nodes.values() {
-        if let Some(cid) = n.community_id {
-            comm_map.entry(cid).or_default().push(&n.id);
-        }
-    }
-    let comms: Vec<serde_json::Value> = comm_map.iter()
-        .map(|(cid, node_ids)| {
-            let nids: Vec<String> = node_ids.iter().map(|s| s.to_string()).collect();
-            let label = derive_community_label(&nids);
-            serde_json::json!({"id": format!("comm_{}", cid), "size": nids.len(), "node_ids": nids, "label": label})
-        })
-        .collect();
-    // Hierarchical communities (Level 0 + Level 1+ super-communities)
+    // Serialize from the graph store (data was swapped in by engine_analyze)
+    let serialized = serialize_cached_graph(path)?;
+    let wrapped: serde_json::Value = serde_json::from_str(&serialized)
+        .unwrap_or(serde_json::json!({"nodes":[],"edges":[],"communities":[]}));
+    let nodes = wrapped.get("nodes").cloned().unwrap_or(serde_json::json!([]));
+    let edges = wrapped.get("edges").cloned().unwrap_or(serde_json::json!([]));
+    let comms = wrapped.get("communities").cloned().unwrap_or(serde_json::json!([]));
+    // Hierarchical communities come from result (not drained)
     let hcomms: Vec<serde_json::Value> = result.hierarchical_communities.iter()
         .map(|hc| serde_json::json!({
             "id": hc.id,
@@ -449,7 +432,7 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
     let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
     // Seed briefing baseline on first analyze so open-project check doesn't diff against empty graph.
     if !root.join(".hologram").join("baseline.json").exists() {
-        save_baseline(&root, graph);
+        let _ = engine_api::engine_read_graph(|g| save_baseline(&root, g));
     }
     // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
@@ -1199,8 +1182,17 @@ async fn exec_command(
     cwd: Option<String>,
     timeout_ms: Option<u64>,
     run_in_background: Option<bool>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
     let dir = cwd.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+
+    // Phase 1: sandbox check before any execution (foreground + background)
+    with_workspace(&state, |h| {
+        h.check_command(&command)?;
+        // Also verify cwd is within project bounds
+        h.check_read_dir(&dir)?;
+        Ok(())
+    })?;
 
     if run_in_background.unwrap_or(false) {
         let id = spawn_bg(&command, &dir)?;
@@ -1358,7 +1350,11 @@ fn list_dir_recursive(root: &std::path::Path, depth: u32) -> Vec<DirEntry> {
 }
 
 #[tauri::command]
-async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
+async fn list_directory(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<Vec<DirEntry>, String> {
+    with_workspace(&state, |h| { h.check_read_dir(&path)?; Ok(()) })?;
     let root = std::path::PathBuf::from(&path);
     if !root.is_dir() {
         return Err(format!("不是有效目录: {}", path));
@@ -1382,6 +1378,17 @@ async fn read_file_content(
         .map(|l| (start + l).min(lines.len()))
         .unwrap_or(lines.len());
     Ok(lines[start..end].join("\n"))
+}
+
+#[tauri::command]
+async fn read_file_base64(
+    file_path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let real_path = with_workspace(&state, |h| h.check_read(&file_path))?;
+    let bytes = std::fs::read(&real_path)
+        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
 #[tauri::command]
@@ -1411,7 +1418,12 @@ async fn write_file_content(
 
 /// Append a line to a log file — used by the TypeScript UI logger.
 #[tauri::command]
-fn log_append(path: String, content: String) -> Result<(), String> {
+fn log_append(
+    path: String,
+    content: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    with_workspace(&state, |h| { h.check_write(&path)?; Ok(()) })?;
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -1423,7 +1435,11 @@ fn log_append(path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn create_directory(path: String) -> Result<(), String> {
+async fn create_directory(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    with_workspace(&state, |h| { h.check_write(&path)?; Ok(()) })?;
     std::fs::create_dir_all(&path)
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
@@ -1445,7 +1461,17 @@ async fn delete_file_or_dir(
 }
 
 #[tauri::command]
-async fn rename_file_or_dir(from: String, to: String) -> Result<(), String> {
+async fn rename_file_or_dir(
+    from: String,
+    to: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    // Phase 1: check both source and destination paths
+    with_workspace(&state, |h| {
+        h.check_write(&from)?;
+        h.check_write(&to)?;
+        Ok(())
+    })?;
     std::fs::rename(&from, &to)
         .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))
 }
@@ -1521,7 +1547,9 @@ async fn search_code(
     file_types: Option<String>,
     max_results: Option<usize>,
     use_regex: Option<bool>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    with_workspace(&state, |h| { h.check_read_dir(&directory)?; Ok(()) })?;
     let root = std::path::PathBuf::from(&directory);
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
@@ -1632,8 +1660,63 @@ async fn search_code(
 async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
     max_results: Option<usize>, use_regex: Option<bool>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
-    search_code(directory, pattern, file_types, max_results, use_regex).await
+    // Sandbox check inline to avoid double-check in search_code
+    with_workspace(&state, |h| { h.check_read_dir(&directory)?; Ok(()) })?;
+    let root = std::path::PathBuf::from(&directory);
+    let is_regex = use_regex.unwrap_or(false);
+    let regex = if is_regex {
+        Some(regex::RegexBuilder::new(&pattern)
+            .case_insensitive(true)
+            .multi_line(true)
+            .build()
+            .map_err(|e| format!("正则表达式无效: {}", e))?)
+    } else { None };
+    let sub_patterns: Vec<String> = if is_regex { Vec::new() }
+        else { pattern.to_lowercase().split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() };
+    let extensions: Vec<String> = file_types.unwrap_or_default()
+        .split(',').map(|s| s.trim().trim_start_matches('.').to_lowercase()).filter(|s| !s.is_empty()).collect();
+    let max = max_results.unwrap_or(50).min(200);
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let skip_dirs: Vec<&str> = vec![
+        ".git", "node_modules", ".venv", "venv", "__pycache__",
+        "target", "dist", ".next", ".nuxt", "build", ".cache",
+        ".hologram", ".idea", ".vscode",
+    ];
+    let skip_extensions: Vec<&str> = vec![
+        "exe","dll","so","dylib","bin","o","a",
+        "png","jpg","jpeg","gif","ico","svg",
+        "woff","woff2","ttf","eot",
+        "zip","tar","gz","bz2","7z","rar",
+        "mp3","mp4","avi","mov","wav",
+        "pdf","doc","docx","xls","xlsx",
+        "pyc","pyo","class","wasm",
+        "lock","map","min.js","min.css",
+    ];
+    for entry in walkdir::WalkDir::new(&root)
+        .into_iter()
+        .filter_entry(|e| { let name = e.file_name().to_string_lossy(); !skip_dirs.iter().any(|d| name == *d) })
+    {
+        let entry = entry.map_err(|e| format!("读取文件失败: {}", e))?;
+        if !entry.file_type().is_file() { continue; }
+        let fp = entry.path();
+        let ext = fp.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let name = fp.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if skip_extensions.iter().any(|skip| ext == *skip || name.ends_with(skip)) { continue; }
+        if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) { continue; }
+        let content = match std::fs::read_to_string(fp) { Ok(c) => c, Err(_) => continue };
+        for (line_no, line) in content.lines().enumerate() {
+            let matched = if let Some(ref re) = regex { re.is_match(line) }
+                else { let line_lower = line.to_lowercase(); sub_patterns.iter().any(|p| line_lower.contains(p)) };
+            if matched {
+                results.push(serde_json::json!({"file": fp.to_string_lossy(), "line": line_no + 1, "content": line.trim()}));
+                if results.len() >= max { break; }
+            }
+        }
+        if results.len() >= max { break; }
+    }
+    Ok(serde_json::json!({"pattern": pattern, "count": results.len(), "truncated": results.len() >= max, "results": results}).to_string())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1647,8 +1730,13 @@ struct GlobEntry {
 }
 
 #[tauri::command]
-async fn glob(pattern: String, path: Option<String>) -> Result<String, String> {
+async fn glob(
+    pattern: String,
+    path: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
     let dir = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    with_workspace(&state, |h| { h.check_read_dir(&dir)?; Ok(()) })?;
     let root = std::path::PathBuf::from(&dir);
     if !root.is_dir() {
         return Err(format!("不是有效目录: {}", dir));
@@ -1724,6 +1812,8 @@ async fn edit_file(
     replace_all: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    // Phase 1: sandbox check — edit = read then write, check read to start
+    let _real = with_workspace(&state, |h| h.check_read(&file_path))?;
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
 
@@ -2266,7 +2356,11 @@ fn parse_status(raw: &str) -> serde_json::Value {
 }
 
 #[tauri::command]
-async fn git_status(path: String) -> Result<String, String> {
+async fn git_status(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let branch = branch.trim().to_string();
 
@@ -2296,56 +2390,89 @@ async fn git_status(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn git_diff_unstaged(path: String, file: String) -> Result<String, String> {
+async fn git_diff_unstaged(
+    path: String,
+    file: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     run_git(&path, &["diff", "--", &file])
 }
 
 #[tauri::command]
-async fn git_diff_staged(path: String, file: String) -> Result<String, String> {
+async fn git_diff_staged(
+    path: String,
+    file: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     run_git(&path, &["diff", "--cached", "--", &file])
 }
 
 #[tauri::command]
-async fn git_stage(path: String, files: Vec<String>) -> Result<String, String> {
-    let mut args = vec!["add", "--"];
-    let strs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
-    args.extend(&strs);
-    run_git(&path, &args)?;
-    Ok("ok".into())
+async fn git_stage(
+    path: String,
+    _files: Vec<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git stage 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_unstage(path: String, files: Vec<String>) -> Result<String, String> {
-    let mut args = vec!["reset", "HEAD", "--"];
-    let strs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
-    args.extend(&strs);
-    run_git(&path, &args)?;
-    Ok("ok".into())
+async fn git_unstage(
+    path: String,
+    _files: Vec<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git unstage 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_stage_all(path: String) -> Result<String, String> {
-    run_git(&path, &["add", "-A"])?;
-    Ok("ok".into())
+async fn git_stage_all(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git stage all 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_commit(path: String, message: String) -> Result<String, String> {
-    run_git(&path, &["commit", "-m", &message]).map(|s| s.trim().to_string())
+async fn git_commit(
+    path: String,
+    _message: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git commit 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_push(path: String) -> Result<String, String> {
-    run_git(&path, &["push"]).map(|s| s.trim().to_string())
+async fn git_push(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git push 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_pull(path: String) -> Result<String, String> {
-    run_git(&path, &["pull", "--ff-only"]).map(|s| s.trim().to_string())
+async fn git_pull(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git pull 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_log(path: String, limit: Option<i32>) -> Result<String, String> {
+async fn git_log(
+    path: String,
+    limit: Option<i32>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     let n = limit.unwrap_or(20);
     let raw = run_git(
         &path,
@@ -2373,14 +2500,22 @@ async fn git_log(path: String, limit: Option<i32>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn git_init(path: String) -> Result<String, String> {
-    run_git(&path, &["init"]).map(|s| s.trim().to_string())
+async fn git_init(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git init 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 // ── IDE-level Git operations ──
 
 #[tauri::command]
-async fn git_list_branches(path: String) -> Result<String, String> {
+async fn git_list_branches(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
     let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
     // Find current branch (marked with *)
@@ -2391,47 +2526,89 @@ async fn git_list_branches(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn git_checkout(path: String, branch: String) -> Result<String, String> {
-    run_git(&path, &["checkout", &branch])
+async fn git_checkout(
+    path: String,
+    _branch: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git checkout 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_create_branch(path: String, name: String) -> Result<String, String> {
-    run_git(&path, &["checkout", "-b", &name])
+async fn git_create_branch(
+    path: String,
+    _name: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git create branch 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_stash_push(path: String) -> Result<String, String> {
-    run_git(&path, &["stash", "push", "-m", "HoloGram"])
+async fn git_stash_push(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git stash push 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_stash_pop(path: String) -> Result<String, String> {
-    run_git(&path, &["stash", "pop"])
+async fn git_stash_pop(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git stash pop 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_stash_list(path: String) -> Result<String, String> {
+async fn git_stash_list(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     run_git(&path, &["stash", "list"])
 }
 
 #[tauri::command]
-async fn git_discard(path: String, file: String) -> Result<String, String> {
-    run_git(&path, &["checkout", "--", &file])
+async fn git_discard(
+    path: String,
+    _file: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
+    return Err("git discard 需用户确认（Phase 2 将支持权限弹窗）".into());
 }
 
 #[tauri::command]
-async fn git_blame(path: String, file: String) -> Result<String, String> {
+async fn git_blame(
+    path: String,
+    file: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     run_git(&path, &["blame", "--line-porcelain", &file])
 }
 
 #[tauri::command]
-async fn git_file_at_head(path: String, file: String) -> Result<String, String> {
+async fn git_file_at_head(
+    path: String,
+    file: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     run_git(&path, &["show", &format!("HEAD:{}", file)])
 }
 
 #[tauri::command]
-async fn git_show(path: String, commit: String) -> Result<String, String> {
+async fn git_show(
+    path: String,
+    commit: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    with_workspace(&state, |h| h.check_read(&path))?;
     let output = run_git(&path, &["show", "--name-only", "--format=", &commit])?;
     let files: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
     serde_json::to_string(&files).map_err(|e| e.to_string())
@@ -2690,6 +2867,7 @@ fn main() {
             workspace_start_watcher,
             list_directory,
             read_file_content,
+            read_file_base64,
             write_file_content,
             log_append,
             create_directory,
