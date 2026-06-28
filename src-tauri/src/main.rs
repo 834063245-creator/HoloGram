@@ -1927,8 +1927,9 @@ async fn edit_file(
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Phase 2: permission check — edit = read then write
+    // Phase 2: permission check — edit = read then write (both must pass)
     require_read(&file_path, &state, &app).await?;
+    require_write(&file_path, &state, &app).await?;
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
 
@@ -2560,7 +2561,7 @@ async fn git_unstage(
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&path, &state, &app).await?;
+    require_git(&path, "unstage", &state, &app).await?;
     let mut args = vec!["reset", "HEAD", "--"];
     args.extend(files.iter().map(|s| s.as_str()));
     run_git(&path, &args)
