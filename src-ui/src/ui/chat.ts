@@ -603,6 +603,8 @@ export class ChatPanel {
 
   /** Any state → Panel: summon the full conversation card */
   private summonPanel(): void {
+    // If agent is running in background, restore to full panel
+    if (this.running) this.panel.classList.remove('chat-pill-running');
     this.morphToMode('panel', 'chat-open');
     this.scrollBottom();
   }
@@ -636,7 +638,9 @@ export class ChatPanel {
       },
     });
 
-    if (this.running) this.abort();
+    // Don't abort when collapsing — keep agent working in background.
+    // Pill shows a pulsing indicator while running.
+    if (this.running) this.panel.classList.add('chat-pill-running');
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
@@ -659,6 +663,7 @@ export class ChatPanel {
         this.mode = 'pill';
         this.removeAllPanelClasses();
         this.panel.classList.add('chat-pill');
+        if (this.running) this.panel.classList.add('chat-pill-running');
         this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
         gsap.set(c, { clearProps: 'opacity' });
         gsap.set(this.panel, { clearProps: 'scale,y,opacity' });
@@ -666,7 +671,7 @@ export class ChatPanel {
     });
     gsap.to(this.panel, { width: 44, borderRadius: '50%', duration: 0.35, ease: 'power2.in', delay: 0.15 });
 
-    if (this.running) this.abort();
+    // Don't abort — keep running in background.
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
@@ -2047,6 +2052,8 @@ export class ChatPanel {
         this.progressBar.remove();
         this.progressBar = null;
       }
+      // Clear background-running pill indicator
+      this.panel.classList.remove('chat-pill-running');
     }
   }
 
