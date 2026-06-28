@@ -1,11 +1,12 @@
-# Handoff — HoloGram（2026-06-28 session 7）
+# Handoff — HoloGram（2026-06-28 session 8）
 
 ## 当前状态
 
-- **引擎**：27 门语言；合并管线 v3 分批 + v4 全局边去重；12/12 pipeline 核心测试 passed
+- **引擎**：27+3 门语言；合并管线 v3/v4；363 lib tests 全过
 - **前端**：节点核心球视觉效果修复（session 4）
-- **已验证**：`codebase-memory-mcp`（1710 文件 C 项目）→ 分析正常
-- **过滤策略**：四级过滤体系完成，覆盖 95%+ 真实项目
+- **已验证**：`codebase-memory-mcp` 分析正常；`cargo tauri build` 成功
+- **MCP 工具**：25 → **27**（新增 `hologram_node` + `hologram_unused`）
+- **README**：全量更新（语言数、管线、过滤策略、测试数）
 
 ---
 
@@ -13,26 +14,33 @@
 
 | 层级 | 位置 | 机制 |
 |------|------|------|
-| L0 — 硬编码 | `discovery.rs:is_excluded` | 28 个通用目录黑名单 |
-| L1 — `.gitignore` | `discovery.rs:collect_gitignore_dirs` | 项目树中所有 `.gitignore` 解析 |
-| L2 — 扩展名 | `discovery.rs:discover_files` | 仅收录 27 门已注册语言 |
-| L3 — 文件大小 | `parser.rs:parse_one` | > 1 MB 跳过（`metadata()` 预检，手写源码不可能超此阈值） |
-
-L1 解析器简化为纯目录名提取：跳过 glob（`*`/`?`/`[`）、negation（`!`）、注释、空行。多级路径取末级组件（`graph-ui/dist/` → `dist`）。
+| L0 — 硬编码 | `discovery.rs` | 28 个通用目录黑名单 |
+| L1 — `.gitignore` | `discovery.rs` | 项目树中所有 `.gitignore` 解析 |
+| L2 — 扩展名 | `discovery.rs` | 仅收录 27+3 门已注册语言 |
+| L3 — 文件大小 | `parser.rs` | > 1 MB 跳过（`metadata()` 预检） |
 
 ---
 
-## 本次变更（session 7 — `.gitignore` 解析）
+## 本次变更（session 8 — MCP 工具扩展）
 
-### 改动
+### 新增工具
+
+| 工具 | 功能 | 输入 |
+|------|------|------|
+| `hologram_node` | 单节点深潜：身份 + 度 + 社区 + 所有入/出边（按 kind 分组） | `node_id` |
+| `hologram_unused` | 死代码检测：in_degree=0 的 Function/Class，按 out_degree 降序 | `limit`（默认 20）、`kind_filter`（默认 "function,class"） |
+
+### 改动文件
 
 | 文件 | 改动 |
 |------|------|
-| `engine/src/pipeline/discovery.rs` | 新增 `collect_gitignore_dirs()` + `is_excluded` 合并硬编码与 gitignore 模式；2 个新测试 |
+| `engine/src/mcp.rs` | tool_defs 注册 + dispatch + `tool_node()` + `tool_unused()` 实现 |
+| `README.md` | 全量更新（27+3 语言、v3/v4 管线、四级过滤、361→27 工具） |
 
 ### 历史变更
 
-- **session 6**：discovery 排除目录扩展（`vendored`/`generated`/`tests`）+ parser 512 KB 上限 — 解决 C 项目 vendored grammar 文件爆炸
+- **session 7**：`.gitignore` 解析 + 四级过滤体系
+- **session 6**：discovery 排除目录扩展 + parser 1 MB 上限
 - **session 5**：全局边去重（8.5M→13.6K）+ 逐批后台 Tree 释放
 - **session 3-4**：GrammarLoader + Node 核心球视觉修复
 - **session 1-2**：合并管线 v3 分批架构 + 静默吞错修复
@@ -41,14 +49,17 @@ L1 解析器简化为纯目录名提取：跳过 glob（`*`/`?`/`[`）、negatio
 
 ## 测试
 
-- **pipeline: 12/12 passed**（runner 6 + discovery 4 + parser 1 + stress 1）
-- `cargo check` 零错误零警告
-- `mcp::tests` 18 个 PoisonError 是已知问题（测试间共享锁污染），非本次引入
+- **363 lib tests passed，0 failed**
+- `cargo check` / `cargo build --release` 零错误零警告
+- `cargo tauri build` 成功产出 `.msi` + `.exe`
+- **已知问题**：
+  - `main.rs` bin tests：2 个测试隔离失败（与 lib tests 共用 engine 实例，数据污染），非本次引入
+  - `mcp::tests` 18 个 PoisonError（测试间共享锁污染），非本次引入
 
 ---
 
 ## 下一步
 
-1. 换其他大型项目验证（Rust monorepo、Python Django）
-2. 如果某项目需要分析 vendored 代码 → CLI flag `--no-filter`
-3. `.gitignore` glob 支持 — 仅在遇到 `cbm_*` 这类真实需求时加
+1. `hologram_unused` 目前只看 in_degree=0；可扩展为"低使用率"（in_degree=1 且仅被 tests 调用）
+2. 工具描述差异化：内置 Agent 已可看到详细描述；MCP 通道对外部 AI 工具用精简版
+3. 修复 main.rs 测试隔离 → 每个测试用唯一 temp dir
