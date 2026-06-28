@@ -12,6 +12,8 @@ use crate::sandbox::{Sandbox, SandboxResult};
 
 /// Read permission check — shared by ReadFile/Glob/Grep/ListDir/SearchContent.
 /// Path resolution → deny rules → safety → ask rules → allow rules.
+/// Sandbox boundary is not a hard deny for reads: user Allow rules can grant
+/// cross-project access (spec Phase 2 cross-directory read requirement).
 pub fn check_read_permission(
     raw_path: &str,
     sandbox: &Sandbox,
@@ -19,53 +21,55 @@ pub fn check_read_permission(
 ) -> PermissionResult {
     let path = Path::new(raw_path);
 
-    // 1. Resolve path via sandbox
+    // 1. Resolve path via sandbox (canonicalization, not boundary enforcement)
     let resolved = match sandbox.resolve_read(path) {
-        SandboxResult::Allowed(p) => p,
-        SandboxResult::Denied(reason) => {
-            return PermissionResult::Deny {
-                reason: format!("读取被拒绝: {}", reason),
-            };
-        }
+        SandboxResult::Allowed(p) => Some(p),
+        SandboxResult::Denied(_) => None,
     };
 
+    // Use resolved path for matching if available, else raw path
+    let match_path = resolved.as_deref().unwrap_or(path);
+    let match_str = path_to_match_str(match_path);
+
     // 2. Content-level Deny rules (path glob matching)
-    if let Some(rule) = rules.find_deny("Read", Some(&path_to_match_str(&resolved))) {
+    if let Some(rule) = rules.find_deny("Read", Some(&match_str)) {
         return PermissionResult::Deny {
             reason: rule.explain(),
         };
     }
 
-    // 3. Safety check (bypass-immune) — only for sensitive paths
-    let safety = safety::check_path_safety(&resolved);
-    if !safety.safe {
-        return PermissionResult::Ask {
-            reason: format!("安全警告: {}", safety.message),
-            suggestions: vec![],
-        };
+    // 3. Safety check (bypass-immune) — only for paths within project boundary
+    if let Some(ref resolved_path) = resolved {
+        let safety = safety::check_path_safety(resolved_path);
+        if !safety.safe {
+            return PermissionResult::Ask {
+                reason: format!("安全警告: {}", safety.message),
+                suggestions: vec![],
+            };
+        }
     }
 
     // 4. Content-level Ask rules
-    if let Some(rule) = rules.find_ask("Read", Some(&path_to_match_str(&resolved))) {
+    if let Some(rule) = rules.find_ask("Read", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
             suggestions: vec![],
         };
     }
 
-    // 5. Within project root → Allow (read is default-allow in project)
-    // ponytail: sandbox.resolve_read already returns Denied for out-of-project paths,
-    // so reaching here means the path is within project root.
-    // Check allow rules for explicit overrides
-    if rules
-        .find_allow("Read", Some(&path_to_match_str(&resolved)))
-        .is_some()
-    {
+    // 5. Content-level Allow rules — explicit allow can grant out-of-project access
+    if rules.find_allow("Read", Some(&match_str)).is_some() {
         return PermissionResult::Allow;
     }
 
-    // 6. Passthrough — file is within project, no specific rules → allow
-    PermissionResult::Allow
+    // 6. Within project → Allow; outside → Deny (no Allow rule matched)
+    if resolved.is_some() {
+        PermissionResult::Allow
+    } else {
+        PermissionResult::Deny {
+            reason: format!("路径在项目目录外，且无 Allow 规则授权: {}", raw_path),
+        }
+    }
 }
 
 /// Write permission check — shared by WriteFile/EditFile/Delete/CreateDir/Rename.
@@ -163,6 +167,24 @@ mod tests {
         let rules = PermissionRules::new();
         let r = check_read_permission("C:\\Windows\\System32\\notepad.exe", &s, &rules);
         assert!(matches!(r, PermissionResult::Deny { .. }), "expected Deny, got: {:?}", r);
+    }
+
+    #[test]
+    fn test_read_outside_project_allowed_by_rule() {
+        let (s, _) = sandbox_in_temp();
+        let mut rules = PermissionRules::new();
+        use crate::permissions::rule::{parse_rule_value, Behavior, PermissionRule, RuleSource};
+        rules.add_rule(PermissionRule {
+            source: RuleSource::Project,
+            behavior: Behavior::Allow,
+            value: parse_rule_value("Read(C:/Windows/System32/**)"),
+        });
+        let r = check_read_permission("C:\\Windows\\System32\\notepad.exe", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Allow),
+            "expected Allow (rule granted cross-project read), got: {:?}",
+            r
+        );
     }
 
     #[test]
