@@ -16,7 +16,7 @@
 | L0 — 硬编码 | `discovery.rs:is_excluded` | 28 个通用目录黑名单 |
 | L1 — `.gitignore` | `discovery.rs:collect_gitignore_dirs` | 项目树中所有 `.gitignore` 解析 |
 | L2 — 扩展名 | `discovery.rs:discover_files` | 仅收录 27 门已注册语言 |
-| L3 — 文件大小 | `parser.rs:parse_one` | > 512 KB 跳过（`metadata()` 预检） |
+| L3 — 文件大小 | `parser.rs:parse_one` | > 1 MB 跳过（`metadata()` 预检，手写源码不可能超此阈值） |
 
 L1 解析器简化为纯目录名提取：跳过 glob（`*`/`?`/`[`）、negation（`!`）、注释、空行。多级路径取末级组件（`graph-ui/dist/` → `dist`）。
 
