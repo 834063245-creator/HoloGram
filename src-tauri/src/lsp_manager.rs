@@ -62,7 +62,7 @@ pub async fn lsp_start(
         .spawn()
         .map_err(|e| format!("无法启动 LSP ({cmd}): {e}"))?;
 
-    crate::os_sandbox::assign(&child);
+    crate::os_sandbox::assign_to_job(&child);
     let stdout = child.stdout.take()
         .ok_or("无法获取 LSP stdout")?;
     let stdin: Box<dyn Write + Send> = Box::new(child.stdin.take()

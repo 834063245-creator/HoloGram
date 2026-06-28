@@ -31,7 +31,7 @@ impl UnityManager {
             .spawn()
             .map_err(|e| format!("Failed to spawn Unity: {}", e))?;
 
-        crate::os_sandbox::assign(&child);
+        crate::os_sandbox::assign_to_job(&child);
         *guard = Some(child);
         Ok(true)
     }
