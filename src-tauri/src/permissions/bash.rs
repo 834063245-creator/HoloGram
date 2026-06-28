@@ -206,6 +206,11 @@ pub fn check(
         };
     }
 
+    // 1.5. Allow rules before danger check — user-trusted commands skip danger detection
+    if rules.find_allow("Bash", Some(command)).is_some() {
+        return PermissionResult::Allow;
+    }
+
     // 2. Danger pattern check
     for (regex, danger) in danger_patterns() {
         if regex.is_match(command) {

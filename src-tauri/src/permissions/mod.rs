@@ -311,12 +311,9 @@ pub fn has_permission_to_use_tool(
         }
     }
 
-    // ⑥ No rule matched, tool has no opinion (Passthrough) → Ask
-    PermissionDecision::Ask {
-        request_id: gen_ask_id(),
-        reason: "此操作需要批准".into(),
-        suggestions: vec![],
-    }
+    // ⑥ No rule matched, tool has no opinion (Passthrough) → Allow
+    // ponytail: Passthrough means "I checked, it's fine." Don't ask.
+    PermissionDecision::Allow
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -134,8 +134,8 @@ MCP `tools/list` 只有精简 API 说明；本规则同步自 `src-ui/src/agent/
 ### 写操作
 
 **`hologram_rename`** — 跨文件安全重命名（支持 rollback）
-- **必须先** `dry_run: true` 预览
-- **参数：** `old_name`, `new_name`, `dry_run`, `node_id`（消歧）
+- **必须先** `dryRun: true` 预览
+- **参数：** `oldName`, `newName`, `dryRun`, `nodeId`（消歧）
 
 ---
 
