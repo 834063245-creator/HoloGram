@@ -320,6 +320,65 @@ async fn require_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>
     ctx.resolve_write(&physical_str)
 }
 
+/// ponytail: 用户 UI 操作的路径解析 — 只做 forward-map + sandbox resolve,
+/// 不检查权限规则. 权限系统是给 Agent 的, 用户在 UI 上的操作不受权限限制.
+/// safety check 仍然保留在写路径 (防误操作系统文件).
+fn resolve_path_user_read(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
+    let ctx = get_ctx(state)?;
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical_str = physical.to_string_lossy().to_string();
+    ctx.resolve_read(&physical_str)
+}
+
+fn resolve_path_user_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
+    let ctx = get_ctx(state)?;
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical_str = physical.to_string_lossy().to_string();
+    ctx.resolve_write(&physical_str)
+}
+
+/// ponytail: 根据 _agent 标志选择路径解析方式 — Agent 走权限检查, UI 只解析
+async fn resolve_read_dispatch(
+    file_path: &str,
+    is_agent: bool,
+    state: &tauri::State<'_, WorkspaceState>,
+    app: &tauri::AppHandle,
+) -> Result<PathBuf, String> {
+    if is_agent {
+        require_read(file_path, state, app).await
+    } else {
+        resolve_path_user_read(file_path, state)
+    }
+}
+
+async fn resolve_write_dispatch(
+    file_path: &str,
+    is_agent: bool,
+    state: &tauri::State<'_, WorkspaceState>,
+    app: &tauri::AppHandle,
+) -> Result<PathBuf, String> {
+    if is_agent {
+        require_write(file_path, state, app).await
+    } else {
+        resolve_path_user_write(file_path, state)
+    }
+}
+
+/// ponytail: 根据 _agent 标志选择 git 权限检查方式
+async fn require_git_dispatch(
+    repo_path: &str,
+    subcommand: &str,
+    is_agent: bool,
+    state: &tauri::State<'_, WorkspaceState>,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    if is_agent {
+        require_git(repo_path, subcommand, state, app).await
+    } else {
+        Ok(())  // user UI git operations are unrestricted
+    }
+}
+
 async fn require_command(command: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
     let ctx = get_ctx(state)?;
     let tool = tools::BashTool { command: command.to_string() };
@@ -1324,6 +1383,7 @@ async fn exec_command(
     cwd: Option<String>,
     timeout_ms: Option<u64>,
     run_in_background: Option<bool>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -1338,7 +1398,7 @@ async fn exec_command(
         require_read_sync(&dir, &state)?
     } else {
         require_command(&command, &state, &app).await?;
-        require_read(&dir, &state, &app).await?
+        resolve_read_dispatch(&dir, _agent.unwrap_or(false), &state, &app).await?
     };
     let physical_dir_str = physical_dir.to_string_lossy().to_string();
 
@@ -1442,11 +1502,9 @@ struct DirEntry {
 fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
     let mut entries: Vec<DirEntry> = Vec::new();
 
-    // Directories to skip
+    // ponytail: 只隐藏 VCS 内部目录 — 其他全显示, git ignored 着色在前端处理
     let skip_dirs: std::collections::HashSet<&str> = [
-        ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
-        "node_modules", ".venv", "venv", ".hologram", "dist", "build", "target",
-        ".next", ".nuxt", ".cache", "egg-info", ".eggs",
+        ".git", ".hg", ".svn",
     ].iter().cloned().collect();
 
     let readdir = match std::fs::read_dir(root) {
@@ -1457,11 +1515,6 @@ fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
     for entry in readdir.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip hidden files and dirs (except .env, .gitignore etc.)
-        if name.starts_with('.') && name != ".env" && name != ".gitignore" && name != ".editorconfig" {
-            continue;
-        }
 
         let is_dir = path.is_dir();
         if is_dir && skip_dirs.contains(name.as_str()) {
@@ -1488,10 +1541,11 @@ fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
 #[tauri::command]
 async fn list_directory(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DirEntry>, String> {
-    let root = require_read(&path, &state, &app).await?;
+    let root = resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     // ponytail: list_dir_recursive does recursive fs::read_dir + is_dir
     // synchronously. On large projects this blocks the async worker for
     // seconds — same class of bug as serialize_cached_graph.
@@ -1510,10 +1564,11 @@ async fn list_directory(
 #[tauri::command]
 async fn list_directory_flat(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DirEntry>, String> {
-    let root = require_read(&path, &state, &app).await?;
+    let root = resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
             return Err(format!("不是有效目录: {}", path));
@@ -1527,10 +1582,9 @@ async fn list_directory_flat(
 /// Flat listing: one level, children always null. Sort: dirs first, alpha.
 fn list_dir_flat(root: &std::path::Path) -> Vec<DirEntry> {
     let mut entries: Vec<DirEntry> = Vec::new();
+    // ponytail: 只隐藏 VCS 内部目录 — 其他全显示, git ignored 着色在前端处理
     let skip_dirs: std::collections::HashSet<&str> = [
-        ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
-        "node_modules", ".venv", "venv", ".hologram", "dist", "build", "target",
-        ".next", ".nuxt", ".cache", "egg-info", ".eggs",
+        ".git", ".hg", ".svn",
     ].iter().cloned().collect();
 
     let readdir = match std::fs::read_dir(root) {
@@ -1541,9 +1595,6 @@ fn list_dir_flat(root: &std::path::Path) -> Vec<DirEntry> {
     for entry in readdir.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') && name != ".env" && name != ".gitignore" && name != ".editorconfig" {
-            continue;
-        }
         let is_dir = path.is_dir();
         if is_dir && skip_dirs.contains(name.as_str()) {
             continue;
@@ -1569,10 +1620,11 @@ async fn read_file_content(
     file_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = require_read(&file_path, &state, &app).await?;
+    let real_path = resolve_read_dispatch(&file_path, _agent.unwrap_or(false), &state, &app).await?;
     let content = std::fs::read_to_string(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     let lines: Vec<&str> = content.lines().collect();
@@ -1586,10 +1638,11 @@ async fn read_file_content(
 #[tauri::command]
 async fn read_file_base64(
     file_path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = require_read(&file_path, &state, &app).await?;
+    let real_path = resolve_read_dispatch(&file_path, _agent.unwrap_or(false), &state, &app).await?;
     let bytes = std::fs::read(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
@@ -1599,10 +1652,11 @@ async fn read_file_base64(
 async fn write_file_content(
     file_path: String,
     content: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real_path = require_write(&file_path, &state, &app).await?;
+    let real_path = resolve_write_dispatch(&file_path, _agent.unwrap_or(false), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
         std::fs::create_dir_all(parent)
@@ -1647,10 +1701,11 @@ fn log_append(
 #[tauri::command]
 async fn create_directory(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let resolved = require_write(&path, &state, &app).await?;
+    let resolved = resolve_write_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     std::fs::create_dir_all(&resolved)
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
@@ -1658,10 +1713,11 @@ async fn create_directory(
 #[tauri::command]
 async fn delete_file_or_dir(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = require_write(&path, &state, &app).await?;
+    let real = resolve_write_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     if !real.exists() { return Err(format!("路径不存在: {}", path)); }
     if real.is_dir() {
         std::fs::remove_dir_all(&real)
@@ -1676,13 +1732,13 @@ async fn delete_file_or_dir(
 async fn rename_file_or_dir(
     from: String,
     to: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Phase 2: check both source and destination paths
-    // Phase 3: use resolved (forward-mapped) paths for actual ops (spec §5.6)
-    let resolved_from = require_write(&from, &state, &app).await?;
-    let resolved_to = require_write(&to, &state, &app).await?;
+    let is_agent = _agent.unwrap_or(false);
+    let resolved_from = resolve_write_dispatch(&from, is_agent, &state, &app).await?;
+    let resolved_to = resolve_write_dispatch(&to, is_agent, &state, &app).await?;
     std::fs::rename(&resolved_from, &resolved_to)
         .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))
 }
@@ -1691,11 +1747,13 @@ async fn rename_file_or_dir(
 async fn move_file(
     source: String,
     dest_dir: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let src_real = require_read(&source, &state, &app).await?;
-    let dest_real = require_write(&dest_dir, &state, &app).await?;
+    let is_agent = _agent.unwrap_or(false);
+    let src_real = resolve_read_dispatch(&source, is_agent, &state, &app).await?;
+    let dest_real = resolve_write_dispatch(&dest_dir, is_agent, &state, &app).await?;
     let name = src_real.file_name()
         .ok_or_else(|| format!("无效路径: {}", source))?;
     let dest = dest_real.join(name);
@@ -1706,10 +1764,11 @@ async fn move_file(
 #[tauri::command]
 async fn open_in_explorer(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = require_read(&path, &state, &app).await?;
+    let real = resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     #[cfg(target_os = "windows")]
     {
         if real.is_dir() {
@@ -1760,10 +1819,11 @@ async fn search_code(
     file_types: Option<String>,
     max_results: Option<usize>,
     use_regex: Option<bool>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let root = require_read(&directory, &state, &app).await?;
+    let root = resolve_read_dispatch(&directory, _agent.unwrap_or(false), &state, &app).await?;
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
         Some(regex::RegexBuilder::new(&pattern)
@@ -1872,10 +1932,11 @@ async fn search_code(
 async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
     max_results: Option<usize>, use_regex: Option<bool>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    search_code(directory, pattern, file_types, max_results, use_regex, state, app).await
+    search_code(directory, pattern, file_types, max_results, use_regex, _agent, state, app).await
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1892,11 +1953,12 @@ struct GlobEntry {
 async fn glob(
     pattern: String,
     path: Option<String>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let dir = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    let root = require_read(&dir, &state, &app).await?;
+    let root = resolve_read_dispatch(&dir, _agent.unwrap_or(false), &state, &app).await?;
 
     let glob_pattern = glob::Pattern::new(&pattern)
         .map_err(|e| format!("无效的 glob 模式: {}", e))?;
@@ -1959,13 +2021,14 @@ async fn edit_file(
     old_string: String,
     new_string: String,
     replace_all: Option<bool>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Phase 2: permission check — edit = read then write (both must pass)
-    // Phase 3: use resolved (forward-mapped) path for actual file ops (spec §5.6)
-    require_read(&file_path, &state, &app).await?;
-    let resolved = require_write(&file_path, &state, &app).await?;
+    let is_agent = _agent.unwrap_or(false);
+    // ponytail: edit = read then write — Agent needs both checks, UI skips rules
+    resolve_read_dispatch(&file_path, is_agent, &state, &app).await?;
+    let resolved = resolve_write_dispatch(&file_path, is_agent, &state, &app).await?;
     let file_path = resolved.to_string_lossy().to_string();
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
@@ -2537,13 +2600,67 @@ fn parse_status(raw: &str) -> serde_json::Value {
     serde_json::json!(files)
 }
 
+/// Lightweight git status for file tree — returns {relativePath: status} map.
+/// Includes ignored files (--ignored flag). Used by FileTreePanel for VSCode-style
+/// git status coloring: modified=orange, untracked=green, ignored=dimmed, etc.
 #[tauri::command]
-async fn git_status(
+async fn git_tree_status(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&path, &state, &app).await?;
+    resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    let porcelain = run_git(path, vec![
+        "status".to_string(), "--porcelain".to_string(),
+        "--ignored".to_string(), "--untracked-files".to_string(),
+    ]).await.unwrap_or_default();
+
+    let mut result = serde_json::Map::new();
+    for line in porcelain.lines() {
+        if line.len() < 4 { continue; }
+        let st = &line[..2];
+        let file_path = line[3..].trim();
+        // For renames, take the new path
+        let file_path = if let Some(idx) = file_path.find(" -> ") {
+            &file_path[idx + 4..]
+        } else {
+            file_path
+        };
+        let status = if st == "!!" {
+            "ignored"
+        } else if st == "??" {
+            "untracked"
+        } else if st.contains('D') {
+            "deleted"
+        } else if st.contains('A') {
+            "added"
+        } else if st.contains('R') {
+            "renamed"
+        } else if st.contains('M') {
+            "modified"
+        } else {
+            "modified"
+        };
+        result.insert(file_path.to_string(), serde_json::json!(status));
+        // Also mark parent directories as containing changes
+        let parts: Vec<&str> = file_path.split('/').collect();
+        for i in 1..parts.len() {
+            let dir = parts[..i].join("/");
+            result.entry(dir).or_insert(serde_json::json!("modified-dir"));
+        }
+    }
+    Ok(serde_json::json!(result).to_string())
+}
+
+#[tauri::command]
+async fn git_status(
+    path: String,
+    _agent: Option<bool>,
+    state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     let branch = run_git(path.clone(), vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]).await.unwrap_or_default();
     let branch = branch.trim().to_string();
 
@@ -2576,10 +2693,11 @@ async fn git_status(
 async fn git_diff_unstaged(
     path: String,
     file: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&path, &state, &app).await?;
+    resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["diff".to_string(), "--".to_string(), file.clone()]).await
 }
 
@@ -2587,10 +2705,11 @@ async fn git_diff_unstaged(
 async fn git_diff_staged(
     path: String,
     file: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&path, &state, &app).await?;
+    resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()]).await
 }
 
@@ -2598,10 +2717,11 @@ async fn git_diff_staged(
 async fn git_stage(
     path: String,
     files: Vec<String>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "stage", &state, &app).await?;
+    require_git_dispatch(&path, "stage", _agent.unwrap_or(false), &state, &app).await?;
     let mut args: Vec<String> = vec!["add".to_string()];
     args.extend(files.iter().map(|s| s.to_string()));
     run_git(path, args).await
@@ -2611,10 +2731,11 @@ async fn git_stage(
 async fn git_unstage(
     path: String,
     files: Vec<String>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "unstage", &state, &app).await?;
+    require_git_dispatch(&path, "unstage", _agent.unwrap_or(false), &state, &app).await?;
     let mut args: Vec<String> = vec!["reset".to_string(), "HEAD".to_string(), "--".to_string()];
     args.extend(files.iter().map(|s| s.to_string()));
     run_git(path, args).await
@@ -2623,10 +2744,11 @@ async fn git_unstage(
 #[tauri::command]
 async fn git_stage_all(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "stage", &state, &app).await?;
+    require_git_dispatch(&path, "stage", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["add".to_string(), "-A".to_string()]).await
 }
 
@@ -2634,40 +2756,44 @@ async fn git_stage_all(
 async fn git_commit(
     path: String,
     message: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "commit", &state, &app).await?;
+    require_git_dispatch(&path, "commit", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["commit".to_string(), "-m".to_string(), message.clone()]).await
 }
 
 #[tauri::command]
 async fn git_push(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "push", &state, &app).await?;
+    require_git_dispatch(&path, "push", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["push".to_string()]).await
 }
 
 #[tauri::command]
 async fn git_pull(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "pull", &state, &app).await?;
+    require_git_dispatch(&path, "pull", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["pull".to_string()]).await
 }
 
 #[tauri::command]
 async fn git_fetch(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "fetch", &state, &app).await?;
+    require_git_dispatch(&path, "fetch", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["fetch".to_string(), "--all".to_string(), "--prune".to_string()]).await
 }
 
@@ -2675,10 +2801,11 @@ async fn git_fetch(
 async fn git_log(
     path: String,
     limit: Option<i32>,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&path, &state, &app).await?;
+    resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     let n = limit.unwrap_or(20);
     let raw = run_git(
         path.clone(),
@@ -2708,10 +2835,11 @@ async fn git_log(
 #[tauri::command]
 async fn git_init(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "init", &state, &app).await?;
+    require_git_dispatch(&path, "init", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["init".to_string()]).await
 }
 
@@ -2720,10 +2848,11 @@ async fn git_init(
 #[tauri::command]
 async fn git_list_branches(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_read(&path, &state, &app).await?;
+    resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
     let out = run_git(path.clone(), vec!["branch".to_string(), "--format=%(refname:short)".to_string()]).await?;
     let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
     // Find current branch (marked with *)
@@ -2737,10 +2866,11 @@ async fn git_list_branches(
 async fn git_checkout(
     path: String,
     branch: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "checkout", &state, &app).await?;
+    require_git_dispatch(&path, "checkout", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["checkout".to_string(), branch.clone()]).await
 }
 
@@ -2748,30 +2878,33 @@ async fn git_checkout(
 async fn git_create_branch(
     path: String,
     name: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "create_branch", &state, &app).await?;
+    require_git_dispatch(&path, "create_branch", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["checkout".to_string(), "-b".to_string(), name.clone()]).await
 }
 
 #[tauri::command]
 async fn git_stash_push(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "stash_push", &state, &app).await?;
+    require_git_dispatch(&path, "stash_push", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["stash".to_string(), "push".to_string()]).await
 }
 
 #[tauri::command]
 async fn git_stash_pop(
     path: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "stash_pop", &state, &app).await?;
+    require_git_dispatch(&path, "stash_pop", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["stash".to_string(), "pop".to_string()]).await
 }
 
@@ -2789,10 +2922,11 @@ async fn git_stash_list(
 async fn git_discard(
     path: String,
     file: String,
+    _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    require_git(&path, "discard", &state, &app).await?;
+    require_git_dispatch(&path, "discard", _agent.unwrap_or(false), &state, &app).await?;
     run_git(path.clone(), vec!["checkout".to_string(), "--".to_string(), file.clone()]).await
 }
 
@@ -3256,6 +3390,7 @@ fn main() {
             bash_output,
             bash_kill,
             // Git commands
+            git_tree_status,
             git_status,
             git_diff_unstaged,
             git_diff_staged,
@@ -3462,10 +3597,12 @@ mod tests {
         let entries = list_dir_flat(&tmp);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
+        // ponytail: only VCS internal dirs (.git/.hg/.svn) are hidden now;
+        // dotfiles and build dirs are visible — git ignored coloring is frontend's job
         assert!(names.contains(&"main.py"));
-        assert!(!names.contains(&".hidden"), "dotfiles should be skipped");
-        assert!(!names.contains(&".git"), ".git should be skipped");
-        assert!(!names.contains(&"node_modules"), "node_modules should be skipped");
+        assert!(names.contains(&".hidden"), "dotfiles should be visible");
+        assert!(!names.contains(&".git"), ".git should still be skipped (VCS internal)");
+        assert!(names.contains(&"node_modules"), "node_modules should be visible (git-ignored coloring handles it)");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

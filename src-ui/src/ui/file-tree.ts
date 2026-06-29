@@ -47,6 +47,10 @@ export class FileTreePanel {
   // Lazy-load cache: dir path → its direct children
   private loadedChildren = new Map<string, DirEntry[]>();
 
+  // Git status map: relative path → status string (modified/untracked/added/deleted/ignored/renamed)
+  private gitStatusMap = new Map<string, string>();
+  private gitStatusLoading = false;
+
   private static instance: FileTreePanel | null = null;
   static get(): FileTreePanel {
     if (!FileTreePanel.instance) FileTreePanel.instance = new FileTreePanel();
@@ -77,6 +81,7 @@ export class FileTreePanel {
     const treeCSS = document.createElement('style');
     treeCSS.textContent = `
       .ft-row { position: relative; border-left: 2px solid transparent; cursor: pointer;
+        display: flex; align-items: center;
         transition: background 0.15s ease, border-left-color 0.15s ease, opacity 0.2s ease; }
       .ft-row.ft-open {
         background: rgba(50, 90, 150, 0.25) !important;
@@ -98,13 +103,35 @@ export class FileTreePanel {
       .ft-row.ft-drop-target { background: rgba(60, 100, 170, 0.35) !important; }
       .ft-guide { pointer-events: none; z-index: 0; }
       .ft-connector { pointer-events: none; z-index: 1; }
-      .ft-arrow, .ft-icon, .ft-name, .ft-ask-btn { position: relative; z-index: 2; }
+      .ft-arrow, .ft-icon, .ft-name, .ft-ask-btn, .ft-git-badge { position: relative; z-index: 2; flex-shrink: 0; }
+      .ft-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ft-empty { padding: 24px 12px; color: var(--text-muted); font-size: calc(11px * var(--font-scale)); text-align: center; user-select: none; }
       .ft-loading { padding: 24px 12px; color: var(--text-muted); font-size: calc(11px * var(--font-scale)); text-align: center; }
       .ft-header-btn { color: var(--text-muted); }
       .ft-header-btn:hover { color: var(--starlight-dim); background: rgba(255,255,255,0.04); }
       .ft-header-btn.ft-active { color: var(--signal, #7eb8ff) !important; }
       .ft-header-btn.ft-active:hover { color: var(--starlight, #c3daf8) !important; }
+      /* ── Git status colors (VSCode-style) ── */
+      .ft-row.ft-git-modified .ft-name-file { color: #e2c08d; }
+      .ft-row.ft-git-modified .ft-icon { color: #e2c08d; }
+      .ft-row.ft-git-added .ft-name-file { color: #81e293; }
+      .ft-row.ft-git-added .ft-icon { color: #81e293; }
+      .ft-row.ft-git-untracked .ft-name-file { color: #73c991; }
+      .ft-row.ft-git-untracked .ft-icon { color: #73c991; }
+      .ft-row.ft-git-deleted .ft-name-file { color: #c66a6a; }
+      .ft-row.ft-git-deleted .ft-icon { color: #c66a6a; }
+      .ft-row.ft-git-renamed .ft-name-file { color: #69a4ff; }
+      .ft-row.ft-git-renamed .ft-icon { color: #69a4ff; }
+      .ft-row.ft-git-ignored .ft-name-file { color: var(--text-muted); opacity: 0.5; }
+      .ft-row.ft-git-ignored .ft-icon { opacity: 0.4; }
+      .ft-row.ft-git-ignored { opacity: 0.6; }
+      .ft-git-badge { font-size: calc(9px * var(--font-scale)); font-weight: 600; margin-left: auto;
+        padding-right: 4px; flex-shrink: 0; font-family: var(--font-mono, monospace); }
+      .ft-git-badge.ft-git-modified { color: #e2c08d; }
+      .ft-git-badge.ft-git-added { color: #81e293; }
+      .ft-git-badge.ft-git-untracked { color: #73c991; }
+      .ft-git-badge.ft-git-deleted { color: #c66a6a; }
+      .ft-git-badge.ft-git-renamed { color: #69a4ff; }
     `;
     this.el.appendChild(treeCSS);
 
@@ -152,10 +179,12 @@ export class FileTreePanel {
       setTimeout(() => { refreshBtn.style.transform = ''; }, 300);
       this.refresh();
     });
+    this.headerEl.appendChild(refreshBtn);
 
     // Close button
     const closeBtn = this.makeHeaderBtn('close', '关闭');
     closeBtn.addEventListener('click', () => this.close());
+    this.headerEl.appendChild(closeBtn);
 
     this.el.appendChild(this.headerEl);
 
@@ -226,6 +255,7 @@ export class FileTreePanel {
     const savedScroll = this.treeEl.scrollTop;
     this.loading = true;
     this.showLoading();
+    this.fetchGitStatus(); // fire-and-forget — tree renders immediately, colors apply on refresh
     try {
       const entries: DirEntry[] = await invoke('list_directory_flat', { path: rootPath });
       if (this.sortByName) this.sortEntries(entries);
@@ -241,6 +271,40 @@ export class FileTreePanel {
 
   refresh(): void {
     if (this.rootPath) this.load(this.rootPath);
+  }
+
+  /** Fetch git status for the workspace root and store as relative-path→status map. */
+  private async fetchGitStatus(): Promise<void> {
+    if (this.gitStatusLoading || !this.workspaceRoot) return;
+    this.gitStatusLoading = true;
+    try {
+      const raw = await invoke<string>('git_tree_status', { path: this.workspaceRoot }).catch(() => '{}');
+      const map = JSON.parse(raw) as Record<string, string>;
+      this.gitStatusMap = new Map(Object.entries(map));
+      // Re-apply styles to existing rows without full re-render
+      this.applyGitStatusToRows();
+    } catch { /* not a git repo or git unavailable */ }
+    finally { this.gitStatusLoading = false; }
+  }
+
+  /** Get git status for a file path (returns relative path key match). */
+  private getGitStatus(filePath: string): string | null {
+    const rel = this.relativePath(filePath);
+    return this.gitStatusMap.get(rel) || null;
+  }
+
+  /** Apply git status classes to all currently rendered rows. */
+  private applyGitStatusToRows(): void {
+    const rows = this.treeEl.querySelectorAll<HTMLElement>('.ft-row');
+    for (const row of rows) {
+      const fp = row.dataset['filePath'] || '';
+      const status = this.getGitStatus(fp);
+      row.classList.remove('ft-git-modified', 'ft-git-added', 'ft-git-untracked',
+        'ft-git-deleted', 'ft-git-renamed', 'ft-git-ignored');
+      if (status && status !== 'modified-dir') {
+        row.classList.add(`ft-git-${status}`);
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1061,6 +1125,12 @@ export class FileTreePanel {
     if (this.focusedPath === entry.path) row.classList.add('ft-focused');
     if (this.clipboard?.cut && this.clipboard.paths.includes(entry.path)) row.classList.add('ft-cut');
 
+    // ── Git status (VSCode-style coloring) ──
+    const gitSt = this.getGitStatus(entry.path);
+    if (gitSt && gitSt !== 'modified-dir') {
+      row.classList.add(`ft-git-${gitSt}`);
+    }
+
     // ── Indent guides ──
     for (let lvl = 0; lvl < depth; lvl++) {
       const guide = document.createElement('span');
@@ -1103,6 +1173,16 @@ export class FileTreePanel {
     name.className = entry.is_dir ? 'ft-name ft-name-dir' : 'ft-name ft-name-file';
     name.textContent = entry.name;
     row.appendChild(name);
+
+    // ── Git status badge (VSCode-style letter: M/U/A/D/R) ──
+    if (!entry.is_dir && gitSt && gitSt !== 'ignored' && gitSt !== 'modified-dir') {
+      const badge = document.createElement('span');
+      badge.className = `ft-git-badge ft-git-${gitSt}`;
+      const letter = gitSt === 'modified' ? 'M' : gitSt === 'untracked' ? 'U'
+        : gitSt === 'added' ? 'A' : gitSt === 'deleted' ? 'D' : gitSt === 'renamed' ? 'R' : '';
+      badge.textContent = letter;
+      row.appendChild(badge);
+    }
 
     // ── "Ask Agent" button ──
     if (!entry.is_dir) {

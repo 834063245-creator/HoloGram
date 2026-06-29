@@ -14,6 +14,8 @@ pub struct SafetyCheckResult {
 /// Like check_path_safety but skips the .hologram/ config check — reading
 /// HoloGram's own data files (memory, sessions, logs) is safe and necessary
 /// for normal operation. Only writing them is dangerous.
+/// ponytail: 读路径不检查 dangerous_dir — 浏览 .vscode/.git/.idea 是正常操作,
+/// 只有写这些目录才需要保护. 之前读也拦导致文件树展开 .vscode 被 safety Ask 拦截.
 pub fn check_path_safety_read(path: &Path) -> SafetyCheckResult {
     let path_str = path.to_string_lossy();
 
@@ -26,11 +28,6 @@ pub fn check_path_safety_read(path: &Path) -> SafetyCheckResult {
     // 2. Dangerous system config files — protect reads too (credentials)
     if is_dangerous_file(path) {
         return SafetyCheckResult { safe: false, message: "系统配置文件受保护".into() };
-    }
-
-    // 3. Dangerous directories
-    if is_dangerous_dir(path) {
-        return SafetyCheckResult { safe: false, message: "受保护的目录".into() };
     }
 
     SafetyCheckResult { safe: true, message: String::new() }
@@ -236,13 +233,17 @@ mod tests {
 
     #[test]
     fn test_read_safety_blocks_dangerous() {
-        // Dangerous system files are still blocked for reads
+        // Dangerous system files are still blocked for reads (credentials)
         let r = check_path_safety_read(Path::new("/home/user/.bashrc"));
         assert!(!r.safe, "bashrc reads should be blocked");
         let r = check_path_safety_read(Path::new("/home/user/.ssh/id_rsa"));
         assert!(!r.safe, "ssh key reads should be blocked");
+        // ponytail: .git/config reads are now allowed — dangerous_dir check is
+        // write-only. File tree needs to browse .vscode/.idea etc without Ask popup.
         let r = check_path_safety_read(Path::new(".git/config"));
-        assert!(!r.safe, ".git/config reads should be blocked");
+        assert!(r.safe, ".git/config reads should be allowed (only writes to .git are blocked)");
+        let r = check_path_safety_read(Path::new(".vscode/settings.json"));
+        assert!(r.safe, ".vscode reads should be allowed");
     }
 
     // ── Write safety exempts runtime dirs (memory/logs/sessions/worktrees) ──

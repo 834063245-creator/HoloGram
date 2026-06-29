@@ -300,15 +300,15 @@ const icons: Record<string, IconDef> = {
   // ── File tree header ──
   'sort-toggle': {
     label: '排序',
-    path: '<line x1="3" y1="7" x2="7" y2="7"/><line x1="3" y1="11" x2="11" y2="11"/><line x1="3" y1="15" x2="15" y2="15"/><polyline points="14,5 14,11 10,9"/><polyline points="11,9 14,11"/>',
+    path: '<line x1="3" y1="6" x2="9" y2="6"/><line x1="3" y1="10" x2="12" y2="10"/><line x1="3" y1="14" x2="15" y2="14"/><polyline points="13,3 15,6 13,9"/>',
   },
   'collapse-all': {
     label: '折叠全部',
-    path: '<path d="M2 6 L9 12 L16 6"/><path d="M2 12 L9 18 L16 12"/>',
+    path: '<rect x="3" y="3" width="12" height="12" rx="1" fill="none"/><polyline points="6,8 9,11 12,8"/>',
   },
   'expand-all': {
     label: '展开全部',
-    path: '<path d="M2 12 L9 6 L16 12"/><path d="M2 18 L9 12 L16 18"/>',
+    path: '<rect x="3" y="3" width="12" height="12" rx="1" fill="none"/><polyline points="6,11 9,8 12,11"/>',
   },
 };
 
