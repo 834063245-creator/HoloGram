@@ -47,6 +47,7 @@ export interface AppSettings {
   projectPath: string;
   agent: AgentSettings;
   display: DisplaySettings;
+  /** @deprecated — 权限规则已迁移到 .hologram/permissions.json，由 Rust 后端管理。此字段仅保留以兼容旧 localStorage 数据，不再被读取。 */
   permissions?: { defaultMode?: 'allow' | 'ask' | 'deny'; allow?: string[]; deny?: string[] };
 }
 

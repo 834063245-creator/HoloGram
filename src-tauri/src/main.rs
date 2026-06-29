@@ -232,6 +232,30 @@ fn get_ctx(state: &WorkspaceState) -> Result<Arc<PermissionContext>, String> {
     Ok(handle.permission_ctx.clone())
 }
 
+/// Check MCP/graph tool permission — deny-only, skips ask/allow/safety.
+/// MCP tools are read-only; only explicit deny rules should block them.
+/// No workspace = no rules = passthrough (allows diagnostic tools like hologram_status).
+fn check_mcp_permission(
+    tool_name: &str,
+    state: &tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    // ponytail: 无工作区 = 无 .hologram/permissions.json = 无自定义规则，放行。
+    // 防止 hologram_status 等诊断工具因前置条件失败而无法诊断引擎状态（循环依赖）。
+    let ctx = match get_ctx(state) {
+        Ok(ctx) => ctx,
+        Err(_) => return Ok(()),
+    };
+    // ponytail: use public accessor ctx.read_rules(), not private ctx.rules
+    let rules = ctx.read_rules();
+    if let Some(rule) = rules.find_deny(tool_name, None) {
+        let reason = format!("{} 工具被规则禁止使用", rule.explain());
+        drop(rules);
+        ctx.audit_deny(tool_name, "", &reason);
+        return Err(reason);
+    }
+    Ok(())
+}
+
 /// Check permission for a tool. If Ask, emit event and wait for user response.
 async fn check_permission(
     tool: &dyn permissions::Tool,
@@ -634,7 +658,8 @@ async fn get_full_graph(
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
+async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_analyze", &state)?;
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
     run_analyze_with_progress(target, app, true).await
 }
@@ -696,7 +721,8 @@ async fn run_analyze_with_progress(target: String, app: tauri::AppHandle, force:
 }
 
 #[tauri::command]
-async fn hologram_neighbors(node_id: String, depth: Option<i32>) -> Result<String, String> {
+async fn hologram_neighbors(node_id: String, depth: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_neighbors", &state)?;
     let d = depth.unwrap_or(2) as usize;
     let nid = node_id.clone();
     tokio::task::spawn_blocking(move || {
@@ -708,7 +734,8 @@ async fn hologram_neighbors(node_id: String, depth: Option<i32>) -> Result<Strin
 }
 
 #[tauri::command]
-async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<String, String> {
+async fn hologram_impact(node_id: String, max_depth: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_impact", &state)?;
     let d = max_depth.unwrap_or(3) as usize;
     let nid = node_id.clone();
     tokio::task::spawn_blocking(move || {
@@ -720,7 +747,8 @@ async fn hologram_impact(node_id: String, max_depth: Option<i32>) -> Result<Stri
 }
 
 #[tauri::command]
-async fn hologram_path(from: String, to: String) -> Result<String, String> {
+async fn hologram_path(from: String, to: String, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_path", &state)?;
     let f = from.clone(); let t = to.clone();
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -733,7 +761,8 @@ async fn hologram_path(from: String, to: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_diff(before_path: String, _after_path: Option<String>) -> Result<String, String> {
+async fn hologram_diff(before_path: String, _after_path: Option<String>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_diff", &state)?;
     let bp = before_path.clone();
     tokio::task::spawn_blocking(move || {
         with_graph(move |current| {
@@ -759,7 +788,8 @@ async fn hologram_diff(before_path: String, _after_path: Option<String>) -> Resu
 }
 
 #[tauri::command]
-async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
+async fn hologram_fragile(limit: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_fragile", &state)?;
     let lim = limit.unwrap_or(10) as usize;
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| serde_json::json!(fragile_nodes(g, lim)))
@@ -767,7 +797,8 @@ async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
+async fn hologram_cycle(mode: Option<String>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_cycle", &state)?;
     let m = mode.unwrap_or_else(|| "all".into());
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -781,7 +812,8 @@ async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
+async fn hologram_search(query: String, limit: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_search", &state)?;
     let q = query.clone(); let lim = limit.unwrap_or(50) as usize;
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -795,7 +827,8 @@ async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, St
 }
 
 #[tauri::command]
-async fn hologram_coupling_report(module: String) -> Result<String, String> {
+async fn hologram_coupling_report(module: String, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_coupling_report", &state)?;
     let m = module.clone();
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| coupling_report(g, &m))
@@ -803,7 +836,8 @@ async fn hologram_coupling_report(module: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
+async fn hologram_blindspots(threshold: Option<f64>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_blindspots", &state)?;
     let _ = threshold;
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -818,7 +852,8 @@ async fn hologram_blindspots(threshold: Option<f64>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_thread_conflicts(severity: Option<String>) -> Result<String, String> {
+async fn hologram_thread_conflicts(severity: Option<String>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_thread_conflicts", &state)?;
     let node_id = severity.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -829,7 +864,8 @@ async fn hologram_thread_conflicts(severity: Option<String>) -> Result<String, S
 }
 
 #[tauri::command]
-async fn hologram_community_report(resolution: Option<f64>, min_size: Option<i32>) -> Result<String, String> {
+async fn hologram_community_report(resolution: Option<f64>, min_size: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_community_report", &state)?;
     let _ = resolution; let ms = min_size.unwrap_or(3);
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -844,7 +880,8 @@ async fn hologram_community_report(resolution: Option<f64>, min_size: Option<i32
 }
 
 #[tauri::command]
-async fn hologram_graph_summary() -> Result<String, String> {
+async fn hologram_graph_summary(state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_graph_summary", &state)?;
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| graph_summary(g))
     }).await.map_err(|e| format!("任务失败: {e}"))?
@@ -853,7 +890,10 @@ async fn hologram_graph_summary() -> Result<String, String> {
 #[tauri::command]
 async fn hologram_rename(
     old_name: String, new_name: String, dry_run: Option<bool>, node_id: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    // ponytail: deny-only 对 stub 安全，真 rename 实现前必须改为 require_write
+    check_mcp_permission("hologram_rename", &state)?;
     let _ = node_id; let on = old_name.clone(); let nn = new_name.clone();
     let dr = dry_run.unwrap_or(true);
     tokio::task::spawn_blocking(move || {
@@ -877,7 +917,9 @@ async fn hologram_rename(
 #[tauri::command]
 async fn hologram_explore(
     query: Option<String>, symbols: Option<Vec<String>>, include_source: Option<bool>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_explore", &state)?;
     let q = query.clone(); let sym = symbols.unwrap_or_default();
     let inc_src = include_source.unwrap_or(true);
     let proj = project_root();
@@ -893,6 +935,7 @@ async fn hologram_run_check(
     path: Option<String>,
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_run_check", &state)?;
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
     // Extract and clear changed_files before spawning blocking task.
     // Clearing early prevents a race where new changes arrive mid-check.
@@ -969,7 +1012,8 @@ async fn hologram_run_check(
 }
 
 #[tauri::command]
-async fn hologram_run_health(path: Option<String>, days: Option<i32>) -> Result<String, String> {
+async fn hologram_run_health(path: Option<String>, days: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_run_health", &state)?;
     let target = path.unwrap_or_else(|| project_root().to_string_lossy().to_string());
     let d = days.unwrap_or(30);
     tokio::task::spawn_blocking(move || {
@@ -1002,7 +1046,8 @@ async fn hologram_run_health(path: Option<String>, days: Option<i32>) -> Result<
 }
 
 #[tauri::command]
-async fn hologram_history(node_id: String) -> Result<String, String> {
+async fn hologram_history(node_id: String, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_history", &state)?;
     let nid = node_id.clone();
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -1015,7 +1060,8 @@ async fn hologram_history(node_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_community(node_id: String) -> Result<String, String> {
+async fn hologram_community(node_id: String, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_community", &state)?;
     let nid = node_id.clone();
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
@@ -1028,7 +1074,8 @@ async fn hologram_community(node_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn hologram_delayed() -> Result<String, String> {
+async fn hologram_delayed(state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_delayed", &state)?;
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
             use engine::graph::EdgeKind;
@@ -1044,7 +1091,9 @@ async fn hologram_delayed() -> Result<String, String> {
 #[tauri::command]
 async fn hologram_run_preflight(
     path: String, files: Option<Vec<String>>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_run_preflight", &state)?;
     let p = path.clone(); let f = files.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
@@ -1056,7 +1105,8 @@ async fn hologram_run_preflight(
 }
 
 #[tauri::command]
-async fn hologram_status() -> Result<String, String> {
+async fn hologram_status(state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_status", &state)?;
     tokio::task::spawn_blocking(move || {
         with_graph(move |g| {
             serde_json::json!({
@@ -1075,7 +1125,9 @@ async fn hologram_policy_check(
     source: Option<String>,
     target: Option<String>,
     edge_kinds: Option<Vec<String>>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_policy_check", &state)?;
     // Build the rules JSON — either from full rules array or shortcut params
     let rules_val = if let Some(r) = rules {
         r
@@ -1113,6 +1165,7 @@ async fn hologram_timeline(
     module: Option<String>,
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_timeline", &state)?;
     let _proj = path
         .filter(|p| !p.is_empty())
         .or_else(|| workspace_path(&state).ok())
@@ -1155,7 +1208,9 @@ async fn hologram_record_event(
     event_type: String,
     file: Option<String>,
     summary: String,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_record_event", &state)?;
     let _ = tokio::task::spawn_blocking(move || {
         engine_api::engine_record_timeline(&event_type, file.as_deref(), &summary)
             .map_err(|e| format!("时间轴写入失败: {}", e))
@@ -1164,7 +1219,8 @@ async fn hologram_record_event(
 }
 
 #[tauri::command]
-async fn hologram_changes() -> Result<String, String> {
+async fn hologram_changes(state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_changes", &state)?;
     tokio::task::spawn_blocking(move || {
         let changes = engine_api::engine_query_timeline(10).unwrap_or_default();
         Ok(serde_json::json!({"changes": changes}).to_string())
@@ -1179,7 +1235,9 @@ async fn hologram_changes() -> Result<String, String> {
 async fn hologram_hotspots(
     days: Option<i32>,
     min_count: Option<i32>,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_hotspots", &state)?;
     let limit = min_count.unwrap_or(3) as usize;
     let _ = days;
     tokio::task::spawn_blocking(move || {
@@ -1198,7 +1256,9 @@ async fn hologram_hotspots(
 async fn hologram_workspace_conflict(
     path_a: String,
     path_b: String,
+    state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_workspace_conflict", &state)?;
     // No dedicated MCP conflict tool yet — return structured stub
     Ok(serde_json::json!({
         "status": "not_implemented",
@@ -1218,6 +1278,7 @@ async fn hologram_gate_check(
     _module_file: Option<String>,
     state: tauri::State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    check_mcp_permission("hologram_gate_check", &state)?;
     // Gate check reuses hologram_run_check logic
     let target = path;
     let changed_files: Vec<String> = state.lock().unwrap().as_ref()
@@ -2715,11 +2776,18 @@ async fn permission_ask_response(
     // Resolve the pending oneshot channel
     crate::permissions::resolve_ask(&request_id, allow);
 
-    // If user wants to remember, add a session rule
+    // If user wants to remember, add a session rule + persist to project config
     if remember.unwrap_or(false) {
         if let Some(ref rule_str) = rule_to_add {
             if let Ok(ctx) = get_ctx(&state) {
-                ctx.add_session_rule(rule_str, if allow { "allow" } else { "deny" });
+                let behavior = if allow { "allow" } else { "deny" };
+                ctx.add_session_rule(rule_str, behavior);
+                // ponytail: persist to .hologram/permissions.json so rule survives restart
+                crate::permissions::rule::append_project_rule(
+                    &ctx.project_root,
+                    rule_str,
+                    behavior,
+                );
             }
         }
     }

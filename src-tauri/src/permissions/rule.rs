@@ -152,6 +152,36 @@ pub fn load_project_rules(project_root: &Path) -> Vec<PermissionRule> {
     rules
 }
 
+/// Append a single rule to the project permissions.json.
+/// Creates the file + directory if they don't exist.
+/// Deduplicates: same rule string in same section won't be added twice.
+pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) {
+    let path = project_root.join(".hologram").join("permissions.json");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut json: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::json!({}));
+    let section = match behavior {
+        "allow" => "allow",
+        "deny" => "deny",
+        _ => "ask",
+    };
+    // ponytail: ensure array exists before taking &mut ref (avoids NLL borrow conflict)
+    if !json[section].is_array() {
+        json[section] = serde_json::json!([]);
+    }
+    if let Some(arr) = json[section].as_array_mut() {
+        let rule_str = rule_str.to_string();
+        if !arr.iter().any(|v| v.as_str() == Some(&rule_str)) {
+            arr.push(serde_json::json!(rule_str));
+        }
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default());
+}
+
 impl PermissionRule {
     /// Check if this rule matches a tool name and optional content.
     pub fn matches(&self, tool_name: &str, command_or_path: Option<&str>) -> bool {
