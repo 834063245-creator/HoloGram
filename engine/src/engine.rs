@@ -245,6 +245,9 @@ impl Engine {
                 old_root.display(),
                 new_root.display()
             );
+            // Stop old watcher — it's watching the previous workspace.
+            // The new watcher will be started at the end of this method.
+            self.stop_watcher();
         }
 
         // Set loading state
@@ -1367,6 +1370,34 @@ mod tests {
         // Second init on same project should succeed (idempotent)
         let result = engine.init(&test_dir);
         assert!(result.is_ok(), "re-init should be idempotent: {:?}", result.err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_engine_workspace_switch_restarts_watcher() {
+        let tmp = std::env::temp_dir().join("hologram_test_engine_ws_switch");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let dir_a = tmp.join("project_a");
+        let dir_b = tmp.join("project_b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let mut engine = Engine::new();
+
+        // Init with project A — watcher starts
+        engine.init(&dir_a).unwrap();
+        assert!(engine.is_ready());
+        assert_eq!(engine.project_root(), dir_a);
+        assert!(engine.is_watching(), "watcher should be running after first init");
+
+        // Switch to project B — watcher must restart for the new root
+        engine.init(&dir_b).unwrap();
+        assert!(engine.is_ready());
+        assert_eq!(engine.project_root(), dir_b);
+        assert!(engine.is_watching(), "watcher should be running after workspace switch");
+        // Verify it's actually watching the new root by checking project_root
+        // (the watcher thread holds a clone of project_root, tested implicitly)
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
