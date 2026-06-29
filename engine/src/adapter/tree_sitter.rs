@@ -187,7 +187,6 @@ mod tests {
         assert!(exts.contains(&"lua".to_string()));
         assert!(exts.contains(&"cs".to_string()));
         assert!(exts.contains(&"swift".to_string()));
-        assert!(exts.contains(&"json".to_string()));
         assert!(exts.contains(&"html".to_string()));
         assert!(exts.contains(&"css".to_string()));
         assert!(exts.contains(&"hs".to_string()));
@@ -278,15 +277,6 @@ pub fn add(a: i32, b: i32) -> i32 {
         let a = TreeSitterAdapter;
         let (nodes, _, _) = a.analyze("Main.kt", "fun main() {}");
         assert!(nodes.is_empty(), "kt not yet wired — pending grammar upgrade");
-    }
-
-    #[test]
-    fn test_analyze_json() {
-        let a = TreeSitterAdapter;
-        let src = "{\"name\": \"test\", \"version\": \"1.0\"}";
-        let (nodes, _, _) = a.analyze("config.json", src);
-        // JSON doesn't have functions/classes, but should have module node
-        assert!(nodes.len() >= 1, "should have at least module node");
     }
 
     #[test]

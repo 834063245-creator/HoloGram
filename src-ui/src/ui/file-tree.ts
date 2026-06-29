@@ -41,8 +41,11 @@ export class FileTreePanel {
   private selectedPaths = new Set<string>();
   private focusedPath = '';
   private clipboard: Clipboard | null = null;
-  private sortByName = false;
+  private sortByName = true;
   private loading = false;
+
+  // Lazy-load cache: dir path → its direct children
+  private loadedChildren = new Map<string, DirEntry[]>();
 
   private static instance: FileTreePanel | null = null;
   static get(): FileTreePanel {
@@ -124,6 +127,7 @@ export class FileTreePanel {
 
     // Sort button
     const sortBtn = this.makeHeaderBtn('sort-toggle', '切换排序 (名称 ↔ 原始)');
+    sortBtn.classList.add('ft-active');
     sortBtn.addEventListener('click', () => {
       this.sortByName = !this.sortByName;
       sortBtn.classList.toggle('ft-active', this.sortByName);
@@ -216,17 +220,20 @@ export class FileTreePanel {
     if (!this.workspaceRoot) this.workspaceRoot = rootPath;
     this.selectedPaths.clear();
     this.focusedPath = '';
+    this.loadedChildren.clear();
     const pathLabel = this.headerEl.querySelector('.ft-path-label');
     if (pathLabel) pathLabel.textContent = rootPath;
+    const savedScroll = this.treeEl.scrollTop;
     this.loading = true;
     this.showLoading();
     try {
-      const entries: DirEntry[] = await invoke('list_directory', { path: rootPath });
+      const entries: DirEntry[] = await invoke('list_directory_flat', { path: rootPath });
       if (this.sortByName) this.sortEntries(entries);
       this.renderTree(entries, this.treeEl, rootPath);
+      this.treeEl.scrollTop = savedScroll;
       this.maybeShowEmpty(entries);
     } catch (e) {
-      this.treeEl.innerHTML = `<div class="ft-empty" style="color:var(--danger)">读取目录失败</div>`;
+      this.treeEl.innerHTML = `<div class="ft-empty" style="color:var(--danger)">读取目录失败: ${e}</div>`;
     } finally {
       this.loading = false;
     }
@@ -448,7 +455,7 @@ export class FileTreePanel {
 
   private getVisibleRows(): HTMLElement[] {
     return [...this.treeEl.querySelectorAll<HTMLElement>('.ft-row')]
-      .filter(r => (r.style as any).display !== 'none');
+      .filter(r => (r.style as any).display !== 'none' && r.offsetParent !== null);
   }
 
   private cssEscape(path: string): string {
@@ -507,7 +514,7 @@ export class FileTreePanel {
     if (e.key === 'Enter') {
       e.preventDefault();
       if (entry?.is_dir) {
-        this.toggleExpand(focusedPath, focusedRow!);
+        void this.toggleExpand(focusedPath, focusedRow!);
       } else if (entry) {
         FileViewer.get().open(focusedPath);
         this.setOpenFilePath(focusedPath);
@@ -535,7 +542,7 @@ export class FileTreePanel {
     if (e.key === ' ') {
       e.preventDefault();
       if (entry?.is_dir) {
-        this.toggleExpand(focusedPath, focusedRow!);
+        void this.toggleExpand(focusedPath, focusedRow!);
       } else {
         this.toggleSelect(focusedPath);
       }
@@ -599,13 +606,13 @@ export class FileTreePanel {
     return { name, path, is_dir: isDir, children: null };
   }
 
-  private toggleExpand(path: string, row: HTMLElement): void {
+  private async toggleExpand(path: string, row: HTMLElement): Promise<void> {
     const container = row.nextElementSibling as HTMLElement;
     if (!container || container.tagName !== 'DIV') return;
     if (container.style.display !== 'none') {
       this.collapseRow(row, container);
     } else {
-      this.expandRow(row, container);
+      await this.expandRow(row, container);
     }
   }
 
@@ -620,12 +627,38 @@ export class FileTreePanel {
     shell.clearHighlight();
   }
 
-  private expandRow(row: HTMLElement, container: HTMLElement): void {
-    // Set invisible BEFORE showing container to avoid flash
+  private async expandRow(row: HTMLElement, container: HTMLElement): Promise<void> {
+    const fp = row.dataset['filePath'] || '';
+    const childDepth = parseInt(container.dataset['treeDepth'] || '1');
+    const childFlags: boolean[] = JSON.parse(container.dataset['treeFlags'] || '[]');
+
+    // Lazy load: fetch children on first expand
+    if (container.children.length === 0) {
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'ft-loading';
+      loadingDiv.textContent = '加载中…';
+      loadingDiv.style.padding = `0 0 0 ${12 + childDepth * 16}px`;
+      container.appendChild(loadingDiv);
+      container.style.display = 'block';
+      const arrow = row.querySelector('.ft-arrow') as HTMLElement;
+      if (arrow) arrow.textContent = '▾';
+
+      try {
+        let children = await invoke<DirEntry[]>('list_directory_flat', { path: fp });
+        if (this.sortByName) this.sortEntries(children);
+        this.loadedChildren.set(fp, children);
+        container.innerHTML = '';
+        this.renderTree(children, container, fp, childDepth, childFlags);
+        this.reapplyRowStates();
+      } catch {
+        container.innerHTML = '<div class="ft-empty" style="color:var(--danger)">读取失败</div>';
+        return;
+      }
+    }
+
     const childRows = container.querySelectorAll<HTMLElement>('.ft-row');
     gsap.killTweensOf(childRows);
     gsap.set(childRows, { opacity: 0, x: -6 });
-
     container.style.display = 'block';
     const arrow = row.querySelector('.ft-arrow') as HTMLElement;
     if (arrow) arrow.textContent = '▾';
@@ -633,16 +666,15 @@ export class FileTreePanel {
     gsap.to(childRows,
       { opacity: 1, x: 0, duration: 0.04, stagger: { each: 0.0015, from: 'start' }, ease: 'power2.out' },
     );
-    const fp = row.dataset['filePath'] || '';
     shell.highlightFolder(fp);
   }
 
-  private expandAll(): void {
+  private async expandAll(): Promise<void> {
     const topRows = this.treeEl.querySelectorAll<HTMLElement>(':scope > .ft-row');
     for (const row of topRows) {
       const fp = row.dataset['filePath'] || '';
       const arrow = row.querySelector('.ft-arrow') as HTMLElement;
-      if (arrow?.textContent) this.expandAllChildren(fp);
+      if (arrow?.textContent) await this.expandAllChildren(fp);
     }
   }
 
@@ -659,31 +691,75 @@ export class FileTreePanel {
     shell.clearHighlight();
   }
 
-  /** Expand all descendants of a given folder row with cascading animation. */
-  private expandAllChildren(folderPath: string): void {
+  /** Expand all descendants of a given folder row — lazy loads everything recursively. */
+  private async expandAllChildren(folderPath: string): Promise<void> {
     const row = this.treeEl.querySelector(`[data-file-path="${this.cssEscape(folderPath)}"]`) as HTMLElement;
     if (!row) return;
     const container = row.nextElementSibling as HTMLElement;
     if (!container || container.tagName !== 'DIV') return;
-    // Set all rows invisible BEFORE showing any containers
+
+    // BFS: load all descendant directories layer by layer
+    const queue: Array<{ path: string; cont: HTMLElement; depth: number; flags: boolean[] }> = [
+      { path: folderPath, cont: container, depth: parseInt(container.dataset['treeDepth'] || '1'), flags: JSON.parse(container.dataset['treeFlags'] || '[]') },
+    ];
+
+    while (queue.length > 0) {
+      const { path, cont, depth, flags } = queue.shift()!;
+      if (cont.children.length > 0) {
+        // Already loaded — just queue child containers
+        const childContainers = cont.querySelectorAll<HTMLElement>(':scope > .ft-row + div');
+        for (const cc of childContainers) {
+          const cr = cc.previousElementSibling as HTMLElement;
+          if (cr?.classList.contains('ft-row')) {
+            queue.push({
+              path: cr.dataset['filePath'] || '',
+              cont: cc as HTMLElement,
+              depth: parseInt(cc.dataset['treeDepth'] || String(depth + 1)),
+              flags: JSON.parse(cc.dataset['treeFlags'] || '[]'),
+            });
+          }
+        }
+        continue;
+      }
+      // Lazy load
+      try {
+        let children = await invoke<DirEntry[]>('list_directory_flat', { path });
+        if (this.sortByName) this.sortEntries(children);
+        this.loadedChildren.set(path, children);
+        cont.innerHTML = '';
+        this.renderTree(children, cont, path, depth, flags);
+        // Queue newly created child dirs
+        const childContainers = cont.querySelectorAll<HTMLElement>(':scope > .ft-row + div');
+        for (const cc of childContainers) {
+          const cr = cc.previousElementSibling as HTMLElement;
+          if (cr?.classList.contains('ft-row')) {
+            queue.push({
+              path: cr.dataset['filePath'] || '',
+              cont: cc as HTMLElement,
+              depth: parseInt((cc as HTMLElement).dataset['treeDepth'] || String(depth + 1)),
+              flags: JSON.parse((cc as HTMLElement).dataset['treeFlags'] || '[]'),
+            });
+          }
+        }
+      } catch { /* skip failed directories */ }
+    }
+
+    // Expand everything: show all descendant containers and animate
+    const allContainers = container.querySelectorAll<HTMLElement>('.ft-row + div');
     const allRows = container.querySelectorAll<HTMLElement>('.ft-row');
     gsap.killTweensOf(allRows);
     gsap.set(allRows, { opacity: 0, x: -6 });
 
-    // Unhide all nested child containers
-    const allContainers = container.querySelectorAll<HTMLElement>('.ft-row + div');
     for (const c of allContainers) {
       c.style.display = 'block';
       const prev = c.previousElementSibling as HTMLElement;
       const arr = prev?.querySelector('.ft-arrow') as HTMLElement;
       if (arr) arr.textContent = '▾';
     }
-    // Expand this level
     container.style.display = 'block';
     const arrow = row.querySelector('.ft-arrow') as HTMLElement;
     if (arrow) arrow.textContent = '▾';
 
-    // Cascade in
     gsap.to(allRows,
       { opacity: 1, x: 0, duration: 0.04, stagger: { each: 0.001, from: 'start' }, ease: 'power2.out' },
     );
@@ -715,9 +791,16 @@ export class FileTreePanel {
       color: 'var(--starlight-dim)', outline: 'none', flexShrink: '0',
     });
     let timer: ReturnType<typeof setTimeout>;
+    let lastQuery = '';
     this.filterInput.addEventListener('input', () => {
       clearTimeout(timer);
-      timer = setTimeout(() => this.applyFilter(this.filterInput.value), 200);
+      const next = this.filterInput.value;
+      timer = setTimeout(() => {
+        // ponytail: clear filter → refresh to restore collapse state
+        if (!next && lastQuery) { this.refresh(); }
+        else { this.applyFilter(next); }
+        lastQuery = next;
+      }, 200);
     });
     this.el.insertBefore(this.filterInput, this.treeEl);
   }
@@ -784,42 +867,106 @@ export class FileTreePanel {
 
   private _hlTimer: ReturnType<typeof setTimeout> | null = null;
 
-  highlightPath(filePath: string): void {
+  async highlightPath(filePath: string): Promise<void> {
     const normalized = filePath.replace(/\\/g, '/').toLowerCase();
-    const rows = this.treeEl.querySelectorAll<HTMLElement>('div[data-file-path]');
-    for (const row of rows) {
-      const rowPath = (row.dataset['filePath'] || '').replace(/\\/g, '/').toLowerCase();
-      if (rowPath !== normalized) continue;
-      // Expand parents
-      let parent = row.parentElement;
-      while (parent && parent !== this.treeEl) {
-        if (parent.style.display === 'none') {
-          parent.style.display = 'block';
-          const parentRow = parent.previousElementSibling as HTMLElement;
-          const arrow = parentRow?.querySelector('.ft-arrow') as HTMLElement;
-          if (arrow) arrow.textContent = '▾';
+
+    // Lazy load parent directories if the file isn't visible yet
+    const findRow = (): HTMLElement | null => {
+      const rows = this.treeEl.querySelectorAll<HTMLElement>('div[data-file-path]');
+      for (const row of rows) {
+        if ((row.dataset['filePath'] || '').replace(/\\/g, '/').toLowerCase() === normalized) return row;
+      }
+      return null;
+    };
+
+    let row = findRow();
+    if (!row) {
+      // Load ancestors: trace path from workspace root
+      const root = (this.workspaceRoot || this.rootPath).replace(/\\/g, '/');
+      const fp = filePath.replace(/\\/g, '/');
+      if (!fp.startsWith(root)) return;
+      const relParts = fp.slice(root.length).split('/').filter(Boolean);
+      // Load each ancestor directory level by level
+      for (let i = 0; i < relParts.length - 1; i++) {
+        const ancestorPath = root + '/' + relParts.slice(0, i + 1).join('/');
+        // Find or load this ancestor's children
+        let ancestorRow = this.treeEl.querySelector<HTMLElement>(`[data-file-path="${this.cssEscape(ancestorPath)}"]`);
+        if (!ancestorRow) {
+          // Need to load parent first — recurse up
+          // ponytail: only works if workspaceRoot is loaded; deep trees handled iteratively
+          await this.loadAncestorChain(ancestorPath);
+          ancestorRow = this.treeEl.querySelector<HTMLElement>(`[data-file-path="${this.cssEscape(ancestorPath)}"]`);
         }
-        parent = parent.parentElement;
+        if (!ancestorRow) return;
+        const container = ancestorRow.nextElementSibling as HTMLElement;
+        if (container && container.tagName === 'DIV') {
+          if (container.children.length === 0) {
+            await this.expandRow(ancestorRow, container);
+          } else if (container.style.display === 'none') {
+            container.style.display = 'block';
+            const arrow = ancestorRow.querySelector('.ft-arrow') as HTMLElement;
+            if (arrow) arrow.textContent = '▾';
+          }
+        }
       }
-      const doScroll = () => {
-        const rowTop = row.offsetTop;
-        const view = this.treeEl;
-        view.scrollTop = rowTop - view.clientHeight / 2 + row.clientHeight / 2;
-        row.style.background = 'rgba(60, 100, 170, 0.45)';
-        row.style.borderLeftColor = 'rgba(100, 160, 240, 0.8)';
-        if (this._hlTimer) clearTimeout(this._hlTimer);
-        this._hlTimer = setTimeout(() => {
-          row.style.background = '';
-          row.style.borderLeftColor = 'transparent';
-        }, 2000);
-      };
-      if (!this.open) {
-        this.show();
-        requestAnimationFrame(doScroll);
-      } else {
-        doScroll();
+      row = findRow();
+    }
+
+    if (!row) return;
+    // Expand ancestors
+    let parent = row.parentElement;
+    while (parent && parent !== this.treeEl) {
+      if (parent.style.display === 'none') {
+        parent.style.display = 'block';
+        const parentRow = parent.previousElementSibling as HTMLElement;
+        const arrow = parentRow?.querySelector('.ft-arrow') as HTMLElement;
+        if (arrow) arrow.textContent = '▾';
       }
-      break;
+      parent = parent.parentElement;
+    }
+    const doScroll = () => {
+      const rowTop = row!.offsetTop;
+      const view = this.treeEl;
+      view.scrollTop = rowTop - view.clientHeight / 2 + row!.clientHeight / 2;
+      row!.style.background = 'rgba(60, 100, 170, 0.45)';
+      row!.style.borderLeftColor = 'rgba(100, 160, 240, 0.8)';
+      if (this._hlTimer) clearTimeout(this._hlTimer);
+      this._hlTimer = setTimeout(() => {
+        row!.style.background = '';
+        row!.style.borderLeftColor = 'transparent';
+      }, 2000);
+    };
+    if (!this.open) {
+      this.show();
+      requestAnimationFrame(doScroll);
+    } else {
+      doScroll();
+    }
+  }
+
+  /** Lazily load ancestor directories along a path. pontail: iterative, one level at a time. */
+  private async loadAncestorChain(targetPath: string): Promise<void> {
+    const root = (this.workspaceRoot || this.rootPath).replace(/\\/g, '/');
+    const tp = targetPath.replace(/\\/g, '/');
+    if (!tp.startsWith(root) || tp === root) return;
+
+    const parts = tp.slice(root.length).split('/').filter(Boolean);
+    for (let i = 0; i < parts.length; i++) {
+      const ancestorPath = root + '/' + parts.slice(0, i + 1).join('/');
+      let row = this.treeEl.querySelector<HTMLElement>(`[data-file-path="${this.cssEscape(ancestorPath)}"]`);
+      if (!row && i === 0) {
+        // Load top-level if not loaded
+        const parentRow = this.treeEl.querySelector<HTMLElement>(`[data-file-path="${this.cssEscape(root)}"]`);
+        if (!parentRow && this.treeEl.children.length === 0) {
+          await this.load(root);
+        }
+        row = this.treeEl.querySelector<HTMLElement>(`[data-file-path="${this.cssEscape(ancestorPath)}"]`);
+      }
+      if (!row) return;
+      const container = row.nextElementSibling as HTMLElement;
+      if (container && container.tagName === 'DIV' && container.children.length === 0) {
+        await this.expandRow(row, container);
+      }
     }
   }
 
@@ -852,24 +999,20 @@ export class FileTreePanel {
       const row = this.buildRow(entry, basePath, depth, lastFlags, isLast);
       parent.appendChild(row);
 
-      if (entry.children && entry.children.length > 0) {
-        if (this.sortByName) this.sortEntries(entry.children);
+      if (entry.is_dir) {
         const childContainer = document.createElement('div');
         childContainer.style.display = 'none';
-        const childFlags = [...lastFlags, isLast];
-        this.renderTree(entry.children, childContainer, basePath, depth + 1, childFlags);
+        childContainer.dataset['treeDepth'] = String(depth + 1);
+        childContainer.dataset['treeFlags'] = JSON.stringify([...lastFlags, isLast]);
         parent.appendChild(childContainer);
-
         row.addEventListener('click', (e) => this.onRowClick(e, entry, row, childContainer));
-      } else if (entry.is_dir) {
-        row.addEventListener('click', (e) => this.onRowClick(e, entry, row, null));
       } else {
         row.addEventListener('click', (e) => this.onRowClick(e, entry, row, null));
       }
     }
   }
 
-  private onRowClick(e: MouseEvent, entry: DirEntry, row: HTMLElement, childContainer: HTMLElement | null): void {
+  private async onRowClick(e: MouseEvent, entry: DirEntry, row: HTMLElement, childContainer: HTMLElement | null): Promise<void> {
     e.stopPropagation();
     const path = row.dataset['filePath'] || '';
 
@@ -884,14 +1027,12 @@ export class FileTreePanel {
 
     // Regular click
     if (childContainer) {
-      // Folder with children — delegate to animated expand/collapse
       if (childContainer.style.display !== 'none') {
         this.collapseRow(row, childContainer);
       } else {
-        this.expandRow(row, childContainer);
+        await this.expandRow(row, childContainer);
       }
     } else if (entry.is_dir) {
-      // Empty folder
       row.style.background = 'rgba(48, 60, 80, 0.35)';
       setTimeout(() => { row.style.background = ''; }, 300);
     } else {

@@ -715,7 +715,7 @@ export class FileViewer {
     }
 
     const fileName = filePath.replace(/\\/g, '/').split('/').pop() || filePath;
-    const uri = monaco.Uri.parse(`file:///${filePath.replace(/\\/g, '/')}`);
+    const uri = monaco.Uri.file(filePath);
     const language = detectLanguage(fileName);
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
@@ -748,6 +748,7 @@ export class FileViewer {
     // Show loading state in a temp model
     const loadingModel = monaco.editor.createModel('加载中...', 'plaintext');
     this.editor.setModel(loadingModel);
+    this.showNormalEditor();
 
     this.state.open = true;
     this.centerOnScreen();
@@ -778,8 +779,15 @@ export class FileViewer {
         if (sid) didChange(sid, uri.toString(), model.getValue());
       });
 
-      // LSP: start server and register providers for this language
-      if (!lspSessions.has(language)) {
+      // LSP: only attempt for languages with configured servers
+      const LSP_LANGUAGES = new Set([
+        'python', 'rust', 'go', 'typescript', 'javascript',
+        'java', 'c', 'cpp', 'csharp', 'ruby', 'lua', 'php',
+        'swift', 'dart', 'haskell', 'elixir', 'erlang', 'zig',
+        'shell', 'html', 'css', 'scss', 'less', 'yaml', 'yml',
+        'scala', 'r', 'nix', 'ocaml',
+      ]);
+      if (!lspSessions.has(language) && LSP_LANGUAGES.has(language)) {
         startLsp(language, `file:///${filePath}`).then(sid => {
           if (sid !== null) {
             lspSessions.set(language, sid);
@@ -803,6 +811,7 @@ export class FileViewer {
       // Notify file tree to highlight the opened file
       FileTreePanel.get().setOpenFilePath(filePath);
     } catch (err: any) {
+      console.error('[FileViewer] read failed:', err);
       loadingModel.dispose();
       const errMsg = `❌ 读取失败: ${err}`;
       const errModel = monaco.editor.createModel(errMsg, 'plaintext');
