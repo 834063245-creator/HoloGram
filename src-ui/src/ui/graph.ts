@@ -3143,7 +3143,9 @@ export class StarGraph {
 
   /** Append new nodes to existing buffers (capacity must be sufficient). */
   private _appendNodes(nodes: GraphNode[], fullGraph: GraphJSON, nodeIdxMap: Map<string, number>): void {
-    const comms = ((fullGraph as any).hierarchical_communities || (fullGraph as any).communities || []) as CommunityData[];
+    // ponytail: 只取 level0 社区 — 与 _renderImpl 的 nodeCommMap 层级一致
+    const allComms = ((fullGraph as any).hierarchical_communities || (fullGraph as any).communities || []) as CommunityData[];
+    const comms = allComms.filter(c => !c.level || c.level === 0);
     const nodeComm = new Map<string, string>();
     for (const c of comms) for (const nid of c.node_ids) nodeComm.set(nid, c.id);
 
@@ -3209,7 +3211,7 @@ export class StarGraph {
       (gAttr['position'].array as Float32Array)[i * 3 + 2] = pz;
       this._glowRgba[i * 4] = gc.r; this._glowRgba[i * 4 + 1] = gc.g;
       this._glowRgba[i * 4 + 2] = gc.b; this._glowRgba[i * 4 + 3] = 0.85;
-      this._glowSizes[i] = 1.0;
+      this._glowSizes[i] = 1.0 * 0.8; // ponytail: 新节点 deg=0, baseScale=0.8; _rebuildEdgeData 后不回填, 跟 core 对齐足够
       // Shared anim attrs (write once — both geometries share the same arrays)
       (gAttr['phase'].array as Float32Array)[i] = Math.random() * Math.PI * 2;
       (gAttr['speed'].array as Float32Array)[i] = 0.5 + Math.random() * 2.5;
@@ -3228,7 +3230,7 @@ export class StarGraph {
         (g2Attr['position'].array as Float32Array)[i * 3 + 2] = pz;
         this._glow2Rgba[i * 4] = gc.r; this._glow2Rgba[i * 4 + 1] = gc.g;
         this._glow2Rgba[i * 4 + 2] = gc.b; this._glow2Rgba[i * 4 + 3] = 0.55;
-        this._glow2Sizes[i] = 0.8;
+        this._glow2Sizes[i] = 0.8 * 0.8; // ponytail: 同 inner glow, baseScale=0.8
       }
 
       if (cid) this.nodeCommMap.set(i, cid);
@@ -3533,12 +3535,14 @@ export class StarGraph {
       }
     }
     // Internal edges for this galaxy only
+    // ponytail: 用 memberIndices Set 判断归属, 不依赖 nodeCommMap 层级 —
+    // 之前 nodeCommMap 存 level1 而 galaxyId 是 level0 → 永远不匹配 → 内部边全被过滤
     const pos = this.nodePositions;
     const verts: number[] = [], colors: number[] = [];
+    const memberSet = new Set(gm.memberIndices);
     for (let ei = 0; ei < this.edgeDataList.length; ei++) {
       const { s, t } = this.edgeDataList[ei];
-      const sc = this.nodeCommMap.get(s), tc = this.nodeCommMap.get(t);
-      if (!sc || sc !== galaxyId || tc !== galaxyId) continue;
+      if (!memberSet.has(s) || !memberSet.has(t)) continue;
       verts.push(pos[s * 3], pos[s * 3 + 1], pos[s * 3 + 2], pos[t * 3], pos[t * 3 + 1], pos[t * 3 + 2]);
       colors.push(cc.r, cc.g, cc.b, cc.r, cc.g, cc.b);
     }
@@ -4293,9 +4297,11 @@ export class StarGraph {
       console.log(`[DEBUG] Level 1 communities:`, level1Comms.map(c => ({ id: c.id, parent_id: c.parent_id, node_count: c.node_ids.length })));
     }
 
-    // Use the most granular community level for layout (prefer Level 1 over Level 0)
-    // Level 1 = finer sub-modules → better spatial separation for the star map
-    const layoutComms = level1Comms.length > level0Comms.length ? level1Comms : level0Comms;
+    // ponytail: layout + galaxyMeta 都用 level0 — 质心/ring/cloud/折叠视图统一层级,
+    // 否则 level1 子盘被 spiralGalaxies+repelCommunityCentroids 推开后, level0 质心
+    // 落在子盘空隙里 → 视觉上"飞出社区". level1 子结构在 fold view 进入 galaxy 后
+    // 由 _showConstellation 的子社区高亮体现.
+    const layoutComms = level0Comms;
     for (const comm of layoutComms) {
       for (const nid of comm.node_ids) {
         const idx = nodeIdx.get(nid);
@@ -4779,9 +4785,9 @@ export class StarGraph {
         this._glow2Rgba[i * 4 + 1] = gc.g;
         this._glow2Rgba[i * 4 + 2] = gc.b;
         this._glow2Rgba[i * 4 + 3] = 0.55;
-        this._glow2Sizes[i] = 0.8; // base outer glow size, twinkle modulates
-      }
-      this._glowSizes[i] = 1.0; // base inner glow size, twinkle modulates
+      this._glow2Sizes[i] = 0.8 * baseScale; // outer glow scales with degree — matches core
+    }
+    this._glowSizes[i] = 1.0 * baseScale; // inner glow scales with degree — matches core
     }
 
     // Pre-compute _nodeMag cache (ponytail: log1p ratio is static, avoid per-frame recalc)
