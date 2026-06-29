@@ -269,3 +269,54 @@ pub async fn lsp_stop(session_id: u32) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::detect_lsp;
+
+    #[test]
+    fn test_all_registered_languages_have_lsp() {
+        let langs = [
+            "python", "rust", "go", "typescript", "javascript",
+            "java", "c", "cpp", "csharp", "ruby", "lua", "php",
+            "swift", "dart", "haskell", "elixir", "erlang", "zig",
+            "bash", "shell", "html", "css", "scss", "less",
+            "yaml", "yml", "scala", "r", "nix", "ocaml",
+        ];
+        for lang in &langs {
+            assert!(
+                detect_lsp(lang).is_some(),
+                "LSP should be configured for: {}", lang
+            );
+        }
+    }
+
+    #[test]
+    fn test_unsupported_language_returns_none() {
+        assert!(detect_lsp("markdown").is_none());
+        assert!(detect_lsp("json").is_none());
+        assert!(detect_lsp("plaintext").is_none());
+        assert!(detect_lsp("nonsense").is_none());
+    }
+
+    #[test]
+    fn test_python_lsp_has_expected_command() {
+        let (cmd, args) = detect_lsp("python").unwrap();
+        assert_eq!(cmd, "pyright-langserver");
+        assert!(args.contains(&"--stdio"));
+    }
+
+    #[test]
+    fn test_rust_lsp_has_expected_command() {
+        let (cmd, args) = detect_lsp("rust").unwrap();
+        assert_eq!(cmd, "rust-analyzer");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_and_javascript_share_lsp() {
+        let (ts_cmd, _) = detect_lsp("typescript").unwrap();
+        let (js_cmd, _) = detect_lsp("javascript").unwrap();
+        assert_eq!(ts_cmd, js_cmd);
+    }
+}
