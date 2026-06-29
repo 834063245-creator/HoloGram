@@ -579,20 +579,69 @@ export class ChatPanel {
       toggleBtn.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
     }
   }
-  // ponytail: expandToInput and summonPanel share the same animation, only mode + class differ
+  // Expand: pill → input/panel (full morph) or input → panel (height only)
   private morphToMode(mode: 'input' | 'panel', cls: string): void {
     if (this._animating) return;
+    const prevMode = this.mode;  // capture before overwriting
     this.mode = mode;
     this.killPanelTweens();
+
+    const fromH = this.panel.offsetHeight;
+
     this.removeAllPanelClasses();
     this.panel.classList.add(cls);
     this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
     this.updateFooter();
 
-    gsap.to(this.panel, { width: 560, borderRadius: 0, duration: 0.35, ease: 'power2.out' });
-    this.fadeContentIn();
+    if (prevMode === 'pill') {
+      // ── Pill → Input/Panel: full radial expand ──
+      this.panel.style.width = '560px';
+      this.panel.style.borderRadius = '0';
+      this.panel.style.height = 'auto';
+      const toH = this.panel.offsetHeight;
+      // Reset to pill dimensions for animation start (sync — no paint between set+read)
+      this.panel.style.width = '48px';
+      this.panel.style.height = fromH + 'px';
+      this.panel.style.borderRadius = '50%';
 
-    setTimeout(() => this.inputArea.focus(), 350);
+      gsap.to(this.panel, {
+        width: 560, height: toH, borderRadius: 0,
+        duration: 0.38, ease: 'power2.out',
+        onComplete: () => { this.panel.style.height = ''; },
+      });
+      this.fadeContentIn(0.2, 0.22);
+
+      // Handle — elastic stretch-in
+      const hi = this.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
+      gsap.fromTo(hi,
+        { scaleX: 0, transformOrigin: 'center center' },
+        { scaleX: 1, duration: 0.5, delay: 0.24, ease: 'elastic.out(1, 0.4)' },
+      );
+    } else {
+      // ── Input → Panel: already at 560px, animate height only ──
+      this.panel.style.width = '560px';
+      this.panel.style.borderRadius = '0';
+      this.panel.style.height = fromH + 'px';
+      // Measure natural target height
+      this.panel.style.height = 'auto';
+      const toH = this.panel.offsetHeight;
+      this.panel.style.height = fromH + 'px';
+
+      gsap.to(this.panel, {
+        height: toH, duration: 0.3, ease: 'power2.out',
+        onComplete: () => { this.panel.style.height = ''; },
+      });
+      this.fadeContentIn(0.1, 0.18);
+
+      // Handle — quick pulse (already visible)
+      const hi = this.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
+      gsap.to(hi, {
+        scaleX: 1.15, duration: 0.1, ease: 'power2.out', transformOrigin: 'center center',
+        onComplete: () => gsap.to(hi, { scaleX: 1, duration: 0.25, ease: 'elastic.out(1, 0.5)' }),
+      });
+    }
+
+    setTimeout(() => this.inputArea.focus(), 380);
     shell.notifyPanelChanged();
   }
 
@@ -609,37 +658,52 @@ export class ChatPanel {
     this.scrollBottom();
   }
 
-  /** Panel/HUD → Input: collapse card, keep floating input bar */
+  /** Panel/HUD → Input: collapse card to floating input bar */
   private collapseToInput(): void {
     if (this._animating) return;
     this.killPanelTweens();
     const c = this.contentEls();
-    // Snapshot target opacities BEFORE the fade-out, while inline styles are clean
-    // (panel mode has no opacity tweens running, so computed === CSS)
     const targets = this.snapshotContentOpacities();
+    const fromH = this.panel.offsetHeight;
 
-    // Restore panel from any HUD transform (scale/y/opacity) before morphing
-    gsap.to(this.panel, { scale: 1, y: 0, opacity: 1, duration: 0.15, ease: 'power2.out' });
+    // Restore panel from any HUD transform
+    gsap.to(this.panel, { scale: 1, y: 0, opacity: 1, duration: 0.1, ease: 'power2.out' });
 
+    // Content out → class switch → height down + content in (all overlapped)
     gsap.to(c, {
-      opacity: 0, duration: 0.15, ease: 'power2.in',
+      opacity: 0, duration: 0.1, ease: 'power2.in',
       onComplete: () => {
         this.mode = 'input';
         this.removeAllPanelClasses();
         this.panel.classList.add('chat-input-mode');
         this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
-        // Clean up GSAP inline transform/opacity so CSS takes over
         gsap.set(this.panel, { clearProps: 'scale,y,opacity' });
-        // Now fade in from 0 → target opacities captured before the fade-out
+
+        // Measure target input-bar height then lock back to panel height
+        this.panel.style.width = '560px';
+        this.panel.style.borderRadius = '0';
+        this.panel.style.height = 'auto';
+        const toH = this.panel.offsetHeight;
+        this.panel.style.height = fromH + 'px';
+
+        // Height + content animate together, snappy ease
+        gsap.to(this.panel, {
+          height: toH, duration: 0.24, ease: 'power3.out',
+          onComplete: () => { this.panel.style.height = ''; },
+        });
         gsap.fromTo(c,
           { opacity: 0 },
-          { opacity: (i) => targets[i], duration: 0.15, ease: 'power2.out' },
+          { opacity: (i) => targets[i], duration: 0.16, ease: 'power2.out' },
+        );
+
+        const hi = this.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
+        gsap.fromTo(hi,
+          { scaleX: 0, transformOrigin: 'center center' },
+          { scaleX: 1, duration: 0.35, delay: 0.08, ease: 'elastic.out(1, 0.5)' },
         );
       },
     });
 
-    // Don't abort when collapsing — keep agent working in background.
-    // Pill shows a pulsing indicator while running.
     if (this.running) this.panel.classList.add('chat-pill-running');
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
@@ -648,30 +712,38 @@ export class ChatPanel {
     shell.notifyPanelChanged();
   }
 
-  /** Input → Pill: collapse to 44px star circle — works from HUD too */
+  /** Input → Pill: collapse to 48px star circle */
   private collapseToPill(): void {
     if (this._animating) return;
     this.killPanelTweens();
     const c = this.contentEls();
 
-    // Restore panel to full presence before shrinking to pill
-    gsap.to(this.panel, { scale: 1, y: 0, opacity: 1, duration: 0.15, ease: 'power2.in' });
+    // Handle snaps shut instantly
+    const hi = this.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
+    gsap.to(hi, { scaleX: 0, duration: 0.05, ease: 'power2.in', transformOrigin: 'center center' });
 
-    gsap.to(c, {
-      opacity: 0, duration: 0.15, ease: 'power2.in',
+    // Restore panel to full presence
+    gsap.to(this.panel, { scale: 1, y: 0, opacity: 1, duration: 0.1, ease: 'power2.in' });
+
+    // Content fades AND panel shrinks simultaneously — no stagger, no dead zone
+    gsap.to(c, { opacity: 0, duration: 0.18, ease: 'power2.in' });
+
+    gsap.to(this.panel, {
+      width: 48, height: 48, borderRadius: '50%',
+      duration: 0.3, ease: 'power3.in',
       onComplete: () => {
         this.mode = 'pill';
         this.removeAllPanelClasses();
         this.panel.classList.add('chat-pill');
         if (this.running) this.panel.classList.add('chat-pill-running');
-        this.panel.style.maxHeight = ''; this.panel.style.minHeight = '';
+        this.panel.style.maxHeight = '';
+        this.panel.style.minHeight = '';
+        this.panel.style.height = '';
         gsap.set(c, { clearProps: 'opacity' });
         gsap.set(this.panel, { clearProps: 'scale,y,opacity' });
       },
     });
-    gsap.to(this.panel, { width: 44, borderRadius: '50%', duration: 0.35, ease: 'power2.in', delay: 0.15 });
 
-    // Don't abort — keep running in background.
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
@@ -1714,16 +1786,29 @@ export class ChatPanel {
     this.footerEl.className = 'chat-footer';
     this.panel.appendChild(this.footerEl);
 
-    // ── Pill star — four-pointed lens flare, lives inside the panel ──
+    // ── Pill core — crystalline geometric mark ──
     const pillStar = document.createElement('div');
     pillStar.className = 'chat-pill-star';
     const starSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     starSvg.setAttribute('viewBox', '0 0 32 32');
-    starSvg.setAttribute('width', '16');
-    starSvg.setAttribute('height', '16');
-    starSvg.innerHTML = '<path d="M16 1.5 L17.5 13.5 L31 15 L17.5 16.5 L16 28.5 L14.5 16.5 L1 15 L14.5 13.5 Z" fill="currentColor"/>';
+    starSvg.setAttribute('width', '18');
+    starSvg.setAttribute('height', '18');
+    starSvg.innerHTML = [
+      '<circle cx="16" cy="16" r="2.5" fill="currentColor"/>',
+      '<polygon points="16,5 25.5,10.5 25.5,21.5 16,27 6.5,21.5 6.5,10.5" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.55"/>',
+      '<polygon points="16,2 30,16 16,30 2,16" fill="none" stroke="currentColor" stroke-width="0.5" opacity="0.28"/>',
+      '<polygon points="16,8 24,16 16,24 8,16" fill="none" stroke="currentColor" stroke-width="0.6" opacity="0.4"/>',
+    ].join('');
     pillStar.appendChild(starSvg);
     this.panel.appendChild(pillStar);
+
+    // ── Inner tracking ring — dashed orbit with tracer dot ──
+    const innerRing = document.createElement('div');
+    innerRing.className = 'chat-pill-inner-ring';
+    const orbitDot = document.createElement('div');
+    orbitDot.className = 'chat-pill-orbit-dot';
+    innerRing.appendChild(orbitDot);
+    this.panel.appendChild(innerRing);
 
     this.container.appendChild(this.panel);
     // Ensure initial mode class matches this.mode = 'pill'
