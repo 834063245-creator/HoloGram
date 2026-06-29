@@ -26,6 +26,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use hologram_engine::engine as engine_api;
+use hologram_engine::graph::Graph;
 
 use crate::permissions::PermissionContext;
 
@@ -140,6 +141,9 @@ impl WorkspaceHandle {
                 let changed = std::mem::take(&mut pending_changed);
                 last_change_at = None;
 
+                // ponytail: snapshot old graph before re-analysis so we can diff
+                let before_graph = engine_api::engine_read_graph(|g| g.clone()).ok();
+
                 if let Some(_json) = run_engine_analysis(&path, &changed) {
                     last_mtimes = current_mtimes;
                     consecutive_failures = 0;
@@ -148,11 +152,17 @@ impl WorkspaceHandle {
                         *last = changed.clone();
                     }
 
-                    let summary = serde_json::json!({
+                    // ponytail: compute diff between old and new graph for incremental update
+                    let diff_json = compute_watcher_diff(before_graph.as_ref());
+
+                    let mut summary = serde_json::json!({
                         "total_nodes": 0,
                         "node_count": 0,
                         "meta": { "source_root": &path }
                     });
+                    if let Some(d) = &diff_json {
+                        summary["diff"] = d.clone();
+                    }
                     if let Err(e) = app_handle.emit("graph-updated", summary.to_string()) {
                         eprintln!("[hologram] emit graph-updated failed: {e}");
                     }
@@ -254,4 +264,39 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
             None
         }
     }
+}
+
+/// Compute diff between previous graph and current engine graph for incremental update.
+/// Returns None if no previous graph or engine read fails.
+fn compute_watcher_diff(before: Option<&Graph>) -> Option<serde_json::Value> {
+    let before = before?;
+    let after = engine_api::engine_read_graph(|g| g.clone()).ok()?;
+    let d = before.diff(&after);
+    let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| serde_json::json!({
+        "id": n.id, "name": n.name, "type": n.kind.as_str(),
+        "location": n.location, "in_degree": n.in_degree, "out_degree": n.out_degree,
+        "community_id": n.community_id,
+    })).collect();
+    let removed_nodes: Vec<_> = d.removed_nodes.iter().map(|n| serde_json::json!({
+        "id": n.id, "name": n.name, "type": n.kind.as_str(),
+    })).collect();
+    let modified_nodes: Vec<_> = d.modified_nodes.iter().map(|(old, new)| serde_json::json!({
+        "node_id": new.id, "name": new.name,
+        "old_kind": old.kind.as_str(), "new_kind": new.kind.as_str(),
+    })).collect();
+    let added_edges: Vec<_> = d.added_edges.iter().map(|e| serde_json::json!({
+        "id": e.id, "source": e.source, "target": e.target,
+        "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+        "cross_file": e.cross_file,
+    })).collect();
+    let removed_edges: Vec<_> = d.removed_edges.iter().map(|e| serde_json::json!({
+        "id": e.id, "source": e.source, "target": e.target,
+    })).collect();
+    Some(serde_json::json!({
+        "added_nodes": added_nodes,
+        "removed_nodes": removed_nodes,
+        "modified_nodes": modified_nodes,
+        "added_edges": added_edges,
+        "removed_edges": removed_edges,
+    }))
 }

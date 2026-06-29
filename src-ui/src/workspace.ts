@@ -220,7 +220,7 @@ export class Workspace {
                 const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
                 ws.fileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
               } catch { /* file graph may not exist yet */ }
-              ws.doGraphUpdate(starGraph, checkPanel);
+              ws.doGraphUpdate(starGraph, checkPanel, summary.diff);
               bus.emit('timeline:refresh');
             } catch { /* get_full_graph failed */ }
           }
@@ -519,15 +519,28 @@ export class Workspace {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // doGraphUpdate — handle incremental graph update from watcher
+  // doGraphUpdate — handle graph update from watcher (incremental if diff available)
   // ═══════════════════════════════════════════════════════════════
 
-  doGraphUpdate(starGraph: StarGraph, checkPanel: CheckPanel): void {
+  doGraphUpdate(starGraph: StarGraph, checkPanel: CheckPanel, diff?: any): void {
     if (!this.graphData) return;
     const nodeCount = Array.isArray(this.graphData.nodes) ? this.graphData.nodes.length : Object.keys(this.graphData.nodes || {}).length;
-    starGraph.render(this.graphData);
-    this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
-    if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
+    // ponytail: incremental path — no clearGraph, no layout recalc, no camera reset
+    if (diff && starGraph.hasGraph) {
+      try {
+        starGraph.applyGraphDiff(diff, this.graphData);
+        this.onStatusChange?.(`已增量更新 (${nodeCount} 节点)`);
+      } catch (e) {
+        console.error('[doGraphUpdate] incremental failed, falling back to full render:', e);
+        starGraph.render(this.graphData);
+        this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
+        if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
+      }
+    } else {
+      starGraph.render(this.graphData);
+      this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
+      if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
+    }
     this.runCheck(checkPanel);
   }
 }
