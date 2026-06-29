@@ -13,7 +13,7 @@ import type {
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import { ToolRegistry } from './tool';
 import type { Tool } from './tool';
-import type { PermissionGate } from './permission';
+// ponytail: PermissionGate removed — rules evaluated in Rust has_permission_to_use_tool()
 import type { HookRegistry } from './hooks';
 import { bus } from '../ui/events';
 import { log } from './logger';
@@ -85,8 +85,7 @@ export interface AgentOptions {
   compactRatio?: number;
   /** Minimum recent messages kept verbatim */
   recentKeep?: number;
-  /** Permission gate for tool execution (nil = allow all) */
-  gate?: PermissionGate;
+  // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
 const DEFAULT_MAX_STEPS = 50;
@@ -141,9 +140,6 @@ export class Agent {
   private recentKeep: number;
   private compactStuck = false;
 
-  // Permission gate (optional — nil means allow all)
-  private gate: PermissionGate | null = null;
-
   // PreToolUse hooks — enrich tool results with graph context
   private hooks: HookRegistry | null = null;
 
@@ -176,7 +172,6 @@ export class Agent {
     this.contextWindow = opts.contextWindow ?? 1000000; // 1M tokens default — covers all current models, triggers compaction only when truly needed
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
-    this.gate = opts.gate || null;
     this.sink = sink;
 
     this.session = [];
@@ -523,21 +518,11 @@ export class Agent {
     let result: string;
     let errMsg = '';
     try {
-      // 中止信号优先检查（必须在权限门前，防止弹窗死锁）
+      // 中止信号优先检查
       if (signal.aborted) throw new Error('aborted');
 
-      // ── Permission gate ──
-      if (this.gate) {
-        const check = await this.gate.check(call.name, t.description(), args, t.readOnly());
-        if (!check.allow) {
-          return {
-            output: check.reason || 'permission denied',
-            errMsg: check.reason,
-            blocked: true,
-            truncated: false,
-          };
-        }
-      }
+      // ponytail: permission check moved to Rust has_permission_to_use_tool()
+      // Agent calls invoke() → Tauri command → check_permission() → execute or deny
       bus.emit('agent:tool-started', { toolName: call.name, args });
       bus.emit('agent:progress', {
         step: 0, // tool execution phase — step=0 means "in tool"

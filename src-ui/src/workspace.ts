@@ -17,7 +17,7 @@ import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent } from './agent/agent';
 import { ToolRegistry, createHologramTools, createCodingTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
-import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
+import { showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
@@ -405,24 +405,11 @@ export class Workspace {
     const maxSteps = mode.maxSteps;
     const contextWindow = agentOpts.contextWindow ?? 0;
 
-    // Permission gate
-    const defaultMode = settings.permissions?.defaultMode || 'ask';
-    const perm = new PermissionPolicy(defaultMode);
-    if (settings.permissions) perm.importRules(settings.permissions);
-    const gate = new PermissionGate(perm, (toolName, desc, args) =>
-      showApprovalDialog(toolName, desc, args),
-    );
-    gate.onRemember = (rule: string) => {
-      const s = loadSettings();
-      const rules = s.permissions || { allow: [], deny: [] };
-      if (!rules.allow) rules.allow = [];
-      if (!rules.allow.includes(rule)) rules.allow.push(rule);
-      s.permissions = rules;
-      saveSettings(s);
-    };
+    // ponytail: permission rules now evaluated in Rust has_permission_to_use_tool()
+    // Dialog rendering still uses showApprovalDialog via permission-ask event → main.ts bridge
 
     this.agent = new Agent(prov, registry, systemPrompt, {
-      pricing, temperature, maxSteps, contextWindow, gate,
+      pricing, temperature, maxSteps, contextWindow,
     }, chatPanel.sink);
 
     // Sub-agent tool
@@ -481,15 +468,10 @@ export class Workspace {
         if (mm) {
           try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }
         }
-        const gate2 = new PermissionGate(perm, (toolName, desc, args) =>
-          showApprovalDialog(toolName, desc, args),
-        );
-        gate2.onRemember = gate.onRemember;
         const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection), {
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature, maxSteps: s.agent?.maxSteps,
           contextWindow: s.agent?.contextWindow,
-          gate: gate2,
         }, chatPanel.sink);
         if (hookCtx) {
           const hooks = new HookRegistry();
