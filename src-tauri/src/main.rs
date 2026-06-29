@@ -414,6 +414,7 @@ async fn workspace_start_watcher(
 use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::graph::Graph;
+use engine::graph::{Node, NodeKind, Edge, EdgeKind};
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
 use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
@@ -767,16 +768,7 @@ async fn hologram_diff(before_path: String, _after_path: Option<String>, state: 
     tokio::task::spawn_blocking(move || {
         with_graph(move |current| {
             match Graph::from_json_file(&bp) {
-                Ok(before) => {
-                    let diff = before.diff(current);
-                    serde_json::json!({
-                        "is_empty": diff.added_nodes.is_empty() && diff.removed_nodes.is_empty(),
-                        "added_nodes": diff.added_nodes.len(),
-                        "removed_nodes": diff.removed_nodes.len(),
-                        "added_edges": diff.added_edges.len(),
-                        "removed_edges": diff.removed_edges.len(),
-                    })
-                }
+                Ok(before) => diff_to_json(&before, current),
                 Err(_) => {
                     let graph_json = serde_json::to_string_pretty(current).unwrap_or_default();
                     let _ = std::fs::write(&bp, &graph_json);
@@ -785,6 +777,35 @@ async fn hologram_diff(before_path: String, _after_path: Option<String>, state: 
             }
         })
     }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// Serialize a GraphDiff as JSON with full node/edge objects (not just counts).
+/// Shared by `hologram_diff` command and `compute_watcher_diff` for watcher events.
+/// Regression: this used to return `.len()` integers, which broke the frontend
+/// `showDiff` that expects `{id, name, ...}` objects — status bar always showed
+/// `+0 / -0 / ~0` and `(5).map(...)` threw.
+fn diff_to_json(before: &Graph, after: &Graph) -> serde_json::Value {
+    let d = before.diff(after);
+    let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| serde_json::json!({
+        "id": n.id, "name": n.name, "type": n.kind.as_str(),
+        "location": n.location,
+    })).collect();
+    let removed_nodes: Vec<_> = d.removed_nodes.iter().map(|n| serde_json::json!({
+        "id": n.id, "name": n.name, "type": n.kind.as_str(),
+    })).collect();
+    let modified_nodes: Vec<_> = d.modified_nodes.iter().map(|(old, new)| serde_json::json!({
+        "node_id": new.id, "name": new.name,
+        "old_kind": old.kind.as_str(), "new_kind": new.kind.as_str(),
+    })).collect();
+    let is_empty = added_nodes.is_empty() && removed_nodes.is_empty() && modified_nodes.is_empty();
+    serde_json::json!({
+        "is_empty": is_empty,
+        "added_nodes": added_nodes,
+        "removed_nodes": removed_nodes,
+        "modified_nodes": modified_nodes,
+        "added_edges": d.added_edges.len(),
+        "removed_edges": d.removed_edges.len(),
+    })
 }
 
 #[tauri::command]
@@ -3494,5 +3515,91 @@ mod tests {
         assert!(alpha_file_pos < beta_pos);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── diff_to_json regression tests ──
+    // Bug: hologram_diff used to return `.len()` integers for added_nodes/
+    // removed_nodes/modified_nodes. Frontend showDiff expected `{id, name}`
+    // objects → `(5).map(...)` threw and status bar showed `+0 / -0 / ~0`.
+
+    fn make_graph_with(nodes: &[(&str, &str, NodeKind)], edges: &[(&str, &str, &str, EdgeKind)]) -> Graph {
+        let mut g = Graph::new();
+        for (id, name, kind) in nodes {
+            g.add_node(Node::new(*id, *name, *kind));
+        }
+        for (id, s, t, k) in edges {
+            g.add_edge(Edge::new(*id, *s, *t, *k));
+        }
+        g
+    }
+
+    #[test]
+    fn diff_to_json_returns_node_objects_not_counts() {
+        let before = make_graph_with(&[("a", "old_fn", NodeKind::Function)], &[]);
+        let after = make_graph_with(&[
+            ("a", "old_fn", NodeKind::Function),
+            ("b", "new_fn", NodeKind::Function),
+        ], &[]);
+        let v = diff_to_json(&before, &after);
+        // added_nodes must be an array of objects, not a number
+        let added = v["added_nodes"].as_array().expect("added_nodes must be array");
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0]["id"].as_str(), Some("b"));
+        assert_eq!(added[0]["name"].as_str(), Some("new_fn"));
+        assert_eq!(added[0]["type"].as_str(), Some("function"));
+        assert!(!v["is_empty"].as_bool().unwrap(), "non-empty diff must report is_empty=false");
+    }
+
+    #[test]
+    fn diff_to_json_removed_nodes_are_objects_with_id() {
+        let before = make_graph_with(&[
+            ("a", "keep", NodeKind::Function),
+            ("b", "delete_me", NodeKind::Class),
+        ], &[]);
+        let after = make_graph_with(&[("a", "keep", NodeKind::Function)], &[]);
+        let v = diff_to_json(&before, &after);
+        let removed = v["removed_nodes"].as_array().expect("removed_nodes must be array");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0]["id"].as_str(), Some("b"));
+        assert_eq!(removed[0]["name"].as_str(), Some("delete_me"));
+        assert_eq!(removed[0]["type"].as_str(), Some("class"));
+    }
+
+    #[test]
+    fn diff_to_json_modified_nodes_carry_kind_change() {
+        let before = make_graph_with(&[("a", "x", NodeKind::Function)], &[]);
+        let after = make_graph_with(&[("a", "x", NodeKind::Class)], &[]);
+        let v = diff_to_json(&before, &after);
+        let modified = v["modified_nodes"].as_array().expect("modified_nodes must be array");
+        assert_eq!(modified.len(), 1);
+        assert_eq!(modified[0]["node_id"].as_str(), Some("a"));
+        assert_eq!(modified[0]["old_kind"].as_str(), Some("function"));
+        assert_eq!(modified[0]["new_kind"].as_str(), Some("class"));
+    }
+
+    #[test]
+    fn diff_to_json_empty_diff_reports_is_empty() {
+        let g = make_graph_with(&[("a", "x", NodeKind::Function)], &[]);
+        let v = diff_to_json(&g, &g);
+        assert!(v["is_empty"].as_bool().unwrap());
+        assert_eq!(v["added_nodes"].as_array().unwrap().len(), 0);
+        assert_eq!(v["removed_nodes"].as_array().unwrap().len(), 0);
+        assert_eq!(v["modified_nodes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn diff_to_json_edge_counts_are_numbers() {
+        let before = make_graph_with(&[
+            ("a", "fn_a", NodeKind::Function),
+            ("b", "fn_b", NodeKind::Function),
+        ], &[]);
+        let after = make_graph_with(&[
+            ("a", "fn_a", NodeKind::Function),
+            ("b", "fn_b", NodeKind::Function),
+        ], &[("e1", "a", "b", EdgeKind::Calls)]);
+        let v = diff_to_json(&before, &after);
+        // edges are counts in the command payload (showDiff only colors nodes)
+        assert_eq!(v["added_edges"].as_u64(), Some(1));
+        assert_eq!(v["removed_edges"].as_u64(), Some(0));
     }
 }
