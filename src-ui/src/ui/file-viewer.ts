@@ -9,6 +9,14 @@ import { invoke } from '../bridge';
 import { iconHtml, iconSvg } from './icons';
 import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
+
+// ponytail: read CSS var once at init; user changes require reload
+function getFontScale(): number {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
+    return parseFloat(v) || 1;
+  } catch { return 1; }
+}
 import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 import { FileTranslator } from './file-translator';
 import { FileTreePanel } from './file-tree';
@@ -141,7 +149,7 @@ export class FileViewer {
     this.header.className = 'fv-titlebar';
     Object.assign(this.header.style, {
       display: 'flex', alignItems: 'center', gap: '6px',
-      height: '30px', padding: '0 6px', flexShrink: '0',
+      minHeight: 'calc(30px * var(--font-scale))', padding: '0 calc(6px * var(--font-scale))', flexShrink: '0',
       cursor: 'move', userSelect: 'none',
       background: 'rgba(14, 22, 38, 0.7)',
       borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.25))',
@@ -152,7 +160,7 @@ export class FileViewer {
     this.breadcrumb.className = 'fv-breadcrumb';
     Object.assign(this.breadcrumb.style, {
       display: 'flex', alignItems: 'center', gap: '2px', flex: '1',
-      overflow: 'hidden', fontSize: '10px', fontFamily: 'var(--font-mono, monospace)',
+      overflow: 'hidden', fontSize: 'calc(10px * var(--font-scale))', fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text-muted)', minWidth: '0',
     });
     this.header.appendChild(this.breadcrumb);
@@ -173,9 +181,9 @@ export class FileViewer {
       btn.innerHTML = iconHtml(icon, 13);
       btn.title = tip;
       Object.assign(btn.style, {
-        width: '22px', height: '22px', padding: '0', border: 'none', cursor: 'pointer',
+        minWidth: 'calc(22px * var(--font-scale))', minHeight: 'calc(22px * var(--font-scale))', padding: '0', border: 'none', cursor: 'pointer',
         background: 'none', color: 'var(--text-muted)', borderRadius: '4px',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(13px * var(--font-scale))',
       });
       btn.addEventListener('mouseenter', () => { btn.style.color = colorVar; btn.style.background = 'rgba(255,255,255,0.05)'; });
       btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-muted)'; btn.style.background = 'none'; });
@@ -305,7 +313,7 @@ export class FileViewer {
       flex: '1', overflow: 'auto', display: 'none',
       padding: '24px 32px',
       color: 'var(--starlight-dim, #c8d6e5)',
-      fontSize: '13px', lineHeight: '1.7',
+      fontSize: 'calc(13px * var(--font-scale))', lineHeight: '1.7',
       fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif)',
     });
 
@@ -319,7 +327,7 @@ export class FileViewer {
       height: '22px', padding: '0 8px', flexShrink: '0',
       background: 'rgba(8, 14, 26, 0.8)',
       borderTop: '1px solid rgba(48, 60, 80, 0.3)',
-      fontSize: '10px', fontFamily: 'var(--font-mono, monospace)',
+      fontSize: 'calc(10px * var(--font-scale))', fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text-muted)',
     });
 
@@ -393,7 +401,7 @@ export class FileViewer {
       theme: 'vs-dark',
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      fontSize: 13,
+      fontSize: Math.round(13 * getFontScale()),
       fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
       lineNumbers: 'on',
       renderWhitespace: 'selection',
@@ -478,7 +486,7 @@ export class FileViewer {
       Object.assign(tabEl.style, {
         display: 'inline-flex', alignItems: 'center', gap: '5px',
         height: '26px', padding: '0 10px', cursor: 'pointer',
-        fontSize: '11px', fontFamily: 'var(--font-mono, monospace)',
+        fontSize: 'calc(11px * var(--font-scale))', fontFamily: 'var(--font-mono, monospace)',
         whiteSpace: 'nowrap', flexShrink: '0', maxWidth: '170px',
         borderTop: isActive ? '2px solid rgba(80, 140, 220, 0.7)' : '2px solid transparent',
         background: isActive ? 'rgba(22, 40, 70, 0.55)' : 'transparent',
@@ -510,7 +518,7 @@ export class FileViewer {
       closeBtn.innerHTML = iconHtml('close', 10);
       Object.assign(closeBtn.style, {
         background: 'none', border: 'none', cursor: 'pointer',
-        color: 'inherit', padding: '0', fontSize: '10px',
+        color: 'inherit', padding: '0', fontSize: 'calc(10px * var(--font-scale))',
         display: 'flex', alignItems: 'center', flexShrink: '0',
         opacity: '0', borderRadius: '2px',
       });
@@ -845,7 +853,7 @@ export class FileViewer {
     if (!this.diffEditor) {
       this.diffEditor = monaco.editor.createDiffEditor(this.diffEditorContainer, {
         theme: 'vs-dark',
-        fontSize: 13,
+        fontSize: Math.round(13 * getFontScale()),
         fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
         readOnly: true,
         automaticLayout: false,

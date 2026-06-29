@@ -583,14 +583,14 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           const hdr = document.createElement('div');
           hdr.textContent = header;
           Object.assign(hdr.style, {
-            fontSize: '10px', color: 'var(--signal, #68a8ff)', marginBottom: '12px',
+            fontSize: 'calc(10px * var(--font-scale))', color: 'var(--signal, #68a8ff)', marginBottom: '12px',
             textTransform: 'uppercase', letterSpacing: '2px', fontWeight: '600',
             fontFamily: 'var(--font-hud, "Orbitron", sans-serif)',
           });
           const q = document.createElement('div');
           q.textContent = question;
           Object.assign(q.style, {
-            fontSize: '14px', marginBottom: '18px', lineHeight: '1.6',
+            fontSize: 'calc(14px * var(--font-scale))', marginBottom: '18px', lineHeight: '1.6',
             color: 'var(--starlight-dim, rgba(195, 218, 248, 0.85))',
           });
           dialog.appendChild(hdr); dialog.appendChild(q);
@@ -612,7 +612,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
             const isSelected = selected.has(idx);
             Object.assign(btn.style, {
               display: 'block', width: '100%', padding: '10px 16px', textAlign: 'left',
-              fontSize: '13px',
+              fontSize: 'calc(13px * var(--font-scale))',
               background: isSelected
                 ? 'rgba(80, 140, 240, 0.12)'
                 : 'rgba(255, 255, 255, 0.03)',
@@ -646,7 +646,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
               const desc = document.createElement('div');
               desc.textContent = opt.description;
               Object.assign(desc.style, {
-                fontSize: '10px', color: 'var(--text-muted, rgba(145, 165, 190, 0.65))',
+                fontSize: 'calc(10px * var(--font-scale))', color: 'var(--text-muted, rgba(145, 165, 190, 0.65))',
                 marginTop: '3px', fontWeight: '400',
               });
               btn.appendChild(desc);
@@ -671,7 +671,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
                   confirmBtn.textContent = '✓ 确认选择';
                   Object.assign(confirmBtn.style, {
                     display: 'block', width: '100%', padding: '9px', marginTop: '8px',
-                    fontSize: '13px', fontWeight: '600',
+                    fontSize: 'calc(13px * var(--font-scale))', fontWeight: '600',
                     background: 'rgba(80, 140, 240, 0.15)',
                     border: '1px solid var(--signal-glow, rgba(80, 140, 240, 0.3))',
                     borderRadius: '8px',

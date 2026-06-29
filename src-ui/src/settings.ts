@@ -39,6 +39,7 @@ export const CHAT_MODES: ChatMode[] = [
 
 interface DisplaySettings {
   language: 'zh' | 'en';
+  fontScale: number;
 }
 
 export interface AppSettings {
@@ -81,6 +82,7 @@ const DEFAULTS: AppSettings = {
   },
   display: {
     language: 'zh',
+    fontScale: 1.0,
   },
 };
 

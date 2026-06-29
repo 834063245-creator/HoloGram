@@ -126,7 +126,7 @@ export class SettingsPanel {
       <div class="sp-content">
         ${this.renderProviderTab(active)}
         ${this.renderAgentTab(s.agent)}
-        ${this.renderDisplayTab(s.display.language)}
+        ${this.renderDisplayTab(s.display.language, s.display.fontScale)}
       </div>
 
       <!-- Footer -->
@@ -250,7 +250,7 @@ export class SettingsPanel {
       </div>`;
   }
 
-  private renderDisplayTab(language: string): string {
+  private renderDisplayTab(language: string, fontScale: number): string {
     const langOpts = [
       { id: 'zh', label: '中文' },
       { id: 'en', label: 'English' },
@@ -264,6 +264,7 @@ export class SettingsPanel {
       </label>`;
     }
 
+    const fs = fontScale;
     return `
       <div class="sp-tab-content" data-tab="display" style="${this.activeTab === 'display' ? '' : 'display:none'}">
         <div class="sp-section">
@@ -272,6 +273,17 @@ export class SettingsPanel {
         </div>
         <div class="sp-hint">
           图例、聚焦横幅、工具栏提示的语言。其他界面不受影响。
+        </div>
+        <div class="sp-section" style="margin-top:18px">
+          <div class="sp-section-title">字体缩放 / Font Scale</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="range" name="fontScale" min="0.8" max="2.0" step="0.05" value="${fs}"
+              style="flex:1;height:4px;accent-color:var(--signal)">
+            <span class="sp-fs-value" style="font-family:var(--font-mono);font-size: calc(11px * var(--font-scale));color:var(--signal);min-width:40px;text-align:right">${fs}x</span>
+          </div>
+        </div>
+        <div class="sp-hint">
+          缩放所有界面文字。更改后保存即生效（Terminal / 编辑器需重新打开文件）。
         </div>
       </div>`;
   }
@@ -286,6 +298,16 @@ export class SettingsPanel {
       el.addEventListener('input', () => { this.dirty = true; });
       el.addEventListener('change', () => { this.dirty = true; });
     });
+    // Font scale live preview
+    const fsSlider = this.panel.querySelector('input[name="fontScale"]') as HTMLInputElement;
+    const fsValue = this.panel.querySelector('.sp-fs-value') as HTMLElement;
+    if (fsSlider && fsValue) {
+      fsSlider.addEventListener('input', () => {
+        const v = parseFloat(fsSlider.value).toFixed(2);
+        fsValue.textContent = v + 'x';
+        document.documentElement.style.setProperty('--font-scale', v);
+      });
+    }
 
     // Tab switching
     this.panel.querySelectorAll('.sp-tab').forEach((tab) => {
@@ -415,6 +437,10 @@ export class SettingsPanel {
     const langEl = this.panel.querySelector('input[name="language"]:checked') as HTMLInputElement;
     if (langEl) {
       s.display.language = langEl.value as Lang;
+    }
+    const fsEl = this.panel.querySelector('input[name="fontScale"]') as HTMLInputElement;
+    if (fsEl) {
+      s.display.fontScale = parseFloat(fsEl.value) || 1.0;
     }
 
     // Save to localStorage
