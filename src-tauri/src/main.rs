@@ -3397,4 +3397,102 @@ mod tests {
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // ── list_dir_flat tests ──
+
+    #[test]
+    fn list_dir_flat_returns_one_level() {
+        let tmp = std::env::temp_dir().join("hologram_test_flat");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        std::fs::write(tmp.join("a.py"), "x=1").unwrap();
+        std::fs::write(tmp.join("b.rs"), "fn main(){}").unwrap();
+        std::fs::write(tmp.join("sub").join("c.py"), "y=2").unwrap();
+
+        let entries = list_dir_flat(&tmp);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        // Only direct children, not c.py inside sub/
+        assert!(names.contains(&"a.py"));
+        assert!(names.contains(&"b.rs"));
+        assert!(names.contains(&"sub"));
+        assert!(!names.contains(&"c.py"), "c.py is in sub/, should not appear at top level");
+
+        // All children must be null (no recursive loading)
+        for e in &entries {
+            assert!(e.children.is_none(), "children must be None for flat listing");
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn list_dir_flat_skips_hidden_and_vcs() {
+        let tmp = std::env::temp_dir().join("hologram_test_flat_skip");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("main.py"), "x=1").unwrap();
+        std::fs::write(tmp.join(".hidden"), "secret").unwrap();
+        std::fs::create_dir_all(tmp.join(".git")).unwrap();
+        std::fs::write(tmp.join(".git").join("config"), "git").unwrap();
+        std::fs::create_dir_all(tmp.join("node_modules")).unwrap();
+        std::fs::write(tmp.join("node_modules").join("lib.js"), "js").unwrap();
+
+        let entries = list_dir_flat(&tmp);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert!(names.contains(&"main.py"));
+        assert!(!names.contains(&".hidden"), "dotfiles should be skipped");
+        assert!(!names.contains(&".git"), ".git should be skipped");
+        assert!(!names.contains(&"node_modules"), "node_modules should be skipped");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn list_dir_flat_keeps_allowed_dotfiles() {
+        let tmp = std::env::temp_dir().join("hologram_test_flat_dotfiles");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(tmp.join(".gitignore"), "*.log").unwrap();
+        std::fs::write(tmp.join(".editorconfig"), "root=true").unwrap();
+
+        let entries = list_dir_flat(&tmp);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert!(names.contains(&".env"), ".env should be included");
+        assert!(names.contains(&".gitignore"), ".gitignore should be included");
+        assert!(names.contains(&".editorconfig"), ".editorconfig should be included");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn list_dir_flat_dirs_first_then_alpha() {
+        let tmp = std::env::temp_dir().join("hologram_test_flat_sort");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("zebra")).unwrap();
+        std::fs::create_dir_all(tmp.join("alpha_dir")).unwrap();
+        std::fs::write(tmp.join("beta.py"), "").unwrap();
+        std::fs::write(tmp.join("alpha.py"), "").unwrap();
+
+        let entries = list_dir_flat(&tmp);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        // Directories first
+        let alpha_dir_pos = names.iter().position(|n| *n == "alpha_dir").unwrap();
+        let zebra_pos = names.iter().position(|n| *n == "zebra").unwrap();
+        let alpha_file_pos = names.iter().position(|n| *n == "alpha.py").unwrap();
+        let beta_pos = names.iter().position(|n| *n == "beta.py").unwrap();
+
+        assert!(alpha_dir_pos < alpha_file_pos, "dirs should come before files");
+        assert!(zebra_pos < alpha_file_pos, "dirs should come before files");
+        // Within dirs: alpha_dir < zebra (case-insensitive)
+        assert!(alpha_dir_pos < zebra_pos);
+        // Within files: alpha.py < beta.py
+        assert!(alpha_file_pos < beta_pos);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
