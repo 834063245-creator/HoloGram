@@ -794,33 +794,36 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       CHAT PANEL — single element morphs: pill → input → panel → hud
+       CHAT PANEL — Command Core Pill → Input → Panel → HUD
        ═══════════════════════════════════════════════════════════════ */
     #chat-panel {
       position: fixed;
       bottom: 100px; left: 50%;
       transform: translateX(-50%);
-      width: 44px; max-height: 55vh;
+      width: 48px; max-height: 55vh;
       background: var(--panel-bg);
       backdrop-filter: blur(20px) saturate(0.6);
       -webkit-backdrop-filter: blur(20px) saturate(0.6);
-      border: 1px solid var(--panel-edge);
+      border: 1px solid rgba(70, 110, 180, 0.36);
       border-radius: 50%;
       z-index: 50;
       display: flex; flex-direction: column;
       opacity: 1; pointer-events: auto;
-      /* morphing animated by GSAP — no CSS transition */
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 0 22px rgba(60, 100, 180, 0.1);
     }
 
-    /* ── Pill state (default) — 44px circle, only star visible ── */
+    /* ── Pill state — 48px crystalline orb ── */
     #chat-panel.chat-pill {
-      width: 44px; border-radius: 50%; max-height: none;
+      width: 48px; border-radius: 50%; max-height: none;
       cursor: pointer;
+      background: rgba(6, 16, 38, 0.94);
+      transition: transform var(--glide), border-color var(--glide), box-shadow var(--glide), background var(--glide);
     }
     #chat-panel.chat-pill:hover {
-      border-color: rgba(80, 140, 240, 0.5);
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 0 32px rgba(80, 140, 240, 0.28);
+      border-color: rgba(180, 220, 255, 0.6);
+      box-shadow: 0 4px 32px rgba(0,0,0,0.4), 0 0 62px rgba(140, 200, 255, 0.5);
+      transform: translateX(-50%) scale(1.07);
+      background: rgba(8, 20, 44, 0.94);
     }
     #chat-panel.chat-pill .chat-header,
     #chat-panel.chat-pill .chat-messages,
@@ -833,67 +836,128 @@
     #chat-panel.chat-pill .chat-panel-tabs,
     #chat-panel.chat-pill .chat-tab-content { display: none; }
 
-    /* ── Pill star icon ── */
+    /* ── Orbital ring (::before) — outer rotating track ── */
+    #chat-panel::before {
+      content: ''; position: absolute; inset: -8px; border-radius: 50%;
+      border: 1px solid rgba(70, 120, 200, 0.2);
+      animation: pill-orbit 10s linear infinite;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity var(--glide), border-color var(--glide);
+    }
+    #chat-panel.chat-pill::before { opacity: 1; }
+    #chat-panel.chat-pill:hover::before {
+      border-color: rgba(160, 210, 255, 0.5);
+      animation-duration: 4.5s;
+    }
+
+    /* ── Ambient aura (::after) — breathing halo ── */
+    #chat-panel::after {
+      content: ''; position: absolute; inset: -18px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(80,140,240,0.09) 0%, transparent 62%);
+      animation: pill-breathe 3.5s ease-in-out infinite;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity var(--glide);
+    }
+    #chat-panel.chat-pill::after { opacity: 1; }
+    #chat-panel.chat-pill:hover::after {
+      background: radial-gradient(circle, rgba(140,200,255,0.14) 0%, transparent 62%);
+    }
+
+    /* ── Inner tracking ring — dashed orbit with tracer dot ── */
+    .chat-pill-inner-ring {
+      position: absolute; inset: 4px; border-radius: 50%;
+      border: 1px dashed rgba(80, 140, 240, 0.22);
+      animation: pill-inner-spin 14s linear infinite;
+      pointer-events: none; opacity: 0;
+      transition: opacity var(--glide), border-color var(--glide);
+    }
+    #chat-panel.chat-pill .chat-pill-inner-ring { opacity: 1; }
+    #chat-panel.chat-pill:hover .chat-pill-inner-ring {
+      border-color: rgba(160, 210, 255, 0.4);
+    }
+    .chat-pill-orbit-dot {
+      position: absolute; top: -2.5px; left: calc(50% - 2.5px);
+      width: 5px; height: 5px;
+      background: var(--signal-bright);
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(100, 160, 240, 0.6);
+      transition: background var(--glide), box-shadow var(--glide);
+    }
+    #chat-panel.chat-pill:hover .chat-pill-orbit-dot {
+      background: #d8eeff;
+      box-shadow: 0 0 14px rgba(180, 220, 255, 0.85);
+    }
+
+    /* ── Core crystal — geometric mark at center ── */
     #chat-panel .chat-pill-star {
       display: flex;
       position: absolute; inset: 0;
       align-items: center; justify-content: center;
       color: var(--signal);
       opacity: 0; pointer-events: none;
-      transition: opacity 0.2s ease, color var(--glide);
+      transition: opacity 0.2s ease, color var(--glide), filter var(--glide);
     }
     #chat-panel.chat-pill .chat-pill-star {
       opacity: 1; pointer-events: auto;
     }
     #chat-panel.chat-pill:hover .chat-pill-star {
-      color: var(--signal-bright);
-      filter: drop-shadow(0 0 8px rgba(100, 160, 240, 0.5));
+      color: #d8eeff;
+      filter: drop-shadow(0 0 20px rgba(160, 210, 255, 0.85));
     }
 
-    /* ── Pill: agent running in background ── */
+    /* ── Running state — agent active in background ── */
+    #chat-panel.chat-pill-running {
+      box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 0 38px rgba(240, 170, 50, 0.16);
+    }
     #chat-panel.chat-pill-running .chat-pill-star {
       color: var(--sol);
-      animation: pill-pulse 1.2s ease-in-out infinite;
+      animation: pill-core-pulse 1.4s ease-in-out infinite;
     }
-    #chat-panel.chat-pill-running::before {
-      animation: pill-orbit 3s linear infinite;
-      border-color: rgba(240, 170, 50, 0.25);
-    }
-    @keyframes pill-pulse {
-      0%, 100% { filter: drop-shadow(0 0 4px rgba(240, 170, 50, 0.3)); }
-      50% { filter: drop-shadow(0 0 14px rgba(240, 170, 50, 0.6)); }
+    @keyframes pill-core-pulse {
+      0%, 100% { filter: drop-shadow(0 0 6px rgba(240, 170, 50, 0.35)); }
+      50%      { filter: drop-shadow(0 0 18px rgba(240, 170, 50, 0.7)); }
     }
 
-    /* ── Pill orbital ring ── */
-    #chat-panel::before {
-      content: ''; position: absolute; inset: -6px; border-radius: 50%;
-      border: 1px solid rgba(60, 100, 180, 0.15);
-      animation: pill-orbit 9s linear infinite;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity var(--glide);
+    /* Running orbital ring — amber, faster */
+    #chat-panel.chat-pill-running::before {
+      border-color: rgba(240, 170, 50, 0.22);
+      animation: pill-orbit 3.5s linear infinite;
     }
-    #chat-panel.chat-pill::before { opacity: 1; }
-    #chat-panel.chat-pill:hover::before {
-      border-color: rgba(80, 140, 240, 0.3);
-      animation-duration: 4.5s;
+
+    /* Running ambient — amber ripple pulse */
+    #chat-panel.chat-pill-running::after {
+      background: radial-gradient(circle, rgba(240,170,50,0.12) 0%, transparent 55%);
+      animation: pill-ripple 2s ease-out infinite;
     }
-    #chat-panel.chat-pill::after {
-      content: ''; position: absolute; inset: -15px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(80,140,240,0.06) 0%, transparent 70%);
-      animation: pill-breathe 3s ease-in-out infinite;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity var(--glide);
+    @keyframes pill-ripple {
+      0%   { transform: scale(0.55); opacity: 0.85; }
+      100% { transform: scale(2.2); opacity: 0; }
     }
-    #chat-panel.chat-pill::after { opacity: 1; }
+
+    /* Running inner ring — amber, faster */
+    #chat-panel.chat-pill-running .chat-pill-inner-ring {
+      border-color: rgba(240, 170, 50, 0.22);
+      animation-duration: 3s;
+    }
+    #chat-panel.chat-pill-running .chat-pill-orbit-dot {
+      background: var(--sol-bright);
+      box-shadow: 0 0 12px rgba(240, 170, 50, 0.75);
+    }
+
+    /* Keyframes */
     @keyframes pill-orbit {
       from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
+      to   { transform: rotate(360deg); }
+    }
+    @keyframes pill-inner-spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
     }
     @keyframes pill-breathe {
-      0%, 100% { opacity: 0.4; }
-      50% { opacity: 1; }
+      0%, 100% { opacity: 0.35; }
+      50%      { opacity: 1; }
     }
 
     /* ── Input-only mode — narrow floating bar ── */
@@ -1278,6 +1342,229 @@
     .msg-perm-result {
       font-size: 11px; color: var(--text-muted, rgba(145, 165, 190, 0.65));
       font-family: var(--font-mono); padding: 4px 0;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       PERMISSION MODAL — Security Clearance Hologram
+       ═══════════════════════════════════════════════════════════════ */
+
+    .perm-overlay {
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(2, 5, 14, 0.84);
+      backdrop-filter: blur(18px) saturate(0.35);
+      -webkit-backdrop-filter: blur(18px) saturate(0.35);
+      display: flex; align-items: center; justify-content: center;
+      animation: permOverlayIn 0.15s ease-out;
+    }
+    @keyframes permOverlayIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    /* Dialog — holographic glass panel, brutalist sharp corners */
+    .perm-dialog {
+      position: relative;
+      display: flex; flex-direction: column;
+      min-height: 290px;
+      background: rgba(5, 14, 32, 0.92);
+      border: 1px solid rgba(54, 82, 128, 0.32);
+      padding: 28px 32px 22px;
+      width: 445px; max-width: 93vw;
+      color: var(--starlight);
+      font-family: var(--font-body);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.02),
+        0 32px 100px rgba(0, 0, 0, 0.65),
+        0 0 90px rgba(50, 90, 160, 0.05);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      animation: permDialogIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      overflow: hidden;
+      border-radius: 0;
+    }
+    @keyframes permDialogIn {
+      from { opacity: 0; transform: scale(0.93) translateY(10px); }
+      to   { opacity: 1; transform: scale(1)    translateY(0);   }
+    }
+
+    /* Scan line — holographic sweep across the panel */
+    .perm-dialog::after {
+      content: '';
+      position: absolute; left: 0; right: 0; z-index: 2;
+      height: 1px; pointer-events: none;
+      background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(90, 150, 230, 0.04) 15%,
+        rgba(130, 190, 250, 0.14) 50%,
+        rgba(90, 150, 230, 0.04) 85%,
+        transparent 100%
+      );
+      animation: permScan 4.8s ease-in-out infinite;
+    }
+    @keyframes permScan {
+      0%   { top: -2px; opacity: 0; }
+      12%  { opacity: 0.55; }
+      24%  { opacity: 0; }
+      40%  { top: 106%; opacity: 0; }
+      52%  { opacity: 0.4; }
+      64%  { opacity: 0; }
+      100% { top: -2px; opacity: 0; }
+    }
+
+    /* Corner accents — L-shaped glowing marks */
+    .perm-corner {
+      position: absolute; width: 18px; height: 18px; z-index: 3; pointer-events: none;
+    }
+    .perm-corner::before, .perm-corner::after {
+      content: ''; position: absolute;
+      background: rgba(80, 135, 210, 0.3);
+      transition: background 0.6s ease;
+    }
+    .perm-corner-tl { top: -1px; left: -1px; }
+    .perm-corner-tl::before { top: 0; left: 0; width: 18px; height: 1px; }
+    .perm-corner-tl::after  { top: 0; left: 0; width: 1px;  height: 18px; }
+
+    .perm-corner-tr { top: -1px; right: -1px; }
+    .perm-corner-tr::before { top: 0; right: 0; width: 18px; height: 1px; }
+    .perm-corner-tr::after  { top: 0; right: 0; width: 1px;  height: 18px; }
+
+    .perm-corner-bl { bottom: -1px; left: -1px; }
+    .perm-corner-bl::before { bottom: 0; left: 0; width: 18px; height: 1px; }
+    .perm-corner-bl::after  { bottom: 0; left: 0; width: 1px;  height: 18px; }
+
+    .perm-corner-br { bottom: -1px; right: -1px; }
+    .perm-corner-br::before { bottom: 0; right: 0; width: 18px; height: 1px; }
+    .perm-corner-br::after  { bottom: 0; right: 0; width: 1px;  height: 18px; }
+
+    /* Header row */
+    .perm-header {
+      display: flex; align-items: center; gap: 9px;
+      margin-bottom: 18px;
+    }
+
+    /* Security indicator — rotating diamond that pulses */
+    .perm-indicator {
+      width: 8px; height: 8px;
+      background: var(--signal);
+      transform: rotate(45deg);
+      animation: permIndPulse 2.2s ease-in-out infinite;
+      box-shadow: 0 0 8px rgba(100, 150, 240, 0.5);
+      flex-shrink: 0;
+    }
+    @keyframes permIndPulse {
+      0%, 100% { opacity: 0.4; box-shadow: 0 0 4px rgba(100, 150, 240, 0.25); }
+      50%      { opacity: 1;   box-shadow: 0 0 14px rgba(100, 160, 240, 0.65); }
+    }
+
+    /* HUD-style header label */
+    .perm-hud-label {
+      font-family: var(--font-hud);
+      font-size: 9px; font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: rgba(115, 160, 220, 0.55);
+    }
+
+    /* Tool name — the command under clearance review */
+    .perm-tool-name {
+      font-family: var(--font-mono);
+      font-size: 19px; font-weight: 600;
+      color: var(--signal-bright);
+      margin-bottom: 5px;
+      letter-spacing: 0.2px;
+      text-shadow: 0 0 22px rgba(100, 160, 240, 0.18);
+      word-break: break-all;
+    }
+
+    /* Reason / description */
+    .perm-desc {
+      font-size: 12px; line-height: 1.6;
+      color: rgba(200, 222, 248, 0.78);
+      margin-bottom: 16px;
+    }
+
+    /* Args block — terminal-style parameter readout */
+    .perm-args-block {
+      margin-bottom: 20px;
+      background: rgba(3, 8, 18, 0.6);
+      border: 1px solid rgba(40, 60, 100, 0.18);
+      border-left: 2px solid rgba(75, 125, 195, 0.3);
+      padding: 10px 14px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: rgba(155, 195, 230, 0.68);
+      word-break: break-all;
+      line-height: 1.55;
+    }
+    .perm-args-label {
+      font-family: var(--font-hud);
+      font-size: 8px; font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: rgba(95, 135, 195, 0.38);
+      margin-bottom: 4px;
+    }
+
+    /* Button row */
+    .perm-btn-row {
+      display: flex; gap: 8px;
+      margin-top: auto;
+    }
+
+    /* Base button */
+    .perm-btn {
+      flex: 1; padding: 10px 6px;
+      font-size: 12px; font-weight: 600;
+      font-family: var(--font-body);
+      border: 1px solid transparent;
+      cursor: pointer;
+      text-align: center;
+      border-radius: 0;
+      transition: all var(--snap);
+      position: relative;
+    }
+    .perm-btn kbd {
+      display: block;
+      font-size: 8px; opacity: 0.42;
+      font-family: var(--font-mono); font-weight: 400;
+      margin-top: 3px;
+    }
+
+    /* Always Allow — green, high trust */
+    .perm-btn-always {
+      background: rgba(61, 165, 93, 0.07);
+      border-color: rgba(61, 165, 93, 0.18);
+      color: var(--pass);
+    }
+    .perm-btn-always:hover {
+      background: rgba(61, 165, 93, 0.16);
+      border-color: rgba(61, 165, 93, 0.4);
+      box-shadow: 0 0 22px rgba(61, 165, 93, 0.1);
+    }
+
+    /* Allow Once — blue, cautious */
+    .perm-btn-once {
+      background: rgba(80, 140, 240, 0.07);
+      border-color: rgba(80, 140, 240, 0.18);
+      color: var(--signal);
+    }
+    .perm-btn-once:hover {
+      background: rgba(80, 140, 240, 0.16);
+      border-color: rgba(80, 140, 240, 0.38);
+      box-shadow: 0 0 22px rgba(80, 140, 240, 0.1);
+    }
+
+    /* Deny — red, threat */
+    .perm-btn-deny {
+      background: rgba(217, 68, 68, 0.05);
+      border-color: rgba(217, 68, 68, 0.1);
+      color: var(--fail);
+    }
+    .perm-btn-deny:hover {
+      background: rgba(217, 68, 68, 0.12);
+      border-color: rgba(217, 68, 68, 0.25);
+      box-shadow: 0 0 22px rgba(217, 68, 68, 0.06);
     }
 
     /* Usage pill */
