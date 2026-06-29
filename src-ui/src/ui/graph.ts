@@ -881,7 +881,6 @@ export class StarGraph {
   private nodeCoreColors: number[] = [];
   // Edge rendering (unchanged)
   private edgeLineGroups: LineSegments2[] = [];
-  private colorMode: 'type' | 'community' | 'coupling' = 'type';
   private scaleMode: 'degree' | 'coupling' = 'degree';
 
   // Full-FX extras
@@ -1099,7 +1098,7 @@ export class StarGraph {
     // Title bar
     const mmTitle = document.createElement('div');
     mmTitle.id = 'minimap-titlebar';
-    mmTitle.innerHTML = `${iconHtml('focus', 11)} <span style="font-size:10px;letter-spacing:0.04em;">小地图</span>`;
+    mmTitle.innerHTML = `${iconHtml('focus', 11)} <span style="font-size: calc(10px * var(--font-scale));letter-spacing:0.04em;">小地图</span>`;
     mmTitle.style.cssText = 'display:flex;align-items:center;gap:4px;padding:3px 8px;color:rgba(255,255,255,0.55);background:rgba(3,8,18,0.75);border:1px solid rgba(255,255,255,0.1);border-bottom:none;border-radius:8px 8px 0 0;font-family:system-ui,sans-serif;pointer-events:none;';
     // Canvas
     const mmCanvas = document.createElement('canvas');
@@ -1109,7 +1108,7 @@ export class StarGraph {
     // Tooltip
     const mmTip = document.createElement('div');
     mmTip.id = 'minimap-tooltip';
-    mmTip.style.cssText = 'position:absolute;pointer-events:none;padding:2px 7px;font-size:10px;color:#eef;background:rgba(2,5,16,0.9);border:1px solid rgba(255,255,255,0.18);border-radius:4px;white-space:nowrap;display:none;font-family:system-ui,sans-serif;top:0;left:0;';
+    mmTip.style.cssText = 'position:absolute;pointer-events:none;padding:2px 7px;font-size: calc(10px * var(--font-scale));color:#eef;background:rgba(2,5,16,0.9);border:1px solid rgba(255,255,255,0.18);border-radius:4px;white-space:nowrap;display:none;font-family:system-ui,sans-serif;top:0;left:0;';
     mmc.appendChild(mmTitle);
     mmc.appendChild(mmCanvas);
     mmc.appendChild(mmTip);
@@ -1432,66 +1431,59 @@ export class StarGraph {
     this.detailCard = document.createElement('div');
     this.detailCard.id = 'detail-card';
     this.detailCard.innerHTML =
-      `<button class="dc-close">${iconHtml('close', 12)}</button>` +
-      '<div class="dc-name"></div><div class="dc-meta"></div><div class="dc-divider"></div>' +
-      '<div class="dc-coupling"></div><div class="dc-divider"></div>' +
+      '<div class="dc-header">' +
+        '<div class="dc-name"></div>' +
+        `<button class="dc-close">${iconHtml('close', 14)}</button>` +
+      '</div>' +
+      '<div class="dc-meta"><span class="dc-kind"></span><span class="dc-degree"></span></div>' +
       '<div class="dc-location"></div>' +
-      `<div class="dc-actions"><button class="dc-open-btn">${iconHtml('file', 11)} 打开</button><button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button><button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button><button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button></div>` +
-      '<div class="dc-blast-filters" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid #333;">' +
-      '<div style="font-size:11px;color:#888;margin-bottom:4px;">边类型过滤:</div>' +
-      '<div class="dc-blast-type-btns" style="display:flex;gap:4px;flex-wrap:wrap;">' +
-      '<button class="dc-blast-type-btn" data-type="all" style="padding:2px 6px;font-size:10px;background:#444;border:1px solid #666;border-radius:3px;cursor:pointer;">全部</button>' +
-      '<button class="dc-blast-type-btn" data-type="structural" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">结构</button>' +
-      '<button class="dc-blast-type-btn" data-type="data" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">数据</button>' +
-      '<button class="dc-blast-type-btn" data-type="temporal" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">时间</button>' +
+      '<div class="dc-divider"></div>' +
+      '<div class="dc-section-title">耦合层级</div>' +
+      '<div class="dc-coupling"></div>' +
+      '<div class="dc-divider"></div>' +
+      '<div class="dc-actions">' +
+        `<button class="dc-open-btn">${iconHtml('file', 11)} 打开</button>` +
+        `<button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button>` +
+        `<button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button>` +
+        `<button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button>` +
       '</div>' +
-      '<div style="font-size:11px;color:#888;margin-top:6px;margin-bottom:4px;">方向过滤:</div>' +
-      '<div class="dc-blast-dir-btns" style="display:flex;gap:4px;flex-wrap:wrap;">' +
-      '<button class="dc-blast-dir-btn" data-dir="both" style="padding:2px 6px;font-size:10px;background:#444;border:1px solid #666;border-radius:3px;cursor:pointer;">双向</button>' +
-      '<button class="dc-blast-dir-btn" data-dir="outbound" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">出向</button>' +
-      '<button class="dc-blast-dir-btn" data-dir="inbound" style="padding:2px 6px;font-size:10px;background:#333;border:1px solid #555;border-radius:3px;cursor:pointer;">入向</button>' +
-      '</div>' +
+      '<div class="dc-blast-filters">' +
+        '<div class="dc-filter-label">边类型过滤</div>' +
+        '<div class="dc-filter-btns">' +
+          '<button class="dc-filter-btn active" data-type="all">全部</button>' +
+          '<button class="dc-filter-btn" data-type="structural">结构</button>' +
+          '<button class="dc-filter-btn" data-type="data">数据</button>' +
+          '<button class="dc-filter-btn" data-type="temporal">时间</button>' +
+        '</div>' +
+        '<div class="dc-filter-label">方向过滤</div>' +
+        '<div class="dc-filter-btns">' +
+          '<button class="dc-filter-btn active" data-dir="both">双向</button>' +
+          '<button class="dc-filter-btn" data-dir="outbound">出向</button>' +
+          '<button class="dc-filter-btn" data-dir="inbound">入向</button>' +
+        '</div>' +
       '</div>';
     this.container.appendChild(this.detailCard);
-    this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
+
+    // Close
+    this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => {
+      e.stopPropagation(); this.hideDetail();
+    });
+    // Focus subgraph
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) { const idx = this.selectedIdx; this.hideDetail(); this.enterFocusSubgraph(idx); }
     });
+    // Blast radius
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) this.startBlastMode(this.selectedIdx);
     });
-    // Blast filter: show/hide filters panel when blast mode is active
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('contextmenu', (e) => {
       e.stopPropagation(); e.preventDefault();
       const panel = this.detailCard.querySelector('.dc-blast-filters') as HTMLElement;
       if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
     });
-    // Blast filter: edge type buttons
-    this.detailCard.querySelectorAll('.dc-blast-type-btn').forEach(btn => {
-      btn.addEventListener('pointerdown', (e) => {
-        e.stopPropagation(); e.preventDefault();
-        this.blastEdgeType = (btn as HTMLElement).dataset.type || 'all';
-        this.detailCard.querySelectorAll('.dc-blast-type-btn').forEach(b => {
-          (b as HTMLElement).style.background = b === btn ? '#444' : '#333';
-          (b as HTMLElement).style.borderColor = b === btn ? '#666' : '#555';
-        });
-        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
-      });
-    });
-    // Blast filter: direction buttons
-    this.detailCard.querySelectorAll('.dc-blast-dir-btn').forEach(btn => {
-      btn.addEventListener('pointerdown', (e) => {
-        e.stopPropagation(); e.preventDefault();
-        this.blastDirection = (btn as HTMLElement).dataset.dir || 'both';
-        this.detailCard.querySelectorAll('.dc-blast-dir-btn').forEach(b => {
-          (b as HTMLElement).style.background = b === btn ? '#444' : '#333';
-          (b as HTMLElement).style.borderColor = b === btn ? '#666' : '#555';
-        });
-        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
-      });
-    });
+    // Open file
     this.detailCard.querySelector('.dc-open-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) {
@@ -1504,15 +1496,37 @@ export class StarGraph {
         }
       }
     });
+    // Ask Agent
     this.detailCard.querySelector('.dc-agent-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) {
         const node = this.graphNodes[this.selectedIdx];
         const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
         const question = `分析节点 "${node.name}" (${TYPE_LABELS[kind] || kind}, 度=${this.deg[this.selectedIdx]}, ${node.location || '未知位置'})。它和其他模块的关系如何？改它会有什么影响？`;
-        // Emit event to ChatPanel via bus
         shell.queryAgent(question);
       }
+    });
+    // Blast filter: edge type
+    this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-type]').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        this.blastEdgeType = (btn as HTMLElement).dataset.type || 'all';
+        this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-type]').forEach(b => {
+          b.classList.toggle('active', b === btn);
+        });
+        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
+      });
+    });
+    // Blast filter: direction
+    this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-dir]').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        this.blastDirection = (btn as HTMLElement).dataset.dir || 'both';
+        this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-dir]').forEach(b => {
+          b.classList.toggle('active', b === btn);
+        });
+        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
+      });
     });
   }
 
@@ -1580,7 +1594,7 @@ export class StarGraph {
   private showDetail(idx: number): void {
     this.selectedIdx = idx;
     const node = this.graphNodes[idx];
-    // Emit file path for file tree ↔ graph linking
+    // Emit file path for file tree <-> graph linking
     if (node.location) {
       const filePath = node.location.indexOf(':') >= 0
         ? node.location.substring(0, node.location.lastIndexOf(':'))
@@ -1588,25 +1602,51 @@ export class StarGraph {
       window.dispatchEvent(new CustomEvent('graph:node-selected', { detail: filePath }));
     }
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
+    // Coupling distance counts
     const dist = [0, 0, 0, 0, 0];
     for (const e of this.edgeDataList) { if (e.s === idx || e.t === idx) dist[e.couplingDepth] = (dist[e.couplingDepth] || 0) + 1; }
     const maxDist = Math.max(...dist, 1);
+
+    // Header: name
     this.detailCard.querySelector('.dc-name')!.textContent = node.name;
-    const metaEl = this.detailCard.querySelector('.dc-meta')!;
-    metaEl.textContent = `${TYPE_LABELS[kind] || kind.toUpperCase()} · 度 ${this.deg[idx]}${this.deg[idx] >= 10 ? ' · hub' : ''}`;
-    (metaEl as HTMLElement).dataset['kind'] = kind;
-    const bars = [
-      { label: 'L1 公开API', v: dist[1], cls: 'l1' }, { label: 'L2 内部导入', v: dist[2], cls: 'l2' },
-      { label: 'L3 共享数据', v: dist[3], cls: 'l3' }, { label: 'L4 封装穿透', v: dist[4], cls: 'l4' },
-    ];
-    this.detailCard.querySelector('.dc-coupling')!.innerHTML = bars.filter(b => b.v > 0).map(b => {
-      const pct = Math.round((b.v / maxDist) * 100);
-      const warn = b.cls === 'l3' ? ` ${iconHtml('alert', 10)}` : b.cls === 'l4' ? ` ${iconHtml('block', 10)}` : '';
-      return `<div class="dc-bar-row"><span class="dc-bar-label">${b.label}</span><span class="dc-bar-count">${b.v} 条</span><span class="dc-bar-track"><span class="dc-bar-fill ${b.cls}" style="width:${pct}%"></span></span>${warn}</div>`;
-    }).join('') || '<div class="dc-empty">无耦合边</div>';
+
+    // Meta: kind + degree
+    const kindColors: Record<string, string> = {
+      symbol: 'var(--signal)', function: 'var(--signal)', method: 'var(--signal)',
+      class: 'var(--signal)', module: 'var(--signal)', variable: 'var(--signal)',
+      interface: 'var(--signal)', constant: 'var(--signal)',
+      medium: 'var(--sol)', file: 'var(--sol)', database: 'var(--sol)',
+      cache: 'var(--sol)', queue: 'var(--sol)',
+      temporal: 'var(--nebula)', thread: 'var(--nebula)', timer: 'var(--nebula)', trigger: 'var(--nebula)',
+    };
+    const kindEl = this.detailCard.querySelector('.dc-kind') as HTMLElement;
+    kindEl.textContent = TYPE_LABELS[kind] || kind.toUpperCase();
+    kindEl.style.color = kindColors[kind] || 'var(--signal)';
+    const degEl = this.detailCard.querySelector('.dc-degree') as HTMLElement;
+    degEl.textContent = `度 ${this.deg[idx]}${this.deg[idx] >= 10 ? ' · Hub 节点' : ''}`;
+
+    // Location
     this.detailCard.querySelector('.dc-location')!.textContent = node.location || '';
+
+    // Coupling bars — always show all 4
+    const bars = [
+      { label: 'L1 公开API', v: dist[1], cls: 'l1' },
+      { label: 'L2 内部导入', v: dist[2], cls: 'l2' },
+      { label: 'L3 共享数据', v: dist[3], cls: 'l3' },
+      { label: 'L4 封装穿透', v: dist[4], cls: 'l4' },
+    ];
+    this.detailCard.querySelector('.dc-coupling')!.innerHTML = bars.map(b => {
+      const pct = Math.round((b.v / maxDist) * 100);
+      const zero = b.v === 0 ? ' dc-zero' : '';
+      const warn = b.v > 0 && (b.cls === 'l3' || b.cls === 'l4')
+        ? ` <span class="dc-bar-warn">${iconHtml(b.cls === 'l3' ? 'alert' : 'block', 10)}</span>` : '';
+      return `<div class="dc-bar-row${zero}"><span class="dc-bar-label">${b.label}</span><span class="dc-bar-count">${b.v}</span><span class="dc-bar-track"><span class="dc-bar-fill ${b.cls}" style="width:${pct}%"></span></span>${warn}</div>`;
+    }).join('');
+
+    // Open button: hide if no location
     const openBtn = this.detailCard.querySelector('.dc-open-btn') as HTMLButtonElement;
     if (openBtn) openBtn.style.display = node.location ? '' : 'none';
+
     this.positionDetailCard(idx);
     this.detailCard.classList.add('visible');
   }
@@ -1619,9 +1659,9 @@ export class StarGraph {
     const x = (this.tmpVec3.x * 0.5 + 0.5) * this.container.clientWidth;
     const y = (-this.tmpVec3.y * 0.5 + 0.5) * this.container.clientHeight;
     let left = x + 24, top = y - 60;
-    if (left + 220 > this.container.clientWidth - 10) left = x - 244;
+    if (left + 290 > this.container.clientWidth - 10) left = x - 310;
     if (top < 10) top = 10;
-    if (top + 200 > this.container.clientHeight - 10) top = this.container.clientHeight - 210;
+    if (top + 300 > this.container.clientHeight - 10) top = this.container.clientHeight - 310;
     if (left < 10) left = 10;
     this.detailCard.style.left = `${left}px`; this.detailCard.style.top = `${top}px`;
   }
@@ -1937,7 +1977,7 @@ export class StarGraph {
       'border:1px solid rgba(60,100,180,0.3);' +
       'border-radius:6px;' +
       'box-shadow:0 0 0 1px rgba(60,100,180,0.05),0 12px 36px rgba(0,0,0,0.5);' +
-      'font-family:var(--font-mono);font-size:10px;color:var(--starlight-dim,#c3daf8);white-space:nowrap;' +
+      'font-family:var(--font-mono);font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,#c3daf8);white-space:nowrap;' +
       'opacity:0;transition:opacity 0.16s;';
     this._promptTitleEl = document.createElement('span');
     this._promptTitleEl.style.cssText = 'max-width:420px;overflow:hidden;text-overflow:ellipsis;';
@@ -1946,7 +1986,7 @@ export class StarGraph {
     this._promptBtnEl.textContent = 'Ask Agent';
     // Mirror detail-card button template (dc-agent-btn)
     this._promptBtnEl.style.cssText =
-      'font-family:var(--font-hud);font-size:8px;font-weight:600;' +
+      'font-family:var(--font-hud);font-size: calc(8px * var(--font-scale));font-weight:600;' +
       'letter-spacing:0.5px;text-transform:uppercase;' +
       'padding:3px 8px;border-radius:2px;cursor:pointer;' +
       'transition:all var(--snap);' +
@@ -1973,7 +2013,7 @@ export class StarGraph {
     dismissBtn.innerHTML = iconHtml('close', 11);
     dismissBtn.style.cssText =
       'padding:2px 4px;border:none;background:none;color:rgba(120,160,215,0.5);' +
-      'cursor:pointer;font-size:11px;line-height:0;transition:color var(--snap);';
+      'cursor:pointer;font-size: calc(11px * var(--font-scale));line-height:0;transition:color var(--snap);';
     dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = 'var(--starlight-dim,#c3daf8)'; });
     dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = 'rgba(120,160,215,0.5)'; });
     dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); this._hidePrompt(); });
@@ -2483,43 +2523,6 @@ export class StarGraph {
   // ── Color mode switching ──────────────────────────────────
 
   /** Cycle node coloring mode. Returns the new mode's display label. */
-  recolorByMode(mode: 'type' | 'community' | 'coupling'): string {
-    this.colorMode = mode;
-    if (this._nodeCount === 0) return mode === 'type' ? '按类型' : mode === 'community' ? '按社区' : '按耦合';
-
-    const isFull = true;
-    for (let i = 0; i < this._nodeCount; i++) {
-      const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
-      let coreColor: number;
-      let glowColor: number;
-
-      if (mode === 'type') {
-        coreColor = NODE_COLORS[kind] || 0x6ab0ff;
-        glowColor = GLOW_COLORS[kind] || 0x2a6acc;
-      } else if (mode === 'community') {
-        const cid = this.nodeCommMap?.get(i);
-        coreColor = cid ? communityColor(cid) : 0x555555;
-        glowColor = coreColor;
-      } else { // coupling heatmap: green (low) → red (high)
-        const risk = this.l34Count[i] || 0;
-        const maxRisk = Math.max(1, ...this.l34Count);
-        const t = risk / maxRisk;
-        const c = new THREE.Color();
-        c.setHSL(0.33 - t * 0.33, 0.75, 0.38 + (1 - t) * 0.18);
-        coreColor = c.getHex();
-        glowColor = coreColor;
-      }
-
-      this._setCoreColor(i, coreColor);
-      this._setGlowColor(i, glowColor);
-      this.nodeCoreColors[i] = coreColor;
-      this.nodeGlowColors[i] = glowColor;
-    }
-
-    const labels: Record<string, string> = { type: t('color.type'), community: t('color.community'), coupling: t('color.coupling') };
-    return labels[mode];
-  }
-
   // ── Node scale mode ──────────────────────────────────────
 
   private getNodeBaseScale(i: number): number {
@@ -2601,24 +2604,6 @@ export class StarGraph {
   /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. Pre-computed cache. */
   private _nodeMag(i: number): number {
     return this._nodeMagCache[i] ?? 0.15;
-  }
-
-  /** Toggle node size between degree-based and coupling-risk-based. Returns display label. */
-  rescaleByMode(mode: 'degree' | 'coupling'): string {
-    this.scaleMode = mode;
-    if (this._nodeCount === 0) return mode === 'degree' ? '按度' : '按耦合风险';
-
-    this.maxDeg = Math.max(1, ...this.deg);
-    const isFull = true;
-    for (let i = 0; i < this._nodeCount; i++) {
-      const base = this.getNodeBaseScale(i);
-      this._setCoreScale(i, isFull ? base * 0.4 : base);
-      if (i < this._nodeCount) {
-      }
-      if (this._glow2Rgba.length > 0) {
-      }
-    }
-    return mode === 'degree' ? t('scale.degree') : t('scale.coupling');
   }
 
   // ── Agent highlight (Agent ↔ 星图联动) ──────────────────
@@ -3435,7 +3420,7 @@ export class StarGraph {
       this.galaxyTitleEl.id = 'galaxy-title';
       this.galaxyTitleEl.style.cssText =
         'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:15;' +
-        'font-size:18px;font-weight:700;letter-spacing:1px;pointer-events:none;' +
+        'font-size: calc(18px * var(--font-scale));font-weight:700;letter-spacing:1px;pointer-events:none;' +
         'color:#ffcc80;text-shadow:0 0 20px rgba(255,160,40,0.6),0 0 40px rgba(255,100,20,0.3);' +
         'transition:opacity 0.3s;opacity:0;';
       this.container.appendChild(this.galaxyTitleEl);
@@ -3455,7 +3440,7 @@ export class StarGraph {
     const label = document.createElement('div');
     label.className = 'galaxy-flash-label';
     label.textContent = `🌌 ${gm.label || gm.id}`;
-    label.style.cssText = 'position:absolute;z-index:12;pointer-events:none;font-size:16px;font-weight:700;color:#ffe0a0;text-shadow:0 0 20px rgba(255,180,60,0.8),0 0 40px rgba(255,140,30,0.4);white-space:nowrap;opacity:0;transition:opacity 0.2s;';
+    label.style.cssText = 'position:absolute;z-index:12;pointer-events:none;font-size: calc(16px * var(--font-scale));font-weight:700;color:#ffe0a0;text-shadow:0 0 20px rgba(255,180,60,0.8),0 0 40px rgba(255,140,30,0.4);white-space:nowrap;opacity:0;transition:opacity 0.2s;';
     const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
     this.tmpVec3.copy(gm.centroid).project(this.camera);
     label.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
@@ -3753,7 +3738,7 @@ export class StarGraph {
       // Extract a short name from the label (first part before /)
       const shortName = gm.label.split('/')[0].replace(/^test_/, '').replace(/_/g, ' ');
       div.textContent = shortName.length > 24 ? shortName.slice(0, 22) + '…' : shortName;
-      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size:10px;color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
+      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
       this.container.appendChild(div);
       div.dataset['galaxyIndex'] = String(gi); div.dataset['galaxyId'] = gm.id;
       this.galaxyLabelDivs.push(div);
@@ -4344,7 +4329,7 @@ export class StarGraph {
     for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
-    // batched: nodeCores/nodeGlows/nodeGlows2 replaced by InstancedMesh+Points this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = []; this.colorMode = 'type'; this.edgeLineGroups = [];
+    // batched: nodeCores/nodeGlows/nodeGlows2 replaced by InstancedMesh+Points this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = []; this.edgeLineGroups = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = []; this.communityRingGroup.clear(); this._communityGlowSprites = []; this._hoveredCommunityIdx = -1;
     this.foldMode = false; this.enteredGalaxyId = null; this.enteredSubCommunityId = null;

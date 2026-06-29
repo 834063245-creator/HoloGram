@@ -100,8 +100,6 @@ const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButton
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
 const btnFold = document.getElementById('btn-fold') as HTMLButtonElement;
-const btnColorMode = document.getElementById('btn-color-mode') as HTMLButtonElement;
-const btnScaleMode = document.getElementById('btn-scale-mode') as HTMLButtonElement;
 const btnResetCam = document.getElementById('btn-reset-cam') as HTMLButtonElement;
 const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
 const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
@@ -282,6 +280,7 @@ async function setupPlaceholderAgent(): Promise<void> {
 
 async function init(): Promise<void> {
   setLang(loadSettings().display.language);
+  document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
 
   const { listen } = await import('@tauri-apps/api/event');
   const { bus: eventBus } = await import('./ui/events');
@@ -596,6 +595,7 @@ async function init(): Promise<void> {
   // Settings
   const settingsPanel = SettingsPanel.get();
   settingsPanel.setOnSave(async () => {
+    document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     if (workspace) await workspace.setupAgent(chatPanel, checkPanel);
     if (workspace?.path && workspace?.agent) {
       chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[settings] autoRestoreLastSession failed:', e));
@@ -719,35 +719,6 @@ async function init(): Promise<void> {
 
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
-
-  // Color mode
-  const colorModeOrder: Array<'type' | 'community' | 'coupling'> = ['type', 'community', 'coupling'];
-  let colorModeIdx = 0;
-  const updateColorTooltip = () => {
-    const mode = colorModeOrder[colorModeIdx];
-    const labels: Record<string, string> = { type: t('color.type'), community: t('color.community'), coupling: t('color.coupling') };
-    btnColorMode.title = `${t('color.tooltip')}: ${labels[mode]}`;
-  };
-  btnColorMode.addEventListener('click', () => {
-    colorModeIdx = (colorModeIdx + 1) % 3;
-    starGraph.recolorByMode(colorModeOrder[colorModeIdx]);
-    btnColorMode.innerHTML = iconSvg('chart');
-    updateColorTooltip();
-  });
-
-  // Scale mode
-  let scaleByCoupling = false;
-  const updateScaleTooltip = () => {
-    btnScaleMode.title = `${t('scale.tooltip')}: ${scaleByCoupling ? t('scale.coupling') : t('scale.degree')}`;
-  };
-  btnScaleMode.addEventListener('click', () => {
-    scaleByCoupling = !scaleByCoupling;
-    starGraph.rescaleByMode(scaleByCoupling ? 'coupling' : 'degree');
-    btnScaleMode.innerHTML = iconSvg('blast');
-    updateScaleTooltip();
-  });
-
-  bus.on('lang:changed', () => { updateColorTooltip(); updateScaleTooltip(); });
 
   // Fold / Reset camera
   btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });

@@ -26,7 +26,16 @@ const MAX_HEIGHT_VH = 0.6;
 
 const DEFAULT_FONT_SIZE = 12;
 const MIN_FONT_SIZE = 8;
-const MAX_FONT_SIZE = 22;
+const MAX_FONT_SIZE = 24;
+
+// ponytail: read CSS var once at init; user changes require reload
+function getFontScale(): number {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
+    return parseFloat(v) || 1;
+  } catch { return 1; }
+}
+function scaledFontSize(): number { return Math.round(DEFAULT_FONT_SIZE * getFontScale()); }
 
 // ── Types ──
 
@@ -63,7 +72,7 @@ export class TerminalPanel {
   private openState = false;
   private collapsed = false;
   private currentHeight = DEFAULT_HEIGHT;
-  private fontSize = DEFAULT_FONT_SIZE;
+  private fontSize = scaledFontSize();
   private globalCwd = '';
 
   // Resize drag state
@@ -117,7 +126,7 @@ export class TerminalPanel {
     this.tabBar = document.createElement('div');
     this.tabBar.style.cssText = `
       display: flex; align-items: center; gap: 2px;
-      padding: 2px 6px; flex-shrink: 0; min-height: 28px;
+      padding: calc(2px * var(--font-scale)) calc(6px * var(--font-scale)); flex-shrink: 0; min-height: calc(28px * var(--font-scale));
       border-bottom: 1px solid var(--panel-edge, rgba(48, 60, 80, 0.3));
       overflow-x: auto; overflow-y: hidden;
       user-select: none;
@@ -133,7 +142,7 @@ export class TerminalPanel {
     this.searchBar = document.createElement('div');
     this.searchBar.style.cssText = `
       display: none; align-items: center; gap: 6px;
-      padding: 3px 8px; flex-shrink: 0;
+      padding: calc(3px * var(--font-scale)) calc(8px * var(--font-scale)); flex-shrink: 0;
       border-bottom: 1px solid rgba(60, 100, 170, 0.2);
       background: rgba(8, 16, 28, 0.6);
     `;
@@ -143,7 +152,7 @@ export class TerminalPanel {
     this.searchInput.style.cssText = `
       flex: 1; background: rgba(4, 8, 16, 0.8); color: var(--starlight);
       border: 1px solid rgba(40, 60, 100, 0.3); outline: none;
-      font-size: 11px; font-family: var(--font-mono); padding: 3px 6px;
+      font-size: calc(11px * var(--font-scale)); font-family: var(--font-mono); padding: 3px 6px;
       border-radius: 0;
     `;
     this.searchInput.addEventListener('keydown', (e) => {
@@ -163,7 +172,7 @@ export class TerminalPanel {
     this.searchBar.appendChild(this.searchInput);
     // Result count
     const searchCount = document.createElement('span');
-    searchCount.style.cssText = 'font-size: 10px; color: var(--text-muted); white-space: nowrap; font-family: var(--font-mono);';
+    searchCount.style.cssText = 'font-size: calc(10px * var(--font-scale)); color: var(--text-muted); white-space: nowrap; font-family: var(--font-mono);';
     searchCount.id = 'term-search-count';
     this.searchBar.appendChild(searchCount);
     this.panel.appendChild(this.searchBar);
@@ -478,7 +487,7 @@ export class TerminalPanel {
       tab.style.cssText = `
         display: inline-flex; align-items: center; gap: 4px;
         padding: 2px 8px; cursor: pointer;
-        font-size: 11px; font-family: var(--font-mono, monospace);
+        font-size: calc(11px * var(--font-scale)); font-family: var(--font-mono, monospace);
         white-space: nowrap; flex-shrink: 0;
         background: ${isActive ? 'rgba(30, 55, 100, 0.45)' : 'transparent'};
         color: ${isActive ? 'var(--starlight, #e2edff)' : 'var(--text-muted, #6a7a94)'};
@@ -492,7 +501,7 @@ export class TerminalPanel {
         input.style.cssText = `
           background: rgba(8, 16, 32, 0.9); color: var(--starlight);
           border: 1px solid rgba(60, 100, 170, 0.4); outline: none;
-          font-size: 10px; font-family: var(--font-mono); width: 100px; padding: 1px 4px;
+          font-size: calc(10px * var(--font-scale)); font-family: var(--font-mono); width: 100px; padding: 1px 4px;
           border-radius: 0;
         `;
         input.value = s.name;
@@ -515,7 +524,7 @@ export class TerminalPanel {
         closeBtn.innerHTML = '×';
         closeBtn.style.cssText = `
           background: none; border: none; cursor: pointer;
-          color: inherit; padding: 0; font-size: 13px; line-height: 1;
+          color: inherit; padding: 0; font-size: calc(13px * var(--font-scale)); line-height: 1;
           opacity: 0.4; margin-left: 2px; border-radius: 0;
         `;
         closeBtn.addEventListener('mouseenter', () => { closeBtn.style.opacity = '1'; closeBtn.style.color = '#e05555'; });
@@ -569,7 +578,7 @@ export class TerminalPanel {
     btn.style.cssText = `
       background: none; border: none; cursor: pointer;
       color: var(--text-muted, #6a7a94); padding: 2px 5px;
-      font-size: 11px; display: flex; align-items: center;
+      font-size: calc(11px * var(--font-scale)); display: flex; align-items: center;
       border-radius: 0; font-family: var(--font-mono);
     `;
     btn.addEventListener('mouseenter', () => {
@@ -643,7 +652,7 @@ export class TerminalPanel {
   }
 
   private zoomReset(): void {
-    this.fontSize = DEFAULT_FONT_SIZE;
+    this.fontSize = scaledFontSize();
     this.applyFontSize();
   }
 

@@ -481,7 +481,7 @@ export class GitPanel {
       padding: '8px 12px', borderRadius: '4px',
       background: 'rgba(200, 40, 40, 0.15)',
       border: '1px solid rgba(200, 40, 40, 0.3)',
-      color: 'var(--fail)', fontSize: '10px', fontFamily: 'var(--font-mono)',
+      color: 'var(--fail)', fontSize: 'calc(10px * var(--font-scale))', fontFamily: 'var(--font-mono)',
     });
     el.textContent = message;
     this.el.appendChild(el);

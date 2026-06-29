@@ -96,8 +96,8 @@ export class FileTreePanel {
       .ft-guide { pointer-events: none; z-index: 0; }
       .ft-connector { pointer-events: none; z-index: 1; }
       .ft-arrow, .ft-icon, .ft-name, .ft-ask-btn { position: relative; z-index: 2; }
-      .ft-empty { padding: 24px 12px; color: var(--text-muted); font-size: 11px; text-align: center; user-select: none; }
-      .ft-loading { padding: 24px 12px; color: var(--text-muted); font-size: 11px; text-align: center; }
+      .ft-empty { padding: 24px 12px; color: var(--text-muted); font-size: calc(11px * var(--font-scale)); text-align: center; user-select: none; }
+      .ft-loading { padding: 24px 12px; color: var(--text-muted); font-size: calc(11px * var(--font-scale)); text-align: center; }
       .ft-header-btn { color: var(--text-muted); }
       .ft-header-btn:hover { color: var(--starlight-dim); background: rgba(255,255,255,0.04); }
       .ft-header-btn.ft-active { color: var(--signal, #7eb8ff) !important; }
@@ -118,7 +118,7 @@ export class FileTreePanel {
     pathLabel.className = 'ft-path-label';
     Object.assign(pathLabel.style, {
       flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono, monospace)',
+      fontSize: 'calc(10px * var(--font-scale))', color: 'var(--text-muted)', fontFamily: 'var(--font-mono, monospace)',
     });
     this.headerEl.appendChild(pathLabel);
 
@@ -711,7 +711,7 @@ export class FileTreePanel {
     Object.assign(this.filterInput.style, {
       width: '100%', padding: '3px 8px', margin: '0',
       background: 'rgba(8,16,28,0.6)', border: '1px solid var(--panel-edge, rgba(48,60,80,0.3))',
-      borderRadius: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px',
+      borderRadius: '3px', fontFamily: 'var(--font-mono)', fontSize: 'calc(10px * var(--font-scale))',
       color: 'var(--starlight-dim)', outline: 'none', flexShrink: '0',
     });
     let timer: ReturnType<typeof setTimeout>;

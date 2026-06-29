@@ -36,7 +36,7 @@ export function showContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
     padding: '4px',
     minWidth: '160px',
     boxShadow: '0 0 0 1px rgba(60,100,180,0.05), 0 12px 36px rgba(0,0,0,0.5)',
-    fontFamily: 'var(--font-mono)', fontSize: '11px',
+    fontFamily: 'var(--font-mono)', fontSize: 'calc(11px * var(--font-scale))',
     display: 'flex', flexDirection: 'column',
   });
 

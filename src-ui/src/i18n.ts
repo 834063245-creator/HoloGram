@@ -56,14 +56,6 @@ const TRANS: Record<string, { zh: string; en: string }> = {
   'focus.nodes':  { zh: '节点', en: 'nodes' },
   'focus.exit':   { zh: 'Esc 退出', en: 'Esc to exit' },
 
-  'color.type':      { zh: '按类型', en: 'By Type' },
-  'color.community': { zh: '按社区', en: 'By Community' },
-  'color.coupling':  { zh: '按耦合', en: 'By Coupling' },
-  'color.tooltip':   { zh: '着色', en: 'Color' },
-
-  'scale.degree':   { zh: '按度', en: 'By Degree' },
-  'scale.coupling': { zh: '按耦合风险', en: 'By Coupling Risk' },
-  'scale.tooltip':  { zh: '缩放', en: 'Scale' },
 };
 
 export type Lang = 'zh' | 'en';

@@ -34,7 +34,7 @@
 }
 .ft-header .ft-title {
   font-family: var(--font-hud, 'Orbitron', sans-serif);
-  font-size: 9px;
+  font-size: calc(9px * var(--font-scale));
   font-weight: 600;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -46,7 +46,7 @@
 }
 .ft-header .ft-meta {
   font-family: var(--font-mono, monospace);
-  font-size: 8px;
+  font-size: calc(8px * var(--font-scale));
   color: rgba(105, 145, 200, 0.5);
   white-space: nowrap;
 }
@@ -54,7 +54,7 @@
   width: 20px; height: 20px; padding: 0;
   background: none; border: none; cursor: pointer;
   color: var(--text-muted, #4a5568);
-  font-size: 14px; border-radius: 4px;
+  font-size: calc(14px * var(--font-scale)); border-radius: 4px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
   transition: color 0.12s;
@@ -75,7 +75,7 @@
   padding: 40px 20px;
 }
 .ft-loading .ft-loading-icon {
-  font-size: 32px;
+  font-size: calc(32px * var(--font-scale));
   animation: ft-pulse 1.8s ease-in-out infinite;
 }
 @keyframes ft-pulse {
@@ -84,13 +84,13 @@
 }
 .ft-loading .ft-loading-text {
   font-family: var(--font-body, sans-serif);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   color: var(--starlight-dim, #c9d1d9);
   text-align: center;
 }
 .ft-loading .ft-loading-wait {
   font-family: var(--font-mono, monospace);
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
   color: var(--text-muted, rgba(145, 165, 190, 0.65));
 }
 
@@ -105,12 +105,12 @@
   padding: 40px 20px;
 }
 .ft-error .ft-error-icon {
-  font-size: 28px;
+  font-size: calc(28px * var(--font-scale));
   opacity: 0.7;
 }
 .ft-error .ft-error-text {
   font-family: var(--font-body, sans-serif);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   color: var(--fail, #d94444);
   text-align: center;
   max-width: 420px;
@@ -134,7 +134,7 @@
   position: sticky; top: 0; z-index: 5;
   padding: 6px 14px;
   font-family: var(--font-hud, 'Orbitron', sans-serif);
-  font-size: 8px; font-weight: 600;
+  font-size: calc(8px * var(--font-scale)); font-weight: 600;
   letter-spacing: 1.2px; text-transform: uppercase;
   background: rgba(3, 8, 20, 0.9);
   border-bottom: 1px solid rgba(40, 60, 100, 0.15);
@@ -167,7 +167,7 @@
 .ft-code-line {
   display: flex; padding: 0 12px; min-height: 20px; align-items: flex-start;
   font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: 11px; line-height: 20px;
+  font-size: calc(11px * var(--font-scale)); line-height: 20px;
   cursor: default; user-select: none;
 }
 .ft-code-line:hover { background: rgba(255,255,255,0.02); }
@@ -179,7 +179,7 @@
 .ft-code-line .ft-ln {
   color: rgba(105, 145, 200, 0.35); min-width: 32px;
   text-align: right; margin-right: 10px; user-select: none;
-  font-size: 9px; flex-shrink: 0;
+  font-size: calc(9px * var(--font-scale)); flex-shrink: 0;
 }
 .ft-code-line .ft-ct { white-space: pre; color: var(--starlight-dim, #c9d1d9); }
 
@@ -187,7 +187,7 @@
 .ft-human-line {
   display: flex; padding: 0 12px; min-height: 20px; align-items: flex-start;
   font-family: var(--font-body, 'Noto Sans SC', sans-serif);
-  font-size: 11px; line-height: 20px;
+  font-size: calc(11px * var(--font-scale)); line-height: 20px;
   cursor: default; user-select: none;
 }
 .ft-human-line:hover { background: rgba(255,255,255,0.02); }
@@ -202,7 +202,7 @@
 .ft-audit-line {
   display: flex; padding: 0 12px; min-height: 20px; align-items: flex-start;
   font-family: var(--font-body, 'Noto Sans SC', sans-serif);
-  font-size: 10px; line-height: 20px;
+  font-size: calc(10px * var(--font-scale)); line-height: 20px;
   cursor: default; user-select: none;
 }
 .ft-audit-line:hover { background: rgba(255,255,255,0.02); }
@@ -217,7 +217,7 @@
 /* ── Audit tags ───────────────────────────────── */
 .ft-audit-tag {
   display: inline-block; font-family: var(--font-hud, 'Orbitron', sans-serif);
-  font-size: 7px; font-weight: 700; letter-spacing: 0.8px;
+  font-size: calc(7px * var(--font-scale)); font-weight: 700; letter-spacing: 0.8px;
   padding: 1px 5px; border-radius: 2px; margin-right: 5px;
   vertical-align: middle; text-transform: uppercase;
   flex-shrink: 0;

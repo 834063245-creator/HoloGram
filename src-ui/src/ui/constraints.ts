@@ -76,7 +76,7 @@ export class ConstraintsPanel {
     const title = document.createElement('span');
     title.innerHTML = `${iconHtml('constraints', 12)} 约束配置`;
     Object.assign(title.style, {
-      fontSize: '13px', fontWeight: '600', color: 'var(--signal, #7eb8ff)', letterSpacing: '0.5px',
+      fontSize: 'calc(13px * var(--font-scale))', fontWeight: '600', color: 'var(--signal, #7eb8ff)', letterSpacing: '0.5px',
     });
 
     const closeBtn = document.createElement('button');
@@ -84,7 +84,7 @@ export class ConstraintsPanel {
     Object.assign(closeBtn.style, {
       width: '24px', height: '24px', padding: '0',
       background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
+      cursor: 'pointer', fontSize: 'calc(14px * var(--font-scale))', borderRadius: '4px',
       transition: 'color var(--snap, 0.12s)',
     });
     closeBtn.addEventListener('mouseenter', () => closeBtn.style.color = 'var(--starlight-dim, #c9d1d9)');
@@ -98,7 +98,7 @@ export class ConstraintsPanel {
     Object.assign(askBtn.style, {
       width: '24px', height: '24px', padding: '0',
       background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
+      cursor: 'pointer', fontSize: 'calc(14px * var(--font-scale))', borderRadius: '4px',
       transition: 'color var(--snap, 0.12s)',
       marginRight: '4px',
     });
@@ -140,7 +140,7 @@ export class ConstraintsPanel {
       this.renderForm();
     } catch (err) {
       console.error('Failed to load constraints:', err);
-      this.content.innerHTML = `<div style="color:#e05555;font-size:12px;padding:12px;">加载约束配置失败</div>`;
+      this.content.innerHTML = `<div style="color:#e05555;font-size: calc(12px * var(--font-scale));padding:12px;">加载约束配置失败</div>`;
     }
   }
 

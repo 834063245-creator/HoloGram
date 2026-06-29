@@ -406,7 +406,7 @@ export class ChatPanel {
     // Model info
     html += '<div class="chat-context-section">';
     html += '<div class="chat-context-section-label">当前模型</div>';
-    html += `<div style="font-family:var(--font-mono);font-size:10px;color:var(--signal)">
+    html += `<div style="font-family:var(--font-mono);font-size: calc(10px * var(--font-scale));color:var(--signal)">
       ${active?.name || '未知'} / ${active?.model || '未配置'}
       ${active?.thinking ? ' · 思考模式' : ''}
     </div>`;
@@ -436,7 +436,7 @@ export class ChatPanel {
     const msgCount = this.agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
     const turnCount = this.turnPairs.length;
     const toolTotal = Array.from(this.toolUsage.values()).reduce((a, b) => a + b, 0);
-    html += `<div style="font-family:var(--font-mono);font-size:9px;color:rgba(145,180,225,0.55);display:flex;gap:16px">
+    html += `<div style="font-family:var(--font-mono);font-size: calc(9px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
       <span>${msgCount} 条消息</span>
       <span>${turnCount} 轮对话</span>
       <span>${toolTotal} 次工具调用</span>
@@ -1513,7 +1513,7 @@ export class ChatPanel {
       delBtn.title = '删除此会话';
       Object.assign(delBtn.style, {
         position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
-        width: '20px', height: '20px', padding: '0', fontSize: '14px',
+        width: '20px', height: '20px', padding: '0', fontSize: 'calc(14px * var(--font-scale))',
         background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
         cursor: 'pointer', borderRadius: '0', lineHeight: '1',
       });
@@ -3087,7 +3087,7 @@ export class ChatPanel {
     subEl.innerHTML = `
       <div class="msg-sub-agent-header">
         ${iconHtml('puzzle', 12)} 子 Agent: ${escapeHtml(data.description)}
-        <span style="font-size:8px;opacity:0.5">${data.mode === 'fork' ? '继承上下文' : '独立'}</span>
+        <span style="font-size: calc(8px * var(--font-scale));opacity:0.5">${data.mode === 'fork' ? '继承上下文' : '独立'}</span>
       </div>
       <div class="msg-sub-agent-body open"></div>`;
     this.currentBubble!.appendChild(subEl);
