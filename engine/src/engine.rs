@@ -989,7 +989,9 @@ pub static GRAMMAR_LOADER: std::sync::LazyLock<GrammarLoader> =
         loader.register_static(tree_sitter_r::LANGUAGE.into(), "r", &["r","R"]);
         loader.register_static(tree_sitter_nix::LANGUAGE.into(), "nix", &["nix"]);
         loader.register_static(tree_sitter_bash::LANGUAGE.into(), "bash", &["sh","bash"]);
-        loader.register_static(tree_sitter_json::LANGUAGE.into(), "json", &["json"]);
+        // ponytail: JSON is data, not code. generic_walk has no JSON-specific
+        // node-kind handlers, so parsing JSON files is a no-op that wastes CPU.
+        // loader.register_static(tree_sitter_json::LANGUAGE.into(), "json", &["json"]);
         loader.register_static(tree_sitter_html::LANGUAGE.into(), "html", &["html","htm"]);
         loader.register_static(tree_sitter_css::LANGUAGE.into(), "css", &["css"]);
         loader.register_static(tree_sitter_yaml::LANGUAGE.into(), "yaml", &["yaml","yml"]);

@@ -1418,9 +1418,8 @@ struct DirEntry {
 }
 
 /// Recursively list directory contents (depth-limited to avoid huge trees).
-fn list_dir_recursive(root: &std::path::Path, depth: u32) -> Vec<DirEntry> {
+fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
     let mut entries: Vec<DirEntry> = Vec::new();
-    if depth == 0 { return entries; }
 
     // Directories to skip
     let skip_dirs: std::collections::HashSet<&str> = [
@@ -1449,7 +1448,7 @@ fn list_dir_recursive(root: &std::path::Path, depth: u32) -> Vec<DirEntry> {
         }
 
         let children = if is_dir {
-            Some(list_dir_recursive(&path, depth - 1))
+            Some(list_dir_recursive(&path))
         } else {
             None
         };
@@ -1461,12 +1460,6 @@ fn list_dir_recursive(root: &std::path::Path, depth: u32) -> Vec<DirEntry> {
             children,
         });
     }
-
-    // Sort: dirs first, then alphabetically
-    entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir)
-            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
 
     entries
 }
@@ -1485,10 +1478,69 @@ async fn list_directory(
         if !root.is_dir() {
             return Err(format!("不是有效目录: {}", path));
         }
-        Ok(list_dir_recursive(&root, 4))
+        Ok(list_dir_recursive(&root))
     })
     .await
     .map_err(|e| format!("目录列表任务失败: {e}"))?
+}
+
+/// Flat (non-recursive) directory listing — returns only direct children, no grandchildren.
+/// Used by FileTreePanel for lazy expansion: load top level, expand folders on demand.
+#[tauri::command]
+async fn list_directory_flat(
+    path: String,
+    state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<DirEntry>, String> {
+    let root = require_read(&path, &state, &app).await?;
+    tokio::task::spawn_blocking(move || {
+        if !root.is_dir() {
+            return Err(format!("不是有效目录: {}", path));
+        }
+        Ok(list_dir_flat(&root))
+    })
+    .await
+    .map_err(|e| format!("目录列表任务失败: {e}"))?
+}
+
+/// Flat listing: one level, children always null. Sort: dirs first, alpha.
+fn list_dir_flat(root: &std::path::Path) -> Vec<DirEntry> {
+    let mut entries: Vec<DirEntry> = Vec::new();
+    let skip_dirs: std::collections::HashSet<&str> = [
+        ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
+        "node_modules", ".venv", "venv", ".hologram", "dist", "build", "target",
+        ".next", ".nuxt", ".cache", "egg-info", ".eggs",
+    ].iter().cloned().collect();
+
+    let readdir = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(_) => return entries,
+    };
+
+    for entry in readdir.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') && name != ".env" && name != ".gitignore" && name != ".editorconfig" {
+            continue;
+        }
+        let is_dir = path.is_dir();
+        if is_dir && skip_dirs.contains(name.as_str()) {
+            continue;
+        }
+        entries.push(DirEntry {
+            name,
+            path: path.to_string_lossy().to_string(),
+            is_dir,
+            children: None,
+        });
+    }
+
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    entries
 }
 
 #[tauri::command]
@@ -3167,6 +3219,7 @@ fn main() {
             agent_isolation_discard,
             agent_isolation_status,
             list_directory,
+            list_directory_flat,
             read_file_content,
             read_file_base64,
             write_file_content,
