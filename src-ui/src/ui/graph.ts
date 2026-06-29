@@ -873,9 +873,9 @@ export class StarGraph {
   private _glowSizes: Float32Array = new Float32Array(0);   // per-point size (twinkle variation)
   private _glow2Sizes: Float32Array = new Float32Array(0);  // outer glow size
   private _nodeMagCache: Float32Array = new Float32Array(0); // pre-computed log1p ratio
+  private _overrideFlags: Float32Array = new Float32Array(0); // 0=shader animated, 1=CPU overridden
+  private _prevOverrideSet: Set<number> = new Set(); // nodes overridden last frame (for reset)
   private _nodeCount = 0;
-  // Reusable Color for animate loop hue shift (ponytail: avoid per-frame allocation)
-  private _animColor = new THREE.Color();
   // Reference colors (unchanged API)
   private nodeGlowColors: number[] = [];
   private nodeCoreColors: number[] = [];
@@ -884,8 +884,6 @@ export class StarGraph {
   private scaleMode: 'degree' | 'coupling' = 'degree';
 
   // Full-FX extras
-  private twinklePhases: number[] = [];
-  private twinkleSpeeds: number[] = [];
   private _nodeBaseHSL: Array<{ h: number; s: number; l: number }> = [];
   private edgeParticles!: THREE.Points;
   private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
@@ -971,7 +969,6 @@ export class StarGraph {
 
   // Step 2: Agent lens & trail
   private _lensActive = false;
-  private _lensOriginalOpacities: Map<number, number> | null = null;
   private _trailLine: THREE.LineSegments | null = null;
 
   // Blast
@@ -1009,9 +1006,6 @@ export class StarGraph {
   private tmpVec3 = new THREE.Vector3();
   // Idle detection — throttle expensive per-frame work when nothing changes
   private _idleCounter = 0;
-  // ponytail: throttle GPU buffer upload to every 3rd frame — twinkle at 20fps
-  // is imperceptible vs 60fps, but cuts PCIe bus pressure by 2/3 and avoids pipeline stalls
-  private _glowUploadTick = 0;
   private _lastCamPos = new THREE.Vector3();
   private _lastCamTarget = new THREE.Vector3();
 
@@ -1757,10 +1751,11 @@ export class StarGraph {
     // Update all node glows: path nodes bright cyan, others dim
     for (let i = 0; i < this._nodeCount; i++) {
       const onPath = this._pathNodes.has(i) || i === src;
+      this._overrideFlags[i] = 1; // all nodes overridden during path mode
       if (i < this._nodeCount) {
         this._setGlowAlpha(i, onPath ? 0.9 : (this._pathNodes.size > 0 ? 0.06 : 0.55));
         if (onPath) {
-          this._setGlowColor(i, 
+          this._setGlowColor(i,
             i === src ? 0x44ffdd : i === this._pathTarget ? 0xff8844 : 0x44ddff);
         }
       }
@@ -1768,6 +1763,7 @@ export class StarGraph {
         { let _v=onPath || this._pathNodes.size === 0; this._setCoreVisible(i, _v); }
       }
     }
+    this._flushOverrideAttrs();
     // Dim/hide non-path edges
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).opacity =
@@ -1800,14 +1796,16 @@ export class StarGraph {
     this._pathTarget = -1;
     this._pathNodes.clear();
     this._pathEdges.clear();
-    // Restore normal appearance
+    // Restore normal appearance — clear override flags, shader takes over
     for (let i = 0; i < this._nodeCount; i++) {
+      this._overrideFlags[i] = 0;
       if (i < this._nodeCount) {
-        this._setGlowAlpha(i, false ? 0 : 0.55);
+        this._setGlowAlpha(i, 0.55);
         this._setGlowColor(i, this.nodeGlowColors[i]);
       }
       this._setCoreVisible(i, true);
     }
+    this._flushOverrideAttrs();
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).opacity =
         edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
@@ -2304,22 +2302,32 @@ export class StarGraph {
   private exitBlastMode(): void {
     this.blastMode = false; this.blastSource = -1; this.blastDistances = [];
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    // ponytail: reset override flags so shader resumes animation.
+    // Core colors need explicit reset (InstancedMesh, not shader-driven).
     for (let i = 0; i < this._nodeCount; i++) {
-      this._setGlowColor(i, this.nodeGlowColors[i]);
-      this._setGlowAlpha(i, false ? 0 : 0.55);
-      const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
-      this._setCoreColor(i, 0xffffff);
+      this._overrideFlags[i] = 0;
+      this._setCoreColor(i, this.nodeCoreColors[i]);
+      const base = this.getNodeBaseScale(i);
+      this._setCoreScale(i, base * 0.35);
     }
+    // Restore glow colors to defaults so when override is cleared,
+    // the base color attribute has correct values for shader to animate from
+    for (let i = 0; i < this._nodeCount; i++) {
+      const gc = new THREE.Color(this.nodeGlowColors[i]);
+      this._setGlowRgba(i, gc.r, gc.g, gc.b, 0.85);
+      if (this._glow2Rgba.length > 0) this._setGlow2Rgba(i, gc.r, gc.g, gc.b, 0.55);
+    }
+    this._flushOverrideAttrs();
     const st = document.getElementById('status-text');
     if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
   }
 
   private updateBlastNodeColors(): void {
     if (!this.blastMode) return;
-    const isFull = true;
     for (let i = 0; i < this._nodeCount; i++) {
       const d = this.blastDistances[i];
       if (d >= 0) {
+        this._overrideFlags[i] = 1;
         const c = new THREE.Color();
         if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
         this._setGlowColor(i, c);
@@ -2328,8 +2336,20 @@ export class StarGraph {
         const base = this.getNodeBaseScale(i);
         this._setCoreScale(i, base * (d === 0 ? 2 : 1));
       } else {
+        this._overrideFlags[i] = 1;
         this._setGlowAlpha(i, 0.12);
       }
+    }
+    // Flush override flags to GPU
+    this._flushOverrideAttrs();
+  }
+
+  private _flushOverrideAttrs(): void {
+    if (this.nodeGlowsPoints?.geometry.attributes['override']) {
+      this.nodeGlowsPoints.geometry.attributes['override'].needsUpdate = true;
+    }
+    if (this.nodeGlows2Points?.geometry.attributes['override']) {
+      this.nodeGlows2Points.geometry.attributes['override'].needsUpdate = true;
     }
   }
 
@@ -2479,9 +2499,11 @@ export class StarGraph {
     this._nodeKindFilter = filter;
     if (filter === null) {
       for (let i = 0; i < this._nodeCount; i++) {
+        this._overrideFlags[i] = 0;
         this._setGlowAlpha(i, 0.55);
         this._setCoreVisible(i, true);
-              }
+      }
+      this._flushOverrideAttrs();
       this._updateLegendActive(this._edgeTypeFilter, null);
       return;
     }
@@ -2496,14 +2518,17 @@ export class StarGraph {
     for (let i = 0; i < this._nodeCount; i++) {
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string);
       const hit = matches(kind);
-      // ponytail: 未命中直接 visible=false 全隐藏, 比 opacity 极低值更彻底且省 GPU
-      if (i < this._nodeCount) {
-        this._setGlowAlpha(i, hit ? 0.55 : 0);
-        if (hit) this._setGlowAlpha(i, 0.88);
+      this._overrideFlags[i] = hit ? 1 : 1; // ALL nodes overridden — shader would animate non-matching
+      if (hit) {
+        this._setGlowAlpha(i, 0.88);
+        if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0.48);
+      } else {
+        this._setGlowAlpha(i, 0);
+        if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0);
       }
-      if (i < this._nodeCount) { let _v=hit; this._setCoreVisible(i, _v); }
-      if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, hit ? 0.48 : 0);
+      this._setCoreVisible(i, hit);
     }
+    this._flushOverrideAttrs();
     this._updateLegendActive(this._edgeTypeFilter, filter);
   }
 
@@ -2561,6 +2586,7 @@ export class StarGraph {
     if (!this.nodeGlowsPoints || i >= this._nodeCount) return;
     this._glowRgba[i * 4] = r; this._glowRgba[i * 4 + 1] = g;
     this._glowRgba[i * 4 + 2] = b; this._glowRgba[i * 4 + 3] = a;
+    this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
   }
 
   private _setGlowColor(i: number, c: THREE.Color | number, a?: number): void {
@@ -2569,17 +2595,24 @@ export class StarGraph {
   }
 
   private _setGlowAlpha(i: number, a: number): void {
-    if (i < this._nodeCount) this._glowRgba[i * 4 + 3] = a;
+    if (i < this._nodeCount) {
+      this._glowRgba[i * 4 + 3] = a;
+      if (this.nodeGlowsPoints) this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+    }
   }
 
   private _setGlow2Rgba(i: number, r: number, g: number, b: number, a: number): void {
     if (!this.nodeGlows2Points || i >= this._nodeCount) return;
     this._glow2Rgba[i * 4] = r; this._glow2Rgba[i * 4 + 1] = g;
     this._glow2Rgba[i * 4 + 2] = b; this._glow2Rgba[i * 4 + 3] = a;
+    this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
   }
 
   private _setGlow2Alpha(i: number, a: number): void {
-    if (i < this._nodeCount && this._glow2Rgba.length > 0) this._glow2Rgba[i * 4 + 3] = a;
+    if (i < this._nodeCount && this._glow2Rgba.length > 0) {
+      this._glow2Rgba[i * 4 + 3] = a;
+      if (this.nodeGlows2Points) this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+    }
   }
 
   private _flushBatch(): void {
@@ -2632,14 +2665,16 @@ export class StarGraph {
 
     // Apply: dim non-highlighted, recolor highlighted
     for (let i = 0; i < this._nodeCount; i++) {
+      this._overrideFlags[i] = 1;
       if (this._agentHighlightIndices.has(i)) {
         this._setGlowColor(i, color);
         this._setGlowAlpha(i, 0.88);
         this._setCoreVisible(i, true);
       } else {
         this._setGlowAlpha(i, 0.025);
-              }
+      }
     }
+    this._flushOverrideAttrs();
     // Dim non-path edges
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = 0.008;
@@ -2668,21 +2703,24 @@ export class StarGraph {
 
   private _clearAgentHighlightState(): void {
     if (this._agentHighlightIndices.size === 0) return;
-    // Restore original glows for previously highlighted nodes
+    // Restore original glows for previously highlighted nodes + clear override
     for (const i of this._agentHighlightIndices) {
       if (i < this._nodeCount) {
+        this._overrideFlags[i] = 0;
         this._setGlowColor(i, this.nodeGlowColors[i]);
-        this._setGlowAlpha(i, false ? 0 : 0.55);
+        this._setGlowAlpha(i, 0.55);
       }
       this._setCoreVisible(i, true);
     }
     // Restore non-highlighted dimmed nodes (opacity + visibility)
     for (let i = 0; i < this._nodeCount; i++) {
       if (!this._agentHighlightIndices.has(i)) {
+        this._overrideFlags[i] = 0;
         this._setGlowAlpha(i, 0.55);
         this._setCoreVisible(i, true);
       }
     }
+    this._flushOverrideAttrs();
     // Restore edge opacities
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).opacity =
@@ -2711,37 +2749,33 @@ export class StarGraph {
     for (let i = 0; i < this._nodeCount; i++) {
       const loc = (this.graphNodes[i].location || '').toLowerCase();
       if (!loc) continue;
-      // Match any hotspot file path against node location
       for (const [hsPath, count] of this._hotspotFiles) {
         if (loc.includes(hsPath) || hsPath.includes(loc)) {
           const intensity = Math.min(1, 0.3 + (count - 2) * 0.12);
-          // Tint glow toward fail/warn color
           if (i < this._nodeCount) {
+            this._overrideFlags[i] = 1;
             const r = 0.85, g = 0.2 + (1 - intensity) * 0.3, b = 0.2 + (1 - intensity) * 0.3;
             this._setGlowRgba(i, r, g, b, 0.35 + intensity * 0.55);
-          }
-          // Pulse larger glows for high-count hotspots
-          if (i < this._nodeCount && count >= 5) {
-            const s = 1.0 + (count - 4) * 0.12;
           }
           break;
         }
       }
     }
+    this._flushOverrideAttrs();
   }
 
   clearHotspots(): void {
     if (this._hotspotFiles.size === 0) return;
     this._hotspotFiles.clear();
-    // Restore original glow colors and opacities
+    // Restore original glow colors and clear override flags
     for (let i = 0; i < this._nodeCount; i++) {
       if (i < this._nodeCount) {
-        this._setGlowColor(i, 
-          this.nodeGlowColors[i] || 0x5588cc,
-        );
+        this._overrideFlags[i] = 0;
+        this._setGlowColor(i, this.nodeGlowColors[i] || 0x5588cc);
         this._setGlowAlpha(i, 0.55);
       }
     }
+    this._flushOverrideAttrs();
   }
 
   // ── Agent Lens (Step 2) — dim everything except visited nodes ──
@@ -2768,22 +2802,17 @@ export class StarGraph {
 
     if (lensIndices.size === 0) return;
 
-    // Save original opacities for restoration
-    if (!this._lensOriginalOpacities) {
-      this._lensOriginalOpacities = new Map();
-    }
-
     // Apply lens: visited nodes stay bright, others dim to 1%
     for (let i = 0; i < this._nodeCount; i++) {
+      this._overrideFlags[i] = 1;
       if (lensIndices.has(i)) {
-        if (!this._lensOriginalOpacities.has(i)) this._lensOriginalOpacities.set(i, this._glowRgba[i * 4 + 3]);
         this._setGlowAlpha(i, 0.88);
         this._setCoreVisible(i, true);
       } else {
-        if (!this._lensOriginalOpacities.has(i)) this._lensOriginalOpacities.set(i, this._glowRgba[i * 4 + 3]);
         this._setGlowAlpha(i, 0.01);
       }
     }
+    this._flushOverrideAttrs();
 
     // Dim all edges
     for (const lines of this.edgeLineGroups) {
@@ -2795,18 +2824,15 @@ export class StarGraph {
 
   /** Restore normal rendering from agent lens mode. */
   clearAgentLens(): void {
-    if (!this._lensActive && !this._lensOriginalOpacities) return;
+    if (!this._lensActive) return;
     this._lensActive = false;
 
     for (let i = 0; i < this._nodeCount; i++) {
-      const orig = this._lensOriginalOpacities?.get(i);
-      if (orig !== undefined) {
-        this._setGlowAlpha(i, orig);
-      } else {
-        this._setGlowAlpha(i, 0.55);
-      }
+      this._overrideFlags[i] = 0;
+      this._setGlowAlpha(i, 0.55);
       this._setCoreVisible(i, true);
     }
+    this._flushOverrideAttrs();
 
     // Restore edge opacities
     for (const lines of this.edgeLineGroups) {
@@ -2814,7 +2840,6 @@ export class StarGraph {
         edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
     }
 
-    this._lensOriginalOpacities?.clear();
     this._clearTrailLine();
   }
 
@@ -2918,16 +2943,20 @@ export class StarGraph {
     const hl = this._fileHighlight;
     const idxs = this._fileHighlightIndices;
 
-    // Nodes: dim non-highlighted
+    // Nodes: dim non-highlighted, set override so shader doesn't animate over
     for (let i = 0; i < this._nodeCount; i++) {
       const visible = !hl || idxs.has(i);
-      if (hl && !visible && (this._glowRgba[i*4+3] > 0.01)) {
-        this._fileOpacityOriginal.set(i, this._glowRgba[i * 4 + 3]);
+      if (hl && !visible) {
+        this._overrideFlags[i] = 1;
         this._setGlowAlpha(i, 0.03);
-      } else if (!hl && this._fileOpacityOriginal.has(i)) {
-        this._setGlowAlpha(i, this._fileOpacityOriginal.get(i)!);
-        this._fileOpacityOriginal.delete(i);
+      } else if (!hl) {
+        this._overrideFlags[i] = 0;
+        this._setGlowAlpha(i, 0.55);
       }
+    }
+    if (hl || this._fileOpacityOriginal.size > 0) {
+      this._flushOverrideAttrs();
+      this._fileOpacityOriginal.clear();
     }
 
     // Edges: dim all when highlighting
@@ -4241,7 +4270,10 @@ export class StarGraph {
     // Hide all batched objects
     this.nodeCoresInstanced.count = 0;
     this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
-    // Zero all glow alpha
+    // ponytail: set override flags so shader passes through CPU alpha during reveal
+    this._overrideFlags.fill(1);
+    this._flushOverrideAttrs();
+    // Zero all glow alpha — override=1 means shader uses these values directly
     this._glowRgba.fill(0);
     this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
     if (this._glow2Rgba.length > 0) {
@@ -4288,9 +4320,10 @@ export class StarGraph {
 
       if (revealedNodes >= totalNodes && revealedEdges >= totalEdgeGroups) {
         this._revealRevealed = true;
+        // ponytail: clear override flags — shader resumes animation now that reveal is done
+        this._overrideFlags.fill(0);
+        this._flushOverrideAttrs();
         // ponytail: force bounding-sphere recompute now that count==totalNodes.
-        // First raycaster call happens during reveal (count=0→partial), caches an
-        // empty/partial sphere; without this, all subsequent raycasts return 0 hits.
         this.nodeCoresInstanced.boundingSphere = null;
         this.labelsContainer.style.transition = 'opacity 0.4s ease-in';
         this.labelsContainer.style.opacity = '1';
@@ -4356,7 +4389,6 @@ export class StarGraph {
     this.detailCard?.classList.remove('visible');
     // Step 2: Clear lens & trail state
     this._lensActive = false;
-    this._lensOriginalOpacities?.clear();
     this._clearTrailLine();
   }
 
@@ -4409,6 +4441,19 @@ export class StarGraph {
     this._glowSizes = new Float32Array(N);
     this._glow2Sizes = isFull ? new Float32Array(N) : new Float32Array(0);
 
+    // ponytail: GPU-driven shader attributes — static, uploaded once
+    const phaseArr = new Float32Array(N);
+    const speedArr = new Float32Array(N);
+    const magArr = new Float32Array(N);
+    const riskArr = new Float32Array(N);
+    const hslArr = new Float32Array(N * 3);
+    this._overrideFlags = new Float32Array(N); // 0=shader animated, 1=CPU overridden
+    // init twinkle data inline (ponytail: avoid separate initTwinkleData call)
+    for (let i = 0; i < N; i++) {
+      phaseArr[i] = Math.random() * Math.PI * 2;
+      speedArr[i] = 0.5 + Math.random() * 2.5;
+    }
+
     const _m = new THREE.Matrix4();
     const _v = new THREE.Vector3();
     const _q = new THREE.Quaternion();
@@ -4440,6 +4485,10 @@ export class StarGraph {
       // HSL cache for twinkle
       this._nodeBaseHSL[i] = { h: 0, s: 0, l: 0 };
       gc.getHSL(this._nodeBaseHSL[i]);
+      // GPU shader attributes (static, uploaded once)
+      hslArr[i * 3] = this._nodeBaseHSL[i].h;
+      hslArr[i * 3 + 1] = this._nodeBaseHSL[i].s;
+      hslArr[i * 3 + 2] = this._nodeBaseHSL[i].l;
 
       // Outer glow RGBA + size
       if (isFull) {
@@ -4456,17 +4505,32 @@ export class StarGraph {
     // Pre-compute _nodeMag cache (ponytail: log1p ratio is static, avoid per-frame recalc)
     this._nodeMagCache = new Float32Array(N);
     const logMax = Math.log1p(this.maxDeg);
-    for (let i = 0; i < N; i++) this._nodeMagCache[i] = 0.15 + 0.85 * (Math.log1p(this.deg[i]) / logMax);
+    for (let i = 0; i < N; i++) {
+      this._nodeMagCache[i] = 0.15 + 0.85 * (Math.log1p(this.deg[i]) / logMax);
+      magArr[i] = this._nodeMagCache[i];
+      riskArr[i] = this.l34Count[i] || 0;
+    }
 
     // Upload + create Points objects
     this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
     if (this.nodeCoresInstanced.instanceColor) this.nodeCoresInstanced.instanceColor.needsUpdate = true;
 
+    // ── Shared shader attribute helper ──
+    const addAnimAttrs = (geo: THREE.BufferGeometry) => {
+      geo.setAttribute('phase', new THREE.BufferAttribute(phaseArr, 1));
+      geo.setAttribute('speed', new THREE.BufferAttribute(speedArr, 1));
+      geo.setAttribute('mag', new THREE.BufferAttribute(magArr, 1));
+      geo.setAttribute('risk', new THREE.BufferAttribute(riskArr, 1));
+      geo.setAttribute('baseHSL', new THREE.BufferAttribute(hslArr, 3));
+      geo.setAttribute('override', new THREE.BufferAttribute(this._overrideFlags, 1));
+    };
+
     const glowGeo = new THREE.BufferGeometry();
     glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPosArr, 3));
     glowGeo.setAttribute('color', new THREE.BufferAttribute(this._glowRgba, 4));
     glowGeo.setAttribute('size', new THREE.BufferAttribute(this._glowSizes, 1));
-    this.nodeGlowsPoints = new THREE.Points(glowGeo, this._makeGlowPointMaterial());
+    addAnimAttrs(glowGeo);
+    this.nodeGlowsPoints = new THREE.Points(glowGeo, this._makeGlowPointMaterial(1.5, 1.0));
     this.nodeGlowsPoints.frustumCulled = false;
     this.nodeGlowsPoints.renderOrder = 1;
     this.nodeGroup.add(this.nodeGlowsPoints);
@@ -4476,20 +4540,72 @@ export class StarGraph {
       g2Geo.setAttribute('position', new THREE.BufferAttribute(glow2PosArr, 3));
       g2Geo.setAttribute('color', new THREE.BufferAttribute(this._glow2Rgba, 4));
       g2Geo.setAttribute('size', new THREE.BufferAttribute(this._glow2Sizes, 1));
-      this.nodeGlows2Points = new THREE.Points(g2Geo, this._makeGlowPointMaterial());
+      addAnimAttrs(g2Geo);
+      this.nodeGlows2Points = new THREE.Points(g2Geo, this._makeGlowPointMaterial(0.55, 0.85));
       this.nodeGlows2Points.frustumCulled = false;
       this.nodeGlows2Points.renderOrder = 1;
       this.nodeGroup.add(this.nodeGlows2Points);
     }
   }
 
-  private _makeGlowPointMaterial(): THREE.ShaderMaterial {
+  // ponytail: GPU-driven glow — all twinkle/sine/hue-shift math runs in vertex shader.
+  // CPU sets uTime/uPulseTime uniforms each frame; per-vertex animData + baseHSL
+  // attributes are static.  Override flag skips shader animation for hover/blast/path.
+  // ── HSL→RGB in GLSL ──
+  private static _GLSL_HSL2RGB = /* glsl */ `
+    vec3 hsl2rgb(float h, float s, float l) {
+      vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+      return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+    }
+  `;
+
+  private _makeGlowPointMaterial(alphaMul: number, sizeMul: number): THREE.ShaderMaterial {
+    const hsl2rgb = StarGraph._GLSL_HSL2RGB;
     return new THREE.ShaderMaterial({
-      uniforms: { uTex: { value: this.glowTex } },
-      vertexShader: `attribute vec4 color; attribute float size; varying vec4 vColor;
-        void main() { vec4 mv = modelViewMatrix * vec4(position,1.0);
-          gl_PointSize = size * 28.0 * (300.0 / -mv.z); gl_Position = projectionMatrix * mv; vColor = color; }`,
-      fragmentShader: `uniform sampler2D uTex; varying vec4 vColor;
+      uniforms: {
+        uTex: { value: this.glowTex },
+        uTime: { value: 0 },
+        uPulseTime: { value: 0 },
+      },
+      vertexShader: /* glsl */ `
+        attribute vec4 color;
+        attribute float size;
+        attribute float phase;
+        attribute float speed;
+        attribute float mag;
+        attribute float risk;
+        attribute vec3  baseHSL;
+        attribute float override;
+        varying vec4 vColor;
+        uniform float uTime;
+        uniform float uPulseTime;
+        ${hsl2rgb}
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          float pointScale = 28.0 * (300.0 / -mv.z);
+          if (override > 0.5) {
+            vColor = color;
+            gl_PointSize = size * pointScale;
+          } else {
+            float twinkle = 1.0 + sin(uTime * speed + phase) * 0.10;
+            float riskFreq = 1.0 + risk * 0.7;
+            float waveAmp = risk > 0.0 ? min(0.18, risk * 0.06) : 0.03;
+            float wave = 1.0 + sin(uPulseTime * riskFreq) * waveAmp;
+            float combined = twinkle * wave;
+            float alpha = min(1.0, ${alphaMul.toFixed(2)} * combined * mag);
+            float hueShift = sin(uTime * 0.3 + phase) * 0.05;
+            float newH = mod(baseHSL.x + hueShift + 1.0, 1.0);
+            float newS = min(1.0, baseHSL.y * 1.2);
+            float newL = min(1.0, baseHSL.z * 1.3);
+            vec3 rgb = hsl2rgb(newH, newS, newL);
+            vColor = vec4(rgb, alpha);
+            gl_PointSize = size * combined * ${sizeMul.toFixed(2)} * pointScale;
+          }
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uTex;
+        varying vec4 vColor;
         void main() { gl_FragColor = vColor * texture2D(uTex, gl_PointCoord); }`,
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
     });
@@ -4630,9 +4746,12 @@ export class StarGraph {
 
       if (!this.focusSubgraphVisibleIndices.has(i)) {
         if (i < this._nodeCount) {
+          this._overrideFlags[i] = 1;
           this._setGlowAlpha(i, 0.02);
         }
         this._setCoreVisible(i, false);
+      } else {
+        this._overrideFlags[i] = 1;
       }
     }
 
@@ -4648,10 +4767,12 @@ export class StarGraph {
 
     // Highlight the focus node
     if (idx < this._nodeCount) {
+      this._overrideFlags[idx] = 1;
       this._setGlowAlpha(idx, 0.92);
       this._setGlowColor(idx, 0xffffff);
     }
 
+    this._flushOverrideAttrs();
     this.focusSubgraphActive = true;
     const node = this.graphNodes[idx];
     this.focusSubgraphBanner.innerHTML =
@@ -4694,6 +4815,10 @@ export class StarGraph {
     // Clear focus edges
     while (this.highlightEdgeGroup.children.length)
       this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+
+    // ponytail: clear override flags — shader resumes animation
+    for (let i = 0; i < this._nodeCount; i++) this._overrideFlags[i] = 0;
+    this._flushOverrideAttrs();
 
     this.focusSubgraphActive = false;
     this.focusSubgraphIdx = -1;
@@ -5021,10 +5146,9 @@ export class StarGraph {
 
   // ── Full-FX: edge particle flow ──────────────────────────
 
-  private initTwinkleData(n: number): void {
-    this.twinklePhases = new Array(n).fill(0).map(() => Math.random() * Math.PI * 2);
-    this.twinkleSpeeds = new Array(n).fill(0).map(() => 0.5 + Math.random() * 2.5);
-  }
+  // ponytail: twinkle data now generated inline in buildNodes (GPU buffer attrs).
+  // Kept as no-op for backward compat — called from _renderImpl after init.
+  private initTwinkleData(_n: number): void { /* no-op: phase/speed baked into GPU attrs in buildNodes */ }
 
   private initEdgeParticles(pos: Float32Array, data: EdgeData[]): void {
     // Remove old
@@ -5134,10 +5258,39 @@ export class StarGraph {
       try { this._updateBloomByDistance(); } catch { /* bloom switch must never crash loop */ }
     }
 
+    // ponytail: GPU-driven glow — set time uniforms, shader handles all animation.
+    // CPU only touches hovered node + neighbors (~10 nodes).
+    const galTime = performance.now() * 0.001;
+    // Update shader time uniforms on both glow layers
+    if (this.nodeGlowsPoints) {
+      (this.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms['uTime'].value = galTime;
+      (this.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms['uPulseTime'].value = this.pulseTime;
+    }
+    if (this.nodeGlows2Points) {
+      (this.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms['uTime'].value = galTime;
+      (this.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms['uPulseTime'].value = this.pulseTime;
+    }
+
+    // ── Hover overrides — reset previous, apply current ──
+    // Track previously overridden nodes so we can release them back to shader
+    if (!this._prevOverrideSet) this._prevOverrideSet = new Set<number>();
+    for (const pi of this._prevOverrideSet) {
+      if (pi < this._nodeCount) this._overrideFlags[pi] = 0;
+    }
+    this._prevOverrideSet.clear();
+    if (this.nodeGlowsPoints?.geometry.attributes['override']) {
+      this.nodeGlowsPoints.geometry.attributes['override'].needsUpdate = true;
+    }
+    if (this.nodeGlows2Points?.geometry.attributes['override']) {
+      this.nodeGlows2Points.geometry.attributes['override'].needsUpdate = true;
+    }
+
     // Hover effects — brightness-only, no size inflation
     this.hoverScale += (this.targetHoverScale - this.hoverScale) * 0.18;
     const neighborSet = new Set(this.hoveredIdx >= 0 ? this.neighborMap[this.hoveredIdx] || [] : []);
     if (this.hoveredIdx >= 0 && this.hoveredIdx < this._nodeCount) {
+      this._overrideFlags[this.hoveredIdx] = 1;
+      this._prevOverrideSet.add(this.hoveredIdx);
       this._setGlowAlpha(this.hoveredIdx, 0.65 + this.hoverScale * 0.35);
       // Brighten core color toward white on hover
       const origColor = this.nodeCoreColors[this.hoveredIdx];
@@ -5145,12 +5298,30 @@ export class StarGraph {
       this._setCoreColor(this.hoveredIdx, brightColor);
       for (const ni of neighborSet) {
         if (ni !== this.hoveredIdx && ni < this._nodeCount) {
+          this._overrideFlags[ni] = 1;
+          this._prevOverrideSet.add(ni);
           this._setGlowAlpha(ni, 0.55 + this.hoverScale * 0.10);
         }
       }
     }
+    // Flush override flags to GPU (only when overrides changed)
+    if (this._prevOverrideSet.size > 0) {
+      if (this.nodeGlowsPoints?.geometry.attributes['override']) {
+        this.nodeGlowsPoints.geometry.attributes['override'].needsUpdate = true;
+      }
+      if (this.nodeGlows2Points?.geometry.attributes['override']) {
+        this.nodeGlows2Points.geometry.attributes['override'].needsUpdate = true;
+      }
+    }
 
-    // ── Galaxy cloud breathe + core pulse + hover highlight + cross-edge flow ──
+    // ── Mode-driven override: blast/path/filter set once on mode change, not per-frame ──
+    // ponytail: blast/path/filter modes already call updateBlastNodeColors / highlightPath / etc.
+    // which set per-node colors AND override flags. The shader preserves those until reset.
+    // We only need to handle the case where a mode was active but animate loop was
+    // resetting nodes outside the mode ring back to animated state.
+    // With shader-driven glow, no per-frame reset needed — shader animates non-overridden nodes.
+
+    // Galaxy cloud breathe + hover ...
     if (this.foldMode && !this.enteredGalaxyId) {
       this.animateCrossEdgeFlow();
       for (let k = 0; k < this.galaxyGlows.length; k++) {
@@ -5175,93 +5346,6 @@ export class StarGraph {
     }
 
     this.pulseTime += 0.03 * (isFull ? 1.5 : 1);
-    // Per-node glow loop — skip when idle to save CPU (cosmetic only, imperceptible at 10fps vs 60fps)
-    if (!IDLE || this._idleCounter % 6 === 0) {
-    const inPathMode = this._pathSource >= 0;
-    const galTime = performance.now() * 0.001; // galaxy time for color cycling
-    for (let i = 0; i < this._nodeCount; i++) {
-      if (this.focusSubgraphActive && !this.focusSubgraphVisibleIndices.has(i)) continue;
-      if (i === this.focusSubgraphIdx || i === this.hoveredIdx || neighborSet.has(i) || i === this.focusNodeIdx) continue;
-      // ponytail: node kind filter gate — keep filtered-out nodes invisible,
-      // overriding per-frame twinkle/glow to prevent filter from leaking through.
-      if (this._nodeKindFilter !== null) {
-        const fk = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
-        let fmatch: boolean;
-        const f = this._nodeKindFilter;
-        if (f === 'function' || f === 'method') fmatch = fk === 'function' || fk === 'method';
-        else if (f === 'medium') fmatch = ['file', 'database', 'cache', 'queue', 'medium'].includes(fk);
-        else if (f === 'temporal') fmatch = ['thread', 'timer', 'trigger', 'temporal'].includes(fk);
-        else fmatch = fk === f;
-        if (!fmatch) {
-          this._setGlowAlpha(i, 0);
-          this._setCoreVisible(i, false);
-          if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0);
-          continue;
-        }
-      }
-      // Path mode: keep path nodes highlighted, non-path nodes dimmed
-      if (inPathMode) {
-        if (this._pathNodes.has(i) || i === this._pathSource) continue; // path node — keep highlight
-        if (this._pathNodes.size > 0) {
-          this._setGlowAlpha(i, 0.05);
-          this._setCoreVisible(i, false);
-          continue;
-        }
-      }
-      if (this.blastMode) {
-        const d = this.blastDistances[i];
-        if (d >= 0) {
-          const c = new THREE.Color();
-          if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
-          this._setGlowColor(i, c);
-          this._setGlowAlpha(i, 0.7);
-          this._setCoreColor(i, c);
-          const base = this.getNodeBaseScale(i);
-          this._setCoreScale(i, base * (d === 0 ? 2 : 1));
-        } else {
-          this._setGlowAlpha(i, Math.min(1, 0.75 * this._nodeMag(i)));
-        }
-      } else {
-        const risk = this.l34Count[i];
-        if (isFull) {
-          // Full mode: individual twinkle + color cycling
-          const twinkle = 1 + Math.sin(galTime * this.twinkleSpeeds[i] + this.twinklePhases[i]) * 0.10;
-          const wave = 1 + Math.sin(this.pulseTime * (1 + risk * 0.7)) * (risk > 0 ? 0.15 : 0.06);
-          const combined = twinkle * wave;
-          const mag = this._nodeMag(i);
-          this._setGlowAlpha(i, Math.min(1, 1.5 * combined * mag));
-          // Animate outer glow layer too; per-point sizes follow twinkle
-          this._glowSizes[i] = combined;
-          if (this._glow2Rgba.length > 0) {
-            this._setGlow2Alpha(i, 0.55 * combined * mag);
-            this._glow2Sizes[i] = 0.85 * combined;
-          }
-          // ponytail: hue shift reuses pre-allocated _animColor to avoid per-frame GC
-          const hueShift = (Math.sin(galTime * 0.3 + this.twinklePhases[i]) * 0.05);
-          const bh = this._nodeBaseHSL[i];
-          this._animColor.setHSL((bh.h + hueShift + 1) % 1, Math.min(1, bh.s * 1.2), Math.min(1, bh.l * 1.3)); this._setGlowColor(i, this._animColor);
-        } else {
-          const freq = 1 + risk * 0.7;
-          const amp = risk > 0 ? Math.min(0.18, risk * 0.06) : 0.03;
-          const wave = 1 + Math.sin(this.pulseTime * freq) * amp;
-          this._setGlowAlpha(i, Math.min(1, 0.9 * wave * this._nodeMag(i)));
-        }
-      }
-    }
-    } // end IDLE-guarded per-node glow loop
-    // Flush glow buffers to GPU every 3rd frame (ponytail: 20fps upload is
-    // imperceptible for ambient twinkle, but avoids PCIe pipeline stalls at 60fps)
-    this._glowUploadTick++;
-    if (this._glowUploadTick % 3 === 0) {
-      if (this.nodeGlowsPoints) {
-        this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
-        this.nodeGlowsPoints.geometry.attributes['size'].needsUpdate = true;
-      }
-      if (this.nodeGlows2Points) {
-        this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
-        this.nodeGlows2Points.geometry.attributes['size'].needsUpdate = true;
-      }
-    }
 
     if (!IDLE || this._idleCounter % 3 === 0) {
       this.updateTooltip(); this.updateLabels(); this._updateCommunityRingHover();
