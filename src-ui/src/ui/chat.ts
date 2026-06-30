@@ -997,7 +997,7 @@ export class ChatPanel {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const bubble = btn.closest('.msg-bubble');
-        const txt = bubble?.querySelector('.msg-text')?.textContent || '';
+        const txt = (bubble as HTMLElement).innerText || '';
         navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(btn, 12)).catch(() => {});
       });
     });
@@ -1357,7 +1357,7 @@ export class ChatPanel {
         copyBtn.title = '复制回复';
         copyBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const txt = bubble.querySelector('.msg-text')?.textContent || '';
+          const txt = (bubble as HTMLElement).innerText || '';
           navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
         });
         actions.append(copyBtn);

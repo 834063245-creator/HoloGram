@@ -1302,3 +1302,77 @@ mod linux {
 
 // assign_to_job is defined above, public. On Windows it delegates to imp::job::assign.
 // On non-Windows it returns true (stub).
+
+#[cfg(test)]
+#[cfg(windows)]
+mod tests {
+    use super::imp::{detect_shell, windows_to_posix_path, Shell};
+
+    #[test]
+    fn test_windows_to_posix_drive_letter() {
+        assert_eq!(windows_to_posix_path("C:\\Users\\foo\\bar"), "/c/Users/foo/bar");
+        assert_eq!(windows_to_posix_path("D:\\project\\src\\main.rs"), "/d/project/src/main.rs");
+        assert_eq!(windows_to_posix_path("C:/Users/foo"), "/c/Users/foo");
+    }
+
+    #[test]
+    fn test_windows_to_posix_nt_prefix() {
+        // \\?\ prefix must be stripped before conversion
+        assert_eq!(
+            windows_to_posix_path("\\\\?\\D:\\HoloGramHG\\src"),
+            "/d/HoloGramHG/src"
+        );
+        assert_eq!(
+            windows_to_posix_path("\\\\?\\C:\\Program Files\\Git"),
+            "/c/Program Files/Git"
+        );
+    }
+
+    #[test]
+    fn test_windows_to_posix_unc() {
+        assert_eq!(
+            windows_to_posix_path("\\\\server\\share\\file.txt"),
+            "//server/share/file.txt"
+        );
+    }
+
+    #[test]
+    fn test_windows_to_posix_no_drive() {
+        // Relative or already-posix paths get slashes flipped
+        assert_eq!(windows_to_posix_path("src\\main.rs"), "src/main.rs");
+        assert_eq!(windows_to_posix_path("some/relative/path"), "some/relative/path");
+    }
+
+    #[test]
+    fn test_windows_to_posix_chinese_path() {
+        // Chinese characters pass through unchanged — only slashes flip
+        assert_eq!(
+            windows_to_posix_path("C:\\Users\\用户\\桌面\\绝密"),
+            "/c/Users/用户/桌面/绝密"
+        );
+        // NT prefix + Chinese
+        assert_eq!(
+            windows_to_posix_path("\\\\?\\D:\\360MoveData\\绝密\\data"),
+            "/d/360MoveData/绝密/data"
+        );
+    }
+
+    #[test]
+    fn test_detect_shell_returns_valid_variant() {
+        // On a dev machine with Git installed, this should return Bash.
+        // On a minimal CI image, it falls back to Cmd — both are valid.
+        let shell = detect_shell();
+        match shell {
+            Shell::Bash(ref path) => {
+                assert!(
+                    std::path::Path::new(path).exists(),
+                    "detected bash path must exist: {}",
+                    path
+                );
+            }
+            Shell::Cmd => {
+                // Cmd fallback is always valid
+            }
+        }
+    }
+}
