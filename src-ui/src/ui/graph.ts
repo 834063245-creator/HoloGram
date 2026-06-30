@@ -774,16 +774,6 @@ export class StarGraph {
   private edgeParticles!: THREE.Points;
   private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
 
-  // Minimap
-  private minimapContainer!: HTMLDivElement;
-  private minimapCanvas!: HTMLCanvasElement;
-  private minimapCtx!: CanvasRenderingContext2D;
-  private minimapTooltip!: HTMLDivElement;
-  private _mmDragging = false;
-  private _mmOffX = 0; private _mmOffY = 0;
-  private _mmHoveredNode = -1;
-  private _mmNodeColors: string[] = [];  // precomputed rgba color strings per node
-
   // Diagnostics
   private _diagMsg = '';
 
@@ -971,34 +961,6 @@ export class StarGraph {
     if (false) this.labelsContainer.style.display = 'none';
     this.container.appendChild(this.labelsContainer);
 
-    // Minimap — draggable radar overview with title bar + hover tooltip
-    const mmc = document.createElement('div');
-    mmc.id = 'graph-minimap-container';
-    mmc.style.cssText = 'position:absolute;bottom:12px;right:12px;z-index:10;transition:opacity 0.25s;';
-    // Title bar
-    const mmTitle = document.createElement('div');
-    mmTitle.id = 'minimap-titlebar';
-    mmTitle.innerHTML = `${iconHtml('focus', 11)} <span style="font-size: calc(10px * var(--font-scale));letter-spacing:0.04em;">小地图</span>`;
-    mmTitle.style.cssText = 'display:flex;align-items:center;gap:4px;padding:3px 8px;color:rgba(255,255,255,0.55);background:rgba(3,8,18,0.75);border:1px solid rgba(255,255,255,0.1);border-bottom:none;border-radius:8px 8px 0 0;font-family:system-ui,sans-serif;pointer-events:none;';
-    // Canvas
-    const mmCanvas = document.createElement('canvas');
-    mmCanvas.id = 'graph-minimap';
-    mmCanvas.width = 280; mmCanvas.height = 190;
-    mmCanvas.style.cssText = 'display:block;border:1px solid rgba(255,255,255,0.12);border-radius:0 0 8px 8px;background:radial-gradient(ellipse at center,rgba(6,16,36,0.92) 0%,rgba(2,6,16,0.96) 100%);cursor:grab;box-shadow:0 0 12px rgba(60,120,220,0.12),0 0 2px rgba(0,0,0,0.6);';
-    // Tooltip
-    const mmTip = document.createElement('div');
-    mmTip.id = 'minimap-tooltip';
-    mmTip.style.cssText = 'position:absolute;pointer-events:none;padding:2px 7px;font-size: calc(10px * var(--font-scale));color:#eef;background:rgba(2,5,16,0.9);border:1px solid rgba(255,255,255,0.18);border-radius:4px;white-space:nowrap;display:none;font-family:system-ui,sans-serif;top:0;left:0;';
-    mmc.appendChild(mmTitle);
-    mmc.appendChild(mmCanvas);
-    mmc.appendChild(mmTip);
-    this.container.appendChild(mmc);
-    this.minimapContainer = mmc;
-    this.minimapCanvas = mmCanvas;
-    this.minimapCtx = mmCanvas.getContext('2d')!;
-    this.minimapTooltip = mmTip;
-    this._setupMinimapDrag();
-    this._setupMinimapInteraction();
 
     this.buildLegend();
     this.buildFocusBanner();
@@ -3374,8 +3336,6 @@ export class StarGraph {
     if (this._pathSource >= 0 && this._deadIndices.has(this._pathSource)) { this._pathSource = -1; this._pathNodes.clear(); this._pathEdges.clear(); }
     if (this._pathTarget >= 0 && this._deadIndices.has(this._pathTarget)) { this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear(); }
 
-    // 7. Force minimap color cache rebuild
-    this._mmNodeColors = [];
 
     // 8. Re-apply diff overlay if active (new nodes might be in the diff set)
     if (this.diffActive && this.diffAddedIds.size + this.diffRemovedIds.size + this.diffModifiedIds.size > 0) {
@@ -5155,262 +5115,6 @@ export class StarGraph {
     this.nodeLabelIdx = [];
   }
 
-  // ── Minimap ───────────────────────────────────────────────
-
-  private _setupMinimapDrag(): void {
-    const c = this.minimapContainer;
-    const canvas = this.minimapCanvas;
-    const onDown = (e: PointerEvent) => {
-      if ((e.target as HTMLElement)?.id === 'minimap-titlebar') return;
-      this._mmDragging = true;
-      this._mmOffX = e.clientX - c.offsetLeft;
-      this._mmOffY = e.clientY - c.offsetTop;
-      c.style.cursor = 'grabbing'; canvas.style.cursor = 'grabbing';
-      c.setPointerCapture(e.pointerId);
-    };
-    const onMove = (e: PointerEvent) => {
-      if (!this._mmDragging) return;
-      c.style.left = `${e.clientX - this._mmOffX}px`;
-      c.style.top = `${e.clientY - this._mmOffY}px`;
-      c.style.right = 'auto'; c.style.bottom = 'auto';
-    };
-    const onUp = () => {
-      this._mmDragging = false;
-      c.style.cursor = ''; canvas.style.cursor = 'grab';
-    };
-    c.addEventListener('pointerdown', onDown);
-    c.addEventListener('pointermove', onMove);
-    c.addEventListener('pointerup', onUp);
-    c.addEventListener('pointerleave', onUp);
-  }
-
-  private updateMinimap(): void {
-    if (!this.minimapCtx || !this.nodePositions || this.nodePositions.length === 0) return;
-    const ctx = this.minimapCtx;
-    const W = 280, H = 190;
-    const PAD = 14;
-    ctx.clearRect(0, 0, W, H);
-
-    // Compute 2D bounds (top-down: XZ plane → minimap XY)
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    const n = this._nodeCount;
-    for (let i = 0; i < n; i++) {
-      const x = this.nodePositions[i * 3], z = this.nodePositions[i * 3 + 2];
-      if (isFinite(x) && isFinite(z)) {
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-      }
-    }
-    const bw = maxX - minX || 1, bh = maxZ - minZ || 1;
-    const scale = Math.min((W - PAD * 2) / bw, (H - PAD * 2) / bh);
-    const ox = (W - bw * scale) / 2, oy = (H - bh * scale) / 2;
-    const proj = (px: number, pz: number) => ({
-      u: ox + (px - minX) * scale,
-      v: oy + (pz - minZ) * scale,
-    });
-
-    // ── Ensure color cache ──
-    if (this._mmNodeColors.length !== n) {
-      this._mmNodeColors = new Array(n);
-      for (let i = 0; i < n; i++) {
-        const kind = this.graphNodes[i]?.kind || this.graphNodes[i]?.type || 'symbol';
-        const hex = NODE_COLORS[kind] ?? NODE_COLORS['symbol']!;
-        const r = (hex >> 16) & 0xff, g = (hex >> 8) & 0xff, b = hex & 0xff;
-        this._mmNodeColors[i] = `${r},${g},${b}`;
-      }
-    }
-
-    // ── Subtle grid dots ──
-    ctx.fillStyle = 'rgba(255,255,255,0.03)';
-    for (let gx = PAD; gx <= W - PAD; gx += 18) {
-      for (let gy = PAD; gy <= H - PAD; gy += 14) {
-        ctx.fillRect(gx, gy, 0.6, 0.6);
-      }
-    }
-
-    // ── Edge lines (sampled, faint) ──
-    const edges = this.edgeDataList;
-    const maxEdges = 350;
-    const edgeStride = edges.length > maxEdges ? Math.floor(edges.length / maxEdges) : 1;
-    ctx.lineWidth = 0.4;
-    for (let ei = 0; ei < edges.length; ei += edgeStride) {
-      const e = edges[ei];
-      const su = proj(this.nodePositions[e.s * 3], this.nodePositions[e.s * 3 + 2]);
-      const tu = proj(this.nodePositions[e.t * 3], this.nodePositions[e.t * 3 + 2]);
-      if (su.u < -4 && tu.u < -4) continue;
-      const ec = e.edgeType.toLowerCase();
-      let alpha = 0.10;
-      if (ec === 'reads') { ctx.strokeStyle = `rgba(102,221,102,${alpha})`; }
-      else if (ec === 'writes') { ctx.strokeStyle = `rgba(255,85,102,${alpha})`; }
-      else if (ec === 'shares') { ctx.strokeStyle = `rgba(255,170,68,${alpha})`; }
-      else if (ec === 'triggers') { ctx.strokeStyle = `rgba(255,136,51,${alpha})`; }
-      else if (ec === 'awaits') { ctx.strokeStyle = `rgba(192,104,255,${alpha})`; }
-      else if (ec === 'sequences') { ctx.strokeStyle = `rgba(136,102,255,${alpha})`; }
-      else if (ec === 'inherits') { ctx.strokeStyle = `rgba(255,102,221,${alpha})`; }
-      else if (ec === 'imports') { ctx.strokeStyle = `rgba(74,223,223,${alpha})`; }
-      else if (ec === 'defines') { ctx.strokeStyle = `rgba(74,223,138,${alpha})`; }
-      else { ctx.strokeStyle = `rgba(74,154,223,${alpha * 0.8})`; }
-      ctx.beginPath();
-      ctx.moveTo(su.u, su.v);
-      ctx.lineTo(tu.u, tu.v);
-      ctx.stroke();
-    }
-
-    // ── Nodes: glow halo + colored core, sized by degree ──
-    const maxD = Math.max(this.maxDeg, 1);
-    for (let i = 0; i < n; i++) {
-      if (this._deadIndices.has(i)) continue; // ponytail: skip dead nodes
-      const { u, v } = proj(this.nodePositions[i * 3], this.nodePositions[i * 3 + 2]);
-      if (u < -2 || u > W + 2 || v < -2 || v > H + 2) continue;
-      const r = 1.0 + 2.8 * Math.log1p(this.deg[i] || 0) / Math.log1p(maxD);
-      const rgb = this._mmNodeColors[i] || '126,184,255';
-      // Glow halo
-      ctx.fillStyle = `rgba(${rgb},0.18)`;
-      ctx.beginPath(); ctx.arc(u, v, r * 2.0, 0, Math.PI * 2); ctx.fill();
-      // Soft middle
-      ctx.fillStyle = `rgba(${rgb},0.45)`;
-      ctx.beginPath(); ctx.arc(u, v, r * 1.15, 0, Math.PI * 2); ctx.fill();
-      // Core
-      ctx.fillStyle = `rgba(${rgb},0.85)`;
-      ctx.beginPath(); ctx.arc(u, v, r, 0, Math.PI * 2); ctx.fill();
-    }
-
-    // ── Camera frustum (filled gradient trapezoid) ──
-    const cam = this.camera.position;
-    const target = this.controls.target;
-    const { u: cx, v: cz } = proj(cam.x, cam.z);
-    const { u: tx, v: tz } = proj(target.x, target.z);
-    const dx = tx - cx, dz = tz - cz;
-    const dist = Math.sqrt(dx * dx + dz * dz) || 1;
-    const ndx = dx / dist, ndz = dz / dist;
-    const halfFov = (this.camera.fov * Math.PI / 180) / 2;
-    const fw = Math.tan(halfFov) * dist * 0.35;
-    const px = -ndz * fw, pz = ndx * fw;
-
-    // Frustum fill gradient (camera→target fade)
-    const grad = ctx.createLinearGradient(cx, cz, tx, tz);
-    grad.addColorStop(0, 'rgba(255,200,100,0.22)');
-    grad.addColorStop(0.6, 'rgba(255,180,60,0.10)');
-    grad.addColorStop(1, 'rgba(255,160,40,0.03)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(cx - px, cz - pz);
-    ctx.lineTo(cx + px, cz + pz);
-    ctx.lineTo(tx + px, tz + pz);
-    ctx.lineTo(tx - px, tz - pz);
-    ctx.closePath();
-    ctx.fill();
-    // Frustum outline
-    ctx.strokeStyle = 'rgba(255,200,100,0.5)';
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-
-    // Camera dot with glow
-    ctx.fillStyle = 'rgba(255,200,100,0.22)';
-    ctx.beginPath(); ctx.arc(cx, cz, 3.8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,220,140,0.9)';
-    ctx.beginPath(); ctx.arc(cx, cz, 2.2, 0, Math.PI * 2); ctx.fill();
-    // Small bright center
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.beginPath(); ctx.arc(cx, cz, 0.9, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // ── Minimap Interaction (hover tooltip + click-to-navigate) ──
-
-  private _setupMinimapInteraction(): void {
-    const canvas = this.minimapCanvas;
-    const tip = this.minimapTooltip;
-    const container = this.minimapContainer;
-
-    // Recompute the projection to map between screen coords and world XZ
-    const getProj = () => {
-      const W = 280, H = 190, PAD = 14;
-      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      for (let i = 0; i < this._nodeCount; i++) {
-        const x = this.nodePositions[i * 3], z = this.nodePositions[i * 3 + 2];
-        if (isFinite(x) && isFinite(z)) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; }
-      }
-      const bw = maxX - minX || 1, bh = maxZ - minZ || 1;
-      const scale = Math.min((W - PAD * 2) / bw, (H - PAD * 2) / bh);
-      const ox = (W - bw * scale) / 2, oy = (H - bh * scale) / 2;
-      return (px: number, pz: number) => ({
-        u: ox + (px - minX) * scale,
-        v: oy + (pz - minZ) * scale,
-      });
-    };
-
-    canvas.addEventListener('mousemove', (e: MouseEvent) => {
-      if (this._mmDragging || this._nodeCount === 0) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-      const proj = getProj();
-      // Find nearest visible node
-      let bestI = -1, bestD2 = 64; // 8px threshold
-      for (let i = 0; i < this._nodeCount; i++) {
-        const { u, v } = proj(this.nodePositions[i * 3], this.nodePositions[i * 3 + 2]);
-        const d2 = (u - mx) ** 2 + (v - my) ** 2;
-        if (d2 < bestD2) { bestD2 = d2; bestI = i; }
-      }
-      if (bestI >= 0) {
-        this._mmHoveredNode = bestI;
-        const node = this.graphNodes[bestI];
-        const kind = node.kind || node.type || 'symbol';
-        const deg = this.deg[bestI] || 0;
-        tip.textContent = `${node.name} · ${kind} · 度${deg}`;
-        tip.style.display = '';
-        tip.style.left = `${Math.min(mx + 12, 280 - 120)}px`;
-        tip.style.top = `${Math.max(my - 20, 0)}px`;
-        canvas.style.cursor = 'pointer';
-      } else {
-        this._mmHoveredNode = -1;
-        tip.style.display = 'none';
-        canvas.style.cursor = this._mmDragging ? 'grabbing' : 'grab';
-      }
-    });
-
-    canvas.addEventListener('mouseleave', () => {
-      if (!this._mmDragging) {
-        this._mmHoveredNode = -1;
-        tip.style.display = 'none';
-        canvas.style.cursor = 'grab';
-      }
-    });
-
-    canvas.addEventListener('click', (e: MouseEvent) => {
-      if (this._mmDragging || this._mmHoveredNode < 0) return;
-      const idx = this._mmHoveredNode;
-      const nx = this.nodePositions[idx * 3];
-      const ny = this.nodePositions[idx * 3 + 1];
-      const nz = this.nodePositions[idx * 3 + 2];
-      if (!isFinite(nx) || !isFinite(ny) || !isFinite(nz)) return;
-      // Animate camera to look at this node from a reasonable distance
-      const dist = 80 + (this.deg[idx] || 0) * 4;
-      const camTarget = new THREE.Vector3(nx, ny, nz);
-      const camPos = new THREE.Vector3(nx + dist * 0.6, ny + dist * 0.55, nz + dist * 0.5);
-      this._flyCameraTo(camPos, camTarget, 600);
-    });
-  }
-
-  /** Smooth camera flight using GSAP-like tween with easing */
-  private _flyCameraTo(targetPos: THREE.Vector3, lookTarget: THREE.Vector3, durationMs: number): void {
-    const startPos = this.camera.position.clone();
-    const startTarget = this.controls.target.clone();
-    const startTime = performance.now();
-    const animate = () => {
-      const elapsed = performance.now() - startTime;
-      let t = Math.min(elapsed / durationMs, 1.0);
-      // Ease-out cubic
-      t = 1 - Math.pow(1 - t, 3);
-      this.camera.position.lerpVectors(startPos, targetPos, t);
-      this.controls.target.lerpVectors(startTarget, lookTarget, t);
-      this.controls.update();
-      if (t < 1.0) {
-        requestAnimationFrame(animate);
-      }
-    };
-    requestAnimationFrame(animate);
-  }
-
   // ── Status ───────────────────────────────────────────────
 
   private updateStatus(nodeCount: number, edgeCount: number, meta?: Record<string, unknown>): void {
@@ -5640,7 +5344,6 @@ export class StarGraph {
     if (!IDLE || this._idleCounter % 3 === 0) {
       this.updateTooltip(); this.updateLabels(); this._updateCommunityRingHover();
     }
-    if (!IDLE || this._idleCounter % 6 === 0) this.updateMinimap();
     this.controls.update();
     this.composer.render();
   }
@@ -5663,7 +5366,6 @@ export class StarGraph {
 
   destroy(): void {
     cancelAnimationFrame(this.animId);
-    this.minimapContainer?.remove();
     this.communityRingGroup.clear();
     // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
     this._revealCancelled = true;
