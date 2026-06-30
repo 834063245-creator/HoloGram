@@ -1026,6 +1026,18 @@ export class ChatPanel {
 
   // ── Session persistence — one file per session, localStorage backup ──
 
+  /** Strip read_file_content's cat -n line numbers. Rust backend always returns
+   *  "{:>6}\t{content}" format. Session JSON files need this stripped before parse. */
+  private static stripLineNumbers(text: string): string {
+    return text.split('\n').map(l => l.replace(/^\s*\d+\t/, '')).join('\n');
+  }
+
+  /** Read a session file and parse as JSON. Handles read_file_content's line numbers. */
+  private async readSessionJSON(filePath: string): Promise<any> {
+    const raw = await invoke<string>('read_file_content', { filePath });
+    return JSON.parse(ChatPanel.stripLineNumbers(raw));
+  }
+
   private lsKey(projectPath: string, id: number): string {
     return `hologram_session_${hashProjectPath(projectPath).toString(36)}_${id}`;
   }
@@ -1040,6 +1052,23 @@ export class ChatPanel {
 
   private trackerFile(projectPath: string): string {
     return `${this.sessionsDir(projectPath)}/_active.json`;
+  }
+
+  /** Scan sessions directory for the highest numeric session ID. Returns 0 if no sessions found. */
+  private async scanMaxSessionId(projectPath: string): Promise<number> {
+    try {
+      const entries = await invoke<any[]>('list_directory', { path: this.sessionsDir(projectPath) });
+      if (!Array.isArray(entries)) return 0;
+      let maxId = 0;
+      for (const e of entries) {
+        if (e.is_dir || !e.name || e.name === '_active.json') continue;
+        const sid = parseInt(String(e.name).replace(/\.json$/, ''), 10);
+        if (!isNaN(sid) && sid > maxId) maxId = sid;
+      }
+      return maxId;
+    } catch {
+      return 0;
+    }
   }
 
   /** Save the active session to its own file. Updates _active.json tracker.
@@ -1093,11 +1122,12 @@ export class ChatPanel {
     let lastId = 0;
     // 1) Tracker file
     try {
-      const raw = await invoke<string>('read_file_content', { filePath: this.trackerFile(projectPath) });
-      const t = JSON.parse(raw);
+      const t = await this.readSessionJSON(this.trackerFile(projectPath));
       lastId = t.lastId || 0;
-      // Use tracker's nextId directly — workspace-specific, no cross-project carry-over
-      nextSessionId = t.nextId || (lastId + 1) || 1;
+      // ponytail: never let tracker push nextSessionId backwards — it causes ID collisions
+      // when the tracker was saved with a stale value (e.g. after workspace switch)
+      const trackerNextId = t.nextId || (lastId + 1) || 1;
+      nextSessionId = Math.max(nextSessionId, trackerNextId);
     } catch { /* tracker missing — try localStorage scan below */ }
 
     // 2) If tracker missing, scan localStorage for newest session IN THIS WORKSPACE
@@ -1121,6 +1151,7 @@ export class ChatPanel {
     if (!lastId) {
       // Fresh workspace — reset session ID counter to avoid carry-over from previous project
       nextSessionId = 1;
+      this.addNotice('未找到历史会话，已创建新会话', 'info');
       return;
     }
 
@@ -1128,8 +1159,7 @@ export class ChatPanel {
     let data: any = null;
     // 1) Try disk file
     try {
-      const fileRaw = await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, lastId) });
-      data = JSON.parse(fileRaw);
+      data = await this.readSessionJSON(this.sessionFile(projectPath, lastId));
     } catch { /* file missing — try localStorage */ }
 
     // 2) localStorage fallback (may be newer if beforeunload save didn't complete)
@@ -1145,10 +1175,44 @@ export class ChatPanel {
         } catch { /* corrupt localStorage entry */ }
       }
     }
-    if (!data || !data.messages || data.messages.length === 0) return;
+    if (!data || !data.messages || data.messages.length === 0) {
+      this.addNotice('历史会话数据为空，已创建新会话', 'info');
+      return;
+    }
+
+    // ponytail: if the tracked session has no user messages (only system prompt),
+    // scan localStorage for a session with actual conversation (no backend dependency)
+    {
+      const convMsgs = (data.messages as any[]).filter((m: any) => m.role !== 'system');
+      if (convMsgs.length === 0 && typeof localStorage !== 'undefined') {
+        const wsPrefix = this.lsKey(projectPath, 0).replace(/_0$/, '_');
+        let bestId = 0; let bestTs = '';
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (!key?.startsWith(wsPrefix)) continue;
+          try {
+            const d = JSON.parse(localStorage.getItem(key)!);
+            if (d.id && !d.deleted && d.savedAt > bestTs) {
+              // Quick check: does it have non-system messages?
+              const hasConv = (d.messages as any[])?.some?.((m: any) => m.role !== 'system');
+              if (hasConv) { bestTs = d.savedAt; bestId = d.id; }
+            }
+          } catch { /* skip */ }
+        }
+        if (bestId > 0 && bestId !== lastId) {
+          try {
+            const lsRaw = localStorage.getItem(this.lsKey(projectPath, bestId));
+            if (lsRaw) { data = JSON.parse(lsRaw); lastId = bestId; }
+          } catch { /* keep original empty data */ }
+        }
+      }
+    }
 
     const agent = await this.agentFactory();
-    if (!agent) return;
+    if (!agent) {
+      this.addNotice('Agent 未就绪（API Key 未配置？），历史会话暂未恢复', 'warn');
+      return;
+    }
 
     const freshSys = agent.getSession().filter((m: Message) => m.role === 'system');
     const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
@@ -1177,10 +1241,17 @@ export class ChatPanel {
 
   /** Scan sessions directory — no agent required. */
   async listSavedSessions(projectPath: string): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
+    const dirPath = this.sessionsDir(projectPath);
     let entries: any[];
     try {
-      entries = await invoke<any[]>('list_directory', { path: this.sessionsDir(projectPath) });
-    } catch {
+      entries = await invoke<any[]>('list_directory', { path: dirPath });
+    } catch (e) {
+      console.error('[chat] listSavedSessions: list_directory failed', e);
+      return [];
+    }
+
+    if (!Array.isArray(entries)) {
+      console.error('[chat] listSavedSessions: unexpected result', typeof entries);
       return [];
     }
 
@@ -1191,7 +1262,7 @@ export class ChatPanel {
       if (isNaN(sid)) continue;
 
       try {
-        const d = JSON.parse(await invoke<string>('read_file_content', { filePath: e.path }));
+        const d = await this.readSessionJSON(e.path);
         if (d.deleted) continue;
         result.push({
           id: d.id || sid,
@@ -1199,7 +1270,9 @@ export class ChatPanel {
           msgCount: (d.messages as any[])?.filter((m: any) => m.role !== 'system').length || 0,
           savedAt: d.savedAt || '',
         });
-      } catch { /* skip unreadable */ }
+      } catch (err) {
+        console.error(`[chat] listSavedSessions: failed to read ${e.name}`, err);
+      }
     }
     result.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
     return result;
@@ -1216,7 +1289,7 @@ export class ChatPanel {
     let data: any;
     // 1) Try disk file
     try {
-      data = JSON.parse(await invoke<string>('read_file_content', { filePath: this.sessionFile(projectPath, sessionId) }));
+      data = await this.readSessionJSON(this.sessionFile(projectPath, sessionId));
     } catch { /* try localStorage */ }
 
     // 2) localStorage fallback
@@ -1277,7 +1350,8 @@ export class ChatPanel {
     if (idx >= 0) this.closeSession(idx);
   }
 
-  /** Walk through active agent's session array and build DOM bubbles. */
+  /** Walk through active agent's session array and build DOM bubbles.
+   *  Also rebuilds turnPairs so edit/resend/retry work on restored messages. */
   private renderRestoredSession(): void {
     const agent = this.agent;
     if (!agent) return;
@@ -1291,7 +1365,16 @@ export class ChatPanel {
       }
     }
 
+    // Rebuild turnPairs — track session indices to restore editing/retry
+    this.turnPairs = [];
+    let pendingUserText: string | null = null;
+    let pendingUserRow: HTMLElement | null = null;
+    let pendingSessionIdx = -1;
+    let sessionIdx = 0;
+
     for (const m of msgs) {
+      const idx = sessionIdx++;
+
       if (m.role === 'system') continue;
 
       if (m.role === 'user') {
@@ -1302,7 +1385,14 @@ export class ChatPanel {
           this.msgList.appendChild(el);
           continue;
         }
+        // Finalize previous pair before starting a new one
+        if (pendingUserText && pendingUserRow) {
+          this.turnPairs.push({ userText: pendingUserText, userBubble: pendingUserRow, assistantBubble: null, sessionIndex: pendingSessionIdx });
+        }
+        pendingUserText = m.content || '';
+        pendingSessionIdx = idx;
         this.appendUserBubble(m.content || '');
+        pendingUserRow = this.msgList.lastElementChild as HTMLElement;
         continue;
       }
 
@@ -1395,7 +1485,19 @@ export class ChatPanel {
 
         this.msgList.appendChild(bubble);
         this.animateBubbleIn(bubble);
+
+        // Link to pending user turn
+        if (pendingUserText && pendingUserRow) {
+          this.turnPairs.push({ userText: pendingUserText, userBubble: pendingUserRow, assistantBubble: bubble, sessionIndex: pendingSessionIdx });
+          pendingUserText = null;
+          pendingUserRow = null;
+        }
       }
+    }
+
+    // Flush any trailing user message without assistant response
+    if (pendingUserText && pendingUserRow) {
+      this.turnPairs.push({ userText: pendingUserText, userBubble: pendingUserRow, assistantBubble: null, sessionIndex: pendingSessionIdx });
     }
 
     // Re-wire node-link click handlers
