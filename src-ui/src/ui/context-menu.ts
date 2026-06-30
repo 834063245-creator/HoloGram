@@ -59,7 +59,7 @@ export function showContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
     Object.assign(row.style, {
       padding: '5px 10px', borderRadius: '3px',
       cursor: item.disabled ? 'default' : 'pointer',
-      color: item.disabled ? 'var(--text-muted, rgba(120,145,170,0.35))' : 'var(--starlight-dim, #c3daf8)',
+      color: item.disabled ? 'var(--text-muted, rgba(120,145,170,0.48))' : 'var(--starlight-dim, #c3daf8)',
       whiteSpace: 'nowrap', userSelect: 'none',
     });
     row.addEventListener('mouseenter', () => {

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Toolbar — 原型演示</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void: #030812;
+    --void-deep: #010408;
+    --starlight: #e2edff;
+    --starlight-dim: rgba(205,225,252,0.94);
+    --signal: #68a8ff;
+    --signal-glow: rgba(80,140,240,0.35);
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-hud: 'Orbitron', system-ui, sans-serif;
+    --font-body: 'Noto Sans SC', system-ui, sans-serif;
+    --font-scale: 1;
+    --toolbar-h: 38px;
+  }
+
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--void-deep);
+    color: var(--starlight-dim);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding-top: 80px; gap: 40px;
+  }
+
+  body::before {
+    content:''; position:fixed; inset:0; z-index:0;
+    background:
+      radial-gradient(900px 500px at 50% 30%, rgba(12,28,60,0.2), transparent 70%),
+      radial-gradient(400px 300px at 30% 60%, rgba(8,16,40,0.15), transparent 60%),
+      var(--void-deep);
+  }
+  body::after {
+    content:''; position:fixed; inset:0; z-index:1; pointer-events:none;
+    background-image:
+      radial-gradient(1px 1px at 10% 12%, rgba(200,220,255,0.6), transparent),
+      radial-gradient(0.8px 0.8px at 25% 8%, rgba(190,215,255,0.45), transparent),
+      radial-gradient(1.2px 1.2px at 42% 18%, rgba(210,230,255,0.55), transparent),
+      radial-gradient(0.6px 0.6px at 58% 10%, rgba(180,210,255,0.4), transparent),
+      radial-gradient(1px 1px at 72% 22%, rgba(200,220,255,0.5), transparent),
+      radial-gradient(0.8px 0.8px at 85% 15%, rgba(190,215,255,0.45), transparent);
+    animation: drift 120s linear infinite;
+  }
+  @keyframes drift { from { transform:translate(0,0); } to { transform:translate(-6px,-8px); } }
+
+  /* ═══════════════════════════════════════════════════════════════
+     TOOLBAR — deep space command console (exact copy)
+     ═══════════════════════════════════════════════════════════════ */
+  #toolbar {
+    position: relative;
+    height: var(--toolbar-h); z-index: 100; width: 100%; max-width: 1100px;
+    background:
+      linear-gradient(180deg, rgba(8,16,32,0.98) 0%, rgba(3,8,20,0.94) 100%);
+    backdrop-filter: blur(20px) saturate(0.5);
+    -webkit-backdrop-filter: blur(20px) saturate(0.5);
+    border-bottom: 1px solid rgba(60,100,180,0.12);
+    box-shadow: 0 1px 0 rgba(100,150,220,0.05), 0 6px 28px rgba(0,0,0,0.5);
+    display: flex; align-items: center; padding: 0 14px; gap: 0;
+  }
+
+  /* Top-edge power indicator — breathing glow */
+  #toolbar::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg,
+      transparent 0%, rgba(80,140,240,0.08) 10%,
+      rgba(100,160,250,0.22) 30%, rgba(80,140,240,0.08) 50%,
+      rgba(100,160,250,0.22) 70%, rgba(80,140,240,0.08) 90%, transparent 100%);
+    animation: toolbar-breathe 6s ease-in-out infinite;
+    pointer-events: none; z-index: 1;
+  }
+  @keyframes toolbar-breathe {
+    0%, 100% { opacity: 0.25; }
+    50%      { opacity: 0.75; }
+  }
+
+  #toolbar .sep {
+    width: 1px; height: 18px; margin: 0 4px;
+    background: linear-gradient(to bottom,
+      transparent 0%, rgba(60,100,200,0.12) 15%,
+      rgba(90,140,230,0.32) 50%, rgba(60,100,200,0.12) 85%, transparent 100%);
+  }
+
+  #toolbar .spacer { flex: 1; }
+
+  /* Logo — holographic shimmer */
+  #tb-logo {
+    font-family: var(--font-hud);
+    font-size: calc(12px * var(--font-scale));
+    font-weight: 700;
+    letter-spacing: 3.5px;
+    color: rgba(160, 210, 255, 0.85);
+    background: linear-gradient(105deg,
+      rgba(100,160,240,0.5) 0%,
+      rgba(140,200,255,0.8) 18%,
+      rgba(210,235,255,1) 36%,
+      rgba(140,200,255,0.8) 54%,
+      rgba(100,160,240,0.5) 72%,
+      rgba(140,200,255,0.8) 90%,
+      rgba(100,160,240,0.5) 100%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: logo-shimmer 4s ease-in-out infinite;
+    margin-right: 2px;
+    cursor: default;
+    user-select: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  @keyframes logo-shimmer {
+    0%, 100% { background-position: 100% 50%; }
+    50%      { background-position: 0% 50%; }
+  }
+
+  /* Buttons — edge-lit HUD controls */
+  #toolbar button {
+    min-height: calc(26px * var(--font-scale));
+    padding: 0 calc(10px * var(--font-scale));
+    font-family: var(--font-body); font-size: calc(10.5px * var(--font-scale));
+    font-weight: 400; letter-spacing: 0.4px;
+    background: transparent; color: rgba(150,185,220,0.60);
+    border: 1px solid transparent; cursor: pointer; white-space: nowrap;
+    border-radius: 2px;
+    display: flex; align-items: center; gap: 5px;
+    transition: color 0.15s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+    user-select: none; position: relative;
+  }
+
+  /* Hover: bottom-edge glow bar */
+  #toolbar button::after {
+    content: ''; position: absolute; bottom: 0; left: 4px; right: 4px; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(100,160,240,0.4), transparent);
+    opacity: 0; transition: opacity 0.2s ease;
+    pointer-events: none;
+  }
+  #toolbar button:hover {
+    color: rgba(215,235,255,0.9);
+    border-color: rgba(80,135,220,0.25);
+    box-shadow: inset 0 0 14px rgba(80,140,240,0.05), 0 0 6px rgba(80,140,240,0.06);
+  }
+  #toolbar button:hover::after { opacity: 1; }
+  #toolbar button:active {
+    transform: translateY(1px);
+    transition: transform 0.05s ease;
+    box-shadow: inset 0 0 8px rgba(80,140,240,0.1);
+  }
+  #toolbar button:active::after { opacity: 0.5; }
+  #toolbar button:disabled { opacity: 0.25; cursor: default; }
+  #toolbar button:disabled::after { display: none; }
+
+  /* Search capsule */
+  #search-wrap {
+    display: flex; align-items: center;
+    border: 1px solid rgba(50,80,140,0.2);
+    border-radius: 2px;
+    background: rgba(4,10,22,0.6);
+    overflow: hidden; margin: 0 2px;
+    transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  }
+  #search-wrap:focus-within {
+    border-color: rgba(80,130,220,0.45);
+    box-shadow: 0 0 10px rgba(50,100,180,0.1), inset 0 0 8px rgba(50,100,180,0.06);
+  }
+  #search-input {
+    width: 155px; min-height: calc(24px * var(--font-scale)); padding: 0 8px;
+    font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
+    background: transparent; border: none; color: var(--starlight-dim);
+    outline: none; letter-spacing: 0.5px;
+  }
+  #search-input::placeholder { color: rgba(105,145,205,0.4); letter-spacing: 1px; }
+  #search-btn {
+    width: calc(24px * var(--font-scale)); min-height: calc(24px * var(--font-scale));
+    font-size: calc(12px * var(--font-scale));
+    background: transparent; border: none;
+    border-left: 1px solid rgba(40,60,100,0.18);
+    color: rgba(145,180,225,0.5); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  #search-btn:hover {
+    color: var(--starlight-dim);
+    background: rgba(40,70,120,0.15);
+  }
+
+  #tb-path {
+    color: rgba(100,145,210,0.35);
+    font-family: var(--font-mono); font-size: calc(8.5px * var(--font-scale));
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 260px; letter-spacing: 0.3px; margin-left: 2px;
+  }
+
+  /* ═══ Demo layout ═══ */
+  .demo-section {
+    z-index:2; display:flex; flex-direction:column; align-items:center; gap: 16px;
+  }
+  .demo-label {
+    font-family: var(--font-hud);
+    font-size: 9px; letter-spacing: 3px; text-transform: uppercase;
+    color: rgba(140,180,220,0.45);
+  }
+  .demo-note {
+    font-family: var(--font-mono); font-size: 9px;
+    color: rgba(140,180,220,0.3); text-align:center; max-width:600px; line-height:1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="demo-section">
+  <div class="demo-label">TOOLBAR · DEEP SPACE COMMAND CONSOLE</div>
+
+  <div id="toolbar">
+    <span id="tb-logo">◈&nbsp;HOLOGRAM</span>
+    <span class="sep"></span>
+    <button>折叠</button>
+    <button>复位</button>
+    <span class="sep"></span>
+    <button>资源</button>
+    <button>打开文件夹</button>
+    <button>重分析</button>
+    <button>简报</button>
+    <span class="sep"></span>
+    <button>变更</button>
+    <button>时间轴</button>
+    <button>冲突</button>
+    <button>约束</button>
+    <button>终端</button>
+    <span class="sep"></span>
+    <button>设置</button>
+    <span class="sep"></span>
+    <span class="spacer"></span>
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="SEARCH SYMBOL…" autocomplete="off" spellcheck="false" />
+      <button id="search-btn">⌕</button>
+    </div>
+    <span class="sep"></span>
+    <button>快捷键</button>
+    <span id="tb-path">D:\Projects\HoloGram\src\main.rs</span>
+  </div>
+</div>
+
+<div class="demo-note">
+  ◈ HOLOGRAM — 全息渐变流光文字，慢速左右扫描<br>
+  悬停按钮 → 底部发光条 + 内发光边框 + 文字亮起<br>
+  点击按钮 → 下压 1px 反馈<br>
+  顶边 → 慢呼吸蓝色电源指示灯带<br>
+  搜索框 → 聚焦时内发光玻璃效果
+</div>
+
+</body>
+</html>

@@ -6,7 +6,6 @@
 // 特性: 键盘导航 · 多选 (Ctrl/Shift) · 剪贴板 · 拖拽 · 筛选 · 排序
 // ═══════════════════════════════════════════════════════════════
 
-import gsap from 'gsap';
 import { invoke } from '../bridge';
 import { iconSvg } from './icons';
 import { FileViewer } from './file-viewer';
@@ -34,7 +33,6 @@ export class FileTreePanel {
   private open = false;
   private rootPath = '';
   private workspaceRoot = ''; // for relative path computation
-  private _transitioning = false;
   private _closeTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Selection & focus ──
@@ -44,8 +42,11 @@ export class FileTreePanel {
   private sortByName = true;
   private loading = false;
 
-  // Lazy-load cache: dir path → its direct children
-  private loadedChildren = new Map<string, DirEntry[]>();
+  // ── Tree data — state-driven, not DOM-query-driven
+  // treeData: directory path → its direct children (flat list)
+  private treeData = new Map<string, DirEntry[]>();
+  // expandedPaths: directories whose children are visible
+  private expandedPaths = new Set<string>();
 
   // Git status map: relative path → status string (modified/untracked/added/deleted/ignored/renamed)
   private gitStatusMap = new Map<string, string>();
@@ -162,16 +163,6 @@ export class FileTreePanel {
     });
     this.headerEl.appendChild(sortBtn);
 
-    // Expand-all button
-    const expandBtn = this.makeHeaderBtn('expand-all', '展开全部');
-    expandBtn.addEventListener('click', () => this.expandAll());
-    this.headerEl.appendChild(expandBtn);
-
-    // Collapse-all button
-    const collapseBtn = this.makeHeaderBtn('collapse-all', '折叠全部');
-    collapseBtn.addEventListener('click', () => this.collapseAll());
-    this.headerEl.appendChild(collapseBtn);
-
     // Refresh button
     const refreshBtn = this.makeHeaderBtn('refresh', '刷新');
     refreshBtn.addEventListener('click', () => {
@@ -214,7 +205,6 @@ export class FileTreePanel {
         { label: '新建文件…', action: () => this.promptNewFile(this.rootPath) },
         { label: '新建文件夹…', action: () => this.promptNewFolder(this.rootPath) },
         { label: '粘贴', action: () => this.pasteTo(this.rootPath), disabled: !this.clipboard },
-        { label: '展开全部', action: () => this.expandAll() },
         { label: '在资源管理器中显示', action: () => invoke('open_in_explorer', { path: this.rootPath }) },
         { label: '刷新', action: () => this.refresh() },
       ]);
@@ -249,17 +239,20 @@ export class FileTreePanel {
     if (!this.workspaceRoot) this.workspaceRoot = rootPath;
     this.selectedPaths.clear();
     this.focusedPath = '';
-    this.loadedChildren.clear();
+    this.treeData.clear();
+    this.expandedPaths.clear();
     const pathLabel = this.headerEl.querySelector('.ft-path-label');
     if (pathLabel) pathLabel.textContent = rootPath;
     const savedScroll = this.treeEl.scrollTop;
     this.loading = true;
     this.showLoading();
-    this.fetchGitStatus(); // fire-and-forget — tree renders immediately, colors apply on refresh
+    this.fetchGitStatus();
     try {
+      // Load root level only — fast, one RPC
       const entries: DirEntry[] = await invoke('list_directory_flat', { path: rootPath });
       if (this.sortByName) this.sortEntries(entries);
-      this.renderTree(entries, this.treeEl, rootPath);
+      this.treeData.set(rootPath, entries);
+      this.renderSubtree(rootPath, this.treeEl, 0, []);
       this.treeEl.scrollTop = savedScroll;
       this.maybeShowEmpty(entries);
     } catch (e) {
@@ -312,35 +305,22 @@ export class FileTreePanel {
   // ═══════════════════════════════════════════════════════════════
 
   toggle(): void {
-    if (this._transitioning) return;
     this.open ? this.close() : this.show();
   }
 
   show(): void {
-    if (this._transitioning) return;
-    this._transitioning = true;
     if (this._closeTimer) { clearTimeout(this._closeTimer); this._closeTimer = null; }
     this.open = true;
     this.el.style.display = 'flex';
-    gsap.killTweensOf(this.el);
-    gsap.fromTo(this.el, { x: -280 }, { x: 0, duration: 0.18, ease: 'power2.out',
-      onComplete: () => { this._transitioning = false; },
-    });
+    this.el.style.transform = 'translateX(0)';
     shell.notifyPanelChanged();
   }
 
   close(): void {
-    if (this._transitioning) return;
-    this._transitioning = true;
     this.open = false;
-    gsap.killTweensOf(this.el);
-    gsap.to(this.el, { x: -280, duration: 0.14, ease: 'power2.in',
-      onComplete: () => {
-        if (!this.open) this.el.style.display = 'none';
-        this._transitioning = false;
-        this._closeTimer = null;
-      },
-    });
+    this.el.style.display = 'none';
+    this.el.style.transform = 'translateX(-100%)';
+    this._closeTimer = null;
     shell.notifyPanelChanged();
   }
 
@@ -455,15 +435,6 @@ export class FileTreePanel {
     const row = this.treeEl.querySelector(`[data-file-path="${this.cssEscape(path)}"]`) as HTMLElement;
     if (row) {
       row.scrollIntoView({ block: 'nearest' });
-      gsap.killTweensOf(row);
-      gsap.fromTo(row,
-        { boxShadow: 'inset 0 0 0 0 rgba(80, 140, 220, 0)' },
-        { boxShadow: 'inset 0 0 12px 2px rgba(80, 140, 220, 0.12)', duration: 0.1, ease: 'power2.out',
-          onComplete: () => {
-            gsap.to(row, { boxShadow: 'inset 0 0 0 0 rgba(80, 140, 220, 0)', duration: 0.2, ease: 'power2.out' });
-          },
-        },
-      );
     }
   }
 
@@ -673,161 +644,95 @@ export class FileTreePanel {
   private async toggleExpand(path: string, row: HTMLElement): Promise<void> {
     const container = row.nextElementSibling as HTMLElement;
     if (!container || container.tagName !== 'DIV') return;
-    if (container.style.display !== 'none') {
-      this.collapseRow(row, container);
+    const depth = parseInt(container.dataset['treeDepth'] || '1') - 1;
+    const flags: boolean[] = JSON.parse(container.dataset['treeFlags'] || '[]');
+
+    if (this.expandedPaths.has(path)) {
+      this.expandedPaths.delete(path);
+      container.innerHTML = '';
+      container.style.display = 'none';
     } else {
-      await this.expandRow(row, container);
+      await this.ensureChildrenLoaded(path);
+      this.expandedPaths.add(path);
+      container.style.display = 'block';
+      this.renderSubtree(path, container, depth + 1, flags);
+      shell.highlightFolder(path);
     }
+    const arrow = row.querySelector('.ft-arrow') as HTMLElement;
+    if (arrow) arrow.textContent = this.expandedPaths.has(path) ? '▾' : '▸';
+    this.reapplyRowStates();
   }
 
-  private collapseRow(row: HTMLElement, container: HTMLElement): void {
-    const arrow = row.querySelector('.ft-arrow') as HTMLElement;
-    if (arrow) arrow.textContent = '▸';
-    // ponytail: instant hide — avoids GSAP onComplete/expand race condition
-    // The expand stagger animation provides sufficient visual feedback
-    const childRows = container.querySelectorAll<HTMLElement>('.ft-row');
-    gsap.killTweensOf(childRows);
-    container.style.display = 'none';
-    shell.clearHighlight();
+  /** Ensure directory children are loaded into treeData. */
+  private async ensureChildrenLoaded(dirPath: string): Promise<void> {
+    if (this.treeData.has(dirPath)) return;
+    try {
+      const children = await invoke<DirEntry[]>('list_directory_flat', { path: dirPath });
+      if (this.sortByName) this.sortEntries(children);
+      this.treeData.set(dirPath, children);
+    } catch { /* ignore */ }
   }
 
   private async expandRow(row: HTMLElement, container: HTMLElement): Promise<void> {
-    const fp = row.dataset['filePath'] || '';
-    const childDepth = parseInt(container.dataset['treeDepth'] || '1');
-    const childFlags: boolean[] = JSON.parse(container.dataset['treeFlags'] || '[]');
-
-    // Lazy load: fetch children on first expand
-    if (container.children.length === 0) {
-      const loadingDiv = document.createElement('div');
-      loadingDiv.className = 'ft-loading';
-      loadingDiv.textContent = '加载中…';
-      loadingDiv.style.padding = `0 0 0 ${12 + childDepth * 16}px`;
-      container.appendChild(loadingDiv);
-      container.style.display = 'block';
-      const arrow = row.querySelector('.ft-arrow') as HTMLElement;
-      if (arrow) arrow.textContent = '▾';
-
-      try {
-        let children = await invoke<DirEntry[]>('list_directory_flat', { path: fp });
-        if (this.sortByName) this.sortEntries(children);
-        this.loadedChildren.set(fp, children);
-        container.innerHTML = '';
-        this.renderTree(children, container, fp, childDepth, childFlags);
-        this.reapplyRowStates();
-      } catch {
-        container.innerHTML = '<div class="ft-empty" style="color:var(--danger)">读取失败</div>';
-        return;
-      }
-    }
-
-    const childRows = container.querySelectorAll<HTMLElement>('.ft-row');
-    gsap.killTweensOf(childRows);
-    gsap.set(childRows, { opacity: 0, x: -6 });
+    const path = row.dataset['filePath'] || '';
+    await this.ensureChildrenLoaded(path);
+    this.expandedPaths.add(path);
     container.style.display = 'block';
+    const depth = parseInt(container.dataset['treeDepth'] || '1') - 1;
+    const flags: boolean[] = JSON.parse(container.dataset['treeFlags'] || '[]');
+    this.renderSubtree(path, container, depth + 1, flags);
     const arrow = row.querySelector('.ft-arrow') as HTMLElement;
     if (arrow) arrow.textContent = '▾';
-
-    gsap.to(childRows,
-      { opacity: 1, x: 0, duration: 0.04, stagger: { each: 0.0015, from: 'start' }, ease: 'power2.out' },
-    );
-    shell.highlightFolder(fp);
+    this.reapplyRowStates();
+    shell.highlightFolder(path);
   }
 
-  private async expandAll(): Promise<void> {
-    const topRows = this.treeEl.querySelectorAll<HTMLElement>(':scope > .ft-row');
-    for (const row of topRows) {
-      const fp = row.dataset['filePath'] || '';
-      const arrow = row.querySelector('.ft-arrow') as HTMLElement;
-      if (arrow?.textContent) await this.expandAllChildren(fp);
-    }
-  }
-
-  private collapseAll(): void {
-    const containers = [...this.treeEl.querySelectorAll<HTMLElement>('.ft-row + div')];
-    for (const c of containers) {
-      const row = c.previousElementSibling as HTMLElement;
-      const arrow = row?.querySelector('.ft-arrow') as HTMLElement;
-      if (arrow) arrow.textContent = '▸';
-      const childRows = c.querySelectorAll<HTMLElement>('.ft-row');
-      gsap.killTweensOf(childRows);
-      c.style.display = 'none';
-    }
+  private collapseRow(row: HTMLElement, container: HTMLElement): void {
+    const path = row.dataset['filePath'] || '';
+    this.expandedPaths.delete(path);
+    container.innerHTML = '';
+    container.style.display = 'none';
+    const arrow = row.querySelector('.ft-arrow') as HTMLElement;
+    if (arrow) arrow.textContent = '▸';
+    this.reapplyRowStates();
     shell.clearHighlight();
   }
 
-  /** Expand all descendants of a given folder row — lazy loads everything recursively. */
-  private async expandAllChildren(folderPath: string): Promise<void> {
-    const row = this.treeEl.querySelector(`[data-file-path="${this.cssEscape(folderPath)}"]`) as HTMLElement;
-    if (!row) return;
-    const container = row.nextElementSibling as HTMLElement;
-    if (!container || container.tagName !== 'DIV') return;
+  /** Core render: walk treeData + expandedPaths, build DOM into parent. */
+  private renderSubtree(dirPath: string, parent: HTMLElement, depth: number, lastFlags: boolean[]): void {
+    const children = this.treeData.get(dirPath);
+    parent.innerHTML = '';
+    if (!children) return;
 
-    // BFS: load all descendant directories layer by layer
-    const queue: Array<{ path: string; cont: HTMLElement; depth: number; flags: boolean[] }> = [
-      { path: folderPath, cont: container, depth: parseInt(container.dataset['treeDepth'] || '1'), flags: JSON.parse(container.dataset['treeFlags'] || '[]') },
-    ];
+    for (let i = 0; i < children.length; i++) {
+      const entry = children[i];
+      const isLast = i === children.length - 1;
+      const row = this.buildRow(entry, dirPath, depth, lastFlags, isLast);
 
-    while (queue.length > 0) {
-      const { path, cont, depth, flags } = queue.shift()!;
-      if (cont.children.length > 0) {
-        // Already loaded — just queue child containers
-        const childContainers = cont.querySelectorAll<HTMLElement>(':scope > .ft-row + div');
-        for (const cc of childContainers) {
-          const cr = cc.previousElementSibling as HTMLElement;
-          if (cr?.classList.contains('ft-row')) {
-            queue.push({
-              path: cr.dataset['filePath'] || '',
-              cont: cc as HTMLElement,
-              depth: parseInt(cc.dataset['treeDepth'] || String(depth + 1)),
-              flags: JSON.parse(cc.dataset['treeFlags'] || '[]'),
-            });
-          }
-        }
-        continue;
+      // Update arrow to reflect expanded state
+      if (entry.is_dir) {
+        const arrow = row.querySelector('.ft-arrow') as HTMLElement;
+        if (arrow) arrow.textContent = this.expandedPaths.has(entry.path) ? '▾' : '▸';
       }
-      // Lazy load
-      try {
-        let children = await invoke<DirEntry[]>('list_directory_flat', { path });
-        if (this.sortByName) this.sortEntries(children);
-        this.loadedChildren.set(path, children);
-        cont.innerHTML = '';
-        this.renderTree(children, cont, path, depth, flags);
-        // Queue newly created child dirs
-        const childContainers = cont.querySelectorAll<HTMLElement>(':scope > .ft-row + div');
-        for (const cc of childContainers) {
-          const cr = cc.previousElementSibling as HTMLElement;
-          if (cr?.classList.contains('ft-row')) {
-            queue.push({
-              path: cr.dataset['filePath'] || '',
-              cont: cc as HTMLElement,
-              depth: parseInt((cc as HTMLElement).dataset['treeDepth'] || String(depth + 1)),
-              flags: JSON.parse((cc as HTMLElement).dataset['treeFlags'] || '[]'),
-            });
-          }
-        }
-      } catch { /* skip failed directories */ }
+
+      parent.appendChild(row);
+
+      if (entry.is_dir && this.expandedPaths.has(entry.path)) {
+        const container = document.createElement('div');
+        container.style.display = 'block';
+        parent.appendChild(container);
+        row.addEventListener('click', (e) => this.onRowClick(e, entry, row, container));
+        this.renderSubtree(entry.path, container, depth + 1, [...lastFlags, isLast]);
+      } else if (entry.is_dir) {
+        const container = document.createElement('div');
+        container.style.display = 'none';
+        parent.appendChild(container);
+        row.addEventListener('click', (e) => this.onRowClick(e, entry, row, container));
+        this.renderSubtree(entry.path, container, depth + 1, [...lastFlags, isLast]);
+      } else {
+        row.addEventListener('click', (e) => this.onRowClick(e, entry, row, null));
+      }
     }
-
-    // Expand everything: show all descendant containers and animate
-    const allContainers = container.querySelectorAll<HTMLElement>('.ft-row + div');
-    const allRows = container.querySelectorAll<HTMLElement>('.ft-row');
-    gsap.killTweensOf(allRows);
-    gsap.set(allRows, { opacity: 0, x: -6 });
-
-    for (const c of allContainers) {
-      c.style.display = 'block';
-      const prev = c.previousElementSibling as HTMLElement;
-      const arr = prev?.querySelector('.ft-arrow') as HTMLElement;
-      if (arr) arr.textContent = '▾';
-    }
-    container.style.display = 'block';
-    const arrow = row.querySelector('.ft-arrow') as HTMLElement;
-    if (arrow) arrow.textContent = '▾';
-
-    gsap.to(allRows,
-      { opacity: 1, x: 0, duration: 0.04, stagger: { each: 0.001, from: 'start' }, ease: 'power2.out' },
-    );
-    shell.highlightFolder(folderPath);
   }
 
   /** Relative path from workspace root. */
@@ -1055,27 +960,6 @@ export class FileTreePanel {
   // Render
   // ═══════════════════════════════════════════════════════════════
 
-  private renderTree(entries: DirEntry[], parent: HTMLElement, basePath: string, depth = 0, lastFlags: boolean[] = []): void {
-    parent.innerHTML = '';
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      const isLast = i === entries.length - 1;
-      const row = this.buildRow(entry, basePath, depth, lastFlags, isLast);
-      parent.appendChild(row);
-
-      if (entry.is_dir) {
-        const childContainer = document.createElement('div');
-        childContainer.style.display = 'none';
-        childContainer.dataset['treeDepth'] = String(depth + 1);
-        childContainer.dataset['treeFlags'] = JSON.stringify([...lastFlags, isLast]);
-        parent.appendChild(childContainer);
-        row.addEventListener('click', (e) => this.onRowClick(e, entry, row, childContainer));
-      } else {
-        row.addEventListener('click', (e) => this.onRowClick(e, entry, row, null));
-      }
-    }
-  }
-
   private async onRowClick(e: MouseEvent, entry: DirEntry, row: HTMLElement, childContainer: HTMLElement | null): Promise<void> {
     e.stopPropagation();
     const path = row.dataset['filePath'] || '';
@@ -1251,7 +1135,6 @@ export class FileTreePanel {
           { label: `新建文件…`, action: () => this.promptNewFile(entry.path) },
           { label: `新建文件夹…`, action: () => this.promptNewFolder(entry.path) },
           { label: '粘贴', action: () => this.pasteTo(entry.path), disabled: !this.clipboard },
-          { label: `展开全部子项`, action: () => this.expandAllChildren(entry.path) },
           { label: '复制路径', action: () => navigator.clipboard.writeText(entry.path) },
           { label: '复制相对路径', action: () => navigator.clipboard.writeText(this.relativePath(entry.path)) },
           { label: '在资源管理器中显示', action: () => invoke('open_in_explorer', { path: entry.path }) },
