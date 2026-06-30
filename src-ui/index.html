@@ -2988,6 +2988,28 @@
     }
     #timeline-panel.tl-open { transform: translateX(0); }
 
+    .tl-header {
+      display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+      padding: 6px 10px 6px 14px;
+      border-bottom: 1px solid rgba(40, 60, 100, 0.15);
+    }
+    .tl-title {
+      font-family: var(--font-hud); font-size: calc(9px * var(--font-scale)); font-weight: 600;
+      letter-spacing: 1.2px; text-transform: uppercase;
+      color: rgba(120, 160, 215, 0.68);
+    }
+    .tl-close {
+      width: 24px; height: 24px; padding: 0;
+      font-size: calc(12px * var(--font-scale)); line-height: 24px; text-align: center;
+      background: transparent; color: rgba(160, 190, 220, 0.5);
+      border: 1px solid transparent; border-radius: 3px; cursor: pointer;
+      transition: all var(--snap);
+    }
+    .tl-close:hover {
+      color: var(--starlight);
+      background: rgba(30, 50, 80, 0.4);
+      border-color: rgba(60, 100, 180, 0.25);
+    }
 
     .tl-content {
       flex: 1; overflow-y: auto; padding: 8px 12px 10px;
@@ -3103,15 +3125,17 @@
       transition: transform var(--glide, 0.25s cubic-bezier(0.4,0,0.2,1));
     }
     #hotspots-panel.hs-open { transform: translateY(-50%) translateX(0); }
+    .hs-header-row {
+      display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+      padding: 6px 10px 6px 14px;
+      border-bottom: 1px solid rgba(40, 60, 100, 0.15);
+    }
+    .hs-title {
+      font-family: var(--font-hud); font-size: calc(9px * var(--font-scale)); font-weight: 600;
+      letter-spacing: 1.2px; text-transform: uppercase;
+      color: rgba(120, 160, 215, 0.68);
+    }
     .hs-content { flex: 1; overflow-y: auto; padding: 8px 10px; }
-    .hs-header {
-      font-size: calc(12px * var(--font-scale)); font-weight: 600; color: var(--sol, #f0b848);
-      margin-bottom: 6px; letter-spacing: 0.3px;
-    }
-    .hs-subtitle {
-      font-size: calc(9px * var(--font-scale)); font-weight: 400; color: var(--text-muted, rgba(120,145,170,0.5));
-      margin-left: 4px;
-    }
     .hs-empty {
       font-size: calc(11px * var(--font-scale)); color: var(--text-muted); padding: 12px 0; line-height: 1.5;
     }
@@ -3820,37 +3844,33 @@
     <div class="so-grid">
       <div class="so-group">
         <div class="so-group-title">全局</div>
-        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>L</kbd></span><span class="so-desc">对话</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>L</kbd></span><span class="so-desc">对话面板</span></div>
         <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span><span class="so-desc">变更着色</span></div>
         <div class="so-row"><span class="so-keys"><kbd>Ctrl</kbd><kbd>,</kbd></span><span class="so-desc">设置</span></div>
         <div class="so-row"><span class="so-keys"><kbd>?</kbd></span><span class="so-desc">快捷键面板</span></div>
-        <div class="so-row"><span class="so-keys"><kbd>Esc</kbd></span><span class="so-desc">退出星系 / 关闭面板</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>Esc</kbd></span><span class="so-desc">逐层关闭：星系 → 面板 → 高亮</span></div>
       </div>
       <span class="so-sep"></span>
       <div class="so-group">
-        <div class="so-group-title">星图交互</div>
+        <div class="so-group-title">星图</div>
         <div class="so-row"><span class="so-keys"><kbd>R</kbd></span><span class="so-desc">复位视角</span></div>
-        <div class="so-row"><span class="so-keys"><kbd>F</kbd></span><span class="so-desc">折叠星系</span></div>
-        <div class="so-row"><span class="so-keys"><kbd>B</kbd></span><span class="so-desc">波及分析（选中/悬停节点后）</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>F</kbd></span><span class="so-desc">折叠 / 展开星系</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>B</kbd></span><span class="so-desc">波及分析（选中节点后）</span></div>
         <div class="so-row"><span class="so-keys"><kbd>Alt</kbd>+<kbd>拖拽</kbd></span><span class="so-desc">框选节点</span></div>
         <div class="so-row"><span class="so-keys"><kbd>Shift</kbd>+<kbd>点击</kbd></span><span class="so-desc">快速路径</span></div>
-        <div class="so-row"><span class="so-keys"><kbd>点击节点</kbd></span><span class="so-desc">详情卡片（可打开/Agent/波及/聚焦）</span></div>
-      </div>
-      <span class="so-sep"></span>
-      <div class="so-group">
-        <div class="so-group-title">视觉</div>
-        <div class="so-row"><span class="so-keys"><kbd>工具栏</kbd></span><span class="so-desc">着色：类型 → 社区 → 耦合</span></div>
-        <div class="so-row"><span class="so-keys"><kbd>工具栏</kbd></span><span class="so-desc">缩放：按度 → 按耦合风险</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>点击节点</kbd></span><span class="so-desc">详情卡片 · 打开 / Agent / 波及 / 聚焦</span></div>
       </div>
       <span class="so-sep"></span>
       <div class="so-group">
         <div class="so-group-title">对话</div>
         <div class="so-row"><span class="so-keys"><kbd>Enter</kbd></span><span class="so-desc">发送</span></div>
         <div class="so-row"><span class="so-keys"><kbd>Shift</kbd><kbd>↵</kbd></span><span class="so-desc">换行</span></div>
-        <div class="so-row"><span class="so-keys"><kbd>/new</kbd></span><span class="so-desc">新会话</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>/new</kbd></span><span class="so-desc">重置当前会话</span></div>
         <div class="so-row"><span class="so-keys"><kbd>/compact</kbd></span><span class="so-desc">压缩上下文</span></div>
         <div class="so-row"><span class="so-keys"><kbd>/memory</kbd></span><span class="so-desc">查看记忆</span></div>
         <div class="so-row"><span class="so-keys"><kbd>/remember</kbd></span><span class="so-desc">记住一件事</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>/export</kbd></span><span class="so-desc">导出对话</span></div>
+        <div class="so-row"><span class="so-keys"><kbd>@文件名</kbd></span><span class="so-desc">引用文件（自动补全）</span></div>
       </div>
       <span class="so-sep"></span>
       <div class="so-group">
