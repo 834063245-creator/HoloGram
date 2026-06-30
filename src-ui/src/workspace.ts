@@ -391,6 +391,9 @@ export class Workspace {
     };
     for (const tool of createCodingTools(codingExec)) { registry.register(tool); }
 
+    // Aliases — short names for high-frequency tools
+    registry.alias('read_file', 'read_file_content');
+
     // Memory tools
     if (this.memoryManager) {
       for (const tool of createMemoryTools(this.memoryManager)) { registry.register(tool); }
@@ -466,6 +469,7 @@ export class Workspace {
           for (const tool of createHologramTools(factoryExec)) r.register(tool);
         }
         for (const tool of createCodingTools(factoryExec)) r.register(tool);
+        r.alias('read_file', 'read_file_content');
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
         }
@@ -632,7 +636,7 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 ### 文件与搜索
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "看看这个文件" | \`read_file_content\` — 读取源文件内容 |
+| "看看这个文件" | \`read_file\` (\`read_file_content\`) — 读取源文件内容 |
 | "XX 函数在哪定义的？" | \`search_content\` — 全项目文本搜索（支持字面量+正则） |
 | "找出所有 *.rs 文件" | \`glob\` — 文件模式匹配（支持 ** 递归，如 "**/*.rs"） |
 | "项目目录结构？" | \`list_directory\` — 列出目录内容 |

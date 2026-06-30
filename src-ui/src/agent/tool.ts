@@ -28,11 +28,29 @@ export interface Tool {
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
 
-  register(t: Tool): void {
+    register(t: Tool): void {
     if (this.tools.has(t.name())) {
       throw new Error(`ToolRegistry: duplicate tool "${t.name()}"`);
     }
     this.tools.set(t.name(), t);
+  }
+
+  /** Register an alias — same implementation, different name shown to LLM.
+   *  Alias also appears in schemas() so LLM can use either name. */
+  alias(aliasName: string, existingName: string): void {
+    const original = this.tools.get(existingName);
+    if (!original) throw new Error(`ToolRegistry: cannot alias unknown tool "${existingName}"`);
+    if (this.tools.has(aliasName)) return; // already exists (real tool or earlier alias)
+
+    // Wrap to override name() — schemas() must show the alias name, not the original
+    const wrapper: Tool = {
+      name: () => aliasName,
+      description: () => original.description(),
+      parameters: () => original.parameters(),
+      readOnly: () => original.readOnly(),
+      execute: (args, onProgress) => original.execute(args, onProgress),
+    };
+    this.tools.set(aliasName, wrapper);
   }
 
   get(name: string): Tool | undefined {
