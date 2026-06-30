@@ -41,6 +41,16 @@ interface ChatSession {
 
 let nextSessionId = 1;
 
+/** djb2 hash for project path → localStorage key isolation. Exported for testing. */
+export function hashProjectPath(projectPath: string): number {
+  let hash = 0;
+  for (let i = 0; i < projectPath.length; i++) {
+    hash = ((hash << 5) - hash) + projectPath.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
+}
+
 export class ChatPanel {
   private container: HTMLElement;
 
@@ -1016,15 +1026,8 @@ export class ChatPanel {
 
   // ── Session persistence — one file per session, localStorage backup ──
 
-  /** localStorage key — scoped to workspace via path hash to prevent cross-project session leaks. */
   private lsKey(projectPath: string, id: number): string {
-    // Simple 32-bit hash of project path for localStorage key prefix
-    let hash = 0;
-    for (let i = 0; i < projectPath.length; i++) {
-      hash = ((hash << 5) - hash) + projectPath.charCodeAt(i);
-      hash |= 0; // convert to 32-bit int
-    }
-    return `hologram_session_${hash.toString(36)}_${id}`;
+    return `hologram_session_${hashProjectPath(projectPath).toString(36)}_${id}`;
   }
 
   private sessionsDir(projectPath: string): string {
