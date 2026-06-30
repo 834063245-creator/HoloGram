@@ -47,7 +47,7 @@
 .ft-header .ft-meta {
   font-family: var(--font-mono, monospace);
   font-size: calc(8px * var(--font-scale));
-  color: rgba(105, 145, 200, 0.5);
+  color: rgba(105, 145, 200, 0.58);
   white-space: nowrap;
 }
 .ft-close-btn {
@@ -177,7 +177,7 @@
   padding-left: 10px;
 }
 .ft-code-line .ft-ln {
-  color: rgba(105, 145, 200, 0.35); min-width: 32px;
+  color: rgba(105, 145, 200, 0.52); min-width: 32px;
   text-align: right; margin-right: 10px; user-select: none;
   font-size: calc(9px * var(--font-scale)); flex-shrink: 0;
 }
@@ -211,7 +211,7 @@
   border-left: 2px solid var(--sol, #f0b848);
   padding-left: 10px;
 }
-.ft-audit-dash { color: rgba(72, 79, 88, 0.5); }
+.ft-audit-dash { color: rgba(90, 100, 115, 0.48); }
 .ft-audit-text { color: var(--starlight-dim, #c9d1d9); white-space: pre-wrap; }
 
 /* ── Audit tags ───────────────────────────────── */
