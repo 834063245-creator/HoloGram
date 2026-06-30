@@ -860,18 +860,25 @@
       box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 0 22px rgba(60, 100, 180, 0.1);
     }
 
-    /* ── Pill state — 48px crystalline orb ── */
+    /* ── Pill state — 48px sapphire crystal lens ── */
     #chat-panel.chat-pill {
-      width: 48px; border-radius: 50%; max-height: none;
+      width: 48px; min-width: 48px;
+      height: 48px; min-height: 48px;
+      border-radius: 50%; max-height: none;
       cursor: pointer;
-      background: rgba(6, 16, 38, 0.94);
+      background: radial-gradient(circle at 35% 30%, rgba(30, 60, 110, 0.35), rgba(4, 12, 28, 0.96) 70%);
+      border: 1px solid rgba(90, 140, 220, 0.28);
       transition: transform var(--glide), border-color var(--glide), box-shadow var(--glide), background var(--glide);
+      /* ponytail: explicit height prevents flex collapse → oval on border-radius:50% */
     }
     #chat-panel.chat-pill:hover {
-      border-color: rgba(180, 220, 255, 0.6);
-      box-shadow: 0 4px 32px rgba(0,0,0,0.4), 0 0 62px rgba(140, 200, 255, 0.5);
-      transform: translateX(-50%) scale(1.07);
-      background: rgba(8, 20, 44, 0.94);
+      border-color: rgba(170, 220, 255, 0.55);
+      box-shadow:
+        0 2px 24px rgba(0,0,0,0.5),
+        0 0 52px rgba(120, 180, 255, 0.35),
+        inset 0 0 24px rgba(80, 140, 240, 0.08);
+      transform: translateX(-50%) scale(1.06);
+      background: radial-gradient(circle at 35% 30%, rgba(40, 75, 130, 0.4), rgba(6, 18, 38, 0.96) 70%);
     }
     #chat-panel.chat-pill .chat-header,
     #chat-panel.chat-pill .chat-messages,
@@ -884,61 +891,59 @@
     #chat-panel.chat-pill .chat-panel-tabs,
     #chat-panel.chat-pill .chat-tab-content { display: none; }
 
-    /* ── Orbital ring (::before) — outer rotating track ── */
+    /* ── Outer atmosphere (::before) — subtle breathing halo, no border clutter ── */
     #chat-panel::before {
-      content: ''; position: absolute; inset: -8px; border-radius: 50%;
-      border: 1px solid rgba(70, 120, 200, 0.2);
-      animation: pill-orbit 10s linear infinite;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity var(--glide), border-color var(--glide);
-    }
-    #chat-panel.chat-pill::before { opacity: 1; }
-    #chat-panel.chat-pill:hover::before {
-      border-color: rgba(160, 210, 255, 0.5);
-      animation-duration: 4.5s;
-    }
-
-    /* ── Ambient aura (::after) — breathing halo ── */
-    #chat-panel::after {
-      content: ''; position: absolute; inset: -18px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(80,140,240,0.09) 0%, transparent 62%);
-      animation: pill-breathe 3.5s ease-in-out infinite;
+      content: ''; position: absolute; inset: -10px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(80,140,240,0.07) 0%, transparent 70%);
+      animation: pill-breathe 4s ease-in-out infinite;
       pointer-events: none;
       opacity: 0;
       transition: opacity var(--glide);
     }
-    #chat-panel.chat-pill::after { opacity: 1; }
-    #chat-panel.chat-pill:hover::after {
-      background: radial-gradient(circle, rgba(140,200,255,0.14) 0%, transparent 62%);
+    #chat-panel.chat-pill::before { opacity: 1; }
+    #chat-panel.chat-pill:hover::before {
+      background: radial-gradient(circle, rgba(120,180,255,0.12) 0%, transparent 70%);
     }
 
-    /* ── Inner tracking ring — dashed orbit with tracer dot ── */
+    /* ── Glass edge highlight (::after) — single crisp inner ring ── */
+    #chat-panel::after {
+      content: ''; position: absolute; inset: 3px; border-radius: 50%;
+      border: 1px solid rgba(120, 170, 240, 0.12);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity var(--glide), border-color var(--glide);
+    }
+    #chat-panel.chat-pill::after { opacity: 1; }
+    #chat-panel.chat-pill:hover::after {
+      border-color: rgba(170, 220, 255, 0.22);
+    }
+
+    /* ── Inner tracking ring — single orbital tracer, no dashed clutter ── */
     .chat-pill-inner-ring {
-      position: absolute; inset: 4px; border-radius: 50%;
-      border: 1px dashed rgba(80, 140, 240, 0.22);
-      animation: pill-inner-spin 14s linear infinite;
+      position: absolute; inset: 6px; border-radius: 50%;
+      border: 1px solid rgba(80, 140, 240, 0.1);
+      animation: pill-inner-spin 18s linear infinite;
       pointer-events: none; opacity: 0;
       transition: opacity var(--glide), border-color var(--glide);
     }
     #chat-panel.chat-pill .chat-pill-inner-ring { opacity: 1; }
     #chat-panel.chat-pill:hover .chat-pill-inner-ring {
-      border-color: rgba(160, 210, 255, 0.4);
+      border-color: rgba(160, 210, 255, 0.28);
     }
     .chat-pill-orbit-dot {
-      position: absolute; top: -2.5px; left: calc(50% - 2.5px);
-      width: 5px; height: 5px;
+      position: absolute; top: -3px; left: calc(50% - 3px);
+      width: 6px; height: 6px;
       background: var(--signal-bright);
       border-radius: 50%;
-      box-shadow: 0 0 8px rgba(100, 160, 240, 0.6);
+      box-shadow: 0 0 10px rgba(120, 180, 255, 0.7), 0 0 2px rgba(200, 230, 255, 0.9);
       transition: background var(--glide), box-shadow var(--glide);
     }
     #chat-panel.chat-pill:hover .chat-pill-orbit-dot {
-      background: #d8eeff;
-      box-shadow: 0 0 14px rgba(180, 220, 255, 0.85);
+      background: #e0f0ff;
+      box-shadow: 0 0 16px rgba(170, 220, 255, 0.9), 0 0 4px rgba(220, 240, 255, 1);
     }
 
-    /* ── Core crystal — geometric mark at center ── */
+    /* ── Core crystal — single clean geometric mark ── */
     #chat-panel .chat-pill-star {
       display: flex;
       position: absolute; inset: 0;
@@ -952,60 +957,72 @@
     }
     #chat-panel.chat-pill:hover .chat-pill-star {
       color: #d8eeff;
-      filter: drop-shadow(0 0 20px rgba(160, 210, 255, 0.85));
+      filter: drop-shadow(0 0 18px rgba(150, 210, 255, 0.8));
     }
 
-    /* ── Running state — agent active in background ── */
+    /* ── Pill badge — event counter when agent runs in background ── */
+    .chat-pill-badge {
+      position: absolute; top: -5px; right: -5px;
+      min-width: 18px; height: 18px; padding: 0 5px;
+      font-family: var(--font-mono); font-size: 9px; font-weight: 700; line-height: 18px; text-align: center;
+      background: var(--fail); color: #fff;
+      border-radius: 9px;
+      box-shadow: 0 0 8px rgba(217,68,68,0.5);
+      pointer-events: none;
+      opacity: 0; transform: scale(0.6);
+      transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .chat-pill-badge.show {
+      opacity: 1; transform: scale(1);
+    }
+
+    /* ── Running state — amber heartbeat ── */
     #chat-panel.chat-pill-running {
-      box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 0 38px rgba(240, 170, 50, 0.16);
+      box-shadow:
+        0 2px 20px rgba(0,0,0,0.4),
+        0 0 36px rgba(240, 170, 50, 0.18),
+        inset 0 0 20px rgba(240, 170, 50, 0.04);
+      border-color: rgba(240, 170, 50, 0.2);
+      background: radial-gradient(circle at 35% 30%, rgba(240, 170, 50, 0.1), rgba(4, 12, 28, 0.96) 70%);
     }
     #chat-panel.chat-pill-running .chat-pill-star {
       color: var(--sol);
-      animation: pill-core-pulse 1.4s ease-in-out infinite;
+      animation: pill-core-pulse 1.6s ease-in-out infinite;
     }
     @keyframes pill-core-pulse {
-      0%, 100% { filter: drop-shadow(0 0 6px rgba(240, 170, 50, 0.35)); }
-      50%      { filter: drop-shadow(0 0 18px rgba(240, 170, 50, 0.7)); }
+      0%, 100% { filter: drop-shadow(0 0 8px rgba(240, 170, 50, 0.4)); transform: scale(1); }
+      50%      { filter: drop-shadow(0 0 22px rgba(255, 190, 60, 0.7)); transform: scale(1.06); }
     }
 
-    /* Running orbital ring — amber, faster */
+    /* Running — atmosphere warms to amber */
     #chat-panel.chat-pill-running::before {
-      border-color: rgba(240, 170, 50, 0.22);
-      animation: pill-orbit 3.5s linear infinite;
+      background: radial-gradient(circle, rgba(240,170,50,0.1) 0%, transparent 65%);
+      animation: pill-breathe 2.5s ease-in-out infinite;
     }
 
-    /* Running ambient — amber ripple pulse */
+    /* Running — glass edge goes amber */
     #chat-panel.chat-pill-running::after {
-      background: radial-gradient(circle, rgba(240,170,50,0.12) 0%, transparent 55%);
-      animation: pill-ripple 2s ease-out infinite;
-    }
-    @keyframes pill-ripple {
-      0%   { transform: scale(0.55); opacity: 0.85; }
-      100% { transform: scale(2.2); opacity: 0; }
+      border-color: rgba(240, 170, 50, 0.14);
     }
 
-    /* Running inner ring — amber, faster */
+    /* Running inner ring — amber, faster orbit */
     #chat-panel.chat-pill-running .chat-pill-inner-ring {
-      border-color: rgba(240, 170, 50, 0.22);
-      animation-duration: 3s;
+      border-color: rgba(240, 170, 50, 0.12);
+      animation-duration: 4.5s;
     }
     #chat-panel.chat-pill-running .chat-pill-orbit-dot {
       background: var(--sol-bright);
-      box-shadow: 0 0 12px rgba(240, 170, 50, 0.75);
+      box-shadow: 0 0 12px rgba(240, 180, 60, 0.8), 0 0 3px rgba(255, 210, 100, 0.9);
     }
 
     /* Keyframes */
-    @keyframes pill-orbit {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
-    }
     @keyframes pill-inner-spin {
       from { transform: rotate(0deg); }
       to   { transform: rotate(360deg); }
     }
     @keyframes pill-breathe {
-      0%, 100% { opacity: 0.35; }
-      50%      { opacity: 1; }
+      0%, 100% { opacity: 0.3; }
+      50%      { opacity: 0.85; }
     }
 
     /* ── Input-only mode — narrow floating bar ── */

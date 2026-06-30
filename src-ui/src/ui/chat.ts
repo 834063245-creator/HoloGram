@@ -109,6 +109,10 @@ export class ChatPanel {
   // ── New: token accumulation (item 12) ──
   private totalTokensUsed = 0;
 
+  // ── Pill badge — agent event counter when collapsed ──
+  private pillEventCount = 0;
+  private pillBadge!: HTMLElement;
+
   // ── New: slash auto-popup ref (item 14) ──
   private _slashPopup: HTMLElement | null = null;
 
@@ -654,6 +658,7 @@ export class ChatPanel {
   private summonPanel(): void {
     // If agent is running in background, restore to full panel
     if (this.running) this.panel.classList.remove('chat-pill-running');
+    this._resetPillBadge();
     this.morphToMode('panel', 'chat-open');
     this.scrollBottom();
   }
@@ -1786,18 +1791,17 @@ export class ChatPanel {
     this.footerEl.className = 'chat-footer';
     this.panel.appendChild(this.footerEl);
 
-    // ── Pill core — crystalline geometric mark ──
+    // ── Pill core — optical sapphire reticle ──
+    // ponytail: single clean geometric mark instead of 4 overlapping polygons
     const pillStar = document.createElement('div');
     pillStar.className = 'chat-pill-star';
     const starSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     starSvg.setAttribute('viewBox', '0 0 32 32');
-    starSvg.setAttribute('width', '18');
-    starSvg.setAttribute('height', '18');
+    starSvg.setAttribute('width', '22');
+    starSvg.setAttribute('height', '22');
     starSvg.innerHTML = [
-      '<circle cx="16" cy="16" r="2.5" fill="currentColor"/>',
-      '<polygon points="16,5 25.5,10.5 25.5,21.5 16,27 6.5,21.5 6.5,10.5" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.55"/>',
-      '<polygon points="16,2 30,16 16,30 2,16" fill="none" stroke="currentColor" stroke-width="0.5" opacity="0.28"/>',
-      '<polygon points="16,8 24,16 16,24 8,16" fill="none" stroke="currentColor" stroke-width="0.6" opacity="0.4"/>',
+      '<circle cx="16" cy="16" r="3" fill="currentColor" opacity="0.9"/>',
+      '<polygon points="16,4 28,16 16,28 4,16" fill="none" stroke="currentColor" stroke-width="0.7" opacity="0.45"/>',
     ].join('');
     pillStar.appendChild(starSvg);
     this.panel.appendChild(pillStar);
@@ -1809,6 +1813,11 @@ export class ChatPanel {
     orbitDot.className = 'chat-pill-orbit-dot';
     innerRing.appendChild(orbitDot);
     this.panel.appendChild(innerRing);
+
+    // ── Event badge — counts agent events when pill is collapsed ──
+    this.pillBadge = document.createElement('div');
+    this.pillBadge.className = 'chat-pill-badge';
+    this.panel.appendChild(this.pillBadge);
 
     this.container.appendChild(this.panel);
     // Ensure initial mode class matches this.mode = 'pill'
@@ -2843,6 +2852,7 @@ export class ChatPanel {
     this.currentBubble.className = 'msg-bubble assistant';
     this.msgList.appendChild(this.currentBubble);
     this.animateBubbleIn(this.currentBubble);
+    this._bumpPillBadge();
   }
 
   private appendUserBubble(text: string): void {
@@ -3140,6 +3150,22 @@ export class ChatPanel {
     }
   }
 
+  // ── Pill badge — agent event counter when collapsed ──
+
+  /** Bump the pill badge count. Call from event handlers when pill-mode streaming. */
+  private _bumpPillBadge(): void {
+    if (this.mode !== 'pill') return;
+    this.pillEventCount++;
+    this.pillBadge.textContent = String(this.pillEventCount > 99 ? '99+' : this.pillEventCount);
+    this.pillBadge.classList.add('show');
+  }
+
+  private _resetPillBadge(): void {
+    this.pillEventCount = 0;
+    this.pillBadge.textContent = '';
+    this.pillBadge.classList.remove('show');
+  }
+
   // ── Sub-agent event handlers (item 10) ──
 
   private handleSubSpawn(data: { id: string; description: string; prompt: string; mode: string }): void {
@@ -3147,6 +3173,7 @@ export class ChatPanel {
     this.flushReasoning();
     this.flushText();
     this.ensureAssistantBubble();
+    this._bumpPillBadge();
 
     const subEl = document.createElement('div');
     subEl.className = 'msg-sub-agent';
@@ -3177,6 +3204,7 @@ export class ChatPanel {
     const body = subEl.querySelector('.msg-sub-agent-body') as HTMLElement;
     const header = subEl.querySelector('.msg-sub-agent-header') as HTMLElement;
     if (body) body.classList.remove('open');
+    this._bumpPillBadge();
 
     // Collapse and show summary
     subEl.innerHTML = `
