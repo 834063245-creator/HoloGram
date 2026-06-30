@@ -481,6 +481,66 @@ use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 
 /// Run analysis via Engine and cache result. Returns JSON summary.
+/// Check whether the engine cache is stale — i.e. any tracked source file
+/// has been modified after the last full analysis (hologram_graph.json mtime).
+/// Walks project tree, stops early on first newer file found.
+/// ponytail: only scans files whose extensions the engine actually parses;
+/// skips .git, node_modules, target, and other generated/ignore dirs.
+fn cache_is_stale(root: &std::path::Path) -> bool {
+    let graph_json = root.join("hologram_graph.json");
+    let cache_mtime = match std::fs::metadata(&graph_json) {
+        Ok(m) => match m.modified() {
+            Ok(t) => t,
+            Err(_) => return true, // can't read mtime → assume stale
+        },
+        Err(_) => return true, // no baseline → stale
+    };
+
+    const EXTS: &[&str] = &[
+        ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".go", ".rs", ".java", ".c",
+        ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".rb", ".cs", ".kt", ".kts", ".swift",
+        ".php", ".lua",
+    ];
+    const SKIP: &[&str] = &[
+        ".git", "node_modules", "target", "build", "dist", "out", ".venv", "venv",
+        ".hologram", "release-bin", "__pycache__", ".pytest_cache", ".ruff_cache",
+        ".mypy_cache", ".next", ".nuxt", ".svelte-kit", ".turbo", ".cursor",
+        ".idea", ".vscode", ".coverage",
+    ];
+
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy();
+                !SKIP.iter().any(|d| name.as_ref() == *d)
+            } else {
+                true
+            }
+        })
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_dot = format!(".{}", ext);
+        if !EXTS.contains(&ext_dot.as_str()) { continue; }
+        if let Ok(meta) = path.metadata() {
+            if let Ok(mtime) = meta.modified() {
+                if mtime > cache_mtime {
+                    eprintln!(
+                        "[direct_analyze] Cache stale: {} modified after last analysis",
+                        path.display()
+                    );
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> {
     let root = std::path::PathBuf::from(path);
     if !root.exists() {
@@ -493,10 +553,14 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
 
     // ponytail: if SQLite cache already has graph data AND reanalysis not
     // forced, skip the full pipeline. Cold-start wins ~420s; warm reload <1s.
+    // But verify cache freshness first — if any source file was modified after
+    // the last analysis, the cache is stale and must be rebuilt. Otherwise
+    // code changes made outside HoloGram (e.g. in VS Code between sessions)
+    // are silently invisible until the user manually hits "re-analyze".
     if !force {
         let cached_node_count = engine_api::engine_read(|idx| idx.node_count())
             .unwrap_or(0);
-        if cached_node_count > 0 {
+        if cached_node_count > 0 && !cache_is_stale(&root) {
             eprintln!("[direct_analyze] Using cached graph ({cached_node_count} nodes), skipping full analysis");
         // Serialize from cache inside callback — avoids cloning the entire Graph
         return engine_api::engine_read_graph(|graph| {
