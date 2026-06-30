@@ -5,20 +5,16 @@
 // 三模式星图：minimal / standard / full — 独立实例，切换即重建
 // v4.1: Workspace 抽象 — 所有工作区状态统一管理
 
-import '@xterm/xterm/css/xterm.css';
 import { invoke, listen, isMockMode } from './bridge';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { FileViewer } from './ui/file-viewer';
-import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
 import { HotspotsPanel } from './ui/hotspots';
 import { ConflictPanel } from './ui/conflict';
 import { SettingsPanel } from './ui/settings-panel';
-import { GitPanel } from './ui/git-panel';
-import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { shell } from './ui/app-shell';
 import { initLogger, log } from './agent/logger';
@@ -89,11 +85,8 @@ function layoutViaWorker(
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
-const dockGit = document.getElementById('dock-git')!;
 const statusText = document.getElementById('status-text')!;
-let _gitStatusTimer: ReturnType<typeof setInterval> | null = null;
 const tbPath = document.getElementById('tb-path')!;
-const btnExplorer = document.getElementById('btn-explorer') as HTMLButtonElement;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
 const btnReanalyze = document.getElementById('btn-reanalyze') as HTMLButtonElement;
 const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButtonElement;
@@ -106,7 +99,6 @@ const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
 const btnTimeline = document.getElementById('btn-timeline') as HTMLButtonElement;
 const btnConstraints = document.getElementById('btn-constraints') as HTMLButtonElement;
 const btnConflict = document.getElementById('btn-conflict') as HTMLButtonElement;
-const btnTerminal = document.getElementById('btn-terminal') as HTMLButtonElement;
 
 // ── State ──
 let workspace: Workspace | null = null;
@@ -166,7 +158,6 @@ async function switchWorkspace(
     }
 
     resetCheckPanelState();
-    if (_gitStatusTimer) { clearInterval(_gitStatusTimer); _gitStatusTimer = null; }
 
     // Create new — pass callbacks immediately so progress events during
     // Workspace.open (analyze + render) push visible status updates.
@@ -197,13 +188,11 @@ async function switchWorkspace(
       edges: Array.isArray(ws.graphData.edges) ? ws.graphData.edges.length : Object.keys(ws.graphData.edges || {}).length,
     });
     setLoading(false);
-    startGitIndicator();
 
     try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[switchWorkspace] setupAgent failed:', e); }
 
     chatPanel.setProjectPath(folder);
     chatPanel.autoRestoreLastSession(folder).catch(() => {});
-    if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
     ws.runCheck(checkPanel);
     await invoke('workspace_start_watcher').catch(() => {});
   } finally {
@@ -235,11 +224,6 @@ function notifyAllPanels(ws: Workspace): void {
   chatPanel.setProjectPath(ws.path);
   timelinePanel.setProjectPath(ws.path);
   hotspotsPanel.setProjectPath(ws.path);
-  TerminalPanel.get().setCwd(ws.path);
-  const ft = FileTreePanel.get();
-  if (ft.isOpen()) ft.load(ws.path);
-  const gp = GitPanel.get();
-  if (gp.isOpen()) gp.load(ws.path);
   if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().load(ws.path);
   conflictPanel.setGraph(starGraph);
 }
@@ -382,13 +366,10 @@ async function init(): Promise<void> {
   // Register all panels so shell knows who's open
   shell.register({ id: 'check', isOpen: () => checkPanel.isOpen() });
   shell.register({ id: 'chat', isOpen: () => chatPanel.isOpen() });
-  shell.register({ id: 'explorer', isOpen: () => FileTreePanel.get().isOpen() });
   shell.register({ id: 'timeline', isOpen: () => timelinePanel.isOpen() });
-  shell.register({ id: 'git', isOpen: () => GitPanel.get().isOpen() });
   shell.register({ id: 'hotspots', isOpen: () => hotspotsPanel.isOpen() });
   shell.register({ id: 'conflict', isOpen: () => conflictPanel.isOpen() });
   shell.register({ id: 'constraints', isOpen: () => ConstraintsPanel.get().isOpen() });
-  shell.register({ id: 'terminal', isOpen: () => TerminalPanel.get().isOpen() });
 
   // Wire navigation / highlight / agent-query commands
   shell.wire({
@@ -405,7 +386,6 @@ async function init(): Promise<void> {
 
   // ── Bus notifications (pure notification — sender doesn't care who listens) ──
   bus.on('check:history', ({ checkData, timestamp }: { checkData: CheckResult; timestamp: string }) => {
-    if (TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
     checkPanel.showHistory(checkData, timestamp);
     updateTabs();
   });
@@ -414,38 +394,19 @@ async function init(): Promise<void> {
     if (workspace?.path) chatPanel.saveActiveSession(workspace.path).catch(() => {});
   });
 
-  // graph → file tree reverse linking
-  window.addEventListener('graph:node-selected', ((e: CustomEvent) => {
-    const filePath = e.detail as string;
-    if (!filePath) return;
-    const ft = FileTreePanel.get();
-    if (!ft.isOpen()) {
-      ft.show();
-      btnExplorer.classList.add('active');
-      if (workspace?.path) ft.load(workspace.path).then(() => ft.highlightPath(filePath));
-    } else {
-      ft.highlightPath(filePath);
-    }
-  }) as EventListener);
-
   // ── Dock tabs ──
   const leftTabs = document.getElementById('left-tabs')!;
   const rightTabs = document.getElementById('right-tabs')!;
-  const bottomTabs = document.getElementById('bottom-tabs')!;
   leftTabs.style.display = '';
   rightTabs.style.display = '';
-  bottomTabs.style.display = '';
   const updateTabs = () => {
-    const hideLeft = FileTreePanel.get().isOpen() || timelinePanel.isOpen()
-      || GitPanel.get().isOpen() || hotspotsPanel.isOpen();
+    const hideLeft = timelinePanel.isOpen() || hotspotsPanel.isOpen();
     const hideRight = checkPanel.isOpen() || ConstraintsPanel.get().isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
     leftTabs.querySelectorAll('.dock-tab').forEach(t => {
       const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'explorer' && FileTreePanel.get().isOpen())
-        || (p === 'timeline' && timelinePanel.isOpen())
-        || (p === 'git' && GitPanel.get().isOpen())
+      const active = (p === 'timeline' && timelinePanel.isOpen())
         || (p === 'hotspots' && hotspotsPanel.isOpen());
       t.classList.toggle('active', !!active);
     });
@@ -454,39 +415,22 @@ async function init(): Promise<void> {
       const active = (p === 'check' && checkPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
       t.classList.toggle('active', !!active);
     });
-    bottomTabs.querySelectorAll('.dock-tab').forEach(t => {
-      const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'terminal' && TerminalPanel.get().isOpen());
-      t.classList.toggle('active', !!active);
-    });
   };
   shell.onPanelChanged = updateTabs;
 
-  // Left dock
+  // Left dock — timeline & hotspots
   leftTabs.addEventListener('click', (e) => {
     const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
     if (!tab) return;
     const p = tab.dataset['panel'];
     const closeLeftSiblings = (except: string) => {
-      if (except !== 'explorer' && FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
       if (except !== 'timeline' && timelinePanel.isOpen()) timelinePanel.close();
-      if (except !== 'git' && GitPanel.get().isOpen()) GitPanel.get().close();
       if (except !== 'hotspots' && hotspotsPanel.isOpen()) hotspotsPanel.close();
     };
-    if (p === 'explorer') {
-      closeLeftSiblings('explorer');
-      const ft = FileTreePanel.get();
-      if (!ft.isOpen() && workspace?.path) ft.load(workspace.path);
-      ft.toggle();
-      btnExplorer.classList.toggle('active', ft.isOpen());
-    } else if (p === 'timeline') {
+    if (p === 'timeline') {
       closeLeftSiblings('timeline');
       if (workspace?.path) timelinePanel.setProjectPath(workspace.path);
       timelinePanel.toggle();
-    } else if (p === 'git') {
-      closeLeftSiblings('git');
-      if (workspace?.path) GitPanel.get().load(workspace.path);
-      else GitPanel.get().toggle();
     } else if (p === 'hotspots') {
       closeLeftSiblings('hotspots');
       if (workspace?.path) hotspotsPanel.setProjectPath(workspace.path);
@@ -495,7 +439,7 @@ async function init(): Promise<void> {
     updateTabs();
   });
 
-  // Right dock
+  // Right dock — check & constraints
   rightTabs.addEventListener('click', (e) => {
     const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
     if (!tab) return;
@@ -511,19 +455,6 @@ async function init(): Promise<void> {
       if (conflictPanel.isOpen()) conflictPanel.close();
       ConstraintsPanel.get().toggle();
     }
-    updateTabs();
-  });
-
-  // Bottom dock
-  const closeBottomSiblings = (except: string) => {
-    if (except !== 'terminal' && TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
-  };
-
-  bottomTabs.addEventListener('click', (e) => {
-    const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
-    if (!tab) return;
-    const p = tab.dataset['panel'];
-    if (p === 'terminal') { closeBottomSiblings('terminal'); TerminalPanel.get().toggle(); }
     updateTabs();
   });
 
@@ -567,8 +498,6 @@ async function init(): Promise<void> {
   // Timeline
   btnTimeline.addEventListener('click', () => {
     if (workspace?.path) timelinePanel.setProjectPath(workspace.path);
-    if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); }
-    if (GitPanel.get().isOpen()) GitPanel.get().close();
     if (hotspotsPanel.isOpen()) hotspotsPanel.close();
     timelinePanel.toggle();
     updateTabs();
@@ -584,13 +513,6 @@ async function init(): Promise<void> {
 
   // Conflict
   btnConflict.addEventListener('click', () => { conflictPanel.toggle(); updateTabs(); });
-
-  // Terminal
-  btnTerminal.addEventListener('click', () => {
-    closeBottomSiblings('terminal');
-    TerminalPanel.get().toggle();
-    updateTabs();
-  });
 
   // Settings
   const settingsPanel = SettingsPanel.get();
@@ -641,26 +563,8 @@ async function init(): Promise<void> {
     if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault(); btnDiff.click();
     }
-    if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      closeBottomSiblings('terminal');
-      TerminalPanel.get().toggle();
-      updateTabs();
-    }
     if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault(); settingsPanel.toggle();
-    }
-    if ((e.key === 'e' || e.key === 'E') && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      const ft = FileTreePanel.get();
-      if (!ft.isOpen() && workspace?.path) ft.load(workspace.path);
-      if (!ft.isOpen()) {
-        if (timelinePanel.isOpen()) timelinePanel.close();
-        if (GitPanel.get().isOpen()) GitPanel.get().close();
-      }
-      ft.toggle();
-      btnExplorer.classList.toggle('active', ft.isOpen());
-      updateTabs();
     }
   });
 
@@ -703,20 +607,6 @@ async function init(): Promise<void> {
     }
   });
 
-  // File explorer toggle
-  btnExplorer.addEventListener('click', () => {
-    const ft = FileTreePanel.get();
-    if (!ft.isOpen() && workspace?.path) ft.load(workspace.path);
-    if (!ft.isOpen()) {
-      if (timelinePanel.isOpen()) timelinePanel.close();
-      if (GitPanel.get().isOpen()) GitPanel.get().close();
-      if (hotspotsPanel.isOpen()) hotspotsPanel.close();
-    }
-    ft.toggle();
-    btnExplorer.classList.toggle('active', ft.isOpen());
-    updateTabs();
-  });
-
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
 
@@ -731,12 +621,10 @@ async function init(): Promise<void> {
     if (e.key === 'Escape') {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
       else if (timelinePanel.isOpen()) { timelinePanel.close(); updateTabs(); }
-      else if (GitPanel.get().isOpen()) { GitPanel.get().close(); updateTabs(); }
       else if (hotspotsPanel.isOpen()) { hotspotsPanel.close(); updateTabs(); }
       else if (conflictPanel.isOpen()) { conflictPanel.close(); updateTabs(); }
       else if (checkPanel.isOpen()) { checkPanel.close(); updateTabs(); }
       else if (chatPanel.isOpen()) { chatPanel.close(); updateTabs(); }
-      else if (FileTreePanel.get().isOpen()) { FileTreePanel.get().close(); btnExplorer.classList.remove('active'); updateTabs(); }
       else if (FileViewer.get().isOpen) FileViewer.get().close();
       else starGraph.clearAgentHighlight();
     }
@@ -818,38 +706,6 @@ async function init(): Promise<void> {
   welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
   setLoading(false);
   await setupPlaceholderAgent();
-}
-
-// ── Git indicator ────────────────────────
-
-function updateGitIndicator(): void {
-  if (!workspace?.path) return;
-  const badge = dockGit.querySelector('.git-badge') as HTMLElement | null;
-  invoke<string>('git_status', { path: workspace.path }).then(raw => {
-    const status = JSON.parse(raw) as { files?: Array<{ status: string; staged: boolean }> };
-    const files = status.files || [];
-    const totalCount = files.length;
-    if (!badge) return;
-    if (totalCount === 0) {
-      badge.textContent = ''; badge.className = 'git-badge clean';
-    } else {
-      badge.textContent = String(totalCount); badge.className = 'git-badge';
-    }
-  }).catch(() => {
-    if (badge) { badge.textContent = ''; badge.className = 'git-badge clean'; }
-  });
-}
-
-function startGitIndicator(): void {
-  if (_gitStatusTimer) clearInterval(_gitStatusTimer);
-  const existing = dockGit.querySelector('.git-badge');
-  if (!existing) {
-    const badge = document.createElement('span');
-    badge.className = 'git-badge';
-    dockGit.appendChild(badge);
-  }
-  updateGitIndicator();
-  _gitStatusTimer = setInterval(updateGitIndicator, 3000);
 }
 
 init();

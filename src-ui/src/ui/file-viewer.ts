@@ -19,7 +19,6 @@ function getFontScale(): number {
 }
 import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 import { FileTranslator } from './file-translator';
-import { FileTreePanel } from './file-tree';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
@@ -600,8 +599,7 @@ export class FileViewer {
         span.style.background = '';
       });
       span.addEventListener('click', () => {
-        const partial = parts.slice(0, i + 1).join('/');
-        FileTreePanel.get().highlightPath(partial);
+        // ponytail: file tree removed — breadcrumb clicks still work for visual feedback
       });
       this.breadcrumb.appendChild(span);
     });
@@ -741,7 +739,6 @@ export class FileViewer {
       this.renderPreview(newTab); // fire-and-forget, async load
       this.renderTabs();
       this.updatePreviewButton();
-      FileTreePanel.get().setOpenFilePath(filePath);
       return;
     }
 
@@ -808,8 +805,6 @@ export class FileViewer {
       this.activeIdx = this.tabs.length - 1;
       this.editor.setModel(model);
       this.renderTabs();
-      // Notify file tree to highlight the opened file
-      FileTreePanel.get().setOpenFilePath(filePath);
     } catch (err: any) {
       console.error('[FileViewer] read failed:', err);
       loadingModel.dispose();
@@ -1126,7 +1121,7 @@ export class FileViewer {
   }
 }
 
-// ── File icon by extension (module-level, shared by renderTabs + FileTreePanel) ──
+// ── File icon by extension ──
 
 function fileIconSvg(fileName: string, size: number): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
