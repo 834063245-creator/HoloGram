@@ -9,7 +9,8 @@
     "dev": "vite",
     "dev:mock": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -30,6 +31,7 @@
     "@webgpu/types": "^0.1.70",
     "tsx": "^4.22.4",
     "typescript": "^5.6",
-    "vite": "^6.0"
+    "vite": "^6.0",
+    "vitest": "^4.1.9"
   }
 }
