@@ -946,10 +946,17 @@
       height: 48px; min-height: 48px;
       border-radius: 50%; max-height: none;
       cursor: pointer;
+      overflow: visible; /* allow status label to float outside */
       background: radial-gradient(circle at 35% 30%, rgba(30, 60, 110, 0.35), rgba(4, 12, 28, 0.96) 70%);
       border: 1px solid rgba(90, 140, 220, 0.28);
       transition: transform var(--glide), border-color var(--glide), box-shadow var(--glide), background var(--glide);
       /* ponytail: explicit height prevents flex collapse → oval on border-radius:50% */
+    }
+    #chat-panel.chat-pill .chat-pill-badge,
+    #chat-panel.chat-pill .chat-pill-star,
+    #chat-panel.chat-pill .chat-pill-inner-ring {
+      /* Keep decorative elements clipped to pill circle */
+      overflow: hidden; border-radius: 50%;
     }
     #chat-panel.chat-pill:hover {
       border-color: rgba(170, 220, 255, 0.55);
@@ -969,7 +976,8 @@
     #chat-panel.chat-pill .chat-resize,
     #chat-panel.chat-pill .chat-status-bar,
     #chat-panel.chat-pill .chat-panel-tabs,
-    #chat-panel.chat-pill .chat-tab-content { display: none; }
+    #chat-panel.chat-pill .chat-tab-content,
+    #chat-panel.chat-pill .chat-progress { display: none; }
 
     /* ── Outer atmosphere (::before) — subtle breathing halo, no border clutter ── */
     #chat-panel::before {
@@ -1052,7 +1060,7 @@
       opacity: 0; transform: scale(0.6);
       transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
     }
-    .chat-pill-badge.show {
+        .chat-pill-badge.show {
       opacity: 1; transform: scale(1);
     }
 
@@ -1116,7 +1124,8 @@
     #chat-panel.chat-input-mode .chat-resize,
     #chat-panel.chat-input-mode .chat-status-bar,
     #chat-panel.chat-input-mode .chat-panel-tabs,
-    #chat-panel.chat-input-mode .chat-tab-content { display: none; }
+    #chat-panel.chat-input-mode .chat-tab-content,
+    #chat-panel.chat-input-mode .chat-progress { display: none; }
 
     /* ── Full panel summoned ── */
     #chat-panel.chat-open {
