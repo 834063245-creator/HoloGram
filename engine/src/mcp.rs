@@ -68,8 +68,7 @@ fn tool_definitions() -> Vec<Value> {
             &[("node_id", "string", "The node ID")], &["node_id"]),
         tool_def("hologram_delayed", "Get all nodes connected via temporal edges with non-null delays.",
             &[], &[]),
-        tool_def("hologram_changes", "Get change markers from the last commit comparison.",
-            &[("project_root", "string", "Project root path")], &[]),
+        // ponytail: hologram_changes removed — merged into hologram_timeline (timeline with limit=1 covers it)
 
         // ── V2 analysis (5) ──
         tool_def("hologram_fragile", "Get top N most fragile modules ranked by L4 encapsulation violation density.",
@@ -88,7 +87,7 @@ fn tool_definitions() -> Vec<Value> {
             &[("filter", "string", "Boundary type filter: all, L4, thread, cycle (default all)")], &[]),
 
         // ── V3 preflight (1) ──
-        tool_def("hologram_preflight", "Pre-flight check: analyze what would happen if the given files change.",
+        tool_def("hologram_run_preflight", "Pre-flight check: analyze what would happen if the given files change.",
             &[("files", "array", "List of file paths that would be changed")], &["files"]),
 
         // ── V3+ parity (5) ──
@@ -98,10 +97,10 @@ fn tool_definitions() -> Vec<Value> {
             &[("query", "string", "Natural language query (e.g. 'DataRequest validate task'). Auto-extracts symbol names."), ("symbols", "array", "List of symbol names (alternative to query)"), ("includeSource", "boolean", "Include source code sections (default true)")], &[]),
         tool_def("hologram_graph_summary", "Get a high-level summary of the current dependency graph.",
             &[], &[]),
-        tool_def("hologram_community_report", "Report on community/cluster structure in the codebase.",
+        tool_def("hologram_clusters", "Report on cluster/community structure in the codebase.",
             &[("min_size", "integer", "Minimum community size to report (default 3)"),
               ("max_nodes", "integer", "Max node IDs per community in output (default 20, max 200)")], &[]),
-        tool_def("hologram_diff", "Diff the current graph against a baseline snapshot.",
+        tool_def("hologram_graph_diff", "Diff the current graph against a baseline snapshot.",
             &[("before_path", "string", "Path to the baseline graph JSON file")], &["before_path"]),
         tool_def("hologram_analyze", "Re-analyze a project directory and reload the graph.",
             &[("path", "string", "Project root directory path")], &["path"]),
@@ -313,19 +312,18 @@ impl McpServer {
             "hologram_history" => self.tool_history(&args, id),
             "hologram_community" => self.tool_community(&args, id),
             "hologram_delayed" => self.tool_delayed(&args, id),
-            "hologram_changes" => self.tool_changes(&args, id),
             "hologram_fragile" => self.tool_fragile(&args, id),
             "hologram_cycle" => self.tool_cycle(&args, id),
             "hologram_thread_conflicts" => self.tool_thread_conflicts(&args, id),
             "hologram_coupling_report" => self.tool_coupling_report(&args, id),
             "hologram_timeline" => self.tool_timeline(&args, id),
             "hologram_blindspots" => self.tool_blindspots(&args, id),
-            "hologram_preflight" => self.tool_preflight(&args, id),
+            "hologram_run_preflight" | "hologram_preflight" => self.tool_preflight(&args, id),
             "hologram_search" => self.tool_search(&args, id),
             "hologram_explore" => self.tool_explore(&args, id),
             "hologram_graph_summary" => self.tool_graph_summary(&args, id),
-            "hologram_community_report" => self.tool_community_report(&args, id),
-            "hologram_diff" => self.tool_diff(&args, id),
+            "hologram_clusters" | "hologram_community_report" => self.tool_community_report(&args, id),
+            "hologram_graph_diff" | "hologram_diff" => self.tool_diff(&args, id),
             "hologram_analyze" => self.tool_analyze(&args, id),
             "hologram_run_check" => self.tool_run_check(&args, id),
             "hologram_run_health" => self.tool_run_health(&args, id),
@@ -623,19 +621,6 @@ impl McpServer {
                 "periodic": periodic,
             })
         })
-    }
-
-    fn tool_changes(&self, args: &Value, id: &Value) -> Value {
-        let _project_root = args.get("project_root").and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root());
-        let events = engine::engine_query_timeline(100).unwrap_or_default();
-        let last = events.first().cloned();
-        McpServer::tool_result(id, json!({
-            "last_change": last,
-            "timeline_anchor_count": events.len(),
-            "changes": events,
-        }))
     }
 
     // ── V2 analysis tools ──
@@ -1468,12 +1453,12 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 27, "27 tools defined");
+        assert_eq!(tools.len(), 26, "26 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"hologram_neighbors"));
         assert!(names.contains(&"hologram_analyze"));
-        assert!(names.contains(&"hologram_preflight"));
+        assert!(names.contains(&"hologram_run_preflight"));
         assert!(names.contains(&"hologram_rename"));
     }
 
@@ -1779,7 +1764,7 @@ mod tests {
     fn test_preflight_missing_files() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_preflight", json!({}), 21)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("hologram_run_preflight", json!({}), 21)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32602);
@@ -1789,7 +1774,7 @@ mod tests {
     fn test_preflight_with_files() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_preflight",
+        let req = serde_json::to_string(&make_tool_call("hologram_run_preflight",
             json!({"files": ["src/a.rs"]}), 22)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -1844,7 +1829,7 @@ mod tests {
     fn test_community_report() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_community_report",
+        let req = serde_json::to_string(&make_tool_call("hologram_clusters",
             json!({"min_size": 1}), 26)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -1859,7 +1844,7 @@ mod tests {
     fn test_diff_missing_before_path() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_diff", json!({}), 27)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("hologram_graph_diff", json!({}), 27)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32602);
