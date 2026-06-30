@@ -3447,8 +3447,9 @@ function formatDiffResult(body: string, argsJson?: string): string {
   if (argsJson) {
     try {
       const args = JSON.parse(argsJson);
-      oldStr = args['old_string'] || args['old_text'] || '';
-      newStr = args['new_string'] || args['new_text'] || args['content'] || '';
+      // Agent sends camelCase (tool.ts), but also handle snake_case from any legacy paths
+      oldStr = args['oldString'] || args['old_string'] || args['old_text'] || args['oldText'] || '';
+      newStr = args['newString'] || args['new_string'] || args['new_text'] || args['newText'] || args['content'] || '';
     } catch {}
   }
 

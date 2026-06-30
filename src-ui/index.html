@@ -1771,6 +1771,25 @@
       color: rgba(145, 180, 225, 0.65);
     }
 
+    /* Table */
+    .msg-markdown table {
+      width: 100%; border-collapse: collapse; margin: 6px 0;
+      font-size: calc(10px * var(--font-scale));
+    }
+    .msg-markdown th {
+      text-align: left; padding: 4px 8px;
+      background: rgba(15, 25, 42, 0.5);
+      color: var(--starlight); font-weight: 600;
+      border: 1px solid rgba(40, 60, 100, 0.25);
+    }
+    .msg-markdown td {
+      padding: 3px 8px;
+      border: 1px solid rgba(40, 60, 100, 0.15);
+    }
+    .msg-markdown tr:nth-child(even) td {
+      background: rgba(8, 16, 28, 0.25);
+    }
+
     /* Inline code */
     .msg-markdown code:not(pre code) {
       font-family: var(--font-mono); font-size: calc(9px * var(--font-scale));
