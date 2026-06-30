@@ -1068,7 +1068,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
         const fileList = files.split(',').map(f => f.trim());
         const results: string[] = [];
         for (const f of fileList) {
-          const r = await exec('git_stage', { path: args.path, file: f });
+          const r = await exec('git_stage', { path: args.path, files: [f] });
           results.push(r);
         }
         return results.join('\n');
