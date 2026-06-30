@@ -1027,6 +1027,8 @@ export class StarGraph {
     canvas.addEventListener('pointerdown', (e: PointerEvent) => {
       pointerDown.set(e.clientX, e.clientY);
       pointerDragged = false;
+      // ponytail: prevent browser text-selection drag on canvas
+      e.preventDefault();
       // Step 3: Alt+left-drag → rectangle selection
       if (e.altKey && e.button === 0) {
         this._selecting = true;
@@ -1034,7 +1036,6 @@ export class StarGraph {
         this._selectEnd.set(e.clientX, e.clientY);
         this._showSelectRect();
         this.controls.enabled = false;
-        e.preventDefault();
         e.stopPropagation();
       }
     });

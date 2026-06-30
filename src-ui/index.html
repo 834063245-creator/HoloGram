@@ -423,8 +423,9 @@
       top: var(--toolbar-h); left: 0; right: 0;
       bottom: var(--status-h);
       z-index: 2;
+      user-select: none;
     }
-    #graph canvas { outline: none; display: block; }
+    #graph canvas { outline: none; display: block; user-select: none; }
 
     #graph-labels {
       position: absolute; inset: 0; pointer-events: none; z-index: 4;
@@ -597,6 +598,7 @@
       transition: opacity 0.16s, transform 0.16s;
       box-shadow: 0 0 0 1px rgba(60,100,180,0.05), 0 12px 36px rgba(0,0,0,0.5);
       display: flex; flex-direction: column; gap: calc(8px * var(--font-scale));
+      user-select: none;
     }
     #detail-card.visible { opacity: 1; transform: translateY(0) scale(1); }
 
@@ -1783,7 +1785,7 @@
       border-color: rgba(60, 100, 180, 0.3);
     }
 
-    /* Streaming pending — unclosed code fence tail, kept raw */
+    /* Streaming pending — unclosed block tail (code fence, list, table), kept raw */
     .streaming-pending {
       white-space: pre-wrap;
       font-family: var(--font-mono, monospace);
@@ -1793,6 +1795,12 @@
       border-left: 2px solid rgba(60, 100, 170, 0.3);
       padding: 4px 8px; margin: 4px 0;
       display: block;
+    }
+
+    /* Streaming typing — incomplete line being received */
+    .streaming-typing {
+      white-space: pre-wrap;
+      color: rgba(200, 220, 248, 0.55);
     }
 
     /* Typing cursor */
