@@ -2219,10 +2219,17 @@ export class ChatPanel {
   }
 
   // ── Text (streaming → assistant bubble) ──
-  // Incremental markdown rendering: parse safe portions, keep unclosed blocks raw.
+  // ponytail: stable-prefix incremental markdown — only the trailing incomplete
+  // block is re-rendered each frame. Completed blocks are moved to a stable
+  // child div and rendered once via marked.parse(). This avoids O(n) full-text
+  // re-parse + DOM reflow on every frame, the root cause of streaming jitter.
+  // Reference: Claude Code's StreamingMarkdown stable-prefix algorithm.
 
   private _streamTextBuf = '';
   private _streamRenderScheduled = false;
+  private _streamStableLen = 0;       // char offset of stable prefix already rendered
+  private _streamStableEl: HTMLElement | null = null;
+  private _streamUnstableEl: HTMLElement | null = null;
 
   private appendText(text: string, _isFinal: boolean): void {
     this.ensureAssistantBubble();
@@ -2231,7 +2238,17 @@ export class ChatPanel {
     if (!this.currentTextEl) {
       this.currentTextEl = document.createElement('div');
       this.currentTextEl.className = 'msg-text msg-markdown streaming';
+
+      // Two-layer DOM: stable (completed blocks, rarely updated) + unstable (tail, updated per frame)
+      this._streamStableEl = document.createElement('div');
+      this._streamStableEl.className = 'msg-markdown-stable';
+      this._streamUnstableEl = document.createElement('div');
+      this._streamUnstableEl.className = 'msg-markdown-unstable';
+      this.currentTextEl.appendChild(this._streamStableEl);
+      this.currentTextEl.appendChild(this._streamUnstableEl);
+
       this.currentBubble!.appendChild(this.currentTextEl);
+      this._streamStableLen = 0;
     }
 
     // Throttle re-renders: at most once per animation frame
@@ -2246,54 +2263,87 @@ export class ChatPanel {
   }
 
   private _renderStreamingMarkdown(): void {
-    if (!this.currentTextEl || !this._streamTextBuf) return; // already flushed
+    if (!this.currentTextEl || !this._streamStableEl || !this._streamUnstableEl || !this._streamTextBuf) return;
     const raw = this._streamTextBuf;
 
-    // Detect odd number of ``` — means the last code fence hasn't been closed
-    const fenceCount = (raw.match(/(?:^|\n)```/gm) || []).length;
-    let safe = raw, pending = '';
+    // 1. Strip last incomplete line — mid-line arrivals cause paragraph reflow
+    const lastNL = raw.lastIndexOf('\n');
+    const visible = lastNL >= 0 ? raw.substring(0, lastNL + 1) : '';
+    const trailingLine = lastNL >= 0 ? raw.substring(lastNL + 1) : raw;
 
-    if (fenceCount % 2 === 1) {
-      // Split at the last ``` — everything before it is safe to render
-      const lastFence = raw.lastIndexOf('\n```');
-      const idx = lastFence >= 0 ? lastFence : raw.lastIndexOf('```');
-      if (idx >= 0) {
-        safe = raw.slice(0, idx);
-        pending = raw.slice(idx);
-      } else {
-        safe = '';
-        pending = raw;
+    // 2. Use marked.lexer() to find safe token boundary.
+    //    Unclosed code fences, half-written tables, etc. are each a single token —
+    //    the lexer naturally handles all markdown block types.
+    let stableText = '';
+    let unstableText = '';
+
+    if (visible) {
+      try {
+        const tokens = marked.lexer(visible);
+        // Find last non-space token
+        let lastNonSpace = -1;
+        for (let i = tokens.length - 1; i >= 0; i--) {
+          const t = tokens[i] as { raw?: string };
+          if (t.raw && t.raw.trim()) { lastNonSpace = i; break; }
+        }
+
+        if (lastNonSpace >= 0) {
+          let cut = 0;
+          for (let i = 0; i < lastNonSpace; i++) {
+            cut += (tokens[i] as { raw?: string }).raw?.length || 0;
+          }
+          stableText = visible.substring(0, cut);
+          unstableText = visible.substring(cut);
+        } else {
+          unstableText = visible;
+        }
+      } catch {
+        // lexer failed (unlikely) — treat everything as unstable
+        unstableText = visible;
       }
     }
 
-    // Render safe portion as markdown, append pending as plain escaped text
-    let html = safe ? (DOMPurify.sanitize(marked.parse(safe) as string)) : '';
-    if (pending) {
-      html += `<span class="streaming-pending">${escapeHtml(pending)}</span>`;
+    // 3. Update stable child: only re-render when the stable prefix grew
+    if (stableText.length > this._streamStableLen) {
+      this._streamStableLen = stableText.length;
+      if (stableText) {
+        this._streamStableEl.innerHTML = DOMPurify.sanitize(marked.parse(stableText) as string);
+      }
     }
 
-    this.currentTextEl.innerHTML = html;
-    // Syntax highlighting deferred to flushText (expensive, skip during streaming)
+    // 4. Update unstable child: re-render the incomplete tail + trailing line each frame
+    let unstableHtml = '';
+    if (unstableText) {
+      unstableHtml += `<span class="streaming-pending">${escapeHtml(unstableText)}</span>`;
+    }
+    if (trailingLine) {
+      unstableHtml += `<span class="streaming-typing">${escapeHtml(trailingLine)}</span>`;
+    }
+    this._streamUnstableEl.innerHTML = unstableHtml;
   }
 
   private flushText(): void {
     if (this.currentTextEl && this._streamTextBuf) {
       this.currentTextEl.classList.remove('streaming');
-      // Final render: full markdown + syntax highlight (only if not already rendered by renderMarkdownText)
+      // Final render: replace two-layer streaming DOM with single full markdown + syntax highlight
       const raw = this._streamTextBuf;
       const html = DOMPurify.sanitize(marked.parse(raw) as string);
       this.currentTextEl.innerHTML = html;
       this.currentTextEl.querySelectorAll('pre code').forEach((block) => {
         hljs.highlightElement(block as HTMLElement);
       });
+      if (this.currentBubble) {
+        this.addMessageActions(this.currentBubble);
+        this.injectCodeBlockButtons(this.currentBubble);
+      }
     }
     this._streamTextBuf = '';
-    if (this.currentBubble) {
-      this.addMessageActions(this.currentBubble);
-      this.injectCodeBlockButtons(this.currentBubble);
-    }
+    this._streamStableLen = 0;
+    this._streamStableEl = null;
+    this._streamUnstableEl = null;
     this.currentTextEl = null;
-    this.currentBubble = null;
+    // ponytail: currentBubble lives until finishTurn() — tool cards, usage,
+    // and multi-step text all share one bubble per assistant response.
   }
 
   // ── Markdown rendering (final only, via EventKind.Message) ──
@@ -2303,15 +2353,21 @@ export class ChatPanel {
     // If the final text matches what was already streamed, just finalize in place
     if (this.currentTextEl && text === this._streamTextBuf) {
       this.currentTextEl.classList.remove('streaming');
+      // Replace two-layer streaming DOM with final single-element render
+      const html = DOMPurify.sanitize(marked.parse(text) as string);
+      this.currentTextEl.innerHTML = html;
       this.currentTextEl.querySelectorAll('pre code').forEach((block) => {
         hljs.highlightElement(block as HTMLElement);
       });
       if (this.currentBubble) {
         this.addMessageActions(this.currentBubble);
+        this.injectCodeBlockButtons(this.currentBubble);
       }
       this._streamTextBuf = '';
+      this._streamStableLen = 0;
+      this._streamStableEl = null;
+      this._streamUnstableEl = null;
       this.currentTextEl = null;
-      this.currentBubble = null;
       this.scrollBottom();
       return;
     }
@@ -2327,8 +2383,11 @@ export class ChatPanel {
       hljs.highlightElement(block as HTMLElement);
     });
     this.currentBubble!.appendChild(el);
-    this.currentTextEl = el;
     this._streamTextBuf = '';
+    this._streamStableLen = 0;
+    this._streamStableEl = null;
+    this._streamUnstableEl = null;
+    this.currentTextEl = null;
     if (this.currentBubble) {
       this.addMessageActions(this.currentBubble);
       this.injectCodeBlockButtons(this.currentBubble);
@@ -2452,8 +2511,9 @@ export class ChatPanel {
       return;
     }
 
-    this.flushReasoning();
-    this.flushText();
+    // ponytail: don't flush text here — EventKind.Message already finalized it
+    // (full dispatch) or it's still streaming (partial dispatch from ToolCallStart).
+    // Flushing prematurely causes renderMarkdownText to double-render later.
     this.ensureAssistantBubble();
 
     const card = document.createElement('div');
@@ -2812,6 +2872,13 @@ export class ChatPanel {
       this.turnPairs[this.turnPairs.length - 1].assistantBubble = this.currentBubble;
     }
     this.pendingToolCards.clear();
+    // Reset per-turn state — the assistant bubble is now complete
+    this.currentBubble = null;
+    this.currentTextEl = null;
+    this._streamTextBuf = '';
+    this._streamStableLen = 0;
+    this._streamStableEl = null;
+    this._streamUnstableEl = null;
     // Auto-save after every turn so sessions survive crash / force-close
     if (this.projectPath) {
       this.saveActiveSession(this.projectPath).catch(() => {});
