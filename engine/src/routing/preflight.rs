@@ -88,11 +88,11 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
     }
 
-    // No file changes and graph size unchanged → nothing to report.
-    if changed_files.is_empty()
-        && before.node_count() == after.node_count()
-        && before.edge_count() == after.edge_count()
-    {
+    // No file changes → nothing to report, regardless of graph size difference.
+    // A size difference without changed_files means the graph was rebuilt (e.g.
+    // re-analysis with more nodes discovered), not a user edit. Reporting L2/L4
+    // deltas in that case is a stale-baseline false positive.
+    if changed_files.is_empty() {
         return quiet_check_result(changed_files, "无新变更", false);
     }
 
@@ -304,5 +304,70 @@ mod tests {
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["baseline_seed"], true);
         assert_eq!(r["violation_count"], 0);
+    }
+
+    /// Regression: stale baseline (fewer nodes/cycles) + re-analysis (more nodes/cycles)
+    /// + NO changed_files → must NOT produce false L2 "new cycles" violations.
+    /// This is the exact bug that produced the "53 new circular dependency cycles" false alarm.
+    #[test]
+    fn test_stale_baseline_no_false_positive() {
+        // ── "Old baseline": small graph with 1 cycle (3 nodes) ──
+        let mut before = Graph::new();
+        before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
+        before.add_node(Node::new("y", "old_y", NodeKind::Symbol));
+        before.add_node(Node::new("z", "old_z", NodeKind::Symbol));
+        before.add_edge(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
+        before.add_edge(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
+        before.add_edge(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 1 cycle: x→y→z→x
+
+        // ── "After re-analysis": bigger graph with 2 cycles ──
+        let mut after = Graph::new();
+        after.add_node(Node::new("x", "old_x", NodeKind::Symbol));
+        after.add_node(Node::new("y", "old_y", NodeKind::Symbol));
+        after.add_node(Node::new("z", "old_z", NodeKind::Symbol));
+        after.add_edge(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // cycle 1
+        after.add_node(Node::new("a", "new_a", NodeKind::Symbol));
+        after.add_node(Node::new("b", "new_b", NodeKind::Symbol));
+        after.add_node(Node::new("c", "new_c", NodeKind::Symbol));
+        after.add_edge(Edge::new("e_ab", "a", "b", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // cycle 2
+
+        // No files changed — this should be quiet
+        let r = run_full_check(&before, &after, &[], ".");
+        assert!(r["passed"].as_bool().unwrap(), "stale baseline without changed_files should pass");
+        assert_eq!(r["violation_count"], 0, "should have zero violations");
+        assert_eq!(r["one_line"], "无新变更");
+        assert_eq!(r["new_cycles"], 0, "should report 0 new cycles");
+    }
+
+    /// Companion: same scenario as test_stale_baseline_no_false_positive, but WITH
+    /// changed_files → must still detect real violations.  Ensures the guard doesn't
+    /// suppress genuine alerts.
+    #[test]
+    fn test_stale_baseline_still_detects_with_real_changes() {
+        let mut before = Graph::new();
+        before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
+        before.add_edge(Edge::new("e_self", "x", "x", EdgeKind::Calls));
+
+        let mut after = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("src/new_module.rs".into());
+        after.add_node(a);
+        after.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
+        let mut e = Edge::new("e_ab", "a", "b", EdgeKind::Calls);
+        e.coupling_depth = 4;
+        after.add_edge(e);
+        after.add_node(Node::new("c", "mod_c", NodeKind::Symbol));
+        after.add_edge(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // 1 new cycle
+
+        // WITH changed files → should still fire
+        let r = run_full_check(&before, &after, &["src/new_module.rs".into()], ".");
+        assert!(!r["passed"].as_bool().unwrap(), "real changes should not pass");
+        assert!(r["violation_count"].as_u64().unwrap() > 0, "should have violations");
+        assert!(r["new_cycles"].as_u64().unwrap() > 0, "should detect new cycles");
     }
 }

@@ -389,9 +389,9 @@ mod smoke {
         ));
     }
 
-    /// 场景 2: write_file "D:/outside/file.txt" → Deny（路径在项目目录外）
+    /// 场景 2: write_file "D:/outside/file.txt" → Ask（越界写弹窗确认，不静默拒绝）
     #[test]
-    fn s2_write_outside_denied() {
+    fn s2_write_outside_ask() {
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
         let tool = EditTool {
@@ -399,7 +399,7 @@ mod smoke {
         };
         assert!(matches!(
             has_permission_to_use_tool(&tool, &ctx),
-            PermissionDecision::Deny { .. }
+            PermissionDecision::Ask { .. }
         ));
     }
 
@@ -549,20 +549,20 @@ mod regression {
 
     /// 回归 c303272 #2 — 跨目录读被 sandbox 误拦
     /// 修前: sandbox.resolve_read 对项目内但跨目录的读返回 Denied → 硬 Deny，用户 Allow 规则无效。
-    /// 修后: sandbox 边界不再硬 Deny，用户 Allow 规则可授权跨项目目录读。
+    /// 修后: sandbox 边界不再硬 Deny，项目外路径走 Ask（弹窗），用户 Allow 规则可授权跨项目目录读。
     /// 盯: 项目外路径 + 用户 Allow 规则 → Allow（不能因 sandbox 边界硬拦）。
     #[test]
     fn r2_cross_dir_read_allowed_by_user_rule() {
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
-        // Windows 路径 + Allow 规则 — 修前会被 sandbox 硬拦，修后 Allow 规则生效
+        // Windows 路径 + 无 Allow 规则 → Ask（越界弹窗，不静默拒绝）
         let tool = ReadTool {
             path: "C:/Windows/System32/drivers/etc/hosts".to_string(),
         };
-        // 无 Allow 规则 → Deny（项目外）
+        // 无 Allow 规则 → Ask（越界弹窗确认，不静默拒绝）
         assert!(matches!(
             has_permission_to_use_tool(&tool, &ctx),
-            PermissionDecision::Deny { .. }
+            PermissionDecision::Ask { .. }
         ));
         // 加 Allow 规则 → Allow（修前这里挂：sandbox 硬拦，规则不生效）
         ctx.add_session_rule("Read(C:/Windows/System32/**)", "allow");
