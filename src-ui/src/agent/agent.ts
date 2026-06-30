@@ -160,6 +160,9 @@ export class Agent {
   // Event sink
   private sink: EventSink;
 
+  // Pending user message inserts (queued during tool execution, applied at safe boundary)
+  private _pendingInserts: string[] = [];
+
   constructor(
     prov: Provider,
     tools: ToolRegistry,
@@ -206,6 +209,39 @@ export class Agent {
     return { hit: this.cacheHitTotal, miss: this.cacheMissTotal };
   }
 
+  /** Retract one turn: remove user message + following assistant + tool messages
+   *  starting at sessionIndex. Caller is responsible for DOM cleanup. */
+  retractTurnAt(sessionIndex: number): void {
+    let end = sessionIndex + 1;
+    while (end < this.session.length && this.session[end].role !== 'user') {
+      end++;
+    }
+    this.session.splice(sessionIndex, end - sessionIndex);
+    ++this.sessionGen;
+  }
+
+  /** Predicted session index of the next insert. Call before insertMessage to get index. */
+  get nextInsertIndex(): number {
+    return this.session.length + this._pendingInserts.length;
+  }
+
+  /** Insert a user message mid-run. Queued safely; agent sees it next loop iteration. */
+  insertMessage(text: string): void {
+    this._pendingInserts.push(text);
+    this.sink({ kind: EventKind.Notice, level: 'info', text: '消息已插入，Agent 将在下一轮看到' });
+  }
+
+  /** Apply queued inserts at a safe boundary (top of loop, after tool results committed). */
+  private _applyPendingInserts(): void {
+    if (this._pendingInserts.length === 0) return;
+    for (const text of this._pendingInserts) {
+      this.session.push({ role: 'user', content: text });
+    }
+    this._pendingInserts = [];
+    // Signal chat.ts to finalize current turn before new response starts
+    this.sink({ kind: EventKind.TurnStarted });
+  }
+
   /** Start a fresh conversation — keep system prompt, clear everything else. */
   newSession(): void {
     const sys = this.session.length > 0 && this.session[0].role === 'system'
@@ -248,6 +284,9 @@ export class Agent {
       if (signal.aborted) throw new Error('aborted');
       if (this.sessionGen !== genAtStart) throw new Error('aborted');
 
+      // Apply pending user inserts at the safe boundary (after tool results committed)
+      this._applyPendingInserts();
+
       bus.emit('agent:progress', {
         step: step + 1,
         maxSteps: this.maxSteps,
@@ -289,7 +328,7 @@ export class Agent {
       }
 
       // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls
-      if (!text && calls.length === 0) {
+      if (!text && calls.length === 0 && this._pendingInserts.length === 0) {
         log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
         return;
       }
@@ -303,7 +342,7 @@ export class Agent {
         tool_calls: calls,
       });
 
-      if (calls.length === 0) return; // model gave final answer
+      if (calls.length === 0 && this._pendingInserts.length === 0) return; // model gave final answer — but keep looping if user inserted messages
 
       // ---- Execute ----
       log.info('agent', 'execute batch', {

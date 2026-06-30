@@ -297,6 +297,7 @@ mod imp {
 
     const CREATE_SUSPENDED: u32 = 0x00000004;
     const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
     const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES: usize = 0x00020009;
     const WAIT_OBJECT_0: u32 = 0;
@@ -860,7 +861,7 @@ mod imp {
                 .stdin(std::process::Stdio::null())  // ponytail: Tauri is GUI subsystem — no console stdin; inherit would give a dead handle
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .creation_flags(DETACHED_PROCESS);   // ponytail: DETACHED_PROCESS not CREATE_NO_WINDOW — GUI parent + Job Object + CREATE_NO_WINDOW causes cmd.exe DLL init to fail (STATUS_DLL_INIT_FAILED)
+                .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);   // ponytail: DETACHED_PROCESS alone creates a console briefly (flash); CREATE_NO_WINDOW suppresses it. The old DLL_INIT_FAILED bug was CREATE_NO_WINDOW WITHOUT DETACHED_PROCESS in GUI+Job Object combo — DETACHED_PROCESS | CREATE_NO_WINDOW together avoid both problems
             let child = c.spawn()?;
             job::assign(&child);
             return Ok(super::SandboxedChild {
@@ -1013,7 +1014,7 @@ mod imp {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .creation_flags(DETACHED_PROCESS);
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
         let child = c.spawn()?;
         job::assign(&child);
         Ok(super::SandboxedChild {

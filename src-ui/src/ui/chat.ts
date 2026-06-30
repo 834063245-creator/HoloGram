@@ -106,7 +106,7 @@ export class ChatPanel {
   private draftText = '';
 
   // ── New: message retry (item 4) ──
-  private turnPairs: Array<{ userText: string; assistantBubble: HTMLElement | null }> = [];
+  private turnPairs: Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> = [];
 
   // ── New: progress bar (item 3) ──
   private progressBar: HTMLElement | null = null;
@@ -1951,7 +1951,7 @@ export class ChatPanel {
 
   private async sendMessage(): Promise<void> {
     const text = this.inputArea.value.trim();
-    if (!text || this.running) return;
+    if (!text) return;
 
     if (!this.agent) {
       const detail = this.lastAgentDiag
@@ -2040,6 +2040,28 @@ export class ChatPanel {
       return;
     }
 
+    // ── Insert path: Agent is running, inject message into session ──
+    if (this.running) {
+      const sessIdx = this.agent.nextInsertIndex;
+      this.agent.insertMessage(text);
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      // Push input history
+      this.inputHistory.push(text);
+      this.historyIdx = this.inputHistory.length;
+      this.draftText = '';
+      // Show panel if collapsed
+      if (this.mode === 'input') this.summonPanel();
+      const hint = this.msgList.querySelector('.chat-hint');
+      if (hint) hint.remove();
+      // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
+      this.turnPairs.push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+      this.addTurnSep();
+      this.appendUserBubble(text);
+      this.scrollBottom();
+      return;
+    }
+
     // Auto-label session on first user message
     if (this.activeIdx >= 0) {
       const session = this.sessions[this.activeIdx];
@@ -2067,8 +2089,9 @@ export class ChatPanel {
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
 
-    // Turn pair for retry (item 4)
-    this.turnPairs.push({ userText: text, assistantBubble: null });
+    // Turn pair for retry (item 4) — sessionIndex is where user msg will land
+    const sessIdx = this.agent.getSession().length;
+    this.turnPairs.push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
 
     // User bubble (original text, focus context is for Agent eyes only)
     this.appendUserBubble(text);
@@ -2148,11 +2171,10 @@ export class ChatPanel {
 
   private setRunning(r: boolean): void {
     this.running = r;
-    this.inputArea.disabled = r;
-    this.sendBtn.classList.toggle('hidden', r);
+    // ponytail: keep input + send enabled during run so user can insert messages
     this.stopBtn.classList.toggle('hidden', !r);
     if (r) {
-      this.inputArea.placeholder = 'Agent 思考中…';
+      this.inputArea.placeholder = 'Agent 思考中… 可直接输入消息插入对话';
       this._updateStatusBar('thinking', '分析中…');
       // Insert progress bar (item 3)
       if (!this.progressBar) {
@@ -2180,6 +2202,10 @@ export class ChatPanel {
 
   private renderEvent(ev: AgentEvent): void {
     switch (ev.kind) {
+      case EventKind.TurnStarted:
+        this.finishCurrentTurn();
+        break;
+
       case EventKind.Reasoning:
         if (ev.text) this.appendReasoning(ev.text);
         break;
@@ -2431,7 +2457,10 @@ export class ChatPanel {
 
   // ── Message actions (copy button) ──
 
-  private addMessageActions(bubble: HTMLElement): void {
+  /** actionHost is where the actions div gets appended. Defaults to bubble.
+   *  For user bubbles, actionHost is the row wrapper so buttons sit outside. */
+  private addMessageActions(bubble: HTMLElement, actionHost?: HTMLElement): void {
+    const host = actionHost || bubble;
     const textEl = bubble.querySelector('.msg-text');
     if (!textEl) return;
 
@@ -2454,24 +2483,30 @@ export class ChatPanel {
       // Retry button (item 4) — find matching turn pair
       for (let i = this.turnPairs.length - 1; i >= 0; i--) {
         if (this.turnPairs[i].assistantBubble === bubble) {
-          const pair = this.turnPairs[i];
+          const pairIdx = i;
           const retryBtn = document.createElement('button');
           retryBtn.className = 'msg-action-btn';
           retryBtn.innerHTML = iconHtml('refresh', 12);
           retryBtn.title = '重试此回复';
           retryBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (this.running) { this.addNotice('Agent 正在运行，请先停止再重试', 'warn'); return; }
             if (!this.agent) return;
+            const text = this.turnPairs[pairIdx]?.userText;
+            if (!text) return;
+            // Retract old turn before re-sending
+            this.retractTurn(pairIdx);
             this.inputArea.value = '';
             this.setRunning(true);
             this.addTurnSep();
-            this.turnPairs.push({ userText: pair.userText, assistantBubble: null });
+            const sessIdx = this.agent.getSession().length;
+            this.turnPairs.push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
             this.abortCtrl = new AbortController();
-            this.agent.run(this.abortCtrl.signal, pair.userText)
+            this.agent.run(this.abortCtrl.signal, text)
               .catch((err: any) => {
                 if (!err.message?.includes('aborted')) {
                   this.addErrorNotice(err.message || String(err), '', [
-                    { label: '重试', onClick: () => { this.inputArea.value = pair.userText; this.sendMessage(); } },
+                    { label: '重试', onClick: () => { this.inputArea.value = text; this.sendMessage(); } },
                   ]);
                 }
               })
@@ -2488,14 +2523,23 @@ export class ChatPanel {
     }
 
     if (bubble.classList.contains('user')) {
-      // Edit button (item 2)
+      // Find turn pair index for this user bubble
+      let pairIdx = -1;
+      for (let i = this.turnPairs.length - 1; i >= 0; i--) {
+        if (this.turnPairs[i].userBubble === host) { pairIdx = i; break; }
+      }
+
+      // Edit button
       const editBtn = document.createElement('button');
       editBtn.className = 'msg-action-btn';
       editBtn.innerHTML = iconHtml('edit', 12);
       editBtn.title = '编辑消息';
       editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const txt = textEl.textContent || '';
+        if (this.running) { this.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
+        if (pairIdx < 0) return;
+        const txt = this.retractTurn(pairIdx);
+        if (txt == null) return;
         this.inputArea.value = txt;
         this.inputArea.style.height = 'auto';
         this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
@@ -2504,25 +2548,58 @@ export class ChatPanel {
       });
       actions.append(editBtn);
 
-      // Resend button (item 2)
+      // Resend button
       const resendBtn = document.createElement('button');
       resendBtn.className = 'msg-action-btn';
       resendBtn.innerHTML = iconHtml('refresh', 12);
       resendBtn.title = '重新发送';
       resendBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const txt = textEl.textContent || '';
-        if (txt && !this.running) {
-          this.inputArea.value = txt;
-          this.sendMessage();
-        }
+        if (this.running) { this.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
+        if (pairIdx < 0) return;
+        const txt = this.retractTurn(pairIdx);
+        if (txt == null) return;
+        this.inputArea.value = txt;
+        this.sendMessage();
       });
       actions.append(resendBtn);
     }
 
     if (actions.children.length > 0) {
-      bubble.appendChild(actions);
+      host.appendChild(actions);
     }
+  }
+
+  /** Retract a turn from DOM and agent session. Returns userText or null. */
+  private retractTurn(idx: number): string | null {
+    const pair = this.turnPairs[idx];
+    if (!pair) return null;
+    // Remove user row + assistant bubble from DOM
+    if (pair.userBubble) pair.userBubble.remove();
+    if (pair.assistantBubble) pair.assistantBubble.remove();
+    // Remove from agent session — search by content if index is stale (inserted mid-run)
+    let sessIdx = pair.sessionIndex;
+    if (sessIdx < 0) {
+      const session = this.agent?.getSession() || [];
+      for (let i = 0; i < session.length; i++) {
+        if (session[i].role === 'user' && session[i].content === pair.userText) {
+          sessIdx = i; break;
+        }
+      }
+    }
+    if (sessIdx >= 0) this.agent?.retractTurnAt(sessIdx);
+    // Remove from turnPairs
+    this.turnPairs.splice(idx, 1);
+    // Re-index sessionIndex for remaining pairs from the actual session
+    const session = this.agent?.getSession() || [];
+    const userMsgIndices: number[] = [];
+    for (let i = 0; i < session.length; i++) {
+      if (session[i].role === 'user') userMsgIndices.push(i);
+    }
+    for (let i = 0; i < this.turnPairs.length && i < userMsgIndices.length; i++) {
+      this.turnPairs[i].sessionIndex = userMsgIndices[i];
+    }
+    return pair.userText;
   }
 
   // ── Tool cards ──
@@ -2885,16 +2962,22 @@ export class ChatPanel {
   }
 
   private appendUserBubble(text: string): void {
+    // ponytail: row wrapper so edit/resend buttons sit outside the bubble
+    const row = document.createElement('div');
+    row.className = 'msg-user-row';
     const el = document.createElement('div');
     el.className = 'msg-bubble user';
     const p = document.createElement('div');
     p.className = 'msg-text';
     p.textContent = text;
     el.appendChild(p);
-    // Item 2: edit/resend actions for user bubbles
-    this.addMessageActions(el);
-    this.msgList.appendChild(el);
+    row.appendChild(el);
+    this.addMessageActions(el, row);
+    this.msgList.appendChild(row);
     this.animateBubbleIn(el);
+    // Track in turnPairs so retractTurn can find it
+    const pair = this.turnPairs[this.turnPairs.length - 1];
+    if (pair) pair.userBubble = row;
   }
 
   private addTurnSep(): void {
@@ -2903,21 +2986,25 @@ export class ChatPanel {
     this.msgList.appendChild(sep);
   }
 
-  private finishTurn(): void {
+  /** Finalize current assistant bubble — link to latest turnPair, reset streaming state.
+   *  Called at TurnStarted boundaries (including mid-run inserts) and at run end. */
+  private finishCurrentTurn(): void {
     this.flushReasoning();
     this.flushText();
-    // Backfill turnPairs for retry (item 4)
-    if (this.turnPairs.length > 0) {
+    if (this.turnPairs.length > 0 && this.currentBubble) {
       this.turnPairs[this.turnPairs.length - 1].assistantBubble = this.currentBubble;
     }
     this.pendingToolCards.clear();
-    // Reset per-turn state — the assistant bubble is now complete
     this.currentBubble = null;
     this.currentTextEl = null;
     this._streamTextBuf = '';
     this._streamStableLen = 0;
     this._streamStableEl = null;
     this._streamUnstableEl = null;
+  }
+
+  private finishTurn(): void {
+    this.finishCurrentTurn();
     // Auto-save after every turn so sessions survive crash / force-close
     if (this.projectPath) {
       this.saveActiveSession(this.projectPath).catch(() => {});
