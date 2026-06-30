@@ -132,7 +132,7 @@ export class Workspace {
     // 1. Register workspace with backend
     ws.onStatusChange?.('正在初始化引擎...');
     console.log('[Workspace.open] step 1: workspace_activate...');
-    await invoke('workspace_activate', { path }).catch(() => {});
+    await invoke('workspace_activate', { path }).catch((e) => { console.error('[Workspace.open] workspace_activate failed:', e); });
     console.log('[Workspace.open] step 1: done');
     initLogger(path);
 
