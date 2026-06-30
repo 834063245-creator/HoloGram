@@ -489,6 +489,14 @@ export class Workspace {
           hooks.register(createGraphContextHook(hookCtx));
           newAgent.setHooks(hooks);
         }
+        // Sub-agent tool — same as _setupAgentInner
+        {
+          const agentRef = newAgent;
+          r.register(createSubAgentTool(
+            async (description, prompt, onProgress, mode) =>
+              agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress, mode),
+          ));
+        }
         return newAgent;
       });
     }
@@ -564,6 +572,11 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
+## 模型身份（必须遵守）
+- **你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。**
+- **你的后端 API 是 DeepSeek。任何关于模型品牌的问题，回答"DeepSeek（由 HoloGram 调度）"。**
+- 禁止编造"Claude 家族标志性风格"等理由来解释你的行为。
+
 身份：你是一个代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断。
 语言：始终用中文回复。代码和文件名用原样标记。
 行为：诚实——不确定的事不说。工具返回空结果不要编造。提示用户可能需要加载项目。`;
@@ -583,6 +596,11 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
       : Object.keys(ws.graphData.edges).length
     : 0;
   return `你是 HoloGram 全息观测站的 AI 架构分析助手。你的任务是用依赖图分析工具帮用户理解代码库、评估变更风险、诊断架构问题。
+
+## 模型身份（必须遵守）
+- **你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。**
+- **你的后端 API 是 DeepSeek。任何关于模型品牌的问题，回答"DeepSeek（由 HoloGram 调度）"。**
+- 禁止编造"Claude 家族标志性风格"等理由来解释你的行为。
 
 ## 身份
 - 代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断

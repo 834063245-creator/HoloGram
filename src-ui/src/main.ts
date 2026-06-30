@@ -251,6 +251,9 @@ function setupIcons(): void {
 // ── Helper: set up agent with placeholder workspace (no project loaded) ──
 async function setupPlaceholderAgent(): Promise<void> {
   if (workspace) return;
+  // Clear backend workspace binding — prevents stale PermissionContext from
+  // previous project leaking into the placeholder's read_file / list_directory calls.
+  await invoke('workspace_activate', { path: '' }).catch(() => {});
   const ws = Workspace.placeholder();
   ws.onStatusChange = (msg) => { statusText.textContent = msg; };
   try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }

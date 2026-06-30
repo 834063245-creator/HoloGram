@@ -1016,7 +1016,16 @@ export class ChatPanel {
 
   // ── Session persistence — one file per session, localStorage backup ──
 
-  private lsKey(id: number): string { return `hologram_session_${id}`; }
+  /** localStorage key — scoped to workspace via path hash to prevent cross-project session leaks. */
+  private lsKey(projectPath: string, id: number): string {
+    // Simple 32-bit hash of project path for localStorage key prefix
+    let hash = 0;
+    for (let i = 0; i < projectPath.length; i++) {
+      hash = ((hash << 5) - hash) + projectPath.charCodeAt(i);
+      hash |= 0; // convert to 32-bit int
+    }
+    return `hologram_session_${hash.toString(36)}_${id}`;
+  }
 
   private sessionsDir(projectPath: string): string {
     return `${projectPath.replace(/\\/g, '/')}/.hologram/sessions`;
@@ -1050,7 +1059,7 @@ export class ChatPanel {
     const json = JSON.stringify(data);
     try {
       if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(this.lsKey(s.id), json);
+        localStorage.setItem(this.lsKey(projectPath, s.id), json);
       }
     } catch { /* quota exceeded — disk write is the fallback */ }
 
@@ -1084,15 +1093,18 @@ export class ChatPanel {
       const raw = await invoke<string>('read_file_content', { filePath: this.trackerFile(projectPath) });
       const t = JSON.parse(raw);
       lastId = t.lastId || 0;
-      nextSessionId = Math.max(nextSessionId, t.nextId || 0);
+      // Use tracker's nextId directly — workspace-specific, no cross-project carry-over
+      nextSessionId = t.nextId || (lastId + 1) || 1;
     } catch { /* tracker missing — try localStorage scan below */ }
 
-    // 2) If tracker missing, scan localStorage for newest session
+    // 2) If tracker missing, scan localStorage for newest session IN THIS WORKSPACE
     if (!lastId && typeof localStorage !== 'undefined') {
+      // Compute workspace prefix so we don't pick up sessions from other projects
+      const wsPrefix = this.lsKey(projectPath, 0).replace(/_0$/, '_');
       let newestTs = '';
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (!key?.startsWith('hologram_session_')) continue;
+        if (!key?.startsWith(wsPrefix)) continue;
         try {
           const d = JSON.parse(localStorage.getItem(key)!);
           if (d.id && !d.deleted && d.savedAt > newestTs) {
@@ -1101,9 +1113,13 @@ export class ChatPanel {
           }
         } catch { /* skip corrupt entry */ }
       }
-      if (lastId) nextSessionId = Math.max(nextSessionId, lastId + 1);
+      if (lastId) nextSessionId = lastId + 1;
     }
-    if (!lastId) return;
+    if (!lastId) {
+      // Fresh workspace — reset session ID counter to avoid carry-over from previous project
+      nextSessionId = 1;
+      return;
+    }
 
     // ── Load session data (file first, localStorage fallback) ──
     let data: any = null;
@@ -1115,7 +1131,7 @@ export class ChatPanel {
 
     // 2) localStorage fallback (may be newer if beforeunload save didn't complete)
     if (typeof localStorage !== 'undefined') {
-      const lsRaw = localStorage.getItem(this.lsKey(lastId));
+      const lsRaw = localStorage.getItem(this.lsKey(projectPath, lastId));
       if (lsRaw) {
         try {
           const lsData = JSON.parse(lsRaw);
@@ -1202,7 +1218,7 @@ export class ChatPanel {
 
     // 2) localStorage fallback
     if (!data && typeof localStorage !== 'undefined') {
-      const lsRaw = localStorage.getItem(this.lsKey(sessionId));
+      const lsRaw = localStorage.getItem(this.lsKey(projectPath, sessionId));
       if (lsRaw) {
         try { data = JSON.parse(lsRaw); } catch { /* corrupt */ }
       }
@@ -1251,7 +1267,7 @@ export class ChatPanel {
     }
     // Clean localStorage backup
     try {
-      if (typeof localStorage !== 'undefined') localStorage.removeItem(this.lsKey(sessionId));
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(this.lsKey(projectPath, sessionId));
     } catch { /* ignore */ }
     // If this session is open in a tab, close that tab
     const idx = this.sessions.findIndex(s => s.id === sessionId);
@@ -2644,7 +2660,9 @@ export class ChatPanel {
     this.lastUsageText = label;
     pill.textContent = label;
     this.currentBubble!.appendChild(pill);
-    this.totalTokensUsed += total; // accumulate for token bar (item 12)
+    // Replace (not accumulate) — each API response's total_tokens already includes
+    // the full prompt+completion for that request, so it IS the current context size.
+    this.totalTokensUsed = total;
     this.scrollBottom();
     this.updateFooter();
   }
