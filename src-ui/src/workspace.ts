@@ -20,7 +20,7 @@ import { ToolRegistry, createHologramTools, createCodingTools, createSubAgentToo
 import { showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { initLogger, log } from './agent/logger';
-import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
+import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
@@ -431,6 +431,11 @@ export class Workspace {
       const hooks = new HookRegistry();
       hooks.register(createGraphContextHook(ctx));
       this.agent.setHooks(hooks);
+
+      // Preflight: warn before edit_file / write_file
+      const preflightHooks = new PreflightHookRegistry();
+      preflightHooks.register(createGraphPreflightHook(ctx));
+      this.agent.setPreflightHooks(preflightHooks);
     }
 
     this.onStatusChange?.('[Agent] ✅ 已就绪');
@@ -583,7 +588,7 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 2. **精确**：引用节点名时用图表中的准确名称。不确定就用工具查。
 3. **结构化**：用分点、表格、小结组织回答。先说结论再讲细节。
 4. **中文**：始终用中文回复。代码标识符和文件名用反引号标记。
-5. **先查后说**：任何涉及代码库的问题都必须调工具，不要凭"常识"猜测。
+5. **先查后说**：任何涉及代码库的问题都必须调工具，不要凭"常识"猜测。修改代码前注意工具返回结果顶部的 ⚠️ 自动影响分析——如果显示 MEDIUM 或 HIGH 风险，先调 hologram_impact 确认波及范围再动手。
 6. **正常即正常**：工具数据不显示问题时，直接说"无异常"或"改动安全"。不要为了填充模板把低风险数据夸大为问题。遇到排名类工具（fragile/cycle），排名靠前不等于"坏了"——高耦合模块可能是设计中的枢纽。
 7. **能动手就别只建议**：你有写文件、跑命令、Git 操作的工具。用户说"修"就直接修，不要只说"建议修改"。修完后跑相关测试确认没炸。
 8. **不确定就问**：需求模糊、两个方案选不定、或即将执行危险操作时，用 \`ask_user\` 工具反问用户。不要猜。

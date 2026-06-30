@@ -14,7 +14,7 @@ import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import { ToolRegistry } from './tool';
 import type { Tool } from './tool';
 // ponytail: PermissionGate removed — rules evaluated in Rust has_permission_to_use_tool()
-import type { HookRegistry } from './hooks';
+import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { bus } from '../ui/events';
 import { log } from './logger';
 
@@ -143,6 +143,9 @@ export class Agent {
   // PreToolUse hooks — enrich tool results with graph context
   private hooks: HookRegistry | null = null;
 
+  // Preflight hooks — warn before destructive writes (edit_file / write_file)
+  private preflightHooks: PreflightHookRegistry | null = null;
+
   // Storm breaker — detect repetitive failing tool calls
   private stormSig = '';
   private stormCount = 0;
@@ -181,6 +184,8 @@ export class Agent {
   }
 
   setHooks(hooks: HookRegistry): void { this.hooks = hooks; }
+
+  setPreflightHooks(hooks: PreflightHookRegistry): void { this.preflightHooks = hooks; }
 
   // ---- Public API ----
 
@@ -521,6 +526,16 @@ export class Agent {
       // 中止信号优先检查
       if (signal.aborted) throw new Error('aborted');
 
+      // ── Preflight hooks: warn before destructive writes ──
+      let preflightWarning: string | null = null;
+      if (this.preflightHooks) {
+        try {
+          preflightWarning = this.preflightHooks.check(call.name, args);
+        } catch (e: any) {
+          log.warn('agent', 'preflight hook failed', { tool: call.name, error: firstLine(e?.message || String(e)) });
+        }
+      }
+
       // ponytail: permission check moved to Rust has_permission_to_use_tool()
       // Agent calls invoke() → Tauri command → check_permission() → execute or deny
       bus.emit('agent:tool-started', { toolName: call.name, args });
@@ -541,6 +556,12 @@ export class Agent {
         });
       });
       log.debug('tool', 'executed', { name: call.name, elapsed_ms: Math.round(performance.now() - toolStart) });
+
+      // Prepend preflight warning at the top of result — Agent sees it first
+      if (preflightWarning) {
+        result = preflightWarning + '\n\n' + '─'.repeat(40) + '\n\n' + result;
+      }
+
       // ── PreToolUse hooks: enrich result with graph context ──
       if (this.hooks && !errMsg) {
         try {
