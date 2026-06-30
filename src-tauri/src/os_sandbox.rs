@@ -140,7 +140,11 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     {
         let shell = imp::detect_shell();
         let cmdline = match shell {
-            imp::Shell::Bash => format!("bash -c {}", quote_cmd(command)),
+            imp::Shell::Bash(ref bash_path) => {
+                // ponytail: bash is UTF-8 native — no GBK mojibake on Chinese paths.
+                // current_dir() sets the OS working dir; bash/MSYS translates it to POSIX.
+                format!("\"{}\" -c {}", bash_path, quote_cmd(command))
+            }
             imp::Shell::Cmd => format!("cmd /s /c \"{}\"", command),
         };
         imp::spawn_job_only(&cmdline, cwd, true)
@@ -414,15 +418,65 @@ mod imp {
 
     // ── Shell detection ──
 
-    #[derive(Clone, Copy)]
-    pub enum Shell { Bash, Cmd }
+    #[derive(Clone)]
+    pub enum Shell {
+        Bash(String), // full path to bash.exe
+        Cmd,
+    }
 
     pub fn detect_shell() -> Shell {
-        // ponytail: always Cmd on Windows. Git Bash / MSYS2 bash.exe can't
-        // reliably load msys-2.0.dll under Job Object + CREATE_NO_WINDOW,
-        // dying with STATUS_DLL_INIT_FAILED. If someone needs bash, they can
-        // configure it explicitly (future: per-workspace shell pref).
+        // ponytail: Git Bash provides native UTF-8 encoding — no GBK/UTF-8
+        // conversion layer. cmd.exe uses the system code page which corrupts
+        // Chinese characters. We use DETACHED_PROCESS (not CREATE_NO_WINDOW)
+        // which avoids the msys-2.0.dll + Job Object STATUS_DLL_INIT_FAILED issue.
+        let bash_candidates = [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ];
+        for path in &bash_candidates {
+            if std::path::Path::new(path).exists() {
+                return Shell::Bash(path.to_string());
+            }
+        }
+        // Try to locate via where.exe git → Git\cmd\git.exe → ..\bin\bash.exe
+        if let Ok(output) = std::process::Command::new("where").arg("git").output() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let git_path = line.trim();
+                if let Some(cmd_dir) = std::path::Path::new(git_path).parent() {
+                    // git.exe is typically in Git\cmd, bash.exe is in Git\bin
+                    if let Some(git_root) = cmd_dir.parent() {
+                        let bash = git_root.join("bin").join("bash.exe");
+                        if bash.exists() {
+                            return Shell::Bash(bash.to_string_lossy().into_owned());
+                        }
+                    }
+                    // Also check if bash.exe is in the same directory (atypical installs)
+                    let bash = cmd_dir.join("bash.exe");
+                    if bash.exists() {
+                        return Shell::Bash(bash.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
         Shell::Cmd
+    }
+
+    /// Convert a Windows path to POSIX form for Git Bash.
+    /// "C:\\Users\\foo\\bar" → "/c/Users/foo/bar"
+    /// UNC paths stay as-is but with forward slashes.
+    pub fn windows_to_posix_path(path: &str) -> String {
+        // Strip NT long path prefix \\?\ before conversion
+        let path = path.strip_prefix("\\\\?\\").unwrap_or(path);
+        if path.starts_with("\\\\") {
+            return path.replace('\\', "/");
+        }
+        let bytes = path.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            let drive = (bytes[0] as char).to_ascii_lowercase();
+            let rest = path[2..].replace('\\', "/");
+            return format!("/{}{}", drive, rest);
+        }
+        path.replace('\\', "/")
     }
 
     // ── Job Object (Phase 4a) ──
