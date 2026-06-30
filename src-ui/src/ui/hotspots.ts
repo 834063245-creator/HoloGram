@@ -41,7 +41,6 @@ const SEVERITY_CLASS: Record<number, string> = {
 export class HotspotsPanel {
   private panel!: HTMLElement;
   private content!: HTMLElement;
-  private tabStatus!: HTMLElement;
   private openState = false;
   private hotspots: HotspotItem[] = [];
   private loading = false;
@@ -64,32 +63,10 @@ export class HotspotsPanel {
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.panel.appendChild(brackets);
 
-    // Tab
-    const tab = document.createElement('div');
-    tab.className = 'hs-tab';
-    tab.addEventListener('click', () => this.toggle());
-
-    this.tabStatus = document.createElement('span');
-    this.tabStatus.className = 'hs-tab-status';
-    this.tabStatus.innerHTML = iconHtml('fire', 11);
-
-    const label = document.createElement('span');
-    label.className = 'hs-tab-label';
-    label.textContent = '热点';
-
-    const arrow = document.createElement('span');
-    arrow.className = 'hs-tab-arrow';
-    arrow.innerHTML = iconHtml('chevron-up', 9);
-
-    tab.appendChild(this.tabStatus);
-    tab.appendChild(label);
-    tab.appendChild(arrow);
-
     // Content area
     this.content = document.createElement('div');
     this.content.className = 'hs-content';
 
-    this.panel.appendChild(tab);
     this.panel.appendChild(this.content);
     container.appendChild(this.panel);
   }
@@ -105,7 +82,6 @@ export class HotspotsPanel {
   async refresh(): Promise<void> {
     if (!this.path || this.loading) return;
     this.loading = true;
-    this.tabStatus.innerHTML = iconHtml('loading', 11);
 
     try {
       const json = await invoke<string>('hologram_hotspots', {
@@ -115,15 +91,11 @@ export class HotspotsPanel {
       const data = JSON.parse(json) as HotspotsData;
       this.hotspots = data.hotspots || [];
       const count = this.hotspots.length;
-      this.tabStatus.innerHTML = count > 0
-        ? `${iconHtml('fire', 11)} ${count}`
-        : iconHtml('fire', 11);
       if (this.openState) this.render();
       // Auto-open if hotspots found
       if (count > 0 && !this.openState) this.open();
     } catch (err) {
       console.error('Hotspots refresh failed:', err);
-      this.tabStatus.innerHTML = iconHtml('fire', 11);
     } finally {
       this.loading = false;
     }

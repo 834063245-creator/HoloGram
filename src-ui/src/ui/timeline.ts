@@ -50,7 +50,6 @@ const TYPE_LABELS: Record<string, string> = {
 export class TimelinePanel {
   private panel!: HTMLElement;
   private content!: HTMLElement;
-  private tabStatus!: HTMLElement;
   private openState = false;
   private events: TimelineEvent[] = [];
   private loading = false;
@@ -73,40 +72,10 @@ export class TimelinePanel {
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.panel.appendChild(brackets);
 
-    // Tab (always visible at bottom left of status bar area)
-    const tab = document.createElement('div');
-    tab.className = 'tl-tab';
-    tab.addEventListener('click', () => this.toggle());
-
-    this.tabStatus = document.createElement('span');
-    this.tabStatus.className = 'tl-tab-status';
-    this.tabStatus.innerHTML = iconHtml('clock', 11);
-
-    const label = document.createElement('span');
-    label.className = 'tl-tab-label';
-    label.textContent = '时间轴';
-
-    const arrow = document.createElement('span');
-    arrow.className = 'tl-tab-arrow';
-    arrow.innerHTML = iconHtml('chevron-up', 9);
-
-    tab.appendChild(this.tabStatus);
-    tab.appendChild(label);
-    tab.appendChild(arrow);
-
-    // Close button inside tab bar (right-aligned)
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'tl-close';
-    closeBtn.innerHTML = iconHtml('close', 11);
-    closeBtn.title = '关闭';
-    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
-    tab.appendChild(closeBtn);
-
     // Content area
     this.content = document.createElement('div');
     this.content.className = 'tl-content';
 
-    this.panel.appendChild(tab);
     this.panel.appendChild(this.content);
     container.appendChild(this.panel);
   }
@@ -139,7 +108,6 @@ export class TimelinePanel {
   async refresh(): Promise<void> {
     if (!this.path || this.loading) return;
     this.loading = true;
-    this.tabStatus.innerHTML = iconHtml('loading', 11);
 
     try {
       // 8-second timeout — prevent perpetual loading if backend hangs
@@ -154,11 +122,9 @@ export class TimelinePanel {
       ]);
       const data = JSON.parse(json) as TimelineData;
       this.events = data.events || [];
-      this.tabStatus.innerHTML = `${iconHtml('clock', 11)} ${this.events.length}`;
       if (this.openState) this.render();
     } catch (err) {
       console.error('Timeline refresh failed:', err);
-      this.tabStatus.innerHTML = `${iconHtml('clock', 11)} !`;
       // Show error state in panel if open
       if (this.openState) {
         this.content.innerHTML = `<div class="tl-empty" style="color:var(--fail)">时间轴暂时不可用<br><small>${String(err).slice(0, 80)}</small></div>`;
