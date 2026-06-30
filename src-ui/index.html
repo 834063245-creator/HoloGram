@@ -337,82 +337,163 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       TOOLBAR — command deck
+       TOOLBAR — deep space command console
        ═══════════════════════════════════════════════════════════════ */
     #toolbar {
       position: fixed; top: 0; left: 0; right: 0;
       height: var(--toolbar-h); z-index: 100;
-      background: rgba(3, 8, 20, 0.9);
-      backdrop-filter: blur(16px) saturate(0.8);
-      -webkit-backdrop-filter: blur(16px) saturate(0.8);
-      border-bottom: 1px solid rgba(40, 60, 100, 0.25);
-      display: flex; align-items: center; padding: 0 14px; gap: 8px;
+      background:
+        linear-gradient(180deg, rgba(8,16,32,0.98) 0%, rgba(3,8,20,0.94) 100%);
+      backdrop-filter: blur(20px) saturate(0.5);
+      -webkit-backdrop-filter: blur(20px) saturate(0.5);
+      border-bottom: 1px solid rgba(60,100,180,0.12);
+      box-shadow: 0 1px 0 rgba(100,150,220,0.05), 0 6px 28px rgba(0,0,0,0.5);
+      display: flex; align-items: center; padding: 0 14px; gap: 0;
     }
 
+    /* ── Top-edge power indicator — slow breathing glow line ── */
+    #toolbar::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(80,140,240,0.08) 10%,
+        rgba(100,160,250,0.22) 30%,
+        rgba(80,140,240,0.08) 50%,
+        rgba(100,160,250,0.22) 70%,
+        rgba(80,140,240,0.08) 90%,
+        transparent 100%);
+      animation: toolbar-breathe 6s ease-in-out infinite;
+      pointer-events: none; z-index: 1; opacity: 0;
+      transition: opacity 0.6s ease;
+    }
+    #toolbar:hover::before { opacity: 1; }
+    /* ponytail: hidden when panels overlay to avoid visual noise */
+    @keyframes toolbar-breathe {
+      0%, 100% { opacity: 0.25; }
+      50%      { opacity: 0.75; }
+    }
 
     #toolbar .sep {
-      width: 1px; height: 16px;
-      background: linear-gradient(to bottom, transparent, rgba(50, 75, 120, 0.35), transparent);
+      width: 1px; height: 18px;
+      margin: 0 4px;
+      background: linear-gradient(to bottom,
+        transparent 0%,
+        rgba(60,100,200,0.12) 15%,
+        rgba(90,140,230,0.32) 50%,
+        rgba(60,100,200,0.12) 85%,
+        transparent 100%);
     }
 
     #toolbar .spacer { flex: 1; }
 
-    /* Toolbar buttons */
-    #toolbar button {
-      min-height: calc(26px * var(--font-scale)); padding: 0 calc(8px * var(--font-scale));
-      font-family: var(--font-body); font-size: calc(11px * var(--font-scale));
-      background: transparent; color: rgba(185, 208, 238, 0.72);
-      border: none; cursor: pointer; white-space: nowrap;
-      border-radius: 3px;
-      display: flex; align-items: center; gap: 5px;
-      transition: all var(--snap);
+    /* ── Logo — holographic shimmer text ── */
+    #tb-logo {
+      font-family: var(--font-hud);
+      font-size: calc(12px * var(--font-scale));
+      font-weight: 700;
+      letter-spacing: 3.5px;
+      background: linear-gradient(105deg,
+        rgba(100,160,240,0.5) 0%,
+        rgba(140,200,255,0.8) 18%,
+        rgba(210,235,255,1) 36%,
+        rgba(140,200,255,0.8) 54%,
+        rgba(100,160,240,0.5) 72%,
+        rgba(140,200,255,0.8) 90%,
+        rgba(100,160,240,0.5) 100%);
+      background-size: 220% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: logo-shimmer 4s ease-in-out infinite;
+      margin-right: 2px;
+      cursor: default;
       user-select: none;
+      white-space: nowrap;
+      flex-shrink: 0;
+      text-shadow: none;
+    }
+    @keyframes logo-shimmer {
+      0%, 100% { background-position: 100% 50%; }
+      50%      { background-position: 0% 50%; }
+    }
+
+    /* ── Buttons — edge-lit HUD controls ── */
+    #toolbar button {
+      min-height: calc(26px * var(--font-scale));
+      padding: 0 calc(10px * var(--font-scale));
+      font-family: var(--font-body); font-size: calc(10.5px * var(--font-scale));
+      font-weight: 400; letter-spacing: 0.4px;
+      background: transparent; color: rgba(150,185,220,0.52);
+      border: 1px solid transparent; cursor: pointer; white-space: nowrap;
+      border-radius: 2px;
+      display: flex; align-items: center; gap: 5px;
+      transition: color 0.15s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+      user-select: none; position: relative;
+    }
+
+    /* Hover: bottom-edge glow bar energizes */
+    #toolbar button::after {
+      content: ''; position: absolute; bottom: 0; left: 4px; right: 4px; height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(100,160,240,0.4), transparent);
+      opacity: 0; transition: opacity 0.2s ease;
+      pointer-events: none;
     }
     #toolbar button:hover {
-      color: var(--starlight);
-      background: rgba(40, 70, 120, 0.2);
+      color: rgba(215,235,255,0.9);
+      border-color: rgba(80,135,220,0.25);
+      box-shadow: inset 0 0 14px rgba(80,140,240,0.05), 0 0 6px rgba(80,140,240,0.06);
     }
-    #toolbar button:active { background: rgba(50, 90, 150, 0.3); }
-    #toolbar button:disabled { opacity: 0.4; cursor: default; }
+    #toolbar button:hover::after { opacity: 1; }
+    #toolbar button:active {
+      transform: translateY(1px);
+      transition: transform 0.05s ease;
+      box-shadow: inset 0 0 8px rgba(80,140,240,0.1);
+    }
+    #toolbar button:active::after { opacity: 0.5; }
+    #toolbar button:disabled { opacity: 0.25; cursor: default; }
+    #toolbar button:disabled::after { display: none; }
 
-
-    /* Search */
+    /* ── Search capsule — glass with inner glow ── */
     #search-wrap {
       display: flex; align-items: center;
-      border: 1px solid rgba(50, 80, 140, 0.25);
-      border-radius: 3px;
-      background: rgba(8, 16, 32, 0.7);
-      overflow: hidden;
-      transition: all var(--snap);
+      border: 1px solid rgba(50,80,140,0.2);
+      border-radius: 2px;
+      background: rgba(4,10,22,0.6);
+      overflow: hidden; margin: 0 2px;
+      transition: border-color 0.25s ease, box-shadow 0.25s ease;
     }
     #search-wrap:focus-within {
-      border-color: rgba(60, 100, 180, 0.45);
-      box-shadow: 0 0 8px rgba(50, 100, 180, 0.12);
+      border-color: rgba(80,130,220,0.45);
+      box-shadow: 0 0 10px rgba(50,100,180,0.1), inset 0 0 8px rgba(50,100,180,0.06);
     }
     #search-input {
       width: 155px; min-height: calc(24px * var(--font-scale)); padding: 0 8px;
       font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
       background: transparent; border: none; color: var(--starlight-dim);
-      outline: none;
+      outline: none; letter-spacing: 0.5px;
     }
-    #search-input::placeholder { color: rgba(105, 145, 205, 0.5); }
+    #search-input::placeholder { color: rgba(105,145,205,0.4); letter-spacing: 1px; }
     #search-btn {
       width: calc(24px * var(--font-scale)); min-height: calc(24px * var(--font-scale));
       font-size: calc(12px * var(--font-scale));
       background: transparent; border: none;
-      border-left: 1px solid rgba(40, 60, 100, 0.2);
-      color: rgba(145, 180, 225, 0.6); cursor: pointer;
+      border-left: 1px solid rgba(40,60,100,0.18);
+      color: rgba(145,180,225,0.5); cursor: pointer;
       display: flex; align-items: center; justify-content: center;
-      transition: color var(--snap);
+      transition: color 0.15s ease, background 0.15s ease;
     }
-    #search-btn:hover { color: var(--starlight-dim); }
+    #search-btn:hover {
+      color: var(--starlight-dim);
+      background: rgba(40,70,120,0.15);
+    }
 
     /* Path display */
     #tb-path {
-      color: rgba(105, 145, 200, 0.44);
-      font-family: var(--font-mono); font-size: calc(9px * var(--font-scale));
+      color: rgba(100,145,210,0.35);
+      font-family: var(--font-mono); font-size: calc(8.5px * var(--font-scale));
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      max-width: 260px;
+      max-width: 260px; letter-spacing: 0.3px;
+      margin-left: 2px;
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -4138,6 +4219,7 @@
        TOOLBAR
        ═══════════════════════════════════════════════════════════════ -->
   <div id="toolbar">
+    <span id="tb-logo">◈&nbsp;HOLOGRAM</span>
     <span class="sep"></span>
     <button id="btn-fold" data-icon="fold" title="折叠/展开社区星系 (F)">折叠</button>
     <button id="btn-reset-cam" data-icon="reset-cam" title="重置摄像机视角 (R)">复位</button>
