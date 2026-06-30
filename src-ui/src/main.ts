@@ -13,7 +13,6 @@ import { FileViewer } from './ui/file-viewer';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
 import { HotspotsPanel } from './ui/hotspots';
-import { ConflictPanel } from './ui/conflict';
 import { SettingsPanel } from './ui/settings-panel';
 import { bus } from './ui/events';
 import { shell } from './ui/app-shell';
@@ -98,7 +97,6 @@ const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
 const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
 const btnTimeline = document.getElementById('btn-timeline') as HTMLButtonElement;
 const btnConstraints = document.getElementById('btn-constraints') as HTMLButtonElement;
-const btnConflict = document.getElementById('btn-conflict') as HTMLButtonElement;
 
 // ── State ──
 let workspace: Workspace | null = null;
@@ -113,7 +111,6 @@ let chatPanel: ChatPanel;
 let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
 let hotspotsPanel: HotspotsPanel;
-let conflictPanel: ConflictPanel;
 
 // ── Folder picker ──
 
@@ -225,7 +222,6 @@ function notifyAllPanels(ws: Workspace): void {
   timelinePanel.setProjectPath(ws.path);
   hotspotsPanel.setProjectPath(ws.path);
   if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().load(ws.path);
-  conflictPanel.setGraph(starGraph);
 }
 
 // ── Check (thin wrapper) ──
@@ -358,17 +354,12 @@ async function init(): Promise<void> {
   hotspotsPanel = new HotspotsPanel(document.body);
   hotspotsPanel.setGraph(starGraph);
 
-  // Conflict
-  conflictPanel = new ConflictPanel(document.body);
-  conflictPanel.setGraph(starGraph);
-
   // ── AppShell wiring — replaces bus commands with explicit dispatch ──
   // Register all panels so shell knows who's open
   shell.register({ id: 'check', isOpen: () => checkPanel.isOpen() });
   shell.register({ id: 'chat', isOpen: () => chatPanel.isOpen() });
   shell.register({ id: 'timeline', isOpen: () => timelinePanel.isOpen() });
   shell.register({ id: 'hotspots', isOpen: () => hotspotsPanel.isOpen() });
-  shell.register({ id: 'conflict', isOpen: () => conflictPanel.isOpen() });
   shell.register({ id: 'constraints', isOpen: () => ConstraintsPanel.get().isOpen() });
 
   // Wire navigation / highlight / agent-query commands
@@ -446,13 +437,11 @@ async function init(): Promise<void> {
     const p = tab.dataset['panel'];
     if (p === 'check') {
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-      if (conflictPanel.isOpen()) conflictPanel.close();
       if (workspace?.path) runCheck();
       checkPanel.toggle();
     } else if (p === 'constraints') {
       if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
       if (checkPanel.isOpen()) checkPanel.close();
-      if (conflictPanel.isOpen()) conflictPanel.close();
       ConstraintsPanel.get().toggle();
     }
     updateTabs();
@@ -460,7 +449,6 @@ async function init(): Promise<void> {
 
   btnCheck.addEventListener('click', () => {
     if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-    if (conflictPanel.isOpen()) conflictPanel.close();
     checkPanel.toggle();
     if (checkPanel.isOpen() && workspace?.path) runCheck();
     updateTabs();
@@ -511,9 +499,6 @@ async function init(): Promise<void> {
     updateTabs();
   });
 
-  // Conflict
-  btnConflict.addEventListener('click', () => { conflictPanel.toggle(); updateTabs(); });
-
   // Settings
   const settingsPanel = SettingsPanel.get();
   settingsPanel.setOnSave(async () => {
@@ -556,7 +541,6 @@ async function init(): Promise<void> {
       e.preventDefault();
       if (checkPanel.isOpen()) checkPanel.close();
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-      if (conflictPanel.isOpen()) conflictPanel.close();
       chatPanel.toggle();
       updateTabs();
     }
@@ -622,7 +606,6 @@ async function init(): Promise<void> {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
       else if (timelinePanel.isOpen()) { timelinePanel.close(); updateTabs(); }
       else if (hotspotsPanel.isOpen()) { hotspotsPanel.close(); updateTabs(); }
-      else if (conflictPanel.isOpen()) { conflictPanel.close(); updateTabs(); }
       else if (checkPanel.isOpen()) { checkPanel.close(); updateTabs(); }
       else if (chatPanel.isOpen()) { chatPanel.close(); updateTabs(); }
       else if (FileViewer.get().isOpen) FileViewer.get().close();
