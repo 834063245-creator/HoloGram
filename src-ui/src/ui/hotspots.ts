@@ -63,6 +63,21 @@ export class HotspotsPanel {
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.panel.appendChild(brackets);
 
+    // Header
+    const header = document.createElement('div');
+    header.className = 'hs-header-row';
+    const title = document.createElement('span');
+    title.className = 'hs-title';
+    title.textContent = '复发热点';
+    header.appendChild(title);
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'tl-close';
+    closeBtn.innerHTML = '&#x2715;';
+    closeBtn.title = '收起';
+    closeBtn.addEventListener('click', () => this.close());
+    header.appendChild(closeBtn);
+    this.panel.appendChild(header);
+
     // Content area
     this.content = document.createElement('div');
     this.content.className = 'hs-content';
@@ -131,7 +146,7 @@ export class HotspotsPanel {
       return;
     }
 
-    let html = `<div class="hs-header">复发热点<span class="hs-subtitle">— 同一文件多次触发 L4（封装穿透）警报</span></div>`;
+    let html = '';
 
     for (const hs of this.hotspots) {
       const fn = basename(hs.file);

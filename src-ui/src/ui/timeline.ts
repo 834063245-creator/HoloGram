@@ -72,6 +72,21 @@ export class TimelinePanel {
     brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
     this.panel.appendChild(brackets);
 
+    // Header
+    const header = document.createElement('div');
+    header.className = 'tl-header';
+    const title = document.createElement('span');
+    title.className = 'tl-title';
+    title.textContent = '时间轴';
+    header.appendChild(title);
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'tl-close';
+    closeBtn.innerHTML = '&#x2715;';
+    closeBtn.title = '收起时间轴';
+    closeBtn.addEventListener('click', () => this.close());
+    header.appendChild(closeBtn);
+    this.panel.appendChild(header);
+
     // Content area
     this.content = document.createElement('div');
     this.content.className = 'tl-content';
