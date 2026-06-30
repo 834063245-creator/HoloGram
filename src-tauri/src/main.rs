@@ -1782,7 +1782,7 @@ fn get_global_memory_dir() -> String {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
-    format!("{}/.hologram/global_memory", home.replace('\\', '/'))
+    format!("{}/.hologram/global_memory", home.replace("\\", "/"))
 }
 
 #[tauri::command]
