@@ -1774,6 +1774,17 @@ async fn create_directory(
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
 
+/// Return the global memory directory path for cross-project memory storage.
+/// On Windows: %USERPROFILE%\.hologram\global_memory
+/// On other: $HOME/.hologram/global_memory
+#[tauri::command]
+fn get_global_memory_dir() -> String {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| ".".to_string());
+    format!("{}/.hologram/global_memory", home.replace('\\', '/'))
+}
+
 #[tauri::command]
 async fn delete_file_or_dir(
     path: String,
@@ -3505,6 +3516,8 @@ fn main() {
             credential_clear,
             // Phase 2: Permission dialog
             permission_ask_response,
+            // Global memory directory for cross-project memory
+            get_global_memory_dir,
         ])
         .setup(|app| {
             // Phase 4a: OS sandbox — Job Object for die-with-parent

@@ -343,9 +343,11 @@ export class Workspace {
 
     persistSecrets(settings).catch(() => {});
 
-    // Load memories
+    // Load memories (global + project)
     let memorySection = '';
-    this.memoryManager = new MemoryManager(this.path);
+    let globalDir: string | undefined;
+    try { globalDir = await invoke<string>('get_global_memory_dir'); } catch { /* ignore */ }
+    this.memoryManager = new MemoryManager(this.path, globalDir);
     try { memorySection = await this.memoryManager.loadPromptSection(); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
 
     const prov: Provider =
@@ -709,13 +711,24 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 
 ## 记忆库
 
-你拥有跨会话持久化记忆。记忆存储在项目的 \`.hologram/memory/\` 目录下，以 Markdown 文件保存，\`MEMORY.md\` 作为索引。
+你拥有跨会话持久化记忆，分为两级：
+
+| 范围 | 目录 | 共享范围 |
+|------|------|---------|
+| 项目记忆 (scope: project) | .hologram/memory/ | 仅当前项目 |
+| 全局记忆 (scope: global) | ~/.hologram/global_memory/ | 跨所有项目共享 |
+
+全局记忆加载在前，项目记忆覆盖在后（同名时项目优先）。Agent 看到的是合并后的结果。
+
+### 选择范围的规则
+- 用户画像、编码风格偏好、个性 → scope: global（换了项目也适用）
+- 架构决策、项目约定、已完成的改造 → scope: project（只跟这个项目相关）
 
 ### 记忆操作工具
-- **\`hologram_memory_list\`** — 列出所有已保存的记忆
-- **\`hologram_memory_read 名称\`** — 读取一条记忆的完整内容
-- **\`hologram_memory_save\`** — 保存新记忆或更新已有记忆
-- **\`hologram_memory_delete 名称\`** — 删除一条记忆
+- hologram_memory_list — 列出所有记忆，分全局/项目显示
+- hologram_memory_read 名称 — 读取一条记忆的完整内容，可指定 scope
+- hologram_memory_save — 保存记忆，通过 scope 参数选择项目/全局
+- hologram_memory_delete 名称 — 删除一条记忆
 
 ### 何时保存记忆
 
