@@ -112,6 +112,7 @@ export class ChatPanel {
   // ── Pill badge — agent event counter when collapsed ──
   private pillEventCount = 0;
   private pillBadge!: HTMLElement;
+  private _lastAgentState: 'idle' | 'thinking' | 'running' | 'error' = 'idle';
 
   // ── New: slash auto-popup ref (item 14) ──
   private _slashPopup: HTMLElement | null = null;
@@ -292,8 +293,10 @@ export class ChatPanel {
   // ── Agent status bar ──
 
   private _updateStatusBar(state: 'idle' | 'thinking' | 'running' | 'error', detail?: string): void {
+    this._lastAgentState = state;
     this.statusDot.className = 'chat-status-dot ' + state;
-    this.statusText.textContent = detail || (state === 'idle' ? '就绪' : state === 'thinking' ? '思考中…' : state === 'running' ? '执行工具' : '错误');
+    const statusLabel = detail || (state === 'idle' ? '就绪' : state === 'thinking' ? '思考中…' : state === 'running' ? '执行工具' : '错误');
+    this.statusText.textContent = statusLabel;
     // Update model in status
     const settings = loadSettings();
     const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
@@ -306,6 +309,7 @@ export class ChatPanel {
     if (this.totalTokensUsed > 0) {
       this.statusTokens.textContent = `${(this.totalTokensUsed / 1000).toFixed(1)}k tok`;
     }
+
   }
 
   // ── Tool usage tracking ──
@@ -455,7 +459,7 @@ export class ChatPanel {
 
   // Content elements that participate in morph animations
   private static readonly CONTENT_SEL =
-    '.chat-header, .chat-messages, .chat-input-area, .chat-footer, .chat-expand-handle, .corner-brackets, .chat-resize';
+    '.chat-header, .chat-messages, .chat-input-area, .chat-footer, .chat-expand-handle, .corner-brackets, .chat-resize, .chat-status-bar, .chat-panel-tabs, .chat-tab-content, .chat-progress';
 
   private contentEls(): HTMLElement[] {
     return gsap.utils.toArray(ChatPanel.CONTENT_SEL, this.panel);
@@ -740,7 +744,9 @@ export class ChatPanel {
         this.mode = 'pill';
         this.removeAllPanelClasses();
         this.panel.classList.add('chat-pill');
-        if (this.running) this.panel.classList.add('chat-pill-running');
+        if (this.running) {
+          this.panel.classList.add('chat-pill-running');
+        }
         this.panel.style.maxHeight = '';
         this.panel.style.minHeight = '';
         this.panel.style.height = '';
@@ -2623,15 +2629,17 @@ export class ChatPanel {
     const pill = document.createElement('div');
     pill.className = 'msg-usage';
 
-    const u = ev.usage;
+        const u = ev.usage;
     const total = u ? (u.total_tokens ?? 0) : 0;
     const cached = u ? (u.cache_hit_tokens ?? 0) : 0;
-    const cost = computeCostStr(ev.pricing, u);
+    const missTokens = u ? (u.cache_miss_tokens ?? 0) : 0;
+    const inputTokens = cached + missTokens;
+    const hitRate = inputTokens > 0 ? (cached / inputTokens * 100) : 0;
 
     let label = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
     label += ' tok';
     if (cached > 0) label += ` · ${cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached} cache`;
-    if (cost) label += ` · ${cost}`;
+    if (cached > 0) label += ` · ${hitRate.toFixed(0)}% 命中`;
 
     this.lastUsageText = label;
     pill.textContent = label;
