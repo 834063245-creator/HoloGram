@@ -162,7 +162,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 
     shouldEnrich(toolName: string): boolean {
       // edit_file / write_file 由 preflight hook 处理，此处不重复
-      return ['read_file_content', 'search_code', 'run_shell'].includes(toolName);
+      return ['read_file_content', 'read_file', 'search_code', 'run_shell'].includes(toolName);
     },
 
     async enrich(toolName: string, args: Record<string, unknown>, result: string): Promise<string> {
@@ -173,7 +173,8 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
       let snippet: string | null = null;
 
       switch (toolName) {
-        case 'read_file_content': {
+        case 'read_file_content':
+        case 'read_file': {
           const fp = String(args['filePath'] || args['file_path'] || '');
           if (fp) snippet = ctx.getImpactSummary(fp);
           break;
