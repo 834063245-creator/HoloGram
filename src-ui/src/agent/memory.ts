@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 // Agent 持久化记忆系统 — 对标 Claude Code MEMORY.md
-// 存储位置: .hologram/memory/*.md + MEMORY.md 索引
-// 跨会话、跨 session tab 共享
+// 项目记忆: .hologram/memory/*.md + MEMORY.md 索引
+// 全局记忆: ~/.hologram/global_memory/*.md + MEMORY.md 索引
+// 跨会话、跨 session tab 共享。全局记忆跨所有项目共享。
 //
 // 记忆置信度体系 (inspired by 初痕 MemoryDirective):
 //   fact       — 用户明确要求，过去的确定结论。仅作提醒，不替代代码和约束决策
@@ -41,32 +42,57 @@ export interface MemoryFile {
 // ── MemoryManager ──
 
 export class MemoryManager {
-  private _dirReady = false;
+  private _projectDirReady = false;
+  private _globalDirReady = false;
+  private globalDirPath: string | null = null;
 
-  constructor(private projectPath: string) {}
+  /** @param projectPath 项目根目录
+   *  @param globalPath  全局记忆目录（可选），不传则不启用全局记忆 */
+  constructor(private projectPath: string, globalPath?: string) {
+    this.globalDirPath = globalPath || null;
+  }
 
-  private get dir(): string {
+  private get projectDir(): string {
     return this.projectPath.replace(/\\/g, '/') + '/.hologram/memory';
   }
 
-  private indexPath(): string {
-    return this.dir + '/MEMORY.md';
+  /** Resolve the working directory for a given scope. */
+  private dirFor(scope: 'project' | 'global'): string {
+    if (scope === 'global') {
+      if (!this.globalDirPath) throw new Error('全局记忆未启用');
+      return this.globalDirPath;
+    }
+    return this.projectDir;
   }
 
-  private filePath(name: string): string {
-    return this.dir + '/' + name + '.md';
+  /** Returns both scopes (global first if enabled). */
+  public scopes(): Array<'project' | 'global'> {
+    const s: Array<'project' | 'global'> = [];
+    if (this.globalDirPath) s.push('global');
+    s.push('project');
+    return s;
+  }
+
+  private indexPath(scope: 'project' | 'global' = 'project'): string {
+    return this.dirFor(scope) + '/MEMORY.md';
+  }
+
+  private filePath(name: string, scope: 'project' | 'global' = 'project'): string {
+    return this.dirFor(scope) + '/' + name + '.md';
   }
 
   /** Ensure .hologram/memory/ exists before any read. Fixes cold-start where
    *  sandbox denies reads from non-existent parent directories. */
-  private async ensureDir(): Promise<void> {
-    if (this._dirReady) return;
+  private async ensureDir(scope: 'project' | 'global' = 'project'): Promise<void> {
+    if (scope === 'project' && this._projectDirReady) return;
+    if (scope === 'global' && this._globalDirReady) return;
     try {
-      await invoke('create_directory', { path: this.dir });
+      await invoke('create_directory', { path: this.dirFor(scope) });
     } catch {
       // Directory may already exist or create is not available — safe to continue
     }
-    this._dirReady = true;
+    if (scope === 'project') this._projectDirReady = true;
+    else this._globalDirReady = true;
   }
 
   // ── Prompt section cache ──
@@ -76,19 +102,19 @@ export class MemoryManager {
 
   // ── Index ──
 
-  /** Load the raw MEMORY.md text. */
-  async loadIndexText(): Promise<string> {
-    await this.ensureDir();
+  /** Load the raw MEMORY.md text for a scope. */
+  async loadIndexText(scope: 'project' | 'global' = 'project'): Promise<string> {
+    await this.ensureDir(scope);
     try {
-      return await invoke<string>('read_file_content', { filePath: this.indexPath() });
+      return await invoke<string>('read_file_content', { filePath: this.indexPath(scope) });
     } catch {
       return '';
     }
   }
 
-  /** Parse MEMORY.md into structured entries. */
-  async list(): Promise<MemoryEntry[]> {
-    const text = await this.loadIndexText();
+  /** Parse MEMORY.md into structured entries for a scope. */
+  async list(scope: 'project' | 'global' = 'project'): Promise<MemoryEntry[]> {
+    const text = await this.loadIndexText(scope);
     if (!text.trim()) return [];
 
     const entries: MemoryEntry[] = [];
@@ -113,18 +139,17 @@ export class MemoryManager {
 
   /** Read a full memory file by name (without .md). Returns null if not found.
    *  Set incrementHit to track recall frequency. */
-  async read(name: string, incrementHit = false): Promise<MemoryFile | null> {
-    await this.ensureDir();
+  async read(name: string, scope: 'project' | 'global' = 'project', incrementHit = false): Promise<MemoryFile | null> {
+    await this.ensureDir(scope);
     try {
-      const raw = await invoke<string>('read_file_content', { filePath: this.filePath(name) });
+      const raw = await invoke<string>('read_file_content', { filePath: this.filePath(name, scope) });
       const mf = parseFrontmatter(raw);
 
       if (incrementHit) {
         mf.hit_count = (mf.hit_count || 0) + 1;
         mf.raw = rebuildRaw(mf);
-        // Fire-and-forget: don't let hit_count write failure destroy the read
         invoke('write_file_content', {
-          filePath: this.filePath(name),
+          filePath: this.filePath(name, scope),
           content: mf.raw,
         }).catch((e: unknown) => {
           console.warn(`[memory] hit_count write failed for "${name}":`, e);
@@ -139,7 +164,8 @@ export class MemoryManager {
 
   // ── Prompt section — loaded into system prompt ──
 
-  /** Load all non-suppressed memories and format as system prompt section.
+  /** Load all non-suppressed memories from both scopes and format as system prompt section.
+   *  Global memories load first, project memories overlay (same name = project wins).
    *  Cached for 5 seconds for rapid session creation. */
   async loadPromptSection(): Promise<string> {
     const now = Date.now();
@@ -147,54 +173,68 @@ export class MemoryManager {
       return this._promptSectionCache;
     }
 
-    const entries = await this.list();
-    if (entries.length === 0) {
-      const section =
-        '暂无已保存的记忆。用户说"记住..."时保存，说"忘了..."时删除。';
+    // Collect from all scopes (global first, project overlay)
+    const allByName = new Map<string, { mf: MemoryFile; scope: string }>();
+    for (const scope of this.scopes()) {
+      const entries = await this.list(scope);
+      for (const entry of entries) {
+        if (!allByName.has(entry.name)) {
+          const mf = await this.read(entry.name, scope);
+          if (mf && mf.confidence !== 'suppressed') {
+            allByName.set(entry.name, { mf, scope });
+          }
+        }
+        // If same name exists in later scope (project), it overrides earlier (global)
+        if (scope === 'project') {
+          const mf = await this.read(entry.name, 'project');
+          if (mf && mf.confidence !== 'suppressed') {
+            allByName.set(entry.name, { mf, scope: 'project' });
+          }
+        }
+      }
+    }
+
+    if (allByName.size === 0) {
+      const section = '暂无已保存的记忆。用户说"记住..."时保存，说"忘了..."时删除。';
       this._promptSectionCache = section;
       this._promptSectionCacheTime = now;
       return section;
     }
 
     // Group by confidence
-    const byConfidence: Record<Confidence, MemoryFile[]> = {
+    const byConfidence: Record<Confidence, Array<{ mf: MemoryFile; scope: string }>> = {
       fact: [],
       reference: [],
       background: [],
       suppressed: [],
     };
 
-    for (const entry of entries) {
-      const mf = await this.read(entry.name);
-      if (!mf) continue;
-      const c = mf.confidence || 'reference';
+    for (const item of allByName.values()) {
+      const c = item.mf.confidence || 'reference';
       if (c === 'suppressed') continue;
-      byConfidence[c].push(mf);
+      byConfidence[c].push(item);
     }
 
     const parts: string[] = [];
 
-    // Fact group — 铁律，但只是提醒
     if (byConfidence.fact.length > 0) {
       parts.push('### 🔒 铁律 (fact)\n用户明确要求的规则。仅作提醒——Agent 仍需基于代码和约束做决策:\n');
-      for (const m of byConfidence.fact) {
-        parts.push(formatMemoryLine(m));
+      for (const { mf, scope } of byConfidence.fact) {
+        parts.push(formatMemoryLine(mf, scope));
       }
     }
 
-    // Reference group — 默认级别
     if (byConfidence.reference.length > 0) {
       parts.push('### 📋 参考 (reference)\nAgent 发现或用户提过的信息。可以参考，引用时带核实语气:\n');
-      for (const m of byConfidence.reference) {
-        parts.push(formatMemoryLine(m));
+      for (const { mf, scope } of byConfidence.reference) {
+        parts.push(formatMemoryLine(mf, scope));
       }
     }
 
-    // Background group — 风格/语气
     if (byConfidence.background.length > 0) {
       parts.push('### 🎨 背景 (background)\n用于调整回复风格和语气，不需要在回复中提及:\n');
-      for (const m of byConfidence.background) {
-        parts.push(formatMemoryLine(m));
+      for (const { mf, scope } of byConfidence.background) {
+        parts.push(formatMemoryLine(mf, scope));
       }
     }
 
@@ -214,49 +254,38 @@ export class MemoryManager {
     type: 'user' | 'feedback' | 'project' | 'reference',
     content: string,
     confidence: Confidence = 'reference',
+    scope: 'project' | 'global' = 'project',
   ): Promise<void> {
-    // Preserve hit_count if updating existing memory
     let hitCount = 0;
-    const existing = await this.read(name);
+    const existing = await this.read(name, scope);
     if (existing) {
       hitCount = existing.hit_count || 0;
     }
 
     const mf: MemoryFile = {
-      name,
-      description,
-      type,
-      confidence,
+      name, description, type, confidence,
       hit_count: hitCount,
       content,
       raw: '',
     };
     const frontmatter = rebuildRaw(mf);
 
-    // Write the memory file
     await invoke('write_file_content', {
-      filePath: this.filePath(name),
+      filePath: this.filePath(name, scope),
       content: frontmatter,
     });
 
-    // Use the description as the title in the index
     const title = description.length > 40 ? description.slice(0, 39) + '…' : description;
+    await this.upsertIndex(title, name + '.md', description, scope);
 
-    // Update MEMORY.md index
-    await this.upsertIndex(title, name + '.md', description);
-
-    // Bust prompt section cache
     this._promptSectionCache = null;
   }
 
-  // ── Delete ──
-
   /** Delete a memory by name. Returns true if deleted, false if not found. */
-  async delete(name: string): Promise<boolean> {
-    let index = await this.loadIndexText();
+  async delete(name: string, scope: 'project' | 'global' = 'project'): Promise<boolean> {
+    let index = await this.loadIndexText(scope);
     if (!index.trim()) return false;
 
-    // Remove matching line from index
     const pattern = new RegExp(
       `^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(name)}\\.md\\)\\s+[—–-]\\s+.+$\\n?`,
       'm',
@@ -267,34 +296,27 @@ export class MemoryManager {
     if (index) index += '\n';
 
     await invoke('write_file_content', {
-      filePath: this.indexPath(),
+      filePath: this.indexPath(scope),
       content: index,
     });
 
-    // Also delete/overwrite the actual .md file (not just delist from index)
     try {
       await invoke('write_file_content', {
-        filePath: this.filePath(name),
+        filePath: this.filePath(name, scope),
         content: JSON.stringify({ deleted: true }),
       });
     } catch (e) {
       console.warn(`[memory] failed to delete file for "${name}":`, e);
     }
 
-    // Bust prompt section cache
     this._promptSectionCache = null;
-
     return true;
   }
 
-  // ── Internal ──
-
-  /** Insert or update a line in MEMORY.md. */
-  private async upsertIndex(title: string, file: string, description: string): Promise<void> {
-    let index = await this.loadIndexText();
+  private async upsertIndex(title: string, file: string, description: string, scope: 'project' | 'global' = 'project'): Promise<void> {
+    let index = await this.loadIndexText(scope);
     const newLine = `- [${title}](${file}) — ${description}`;
 
-    // Try to replace existing line for same file
     const pattern = new RegExp(
       `^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(file.replace(/\.md$/, ''))}\\.md\\)\\s+[—–-]\\s+.+$`,
       'm',
@@ -302,14 +324,13 @@ export class MemoryManager {
     if (pattern.test(index)) {
       index = index.replace(pattern, newLine);
     } else {
-      // Append
       index = index.trimEnd();
       if (index) index += '\n';
       index += newLine + '\n';
     }
 
     await invoke('write_file_content', {
-      filePath: this.indexPath(),
+      filePath: this.indexPath(scope),
       content: index,
     });
   }
@@ -371,9 +392,10 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 }
 
-function formatMemoryLine(m: MemoryFile): string {
+function formatMemoryLine(m: MemoryFile, scope?: string): string {
   const body = m.content.length > 120 ? m.content.slice(0, 119) + '…' : m.content;
-  return `- **${m.description}** — ${body}`;
+  const tag = scope === 'global' ? ' [全局]' : '';
+  return `- **${m.description}**${tag} — ${body}`;
 }
 
 // ── Agent Tools ──
@@ -384,28 +406,27 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
     {
       name: () => 'hologram_memory_list',
       description: () =>
-        '列出所有已保存的记忆及其置信度。保存新记忆前，先调用此工具检查是否已有类似记忆——已有则用 hologram_memory_save 更新而非新建。',
+        '列出所有已保存的记忆及其置信度和所属范围（项目/全局）。保存新记忆前，先调用此工具检查是否已有类似记忆——已有则用 hologram_memory_save 更新而非新建。',
       parameters: () => ({ type: 'object', properties: {} }),
       readOnly: () => true,
       execute: async () => {
-        const entries = await mm.list();
-        if (entries.length === 0) return '暂无已保存的记忆。';
-
-        // Load full info for each entry to get confidence
-        const lines: string[] = [];
-        for (const e of entries) {
-          const mf = await mm.read(e.name);
-          const conf = mf?.confidence || 'reference';
-          const confTag = {
-            fact: '[fact]',
-            reference: '[ref]',
-            background: '[bg]',
-            suppressed: '[sup]',
-          }[conf];
-          const hit = mf?.hit_count ? ` · 回想${mf.hit_count}次` : '';
-          lines.push(`- ${confTag} **${e.title}** (\`${e.name}\`)${hit} — ${e.description}`);
+        const sections: string[] = [];
+        // Show global first, then project
+        const allScopes = mm.scopes?.() || ['project'];
+        for (const scope of allScopes) {
+          const entries = await mm.list(scope);
+          if (entries.length === 0) continue;
+          const label = scope === 'global' ? '🌐 全局记忆' : '📁 项目记忆';
+          sections.push(`### ${label}`);
+          for (const e of entries) {
+            const mf = await mm.read(e.name, scope);
+            const conf = mf?.confidence || 'reference';
+            const confTag = { fact: '[fact]', reference: '[ref]', background: '[bg]', suppressed: '[sup]' }[conf];
+            const hit = mf?.hit_count ? ` · 回想${mf.hit_count}次` : '';
+            sections.push(`- ${confTag} **${e.title}** (\`${e.name}\`)${hit} — ${e.description}`);
+          }
         }
-        return lines.join('\n');
+        return sections.length > 0 ? sections.join('\n') : '暂无已保存的记忆。';
       },
     },
     {
@@ -419,13 +440,19 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
             type: 'string',
             description: '记忆名称（不含 .md 扩展名），从 hologram_memory_list 获取',
           },
+          scope: {
+            type: 'string',
+            enum: ['project', 'global'],
+            description: '记忆范围。project=当前项目，global=跨所有项目共享。默认从 list 中看到的范围推断。',
+          },
         },
         required: ['name'],
       }),
       readOnly: () => true,
       execute: async (args) => {
         const name = args.name as string;
-        const mf = await mm.read(name, true); // incrementHit
+        const scope = (args.scope as 'project' | 'global') || 'project';
+        const mf = await mm.read(name, scope, true);
         if (!mf) return `未找到记忆 "${name}"。用 hologram_memory_list 查看所有记忆。`;
         const confLabels: Record<Confidence, string> = {
           fact: '🔒 铁律 — 用户明确要求。仅作提醒，不替代代码决策',
@@ -433,8 +460,9 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           background: '🎨 背景 — 用于调整风格，无需在回复中提及',
           suppressed: '🚫 已抑制',
         };
+        const scopeLabel = scope === 'global' ? ' [全局]' : ' [项目]';
         return [
-          `## ${mf.description || mf.name}`,
+          `## ${mf.description || mf.name}${scopeLabel}`,
           `类型: ${mf.type}`,
           `置信度: ${confLabels[mf.confidence] || mf.confidence}`,
           `回想次数: ${mf.hit_count}`,
@@ -452,6 +480,9 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         + '- fact — 仅用户通过 /remember 命令明确要求时才能使用\n'
         + '- background — 仅影响风格/语气\n'
         + '- suppressed — 已废弃，不再给 LLM 看到\n\n'
+        + '记忆范围 (scope):\n'
+        + '- project (默认) — 仅当前项目可见，适合架构决策、项目约定\n'
+        + '- global — 跨所有项目可见，适合用户偏好、编码风格、个性\n\n'
         + '先 hologram_memory_list 检查是否已有类似记忆——已有则更新而非新建。',
       parameters: () => ({
         type: 'object',
@@ -478,6 +509,11 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
             type: 'string',
             description: '记忆正文。对于 feedback/project 类型，应包含 **Why:** 和 **How to apply:** 段落。',
           },
+          scope: {
+            type: 'string',
+            enum: ['project', 'global'],
+            description: '记忆范围。project=仅当前项目，global=跨所有项目共享。用户偏好/编码风格 → global；架构决策/项目约定 → project。默认: project',
+          },
         },
         required: ['name', 'description', 'type', 'content'],
       }),
@@ -491,23 +527,25 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         if (!['fact', 'reference', 'background', 'suppressed'].includes(confidence)) {
           confidence = 'reference';
         }
-        // Enforce: Agent cannot self-elevate to fact — auto-downgrade to reference
         let factDowngraded = false;
         if (confidence === 'fact') {
           confidence = 'reference';
           factDowngraded = true;
         }
+        const scope = (args.scope as 'project' | 'global') || 'project';
         await mm.save(
           args.name as string,
           args.description as string,
           type as MemoryFile['type'],
           args.content as string,
           confidence,
+          scope,
         );
         const downgradeNote = factDowngraded
           ? ' (注意: fact 级别需用户授权，已自动降为 reference)'
           : '';
-        return `已保存记忆 "${args.name}" (${confidence})。${downgradeNote}`;
+        const scopeNote = scope === 'global' ? ' [全局]' : '';
+        return `已保存记忆 "${args.name}" (${confidence})${scopeNote}。${downgradeNote}`;
       },
     },
     {
@@ -521,13 +559,19 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
             type: 'string',
             description: '要删除的记忆名称（不含 .md 扩展名）',
           },
+          scope: {
+            type: 'string',
+            enum: ['project', 'global'],
+            description: '记忆范围。默认: project',
+          },
         },
         required: ['name'],
       }),
       readOnly: () => false,
       execute: async (args) => {
         const name = args.name as string;
-        const ok = await mm.delete(name);
+        const scope = (args.scope as 'project' | 'global') || 'project';
+        const ok = await mm.delete(name, scope);
         return ok
           ? `已删除记忆 "${name}"。`
           : `未找到记忆 "${name}"，可能已被删除。用 hologram_memory_list 查看当前记忆列表。`;
