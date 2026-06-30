@@ -445,11 +445,11 @@ async function* readSSE(
     yield {
       type: ChunkType.Usage,
       usage: {
-        prompt_tokens: inTok + cacheCreate + cacheRead,
+        prompt_tokens: inTok, // inTok 已是总数，cacheCreate/cacheRead 是其 breakdown
         completion_tokens: outTok,
-        total_tokens: inTok + cacheCreate + cacheRead + outTok,
+        total_tokens: inTok + outTok,
         cache_hit_tokens: cacheRead,
-        cache_miss_tokens: inTok + cacheCreate,
+        cache_miss_tokens: inTok - cacheRead,
         reasoning_tokens: 0,
         finish_reason: mapStopReason(finishReason),
       },
