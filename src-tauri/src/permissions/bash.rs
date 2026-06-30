@@ -169,7 +169,23 @@ fn looks_like_path(token: &str) -> bool {
     if token.is_empty() {
         return false;
     }
+    // Shell flags: --long, -x, /x (cmd.exe) — NOT paths
+    if token.starts_with("--") {
+        return false;
+    }
+    if token.starts_with('-') {
+        return false;
+    }
     if token.starts_with('/') {
+        // Single-letter after / is a cmd.exe flag (/c, /d, /s, /q, ...)
+        // Multi-char after / is likely a Unix path (/etc, /usr, /home, ...)
+        // Exception: /? is a cmd flag too
+        if token.len() == 2 {
+            let ch = token.as_bytes()[1];
+            if ch.is_ascii_alphabetic() || ch == b'?' {
+                return false; // cmd.exe flag: /c, /d, /s, /q, /?
+            }
+        }
         return true;
     }
     if token.starts_with("./") || token.starts_with("../") {
@@ -235,15 +251,24 @@ pub fn check(
         }
     }
 
-    // 3. Path check — extracted paths must be within sandbox
+    // 3. Path check — extracted paths must be within sandbox.
+    // Out-of-project paths are escalated to Ask (user dialog), not silently denied,
+    // because path extraction heuristics can produce false positives (e.g. shell
+    // flags like /c on cmd.exe), and the user should be the final arbiter.
     let paths = extract_command_paths(command);
     for raw_path in &paths {
         let expanded = expand_home(raw_path);
         match sandbox.resolve_read(&expanded) {
             SandboxResult::Allowed(_) => {}
             SandboxResult::Denied(reason) => {
-                return PermissionResult::Deny {
-                    reason: format!("路径 {} 在项目目录外: {}", raw_path, reason),
+                return PermissionResult::Ask {
+                    reason: format!("命令访问了项目外的路径: {} ({})", raw_path, reason),
+                    suggestions: vec![
+                        crate::permissions::PermissionUpdate {
+                            rule: format!("Bash({})", command),
+                            behavior: "allow".into(),
+                        },
+                    ],
                 };
             }
         }
@@ -329,9 +354,65 @@ mod tests {
     fn test_check_command_outside_path() {
         let s = sandbox_in_temp();
         let rules = PermissionRules::new();
+        // Out-of-project paths trigger Ask (user dialog), not silent Deny
         assert!(matches!(
             check("cat /etc/passwd", &s, &rules),
-            PermissionResult::Deny { .. }
+            PermissionResult::Ask { .. }
+        ));
+    }
+
+    #[test]
+    fn test_cmd_flags_not_treated_as_paths() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // /c, /d, /s are cmd.exe flags, not paths — should never trigger Ask or Deny
+        // when the command contains no real out-of-project paths
+        assert!(matches!(
+            check("cmd /c dir", &s, &rules),
+            PermissionResult::Passthrough
+        ));
+        assert!(matches!(
+            check("cmd /s /c \"echo hello\"", &s, &rules),
+            PermissionResult::Passthrough
+        ));
+        // /d is a flag, but D:\\foo IS a real out-of-project path → Ask
+        assert!(matches!(
+            check("cd /d D:\\foo && dir", &s, &rules),
+            PermissionResult::Ask { .. }
+        ));
+    }
+
+    #[test]
+    fn test_unix_flags_not_treated_as_paths() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // -c, -p, --foo are Unix flags, not paths
+        assert!(matches!(
+            check("bash -c 'echo hi'", &s, &rules),
+            PermissionResult::Passthrough
+        ));
+        assert!(matches!(
+            check("cargo test -- --nocapture", &s, &rules),
+            PermissionResult::Passthrough
+        ));
+        assert!(matches!(
+            check("npm test --filter=foo", &s, &rules),
+            PermissionResult::Passthrough
+        ));
+    }
+
+    #[test]
+    fn test_real_unix_paths_still_detected() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // /etc, /usr, /home are real Unix paths, not flags
+        assert!(matches!(
+            check("cat /etc/hosts", &s, &rules),
+            PermissionResult::Ask { .. }
+        ));
+        assert!(matches!(
+            check("ls /usr/local/bin", &s, &rules),
+            PermissionResult::Ask { .. }
         ));
     }
 
@@ -359,6 +440,17 @@ mod tests {
         assert!(!looks_like_path("--flag"));
         assert!(!looks_like_path(""));
         assert!(!looks_like_path("C:")); // just drive letter, no path separator
+        // Shell flags: must NOT be treated as paths
+        assert!(!looks_like_path("-c"));          // Unix flag
+        assert!(!looks_like_path("-p"));          // Unix flag
+        assert!(!looks_like_path("--nocapture")); // long flag
+        assert!(!looks_like_path("/c"));          // cmd.exe flag
+        assert!(!looks_like_path("/d"));          // cmd.exe flag
+        assert!(!looks_like_path("/s"));          // cmd.exe flag
+        assert!(!looks_like_path("/?"));          // cmd.exe flag
+        // Multi-char / paths still detected
+        assert!(looks_like_path("/usr"));
+        assert!(looks_like_path("/home/user"));
     }
 
     #[test]

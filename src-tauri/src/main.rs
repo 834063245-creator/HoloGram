@@ -574,10 +574,10 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         "hierarchical_communities": hcomms,
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
-    // Seed briefing baseline on first analyze so open-project check doesn't diff against empty graph.
-    if !root.join(".hologram").join("baseline.json").exists() {
-        let _ = engine_api::engine_read_graph(|g| save_baseline(&root, g));
-    }
+    // Always update baseline after full analysis so subsequent checks
+    // diff against a fresh snapshot — prevents stale-baseline false positives
+    // (e.g. "53 new cycles" when graph structure evolves between analyses).
+    let _ = engine_api::engine_read_graph(|g| save_baseline(&root, g));
     // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
     let _ = regenerate_file_graph(&path);
@@ -2983,18 +2983,16 @@ async fn permission_ask_response(
     // Resolve the pending oneshot channel
     crate::permissions::resolve_ask(&request_id, allow);
 
-    // If user wants to remember, add a session rule + persist to project config
+    // If user wants to remember, add a session rule (in-memory only).
+    // Session rules live for the current app session and are NOT persisted
+    // to disk — this is distinct from permanent project rules which the user
+    // edits explicitly in settings. "Always allow" means "always for this
+    // session", not "always forever".
     if remember.unwrap_or(false) {
         if let Some(ref rule_str) = rule_to_add {
             if let Ok(ctx) = get_ctx(&state) {
                 let behavior = if allow { "allow" } else { "deny" };
                 ctx.add_session_rule(rule_str, behavior);
-                // ponytail: persist to .hologram/permissions.json so rule survives restart
-                crate::permissions::rule::append_project_rule(
-                    &ctx.project_root,
-                    rule_str,
-                    behavior,
-                );
             }
         }
     }

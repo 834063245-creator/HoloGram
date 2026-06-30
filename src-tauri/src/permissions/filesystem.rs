@@ -72,12 +72,21 @@ pub fn check_read_permission(
         return PermissionResult::Allow;
     }
 
-    // 6. Within project → Allow; outside → Deny (no Allow rule matched)
+    // 6. Within project → Allow; outside → Ask user (not silent Deny).
+    // The user may have a legitimate reason to read outside the project
+    // (e.g. reading system headers, configs, or another project's source).
+    // Let them decide with a dialog rather than silently blocking.
     if resolved.is_some() {
         PermissionResult::Allow
     } else {
-        PermissionResult::Deny {
-            reason: format!("路径在项目目录外，且无 Allow 规则授权: {}", raw_path),
+        PermissionResult::Ask {
+            reason: format!("读取项目外的路径: {}（需要用户确认）", raw_path),
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("Read({})", raw_path.replace('\\', "/")),
+                    behavior: "allow".into(),
+                },
+            ],
         }
     }
 }
@@ -96,12 +105,21 @@ pub fn check_write_permission(
 ) -> PermissionResult {
     let path = Path::new(raw_path);
 
-    // 1. Resolve path via sandbox (may canonicalize or find nearest ancestor)
+    // 1. Resolve path via sandbox (may canonicalize or find nearest ancestor).
+    // Out-of-project writes are escalated to Ask (user dialog), not silently
+    // denied — the user may have a valid reason (e.g. writing to a shared
+    // config directory or another project during cross-project tooling).
     let resolved = match sandbox.resolve_write(path) {
         SandboxResult::Allowed(p) => p,
         SandboxResult::Denied(reason) => {
-            return PermissionResult::Deny {
-                reason: format!("写入被拒绝: {}", reason),
+            return PermissionResult::Ask {
+                reason: format!("写入项目外的路径: {} ({})，需要用户确认", raw_path, reason),
+                suggestions: vec![
+                    crate::permissions::PermissionUpdate {
+                        rule: format!("Edit({})", raw_path.replace('\\', "/")),
+                        behavior: "allow".into(),
+                    },
+                ],
             };
         }
     };
@@ -181,11 +199,12 @@ mod tests {
     }
 
     #[test]
-    fn test_read_outside_project_denied() {
+    fn test_read_outside_project_ask() {
         let (s, _) = sandbox_in_temp();
         let rules = PermissionRules::new();
+        // Out-of-project reads escalate to Ask (user dialog), not silent Deny
         let r = check_read_permission("C:\\Windows\\System32\\notepad.exe", &s, &rules, None);
-        assert!(matches!(r, PermissionResult::Deny { .. }), "expected Deny, got: {:?}", r);
+        assert!(matches!(r, PermissionResult::Ask { .. }), "expected Ask, got: {:?}", r);
     }
 
     #[test]
