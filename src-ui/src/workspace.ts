@@ -19,6 +19,7 @@ import { Agent } from './agent/agent';
 import { ToolRegistry, createHologramTools, createCodingTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
 import { showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
+import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
@@ -78,6 +79,7 @@ export class Workspace {
   // ── Agent & memory ──
   agent: Agent | null = null;
   memoryManager: MemoryManager | null = null;
+  taskManager: TaskManager = new TaskManager();
 
   // ── Check state ──
   checkRunning: boolean = false;
@@ -395,11 +397,16 @@ export class Workspace {
 
     // Aliases — short names for high-frequency tools
     registry.alias('read_file', 'read_file_content');
+    // ponytail: hologram_history is now an alias of hologram_node (V4 richer result)
+    registry.alias('hologram_history', 'hologram_node');
 
     // Memory tools
     if (this.memoryManager) {
       for (const tool of createMemoryTools(this.memoryManager)) { registry.register(tool); }
     }
+
+    // Task tracking tools
+    for (const tool of createTaskTools(this.taskManager)) { registry.register(tool); }
 
     const pricing = defaultPricing(active.kind, active.model);
     const systemPrompt = buildSystemPrompt(this, memorySection);
@@ -472,9 +479,12 @@ export class Workspace {
         }
         for (const tool of createCodingTools(factoryExec)) r.register(tool);
         r.alias('read_file', 'read_file_content');
+        r.alias('hologram_history', 'hologram_node');
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
         }
+        // Sub-agents get their own task manager (per-agent scope)
+        for (const tool of createTaskTools(new TaskManager())) r.register(tool);
         let memSection = '';
         if (mm) {
           try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }

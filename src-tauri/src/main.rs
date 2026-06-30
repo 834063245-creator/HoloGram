@@ -885,7 +885,7 @@ async fn hologram_path(from: String, to: String, state: tauri::State<'_, Workspa
 }
 
 #[tauri::command]
-async fn hologram_diff(before_path: String, _after_path: Option<String>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+async fn hologram_graph_diff(before_path: String, _after_path: Option<String>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
     check_mcp_permission("hologram_diff", &state)?;
     let bp = before_path.clone();
     tokio::task::spawn_blocking(move || {
@@ -1008,7 +1008,7 @@ async fn hologram_thread_conflicts(severity: Option<String>, state: tauri::State
 }
 
 #[tauri::command]
-async fn hologram_community_report(resolution: Option<f64>, min_size: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+async fn hologram_clusters(resolution: Option<f64>, min_size: Option<i32>, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
     check_mcp_permission("hologram_community_report", &state)?;
     let _ = resolution; let ms = min_size.unwrap_or(3);
     tokio::task::spawn_blocking(move || {
@@ -1203,6 +1203,76 @@ async fn hologram_history(node_id: String, state: tauri::State<'_, WorkspaceStat
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
+// ── V4: hologram_node — complete node info + edges grouped by kind ──
+#[tauri::command]
+async fn hologram_node(node_id: String, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
+    check_mcp_permission("hologram_node", &state)?;
+    let nid = node_id.clone();
+    tokio::task::spawn_blocking(move || {
+        with_store(move |idx| {
+            let node = match idx.get_node(&nid) {
+                Some(n) => n.clone(),
+                None => return serde_json::json!({"error": format!("Node '{}' not found", nid)}),
+            };
+            let incoming = idx.get_incoming_edges(&nid);
+            let outgoing = idx.get_outgoing_edges(&nid);
+            let group_edges = |edges: &[Edge]| -> serde_json::Map<String, serde_json::Value> {
+                let mut groups: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                for e in edges {
+                    let k = e.kind.as_str().to_string();
+                    groups.entry(k).or_insert_with(|| serde_json::json!([]))
+                        .as_array_mut().unwrap()
+                        .push(serde_json::json!({
+                            "id": e.id, "source": e.source, "target": e.target,
+                            "coupling_depth": e.coupling_depth,
+                            "cross_file": e.cross_file,
+                            "temporal_delay_sec": e.temporal_delay_sec,
+                        }));
+                }
+                groups
+            };
+            serde_json::json!({
+                "node": { "id": node.id, "name": node.name, "kind": node.kind.as_str(),
+                    "out_degree": node.out_degree, "in_degree": node.in_degree },
+                "incoming_count": incoming.len(), "outgoing_count": outgoing.len(),
+                "incoming_by_kind": group_edges(&incoming),
+                "outgoing_by_kind": group_edges(&outgoing),
+            })
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
+// ── V4: hologram_unused — dead code detection (in_degree == 0) ──
+#[tauri::command]
+async fn hologram_unused(
+    limit: Option<usize>,
+    kind_filter: Option<String>,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    check_mcp_permission("hologram_unused", &state)?;
+    let lim = limit.unwrap_or(20).min(200);
+    let kinds_str = kind_filter.unwrap_or_else(|| "function,class".into());
+    let kinds: Vec<String> = kinds_str.split(',').map(|s| s.trim().to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        with_store(move |idx| {
+            let mut candidates: Vec<serde_json::Value> = idx.nodes_iter()
+                .filter(|n| n.in_degree == 0 && kinds.iter().any(|k| n.kind.as_str() == k.as_str()))
+                .map(|n| serde_json::json!({
+                    "id": n.id, "name": n.name, "kind": n.kind.as_str(),
+                    "out_degree": n.out_degree, "in_degree": n.in_degree,
+                    "location": n.location,
+                }))
+                .collect();
+            candidates.sort_by(|a, b| {
+                b["out_degree"].as_u64().unwrap_or(0)
+                    .cmp(&a["out_degree"].as_u64().unwrap_or(0))
+            });
+            candidates.truncate(lim);
+            serde_json::json!({"unused": candidates, "count": candidates.len()})
+        })
+    }).await.map_err(|e| format!("任务失败: {e}"))?
+}
+
 #[tauri::command]
 async fn hologram_community(node_id: String, state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
     check_mcp_permission("hologram_community", &state)?;
@@ -1362,14 +1432,6 @@ async fn hologram_record_event(
     Ok("ok".into())
 }
 
-#[tauri::command]
-async fn hologram_changes(state: tauri::State<'_, WorkspaceState>) -> Result<String, String> {
-    check_mcp_permission("hologram_changes", &state)?;
-    tokio::task::spawn_blocking(move || {
-        let changes = engine_api::engine_query_timeline(10).unwrap_or_default();
-        Ok(serde_json::json!({"changes": changes}).to_string())
-    }).await.map_err(|e| format!("变更查询失败: {e}"))?
-}
 
 // ═══════════════════════════════════════════════════════
 // P6: Hotspots — 复发热点检测（L4 复发计数）
@@ -1696,7 +1758,11 @@ async fn read_file_content(
     let end = limit
         .map(|l| (start + l).min(lines.len()))
         .unwrap_or(lines.len());
-    Ok(lines[start..end].join("\n"))
+    // ponytail: cat -n format — line numbers help the LLM reference exact lines
+    let numbered: Vec<String> = lines[start..end].iter().enumerate()
+        .map(|(i, l)| format!("{:>6}\t{}", start + i + 1, l))
+        .collect();
+    Ok(numbered.join("\n"))
 }
 
 #[tauri::command]
@@ -1894,6 +1960,12 @@ async fn search_code(
     file_types: Option<String>,
     max_results: Option<usize>,
     use_regex: Option<bool>,
+    context_lines: Option<usize>,
+    output_mode: Option<String>,
+    show_line_numbers: Option<bool>,
+    head_limit: Option<usize>,
+    offset: Option<usize>,
+    glob_filter: Option<String>,
     _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
@@ -1921,12 +1993,20 @@ async fn search_code(
         .filter(|s| !s.is_empty())
         .collect();
     let max = max_results.unwrap_or(50).min(200);
+    let ctx = context_lines.unwrap_or(0).min(10); // context lines around match
+    let mode = output_mode.unwrap_or_else(|| "content".into());
+    let show_ln = show_line_numbers.unwrap_or(true);
+    let head = head_limit.unwrap_or(250); // 0 = unlimited
+    let skip = offset.unwrap_or(0);
+    let gfilter = glob_filter.clone();
 
     // ponytail: walkdir + read_to_string per file is heavy sync I/O.
     // Must run on blocking thread to avoid starving other async commands.
     let pat = pattern.clone();
     tokio::task::spawn_blocking(move || {
         let mut results: Vec<serde_json::Value> = Vec::new();
+        let mut file_sets: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut file_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let skip_dirs: Vec<&str> = vec![
             ".git", "node_modules", ".venv", "venv", "__pycache__",
             "target", "dist", ".next", ".nuxt", "build", ".cache",
@@ -1942,6 +2022,12 @@ async fn search_code(
             "pyc", "pyo", "class", "wasm",
             "lock", "map", "min.js", "min.css",
         ];
+
+        // Compile glob filter if provided
+        let glob_re: Option<regex::Regex> = gfilter.and_then(|gf| {
+            let pat = gf.replace(".", "\\.").replace("*", ".*").replace("?", ".");
+            regex::Regex::new(&format!("^{}$", pat)).ok()
+        });
 
         for entry in walkdir::WalkDir::new(&root)
             .into_iter()
@@ -1967,13 +2053,19 @@ async fn search_code(
             if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) {
                 continue;
             }
+            let fp_str = fp.to_string_lossy().to_string();
+            if let Some(ref re) = &glob_re {
+                if !re.is_match(&fp_str) { continue; }
+            }
 
             let content = match std::fs::read_to_string(fp) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
+            let lines: Vec<&str> = content.lines().collect();
 
-            for (line_no, line) in content.lines().enumerate() {
+            let mut file_has_match = false;
+            for (line_no, line) in lines.iter().enumerate() {
                 let matched = if let Some(ref re) = regex {
                     re.is_match(line)
                 } else {
@@ -1981,37 +2073,98 @@ async fn search_code(
                     sub_patterns.iter().any(|p| line_lower.contains(p))
                 };
                 if matched {
-                    results.push(serde_json::json!({
-                        "file": fp.to_string_lossy(),
-                        "line": line_no + 1,
-                        "content": line.trim(),
-                    }));
+                    file_has_match = true;
+                    *file_counts.entry(fp_str.clone()).or_insert(0) += 1;
+
+                    if mode == "content" {
+                        let start = line_no.saturating_sub(ctx);
+                        let end = (line_no + ctx + 1).min(lines.len());
+                        let context_block: Vec<serde_json::Value> = lines[start..end].iter().enumerate().map(|(i, l)| {
+                            let ln = start + i + 1;
+                            serde_json::json!({
+                                "line": if show_ln { Some(ln) } else { None },
+                                "content": l,
+                                "is_match": ln == line_no + 1,
+                            })
+                        }).collect();
+                        results.push(serde_json::json!({
+                            "file": fp_str,
+                            "match_line": line_no + 1,
+                            "match_content": line,
+                            "context": ctx,
+                            "context_block": context_block,
+                        }));
+                    }
                     if results.len() >= max { break; }
                 }
             }
+            if file_has_match { file_sets.insert(fp_str.clone()); }
             if results.len() >= max { break; }
         }
 
-        Ok(serde_json::json!({
-            "pattern": pat,
-            "count": results.len(),
-            "truncated": results.len() >= max,
-            "results": results,
-        }).to_string())
+        // Apply output mode
+        let output = match mode.as_str() {
+            "files_with_matches" => {
+                let mut files: Vec<&String> = file_sets.iter().collect();
+                files.sort();
+                let total = files.len();
+                let files = if head > 0 { files.into_iter().skip(skip).take(head).collect::<Vec<_>>() } else { files };
+                serde_json::json!({
+                    "pattern": pat,
+                    "count": total,
+                    "truncated": head > 0 && skip + head < total,
+                    "files": files,
+                })
+            }
+            "count" => {
+                let mut counts: Vec<(&String, &usize)> = file_counts.iter().collect();
+                counts.sort_by(|a, b| b.1.cmp(a.1));
+                let total = counts.len();
+                let counts = if head > 0 { counts.into_iter().skip(skip).take(head).collect::<Vec<_>>() } else { counts };
+                serde_json::json!({
+                    "pattern": pat,
+                    "total_matches": file_counts.values().sum::<usize>(),
+                    "file_count": total,
+                    "truncated": head > 0 && skip + head < total,
+                    "files": counts.into_iter().map(|(f, c)| serde_json::json!({"file": f, "matches": c})).collect::<Vec<_>>(),
+                })
+            }
+            _ => { // "content"
+                let total = results.len();
+                let results = if head > 0 { results.into_iter().skip(skip).take(head).collect::<Vec<_>>() } else { results };
+                serde_json::json!({
+                    "pattern": pat,
+                    "count": total,
+                    "truncated": head > 0 && skip + head < total,
+                    "context_lines": ctx,
+                    "results": results,
+                })
+            }
+        };
+
+        Ok(output.to_string())
     }).await.map_err(|e| format!("搜索任务失败: {e}"))?
 }
 
 /// Alias: LLM sometimes generates "search_content" instead of "search_code".
 /// ponytail: delegate — the 70-line duplicate was a copy-paste bug magnet.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
     max_results: Option<usize>, use_regex: Option<bool>,
+    context_lines: Option<usize>, output_mode: Option<String>,
+    show_line_numbers: Option<bool>, head_limit: Option<usize>,
+    offset: Option<usize>, glob_filter: Option<String>,
     _agent: Option<bool>,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    search_code(directory, pattern, file_types, max_results, use_regex, _agent, state, app).await
+    search_code(
+        directory, pattern, file_types, max_results, use_regex,
+        context_lines, output_mode, show_line_numbers, head_limit,
+        offset, glob_filter, _agent, state, app,
+    ).await
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3406,7 +3559,7 @@ fn main() {
             hologram_neighbors,
             hologram_impact,
             hologram_path,
-            hologram_diff,
+            hologram_graph_diff,
             hologram_explore,
             hologram_fragile,
             hologram_search,
@@ -3417,7 +3570,7 @@ fn main() {
             hologram_thread_conflicts,
             hologram_timeline,
             hologram_record_event,
-            hologram_community_report,
+            hologram_clusters,
             hologram_graph_summary,
             hologram_rename,
             set_active_project,
@@ -3431,9 +3584,10 @@ fn main() {
             hologram_run_preflight,
             hologram_run_health,
             hologram_history,
+            hologram_node,
+            hologram_unused,
             hologram_community,
             hologram_delayed,
-            hologram_changes,
             hologram_hotspots,
             hologram_workspace_conflict,
             hologram_gate_check,

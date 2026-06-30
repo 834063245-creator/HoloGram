@@ -276,9 +276,9 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       execute: (args) => exec('hologram_timeline', args),
     },
     {
-      name: () => 'hologram_diff',
+      name: () => 'hologram_graph_diff',
       description: () =>
-        'Diff the current graph against a baseline JSON snapshot. Returns added/removed nodes and edges. First call creates the baseline; subsequent calls compare against it.',
+        'Diff the current graph against a baseline JSON snapshot. Returns added/removed nodes and edges. First call creates the baseline; subsequent calls compare against it. NOT a git diff — use git_diff for code changes.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -290,24 +290,24 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
         required: ['beforePath'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('hologram_diff', args),
+      execute: (args) => exec('hologram_graph_diff', args),
     },
     {
-      name: () => 'hologram_community_report',
+      name: () => 'hologram_clusters',
       description: () =>
-        'Report on community/cluster structure in the codebase. Uses Leiden algorithm for community detection. Shows which modules naturally cluster together.',
+        'Report on cluster/community structure in the codebase. Uses Leiden algorithm. Shows which modules naturally group together. For a single node\'s cluster membership use hologram_community.',
       parameters: () => ({
         type: 'object',
         properties: {
           minSize: {
             type: 'integer',
-            description: 'Minimum community size to report (default: 3)',
+            description: 'Minimum cluster size to report (default: 3)',
             default: 3,
           },
         },
       }),
       readOnly: () => true,
-      execute: (args) => exec('hologram_community_report', args),
+      execute: (args) => exec('hologram_clusters', args),
     },
     {
       name: () => 'hologram_graph_summary',
@@ -380,20 +380,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       readOnly: () => true,
       execute: (args) => exec('hologram_run_health', args),
     },
-    {
-      name: () => 'hologram_history',
-      description: () =>
-        'Look up a node by ID — returns its name, type, in/out degree, and location. Use to inspect a specific node\'s metadata and connectivity.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          nodeId: { type: 'string', description: 'The node ID or name to query history for' },
-        },
-        required: ['nodeId'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_history', args),
-    },
+    // ponytail: hologram_history removed — aliased to hologram_node in workspace.ts
     {
       name: () => 'hologram_community',
       description: () =>
@@ -431,17 +418,6 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_delayed', args),
-    },
-    {
-      name: () => 'hologram_changes',
-      description: () =>
-        'Get the most recent change recorded in the timeline — what was changed, impact count, affected nodes, and commit hash. Use when asked "what changed last?" or "what was the last commit\'s impact?"',
-      parameters: () => ({
-        type: 'object',
-        properties: {},
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_changes', {}),
     },
     {
       name: () => 'hologram_search',
@@ -524,6 +500,47 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_policy_check', args),
+    },
+    // ── V4: node deep-dive (supersedes hologram_history) ──
+    {
+      name: () => 'hologram_node',
+      description: () =>
+        'Complete information about a single node: identity (name, kind, degree), community membership, and ALL incoming/outgoing edges grouped by kind (imports, calls, inherits, etc.). Use after hologram_search to deep-dive a specific symbol. Richer than hologram_history which only returns node metadata.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          node_id: {
+            type: 'string',
+            description: 'The node ID or name to query',
+          },
+        },
+        required: ['node_id'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_node', args),
+    },
+    // ── V4: dead code detection ──
+    {
+      name: () => 'hologram_unused',
+      description: () =>
+        'Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending (most impactful first). Defaults to function+class kinds. Use to find dead code candidates before deleting.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          limit: {
+            type: 'integer',
+            description: 'Max results (default: 20, max: 200)',
+            default: 20,
+          },
+          kind_filter: {
+            type: 'string',
+            description: 'Comma-separated node kinds (default: "function,class")',
+            default: 'function,class',
+          },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_unused', args),
     },
   ];
 }
@@ -741,7 +758,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'read_file_content',
       description: () =>
-        'Read the content of a file on disk. Returns the full text content by default. Use offset and limit to read a specific range of lines (0-indexed). Use to inspect source code files when analyzing dependencies or investigating violations.',
+        'Read the content of a file on disk. Returns text in cat -n format (6-digit line number + tab + content). Use offset and limit to read a specific range of lines (0-indexed). Use to inspect source code files when analyzing dependencies or investigating violations.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -858,7 +875,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'search_content',
       description: () =>
-        'Search for a text pattern across all source files in a directory. Returns matching files with line numbers and content. Supports both literal substring (default, case-insensitive) and regex (set useRegex: true). Skips binary files, hidden dirs, and build artifacts.',
+        'Search for a text pattern across all source files. Supports literal substring (default, case-insensitive) and regex. Returns matching lines with optional context lines, file lists, or counts. Skips binary files, hidden dirs, and build artifacts. Prefer this over run_shell grep — it is faster and respects .gitignore-style exclusions.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -881,9 +898,24 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           },
           useRegex: {
             type: 'boolean',
-            description: 'Set to true to interpret pattern as a regex (e.g. "function\\s+\\w+"). Default: false (literal substring)',
+            description: 'Set to true to interpret pattern as a regex (e.g. "function\\\\s+\\\\w+"). Default: false (literal substring)',
             default: false,
           },
+          contextLines: {
+            type: 'integer',
+            description: 'Number of context lines before and after each match (like grep -C). Default: 0. Max: 10.',
+            default: 0,
+          },
+          outputMode: {
+            type: 'string',
+            enum: ['content', 'files_with_matches', 'count'],
+            description: 'Output mode: "content" = matching lines with context, "files_with_matches" = just file paths, "count" = match counts per file. Default: content.',
+            default: 'content',
+          },
+          showLineNumbers: { type: 'boolean', description: 'Include line numbers in output (default: true)', default: true },
+          headLimit: { type: 'integer', description: 'Max results/files to return (default: 250, 0 = unlimited)', default: 250 },
+          offset: { type: 'integer', description: 'Skip first N results for pagination (default: 0)', default: 0 },
+          globFilter: { type: 'string', description: 'Additional glob filter on file paths (e.g. "**/*.rs", "src/**/*.ts")' },
         },
         required: ['directory', 'pattern'],
       }),
@@ -1223,6 +1255,215 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('web_fetch', args),
+    },
+
+    // ── Phase 2a: File Operations (Tauri commands already exist) ──
+    {
+      name: () => 'delete_file',
+      description: () =>
+        'Delete a file or directory at the specified path. Use to clean up temporary files or remove unwanted code. DANGEROUS — cannot be undone. Verify with user if deleting important files.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the file or directory to delete' },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('delete_file_or_dir', args),
+    },
+    {
+      name: () => 'create_directory',
+      description: () =>
+        'Create a new directory (and any missing parent directories). Use before writing new files into a directory that may not exist yet.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the directory to create' },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('create_directory', args),
+    },
+    {
+      name: () => 'move_file',
+      description: () =>
+        'Move or rename a file or directory. The destination path determines the new name/location.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: 'Source path' },
+          to: { type: 'string', description: 'Destination path' },
+        },
+        required: ['from', 'to'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('move_file', args),
+    },
+    {
+      name: () => 'rename_file',
+      description: () =>
+        'Rename a file or directory (keep it in the same parent directory). For moving to a different directory, use move_file instead.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the file/directory to rename' },
+          new_name: { type: 'string', description: 'New name (not path, just the name)' },
+        },
+        required: ['path', 'new_name'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('rename_file_or_dir', { filePath: args.path, newName: args.new_name }),
+    },
+
+    // ── Phase 2b: Git Operations (Tauri commands already exist) ──
+    {
+      name: () => 'git_init',
+      description: () => 'Initialize a new git repository in the given directory.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the directory' },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_init', args),
+    },
+    {
+      name: () => 'git_checkout',
+      description: () => 'Switch to a different branch. Use git_create_branch first if the branch does not exist.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the git repository' },
+          branch: { type: 'string', description: 'Branch name to switch to' },
+        },
+        required: ['path', 'branch'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_checkout', args),
+    },
+    {
+      name: () => 'git_create_branch',
+      description: () => 'Create a new git branch from the current HEAD. Does NOT switch to it — use git_checkout after.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the git repository' },
+          branch: { type: 'string', description: 'New branch name' },
+        },
+        required: ['path', 'branch'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_create_branch', args),
+    },
+    {
+      name: () => 'git_discard',
+      description: () => 'Discard unstaged changes to a file (git checkout -- <file>). Loses all uncommitted modifications.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the git repository' },
+          file: { type: 'string', description: 'File path to discard changes for (relative to repo root)' },
+        },
+        required: ['path', 'file'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_discard', args),
+    },
+    {
+      name: () => 'git_stash_push',
+      description: () => 'Stash current uncommitted changes. Use before switching branches with dirty working tree.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the git repository' },
+          message: { type: 'string', description: 'Optional stash message for identification' },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_stash_push', args),
+    },
+    {
+      name: () => 'git_stash_pop',
+      description: () => 'Restore the most recently stashed changes. Pops the stash — the changes are applied and the stash entry is removed.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the git repository' },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_stash_pop', args),
+    },
+
+    // ── Phase 2c: Agent Worktree Isolation (Tauri commands already exist) ──
+    {
+      name: () => 'agent_isolation_create',
+      description: () =>
+        'Create an isolated git worktree for a sub-agent to work in. Returns the isolation path. Use before spawning a sub-agent that mutates files — prevents conflicts when multiple agents modify the same repo concurrently.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Label for this isolation workspace' },
+        },
+        required: ['label'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('agent_isolation_create', args),
+    },
+    {
+      name: () => 'agent_isolation_diff',
+      description: () => 'Show the diff of changes made in an isolation workspace.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Isolation workspace label' },
+        },
+        required: ['label'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('agent_isolation_diff', args),
+    },
+    {
+      name: () => 'agent_isolation_merge',
+      description: () => 'Merge changes from an isolation workspace back into the main repository.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Isolation workspace label to merge' },
+        },
+        required: ['label'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('agent_isolation_merge', args),
+    },
+    {
+      name: () => 'agent_isolation_discard',
+      description: () => 'Discard an isolation workspace and delete its worktree. Use when the sub-agent\'s changes are no longer needed.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Isolation workspace label to discard' },
+        },
+        required: ['label'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('agent_isolation_discard', args),
+    },
+    {
+      name: () => 'agent_isolation_status',
+      description: () => 'List all isolation workspaces and their current status.',
+      parameters: () => ({
+        type: 'object',
+        properties: {},
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('agent_isolation_status', args),
     },
   ];
 }
