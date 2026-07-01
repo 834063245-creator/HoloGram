@@ -371,9 +371,9 @@ async function init(): Promise<void> {
   shell.register({ id: 'hotspots', isOpen: () => hotspotsPanel.isOpen() });
   shell.register({ id: 'constraints', isOpen: () => ConstraintsPanel.get().isOpen() });
   shell.register({ id: 'dataflow', isOpen: () => dataflowPanel.isOpen() });
-  dataflowPanel.setNewTraceHandler(async (r, d, s, sig) => {
+  dataflowPanel.setNewTraceHandler(async (q, s, sig) => {
     if (!workspace) throw new Error('未打开工作区');
-    await workspace.spawnDataflowTrace(r, d, s, sig);
+    await workspace.spawnDataflowTrace(q, s, sig);
   });
 
   // Wire navigation / highlight / agent-query commands

@@ -586,13 +586,13 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'dataflow_save',
       description: () =>
-        'Save a dataflow trace to persistent storage. trace_json must be a complete JSON object with trace_id, resource, description, language, files_involved, nodes, edges, source_snippets, and test metadata. On save, Layer 1 (snippet anchor) and Layer 2 (dataflow engine cross-validation) run automatically, updating edge confidence and status. Used by the Dataflow Agent after tracing a resource.',
+        'Save a dataflow trace to persistent storage. traceJson must be a complete JSON object with traceId, resource, description, language, files_involved, nodes, edges, source_snippets, and test metadata. On save, Layer 1 (snippet anchor) and Layer 2 (dataflow engine cross-validation) run automatically, updating edge confidence and status. Used by the Dataflow Agent after tracing a resource.',
       parameters: () => ({
         type: 'object',
         properties: {
-          trace_json: { type: 'string', description: 'Complete trace JSON string' },
+          traceJson: { type: 'string', description: 'Complete trace JSON string' },
         },
-        required: ['trace_json'],
+        required: ['traceJson'],
       }),
       readOnly: () => false,
       execute: (args) => exec('dataflow_save', args),
@@ -600,11 +600,11 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'dataflow_query',
       description: () =>
-        'Query a saved dataflow trace by trace_id (exact) or resource (returns latest version). Returns the complete trace JSON including nodes, edges, source_snippets, test_status.',
+        'Query a saved dataflow trace by traceId (exact) or resource (returns latest version). Returns the complete trace JSON including nodes, edges, source_snippets, test_status.',
       parameters: () => ({
         type: 'object',
         properties: {
-          trace_id: { type: 'string', description: 'Exact trace id, e.g. "logBuffer_v1"' },
+          traceId: { type: 'string', description: 'Exact trace id, e.g. "logBuffer_v1"' },
           resource: { type: 'string', description: 'Resource name (returns latest version)' },
         },
       }),
@@ -614,7 +614,7 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'dataflow_list',
       description: () =>
-        'List all saved dataflow traces with optional filters. Returns summaries (trace_id, resource, description, language, status, test_status, verified_at) without the full trace_json.',
+        'List all saved dataflow traces with optional filters. Returns summaries (traceId, resource, description, language, status, testStatus, verifiedAt) without the full traceJson.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -633,10 +633,10 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          trace_id: { type: 'string', description: 'Trace id to delete' },
+          traceId: { type: 'string', description: 'Trace id to delete' },
           hard: { type: 'boolean', description: 'Hard delete (default false = soft delete)', default: false },
         },
-        required: ['trace_id'],
+        required: ['traceId'],
       }),
       readOnly: () => false,
       execute: (args) => exec('dataflow_delete', args),
@@ -644,13 +644,13 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'dataflow_verify',
       description: () =>
-        '重新验证一条 trace：重跑 source_snippets 锚点检测 + hologram_dataflow 静态交叉验证 + 关联测试文件（如存在）。更新 verified_at、test_status、status 字段。代码变更后用此工具检查 trace 是否仍然有效。',
+        '重新验证一条 trace：重跑 source_snippets 锚点检测 + hologram_dataflow 静态交叉验证 + 关联测试文件（如存在）。更新 verifiedAt、testStatus、status 字段。代码变更后用此工具检查 trace 是否仍然有效。',
       parameters: () => ({
         type: 'object',
         properties: {
-          trace_id: { type: 'string', description: '要验证的 trace id' },
+          traceId: { type: 'string', description: '要验证的 trace id' },
         },
-        required: ['trace_id'],
+        required: ['traceId'],
       }),
       readOnly: () => true,
       execute: (args) => exec('dataflow_verify', args),
@@ -658,11 +658,11 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'dataflow_stale_check',
       description: () =>
-        '检查一条或全部 trace 是否因代码变更而过期。对每条 trace 重跑 snippet 锚点验证 + 检查 files_involved 文件是否仍存在。过期的 trace status 标为 stale。不传 trace_id = 检查全部 active/stale trace。',
+        '检查一条或全部 trace 是否因代码变更而过期。对每条 trace 重跑 snippet 锚点验证 + 检查 files_involved 文件是否仍存在。过期的 trace status 标为 stale。不传 traceId = 检查全部 active/stale trace。',
       parameters: () => ({
         type: 'object',
         properties: {
-          trace_id: { type: 'string', description: '要检查的 trace id（不传 = 全量检查）' },
+          traceId: { type: 'string', description: '要检查的 trace id（不传 = 全量检查）' },
         },
       }),
       readOnly: () => true,

@@ -29,7 +29,7 @@ export class DataflowPanel {
   private resizing = false;
   private dragStart = { x: 0, y: 0, elX: 0, elY: 0, w: 0, h: 0 };
 
-  private onNewTrace?: (resource: string, description: string, onStatus: (line: string) => void, signal: AbortSignal) => Promise<void>;
+  private onNewTrace?: (query: string, onStatus: (line: string) => void, signal: AbortSignal) => Promise<void>;
 
   constructor(container: HTMLElement) {
     this.buildDOM(container);
@@ -77,31 +77,32 @@ export class DataflowPanel {
     left.appendChild(toolbar);
     left.appendChild(this.listEl);
 
-    // new-trace form (hidden by default)
+    // new-trace form (hidden by default) — 自然语言输入
     const form = document.createElement('div');
     form.className = 'df-new-form';
     form.style.display = 'none';
     form.innerHTML = `
-      <input class="df-input-resource" placeholder="resource 名称（如 logBuffer）" autocomplete="off" />
+      <input class="df-input-query" placeholder="用自然语言描述要追的数据流（如：logBuffer 怎么从写入到落盘的）" autocomplete="off" />
       <div class="df-autocomplete" style="display:none"></div>
-      <input class="df-input-desc" placeholder="一句话描述（如 UI 日志缓冲流）" />
       <div class="df-form-actions">
         <button class="df-btn-start">开始追踪</button>
         <button class="df-btn-cancel">取消</button>
       </div>`;
     left.appendChild(form);
 
-    // resource autocomplete
-    const resInput = form.querySelector('.df-input-resource') as HTMLInputElement;
+    // 自然语言输入时联想符号名（帮 Agent 解析 resource，用户也可忽略）
+    const queryInput = form.querySelector('.df-input-query') as HTMLInputElement;
     const acBox = form.querySelector('.df-autocomplete') as HTMLElement;
     let acTimer: ReturnType<typeof setTimeout> | null = null;
-    resInput.addEventListener('input', () => {
-      const q = resInput.value.trim();
+    queryInput.addEventListener('input', () => {
+      const q = queryInput.value.trim();
       if (acTimer) clearTimeout(acTimer);
-      if (q.length < 2) { acBox.style.display = 'none'; return; }
+      // 从输入里提取最后一个可能是符号名的词（字母/数字/下划线，≥2字符）
+      const m = q.match(/[A-Za-z_][A-Za-z0-9_]{1,}$/);
+      if (!m) { acBox.style.display = 'none'; return; }
       acTimer = setTimeout(async () => {
         try {
-          const raw = await invoke<string>('hologram_search', { query: q, limit: 8 });
+          const raw = await invoke<string>('hologram_search', { query: m[0], limit: 8 });
           const data = JSON.parse(raw);
           const results = data.results || [];
           if (results.length === 0) { acBox.style.display = 'none'; return; }
@@ -110,14 +111,16 @@ export class DataflowPanel {
           acBox.style.display = 'block';
           acBox.querySelectorAll('.df-ac-item').forEach((el) => {
             (el as HTMLElement).onclick = () => {
-              resInput.value = (el as HTMLElement).dataset['name']!;
+              // 用选中的符号名替换输入末尾的半截词
+              const v = queryInput.value;
+              queryInput.value = v.slice(0, v.length - m[0].length) + (el as HTMLElement).dataset['name']!;
               acBox.style.display = 'none';
             };
           });
         } catch { acBox.style.display = 'none'; }
       }, 200);
     });
-    resInput.addEventListener('blur', () => { setTimeout(() => { acBox.style.display = 'none'; }, 200); });
+    queryInput.addEventListener('blur', () => { setTimeout(() => { acBox.style.display = 'none'; }, 200); });
 
     // status log (for new-trace progress)
     this.statusEl = document.createElement('div');
@@ -157,20 +160,21 @@ export class DataflowPanel {
     // drag + resize
     this.header.addEventListener('pointerdown', (e) => this.onDragStart(e));
     this.grip.addEventListener('pointerdown', (e) => this.onResizeStart(e));
+    // 点击面板任意位置置顶
+    this.el.addEventListener('pointerdown', () => this.bringToFront());
   }
 
   // ── New trace ─────────────────────────────────────────
 
   private async onStartTrace(form: HTMLElement): Promise<void> {
-    const resource = (form.querySelector('.df-input-resource') as HTMLInputElement).value.trim();
-    const description = (form.querySelector('.df-input-desc') as HTMLInputElement).value.trim();
-    if (!resource || !description || !this.onNewTrace) return;
+    const query = (form.querySelector('.df-input-query') as HTMLInputElement).value.trim();
+    if (!query || !this.onNewTrace) return;
     form.style.display = 'none';
     this.statusEl.style.display = 'block';
-    this.statusEl.innerHTML = `<div class="df-status-title">追踪 ${resource}…</div>`;
+    this.statusEl.innerHTML = `<div class="df-status-title">追踪中…</div>`;
     this.abortCtrl = new AbortController();
     try {
-      await this.onNewTrace(resource, description, (line) => {
+      await this.onNewTrace(query, (line) => {
         const row = document.createElement('div');
         row.className = 'df-status-line';
         row.textContent = line;
@@ -291,12 +295,12 @@ export class DataflowPanel {
         ${edgesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">边 <span class="df-sect-count">${edges.length}</span></div>${edgesHtml}</div>` : ''}
         ${snips ? `<div class="df-detail-section"><div class="df-section-hdr">源码片段</div>${snips}</div>` : ''}
         <div class="df-detail-actions">
-          <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 重验证</button>
-          <button class="df-btn-stale" data-tid="${t.trace_id}">${iconHtml('eye', 13)} 过期检查</button>
-          <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
-          <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
-          <button class="df-btn-diff" data-tid="${t.trace_id}">${iconHtml('diff', 13)} 版本对比</button>
-          <button class="df-btn-del" data-tid="${t.trace_id}">${iconHtml('trash', 13)} 删除</button>
+          <button class="df-btn-verify" data-tid="${t.trace_id}">🔁 重验证</button>
+          <button class="df-btn-stale" data-tid="${t.trace_id}">🔍 过期检查</button>
+          <button class="df-btn-retrace" data-tid="${t.trace_id}">🔄 重追踪</button>
+          <button class="df-btn-edit" data-tid="${t.trace_id}">✏ 编辑</button>
+          <button class="df-btn-diff" data-tid="${t.trace_id}">📊 版本对比</button>
+          <button class="df-btn-del" data-tid="${t.trace_id}">🗑 删除</button>
         </div>`;
       const delBtn = this.detailEl.querySelector('.df-btn-del') as HTMLElement | null;
       if (delBtn) delBtn.onclick = async () => {
@@ -343,7 +347,7 @@ export class DataflowPanel {
         this.statusEl.innerHTML = `<div class="df-status-title">重追踪 ${t.resource}…</div>`;
         const ctrl = new AbortController();
         try {
-          await this.onNewTrace(t.resource, t.description || '', (line) => {
+          await this.onNewTrace(`重新追踪 ${t.resource}：${t.description || '数据流追踪'}`, (line) => {
             const row = document.createElement('div');
             row.className = 'df-status-line';
             row.textContent = line;
@@ -351,9 +355,9 @@ export class DataflowPanel {
             this.statusEl.scrollTop = this.statusEl.scrollHeight;
           }, ctrl.signal);
           await this.refresh();
-          this.showBanner(`${iconHtml('check-circle', 13)} 重追踪完成`, 'ok');
+          this.showBanner('✓ 重追踪完成', 'ok');
         } catch (e: any) {
-          this.showBanner(`${iconHtml('close', 13)} 重追踪失败: ${e?.message || e}`, 'err');
+          this.showBanner(`✗ 重追踪失败: ${e?.message || e}`, 'err');
         }
         retraceBtn.textContent = '🔄 重追踪';
       };
@@ -535,6 +539,7 @@ export class DataflowPanel {
     if (this.openState) return;
     this.openState = true;
     this.el.style.display = 'flex';
+    this.bringToFront();
     this.refresh();
     shell.notifyPanelChanged();
   }
@@ -548,6 +553,10 @@ export class DataflowPanel {
   }
 
   isOpen(): boolean { return this.openState; }
+
+  private bringToFront(): void {
+    this.el.style.zIndex = String(Math.max(78, Number(this.el.style.zIndex) + 1));
+  }
 
   // ── Drag ──────────────────────────────────────────────
 
