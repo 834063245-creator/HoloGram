@@ -390,9 +390,23 @@ pub struct FileDataflow {
 // Public API: query_file_dataflow
 // ═══════════════════════════════════════════════════════════════
 
-/// Run dataflow queries on a single file. Returns structured per-scope
-/// reads/writes/triggers/sequences plus cross-function shared state.
-/// Pure — does not touch the Graph. Use for on-demand Agent tracing.
+/// Run dataflow queries on a single already-parsed file.
+///
+/// Returns per-function reads/writes/triggers/sequences + cross-function
+/// shared state detection. Pure — does not touch the Graph.
+///
+/// For batch file queries with auto-detection of language + parsing,
+/// use [`query_dataflow_files`] instead.
+///
+/// # Example output
+/// ```text
+/// FileDataflow {
+///   scopes: [ScopeFlow { name: "login", reads: ["db","hash"],
+///             writes: ["token"], triggers: ["validate_async"], ... }],
+///   shared: [SharedVarFlow { var: "db", readers: ["login","query"],
+///             writers: ["init_db"] }]
+/// }
+/// ```
 pub fn query_file_dataflow(
     lang: Language,
     source: &str,
@@ -594,13 +608,20 @@ pub struct DataflowFileResult {
     pub result: Result<FileDataflow, String>,
 }
 
-/// Run dataflow queries across multiple files. Each file is read from disk,
-/// parsed with tree-sitter, and queried via `query_file_dataflow`.
-/// Returns one result per file — errors (missing file, parse failure,
-/// unsupported language) are captured per-file, not propagated.
+/// Batch dataflow query — reads files from disk, auto-detects language,
+/// parses, and runs [`query_file_dataflow`] on each.
 ///
-/// This is the engine-native entry point for Agent workflows. Call it
-/// directly from within a workflow to trace variable flows across files.
+/// Errors (missing file, unsupported extension, parse failure) are captured
+/// per-file in `DataflowFileResult::result` — never propagated.
+///
+/// # Agent workflow pattern
+/// ```text
+/// 1. hologram_search("db") → find candidate files
+/// 2. query_dataflow_files(&[path1, path2, path3]) → dataflow results
+/// 3. For each shared variable found, cross-reference with graph structure
+/// ```
+///
+/// 18 languages supported. See [`config_for_ext`] for the full list.
 pub fn query_dataflow_files(files: &[std::path::PathBuf]) -> Vec<DataflowFileResult> {
     files.iter().map(|p| {
         let file = p.to_string_lossy().replace('\\', "/");
