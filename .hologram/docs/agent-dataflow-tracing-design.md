@@ -232,7 +232,9 @@ CREATE INDEX idx_dt_status   ON dataflow_traces(status);
 
 这些不是通过 MCP 协议暴露给外部客户端的工具（`hologram_dataflow` 已经是 MCP 工具了，它不需要改）。它们是内置在 Agent 工具注册表里的，Agent 在对话流程中直接调用，Dataflow 面板通过 Tauri `invoke` 层走同样的后端逻辑。
 
-### 后端：Tauri command（`src-tauri/src/main.rs`）
+### 后端：Tauri command（新建 `src-tauri/src/commands/dataflow.rs` 模块）
+
+> **main.rs 拆分后落点说明。** 原方案写于拆分前，当时所有 Tauri command 都堆在 `main.rs`。拆分后 `main.rs` 只剩入口 + `invoke_handler` 注册 + tests，命令实现按业务域分散到 `commands/` 模块（`hologram.rs` 图查询、`tools.rs` 文件/git/IPC、`workspace.rs` 工作区）。dataflow 这 6 个命令自成体系，新建 `src-tauri/src/commands/dataflow.rs`，与 `hologram.rs`/`workspace.rs` 平级。
 
 | command | 参数 | 说明 | Phase |
 |---------|------|------|-------|
@@ -242,6 +244,17 @@ CREATE INDEX idx_dt_status   ON dataflow_traces(status);
 | `dataflow_delete` | `trace_id: String` | 软删除（status=deprecated）或硬删除 | 1 |
 | `dataflow_verify` | `trace_id: String` | 重跑 Layer 1-2 验证 + 关联测试，更新 verified_at / test_status | 2 |
 | `dataflow_stale_check` | `trace_id?`（不传=全量） | Layer 3 符号引用完整性检测，更新 status | 2 |
+
+**后端文件变更清单：**
+
+| 文件 | 变更 |
+|------|------|
+| `engine/src/storage/sqlite.rs` | `ensure_schema()` 里加 `dataflow_traces` 表 + 两个索引（跟 nodes/edges/timeline_events 同一处声明，engine 打开 db 时自动建表） |
+| `src-tauri/src/commands/dataflow.rs` | **新建**。6 个 `#[tauri::command]` 实现。db 访问用 `engine::storage::SqliteDb::open_aux_connection(<workspace>/.hologram/hologram.db)` 拿独立连接直接读写 `dataflow_traces`——复用现有 timeline 的 aux connection 模式，避免阻塞 graph store 主连接。Layer 2 交叉验证在同模块内直接调 `hologram_engine` 的 dataflow API（同进程，非 IPC）。 |
+| `src-tauri/src/commands/mod.rs` | 加 `pub mod dataflow;` |
+| `src-tauri/src/main.rs` | `invoke_handler` 里注册 `commands::dataflow::dataflow_save` 等 6 个命令（只加注册行，不写实现） |
+
+> **为什么不走 engine_client IPC。** src-tauri 已 `use hologram_engine as engine` 把 engine 作为 Rust 库直接链接进来（`commands/hologram.rs`、`utils.rs` 都是同进程直调）。`engine_client`/`engine_*` 那套 IPC 是给独立 engine 进程的 fallback 通道，dataflow 命令不需要走它——直接调 engine 的 dataflow API + 直接开 aux sqlite 连接即可，跟 timeline 命令一个层级。
 
 ### 前端：Agent 内置工具定义（`src-ui/src/agent/tool.ts`）
 
@@ -517,7 +530,11 @@ Dataflow Panel ──invoke()──→ dataflow_traces 表 ←──内置工具
      │ 列表/详情/删除                  save 写入                     │ 搜索/读取/分析/测试
      │                                                              │
      ▼                                                              ▼
- 用户直接操作                    Tauri command (main.rs)           工具链 (chat 复用)
+ 用户直接操作                    Tauri command (commands/dataflow.rs)           工具链 (chat 复用)
+                                       │
+                                       │ SqliteDb::open_aux_connection()
+                                       ▼
+                                 engine/src/storage/sqlite.rs (hologram.db)
 ```
 
 ---
@@ -544,9 +561,9 @@ Dataflow Panel ──invoke()──→ dataflow_traces 表 ←──内置工具
 
 **后端：**
 
-1. `dataflow_traces` 表建在 `sqlite.rs` 的 `ensure_schema()`，含索引
-2. Tauri command `dataflow_save`：验证 trace schema → Layer 1 snippet 锚点 → Layer 2 引擎交叉验证 → 计算节点/边的 confidence → INSERT/UPDATE
-3. Tauri command `dataflow_query`、`dataflow_list`、`dataflow_delete`：按 trace_id/resource 查询、列表、软删除
+1. `dataflow_traces` 表建在 `engine/src/storage/sqlite.rs` 的 `ensure_schema()`（跟 nodes/edges/timeline_events 同一处声明，engine 打开 db 时自动建表），含索引
+2. 新建 `src-tauri/src/commands/dataflow.rs`，`commands/mod.rs` 加 `pub mod dataflow;`。实现 `dataflow_save`：验证 trace schema → Layer 1 snippet 锚点 → Layer 2 引擎交叉验证 → 计算节点/边的 confidence → INSERT/UPDATE。db 读写用 `SqliteDb::open_aux_connection(<workspace>/.hologram/hologram.db)`（复用 timeline 的 aux connection 模式），Layer 2 直接调 `hologram_engine` 的 dataflow API（同进程直调，非 IPC）
+3. 同模块实现 `dataflow_query`、`dataflow_list`、`dataflow_delete`：按 trace_id/resource 查询、列表、软删除。完成后在 `main.rs` 的 `invoke_handler` 注册这 4 个命令
 
 **前端引擎侧：**
 
@@ -572,8 +589,8 @@ Dataflow Panel ──invoke()──→ dataflow_traces 表 ←──内置工具
 
 ### Phase 2 — 验证 + 维护（目标：trace 不会悄悄变旧）
 
-9. Tauri command `dataflow_verify`：重跑 Layer 1-2 + 重跑关联测试文件（如存在），更新 `verified_at` / `test_status`
-10. Tauri command `dataflow_stale_check`：Layer 3 符号引用完整性检测。对每个 resource 调 `hologram_search` → 对比上次保存的引用集 → 新出现引用者 → status 标 stale
+9. 在 `src-tauri/src/commands/dataflow.rs` 实现 `dataflow_verify`：重跑 Layer 1-2 + 重跑关联测试文件（如存在），更新 `verified_at` / `test_status`。注册到 `main.rs` 的 `invoke_handler`
+10. 同模块实现 `dataflow_stale_check`：Layer 3 符号引用完整性检测。对每个 resource 调 `hologram_search` → 对比上次保存的引用集 → 新出现引用者 → status 标 stale。注册到 `main.rs`
 11. Watcher 联动：engine watcher 检测到 `files_involved` 中的文件变更 → 自动调 `dataflow_stale_check(trace_id)` → 更新状态
 
 ---

@@ -3644,7 +3644,7 @@ interface DfFileResult {
   shared?: DfShared[];
 }
 
-function formatDataflowCard(text: string): string | null {
+export function formatDataflowCard(text: string): string | null {
   let data: { results: DfFileResult[] };
   try { data = JSON.parse(text); } catch { return null; }
   if (!data?.results?.length) return null;

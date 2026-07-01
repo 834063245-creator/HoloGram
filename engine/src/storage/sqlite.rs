@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tracing::info;
 
 use crate::graph::{EdgeKind, Node, NodeKind};
@@ -163,7 +163,25 @@ impl SqliteDb {
                 CREATE TABLE IF NOT EXISTS meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT
-                );",
+                );
+
+                CREATE TABLE IF NOT EXISTS dataflow_traces (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trace_id     TEXT NOT NULL UNIQUE,
+                    resource     TEXT NOT NULL,
+                    description  TEXT DEFAULT '',
+                    language     TEXT DEFAULT '',
+                    files_json   TEXT DEFAULT '[]',
+                    created_at   TEXT NOT NULL,
+                    verified_at  TEXT,
+                    test_file    TEXT DEFAULT '',
+                    test_status  TEXT DEFAULT '',
+                    commit_hash  TEXT DEFAULT '',
+                    status       TEXT DEFAULT 'active',
+                    trace_json   TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_dt_resource ON dataflow_traces(resource);
+                CREATE INDEX IF NOT EXISTS idx_dt_status   ON dataflow_traces(status);",
             )
             .map_err(|e| format!("ensure schema: {}", e))?;
 
@@ -556,6 +574,139 @@ pub fn timeline_query(conn: &Connection, limit: usize) -> Result<Vec<serde_json:
     Ok(events)
 }
 
+// ── dataflow traces ─────────────────────────────────────
+
+/// Save (insert or update by trace_id) a dataflow trace.
+/// `trace` is the full trace JSON object; indexing fields are extracted from it.
+/// ponytail: 提权字段从 trace JSON 解出存为列，列表查询不必 parse trace_json。
+pub fn dataflow_save_trace(conn: &Connection, trace: &serde_json::Value) -> Result<(), String> {
+    let trace_id = trace.get("trace_id").and_then(|v| v.as_str())
+        .ok_or_else(|| "trace_json missing trace_id".to_string())?;
+    let resource = trace.get("resource").and_then(|v| v.as_str())
+        .ok_or_else(|| "trace_json missing resource".to_string())?;
+    let description = trace.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let language = trace.get("language").and_then(|v| v.as_str()).unwrap_or("");
+    let files_json = trace.get("files_involved")
+        .map(|f| serde_json::to_string(f).unwrap_or_else(|_| "[]".into()))
+        .unwrap_or_else(|| "[]".into());
+    let created_at: String = trace.get("created_at").and_then(|v| v.as_str()).map(String::from)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let verified_at = trace.get("verified_at").and_then(|v| v.as_str()).unwrap_or("");
+    let test_file = trace.get("test_file").and_then(|v| v.as_str()).unwrap_or("");
+    let test_status = trace.get("test_status").and_then(|v| v.as_str()).unwrap_or("");
+    let commit_hash = trace.get("commit_hash").and_then(|v| v.as_str()).unwrap_or("");
+    let status = trace.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+    let trace_str = serde_json::to_string(trace)
+        .map_err(|e| format!("serialize trace_json: {}", e))?;
+
+    conn.execute(
+        "INSERT INTO dataflow_traces (trace_id, resource, description, language, files_json,
+            created_at, verified_at, test_file, test_status, commit_hash, status, trace_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+         ON CONFLICT(trace_id) DO UPDATE SET
+            resource=excluded.resource, description=excluded.description,
+            language=excluded.language, files_json=excluded.files_json,
+            verified_at=excluded.verified_at, test_file=excluded.test_file,
+            test_status=excluded.test_status, commit_hash=excluded.commit_hash,
+            status=excluded.status, trace_json=excluded.trace_json",
+        params![trace_id, resource, description, language, files_json,
+            &created_at, verified_at, test_file, test_status, commit_hash, status, trace_str],
+    ).map_err(|e| format!("dataflow insert: {}", e))?;
+    Ok(())
+}
+
+/// Query a single trace by exact trace_id, or the latest version by resource.
+pub fn dataflow_query_trace(
+    conn: &Connection,
+    trace_id: Option<&str>,
+    resource: Option<&str>,
+) -> Result<Option<serde_json::Value>, String> {
+    if let Some(tid) = trace_id {
+        let trace_str: Option<String> = conn.query_row(
+            "SELECT trace_json FROM dataflow_traces WHERE trace_id = ?1",
+            params![tid], |row| row.get(0),
+        ).optional().map_err(|e| format!("dataflow query: {}", e))?;
+        return trace_str
+            .map(|s| serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("parse trace_json: {}", e)))
+            .transpose();
+    }
+    if let Some(res) = resource {
+        let trace_str: Option<String> = conn.query_row(
+            "SELECT trace_json FROM dataflow_traces WHERE resource = ?1
+             ORDER BY id DESC LIMIT 1",
+            params![res], |row| row.get(0),
+        ).optional().map_err(|e| format!("dataflow query: {}", e))?;
+        return trace_str
+            .map(|s| serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("parse trace_json: {}", e)))
+            .transpose();
+    }
+    Err("dataflow_query requires trace_id or resource".into())
+}
+
+/// List trace summaries (no trace_json payload) with optional filters.
+pub fn dataflow_list_traces(
+    conn: &Connection,
+    language: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut sql = String::from(
+        "SELECT id, trace_id, resource, description, language, status, test_status, verified_at
+         FROM dataflow_traces WHERE 1=1");
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(l) = language { sql.push_str(" AND language = ?"); p.push(Box::new(l.to_string())); }
+    if let Some(s) = status { sql.push_str(" AND status = ?"); p.push(Box::new(s.to_string())); }
+    sql.push_str(" ORDER BY id DESC LIMIT ?");
+    p.push(Box::new(limit as i64));
+    let p_refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("dataflow list prepare: {}", e))?;
+    let rows = stmt.query_map(p_refs.as_slice(), |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "trace_id": row.get::<_, String>(1)?,
+            "resource": row.get::<_, String>(2)?,
+            "description": row.get::<_, String>(3).unwrap_or_default(),
+            "language": row.get::<_, String>(4).unwrap_or_default(),
+            "status": row.get::<_, String>(5).unwrap_or_default(),
+            "test_status": row.get::<_, String>(6).unwrap_or_default(),
+            "verified_at": row.get::<_, Option<String>>(7).unwrap_or(None),
+        }))
+    }).map_err(|e| format!("dataflow list: {}", e))?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| format!("dataflow list row: {}", e))?); }
+    Ok(out)
+}
+
+/// Soft-delete (status='deprecated') or hard-delete a trace by trace_id.
+pub fn dataflow_delete_trace(conn: &Connection, trace_id: &str, hard: bool) -> Result<(), String> {
+    if hard {
+        conn.execute("DELETE FROM dataflow_traces WHERE trace_id = ?1", params![trace_id])
+            .map_err(|e| format!("dataflow delete: {}", e))?;
+    } else {
+        conn.execute("UPDATE dataflow_traces SET status = 'deprecated' WHERE trace_id = ?1",
+            params![trace_id]).map_err(|e| format!("dataflow delete: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Update status/verified_at/test_status on a trace (used by verify/stale_check).
+pub fn dataflow_update_meta(
+    conn: &Connection,
+    trace_id: &str,
+    status: &str,
+    verified_at: Option<&str>,
+    test_status: Option<&str>,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE dataflow_traces SET status=?1, verified_at=COALESCE(?2, verified_at),
+            test_status=COALESCE(?3, test_status) WHERE trace_id=?4",
+        params![status, verified_at, test_status, trace_id],
+    ).map_err(|e| format!("dataflow update meta: {}", e))?;
+    Ok(())
+}
+
 /// Parse edge kind from SQLite string.
 /// Returns an error for unknown kinds instead of silently defaulting to Calls.
 fn edge_kind_from_str(s: &str) -> Result<EdgeKind, String> {
@@ -673,6 +824,75 @@ mod tests {
         let reads = loaded.iter().find(|(_, _, k, _, _)| *k == EdgeKind::Reads).unwrap();
         assert_eq!(reads.3, 2);
         assert!(reads.4.is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_dataflow_trace_save_query_list_delete() {
+        let tmp = std::env::temp_dir().join("hologram_test_dataflow_trace");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap();
+        let conn = db.conn();
+
+        let trace = serde_json::json!({
+            "trace_id": "logBuffer_v1",
+            "resource": "logBuffer",
+            "description": "UI 日志缓冲",
+            "language": "typescript",
+            "files_involved": ["src/logger.ts"],
+            "created_at": "2026-07-01T13:13:45Z",
+            "verified_at": "2026-07-01T13:13:45Z",
+            "test_file": "tests/logger.test.ts",
+            "test_status": "4/4 passed",
+            "commit_hash": "abc1234",
+            "status": "active",
+            "nodes": [],
+            "edges": [],
+            "source_snippets": {}
+        });
+        dataflow_save_trace(conn, &trace).unwrap();
+
+        // query by trace_id
+        let q = dataflow_query_trace(conn, Some("logBuffer_v1"), None).unwrap();
+        assert_eq!(q.as_ref().unwrap()["resource"], "logBuffer");
+
+        // query by resource (latest version)
+        let q2 = dataflow_query_trace(conn, None, Some("logBuffer")).unwrap();
+        assert_eq!(q2.as_ref().unwrap()["trace_id"], "logBuffer_v1");
+
+        // list — no trace_json in payload
+        let list = dataflow_list_traces(conn, None, None, 10).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["resource"], "logBuffer");
+        assert!(list[0].get("trace_json").is_none(), "list must not return trace_json");
+
+        // filter by language
+        assert_eq!(dataflow_list_traces(conn, Some("typescript"), None, 10).unwrap().len(), 1);
+        assert_eq!(dataflow_list_traces(conn, Some("go"), None, 10).unwrap().len(), 0);
+
+        // upsert (same trace_id → update, no duplicate)
+        let mut trace2 = trace.clone();
+        trace2["status"] = "stale".into();
+        dataflow_save_trace(conn, &trace2).unwrap();
+        let list2 = dataflow_list_traces(conn, None, None, 10).unwrap();
+        assert_eq!(list2.len(), 1, "upsert must not duplicate");
+        assert_eq!(list2[0]["status"], "stale");
+
+        // update_meta (column-only, used by stale_check)
+        dataflow_update_meta(conn, "logBuffer_v1", "broken", Some("2026-08-01T00:00:00Z"), Some("0/4 passed")).unwrap();
+        let list3 = dataflow_list_traces(conn, None, None, 10).unwrap();
+        assert_eq!(list3[0]["status"], "broken");
+        assert_eq!(list3[0]["test_status"], "0/4 passed");
+
+        // soft delete → deprecated
+        dataflow_delete_trace(conn, "logBuffer_v1", false).unwrap();
+        assert_eq!(dataflow_list_traces(conn, None, None, 10).unwrap()[0]["status"], "deprecated");
+
+        // hard delete → gone
+        dataflow_delete_trace(conn, "logBuffer_v1", true).unwrap();
+        assert_eq!(dataflow_list_traces(conn, None, None, 10).unwrap().len(), 0);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

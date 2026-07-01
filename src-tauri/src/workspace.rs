@@ -27,6 +27,8 @@ use tauri::{AppHandle, Emitter};
 
 use hologram_engine::engine as engine_api;
 use hologram_engine::graph::Graph;
+use hologram_engine::storage::SqliteDb;
+use hologram_engine::storage::sqlite::{dataflow_list_traces, dataflow_query_trace, dataflow_update_meta};
 
 use crate::permissions::PermissionContext;
 
@@ -151,6 +153,9 @@ impl WorkspaceHandle {
                     if let Ok(mut last) = changed_files.lock() {
                         *last = changed.clone();
                     }
+
+                    // Dataflow trace stale check: if any changed file is in a trace's files_involved, mark stale
+                    check_dataflow_traces_stale(&path, &changed);
 
                     // ponytail: compute diff between old and new graph for incremental update
                     let diff_json = compute_watcher_diff(before_graph.as_ref());
@@ -299,4 +304,42 @@ fn compute_watcher_diff(before: Option<&Graph>) -> Option<serde_json::Value> {
         "added_edges": added_edges,
         "removed_edges": removed_edges,
     }))
+}
+
+/// Check if any changed file belongs to a trace's files_involved → mark stale.
+/// ponytail: 开 aux connection 直接读，不阻塞 graph store。失败静默——watcher 不应因 trace 检查挂掉。
+fn check_dataflow_traces_stale(project_root: &str, changed: &[String]) {
+    let db_path = Path::new(project_root).join(".hologram").join("hologram.db");
+    let conn = match SqliteDb::open_aux_connection(&db_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let traces = match dataflow_list_traces(&conn, None, None, 1000) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let changed_norm: Vec<String> = changed.iter()
+        .map(|p| p.replace('\\', "/")).collect();
+    for t in &traces {
+        let status = t.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "active" && status != "stale" { continue; }
+        let tid = match t.get("trace_id").and_then(|v| v.as_str()) { Some(s) => s, None => continue };
+        // list summary has no files_json — query full trace
+        let trace = match dataflow_query_trace(&conn, Some(tid), None) {
+            Ok(Some(v)) => v, _ => continue,
+        };
+        let files = match trace.get("files_involved").and_then(|v| v.as_array()) {
+            Some(f) => f, None => continue,
+        };
+        let files_norm: Vec<String> = files.iter()
+            .filter_map(|v| v.as_str()).map(|p| p.replace('\\', "/")).collect();
+        let hit = files_norm.iter().any(|f| {
+            changed_norm.iter().any(|c| {
+                f.ends_with(c) || c.ends_with(f) || f == c
+            })
+        });
+        if hit {
+            let _ = dataflow_update_meta(&conn, tid, "stale", None, None);
+        }
+    }
 }

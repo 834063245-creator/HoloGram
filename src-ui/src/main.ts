@@ -13,6 +13,7 @@ import { FileViewer } from './ui/file-viewer';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
 import { HotspotsPanel } from './ui/hotspots';
+import { DataflowPanel } from './ui/dataflow-panel';
 import { SettingsPanel } from './ui/settings-panel';
 import { bus } from './ui/events';
 import { shell } from './ui/app-shell';
@@ -111,6 +112,7 @@ let chatPanel: ChatPanel;
 let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
 let hotspotsPanel: HotspotsPanel;
+let dataflowPanel: DataflowPanel;
 
 // ── Folder picker ──
 
@@ -355,8 +357,11 @@ async function init(): Promise<void> {
   timelinePanel = new TimelinePanel(document.body);
 
   // Hotspots
-  hotspotsPanel = new HotspotsPanel(document.body);
-  hotspotsPanel.setGraph(starGraph);
+   hotspotsPanel = new HotspotsPanel(document.body);
+   hotspotsPanel.setGraph(starGraph);
+
+   // Dataflow panel (floating window)
+   dataflowPanel = new DataflowPanel(document.body);
 
   // ── AppShell wiring — replaces bus commands with explicit dispatch ──
   // Register all panels so shell knows who's open
@@ -365,6 +370,11 @@ async function init(): Promise<void> {
   shell.register({ id: 'timeline', isOpen: () => timelinePanel.isOpen() });
   shell.register({ id: 'hotspots', isOpen: () => hotspotsPanel.isOpen() });
   shell.register({ id: 'constraints', isOpen: () => ConstraintsPanel.get().isOpen() });
+  shell.register({ id: 'dataflow', isOpen: () => dataflowPanel.isOpen() });
+  dataflowPanel.setNewTraceHandler(async (r, d, s, sig) => {
+    if (!workspace) throw new Error('未打开工作区');
+    await workspace.spawnDataflowTrace(r, d, s, sig);
+  });
 
   // Wire navigation / highlight / agent-query commands
   shell.wire({
@@ -456,6 +466,11 @@ async function init(): Promise<void> {
     checkPanel.toggle();
     if (checkPanel.isOpen() && workspace?.path) runCheck();
     updateTabs();
+  });
+
+  // Dataflow panel (floating, independent of dock tabs)
+  document.getElementById('btn-dataflow')?.addEventListener('click', () => {
+    dataflowPanel.toggle();
   });
 
   // Diff
