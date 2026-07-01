@@ -15,6 +15,7 @@ pub mod dynamic_dispatch;
 pub mod policy_check;
 
 pub mod dataflow_synthesis;
+pub mod dataflow_engine;
 
 pub use coupling::compute_coupling;
 pub use fragility::fragile_nodes;
