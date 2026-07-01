@@ -2023,6 +2023,14 @@ def order_view():
         assert!(shared_vars.contains(&"db"), "db.py should have shared 'db' var, got shared={:?}", db_df.shared);
         assert!(shared_vars.contains(&"host"), "db.py should have shared 'host' var, got shared={:?}", db_df.shared);
 
+        // helper.js: async + cache patterns
+        let js_results = crate::analysis::dataflow_engine::query_dataflow_files(&[fixture.join("helper.js")]);
+        let js_df = js_results[0].result.as_ref().expect("helper.js dataflow");
+        let loader = js_df.scopes.iter().find(|s| s.name == "loadResource").expect("loadResource");
+        assert!(loader.writes.contains(&"data".into()) || loader.writes.contains(&"cached".into()),
+            "loadResource writes something, got writes={:?}", loader.writes);
+        assert!(!loader.triggers.is_empty(), "loadResource has await trigger");
+
         // ── Persistence: save + read back ──
         engine.save().expect("save to SQLite");
         let nc2 = engine.read(|idx| idx.node_count()).unwrap();
