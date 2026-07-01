@@ -1946,9 +1946,13 @@ pub(crate) fn agent_isolation_create(
     let original_head = isolation.original_head.clone();
 
     // Set isolation on the permission context
-    if let Ok(guard) = state.lock() {
-        if let Some(ref handle) = *guard {
-            handle.permission_ctx.set_isolation(isolation);
+    {
+        let id = agent_id.clone();
+        if let Ok(guard) = state.lock() {
+            if let Some(ref handle) = *guard {
+                handle.permission_ctx.set_isolation(&id, isolation);
+                crate::permissions::set_active_agent_id(&id);
+            }
         }
     }
 
@@ -1964,8 +1968,10 @@ pub(crate) fn agent_isolation_create(
 /// Show the diff of worktree changes (before user decides merge/discard).
 #[tauri::command]
 pub(crate) fn agent_isolation_diff(
+    agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
+    crate::permissions::set_active_agent_id(&agent_id);
     let ctx = crate::utils::get_ctx(&state)?;
     let isolation = ctx
         .get_isolation()
@@ -1994,46 +2000,73 @@ pub(crate) fn agent_isolation_diff(
 /// Merge worktree changes back to main repo and clean up.
 #[tauri::command]
 pub(crate) fn agent_isolation_merge(
+    agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
+    crate::permissions::set_active_agent_id(&agent_id);
     let ctx = crate::utils::get_ctx(&state)?;
     let isolation = ctx
         .get_isolation()
         .ok_or("没有活跃的隔离环境")?;
 
     let result = isolation.merge_to_main()?;
-    ctx.clear_isolation();
+    ctx.clear_isolation(&agent_id);
+    crate::permissions::clear_active_agent_id();
     Ok(result)
 }
 
 /// Discard worktree changes and clean up.
 #[tauri::command]
 pub(crate) fn agent_isolation_discard(
+    agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
+    crate::permissions::set_active_agent_id(&agent_id);
     let ctx = crate::utils::get_ctx(&state)?;
     let isolation = ctx
         .get_isolation()
         .ok_or("没有活跃的隔离环境")?;
 
     isolation.discard()?;
-    ctx.clear_isolation();
+    ctx.clear_isolation(&agent_id);
+    crate::permissions::clear_active_agent_id();
     Ok("工作树已丢弃".into())
 }
 
-/// Get current isolation status.
+/// Get current isolation status (all active isolations).
 #[tauri::command]
 pub(crate) fn agent_isolation_status(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    let iso = ctx.get_isolation();
-    match iso {
-        Some(i) if i.kind == IsolationKind::Worktree => Ok(serde_json::json!({
-            "isolation": "worktree",
-            "worktree_path": i.worktree_path.map(|p| p.to_string_lossy().to_string()),
+    let entries = ctx.list_isolations();
+    let isolations: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(id, iso)| {
+            serde_json::json!({
+                "agent_id": id,
+                "kind": if iso.kind == IsolationKind::Worktree { "worktree" } else { "none" },
+                "worktree_path": iso.worktree_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            })
         })
-        .to_string()),
-        _ => Ok(serde_json::json!({"isolation": "none"}).to_string()),
+        .collect();
+    Ok(serde_json::json!({
+        "isolations": isolations,
+        "count": isolations.len(),
+    }).to_string())
+}
+
+/// Prune stale worktrees older than `ttl_minutes` (default 30).
+/// Called on workspace activation to clean up leaked worktrees.
+#[tauri::command]
+pub(crate) fn agent_isolation_prune(
+    state: tauri::State<'_, crate::WorkspaceState>,
+) -> Result<String, String> {
+    let project_path = crate::utils::workspace_path(&state)?;
+    let main_path = std::path::PathBuf::from(&project_path);
+    match crate::agent_isolation::prune_stale_worktrees(&main_path, 30) {
+        Ok(0) => Ok(serde_json::json!({"pruned": 0}).to_string()),
+        Ok(n) => Ok(serde_json::json!({"pruned": n}).to_string()),
+        Err(e) => Err(e),
     }
 }

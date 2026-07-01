@@ -11,6 +11,7 @@ pub mod rule;
 pub mod safety;
 pub mod web;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 
@@ -19,6 +20,25 @@ use tokio::sync::oneshot;
 use crate::agent_isolation::AgentIsolation;
 use crate::audit::AuditLogger;
 use crate::sandbox::{Sandbox, SandboxResult};
+
+// ponytail: request-local agent_id so forward_map_path / reverse_map_path
+// know which agent's isolation to use without thread-local plumbing through
+// every utility function (require_read, require_write, etc.).
+std::thread_local! {
+    static ACTIVE_AGENT_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_active_agent_id(id: &str) {
+    ACTIVE_AGENT_ID.with(|cell| *cell.borrow_mut() = Some(id.to_string()));
+}
+
+pub fn clear_active_agent_id() {
+    ACTIVE_AGENT_ID.with(|cell| *cell.borrow_mut() = None);
+}
+
+pub fn active_agent_id() -> Option<String> {
+    ACTIVE_AGENT_ID.with(|cell| cell.borrow().clone())
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Tool trait — 每个 Tauri command 对应一个 Tool 实现 (spec §4.2)
@@ -81,8 +101,8 @@ pub struct PermissionContext {
     pub sandbox: Sandbox,
     rules: RwLock<rule::PermissionRules>,
     audit_logger: AuditLogger,
-    /// Agent isolation state — None = direct repo access, Some(Worktree) = sandboxed.
-    isolation: RwLock<Option<AgentIsolation>>,
+    /// Agent isolation state — keyed by agent_id for multi-agent parallel isolation.
+    isolation: RwLock<HashMap<String, AgentIsolation>>,
 }
 
 impl PermissionContext {
@@ -97,14 +117,14 @@ impl PermissionContext {
 
         let sandbox = Sandbox::new(project_root);
         let audit_logger = AuditLogger::new(project_root);
-        let isolation = AgentIsolation::none(project_root);
+        let isolation = HashMap::new();
 
         Self {
             project_root: project_root.to_path_buf(),
             sandbox,
             rules: RwLock::new(rules),
             audit_logger,
-            isolation: RwLock::new(Some(isolation)),
+            isolation: RwLock::new(isolation),
         }
     }
 
@@ -151,54 +171,72 @@ impl PermissionContext {
     // ═══════════════════════════════════════════════════════════════
 
     /// Set the active agent isolation (e.g. when an agent starts in worktree mode).
-    pub fn set_isolation(&self, isolation: AgentIsolation) {
+    pub fn set_isolation(&self, agent_id: &str, isolation: AgentIsolation) {
         if let Ok(mut iso) = self.isolation.write() {
-            *iso = Some(isolation);
+            iso.insert(agent_id.to_string(), isolation);
         }
     }
 
-    /// Clear isolation back to None (agent finished, worktree removed).
-    pub fn clear_isolation(&self) {
+    /// Clear isolation for a specific agent (agent finished, worktree removed).
+    pub fn clear_isolation(&self, agent_id: &str) {
         if let Ok(mut iso) = self.isolation.write() {
-            *iso = Some(AgentIsolation::none(&self.project_root));
+            iso.remove(agent_id);
         }
     }
 
-    /// Get the current isolation kind.
+    /// Get the current isolation kind for the active agent.
     #[allow(dead_code)] // ponytail: public API for future mode checks
     pub fn isolation_kind(&self) -> crate::agent_isolation::IsolationKind {
-        self.isolation
-            .read()
-            .ok()
-            .and_then(|iso| iso.as_ref().map(|i| i.kind))
+        active_agent_id()
+            .and_then(|id| {
+                self.isolation
+                    .read()
+                    .ok()
+                    .and_then(|iso| iso.get(&id).map(|i| i.kind))
+            })
             .unwrap_or(crate::agent_isolation::IsolationKind::None)
     }
 
-    /// Get a clone of the current isolation state.
+    /// Get a clone of the current isolation state for the active agent.
     pub fn get_isolation(&self) -> Option<AgentIsolation> {
+        active_agent_id()
+            .and_then(|id| {
+                self.isolation
+                    .read()
+                    .ok()
+                    .and_then(|iso| iso.get(&id).cloned())
+            })
+    }
+
+    /// Get all active isolation entries (for status listing).
+    pub fn list_isolations(&self) -> Vec<(String, AgentIsolation)> {
         self.isolation
             .read()
-            .ok()
-            .and_then(|iso| iso.clone())
+            .map(|iso| iso.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default()
     }
 
     /// Reverse-map a path for permission checking: worktree physical path → main repo logical path.
-    /// In None isolation, returns the path unchanged.
+    /// Uses the active agent's isolation. Returns path unchanged if no active isolation.
     pub fn reverse_map_path(&self, path: &Path) -> PathBuf {
         if let Ok(iso) = self.isolation.read() {
-            if let Some(ref isolation) = *iso {
-                return isolation.reverse_map(path);
+            if let Some(id) = active_agent_id() {
+                if let Some(isolation) = iso.get(&id) {
+                    return isolation.reverse_map(path);
+                }
             }
         }
         path.to_path_buf()
     }
 
     /// Forward-map a path for execution: main repo logical path → worktree physical path.
-    /// In None isolation, returns the path unchanged.
+    /// Uses the active agent's isolation. Returns path unchanged if no active isolation.
     pub fn forward_map_path(&self, path: &Path) -> PathBuf {
         if let Ok(iso) = self.isolation.read() {
-            if let Some(ref isolation) = *iso {
-                return isolation.forward_map(path);
+            if let Some(id) = active_agent_id() {
+                if let Some(isolation) = iso.get(&id) {
+                    return isolation.forward_map(path);
+                }
             }
         }
         path.to_path_buf()

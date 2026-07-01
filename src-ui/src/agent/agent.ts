@@ -859,6 +859,20 @@ export class Agent {
       return { text: '', err: 'Fork children cannot spawn further forks' };
     }
 
+    // Auto-isolation: create a git worktree for fork sub-agents so file mutations
+    // are sandboxed and can be reviewed (diff) before merge. Falls back to direct
+    // mode if isolation tool is unavailable or creation fails.
+    let isolationId: string | null = null;
+    if (mode === 'fork' && !!this.tools.get('agent_isolation_create')) {
+      isolationId = `agent-${Date.now()}`;
+      try {
+        const createT = this.tools.get('agent_isolation_create');
+        if (createT) await createT.execute({ agent_id: isolationId });
+      } catch {
+        isolationId = null;
+      }
+    }
+
     // Clone all tools from parent — sub-agent has full agency
     const subTools = new ToolRegistry();
     for (const t of this.tools.all()) {
@@ -934,6 +948,20 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       return { text: lastAssistant?.content || '(子 Agent 没有生成回复)' };
     } catch (e: any) {
       return { text: '', err: e.message || '子 Agent 执行失败' };
+    } finally {
+      // Auto-diff: after fork agent finishes (success or error), check for changes
+      if (isolationId && this.tools.get('agent_isolation_diff')) {
+        try {
+          const diffT = this.tools.get('agent_isolation_diff');
+          if (diffT) {
+            const diffResult = await diffT.execute({ agent_id: isolationId });
+            bus.emit('agent:sub-isolation-diff', {
+              agentId: isolationId,
+              diff: diffResult,
+            });
+          }
+        } catch { /* best effort */ }
+      }
     }
   }
 }

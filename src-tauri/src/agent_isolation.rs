@@ -293,6 +293,33 @@ fn normalize(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// Prune worktrees older than `ttl_minutes` without active agent.
+/// Returns the number of pruned worktrees.
+pub fn prune_stale_worktrees(main_repo_path: &Path, ttl_minutes: u64) -> Result<usize, String> {
+    let worktrees_dir = main_repo_path.join(".hologram").join("worktrees");
+    if !worktrees_dir.exists() {
+        return Ok(0);
+    }
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(ttl_minutes * 60);
+    let mut pruned = 0;
+    for entry in std::fs::read_dir(&worktrees_dir)
+        .map_err(|e| format!("读取 worktrees 目录失败: {e}"))?
+    {
+        let entry = entry.map_err(|e| format!("目录遍历失败: {e}"))?;
+        let meta = entry.metadata().ok();
+        if let Some(meta) = meta {
+            if let Ok(modified) = meta.modified() {
+                if modified < cutoff {
+                    remove_worktree(main_repo_path, &entry.path()).ok();
+                    pruned += 1;
+                }
+            }
+        }
+    }
+    Ok(pruned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

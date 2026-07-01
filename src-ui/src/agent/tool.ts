@@ -1507,9 +1507,9 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
       parameters: () => ({
         type: 'object',
         properties: {
-          label: { type: 'string', description: 'Label for this isolation workspace' },
+          agent_id: { type: 'string', description: 'Identifier for this isolation workspace' },
         },
-        required: ['label'],
+        required: ['agent_id'],
       }),
       readOnly: () => false,
       execute: (args) => exec('agent_isolation_create', args),
@@ -1520,9 +1520,9 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
       parameters: () => ({
         type: 'object',
         properties: {
-          label: { type: 'string', description: 'Isolation workspace label' },
+          agent_id: { type: 'string', description: 'Isolation workspace to diff' },
         },
-        required: ['label'],
+        required: ['agent_id'],
       }),
       readOnly: () => true,
       execute: (args) => exec('agent_isolation_diff', args),
@@ -1533,9 +1533,9 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
       parameters: () => ({
         type: 'object',
         properties: {
-          label: { type: 'string', description: 'Isolation workspace label to merge' },
+          agent_id: { type: 'string', description: 'Isolation workspace to merge' },
         },
-        required: ['label'],
+        required: ['agent_id'],
       }),
       readOnly: () => false,
       execute: (args) => exec('agent_isolation_merge', args),
@@ -1546,9 +1546,9 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
       parameters: () => ({
         type: 'object',
         properties: {
-          label: { type: 'string', description: 'Isolation workspace label to discard' },
+          agent_id: { type: 'string', description: 'Isolation workspace to discard' },
         },
-        required: ['label'],
+        required: ['agent_id'],
       }),
       readOnly: () => false,
       execute: (args) => exec('agent_isolation_discard', args),
