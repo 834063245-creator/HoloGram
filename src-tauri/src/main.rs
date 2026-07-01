@@ -2397,18 +2397,18 @@ async fn web_search(
     // Permission check — use WebFetchTool for web_search
     {
         let ctx = get_ctx(&state)?;
-        let tool = tools::WebFetchTool { url: format!("https://www.bing.com/search?q={}&setmkt=en-US", &query) };
+        let tool = tools::WebFetchTool { url: format!("https://www.sogou.com/web?query={}", &query) };
         check_permission(&tool, &ctx, &app).await?;
     }
 
     let q = urlencoding(&query);
-    let url = format!("https://www.bing.com/search?q={}&setmkt=en-US", q);
+    let url = format!("https://www.sogou.com/web?query={}", q);
     let resp = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(5))
         .timeout_read(std::time::Duration::from_secs(10))
         .build()
         .get(&url)
-        .set("User-Agent", "HoloGram/1.0")
+        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .call()
         .map_err(|e| format!("web_search: request failed: {}", e))?;
@@ -2418,27 +2418,38 @@ async fn web_search(
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
-    // Bing results are in <li class="b_algo"> blocks.
-    // Each block contains: <h2><a href="URL">TITLE</a></h2> + <p>SNIPPET</p>
-    let algo_re = regex::Regex::new(
-        r#"<li class="b_algo"[^>]*>([\s\S]*?)</li>"#
+    // Sogou results are in <div class="rb"> or <div class="vrwrap"> blocks.
+    // Each block contains: <h3><a href="URL">TITLE</a></h3> + <p>/<div> snippet
+    let result_block_re = regex::Regex::new(
+        r#"<div class="(?:rb|vrwrap)"[^>]*>([\s\S]*?)</div>"#
     ).unwrap();
     let title_re = regex::Regex::new(
-        r#"<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h2>"#
+        r#"<h3[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h3>"#
     ).unwrap();
+    // Sogou snippets: <p class="star-wiki">, <div class="ft">, <p class="str_info">, or generic <p>
     let snippet_re = regex::Regex::new(
+        r#"<(?:p|div)[^>]*class="(?:star-wiki|ft|str_info)"[^>]*>([\s\S]*?)</(?:p|div)>"#
+    ).unwrap();
+    // ponytail: fallback snippet extractor if class-based fails — grab first long-enough <p>
+    let generic_p_re = regex::Regex::new(
         r#"<p[^>]*>([\s\S]*?)</p>"#
     ).unwrap();
     let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
 
-    for cap in algo_re.captures_iter(&html) {
+    for cap in result_block_re.captures_iter(&html) {
         let block = &cap[1];
         let title_url = title_re.captures(block).map(|c| {
             (c[1].to_string(), tag_re.replace_all(&c[2], "").trim().to_string())
         });
+        // Try class-specific snippets first, fall back to generic <p>
         let snippet = snippet_re.captures_iter(block)
             .map(|c| tag_re.replace_all(&c[1], "").trim().to_string())
             .find(|s| s.len() > 15)
+            .or_else(|| {
+                generic_p_re.captures_iter(block)
+                    .map(|c| tag_re.replace_all(&c[1], "").trim().to_string())
+                    .find(|s| s.len() > 15)
+            })
             .unwrap_or_default();
 
         if let Some((url, title)) = title_url {
@@ -2453,7 +2464,7 @@ async fn web_search(
         }
     }
 
-    // Fallback: if b_algo parsing yielded nothing, try generic link extraction
+    // Fallback: if result-block parsing yielded nothing, try generic link extraction
     if results.is_empty() {
         let fallback_re = regex::Regex::new(
             r#"<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>"#

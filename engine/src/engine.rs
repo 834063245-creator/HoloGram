@@ -176,6 +176,11 @@ pub struct Engine {
     /// Serializes full analysis runs. Only one analyze() at a time.
     analyze_lock: Mutex<()>,
 
+    /// Cancel token for the currently-running analysis.
+    /// Set to `true` when a new analyze() call wants to preempt the old one.
+    /// The running pipeline checks this between stages and aborts early.
+    cancel_token: RwLock<Option<Arc<AtomicBool>>>,
+
     /// Current lifecycle state.
     state: RwLock<EngineState>,
 
@@ -195,6 +200,7 @@ impl Engine {
             timeline_conn: Mutex::new(None),
             project_root: Mutex::new(PathBuf::new()),
             analyze_lock: Mutex::new(()),
+            cancel_token: RwLock::new(None),
             state: RwLock::new(EngineState::Uninitialized),
             watcher_running: Arc::new(AtomicBool::new(false)),
             watcher_handle: Mutex::new(None),
@@ -356,11 +362,24 @@ impl Engine {
     /// detect_communities → store in GraphStore + SQLite →
     /// sync CACHED_GRAPH (temporary backward compat).
     pub fn analyze(&self, project_root: &Path) -> Result<AnalyzeResult, String> {
-        // Serialize analysis — only one at a time
+        // Cancel any currently-running analysis so it aborts at the next
+        // stage boundary, releasing the lock quickly instead of running to
+        // completion. This is what makes the "re-analyze" button responsive:
+        // the old run exits early, the new one starts immediately.
+        if let Some(token) = self.cancel_token.read().as_ref() {
+            token.store(true, Ordering::SeqCst);
+        }
+
+        // Block until the current analysis releases the lock (cancelled →
+        // aborts at stage boundary within seconds, not minutes).
         let _lock = self
             .analyze_lock
             .lock()
             .map_err(|e| format!("Analyze lock poisoned: {}", e))?;
+
+        // Old analysis is done — clear the stale cancel token and create ours.
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self.cancel_token.write() = Some(cancel.clone());
 
         // Abort stale analyzes queued before a workspace switch.
         if self.project_root() != project_root {
@@ -394,14 +413,17 @@ impl Engine {
         // Without this, a single stack overflow or unwrap failure leaves the
         // engine permanently "analyzing" and the analyze_lock poisoned.
         let analyze_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_pipeline(project_root, started_at, started_at_ms)
+            self.run_pipeline(project_root, started_at, started_at_ms, &cancel)
         }));
+
+        // Clean up cancel token regardless of outcome
+        *self.cancel_token.write() = None;
 
         match analyze_result {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(e)) => {
                 *self.state.write() = EngineState::Error(e.clone());
-                return Err(e);
+                Err(e)
             }
             Err(panic_payload) => {
                 let msg = panic_payload
@@ -410,7 +432,7 @@ impl Engine {
                     .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "unknown panic".to_string());
                 *self.state.write() = EngineState::Error(format!("分析过程崩溃: {msg}"));
-                return Err(format!("分析过程崩溃: {msg}"));
+                Err(format!("分析过程崩溃: {msg}"))
             }
         }
     }
@@ -422,6 +444,7 @@ impl Engine {
         project_root: &Path,
         started_at: std::time::Instant,
         started_at_ms: u64,
+        cancel: &AtomicBool,
     ) -> Result<AnalyzeResult, String> {
         let set_progress = |phase: &str, current: usize, total: usize, file: &str| {
             *self.state.write() = EngineState::Analyzing {
@@ -453,6 +476,9 @@ impl Engine {
                 result.files_parsed, result.files_discovered, failed_note,
                 result.graph.node_count(), result.graph.edge_count()),
         });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
         let parse_cache = std::mem::take(&mut result.parse_cache);
         let discovered_files = std::mem::take(&mut result.discovered_files);
         set_progress("解析完成", result.files_parsed, result.files_discovered,
@@ -498,6 +524,9 @@ impl Engine {
         info!(edges = lsp_resolved, "[engine] LSP type-resolved call edges");
         eprintln!("[engine] stage: LSP done in {:.1}s ({} resolved)",
             stage_start.elapsed().as_secs_f64(), lsp_resolved);
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
 
         // 2. Cross-file resolution
         set_progress("跨文件解析", 0, 0, "");
@@ -511,6 +540,9 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges resolved", resolved),
         });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
 
         // 3. Coupling analysis
         set_progress("耦合分析", 0, 0, "");
@@ -523,6 +555,9 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: String::new(),
         });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
 
         // 4. Framework route detection
         set_progress("框架路由检测", 0, 0, "");
@@ -536,6 +571,9 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} routes", routes_found),
         });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
 
         // 5. Dynamic dispatch synthesis
         set_progress("动态调度合成", 0, 0, "");
@@ -549,6 +587,9 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", syn_edges),
         });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
 
         // 6. Dataflow — now on-demand via query_file_dataflow().
         // Pipeline no longer precomputes dataflow edges at graph build time.
@@ -573,6 +614,9 @@ impl Engine {
             elapsed_secs: leiden_elapsed,
             detail: format!("{} communities, {} super", community_count, hc_count),
         });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
         for (comm_idx, comm) in communities.iter().enumerate() {
             for node_id in comm {
                 if let Some(node) = result.graph.nodes.get_mut(node_id) {
@@ -2035,5 +2079,150 @@ def order_view():
         engine.save().expect("save to SQLite");
         let nc2 = engine.read(|idx| idx.node_count()).unwrap();
         assert_eq!(nc2, nc, "node count after save must match");
+    }
+
+    // ── Cancel token tests ──────────────────────────────────────────────
+
+    /// Cancel flag set mid-pipeline → analysis aborts with cancel error.
+    /// Proves that re-analyze doesn't block waiting for a running analysis
+    /// to complete — the old one is cancelled at the next stage boundary.
+    #[test]
+    fn test_cancel_token_stops_pipeline() {
+        let tmp = std::env::temp_dir().join("hologram_test_cancel_stop");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // ponytail: 300 files so core-parse takes 100-300ms — enough for
+        // the cancel signal to arrive before the pipeline finishes. 20 files
+        // parsed in 10ms which was too fast.
+        for i in 0..300 {
+            std::fs::write(
+                tmp.join(format!("mod{}.py", i)),
+                format!("def func{0}():\n    return {0}\n", i),
+            )
+            .unwrap();
+        }
+
+        let engine = std::sync::Arc::new(Engine::new());
+        {
+            let ptr = std::sync::Arc::as_ptr(&engine) as *mut Engine;
+            unsafe { &mut *ptr }.init(&tmp).unwrap();
+        }
+
+        let e = engine.clone();
+        let t = tmp.clone();
+        let handle = std::thread::spawn(move || e.analyze(&t));
+
+        // Wait for analysis to enter its first stage, then cancel.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if let Some(token) = engine.cancel_token.read().as_ref() {
+            token.store(true, Ordering::SeqCst);
+        }
+
+        let result = handle.join().unwrap();
+        assert!(
+            result.is_err(),
+            "analysis must be cancelled: expected Err, got {:?}",
+            result.ok()
+        );
+        assert!(
+            result.unwrap_err().contains("已被新的重分析请求取消"),
+            "error must mention cancellation"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// After analysis completes (success or error), cancel_token must be
+    /// None — proves cleanup doesn't leak a stale token that interferes
+    /// with the next analysis.
+    #[test]
+    fn test_cancel_token_cleaned_up_after_analysis() {
+        let tmp = std::env::temp_dir().join("hologram_test_cancel_cleanup");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.py"), "def f(): pass\n").unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+
+        // 1. Successful analysis: token must be None
+        let result = engine.analyze(&tmp);
+        assert!(result.is_ok(), "analyze failed: {:?}", result.err());
+        assert!(
+            engine.cancel_token.read().is_none(),
+            "cancel_token must be None after successful analysis"
+        );
+
+        // 2. Lock is healthy — can analyze again
+        let result2 = engine.analyze(&tmp);
+        assert!(result2.is_ok(), "second analyze failed: {:?}", result2.err());
+        assert!(
+            engine.cancel_token.read().is_none(),
+            "cancel_token must be None after second analysis"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Calling analyze() while another is running cancels the first and
+    /// runs to completion. This is the re-analyze button's contract:
+    /// "start fresh, now, don't queue behind the old run."
+    #[test]
+    fn test_reanalyze_cancels_running_analysis() {
+        let tmp = std::env::temp_dir().join("hologram_test_rac_cancel");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Enough files to ensure the first analysis is still running
+        // when the second call arrives
+        for i in 0..30 {
+            std::fs::write(
+                tmp.join(format!("lib{}.py", i)),
+                format!("def fn{0}():\n    return {0}\nclass C{0}:\n    pass\n", i),
+            )
+            .unwrap();
+        }
+
+        let engine = std::sync::Arc::new(Engine::new());
+        {
+            let ptr = std::sync::Arc::as_ptr(&engine) as *mut Engine;
+            unsafe { &mut *ptr }.init(&tmp).unwrap();
+        }
+
+        // Start first analysis
+        let e1 = engine.clone();
+        let t1 = tmp.clone();
+        let handle = std::thread::spawn(move || e1.analyze(&t1));
+
+        // Brief sleep so first analysis is past init and into pipeline
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Second analysis — this cancels the first via the token
+        let result2 = engine.analyze(&tmp);
+        assert!(result2.is_ok(), "second analyze must succeed: {:?}", result2.err());
+        assert!(
+            matches!(engine.state(), EngineState::Ready { .. }),
+            "state must be Ready after second analysis"
+        );
+
+        // First analysis should have been cancelled (or completed if it was
+        // fast enough — either is acceptable, it's not stuck)
+        let result1 = handle.join().unwrap();
+        if let Err(ref e) = result1 {
+            assert!(
+                e.contains("已被取消") || e.contains("已被新的重分析"),
+                "if first analysis failed, must be from cancellation: {}",
+                e
+            );
+        }
+        // If result1 is Ok, it means the first analysis finished before
+        // cancellation took effect — also fine (project was small enough).
+
+        // Verify data is accessible after all this
+        let nc = engine.node_count().unwrap();
+        assert!(nc > 0, "must have nodes after re-analysis");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
