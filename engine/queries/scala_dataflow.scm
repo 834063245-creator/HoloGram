@@ -12,7 +12,6 @@
 
 ;; Scope boundaries
 (function_definition) @scope_fn
-(method_definition) @scope_fn
 (lambda_expression) @scope_fn
 
 ;; Sequences
