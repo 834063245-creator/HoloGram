@@ -996,9 +996,9 @@ def pipeline():
 
         // Parse error — garbage Python
         std::fs::write(tmp.join("bad.py"), "def foo(:").unwrap();
-        let results = super::query_dataflow_files(&[tmp.join("bad.py")]);
-        // tree-sitter is error-tolerant, so this actually parses. But a truly
-        // empty or binary file should fail gracefully.
+        let _results = super::query_dataflow_files(&[tmp.join("bad.py")]);
+        // ponytail: tree-sitter is error-tolerant, so this parses. Truly
+        // empty or binary file should work gracefully instead.
         std::fs::write(tmp.join("empty.py"), "").unwrap();
         let results = super::query_dataflow_files(&[tmp.join("empty.py")]);
         assert!(results[0].result.is_ok()); // empty file = valid parse, zero scopes
