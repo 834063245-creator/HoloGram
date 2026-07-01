@@ -4925,16 +4925,12 @@ export class StarGraph {
     this.legendEl.innerHTML =
       `<div class="legend-section">
         <div class="legend-title">${t('legend.node')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="symbol" title="${t('legend.symbol.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x6ab0ff)};color:${hexToCSS(0x6ab0ff)}"></span> ${t('legend.symbol')}</div>
         <div class="legend-row legend-node-row" data-node-filter="function" title="${t('legend.function.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x4ad8c8)};color:${hexToCSS(0x4ad8c8)}"></span> ${t('legend.function')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="method" title="${t('legend.method.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x4ad8c8)};color:${hexToCSS(0x4ad8c8)}"></span> ${t('legend.method')}</div>
         <div class="legend-row legend-node-row" data-node-filter="class" title="${t('legend.class.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x7fd84a)};color:${hexToCSS(0x7fd84a)}"></span> ${t('legend.class')}</div>
         <div class="legend-row legend-node-row" data-node-filter="module" title="${t('legend.module.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xd8d84a)};color:${hexToCSS(0xd8d84a)}"></span> ${t('legend.module')}</div>
         <div class="legend-row legend-node-row" data-node-filter="interface" title="${t('legend.interface.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xf0a850)};color:${hexToCSS(0xf0a850)}"></span> ${t('legend.interface')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="variable" title="${t('legend.variable.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xf07070)};color:${hexToCSS(0xf07070)}"></span> ${t('legend.variable')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="constant" title="${t('legend.constant.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xd850b0)};color:${hexToCSS(0xd850b0)}"></span> ${t('legend.constant')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="medium" title="${t('legend.medium.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> ${t('legend.medium')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="temporal" title="${t('legend.temporal.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xc098ff)};color:${hexToCSS(0xc098ff)}"></span> ${t('legend.temporal')}</div>
+        <div class="legend-row legend-node-row" data-node-filter="file" title="${t('legend.file.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> ${t('legend.file')}</div>
+        <div class="legend-row legend-node-row" data-node-filter="symbol" title="${t('legend.symbol.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x6ab0ff)};color:${hexToCSS(0x6ab0ff)}"></span> ${t('legend.symbol')}</div>
       </div>
       <div class="legend-section">
         <div class="legend-title">${t('legend.edge')}</div>
@@ -4942,12 +4938,6 @@ export class StarGraph {
         <div class="legend-row legend-edge-row" data-edge-type="imports" title="${t('legend.imports.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x4adfdf)}"></span> ${t('legend.imports')}</div>
         <div class="legend-row legend-edge-row" data-edge-type="defines" title="${t('legend.defines.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x4adf8a)}"></span> ${t('legend.defines')}</div>
         <div class="legend-row legend-edge-row" data-edge-type="inherits" title="${t('legend.inherits.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff66dd)}"></span> ${t('legend.inherits')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="reads" title="${t('legend.dataRead.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x66dd66)}"></span> ${t('legend.dataRead')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="writes" title="${t('legend.dataWrite.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff5566)}"></span> ${t('legend.dataWrite')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="shares" title="${t('legend.shares.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xffaa44)}"></span> ${t('legend.shares')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="triggers" title="${t('legend.triggers.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff8833)}"></span> ${t('legend.triggers')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="awaits" title="${t('legend.awaits.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xc068ff)}"></span> ${t('legend.awaits')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="sequences" title="${t('legend.sequences.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x8866ff)}"></span> ${t('legend.sequences')}</div>
       </div>`;
     this.container.appendChild(this.legendEl);
     this.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach(row => {
