@@ -1951,4 +1951,81 @@ def order_view():
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    /// Full-pipeline integration test against a multi-file, multi-language
+    /// fixture. One test that catches regressions across the entire stack:
+    /// parser → structure → coupling → communities → dataflow → persistence.
+    #[test]
+    fn test_fixture_full_pipeline() {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/test_project");
+
+        let mut engine = Engine::new();
+        engine.init(&fixture).unwrap();
+        let result = engine.analyze(&fixture);
+        assert!(result.is_ok(), "analyze failed: {:?}", result.err());
+
+        // ── Structure: nodes + edges exist ──
+        let nc = engine.node_count().unwrap();
+        let ec = engine.edge_count().unwrap();
+        assert!(nc >= 8, "expected >=8 nodes (3 py files + 1 js file + functions/classes), got {nc}");
+        assert!(ec >= 5, "expected >=5 edges (calls + imports + inherits), got {ec}");
+
+        // ── Edge types present ──
+        let (has_calls, has_imports, has_defines, has_inherits) = engine.read(|idx| {
+            let mut calls = false; let mut imports = false;
+            let mut defines = false; let mut inherits = false;
+            for (_src, targets) in idx.edges_iter() {
+                for (_tgt, kind, _depth, _delay) in targets {
+                    match kind {
+                        crate::graph::EdgeKind::Calls => calls = true,
+                        crate::graph::EdgeKind::Imports => imports = true,
+                        crate::graph::EdgeKind::Defines => defines = true,
+                        crate::graph::EdgeKind::Inherits => inherits = true,
+                        _ => {}
+                    }
+                }
+            }
+            (calls, imports, defines, inherits)
+        }).unwrap();
+        assert!(has_calls, "must have Calls edges (e.g. main → connect_db)");
+        assert!(has_imports, "must have Imports edges (Python cross-file imports)");
+        assert!(has_defines, "must have Defines edges (class → module, function → class)");
+        assert!(has_inherits, "must have Inherits edges (PooledConnection → Config)");
+
+        // ── Communities detected ──
+        let community_count = engine.read(|idx| {
+            let ids: std::collections::HashSet<usize> = idx.nodes_iter()
+                .filter_map(|n| n.community_id)
+                .collect();
+            ids.len()
+        }).unwrap();
+        assert!(community_count >= 1, "must detect at least 1 community");
+
+        // ── Dataflow: query specific files ──
+        let main_py = fixture.join("main.py");
+        let db_py = fixture.join("db.py");
+        let results = crate::analysis::dataflow_engine::query_dataflow_files(&[main_py, db_py]);
+        assert_eq!(results.len(), 2);
+
+        // main.py: should detect `main` and `fetch_remote` async triggers
+        let main_df = results[0].result.as_ref().expect("main.py dataflow");
+        let main_fn = main_df.scopes.iter().find(|s| s.name == "main").expect("main function");
+        assert!(main_fn.writes.contains(&"db".into()), "main() writes db, got writes={:?}", main_fn.writes);
+        let fetch_fn = main_df.scopes.iter().find(|s| s.name == "fetch_remote").expect("fetch_remote");
+        assert!(!fetch_fn.triggers.is_empty(), "fetch_remote has await trigger");
+
+        // db.py: `_connection_count` should be detected as shared state
+        let db_df = results[1].result.as_ref().expect("db.py dataflow");
+        // db.py has shared variables: `host` (Config ctor → connect_db),
+        // `db` + `sql` (passed through execute_query → _do_query).
+        let shared_vars: Vec<&str> = db_df.shared.iter().map(|s| s.var.as_str()).collect();
+        assert!(shared_vars.contains(&"db"), "db.py should have shared 'db' var, got shared={:?}", db_df.shared);
+        assert!(shared_vars.contains(&"host"), "db.py should have shared 'host' var, got shared={:?}", db_df.shared);
+
+        // ── Persistence: save + read back ──
+        engine.save().expect("save to SQLite");
+        let nc2 = engine.read(|idx| idx.node_count()).unwrap();
+        assert_eq!(nc2, nc, "node count after save must match");
+    }
 }
