@@ -2397,12 +2397,12 @@ async fn web_search(
     // Permission check — use WebFetchTool for web_search
     {
         let ctx = get_ctx(&state)?;
-        let tool = tools::WebFetchTool { url: format!("https://www.bing.com/search?q={}", &query) };
+        let tool = tools::WebFetchTool { url: format!("https://www.bing.com/search?q={}&setmkt=en-US", &query) };
         check_permission(&tool, &ctx, &app).await?;
     }
 
     let q = urlencoding(&query);
-    let url = format!("https://www.bing.com/search?q={}", q);
+    let url = format!("https://www.bing.com/search?q={}&setmkt=en-US", q);
     let resp = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(5))
         .timeout_read(std::time::Duration::from_secs(10))
