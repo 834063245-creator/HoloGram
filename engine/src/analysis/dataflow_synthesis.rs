@@ -37,7 +37,9 @@ pub fn synthesize_dataflow_edges(
     for p in discovered_files {
         let s = p.to_string_lossy().replace('\\', "/");
         let lower = s.to_lowercase();
-        if lower.ends_with(".js")||lower.ends_with(".ts")||lower.ends_with(".tsx")||lower.ends_with(".py") {
+        // Collect any file whose extension has a dataflow config
+        let ext = lower.rsplit('.').next().unwrap_or("");
+        if crate::analysis::dataflow_engine::config_for_ext(ext).is_some() {
             files.insert(s);
         }
     }
@@ -63,17 +65,18 @@ pub fn synthesize_dataflow_edges(
         } else {
             project_root.join(file).to_string_lossy().replace('\\', "/")
         };
-        let is_py = file.to_lowercase().ends_with(".py");
-        let ext = if is_py { "py" } else { "ts" };
+        let ext = file.rsplit('.').next().unwrap_or("");
+        let (grammar_key, cfg) = match crate::analysis::dataflow_engine::config_for_ext(ext) {
+            Some(x) => x,
+            None => continue,
+        };
 
         // Try parse cache first
         if let Some((source, Some(tree))) = parse_cache.get(&abs_key) {
-            let lang = match GRAMMAR_LOADER.get(ext) {
+            let lang = match GRAMMAR_LOADER.get(grammar_key) {
                 Some(l) => l,
                 None => continue,
             };
-            let cfg = if is_py { crate::analysis::dataflow_engine::python_config() }
-                      else { crate::analysis::dataflow_engine::js_ts_config() };
             added += crate::analysis::dataflow_engine::synthesize_via_queries(
                 graph, file, lang, source, tree, &cfg,
             );
@@ -81,15 +84,13 @@ pub fn synthesize_dataflow_edges(
             // Fallback: read from disk, parse, run queries
             let full_path = project_root.join(file);
             if let Ok(source) = std::fs::read_to_string(&full_path) {
-                let lang = match GRAMMAR_LOADER.get(ext) {
+                let lang = match GRAMMAR_LOADER.get(grammar_key) {
                     Some(l) => l,
                     None => continue,
                 };
                 let mut p = tree_sitter::Parser::new();
                 if p.set_language(&lang).is_err() { continue; }
                 if let Some(tree) = p.parse(&source, None) {
-                    let cfg = if is_py { crate::analysis::dataflow_engine::python_config() }
-                              else { crate::analysis::dataflow_engine::js_ts_config() };
                     added += crate::analysis::dataflow_engine::synthesize_via_queries(
                         graph, file, lang, &source, &tree, &cfg,
                     );
