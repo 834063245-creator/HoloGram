@@ -747,6 +747,7 @@ impl Engine {
                 ".git", ".hologram", "node_modules", "__pycache__",
                 "target", ".venv", "venv", ".tox", ".mypy_cache",
                 ".pytest_cache", ".ruff_cache", "dist", "build",
+                ".vscode", ".idea", ".fleet", ".cursor",
             ];
 
             let mut pending = false;
@@ -772,15 +773,15 @@ impl Engine {
                         if !is_source {
                             continue;
                         }
-                        let source_change = event.paths.iter().any(|p| {
+                        let is_tracked = |p: &PathBuf| -> bool {
                             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
                             let is_src = SOURCE_EXTS.contains(&ext);
                             let is_ignored = p.components().any(|c| {
                                 IGNORE_DIRS.contains(&c.as_os_str().to_str().unwrap_or(""))
                             });
                             is_src && !is_ignored
-                        });
-                        if !source_change {
+                        };
+                        if !event.paths.iter().any(|p| is_tracked(p)) {
                             continue;
                         }
 
@@ -794,6 +795,9 @@ impl Engine {
                             _ => "modified",
                         };
                         for p in &event.paths {
+                            if !is_tracked(p) {
+                                continue;
+                            }
                             if seen_paths.insert(p.clone()) {
                                 info!("[engine watcher] change ({}): {}", action, p.display());
                                 changed_paths.push((p.clone(), action.to_string()));
