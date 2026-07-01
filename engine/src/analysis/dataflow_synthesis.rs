@@ -18,7 +18,12 @@ type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
 // so `node_id_for` / `medium_id_for` can do O(1) lookups instead of O(N) scans.
 thread_local! {
     static NAME_IDX: RefCell<Option<HashMap<String, String>>> = RefCell::new(None);
+    // (enabled, count): enabled=false → budget exhausted, skip all node creation.
+    // node_id_for / medium_id_for increment `count` and disable when >= 50_000.
+    static NODE_BUDGET: RefCell<(bool, u32)> = RefCell::new((true, 0));
 }
+
+const MAX_SYNTH_NODES: u32 = 50_000;
 
 // ── Fix 1 helper: file-scoped key for node_id_for dedup ──
 // Prevents cross-file name collisions from producing giant artificial SCCs.
@@ -43,14 +48,18 @@ pub fn synthesize_dataflow_edges(
             files.insert(s);
         }
     }
-    // Guard: dataflow synthesis creates nodes for every Read/Write/Trigger/Await
-    // target. On large projects (>300 JS/TS/Python files) this floods the graph
-    // with 100K+ synthesized nodes and takes minutes. Skip — it's an enhancement,
-    // not core analysis. Framework routes + dynamic dispatch + communities still run.
-    if files.len() > 300 {
-        tracing::info!(files = files.len(), "[dataflow] skipping — project too large");
+    // ponytail: per-file-per-name dedup (scoped_key in node_id_for) keeps node count
+    // at O(files × unique_names) ≈ 9k for 300 files, not O(references). Cap raised
+    // to 5000 — big enough for any practical monorepo. If you hit this, the real fix
+    // is skipping Symbol nodes for local variables and only keeping Medium nodes for
+    // shared state. See .hologram/docs/dataflow-synthesis-gap.md.
+    if files.len() > 5000 {
+        tracing::info!(files = files.len(), "[dataflow] skipping — >5000 files");
         return 0;
     }
+    // Secondary guard: stop creating new Symbol/Medium nodes after 50k total.
+    // node_id_for / medium_id_for check this and return placeholder IDs past the cap.
+    NODE_BUDGET.with(|cell| *cell.borrow_mut() = (true, 0u32));
     // Pre-build name → node_id index for O(1) lookups (was O(N) per node_id_for call).
     let mut name_to_id: HashMap<String, String> = HashMap::new();
     for (id, node) in graph.nodes.iter() {
@@ -100,6 +109,7 @@ pub fn synthesize_dataflow_edges(
     }
 
     NAME_IDX.with(|cell| *cell.borrow_mut() = None);
+    NODE_BUDGET.with(|cell| *cell.borrow_mut() = (true, 0));
     added
 }
 
@@ -112,6 +122,19 @@ pub(crate) fn node_id_for(graph: &mut Graph, name: &str, file: &str, line: usize
     if let Some(id) = NAME_IDX.with(|cell| cell.borrow().as_ref().and_then(|idx| idx.get(&key).cloned())) {
         return id;
     }
+    // Budget guard: stop creating Symbol nodes past MAX_SYNTH_NODES.
+    // Returns a stable placeholder so edge creation doesn't panic.
+    let (enabled, count) = NODE_BUDGET.with(|cell| *cell.borrow());
+    if !enabled {
+        return format!("df_budget_exhausted_{}", key.replace([':', ' '], "_"));
+    }
+    if count >= MAX_SYNTH_NODES {
+        NODE_BUDGET.with(|cell| cell.borrow_mut().0 = false);
+        tracing::warn!("[dataflow] Symbol node budget ({MAX_SYNTH_NODES}) exhausted — stopping node creation");
+        return format!("df_budget_exhausted_{}", key.replace([':', ' '], "_"));
+    }
+    NODE_BUDGET.with(|cell| cell.borrow_mut().1 += 1);
+
     let nid = format!("df_{}_{}", file.replace(['.', '/', '\\'], "_"), name);
     let mut n = Node::new(&nid, name, NodeKind::Symbol);
     n.location = Some(format!("{}:{}", file, line));
@@ -137,6 +160,14 @@ pub(crate) fn medium_id_for(graph: &mut Graph, name: &str, file: &str, line: usi
     for (id, node) in &graph.nodes {
         if node.name == name && matches!(node.kind, NodeKind::Medium) { return id.clone(); }
     }
+    // Budget guard — shared state is more important, so we allow Medium creation
+    // even past the Symbol budget. But still guard against runaway.
+    let (enabled, count) = NODE_BUDGET.with(|cell| *cell.borrow());
+    if !enabled && count > MAX_SYNTH_NODES + 5_000 {
+        return format!("med_budget_exhausted_{}", name);
+    }
+    NODE_BUDGET.with(|cell| cell.borrow_mut().1 += 1);
+
     let nid = format!("med_{}_{}", file.replace(['.', '/', '\\'], "_"), name);
     let mut n = Node::new(&nid, name, NodeKind::Medium);
     n.location = Some(format!("{}:{}", file, line));
