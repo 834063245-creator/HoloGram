@@ -162,8 +162,26 @@ impl IncrementalUpdater {
         new_index.flush_pending();
 
         // ── Write-back to SQLite ──
-        if let Err(e) = new_index.to_sqlite(db) {
-            warn!("[incr] SQLite write-back failed: {}", e);
+        // ponytail: retry on lock contention (timeline writes on aux conn),
+        // 3 attempts × ~700ms total; escalate to error on final failure.
+        let mut write_err: Option<String> = None;
+        for attempt in 0..3 {
+            match new_index.to_sqlite(db) {
+                Ok(()) => {
+                    write_err = None;
+                    break;
+                }
+                Err(e) => {
+                    write_err = Some(e);
+                    if attempt < 2 {
+                        std::thread::sleep(std::time::Duration::from_millis(100 * (1 << attempt)));
+                        info!("[incr] SQLite write-back retry {}/2", attempt + 1);
+                    }
+                }
+            }
+        }
+        if let Some(e) = write_err {
+            warn!("[incr] SQLite write-back failed after 3 retries: {}", e);
         }
 
         Ok((new_index, total_errors))
