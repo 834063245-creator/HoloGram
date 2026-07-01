@@ -845,98 +845,45 @@ pub(crate) async fn edit_file(
 // Web Search & Fetch
 // ═══════════════════════════════════════════════════════
 
+const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
+
+fn search_backend() -> &'static str {
+    match std::env::var("HOLOGRAM_SEARCH_BACKEND").as_deref() {
+        Ok("bing") => "bing",
+        _ => "duckduckgo",
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn web_search(
     query: String,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Permission check — use WebFetchTool for web_search
+    let backend = search_backend();
+    let (search_url, q) = (match backend {
+        "bing" => format!("https://www.bing.com/search?q={}&setlang=en", crate::utils::urlencoding(&query)),
+        _ => format!("https://html.duckduckgo.com/html/?q={}", crate::utils::urlencoding(&query)),
+    }, query.clone());
+
+    // Permission check
     {
         let ctx = crate::utils::get_ctx(&state)?;
-        let tool = crate::tools::WebFetchTool { url: format!("https://www.sogou.com/web?query={}", &query) };
+        let tool = crate::tools::WebFetchTool { url: search_url.clone() };
         crate::utils::check_permission(&tool, &ctx, &app).await?;
     }
 
-    let q = crate::utils::urlencoding(&query);
-    let url = format!("https://www.sogou.com/web?query={}", q);
-    let resp = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout_read(std::time::Duration::from_secs(10))
-        .build()
-        .get(&url)
-        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .call()
-        .map_err(|e| format!("web_search: request failed: {}", e))?;
+    let results = match backend {
+        "bing" => bing_search(&q)?,
+        _ => duckduckgo_search(&q)?,
+    };
 
-    let html = resp.into_string()
-        .map_err(|e| format!("web_search: read error: {}", e))?;
-
-    let mut results: Vec<serde_json::Value> = Vec::new();
-
-    // Sogou results are in <div class="rb"> or <div class="vrwrap"> blocks.
-    // Each block contains: <h3><a href="URL">TITLE</a></h3> + <p>/<div> snippet
-    let result_block_re = regex::Regex::new(
-        r#"<div class="(?:rb|vrwrap)"[^>]*>([\s\S]*?)</div>"#
-    ).unwrap();
-    let title_re = regex::Regex::new(
-        r#"<h3[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h3>"#
-    ).unwrap();
-    // Sogou snippets: <p class="star-wiki">, <div class="ft">, <p class="str_info">, or generic <p>
-    let snippet_re = regex::Regex::new(
-        r#"<(?:p|div)[^>]*class="(?:star-wiki|ft|str_info)"[^>]*>([\s\S]*?)</(?:p|div)>"#
-    ).unwrap();
-    // ponytail: fallback snippet extractor if class-based fails — grab first long-enough <p>
-    let generic_p_re = regex::Regex::new(
-        r#"<p[^>]*>([\s\S]*?)</p>"#
-    ).unwrap();
-    let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
-
-    for cap in result_block_re.captures_iter(&html) {
-        let block = &cap[1];
-        let title_url = title_re.captures(block).map(|c| {
-            (c[1].to_string(), tag_re.replace_all(&c[2], "").trim().to_string())
-        });
-        // Try class-specific snippets first, fall back to generic <p>
-        let snippet = snippet_re.captures_iter(block)
-            .map(|c| tag_re.replace_all(&c[1], "").trim().to_string())
-            .find(|s| s.len() > 15)
-            .or_else(|| {
-                generic_p_re.captures_iter(block)
-                    .map(|c| tag_re.replace_all(&c[1], "").trim().to_string())
-                    .find(|s| s.len() > 15)
-            })
-            .unwrap_or_default();
-
-        if let Some((url, title)) = title_url {
-            if !title.is_empty() && title.len() > 3 {
-                results.push(serde_json::json!({
-                    "title": title,
-                    "url": url,
-                    "snippet": snippet,
-                }));
-                if results.len() >= 10 { break; }
-            }
-        }
-    }
-
-    // Fallback: if result-block parsing yielded nothing, try generic link extraction
     if results.is_empty() {
-        let fallback_re = regex::Regex::new(
-            r#"<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>"#
-        ).unwrap();
-        for cap in fallback_re.captures_iter(&html) {
-            let title = tag_re.replace_all(&cap[2], "").trim().to_string();
-            if title.len() > 5 {
-                results.push(serde_json::json!({
-                    "title": title,
-                    "url": &cap[1],
-                    "snippet": "",
-                }));
-            }
-            if results.len() >= 10 { break; }
-        }
+        return Ok(serde_json::json!({
+            "query": query,
+            "results": [],
+            "error": "No results found.",
+        }).to_string());
     }
 
     Ok(serde_json::json!({
@@ -945,6 +892,95 @@ pub(crate) async fn web_search(
     }).to_string())
 }
 
+fn bing_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
+    let url = format!("https://www.bing.com/search?q={}&setlang=en", crate::utils::urlencoding(query));
+
+    let resp = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(10))
+        .build()
+        .get(&url)
+        .set("User-Agent", CHROME_UA)
+        .set("Accept-Language", "en-US,en;q=0.9")
+        .call()
+        .map_err(|e| format!("web_search: request failed: {}", e))?;
+
+    let html = resp.into_string().map_err(|e| format!("web_search: read error: {}", e))?;
+
+    let mut results = Vec::new();
+    // Bing results: <li class="b_algo"> with <h2><a href="URL">TITLE</a></h2> + <p>SNIPPET</p>
+    let block_re = regex::Regex::new(r#"<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)</li>"#).unwrap();
+    let link_re = regex::Regex::new(r#"<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h2>"#).unwrap();
+    let snippet_re = regex::Regex::new(r#"<p[^>]*>([\s\S]*?)</p>"#).unwrap();
+    let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
+
+    for cap in block_re.captures_iter(&html) {
+        let block = &cap[1];
+        if let Some(lc) = link_re.captures(block) {
+            let title = tag_re.replace_all(&lc[2], "").trim().to_string();
+            if title.len() > 3 {
+                let snippet = snippet_re.captures_iter(block)
+                    .map(|c| tag_re.replace_all(&c[1], "").trim().to_string())
+                    .find(|s| s.len() > 15)
+                    .unwrap_or_default();
+                results.push(serde_json::json!({
+                    "title": title,
+                    "url": lc[1].to_string(),
+                    "snippet": snippet,
+                }));
+                if results.len() >= 10 { break; }
+            }
+        }
+    }
+    Ok(results)
+}
+
+fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
+    let q = crate::utils::urlencoding(query);
+    let url = format!("https://html.duckduckgo.com/html/?q={}", q);
+
+    let resp = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(10))
+        .build()
+        .get(&url)
+        .set("User-Agent", CHROME_UA)
+        .set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8")
+        .call()
+        .map_err(|e| format!("web_search: request failed: {}", e))?;
+
+    let html = resp.into_string().map_err(|e| format!("web_search: read error: {}", e))?;
+
+    let mut results = Vec::new();
+    let title_re = regex::Regex::new(
+        r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>"#
+    ).unwrap();
+    let snippet_re = regex::Regex::new(
+        r#"<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>"#
+    ).unwrap();
+    let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
+
+    let split_re = regex::Regex::new(r#"<div[^>]*class="[^"]*result[^"]*"[^>]*>"#).unwrap();
+    let blocks: Vec<&str> = split_re.split(&html).collect();
+
+    for block in &blocks[1..] {
+        if let Some(tc) = title_re.captures(block) {
+            let title = tag_re.replace_all(&tc[2], "").trim().to_string();
+            if title.len() > 3 {
+                let snippet = snippet_re.captures(block)
+                    .map(|c| tag_re.replace_all(&c[1], "").trim().to_string())
+                    .unwrap_or_default();
+                results.push(serde_json::json!({
+                    "title": title,
+                    "url": tc[1].to_string(),
+                    "snippet": snippet,
+                }));
+                if results.len() >= 10 { break; }
+            }
+        }
+    }
+    Ok(results)
+}
 /// URL-encode a string.
 fn urlencoding(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
@@ -981,15 +1017,28 @@ pub(crate) async fn web_fetch(
         return Err("SSRF 防护: 不允许访问内网地址".to_string());
     }
 
-    let resp = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout_read(std::time::Duration::from_secs(10))
-        .build()
-        .get(url.as_str())
-        .set("User-Agent", "HoloGram/1.0")
-        .set("Accept", "text/html, text/plain, application/json, text/markdown, */*")
-        .call()
-        .map_err(|e| format!("请求失败: {}", e))?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .build();
+
+    let make_request =
+        |ua: &str| -> Result<ureq::Response, ureq::Error> {
+            agent.get(url.as_str())
+                .set("User-Agent", ua)
+                .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,text/markdown;q=0.7,*/*;q=0.1")
+                .set("Accept-Language", "en-US,en;q=0.9")
+                .call()
+        };
+
+    let resp = match make_request(CHROME_UA) {
+        Ok(r) => r,
+        // ponytail: Cloudflare bot detection → retry with honest UA (openCode pattern)
+        Err(ureq::Error::Status(403, response)) if response.header("cf-mitigated") == Some("challenge") => {
+            make_request("opencode").map_err(|e| format!("请求失败 (Cloudflare blocked): {}", e))?
+        }
+        Err(e) => return Err(format!("请求失败: {}", e)),
+    };
 
     let content_type = resp.header("content-type").unwrap_or("").to_lowercase();
     let max_size: usize = 1 << 20; // 1 MiB
