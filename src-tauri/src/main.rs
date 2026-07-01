@@ -139,6 +139,7 @@ fn main() {
             commands::tools::agent_isolation_merge,
             commands::tools::agent_isolation_discard,
             commands::tools::agent_isolation_status,
+            commands::tools::agent_isolation_prune,
             // ── File operations ──
             commands::tools::list_directory,
             commands::tools::list_directory_flat,
