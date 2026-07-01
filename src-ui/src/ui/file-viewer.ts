@@ -689,7 +689,8 @@ export class FileViewer {
 
   // ── Public API ──
 
-  async open(filePath: string, opts?: { noAutoPreview?: boolean }): Promise<void> {
+  async open(filePath: string, opts?: { noAutoPreview?: boolean; line?: number }): Promise<void> {
+    const targetLine = opts?.line;
     const existingIdx = this.tabs.findIndex(t => t.filePath === filePath);
     if (existingIdx >= 0) {
       this.activeIdx = existingIdx;
@@ -709,6 +710,7 @@ export class FileViewer {
       this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
       this.centerOnScreen();
       this.updatePreviewButton();
+      if (targetLine) this.jumpToLine(targetLine);
       return;
     }
 
@@ -823,7 +825,15 @@ export class FileViewer {
 
     this.editor.layout();
     this.editor.focus();
+    if (targetLine) this.jumpToLine(targetLine);
     this.updatePreviewButton();
+  }
+
+  /** Jump editor cursor to a 1-based line number. */
+  private jumpToLine(line: number): void {
+    const ln = Math.max(1, Math.round(line));
+    this.editor.setPosition({ lineNumber: ln, column: 1 });
+    this.editor.revealLineInCenter(ln);
   }
 
   private async saveActiveTab(): Promise<void> {

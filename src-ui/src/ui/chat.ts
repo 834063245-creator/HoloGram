@@ -424,7 +424,7 @@ export class ChatPanel {
     // Model info
     html += '<div class="chat-context-section">';
     html += '<div class="chat-context-section-label">当前模型</div>';
-    html += `<div style="font-family:var(--font-mono);font-size: calc(10px * var(--font-scale));color:var(--signal)">
+    html += `<div style="font-family:var(--font-mono);font-size: calc(12px * var(--font-scale));color:var(--signal)">
       ${active?.name || '未知'} / ${active?.model || '未配置'}
       ${active?.thinking ? ' · 思考模式' : ''}
     </div>`;
@@ -454,7 +454,7 @@ export class ChatPanel {
     const msgCount = this.agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
     const turnCount = this.turnPairs.length;
     const toolTotal = Array.from(this.toolUsage.values()).reduce((a, b) => a + b, 0);
-    html += `<div style="font-family:var(--font-mono);font-size: calc(9px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
+    html += `<div style="font-family:var(--font-mono);font-size: calc(11px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
       <span>${msgCount} 条消息</span>
       <span>${turnCount} 轮对话</span>
       <span>${toolTotal} 次工具调用</span>

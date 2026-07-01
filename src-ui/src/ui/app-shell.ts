@@ -31,7 +31,7 @@ class AppShell {
   // ── Wiring slots (set by main.ts) ──
   private _onPanelChanged: (() => void) | null = null;
   private _navigateToNode: ((name: string) => void) | null = null;
-  private _navigateToFile: ((path: string) => void) | null = null;
+  private _navigateToFile: ((path: string, line?: number) => void) | null = null;
   private _highlightFile: ((path: string) => void) | null = null;
   private _highlightFolder: ((path: string) => void) | null = null;
   private _clearHighlight: (() => void) | null = null;
@@ -66,7 +66,7 @@ class AppShell {
   /** 注入导航/高亮/查询处理函数 — 由 main.ts 在 starGraph/chatPanel 创建后调用 */
   wire(opts: {
     navigateToNode: (name: string) => void;
-    navigateToFile: (path: string) => void;
+    navigateToFile: (path: string, line?: number) => void;
     highlightFile: (path: string) => void;
     highlightFolder: (path: string) => void;
     clearHighlight: () => void;
@@ -97,8 +97,8 @@ class AppShell {
     this._navigateToNode?.(name);
   }
 
-  navigateToFile(path: string): void {
-    this._navigateToFile?.(path);
+  navigateToFile(path: string, line?: number): void {
+    this._navigateToFile?.(path, line);
     bus.emit('navigate:file', path); // broadcast for chat.ts context tracking
   }
 

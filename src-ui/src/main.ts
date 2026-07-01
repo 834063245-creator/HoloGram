@@ -264,6 +264,7 @@ async function setupPlaceholderAgent(): Promise<void> {
 async function init(): Promise<void> {
   setLang(loadSettings().display.language);
   document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
+  starGraph.resize(); // CSS custom props changed → container shrunk → canvas must follow
 
   const { listen } = await import('@tauri-apps/api/event');
   const { bus: eventBus } = await import('./ui/events');
@@ -368,7 +369,7 @@ async function init(): Promise<void> {
   // Wire navigation / highlight / agent-query commands
   shell.wire({
     navigateToNode: (name) => starGraph.focusNode(name),
-    navigateToFile: (path) => FileViewer.get().open(path),
+    navigateToFile: (path, line) => FileViewer.get().open(path, { line }),
     highlightFile:   (path) => starGraph.highlightFile(path),
     highlightFolder: (path) => starGraph.highlightFolder(path),
     clearHighlight:  ()    => starGraph.clearFileHighlight(),
@@ -506,6 +507,7 @@ async function init(): Promise<void> {
   const settingsPanel = SettingsPanel.get();
   settingsPanel.setOnSave(async () => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
+    starGraph.resize();
     if (workspace) await workspace.setupAgent(chatPanel, checkPanel);
     if (workspace?.path && workspace?.agent) {
       chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[settings] autoRestoreLastSession failed:', e));

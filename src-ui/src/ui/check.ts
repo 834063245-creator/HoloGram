@@ -193,11 +193,13 @@ export class CheckPanel {
   // ── Render ──
 
   private renderResult(r: CheckResult, isHistory = false): void {
-    // Update tab status indicator
     this.headerStatus.className = r.passed ? 'check-tab-status check-pass' : 'check-tab-status check-fail';
 
-    const totalV = (r.l5_violations?.length || 0) + (r.l4_violations?.length || 0) +
-                   (r.l3_violations?.length || 0) + (r.l2_violations?.length || 0);
+    const l5 = r.l5_violations?.length || 0;
+    const l4 = r.l4_violations?.length || 0;
+    const l3 = r.l3_violations?.length || 0;
+    const l2 = r.l2_violations?.length || 0;
+    const totalV = l5 + l4 + l3 + l2;
 
     this.content.innerHTML = '';
 
@@ -214,114 +216,118 @@ export class CheckPanel {
       this.content.appendChild(banner);
     }
 
-    // ── Header ──
-    const header = ce('div', 'check-header');
-    const statusBadge = ce('span', r.passed ? 'check-badge-pass' : 'check-badge-fail');
-    statusBadge.innerHTML = r.passed ? `${iconHtml('check-circle', 12)} 通过` : `${iconHtml('alert', 12)} 未通过`;
-    header.appendChild(statusBadge);
+    // ── Status header (prominent) ──
+    const statusBar = ce('div', r.passed ? 'check-status-bar check-status-pass' : 'check-status-bar check-status-fail');
+    const statusIcon = ce('span', 'check-status-icon');
+    statusIcon.innerHTML = r.passed ? iconHtml('check-circle', 18) : iconHtml('alert', 18);
+    const statusLabel = ce('span', 'check-status-label');
+    statusLabel.textContent = r.passed ? '检查通过' : '检查未通过';
+    statusBar.append(statusIcon, statusLabel);
+    this.content.appendChild(statusBar);
 
-    const ts = ce('span', 'check-ts');
-    ts.textContent = fmtTime(r.timestamp);
-    header.appendChild(ts);
-    this.content.appendChild(header);
+    // ── Summary row (one-liner) ──
+    const summary = ce('div', 'check-summary');
+    const parts: string[] = [];
+    parts.push(`${r.total_changed_files} 文件`);
+    if (totalV > 0) parts.push(`${totalV} 违规`);
+    if (r.blast_radius > 0) parts.push(`波及 ${r.blast_radius}`);
+    if (r.new_cycles > 0) parts.push(`环 ${r.new_cycles}`);
+    if (r.new_thread_conflicts > 0) parts.push(`冲突 ${r.new_thread_conflicts}`);
+    if (r.api_signature_changes > 0) parts.push(`API ${r.api_signature_changes}`);
+    parts.push(fmtTime(r.timestamp));
+    summary.textContent = parts.join(' · ');
+    this.content.appendChild(summary);
 
-    // ── Files ──
-    const filesSec = ce('div', 'check-section');
-    const filesTitle = ce('div', 'check-section-title');
-    filesTitle.innerHTML = `${iconHtml('file', 10)} 变更文件 (${r.total_changed_files})`;
-    filesSec.appendChild(filesTitle);
-    const filesList = ce('div', 'check-file-list');
-    for (const f of r.changed_files.slice(0, 10)) {
-      const item = ce('div', 'check-file-item');
-      item.textContent = basename(f);
-      item.title = f;
-      item.style.cursor = 'pointer';
-      item.addEventListener('click', () => {
-        shell.navigateToFile(f);
-      });
-      filesList.appendChild(item);
-    }
-    if (r.changed_files.length > 10) {
-      const more = ce('div', 'check-file-item check-file-more');
-      more.textContent = `… 还有 ${r.changed_files.length - 10} 个文件`;
-      filesList.appendChild(more);
-    }
-    filesSec.appendChild(filesList);
-    this.content.appendChild(filesSec);
+    // ── Collapsible sections ──
 
-    // ── Violations ──
-    if (!r.passed && totalV > 0) {
-      const vSec = ce('div', 'check-section');
-      const vTitle = ce('div', 'check-section-title');
-      vTitle.innerHTML = `${iconHtml('alert', 11)} 违规 (${totalV})`;
-      vSec.appendChild(vTitle);
+    // Files
+    this.addCollapsible(
+      '变更文件', String(r.total_changed_files),
+      r.total_changed_files <= 5, // auto-expand if few
+      () => {
+        const list = ce('div', 'check-file-list');
+        for (const f of r.changed_files) {
+          const item = ce('div', 'check-file-item');
+          item.textContent = basename(f);
+          item.title = f;
+          item.addEventListener('click', () => shell.navigateToFile(f));
+          list.appendChild(item);
+        }
+        return list;
+      },
+    );
 
-      // L5 - Irreversible
-      if ((r.l5_violations?.length || 0) > 0) {
-        vSec.appendChild(this.renderViolationGroup('L5 不可逆', 'l5', r.l5_violations || []));
-      }
-      // L4 - Silent
-      if ((r.l4_violations?.length || 0) > 0) {
-        vSec.appendChild(this.renderViolationGroup('L4 静默', 'l4', r.l4_violations || []));
-      }
-      // L3 - Delayed
-      if ((r.l3_violations?.length || 0) > 0) {
-        vSec.appendChild(this.renderViolationGroup('L3 延迟', 'l3', r.l3_violations || []));
-      }
-      // L2 - Blast
-      if ((r.l2_violations?.length || 0) > 0) {
-        vSec.appendChild(this.renderViolationGroup('L2 波及', 'l2', r.l2_violations || []));
-      }
-
-      this.content.appendChild(vSec);
+    // Violations: all levels, collapsed unless it's the highest severity or >0
+    const vLevels: Array<{ label: string; cls: string; count: number; violations: Violation[] }> = [
+      { label: 'L5 不可逆', cls: 'l5', count: l5, violations: r.l5_violations || [] },
+      { label: 'L4 静默', cls: 'l4', count: l4, violations: r.l4_violations || [] },
+      { label: 'L3 延迟', cls: 'l3', count: l3, violations: r.l3_violations || [] },
+      { label: 'L2 波及', cls: 'l2', count: l2, violations: r.l2_violations || [] },
+    ];
+    for (const vl of vLevels) {
+      if (vl.count === 0) continue;
+      const expand = vl.cls === 'l5' || vl.cls === 'l4'; // auto-expand L5/L4
+      this.addCollapsible(vl.label, String(vl.count), expand, () => this.buildViolationGroup(vl.label, vl.cls, vl.violations));
     }
 
-    // ── Stats ──
-    const statsSec = ce('div', 'check-section');
-    const statsTitle = ce('div', 'check-section-title');
-    statsTitle.innerHTML = `${iconHtml('chart', 11)} 统计`;
-    statsSec.appendChild(statsTitle);
+    // Stats
+    this.addCollapsible('统计', '', false, () => {
+      const grid = ce('div', 'check-stats-grid');
+      grid.appendChild(this.statItem('波及半径', `${r.blast_radius} nodes`));
+      grid.appendChild(this.statItem('跨社区边', `${r.cross_community_edges}`));
+      grid.appendChild(this.statItem('新增环', `${r.new_cycles}`));
+      grid.appendChild(this.statItem('线程冲突', `${r.new_thread_conflicts}`));
+      grid.appendChild(this.statItem('API 变更', `${r.api_signature_changes}`));
+      return grid;
+    });
 
-    const statsGrid = ce('div', 'check-stats-grid');
-    statsGrid.appendChild(this.statItem('波及半径', `${r.blast_radius} nodes`));
-    statsGrid.appendChild(this.statItem('跨社区边', `${r.cross_community_edges}`));
-    statsGrid.appendChild(this.statItem('新环', `${r.new_cycles}`));
-    statsGrid.appendChild(this.statItem('线程冲突', `${r.new_thread_conflicts}`));
-    statsGrid.appendChild(this.statItem('API 签名变更', `${r.api_signature_changes}`));
-    statsSec.appendChild(statsGrid);
-    this.content.appendChild(statsSec);
-
-    // ── Auto-passed ──
+    // Auto-passed
     if (r.passed_checks.length > 0) {
-      const apSec = ce('div', 'check-section');
-      const apTitle = ce('div', 'check-section-title');
-      apTitle.innerHTML = `${iconHtml('check-circle', 11)} 自动放行 (${r.passed_checks.length})`;
-      apSec.appendChild(apTitle);
-      for (const c of r.passed_checks.slice(0, 8)) {
-        const item = ce('div', 'check-passed-item');
-        item.textContent = c;
-        apSec.appendChild(item);
-      }
-      if (r.passed_checks.length > 8) {
-        const more = ce('div', 'check-passed-item');
-        more.textContent = `… 还有 ${r.passed_checks.length - 8} 项`;
-        apSec.appendChild(more);
-      }
-      this.content.appendChild(apSec);
+      this.addCollapsible('自动放行', String(r.passed_checks.length), false, () => {
+        const frag = document.createDocumentFragment();
+        for (const c of r.passed_checks) {
+          const item = ce('div', 'check-passed-item');
+          item.textContent = c;
+          frag.appendChild(item);
+        }
+        return frag;
+      });
     }
   }
 
-  private renderViolationGroup(
-    label: string,
-    level: string,
-    violations: Violation[],
-  ): HTMLElement {
-    const group = ce('div', 'check-vgroup');
-    const head = ce('div', `check-vhead check-vhead-${level}`);
-    head.textContent = `${label} (${violations.length})`;
-    group.appendChild(head);
+  /** Collapsible section: title + count badge → click toggles body. */
+  private addCollapsible(
+    title: string,
+    count: string,
+    startOpen: boolean,
+    buildBody: () => HTMLElement | DocumentFragment,
+  ): void {
+    const sec = ce('div', 'check-fold-section');
+    const head = ce('div', 'check-fold-head');
+    const arrow = ce('span', 'check-fold-arrow');
+    arrow.textContent = startOpen ? '▾' : '▸';
+    const label = ce('span', 'check-fold-label');
+    label.textContent = title;
+    const badge = ce('span', 'check-fold-badge');
+    if (count) badge.textContent = count;
+    head.append(arrow, label, badge);
 
-    for (const v of violations.slice(0, 5)) {
+    const body = ce('div', 'check-fold-body');
+    if (!startOpen) body.classList.add('collapsed');
+    body.appendChild(buildBody());
+
+    head.addEventListener('click', () => {
+      const collapsed = body.classList.toggle('collapsed');
+      arrow.textContent = collapsed ? '▸' : '▾';
+    });
+
+    sec.append(head, body);
+    this.content.appendChild(sec);
+  }
+
+  private buildViolationGroup(label: string, level: string, violations: Violation[]): HTMLElement {
+    const frag = document.createDocumentFragment();
+    for (const v of violations) {
       const sig = v.signal || {};
       const desc = sig.description || v.message || '?';
       const fp = sig.file_path || '';
@@ -329,81 +335,71 @@ export class CheckPanel {
       const loc = fp ? `${basename(fp)}${line ? ':' + line : ''}` : '';
 
       const item = ce('div', 'check-vitem');
-      const locEl = ce('span', 'check-vloc');
-      locEl.textContent = loc;
-      item.appendChild(locEl);
+      // Title row: location + description
+      const titleRow = ce('div', 'check-vitem-title');
+      if (loc) {
+        const locEl = ce('span', 'check-vloc');
+        locEl.textContent = loc;
+        titleRow.appendChild(locEl);
+      }
       const descEl = ce('span', 'check-vdesc');
-      descEl.textContent = desc.length > 80 ? desc.slice(0, 80) + '…' : desc;
+      descEl.textContent = desc.length > 100 ? desc.slice(0, 100) + '…' : desc;
       descEl.title = desc;
-      item.appendChild(descEl);
+      titleRow.appendChild(descEl);
 
+      // Ask button
+      const askBtn = document.createElement('button');
+      askBtn.className = 'check-ask-btn';
+      askBtn.innerHTML = iconHtml('agent', 12);
+      askBtn.title = '问 Agent';
+      const nodeList = (sig.affected_nodes || []).slice(0, 3).join(', ');
+      askBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ctx = [
+          `[${label}] ${desc}`,
+          fp ? `文件: ${fp}${line ? ':' + line : ''}` : '',
+          nodeList ? `影响: ${nodeList}` : '',
+          sig.old_value ? `变更: ${sig.old_value} → ${sig.new_value}` : '',
+        ].filter(Boolean).join(' | ');
+        askAgent(`分析这条违规: ${ctx}`);
+      });
+      titleRow.appendChild(askBtn);
+      item.appendChild(titleRow);
+
+      // Affected nodes (inline)
       if (sig.affected_nodes && sig.affected_nodes.length > 0) {
         const aff = ce('div', 'check-vaffect');
-        const affLabel = document.createElement('span');
-        affLabel.textContent = '影响: ';
-        aff.appendChild(affLabel);
-
         const nodeIds = sig.graph_node_ids || [];
-        const displayNodes = sig.affected_nodes.slice(0, 5);
-        displayNodes.forEach((name, i) => {
+        sig.affected_nodes.slice(0, 8).forEach((name, i) => {
           const nodeLink = ce('span', 'check-node-link');
           nodeLink.textContent = name;
-          const gid = nodeIds[i] || '';
-          nodeLink.title = gid ? `节点ID: ${gid}\n点击跳转到星图` : '点击跳转到星图';
-          nodeLink.addEventListener('click', (e) => {
-            e.stopPropagation();
+          nodeLink.title = nodeIds[i] ? `节点: ${nodeIds[i]}` : '跳转到星图';
+          nodeLink.addEventListener('click', (e2) => {
+            e2.stopPropagation();
             shell.navigateToNode(name);
             this.close();
           });
           aff.appendChild(nodeLink);
-          if (i < displayNodes.length - 1) {
-            aff.appendChild(document.createTextNode(', '));
+          if (i < Math.min(sig.affected_nodes!.length, 8) - 1) {
+            aff.appendChild(document.createTextNode(' · '));
           }
         });
-
-        if (sig.affected_nodes.length > 5) {
-          const more = document.createElement('span');
-          more.className = 'check-vmore-inline';
-          more.textContent = ` … +${sig.affected_nodes.length - 5}`;
-          aff.appendChild(more);
+        if (sig.affected_nodes.length > 8) {
+          aff.appendChild(document.createTextNode(` … +${sig.affected_nodes.length - 8}`));
         }
-
         item.appendChild(aff);
       }
+
+      // Old → new value change
       if (sig.old_value && sig.new_value) {
         const chg = ce('div', 'check-vchange');
         chg.textContent = `${sig.old_value} → ${sig.new_value}`;
         item.appendChild(chg);
       }
 
-      // "Ask Agent" button for each violation
-      const askBtn = document.createElement('button');
-      askBtn.className = 'check-ask-btn';
-      askBtn.innerHTML = iconHtml('agent', 11);
-      askBtn.title = '问 Agent 关于这条违规';
-      const nodeList = (sig.affected_nodes || []).slice(0, 3).join(', ');
-      askBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const context = [
-          `[${label}] ${desc}`,
-          fp ? `文件: ${fp}${line ? ':' + line : ''}` : '',
-          nodeList ? `影响节点: ${nodeList}` : '',
-          sig.old_value ? `变更: ${sig.old_value} → ${sig.new_value}` : '',
-        ].filter(Boolean).join(' | ');
-        askAgent(`分析这条违规: ${context}`);
-      });
-      item.appendChild(askBtn);
-
-      group.appendChild(item);
+      frag.appendChild(item);
     }
-
-    if (violations.length > 5) {
-      const more = ce('div', 'check-vmore');
-      more.textContent = `… 还有 ${violations.length - 5} 条`;
-      group.appendChild(more);
-    }
-
-    return group;
+    return frag as unknown as HTMLElement;
   }
 
   private statItem(label: string, value: string): HTMLElement {
@@ -433,58 +429,56 @@ export class CheckPanel {
     if (!data || !data.modules || data.modules.length === 0) return;
 
     // Remove existing gate section if any
-    const existing = this.content.querySelector('.check-gate');
+    const existing = this.content.querySelector('.check-fold-gate');
     if (existing) existing.remove();
 
-    const gateSec = ce('div', 'check-section check-gate');
-    const gateTitle = ce('div', 'check-section-title');
-    gateTitle.innerHTML = `${iconHtml('block', 11)} 门禁评估 (${data.total_evaluated} 模块)`;
-    gateSec.appendChild(gateTitle);
+    const gateLabel = `门禁评估 (${data.total_evaluated} 模块)`;
+    const riskCount = String(data.high_risk + data.medium_risk);
+    this.addCollapsible(gateLabel, riskCount, data.high_risk > 0, () => {
+      const frag = document.createDocumentFragment();
 
-    // Risk summary
-    const summaryRow = ce('div', 'check-gate-summary');
-    if (data.high_risk > 0) {
-      const hi = ce('span', 'check-gate-badge check-gate-high');
-      hi.textContent = `⚠ ${data.high_risk} 高风险`;
-      summaryRow.appendChild(hi);
-    }
-    if (data.medium_risk > 0) {
-      const mi = ce('span', 'check-gate-badge check-gate-mid');
-      mi.textContent = `⚡ ${data.medium_risk} 中风险`;
-      summaryRow.appendChild(mi);
-    }
-    const lo = ce('span', 'check-gate-badge check-gate-low');
-    lo.textContent = `✓ ${data.low_risk} 低风险`;
-    summaryRow.appendChild(lo);
-    gateSec.appendChild(summaryRow);
-
-    // Show high/medium risk modules with details
-    for (const m of data.modules) {
-      if (m.risk === 'low') continue; // Skip low risk
-      const item = ce('div', `check-gate-item check-gate-${m.risk}`);
-      const head = ce('div', 'check-gate-item-head');
-      const riskBadge = ce('span', `check-gate-risk check-gate-risk-${m.risk}`);
-      riskBadge.textContent = m.risk === 'high' ? '高' : '中';
-      head.appendChild(riskBadge);
-      const nameEl = ce('span', 'check-gate-name');
-      nameEl.textContent = m.name;
-      head.appendChild(nameEl);
-      const stats = ce('span', 'check-gate-stats');
-      stats.textContent = `扇入${m.fan_in} 扇出${m.fan_out} L4×${m.coupling_l4}`;
-      head.appendChild(stats);
-      item.appendChild(head);
-
-      if (m.recommendations && m.recommendations.length > 0) {
-        for (const rec of m.recommendations) {
-          const recEl = ce('div', 'check-gate-rec');
-          recEl.textContent = rec;
-          item.appendChild(recEl);
-        }
+      // Risk summary
+      const summaryRow = ce('div', 'check-gate-summary');
+      if (data.high_risk > 0) {
+        const hi = ce('span', 'check-gate-badge check-gate-high');
+        hi.textContent = `⚠ ${data.high_risk} 高风险`;
+        summaryRow.appendChild(hi);
       }
-      gateSec.appendChild(item);
-    }
+      if (data.medium_risk > 0) {
+        const mi = ce('span', 'check-gate-badge check-gate-mid');
+        mi.textContent = `⚡ ${data.medium_risk} 中风险`;
+        summaryRow.appendChild(mi);
+      }
+      const lo = ce('span', 'check-gate-badge check-gate-low');
+      lo.textContent = `✓ ${data.low_risk} 低风险`;
+      summaryRow.appendChild(lo);
+      frag.appendChild(summaryRow);
 
-    this.content.appendChild(gateSec);
+      for (const m of data.modules) {
+        if (m.risk === 'low') continue;
+        const item = ce('div', `check-gate-item check-gate-${m.risk}`);
+        const head = ce('div', 'check-gate-item-head');
+        const riskBadge = ce('span', `check-gate-risk check-gate-risk-${m.risk}`);
+        riskBadge.textContent = m.risk === 'high' ? '高' : '中';
+        head.appendChild(riskBadge);
+        const nameEl = ce('span', 'check-gate-name');
+        nameEl.textContent = m.name;
+        head.appendChild(nameEl);
+        const stats = ce('span', 'check-gate-stats');
+        stats.textContent = `扇入${m.fan_in} 扇出${m.fan_out} L4×${m.coupling_l4}`;
+        head.appendChild(stats);
+        item.appendChild(head);
+        if (m.recommendations && m.recommendations.length > 0) {
+          for (const rec of m.recommendations) {
+            const recEl = ce('div', 'check-gate-rec');
+            recEl.textContent = rec;
+            item.appendChild(recEl);
+          }
+        }
+        frag.appendChild(item);
+      }
+      return frag;
+    });
   }
 }
 

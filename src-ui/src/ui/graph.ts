@@ -1335,7 +1335,9 @@ export class StarGraph {
           const loc = node.location;
           const lastColon = loc.lastIndexOf(':');
           const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
-          shell.navigateToFile(filePath);
+          const lineStr = lastColon > 1 ? loc.substring(lastColon + 1) : '';
+          const line = parseInt(lineStr, 10);
+          shell.navigateToFile(filePath, isNaN(line) ? undefined : line);
         }
       }
     });
@@ -5349,6 +5351,9 @@ export class StarGraph {
   }
 
   // ── Resize ───────────────────────────────────────────────
+
+  /** Public resize — call after CSS layout changes (e.g. --font-scale, --toolbar-h) */
+  resize(): void { this.onResize(); }
 
   private onResize = (): void => {
     const w = this.container.clientWidth, h = this.container.clientHeight;
