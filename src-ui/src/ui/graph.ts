@@ -2359,6 +2359,7 @@ export class StarGraph {
         this._overrideFlags[i] = 0;
         this._setGlowAlpha(i, 0.55);
         this._setCoreVisible(i, true);
+        if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0.55);
       }
       this._flushOverrideAttrs();
       this._updateLegendActive(this._edgeTypeFilter, null);
@@ -2375,7 +2376,7 @@ export class StarGraph {
     for (let i = 0; i < this._nodeCount; i++) {
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string);
       const hit = matches(kind);
-      this._overrideFlags[i] = hit ? 1 : 1; // ALL nodes overridden — shader would animate non-matching
+      this._overrideFlags[i] = hit ? 0 : 1; // matching=let shader animate, non-matching=CPU freeze at alpha 0
       if (hit) {
         this._setGlowAlpha(i, 0.88);
         if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0.48);
