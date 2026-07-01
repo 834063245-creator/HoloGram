@@ -3,7 +3,8 @@
 
 // Tool 系统 — Tool 接口 + Registry 注册表 + Hologram 工具定义
 
-import type { ToolSchema } from '../provider/types';
+import type { Provider, ToolSchema } from '../provider/types';
+import { ChunkType } from '../provider/types';
 import { bus } from '../ui/events';
 
 // ---- Tool 接口 ----
@@ -551,7 +552,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
 // Coding Tools — 文件 / Shell / 搜索 / Git / Web
 // ═══════════════════════════════════════════════════════
 
-export function createCodingTools(exec: ToolExecutor): Tool[] {
+export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool[] {
   return [
     // ── User Interaction ──
     {
@@ -1184,7 +1185,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'web_search',
       description: () =>
-        'Search the web for documentation, solutions, or references. Returns page titles, URLs, and snippets. Use to look up library docs, error messages, or API references.',
+        'Search the web for documentation, solutions, or references. Returns a concise summary with source links — the search results are already read and summarized, so you can use the information directly without calling web_fetch on every link.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -1196,9 +1197,14 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
         required: ['query'],
       }),
       readOnly: () => true,
-      execute: async (args) => {
+      execute: async (args, onProgress) => {
         try {
-          return await exec('web_search', args);
+          onProgress?.('搜索中…');
+          const rawResults = await exec('web_search', args);
+          if (!provider) return rawResults; // no LLM available, return raw
+          onProgress?.('摘要中…');
+          const summary = await summarizeSearchResults(provider, args.query as string, rawResults);
+          return summary;
         } catch (e: any) {
           return JSON.stringify({ error: `web_search failed: ${e.message || e}` });
         }
@@ -1433,6 +1439,49 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       execute: (args) => exec('agent_isolation_status', args),
     },
   ];
+}
+
+// ponytail: single-turn LLM call to summarise search results, same pattern as Agent.summarizeRegion.
+// No tools, low temp — factual summary with source links preserved.
+async function summarizeSearchResults(provider: Provider, query: string, rawResults: string): Promise<string> {
+  const prompt = `Summarise the following web search results for the query "${query}".
+
+Return format:
+1. One-line conclusion (bold)
+2. Key findings (bullet points, each with source URL as markdown link)
+3. If results are irrelevant or empty, say so honestly
+
+Rules:
+- Keep it concise — the user will read this as a tool output, not a chat response
+- Preserve all source URLs as markdown links: [Title](URL)
+- Don't add information not present in the results
+- Reply in the same language as the query
+
+Raw search results:
+${rawResults}`;
+
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(), 20_000);
+
+  try {
+    const gen = provider.stream(ac.signal, {
+      messages: [{ role: 'user', content: prompt }],
+      tools: [],
+      temperature: 0.3,
+      max_tokens: 0,
+    });
+
+    const parts: string[] = [];
+    for await (const chunk of gen) {
+      if (chunk.type === ChunkType.Text && chunk.text) parts.push(chunk.text);
+      if (chunk.type === ChunkType.Error) throw chunk.err!;
+    }
+    return parts.join('').trim() || rawResults;
+  } catch {
+    return rawResults; // fallback: return raw results if LLM call fails
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

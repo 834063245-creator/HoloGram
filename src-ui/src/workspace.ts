@@ -393,7 +393,7 @@ export class Workspace {
       const result = await invoke<string>(name, { ...args, _agent: true });
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
-    for (const tool of createCodingTools(codingExec)) { registry.register(tool); }
+    for (const tool of createCodingTools(codingExec, prov)) { registry.register(tool); }
 
     // Aliases — short names for high-frequency tools
     registry.alias('read_file', 'read_file_content');
@@ -477,7 +477,7 @@ export class Workspace {
         if (ws.graphData) {
           for (const tool of createHologramTools(factoryExec)) r.register(tool);
         }
-        for (const tool of createCodingTools(factoryExec)) r.register(tool);
+        for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
         r.alias('hologram_history', 'hologram_node');
         if (mm) {
