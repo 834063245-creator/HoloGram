@@ -3548,6 +3548,10 @@
       font-family: var(--font-mono); font-size: calc(9px * var(--font-scale));
       color: var(--signal); margin-left: 4px;
     }
+    .sp-checkbox-label {
+      font-size: calc(10px * var(--font-scale)); color: rgba(165, 200, 235, 0.78);
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+    }
     .sp-input {
       flex: 1; min-width: 0; padding: 5px 8px;
       font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
@@ -3582,6 +3586,7 @@
       transition: all var(--snap); flex-shrink: 0;
     }
     .sp-key-toggle:hover { background: rgba(25, 38, 60, 0.6); color: var(--starlight-dim); }
+    .sp-ascii-warn { color: #e88; font-size: calc(9px * var(--font-scale)); margin-left: 6px; }
 
     /* Range slider */
     .sp-slider-row {
@@ -3637,7 +3642,7 @@
 
     /* Hint */
     .sp-hint {
-      font-size: calc(9px * var(--font-scale)); color: rgba(105, 145, 200, 0.52);
+      font-size: calc(9px * var(--font-scale)); color: rgba(140, 180, 220, 0.7);
       padding: 4px 0; line-height: 1.4;
     }
     .sp-hint a {
@@ -3709,7 +3714,7 @@
       box-shadow: 0 0 8px rgba(50, 100, 180, 0.1);
     }
     .sp-hint-sub {
-      font-weight: 400; font-size: calc(8px * var(--font-scale)); color: rgba(105, 145, 200, 0.3);
+      font-weight: 400; font-size: calc(8px * var(--font-scale)); color: rgba(130, 170, 210, 0.62);
       margin-left: 4px;
     }
     .sp-hint code {

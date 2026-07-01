@@ -362,6 +362,7 @@ export class Workspace {
           })
         : createOpenAIProvider({
             name: active.name, apiKey: active.apiKey, baseUrl: active.baseUrl, model: active.model,
+            disableThinking: settings.agent?.disableThinking,
           });
 
     const registry = new ToolRegistry();
@@ -473,7 +474,7 @@ export class Workspace {
         const p: Provider =
           act.kind === 'anthropic'
             ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
-            : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
+            : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, disableThinking: s.agent?.disableThinking });
         const r = new ToolRegistry();
         const factoryExec: ToolExecutor = async (name, args) => {
           const result = await invoke<string>(name, { ...args, _agent: true });

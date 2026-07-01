@@ -3,7 +3,7 @@
 
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
-import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
+import { Chunk, ChunkType, Message, Provider, Request, Role, classifyError, sanitizeToolPairing } from './types';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
@@ -82,7 +82,7 @@ interface AnthRequest {
   system?: TextBlock[];
   messages: AnthMessage[];
   tools?: AnthTool[];
-  thinking?: { type: string; display: string };
+  thinking?: { type: string; display?: string; budget_tokens?: number };
   stream: boolean;
 }
 
@@ -191,8 +191,22 @@ function buildRequest(
     stream: true,
   };
 
-  if (thinkingCfg === 'adaptive') {
-    r.thinking = { type: 'adaptive', display: 'summarized' };
+  if (thinkingCfg && thinkingCfg !== 'off') {
+    // 努力等级 → budget tokens 映射
+    const effortMap: Record<string, number> = { low: 4000, medium: 8000, high: 16000, max: 32000 };
+    const effortBudget = effortMap[thinkingCfg.toLowerCase()];
+    if (effortBudget) {
+      r.thinking = { type: 'enabled', budget_tokens: Math.min(effortBudget, 32000) };
+    } else {
+      // 纯数字字符串 = budget tokens（如 "4000"、"16000"）
+      const budget = parseInt(thinkingCfg, 10);
+      if (!isNaN(budget) && budget > 0) {
+        r.thinking = { type: 'enabled', budget_tokens: Math.min(budget, 32000) };
+      } else {
+        // "auto" 或任意非 off 字符串 → 自动模式
+        r.thinking = { type: 'auto', display: 'summarized' as const };
+      }
+    }
   }
 
   return r;
@@ -232,7 +246,7 @@ async function sendWithRetry(
       });
     } catch (err: any) {
       if (err.name === 'AbortError') throw new Error(`${name}: aborted`);
-      lastErr = new Error(`${name}: request failed: ${err.message}`);
+      lastErr = new Error(classifyError(name, 0, '', err.message));
       continue;
     }
 
@@ -240,13 +254,9 @@ async function sendWithRetry(
 
     const msg = await resp.text().catch(() => '');
     if (resp.status === 401 || resp.status === 403) {
-      throw new Error(
-        `authentication failed for "${name}" (HTTP ${resp.status}): API key is invalid or expired`,
-      );
+      throw new Error(classifyError(name, resp.status, msg));
     }
-    const statusErr = new Error(
-      `${name}: status ${resp.status}: ${msg.slice(0, 500)}`,
-    );
+    const statusErr = new Error(classifyError(name, resp.status, msg));
     if (!isRetryableStatus(resp.status)) throw statusErr;
     lastErr = statusErr;
   }

@@ -4,7 +4,7 @@
 // OpenAI-compatible provider — DeepSeek, MiMo, and any OpenAI-compatible endpoint
 // 手写 fetch() + SSE 解析，零第三方 SDK
 
-import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
+import { Chunk, ChunkType, Message, Provider, Request, Role, classifyError, sanitizeToolPairing } from './types';
 
 const DEFAULT_MAX_TOKENS = 200000;
 
@@ -192,7 +192,7 @@ async function sendWithRetry(
       });
     } catch (err: any) {
       if (err.name === 'AbortError') throw new Error(`${name}: aborted`);
-      lastErr = new Error(`${name}: request failed: ${err.message}`);
+      lastErr = new Error(classifyError(name, 0, '', err.message));
       continue;
     }
 
@@ -200,11 +200,9 @@ async function sendWithRetry(
 
     const msg = await resp.text().catch(() => '');
     if (resp.status === 401 || resp.status === 403) {
-      throw new Error(
-        `authentication failed for "${name}" (HTTP ${resp.status}): API key is invalid or expired`,
-      );
+      throw new Error(classifyError(name, resp.status, msg));
     }
-    const statusErr = new Error(`${name}: status ${resp.status}: ${msg.slice(0, 500)}`);
+    const statusErr = new Error(classifyError(name, resp.status, msg));
     if (!isRetryableStatus(resp.status)) throw statusErr;
     lastErr = statusErr;
   }
@@ -297,6 +295,13 @@ async function* readSSE(
           ev = JSON.parse(data);
         } catch {
           continue;
+        }
+
+        // In-stream error from OpenAI-compatible API (DeepSeek overload, rate limit, etc.)
+        if ((ev as any).error) {
+          const e = (ev as any).error;
+          yield { type: ChunkType.Error, err: new Error(`${name}: ${e.message || JSON.stringify(e)}`) };
+          return;
         }
 
         // Usage may come in a separate chunk or alongside the last choice.
