@@ -928,4 +928,57 @@ def foo():
         assert!(foo.is_some(), "should find scope foo");
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn test_demo_realistic() {
+        // Realistic patterns: shared config, caching, async, pipeline
+        let src = r#"
+config = {"host": "localhost"}
+_cache = {}
+def connect():
+    return config["host"]
+def query(sql):
+    result = _cache.get(sql)
+    if result:
+        return result
+    db = connect()
+    data = db.execute(sql)
+    _cache[sql] = data
+    return data
+async def fetch_users():
+    data = await http_get("/api/users")
+    return data
+def pipeline():
+    load_data()
+    transform_data()
+    save_results()
+"#;
+        let df = run_query("py", python_config(), src);
+        eprintln!("=== SCOPES ===");
+        for s in &df.scopes {
+            eprintln!("  {}: reads={:?} writes={:?} triggers={:?} seq={:?}",
+                s.name, s.reads, s.writes, s.triggers, s.sequence_calls);
+        }
+        eprintln!("=== SHARED ===");
+        for sh in &df.shared {
+            eprintln!("  {}: readers={:?} writers={:?}", sh.var, sh.readers, sh.writers);
+        }
+        // Assertions
+        assert!(df.scopes.iter().any(|s| s.name == "connect"), "should find connect");
+        assert!(df.scopes.iter().any(|s| s.name == "query"), "should find query");
+        assert!(df.scopes.iter().any(|s| s.name == "fetch_users"), "should find fetch_users");
+        assert!(df.scopes.iter().any(|s| s.name == "pipeline"), "should find pipeline");
+        // connect reads config
+        let connect = df.scopes.iter().find(|s| s.name == "connect").unwrap();
+        assert!(connect.reads.contains(&"config".into()), "connect should read config");
+        // fetch_users has trigger
+        let fetch = df.scopes.iter().find(|s| s.name == "fetch_users").unwrap();
+        assert!(!fetch.triggers.is_empty(), "fetch_users should have trigger");
+        // pipeline has sequence_calls
+        let pipe = df.scopes.iter().find(|s| s.name == "pipeline").unwrap();
+        assert_eq!(pipe.sequence_calls.len(), 3, "pipeline should have 3 sequence calls");
+        // config should be shared (read by connect)
+        let config_shared = df.shared.iter().find(|s| s.var == "config");
+        assert!(config_shared.is_some(), "config should be detected as shared");
+    }
 }
