@@ -1,8 +1,5 @@
-;; Dart dataflow queries
-
-;; Writes
-(assignment_expression left: (identifier) @write)
-(variable_declaration name: (identifier) @write)
+;; Dart dataflow queries — minimal: reads + scope + async only.
+;; tree-sitter-dart 0.2 has unusual AST; Write patterns TBD.
 
 ;; All identifiers — engine filters to reads
 (identifier) @read
@@ -10,10 +7,8 @@
 ;; Scope boundaries
 (function_declaration) @scope_fn
 (method_declaration) @scope_fn
-(function_expression) @scope_fn
 
 ;; Async triggers
-(await_expression (function_expression) @trigger_call)
 (await_expression (identifier) @trigger_call)
 
 ;; Sequences
