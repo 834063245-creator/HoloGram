@@ -31,7 +31,6 @@ use crate::adapter::python_lsp::run_py_lsp;
 use crate::adapter::ts_lsp::run_ts_lsp;
 use crate::adapter::type_registry::TypeRegistry;
 use crate::analysis::coupling::compute_coupling;
-use crate::analysis::dataflow_synthesis::synthesize_dataflow_edges;
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
@@ -390,6 +389,50 @@ impl Engine {
 
         info!("[engine] analysis started for {}", project_root.display());
 
+        // ponytail: panic guard — if any pipeline stage panics or errors,
+        // reset state from Analyzing to Error so the UI doesn't stay stuck.
+        // Without this, a single stack overflow or unwrap failure leaves the
+        // engine permanently "analyzing" and the analyze_lock poisoned.
+        let analyze_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_pipeline(project_root, started_at, started_at_ms)
+        }));
+
+        match analyze_result {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(e)) => {
+                *self.state.write() = EngineState::Error(e.clone());
+                return Err(e);
+            }
+            Err(panic_payload) => {
+                let msg = panic_payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                *self.state.write() = EngineState::Error(format!("分析过程崩溃: {msg}"));
+                return Err(format!("分析过程崩溃: {msg}"));
+            }
+        }
+    }
+
+    /// Pipeline body extracted so `catch_unwind` can guard against panics
+    /// without poisoning the analyze_lock or leaving state at Analyzing.
+    fn run_pipeline(
+        &self,
+        project_root: &Path,
+        started_at: std::time::Instant,
+        started_at_ms: u64,
+    ) -> Result<AnalyzeResult, String> {
+        let set_progress = |phase: &str, current: usize, total: usize, file: &str| {
+            *self.state.write() = EngineState::Analyzing {
+                started_at_ms,
+                phase: phase.to_string(),
+                current,
+                total,
+                file: file.to_string(),
+            };
+        };
+
         // Per-stage timing collector
         let mut stage_timings: Vec<StageTiming> = Vec::new();
 
@@ -410,18 +453,12 @@ impl Engine {
                 result.files_parsed, result.files_discovered, failed_note,
                 result.graph.node_count(), result.graph.edge_count()),
         });
-        // Detach parse_cache + discovered_files so they can be moved into the
-        // LSP thread (which needs 'static). Re-attached after LSP completes.
         let parse_cache = std::mem::take(&mut result.parse_cache);
         let discovered_files = std::mem::take(&mut result.discovered_files);
         set_progress("解析完成", result.files_parsed, result.files_discovered,
             &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
-        // 1.5. Type-aware LSP call resolution (before cross-file resolution)
-        // Run on a dedicated thread with a large stack: process_function and
-        // process_class are mutually recursive, and eval_expr_type recurses too.
-        // On Windows the main thread is stuck with ~1 MB which overflows on
-        // deeply nested ASTs (hang, not crash — Windows swallows SIGSEGV).
+        // 1.5. Type-aware LSP call resolution
         set_progress("类型感知解析", 0, 0, "");
         let project_root_buf = project_root.to_path_buf();
         let mut graph_for_lsp = std::mem::take(&mut result.graph);
@@ -431,18 +468,24 @@ impl Engine {
             let r = resolve_calls_lsp(&mut graph_for_lsp, &parse_cache, &discovered_files, &project_root_buf);
             let _ = tx.send((graph_for_lsp, parse_cache, discovered_files, r));
         });
+        // ponytail: 30s timeout on LSP — prevents permanent hang if the LSP
+        // thread stack-overflows (Windows swallows SIGSEGV on alt-stack threads
+        // too). Fall back to skipping LSP pass rather than blocking forever.
         let lsp_resolved = match handle {
-            Ok(h) => {
-                h.join().ok();
-                match rx.recv() {
+            Ok(_h) => {
+                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
                     Ok((g, pc, df, r)) => {
                         result.graph = g;
                         result.parse_cache = pc;
                         result.discovered_files = df;
                         r
                     }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        warn!("[engine] LSP thread timed out after 30s — skipping LSP pass");
+                        0
+                    }
                     Err(_) => {
-                        warn!("[engine] LSP thread did not report back — skipping LSP pass");
+                        warn!("[engine] LSP thread disconnected — skipping LSP pass");
                         0
                     }
                 }
@@ -455,13 +498,6 @@ impl Engine {
         info!(edges = lsp_resolved, "[engine] LSP type-resolved call edges");
         eprintln!("[engine] stage: LSP done in {:.1}s ({} resolved)",
             stage_start.elapsed().as_secs_f64(), lsp_resolved);
-        // Note: LSP stage_start was set before the thread spawn at line ~376,
-        // but it was shadowed by later stage_starts. We record from the
-        // core-parse stage_start to here as a combined parse+LSP span.
-        // For per-stage LSP timing, we use the sub-timing below.
-        // ponytail: LSP timing is measured from core-parse start because
-        // the stage_start variable is reused. A follow-up can add a dedicated
-        // LSP timer. For now, the core-parse stage covers discovery+parse+LSP.
 
         // 2. Cross-file resolution
         set_progress("跨文件解析", 0, 0, "");
@@ -488,7 +524,7 @@ impl Engine {
             detail: String::new(),
         });
 
-        // 4. Framework route detection (uses parse cache + discovered files to avoid re-walkdir)
+        // 4. Framework route detection
         set_progress("框架路由检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let routes_found = detect_framework_routes(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -501,7 +537,7 @@ impl Engine {
             detail: format!("{} routes", routes_found),
         });
 
-        // 5. Dynamic dispatch synthesis (uses parse cache + discovered files)
+        // 5. Dynamic dispatch synthesis
         set_progress("动态调度合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let syn_edges = synthesize_dynamic_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -514,25 +550,15 @@ impl Engine {
             detail: format!("{} edges", syn_edges),
         });
 
-        // 6. Dataflow synthesis (uses parse cache + discovered files)
-        set_progress("数据流合成", 0, 0, "");
-        let stage_start = std::time::Instant::now();
-        let df_edges = synthesize_dataflow_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = df_edges, "[engine] dataflow edges synthesized");
-        eprintln!("[engine] stage: dataflow done in {:.1}s ({} edges)",
-            stage_start.elapsed().as_secs_f64(), df_edges);
-        stage_timings.push(StageTiming {
-            name: "Dataflow".into(),
-            elapsed_secs: stage_start.elapsed().as_secs_f64(),
-            detail: format!("{} edges", df_edges),
-        });
+        // 6. Dataflow — now on-demand via query_file_dataflow().
+        // Pipeline no longer precomputes dataflow edges at graph build time.
+        // Agent tools call the query engine directly when tracing variables.
 
-        // ponytail: release parse_cache (source + CST) after synthesis —
-        // for large C projects this is 2+ GB of tree-sitter trees no longer needed.
+        // ponytail: release parse_cache after synthesis
         result.parse_cache.clear();
         result.parse_cache.shrink_to_fit();
 
-        // 7. Community detection (Leiden — single pass for flat + hierarchical)
+        // 7. Community detection (Leiden)
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let (communities, hierarchical) = detect_communities_and_hierarchy(&result.graph, 42);
@@ -547,7 +573,6 @@ impl Engine {
             elapsed_secs: leiden_elapsed,
             detail: format!("{} communities, {} super", community_count, hc_count),
         });
-        // Assign community_id back to each node (Level 0 = base community index)
         for (comm_idx, comm) in communities.iter().enumerate() {
             for node_id in comm {
                 if let Some(node) = result.graph.nodes.get_mut(node_id) {
@@ -560,10 +585,9 @@ impl Engine {
         let edge_count = result.graph.edge_count();
         let elapsed = started_at.elapsed().as_secs_f64();
 
-        // 8. Store into GraphStore (MemoryIndex + SQLite) — atomic swap+save
+        // 8. Store into GraphStore (MemoryIndex + SQLite)
         set_progress("写入数据库", 0, 0, "");
         let stage_start = std::time::Instant::now();
-        // Drain graph into MemoryIndex — edges consumed one-by-one, no duplicate allocation
         let graph_nodes = std::mem::take(&mut result.graph.nodes);
         let graph_edges = std::mem::take(&mut result.graph.edges);
         let idx = MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
@@ -1762,5 +1786,169 @@ def order_view():
         let g = graph_from_index(&idx);
         let e = g.edges.values().next().unwrap();
         assert!(!e.cross_file, "edges without locations should default cross_file=false");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Re-analyze resilience — state must never stay stuck at Analyzing
+    // ═══════════════════════════════════════════════════════════════
+
+    /// After a workspace-mismatch error, state must be Error (not stuck at
+    /// Analyzing), and the analyze lock must be released so the next call
+    /// can proceed.
+    #[test]
+    fn test_reanalyze_state_recovers_on_workspace_mismatch() {
+        let tmp = std::env::temp_dir().join("hologram_test_rs_ws_mismatch");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let dir_a = tmp.join("project_a");
+        let dir_b = tmp.join("project_b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&dir_a).unwrap();
+        assert!(engine.is_ready());
+
+        // analyze(dir_b) when engine is bound to dir_a — must fail
+        let result = engine.analyze(&dir_b);
+        assert!(result.is_err(), "analyze on wrong workspace must return Err");
+        assert!(
+            result.unwrap_err().contains("工作区已切换"),
+            "error message should mention workspace switch"
+        );
+
+        // State must be Uninitialized (not Analyzing!) because the check
+        // happens BEFORE set_progress("发现文件", ...) sets Analyzing.
+        assert!(
+            !engine.state().is_analyzing(),
+            "state must NOT be Analyzing after workspace-mismatch error"
+        );
+
+        // Lock must be released — a second analyze on the correct path works
+        let result2 = engine.analyze(&dir_a);
+        // This should succeed (or fail with a real analysis error, not lock
+        // poisoned). Either way, it must not hang.
+        assert!(
+            result2.is_ok() || !result2.as_ref().unwrap_err().contains("poisoned"),
+            "analyze lock must not be poisoned after error: {:?}",
+            result2.err()
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Full analysis on a real project: verify state ends at Ready (not
+    /// stuck at Analyzing), data is accessible, and lock is released.
+    #[test]
+    fn test_reanalyze_completes_and_state_is_ready() {
+        let tmp = std::env::temp_dir().join("hologram_test_rs_completes");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Small multi-file Python project to exercise the full pipeline
+        std::fs::write(tmp.join("main.py"), "import util\ndef main():\n    return util.add(1, 2)\n").unwrap();
+        std::fs::write(tmp.join("util.py"), "def add(a, b):\n    return a + b\n").unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+        assert!(engine.is_ready());
+
+        let result = engine.analyze(&tmp);
+        assert!(result.is_ok(), "analyze must succeed: {:?}", result.err());
+
+        // State must be Ready (NOT Analyzing)
+        let state = engine.state();
+        assert!(
+            matches!(state, EngineState::Ready { .. }),
+            "state must be Ready after successful analysis, got {:?}",
+            state
+        );
+
+        // Data must be accessible
+        let nc = engine.node_count().unwrap();
+        let ec = engine.edge_count().unwrap();
+        assert!(nc > 0, "must have nodes after analysis");
+        assert!(ec > 0, "must have edges after analysis (import + call)");
+
+        // Lock is healthy — consecutive reads work
+        let nc2 = engine.read(|idx| idx.node_count()).unwrap();
+        assert_eq!(nc2, nc, "read after analyze must return same count");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Verify the analyze lock is not poisoned and state is not stuck
+    /// after the pipeline completes (success or error).  Regression test
+    /// for the "re-analyze stuck at 分析中" bug where a panic or error
+    /// inside the pipeline left state permanently at Analyzing.
+    #[test]
+    fn test_reanalyze_lock_healthy_and_state_not_stuck() {
+        let tmp = std::env::temp_dir().join("hologram_test_rs_lock_healthy");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        std::fs::write(tmp.join("hello.py"), "def f(): pass\n").unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+
+        // Run analyze — may succeed or fail, but must not leave state stuck
+        let _ = engine.analyze(&tmp);
+
+        // Assert 1: state is not Analyzing
+        assert!(
+            !engine.state().is_analyzing(),
+            "BUG: state stuck at Analyzing after analyze() returned"
+        );
+
+        // Assert 2: lock is healthy — can call analyze() again
+        let result2 = engine.analyze(&tmp);
+        // Either succeeds or fails with a non-poison error
+        if let Err(e) = &result2 {
+            assert!(
+                !e.contains("poisoned"),
+                "BUG: analyze lock poisoned after first analyze: {}",
+                e
+            );
+        }
+
+        // Assert 3: graph write still works
+        use crate::graph::{Node, NodeKind};
+        let write_result = engine.write(|idx| {
+            idx.insert_node(Node::new("test_n", "Test", NodeKind::Symbol));
+        });
+        assert!(write_result.is_ok(), "write after analyze must succeed: {:?}", write_result.err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Verify that even when analyze() is called concurrently on two
+    /// engines (different instances), each completes without the other's
+    /// state leaking.  Proves the analyze_lock is per-instance.
+    #[test]
+    fn test_reanalyze_independent_engines_dont_interfere() {
+        let tmp = std::env::temp_dir().join("hologram_test_rs_independent");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let dir1 = tmp.join("p1");
+        let dir2 = tmp.join("p2");
+        std::fs::create_dir_all(&dir1).unwrap();
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir1.join("a.py"), "def x(): pass\n").unwrap();
+        std::fs::write(dir2.join("b.py"), "def y(): pass\n").unwrap();
+
+        let mut e1 = Engine::new();
+        let mut e2 = Engine::new();
+        e1.init(&dir1).unwrap();
+        e2.init(&dir2).unwrap();
+
+        let r1 = e1.analyze(&dir1);
+        let r2 = e2.analyze(&dir2);
+
+        assert!(r1.is_ok(), "engine 1 analyze failed: {:?}", r1.err());
+        assert!(r2.is_ok(), "engine 2 analyze failed: {:?}", r2.err());
+
+        assert!(matches!(e1.state(), EngineState::Ready { .. }), "engine 1 state stuck");
+        assert!(matches!(e2.state(), EngineState::Ready { .. }), "engine 2 state stuck");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

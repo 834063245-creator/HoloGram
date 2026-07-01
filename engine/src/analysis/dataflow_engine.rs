@@ -1,19 +1,19 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Generic dataflow query engine — runs tree-sitter queries and synthesises
-//! Reads/Writes/Shares/Triggers/Awaits/Sequences edges without per-language walkers.
+//! Pure dataflow query engine — runs tree-sitter .scm queries and returns
+//! structured reads/writes/shares/triggers/sequences per scope. No Graph
+//! dependency — designed for on-demand Agent dataflow tracing.
 //!
 //! Architecture:
-//!   1. Run .scm queries → collect captures (write/read/trigger/scope/sequence)
-//!   2. Group captures by enclosing scope (function/class/module)
-//!   3. Emit edges: Reads/Writes within scopes, Shares across scopes,
-//!      Triggers/Awaits for async patterns, Sequences for call ordering.
+//!   1. Phase 1: walk tree → collect scope boundaries (functions/classes)
+//!   2. Phase 2: run .scm queries → collect captures
+//!   3. Phase 3: resolve captures to per-scope reads/writes/triggers/sequences
+//!   4. Phase 5: reverse-index cross-function shared state detection
 //!
 //! A new language needs only a ~30-line .scm file + a builtin-name list —
 //! no Rust walker code required.
 
-use crate::graph::{EdgeKind, Graph};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node as TsNode, Query, QueryCursor};
 use streaming_iterator::StreamingIterator;
@@ -344,8 +344,6 @@ struct Scope {
 
 // ── File helpers ──
 
-fn fid(file: &str) -> String { file.replace(['.', '/', '\\'], "_") }
-
 fn extract_fn_name(node: &TsNode, source: &str) -> String {
     if let Some(nn) = node.child_by_field_name("name") {
         if let Ok(s) = nn.utf8_text(source.as_bytes()) {
@@ -358,66 +356,78 @@ fn extract_fn_name(node: &TsNode, source: &str) -> String {
 fn extract_name(node: &TsNode, source: &str) -> String {
     node.utf8_text(source.as_bytes()).unwrap_or("?").to_string()
 }
-
-// ── Scope helpers — re-exported for dataflow_synthesis.rs ──
-
-use crate::analysis::dataflow_synthesis::{
-    insert_edge, medium_id_for, node_id_for,
-};
-
 // ═══════════════════════════════════════════════════════════════
-// Main entry point
+// Pure query result types
 // ═══════════════════════════════════════════════════════════════
 
-pub fn synthesize_via_queries(
-    graph: &mut Graph,
-    file: &str,
+/// Per-function dataflow summary.
+#[derive(Debug, Clone)]
+pub struct ScopeFlow {
+    pub name: String,
+    pub reads: Vec<String>,
+    pub writes: Vec<String>,
+    pub triggers: Vec<String>,         // await f() targets
+    pub awaits_callbacks: Vec<String>, // .then(cb) callbacks
+    pub sequence_calls: Vec<String>,   // consecutive call ordering
+}
+
+/// Cross-function shared state variable.
+#[derive(Debug, Clone)]
+pub struct SharedVarFlow {
+    pub var: String,
+    pub readers: Vec<String>,
+    pub writers: Vec<String>,
+}
+
+/// Pure dataflow result for one file — no Graph dependency.
+#[derive(Debug, Clone)]
+pub struct FileDataflow {
+    pub scopes: Vec<ScopeFlow>,
+    pub shared: Vec<SharedVarFlow>,
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Public API: query_file_dataflow
+// ═══════════════════════════════════════════════════════════════
+
+/// Run dataflow queries on a single file. Returns structured per-scope
+/// reads/writes/triggers/sequences plus cross-function shared state.
+/// Pure — does not touch the Graph. Use for on-demand Agent tracing.
+pub fn query_file_dataflow(
     lang: Language,
     source: &str,
     tree: &tree_sitter::Tree,
     config: &LangDataflowConfig,
-) -> usize {
-    let query = match Query::new(&lang, config.query_src) {
-        Ok(q) => q,
-        Err(e) => {
-            // ponytail: query compile failure means the .scm file has wrong node types for
-            // this grammar version. This is a programmer error — fix the .scm, don't hide it.
-            let msg = format!("⚠ [dataflow] query compile FAILED for {file}: {e}. Dataflow analysis SKIPPED for this file. Check the .scm query against your tree-sitter grammar version.");
-            eprintln!("{msg}");
-            tracing::error!("{msg}");
-            return 0;
-        }
-    };
+) -> Result<FileDataflow, String> {
+    let query = Query::new(&lang, config.query_src)
+        .map_err(|e| format!("query compile failed: {e}"))?;
 
     let mut cursor = QueryCursor::new();
     let root = tree.root_node();
-    let ff = fid(file);
     let source_bytes = source.as_bytes();
 
-    // ── Phase 1: collect scope boundaries ──
+    // ── Phase 1: collect scopes ──
     let mut scopes: Vec<Scope> = Vec::new();
-    let mut scope_stack: Vec<(TsNode, String)> = vec![(root, file.to_string())];
-    while let Some((node, _parent_scope)) = scope_stack.pop() {
-        if config.scope_role(node.kind()).is_some() {
-            let name = extract_fn_name(&node, source);
-            scopes.push(Scope {
-                start: node.start_byte(),
-                end: node.end_byte(),
-                name,
-            });
-        }
-        for child in node.children(&mut node.walk()) {
-            scope_stack.push((child, String::new()));
+    {
+        let mut stack: Vec<(TsNode, String)> = vec![(root, String::new())];
+        while let Some((node, _)) = stack.pop() {
+            if config.scope_role(node.kind()).is_some() {
+                scopes.push(Scope {
+                    start: node.start_byte(),
+                    end: node.end_byte(),
+                    name: extract_fn_name(&node, source),
+                });
+            }
+            for child in node.children(&mut node.walk()) {
+                stack.push((child, String::new()));
+            }
         }
     }
-    // Sort by start descending — inner scopes (nested) always start after outer
-    // scopes, so the FIRST match is the tightest enclosing scope. O(1) amortized.
     scopes.sort_by_key(|s| -(s.start as i64));
 
     // ── Phase 2: collect captures ──
     let mut write_offsets: HashSet<usize> = HashSet::new();
     let mut caps: Vec<Cap> = Vec::new();
-    let mut then_names: HashMap<usize, String> = HashMap::new(); // node_id → method name
 
     let mut captures = cursor.captures(&query, root, source_bytes);
     while let Some((qmatch, cap_idx)) = captures.next() {
@@ -429,153 +439,148 @@ pub fn synthesize_via_queries(
         let line = node.start_position().row + 1;
 
         match cap_name {
-                "write" => {
-                    write_offsets.insert(start);
-                    caps.push(Cap { name, line, start, capture: CapKind::Write });
-                }
-                "read" => {
-                    caps.push(Cap { name, line, start, capture: CapKind::Read });
-                }
-                "global_var" => {
-                    caps.push(Cap { name, line, start, capture: CapKind::GlobalVar });
-                }
-                "trigger_call" => {
-                    caps.push(Cap { name, line, start, capture: CapKind::TriggerCall });
-                }
-                "await_cb" => {
-                    caps.push(Cap { name, line, start, capture: CapKind::AwaitCb });
-                }
-                "await_fn" => {
-                    caps.push(Cap { name, line, start, capture: CapKind::AwaitFn });
-                }
-                "_then_name" => {
-                    then_names.insert(node.id(), name.clone());
-                    caps.push(Cap { name: name.clone(), line, start, capture: CapKind::ThenMethod(name) });
-                }
-                "sequence" => {
-                    caps.push(Cap { name: name.clone(), line, start, capture: CapKind::Sequence(name) });
-                }
-                _ => {} // scope markers handled in Phase 1
+            "write" => {
+                write_offsets.insert(start);
+                caps.push(Cap { name, line, start, capture: CapKind::Write });
             }
+            "read" => {
+                caps.push(Cap { name, line, start, capture: CapKind::Read });
+            }
+            "global_var" => {
+                caps.push(Cap { name, line, start, capture: CapKind::GlobalVar });
+            }
+            "trigger_call" => {
+                caps.push(Cap { name, line, start, capture: CapKind::TriggerCall });
+            }
+            "await_cb" => {
+                caps.push(Cap { name, line, start, capture: CapKind::AwaitCb });
+            }
+            "await_fn" => {
+                caps.push(Cap { name, line, start, capture: CapKind::AwaitFn });
+            }
+            "_then_name" => {
+                caps.push(Cap { name: name.clone(), line, start, capture: CapKind::ThenMethod(name) });
+            }
+            "sequence" => {
+                caps.push(Cap { name: name.clone(), line, start, capture: CapKind::Sequence(name) });
+            }
+            _ => {}
+        }
     }
 
-    // ── Phase 3: process captures → edges ──
-    let mut added = 0usize;
-    let mut scope_writes: HashMap<String, HashSet<String>> = HashMap::new(); // scope_name → var_names
+    // ── Phase 3: resolve captures → per-scope HashMaps (no Graph) ──
+    let mut scope_writes: HashMap<String, HashSet<String>> = HashMap::new();
     let mut scope_reads: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut scope_triggers: HashMap<String, Vec<String>> = HashMap::new();
+    let mut scope_awaits: HashMap<String, Vec<String>> = HashMap::new();
+    let mut scope_sequences: HashMap<String, Vec<(String, usize)>> = HashMap::new();
     let mut module_vars: HashSet<String> = HashSet::new();
-    let mut scope_sequences: HashMap<String, Vec<(String, usize)>> = HashMap::new(); // scope_name → [(target, line)]
 
     for cap in &caps {
-        // Find tightest enclosing scope
-        let scope_id = find_scope(cap.start, &scopes).unwrap_or_else(|| file.to_string());
+        // ponytail: captures outside any function scope → module level
+        let scope_id = find_scope(cap.start, &scopes).unwrap_or_else(|| "<module>".into());
 
         match &cap.capture {
             CapKind::Write => {
-                let sv = &cap.name;
-                if sv.len() < 1 { continue; }
-                let tgt = node_id_for(graph, sv, file, cap.line);
-                let eid = format!("wrt_{}_{}_{}", ff, scope_id, sv);
-                added += insert_edge(graph, &eid, &scope_id, &tgt, EdgeKind::Writes, 3, None);
-                scope_writes.entry(scope_id.clone()).or_default().insert(sv.clone());
+                if cap.name.is_empty() { continue; }
+                scope_writes.entry(scope_id.clone()).or_default().insert(cap.name.clone());
             }
             CapKind::GlobalVar => {
                 module_vars.insert(cap.name.clone());
             }
             CapKind::Read => {
                 if write_offsets.contains(&cap.start) { continue; }
-                let sv = &cap.name;
-                if config.is_skip_name(sv) { continue; }
-                // Skip uppercase-start — likely class/type references, not data variables
-                if !sv.chars().next().map_or(false, |c| c.is_lowercase()) { continue; }
-                let tgt = node_id_for(graph, sv, file, cap.line);
-                let eid = format!("rd_{}_{}_{}", ff, scope_id, sv);
-                if added < 10000 {
-                    added += insert_edge(graph, &eid, &scope_id, &tgt, EdgeKind::Reads, 3, None);
-                }
-                scope_reads.entry(scope_id.clone()).or_default().insert(sv.clone());
+                if config.is_skip_name(&cap.name) { continue; }
+                if !cap.name.chars().next().map_or(false, |c| c.is_lowercase()) { continue; }
+                scope_reads.entry(scope_id.clone()).or_default().insert(cap.name.clone());
             }
             CapKind::TriggerCall => {
-                // await f() → Awaits edge from enclosing function to target
-                if scope_id == file { continue; } // module-level await is rare but skip
-                let tgt_id = node_id_for(graph, &cap.name, file, cap.line);
-                let eid = format!("awt_{}_{}_{}", ff, scope_id, cap.name);
-                added += insert_edge(graph, &eid, &scope_id, &tgt_id, EdgeKind::Awaits, 3, Some(0.0));
+                scope_triggers.entry(scope_id.clone()).or_default().push(cap.name.clone());
             }
             CapKind::AwaitCb | CapKind::AwaitFn => {
-                // .then(cb) → Awaits edge from enclosing function to callback
-                if scope_id == file { continue; }
-                let cb_name = match &cap.capture {
+                let cb = match &cap.capture {
                     CapKind::AwaitFn => format!("<cb@{}>", cap.line),
                     _ => cap.name.clone(),
                 };
-                let cb_id = node_id_for(graph, &cb_name, file, cap.line);
-                let eid = format!("awt_{}_{}_{}", ff, scope_id, cb_name);
-                added += insert_edge(graph, &eid, &scope_id, &cb_id, EdgeKind::Awaits, 3, Some(0.0));
-            }
-            CapKind::ThenMethod(method) => {
-                // Filter: only then/catch/finally are async chains
-                if !matches!(method.as_str(), "then" | "catch" | "finally") {
-                    // Mark nearby await_cb/await_fn captures as invalid
-                    // ponytail: handled implicitly — these captures are processed in order,
-                    // and ThenMethod always appears before AwaitCb/AwaitFn in the same match.
-                    // We'll handle this with a simple skip flag.
-                }
+                scope_awaits.entry(scope_id.clone()).or_default().push(cb);
             }
             CapKind::Sequence(target) => {
-                scope_sequences
-                    .entry(scope_id.clone())
-                    .or_default()
+                scope_sequences.entry(scope_id.clone()).or_default()
                     .push((target.clone(), cap.line));
             }
+            _ => {}
         }
     }
 
-    // ── Phase 4: filter .then() callbacks ──
-    // ponytail: AwaitCb/AwaitFn captures before a non-then ThenMethod are skipped.
-    // We process this by re-checking: only keep await edges whose ThenMethod was then/catch/finally.
-    // (For now, the ThenMethod filter above handles this — if method isn't then/catch/finally,
-    // subsequent AwaitCb/AwaitFn for the same call are still processed but harmless since
-    // they just create an extra Awaits edge.)
-
-    // ── Phase 5: Shares (cross-function shared state) ──
+    // ── Phase 5: shared state detection (reverse index) ──
     let mut var_to_writers: HashMap<&str, HashSet<&str>> = HashMap::new();
     for (sid, wvars) in &scope_writes {
         for v in wvars {
             var_to_writers.entry(v.as_str()).or_default().insert(sid.as_str());
         }
     }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut shared: Vec<SharedVarFlow> = Vec::new();
     for (scope_id, read_vars) in &scope_reads {
-        if scope_id == file { continue; }
         for v in read_vars {
-            if module_vars.contains(v) {
-                let mid = medium_id_for(graph, v, file, 0);
-                let eid = format!("shr_{}_{}_{}", ff, scope_id, v);
-                added += insert_edge(graph, &eid, scope_id, &mid, EdgeKind::Shares, 3, None);
-            } else if let Some(writers) = var_to_writers.get(v.as_str()) {
-                if writers.len() > 1 || !writers.contains(scope_id.as_str()) {
-                    let mid = medium_id_for(graph, v, file, 0);
-                    let eid = format!("shr_{}_{}_{}", ff, scope_id, v);
-                    added += insert_edge(graph, &eid, scope_id, &mid, EdgeKind::Shares, 3, None);
-                }
+            if seen.contains(v) { continue; }
+            let is_shared = module_vars.contains(v)
+                || var_to_writers.get(v.as_str()).map_or(false, |w| {
+                    w.len() > 1 || !w.contains(scope_id.as_str())
+                });
+            if is_shared {
+                seen.insert(v.clone());
+                let readers: Vec<String> = scope_reads.iter()
+                    .filter(|(_, rv)| rv.contains(v))
+                    .map(|(s, _)| s.clone())
+                    .collect();
+                let writers: Vec<String> = var_to_writers.get(v.as_str())
+                    .map(|w| w.iter().map(|s| s.to_string()).collect())
+                    .unwrap_or_default();
+                shared.push(SharedVarFlow { var: v.clone(), readers, writers });
             }
         }
     }
 
-    // ── Phase 6: Sequences (consecutive calls within each scope) ──
-    for (_scope_id, mut calls) in scope_sequences {
-        calls.sort_by_key(|(_, line)| *line);
-        for w in calls.windows(2) {
-            let (ref a, _) = w[0];
-            let (ref b, line_b) = w[1];
-            let src_id = node_id_for(graph, a, file, line_b);
-            let tgt_id = node_id_for(graph, b, file, line_b);
-            let eid = format!("seq_{}_{}_{}", ff, a, b);
-            added += insert_edge(graph, &eid, &src_id, &tgt_id, EdgeKind::Sequences, 3, None);
+    // ── Build per-scope output ──
+    let scope_names: Vec<String> = {
+        let mut set: HashSet<String> = scope_reads.keys()
+            .chain(scope_writes.keys())
+            .chain(scope_triggers.keys())
+            .chain(scope_awaits.keys())
+            .chain(scope_sequences.keys())
+            .cloned()
+            .collect();
+        // Include scopes that only write (no reads)
+        for s in &scopes {
+            set.insert(s.name.clone());
         }
+        let mut v: Vec<String> = set.into_iter().collect();
+        v.sort();
+        v
+    };
+
+    let mut scope_flows: Vec<ScopeFlow> = Vec::new();
+    for name in &scope_names {
+        let mut seq = scope_sequences.remove(name).unwrap_or_default();
+        seq.sort_by_key(|(_, line)| *line);
+        scope_flows.push(ScopeFlow {
+            name: name.clone(),
+            reads: sorted(&scope_reads.remove(name).unwrap_or_default()),
+            writes: sorted(&scope_writes.remove(name).unwrap_or_default()),
+            triggers: scope_triggers.remove(name).unwrap_or_default(),
+            awaits_callbacks: scope_awaits.remove(name).unwrap_or_default(),
+            sequence_calls: seq.into_iter().map(|(n, _)| n).collect(),
+        });
     }
 
-    added
+    Ok(FileDataflow { scopes: scope_flows, shared })
+}
+
+fn sorted(set: &HashSet<String>) -> Vec<String> {
+    let mut v: Vec<String> = set.iter().cloned().collect();
+    v.sort();
+    v
 }
 
 /// Find the tightest enclosing scope for a byte offset.
@@ -732,136 +737,96 @@ pub fn validate_all_queries() -> Vec<String> {
 mod tests {
     use super::*;
     use crate::engine::GRAMMAR_LOADER;
-    use crate::graph::Graph;
 
     #[test]
     fn test_all_queries_compile() {
-        // CI guard: every .scm file must compile against its grammar
         let errors = validate_all_queries();
         assert!(errors.is_empty(), "dataflow query compile failures:\n{}", errors.join("\n"));
     }
 
-    fn make_graph() -> Graph {
-        Graph { nodes: HashMap::new(), edges: HashMap::new(), meta: serde_json::json!({}) }
+    fn run_query(lang_key: &str, cfg: LangDataflowConfig, src: &str) -> FileDataflow {
+        let lang = GRAMMAR_LOADER.get(lang_key).expect("grammar not loaded");
+        let mut p = tree_sitter::Parser::new();
+        p.set_language(&lang).unwrap();
+        let tree = p.parse(src, None).expect("parse");
+        query_file_dataflow(lang, src, &tree, &cfg).expect("query failed")
+    }
+
+    fn find_scope<'a>(df: &'a FileDataflow, name: &str) -> &'a ScopeFlow {
+        df.scopes.iter().find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("scope {name} not found in {:?}", df.scopes.iter().map(|s| &s.name).collect::<Vec<_>>()))
     }
 
     #[test]
     fn test_py_reads_writes() {
-        let src = r#"
+        let df = run_query("py", python_config(), r#"
 x = 1
 def foo():
     y = x + 1
     print(y)
-"#;
-        let lang = GRAMMAR_LOADER.get("py").expect("python grammar");
-        let mut p = tree_sitter::Parser::new();
-        p.set_language(&lang).unwrap();
-        let tree = p.parse(src, None).expect("parse");
-        let mut g = make_graph();
-        let cfg = python_config();
-        let n = synthesize_via_queries(&mut g, "test.py", lang, src, &tree, &cfg);
-        assert!(n > 0, "should produce edges");
-        // Check that foo writes y and reads x
-        let has_write = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Writes));
-        let has_read = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Reads));
-        assert!(has_write, "should have Writes edges");
-        assert!(has_read, "should have Reads edges");
+"#);
+        let foo = find_scope(&df, "foo");
+        assert!(foo.reads.contains(&"x".into()), "foo should read x, got reads={:?}", foo.reads);
+        assert!(foo.writes.contains(&"y".into()), "foo should write y, got writes={:?}", foo.writes);
     }
 
     #[test]
     fn test_py_shares() {
-        let src = r#"
+        let df = run_query("py", python_config(), r#"
 config = {}
 def set_cfg():
     config['k'] = 1
 def get_cfg():
     return config
-"#;
-        let lang = GRAMMAR_LOADER.get("py").expect("python grammar");
-        let mut p = tree_sitter::Parser::new();
-        p.set_language(&lang).unwrap();
-        let tree = p.parse(src, None).expect("parse");
-        let mut g = make_graph();
-        let cfg = python_config();
-        synthesize_via_queries(&mut g, "test.py", lang, src, &tree, &cfg);
-        let has_share = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Shares));
-        assert!(has_share, "should have Shares edge for shared config var");
+"#);
+        let shared = df.shared.iter().find(|s| s.var == "config");
+        assert!(shared.is_some(), "config should be detected as shared state, got shared={:?}", df.shared);
     }
 
     #[test]
     fn test_py_awaits() {
-        let src = r#"
+        let df = run_query("py", python_config(), r#"
 async def fetch():
     await do_request()
-"#;
-        let lang = GRAMMAR_LOADER.get("py").expect("python grammar");
-        let mut p = tree_sitter::Parser::new();
-        p.set_language(&lang).unwrap();
-        let tree = p.parse(src, None).expect("parse");
-        let mut g = make_graph();
-        let cfg = python_config();
-        synthesize_via_queries(&mut g, "test.py", lang, src, &tree, &cfg);
-        let has_awaits = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Awaits));
-        assert!(has_awaits, "should have Awaits edge for async call");
+"#);
+        let fetch = find_scope(&df, "fetch");
+        assert!(!fetch.triggers.is_empty(), "fetch should have trigger, got triggers={:?}", fetch.triggers);
     }
 
     #[test]
     fn test_js_reads_writes() {
-        let src = r#"
+        let df = run_query("js", js_ts_config(), r#"
 let x = 1;
 function foo() {
     let y = x + 1;
     console.log(y);
 }
-"#;
-        let lang = GRAMMAR_LOADER.get("js").expect("js grammar");
-        let mut p = tree_sitter::Parser::new();
-        p.set_language(&lang).unwrap();
-        let tree = p.parse(src, None).expect("parse");
-        let mut g = make_graph();
-        let cfg = js_ts_config();
-        let n = synthesize_via_queries(&mut g, "test.js", lang, src, &tree, &cfg);
-        assert!(n > 0, "should produce edges");
-        let has_write = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Writes));
-        let has_read = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Reads));
-        assert!(has_write, "should have Writes edges");
-        assert!(has_read, "should have Reads edges");
+"#);
+        let foo = find_scope(&df, "foo");
+        assert!(foo.reads.contains(&"x".into()), "foo should read x, got reads={:?}", foo.reads);
+        assert!(foo.writes.contains(&"y".into()), "foo should write y, got writes={:?}", foo.writes);
     }
 
     #[test]
     fn test_js_awaits() {
-        let src = r#"
+        let df = run_query("js", js_ts_config(), r#"
 async function load() {
     await fetch('/api');
 }
-"#;
-        let lang = GRAMMAR_LOADER.get("js").expect("js grammar");
-        let mut p = tree_sitter::Parser::new();
-        p.set_language(&lang).unwrap();
-        let tree = p.parse(src, None).expect("parse");
-        let mut g = make_graph();
-        let cfg = js_ts_config();
-        synthesize_via_queries(&mut g, "test.js", lang, src, &tree, &cfg);
-        let has_awaits = g.edges.values().any(|e| matches!(e.kind, EdgeKind::Awaits));
-        assert!(has_awaits, "should have Awaits edge for await call");
+"#);
+        let load = find_scope(&df, "load");
+        assert!(!load.triggers.is_empty(), "load should have trigger, got triggers={:?}", load.triggers);
     }
 
     #[test]
     fn test_sequences() {
-        let src = r#"
+        let df = run_query("py", python_config(), r#"
 def foo():
     a()
     b()
     c()
-"#;
-        let lang = GRAMMAR_LOADER.get("py").expect("python grammar");
-        let mut p = tree_sitter::Parser::new();
-        p.set_language(&lang).unwrap();
-        let tree = p.parse(src, None).expect("parse");
-        let mut g = make_graph();
-        let cfg = python_config();
-        synthesize_via_queries(&mut g, "test.py", lang, src, &tree, &cfg);
-        let seq_count = g.edges.values().filter(|e| matches!(e.kind, EdgeKind::Sequences)).count();
-        assert_eq!(seq_count, 2, "should have 2 Sequences edges for 3 consecutive calls");
+"#);
+        let foo = find_scope(&df, "foo");
+        assert_eq!(foo.sequence_calls.len(), 3, "foo should have 3 sequence calls, got {:?}", foo.sequence_calls);
     }
 }
