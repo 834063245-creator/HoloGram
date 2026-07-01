@@ -18,6 +18,8 @@ export interface AgentSettings {
   maxSteps: number;
   contextWindow: number;
   chatMode: ChatModeId;
+  /** DeepSeek: 禁用深度思考 (default false = auto). */
+  disableThinking?: boolean;
 }
 
 type ChatModeId = 'general' | 'code' | 'architect' | 'fast';
@@ -31,10 +33,10 @@ export interface ChatMode {
 }
 
 export const CHAT_MODES: ChatMode[] = [
-  { id: 'general', label: '通用', description: '均衡回答', temperature: 0.7, maxSteps: 50 },
-  { id: 'code', label: '编码', description: '直接动手，少问', temperature: 0.3, maxSteps: 80 },
-  { id: 'architect', label: '架构', description: '深度查图分析', temperature: 0.5, maxSteps: 60 },
-  { id: 'fast', label: '极速', description: '简短快速迭代', temperature: 0.2, maxSteps: 25 },
+  { id: 'general', label: '通用', description: '均衡回答', temperature: 0.7, maxSteps: 100 },
+  { id: 'code', label: '编码', description: '直接动手，少问', temperature: 0.3, maxSteps: 150 },
+  { id: 'architect', label: '架构', description: '深度查图分析', temperature: 0.5, maxSteps: 120 },
+  { id: 'fast', label: '极速', description: '简短快速迭代', temperature: 0.2, maxSteps: 50 },
 ];
 
 interface DisplaySettings {
@@ -76,7 +78,7 @@ const DEFAULTS: AppSettings = {
   projectPath: '.',
   agent: {
     temperature: 0.7,
-    maxSteps: 50,
+    maxSteps: 100,
     contextWindow: 0,
     chatMode: 'general',
   },

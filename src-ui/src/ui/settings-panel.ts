@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Settings Panel — 设置模态面板
-// Provider | Agent | 显示 三个标签页
-// 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化
+// Settings Panel �?设置模态面�?
+// Provider | Agent | 显示 三个标签�?
+// 读写 settings.ts �?localStorage，保存后触发 Agent 重新初始�?
 
 import { loadSettings, saveSettings, persistSecrets, updateProvider } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
@@ -15,7 +15,7 @@ import { shell } from './app-shell';
 
 const PANEL_ID = 'settings-panel';
 
-// ponytail: permissions tab removed — rules now managed via .hologram/permissions.json (Rust backend)
+// ponytail: permissions tab removed �?rules now managed via .hologram/permissions.json (Rust backend)
 type Tab = 'provider' | 'agent' | 'display';
 
 export class SettingsPanel {
@@ -84,7 +84,7 @@ export class SettingsPanel {
   // ── Build DOM ──
 
   private buildDOM(): void {
-    // Overlay — click to close
+    // Overlay �?click to close
     this.overlay = document.createElement('div');
     this.overlay.id = `${PANEL_ID}-overlay`;
     this.overlay.addEventListener('click', () => this.close());
@@ -175,7 +175,7 @@ export class SettingsPanel {
             <div class="sp-key-row">
               <input type="password" class="sp-input sp-key-input" data-field="apiKey"
                      value="${escapeAttr(active.apiKey)}"
-                     placeholder="sk-…">
+                     placeholder="sk-�?>
               <button class="sp-key-toggle" title="显示/隐藏">${iconHtml('search', 12)}</button>
             </div>
           </div>
@@ -191,30 +191,37 @@ export class SettingsPanel {
                    value="${escapeAttr(active.baseUrl)}"
                    placeholder="https://api.deepseek.com/v1">
           </div>
-          ${isAnthropic ? `
+           ${isAnthropic ? `
           <div class="sp-field">
-            <label class="sp-label">Extended Thinking</label>
-            <input type="text" class="sp-input" data-field="thinking"
-                   value="${escapeAttr(active.thinking || '')}"
-                   placeholder="留空关闭, 例如: 8k">
+            <label class="sp-label">思考努力等�?/label>
+            <select class="sp-input" data-field="thinking">
+              <option value="" ${!active.thinking ? 'selected' : ''}>自动（模型自定）</option>
+              <option value="low" ${active.thinking === 'low' ? 'selected' : ''}>�?(low)</option>
+              <option value="medium" ${active.thinking === 'medium' ? 'selected' : ''}>�?(medium)</option>
+              <option value="high" ${active.thinking === 'high' ? 'selected' : ''}>�?(high)</option>
+              <option value="max" ${active.thinking === 'max' ? 'selected' : ''}>极限 (max)</option>
+              <option value="off" ${active.thinking === 'off' ? 'selected' : ''}>关闭</option>
+            </select>
+            <div class="sp-hint-sub">Anthropic extended thinking 努力等级。等级越高思考越深（越费 token）�?/div>
           </div>` : ''}
         </div>
         <div class="sp-hint">
           ${isAnthropic
-            ? 'Anthropic: 从 <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a> 获取 Key'
-            : 'DeepSeek: 从 <a href="https://platform.deepseek.com/" target="_blank">platform.deepseek.com</a> 获取 Key'}
+            ? 'Anthropic: �?<a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a> 获取 Key'
+            : 'DeepSeek: �?<a href="https://platform.deepseek.com/" target="_blank">platform.deepseek.com</a> 获取 Key'}
         </div>
       </div>`;
   }
 
   private renderAgentTab(agent: AgentSettings): string {
     const tempPct = Math.round(((agent.temperature || 0.7) / 2) * 100);
+    const thinkingEnabled = !agent.disableThinking;
     return `
       <div class="sp-tab-content" data-tab="agent" style="${this.activeTab === 'agent' ? '' : 'display:none'}">
         <div class="sp-section">
           <div class="sp-section-title">模型参数</div>
           <div class="sp-field">
-            <label class="sp-label">Temperature <span class="sp-val">${(agent.temperature || 0.7).toFixed(1)}</span></label>
+            <label class="sp-label">输出随机�?<span class="sp-val">${(agent.temperature || 0.7).toFixed(1)}</span></label>
             <div class="sp-slider-row">
               <span class="sp-slider-end">0</span>
               <input type="range" class="sp-range" data-field="temperature"
@@ -222,30 +229,38 @@ export class SettingsPanel {
                      style="--pct:${tempPct}%">
               <span class="sp-slider-end">2</span>
             </div>
+            <div class="sp-hint-sub">�?= 稳定可预测，适合代码/事实 · �?= 有创意，适合写作/头脑风暴</div>
           </div>
           <div class="sp-field">
-            <label class="sp-label">最大工具轮次 <span class="sp-hint-sub">安全上限，正常对话不会触及</span></label>
+            <label class="sp-label sp-checkbox-label">
+              <input type="checkbox" data-field="disableThinking" ${thinkingEnabled ? 'checked' : ''}>
+              深度思�?(DeepSeek Think 模式)
+            </label>
+            <div class="sp-hint-sub">启用后模型先思考再回答。仅 DeepSeek v4/v3 有效，关掉直接输出�?/div>
+          </div>
+          <div class="sp-field">
+            <label class="sp-label">最大工具轮�?<span class="sp-hint-sub">安全上限�?=不限制）</span></label>
             <input type="number" class="sp-input sp-input-num" data-field="maxSteps"
-                   value="${agent.maxSteps || 50}" min="1" max="200">
+                   value="${agent.maxSteps || 100}" min="0" max="200">
           </div>
           <div class="sp-field">
             <label class="sp-label">上下文窗口（0=不限制）</label>
             <input type="number" class="sp-input sp-input-num" data-field="contextWindow"
                    value="${agent.contextWindow || 0}" min="0" step="1000"
-                   placeholder="0 = 不限制">
+                   placeholder="0 = 不限�?>
           </div>
         </div>
         <div class="sp-section">
           <div class="sp-section-title">工具管理</div>
           <div class="sp-field">
-            <input class="sp-input" data-field="toolSearch" placeholder="搜索工具…" autocomplete="off">
+            <input class="sp-input" data-field="toolSearch" placeholder="搜索工具�? autocomplete="off">
           </div>
           <div class="sp-tool-list" id="sp-tool-list">
             ${this.buildToolListHtml()}
           </div>
         </div>
         <div class="sp-hint">
-          高 Temperature → 更有创意但可能胡说。小窗口 → 旧消息会被压缩。
+          输出随机性低 �?更稳�? ·  �?�?更有创意但可能胡说。小窗口 �?旧消息会被压缩�?
         </div>
       </div>`;
   }
@@ -272,7 +287,7 @@ export class SettingsPanel {
           <div class="sp-radio-group">${langRadios}</div>
         </div>
         <div class="sp-hint">
-          图例、聚焦横幅、工具栏提示的语言。其他界面不受影响。
+          图例、聚焦横幅、工具栏提示的语言。其他界面不受影响�?
         </div>
         <div class="sp-section" style="margin-top:18px">
           <div class="sp-section-title">字体缩放 / Font Scale</div>
@@ -283,12 +298,12 @@ export class SettingsPanel {
           </div>
         </div>
         <div class="sp-hint">
-          缩放所有界面文字。更改后保存即生效（Terminal / 编辑器需重新打开文件）。
+          缩放所有界面文字。更改后保存即生效（Terminal / 编辑器需重新打开文件）�?
         </div>
       </div>`;
   }
 
-  // ponytail: renderPermissionsTab removed — rules managed via .hologram/permissions.json
+  // ponytail: renderPermissionsTab removed �?rules managed via .hologram/permissions.json
 
   // ── Events ──
 
@@ -341,6 +356,26 @@ export class SettingsPanel {
       }
     });
 
+    // 过滤�?ASCII 字符（Key �?URL 只允�?ASCII�?
+    const stripNonAscii = (el: HTMLInputElement) => {
+      const raw = el.value;
+      const cleaned = raw.replace(/[^\x00-\x7F]/g, '');
+      if (cleaned !== raw) {
+        el.value = cleaned;
+        const old = el.nextElementSibling as HTMLElement | null;
+        if (old?.classList.contains('sp-ascii-warn')) old.remove();
+        const warn = document.createElement('span');
+        warn.className = 'sp-ascii-warn';
+        warn.textContent = ' 已自动移除中文字符（Key/URL 只支持英文和数字）';
+        el.after(warn);
+        setTimeout(() => warn.remove(), 3000);
+      }
+    };
+    const keyInput = this.panel.querySelector('.sp-key-input') as HTMLInputElement | null;
+    const urlInput = this.panel.querySelector('[data-field="baseUrl"]') as HTMLInputElement | null;
+    keyInput?.addEventListener('blur', () => stripNonAscii(keyInput));
+    urlInput?.addEventListener('blur', () => stripNonAscii(urlInput));
+
     // Temperature range slider
     const range = this.panel.querySelector('.sp-range') as HTMLInputElement;
     if (range) {
@@ -359,7 +394,7 @@ export class SettingsPanel {
 
   private buildToolListHtml(): string {
     if (this.toolNames.length === 0) {
-      return '<div class="sp-hint" style="padding:8px">工具列表在 Agent 初始化后可用</div>';
+      return '<div class="sp-hint" style="padding:8px">工具列表�?Agent 初始化后可用</div>';
     }
     return this.toolNames
       .map(name => {
@@ -386,7 +421,7 @@ export class SettingsPanel {
     });
   }
 
-  // ponytail: wirePermissionEvents removed — permissions tab deleted
+  // ponytail: wirePermissionEvents removed �?permissions tab deleted
 
   private switchTab(tab: Tab): void {
     this.activeTab = tab;
@@ -412,12 +447,12 @@ export class SettingsPanel {
     const apiKeyEl = this.panel.querySelector('[data-field="apiKey"]') as HTMLInputElement;
     const modelEl = this.panel.querySelector('[data-field="model"]') as HTMLInputElement;
     const baseUrlEl = this.panel.querySelector('[data-field="baseUrl"]') as HTMLInputElement;
-    const thinkingEl = this.panel.querySelector('[data-field="thinking"]') as HTMLInputElement;
+    const thinkingEl = this.panel.querySelector('[data-field="thinking"]') as HTMLSelectElement | null;
 
     if (apiKeyEl) active.apiKey = apiKeyEl.value.trim();
     if (modelEl) active.model = modelEl.value.trim();
     if (baseUrlEl) active.baseUrl = baseUrlEl.value.trim();
-    if (thinkingEl) active.thinking = thinkingEl.value.trim();
+    if (thinkingEl) active.thinking = thinkingEl.value;
 
     // Update provider in settings
     s.providers = s.providers.map((p) =>
@@ -430,8 +465,10 @@ export class SettingsPanel {
     const ctxWinEl = this.panel.querySelector('[data-field="contextWindow"]') as HTMLInputElement;
 
     if (tempEl) s.agent.temperature = parseFloat(tempEl.value) || 0.7;
-    if (stepsEl) s.agent.maxSteps = parseInt(stepsEl.value) || 10;
+    if (stepsEl) s.agent.maxSteps = parseInt(stepsEl.value) || 100;
     if (ctxWinEl) s.agent.contextWindow = parseInt(ctxWinEl.value) || 0;
+    const thinkChk = this.panel.querySelector('[data-field="disableThinking"]') as HTMLInputElement;
+    if (thinkChk) s.agent.disableThinking = !thinkChk.checked;
 
     // Read display form values
     const langEl = this.panel.querySelector('input[name="language"]:checked') as HTMLInputElement;
@@ -484,4 +521,4 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ponytail: parseRuleString removed — permissions tab deleted
+// ponytail: parseRuleString removed �?permissions tab deleted

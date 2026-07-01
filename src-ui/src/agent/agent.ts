@@ -88,7 +88,7 @@ export interface AgentOptions {
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
-const DEFAULT_MAX_STEPS = 50;
+const DEFAULT_MAX_STEPS = 100;
 const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
 const STORM_BREAK_THRESHOLD = 3;
 
@@ -330,6 +330,7 @@ export class Agent {
       // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls
       if (!text && calls.length === 0 && this._pendingInserts.length === 0) {
         log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
+        this.sink({ kind: EventKind.Notice, level: 'warn', text: 'Provider 本次调用了但无内容返回，已跳过此轮。' });
         return;
       }
 
@@ -449,7 +450,10 @@ export class Agent {
       err = e instanceof Error ? e : new Error(String(e));
     }
 
-    if (err) return { text: '', reasoning: '', signature: '', calls: [], usage, err };
+    if (err) {
+      this.sink({ kind: EventKind.Notice, level: 'error', text: `模型调用失败: ${err.message || err}` });
+      return { text: '', reasoning: '', signature: '', calls: [], usage, err };
+    }
 
     // Close the text stream
     if (text || reasoning) {
