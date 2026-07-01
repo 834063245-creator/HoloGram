@@ -2383,9 +2383,99 @@ fn is_private_ip(host: &str) -> bool {
         }
         IpAddr::V6(v6) => {
             let segs = v6.segments();
-            segs[0] & 0xffc0 == 0xfe80
+                        segs[0] & 0xffc0 == 0xfe80
         }
     }
+}
+
+#[tauri::command]
+async fn web_search(
+    query: String,
+    state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    // Permission check — use WebFetchTool for web_search
+    {
+        let ctx = get_ctx(&state)?;
+        let tool = tools::WebFetchTool { url: format!("https://html.duckduckgo.com/html/?q={}", &query) };
+        check_permission(&tool, &ctx, &app).await?;
+    }
+
+    let q = urlencoding(&query);
+    let url = format!("https://html.duckduckgo.com/html/?q={}", q);
+    let resp = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(10))
+        .build()
+        .get(&url)
+        .set("User-Agent", "HoloGram/1.0")
+        .call()
+        .map_err(|e| format!("web_search: request failed: {}", e))?;
+
+    let html = resp.into_string()
+        .map_err(|e| format!("web_search: read error: {}", e))?;
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let link_re = regex::Regex::new(
+        r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>"#
+    ).unwrap();
+    let snippet_re = regex::Regex::new(
+        r#"<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)</a>"#
+    ).unwrap();
+
+    let mut links: Vec<(String, String)> = Vec::new();
+    for cap in link_re.captures_iter(&html) {
+        let url = cap[1].to_string();
+        let title = cap[2].replace(['<', '>'], "").trim().to_string();
+        links.push((url, title));
+        if links.len() >= 15 { break; }
+    }
+
+    for (i, (url, title)) in links.iter().enumerate() {
+        let snippet = snippet_re.captures_iter(&html).nth(i)
+            .map(|c| c[1].replace(['<', '>'], "").trim().to_string())
+            .unwrap_or_default();
+        results.push(serde_json::json!({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+        }));
+    }
+
+    if results.is_empty() {
+        let fallback_re = regex::Regex::new(
+            r#"<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>"#
+        ).unwrap();
+        for cap in fallback_re.captures_iter(&html) {
+            let title = cap[2].replace(['<', '>'], "").trim().to_string();
+            if title.len() > 5 {
+                results.push(serde_json::json!({
+                    "title": title,
+                    "url": &cap[1],
+                    "snippet": "",
+                }));
+            }
+            if results.len() >= 10 { break; }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "query": query,
+        "results": &results[..results.len().min(10)],
+    }).to_string())
+}
+
+/// URL-encode a string.
+fn urlencoding(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => { out.push('%'); out.push_str(&format!("{:02X}", b)); }
+        }
+    }
+    out
 }
 
 #[tauri::command]
@@ -3644,6 +3734,7 @@ fn main() {
             search_content,
             glob,
             web_fetch,
+            web_search,
             edit_file,
             start_mcp_server,
             stop_mcp_server,

@@ -1197,41 +1197,8 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: async (args) => {
-        const query = encodeURIComponent(args.query as string);
         try {
-          const resp = await fetch(
-            `https://html.duckduckgo.com/html/?q=${query}`,
-            { headers: { 'User-Agent': 'HoloGram/1.0' } },
-          );
-          const html = await resp.text();
-          // Extract result links and snippets from DuckDuckGo HTML
-          const results: { title: string; url: string; snippet: string }[] = [];
-          const linkRe = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi;
-          const snippetRe = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
-          let linkMatch;
-          const links: { title: string; url: string }[] = [];
-          while ((linkMatch = linkRe.exec(html)) !== null && links.length < 15) {
-            links.push({ url: linkMatch[1], title: linkMatch[2].replace(/<[^>]*>/g, '').trim() });
-          }
-          let snippetIdx = 0;
-          let snippetMatch;
-          while ((snippetMatch = snippetRe.exec(html)) !== null && snippetIdx < links.length) {
-            const snippet = snippetMatch[1].replace(/<[^>]*>/g, '').trim();
-            results.push({ ...links[snippetIdx], snippet });
-            snippetIdx++;
-          }
-          // If no structured results, return raw link extraction fallback
-          if (results.length === 0) {
-            const fallbackRe = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
-            let m;
-            while ((m = fallbackRe.exec(html)) !== null && results.length < 10) {
-              const title = m[2].replace(/<[^>]*>/g, '').trim();
-              if (title.length > 5) {
-                results.push({ title, url: m[1], snippet: '' });
-              }
-            }
-          }
-          return JSON.stringify({ query: args.query, results: results.slice(0, 10) });
+          return await exec('web_search', args);
         } catch (e: any) {
           return JSON.stringify({ error: `web_search failed: ${e.message || e}` });
         }
