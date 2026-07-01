@@ -257,7 +257,7 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
 
 /// Run a full engine analysis for the changed files and return the JSON result.
 fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
-    match crate::direct_analyze(project_path, true) {
+    match crate::utils::direct_analyze(project_path, true) {
         Ok(json) => Some(json),
         Err(e) => {
             eprintln!("[hologram] engine analysis failed: {e}");

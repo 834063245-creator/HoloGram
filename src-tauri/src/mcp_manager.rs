@@ -42,13 +42,13 @@ impl McpManager {
         // Kill any existing process
         self.kill_inner();
 
-        let root = super::project_root();
+        let root = crate::utils::project_root();
 
         #[cfg(windows)]
         let child = {
             use std::os::windows::process::CommandExt;
             Command::new(engine_path)
-                .creation_flags(super::NO_WINDOW)
+                .creation_flags(crate::utils::NO_WINDOW)
                 .current_dir(&root)
                 .args(["serve", "--project-root", project_root])
                 .stdin(Stdio::piped())
