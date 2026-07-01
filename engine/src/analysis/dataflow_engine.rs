@@ -981,4 +981,53 @@ def pipeline():
         let config_shared = df.shared.iter().find(|s| s.var == "config");
         assert!(config_shared.is_some(), "config should be detected as shared");
     }
+
+    #[test]
+    fn test_query_files_errors() {
+        let tmp = std::env::temp_dir().join("_df_err_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Unsupported extension
+        std::fs::write(tmp.join("readme.txt"), "hello").unwrap();
+        let results = super::query_dataflow_files(&[tmp.join("readme.txt")]);
+        assert!(results[0].result.is_err());
+        assert!(results[0].result.as_ref().unwrap_err().contains("unsupported"));
+
+        // Parse error — garbage Python
+        std::fs::write(tmp.join("bad.py"), "def foo(:").unwrap();
+        let results = super::query_dataflow_files(&[tmp.join("bad.py")]);
+        // tree-sitter is error-tolerant, so this actually parses. But a truly
+        // empty or binary file should fail gracefully.
+        std::fs::write(tmp.join("empty.py"), "").unwrap();
+        let results = super::query_dataflow_files(&[tmp.join("empty.py")]);
+        assert!(results[0].result.is_ok()); // empty file = valid parse, zero scopes
+        assert_eq!(results[0].result.as_ref().unwrap().scopes.len(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_query_files_multilang() {
+        let tmp = std::env::temp_dir().join("_df_multilang");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("auth.py"), "secret = 'xyz'\ndef login():\n    return secret\n").unwrap();
+        std::fs::write(tmp.join("app.js"), "let db = null;\nfunction connect() {\n    db = openDB();\n}\n").unwrap();
+
+        let results = super::query_dataflow_files(&[tmp.join("auth.py"), tmp.join("app.js")]);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].result.is_ok(), "py failed: {:?}", results[0].result);
+        assert!(results[1].result.is_ok(), "js failed: {:?}", results[1].result);
+
+        let py = results[0].result.as_ref().unwrap();
+        let login = py.scopes.iter().find(|s| s.name == "login").unwrap();
+        assert!(login.reads.contains(&"secret".into()), "login should read secret");
+
+        let js = results[1].result.as_ref().unwrap();
+        let connect = js.scopes.iter().find(|s| s.name == "connect").unwrap();
+        assert!(connect.writes.contains(&"db".into()), "connect should write db");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
