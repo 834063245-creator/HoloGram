@@ -15,8 +15,8 @@ import { invoke, listen } from './bridge';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
-import { Agent } from './agent/agent';
-import { ToolRegistry, createHologramTools, createCodingTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
+import { Agent, type AgentEvent, EventKind } from './agent/agent';
+import { ToolRegistry, createHologramTools, createCodingTools, createDataflowTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
 import { showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { TaskManager, createTaskTools } from './agent/task';
@@ -78,6 +78,8 @@ export class Workspace {
 
   // ── Agent & memory ──
   agent: Agent | null = null;
+  prov: Provider | null = null;
+  registry: ToolRegistry | null = null;
   memoryManager: MemoryManager | null = null;
   taskManager: TaskManager = new TaskManager();
 
@@ -372,6 +374,7 @@ export class Workspace {
         return typeof result === 'string' ? result : JSON.stringify(result);
       };
       for (const tool of createHologramTools(holoExec)) { registry.register(tool); }
+      for (const tool of createDataflowTools(holoExec)) { registry.register(tool); }
       dbg('setupAgent', `${createHologramTools(holoExec).length} hologram tools registered`);
     }
 
@@ -420,6 +423,8 @@ export class Workspace {
     // ponytail: permission rules now evaluated in Rust has_permission_to_use_tool()
     // Dialog rendering still uses showApprovalDialog via permission-ask event → main.ts bridge
 
+    this.prov = prov;
+    this.registry = registry;
     this.agent = new Agent(prov, registry, systemPrompt, {
       pricing, temperature, maxSteps, contextWindow,
     }, chatPanel.sink);
@@ -476,6 +481,7 @@ export class Workspace {
         };
         if (ws.graphData) {
           for (const tool of createHologramTools(factoryExec)) r.register(tool);
+          for (const tool of createDataflowTools(factoryExec)) r.register(tool);
         }
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
@@ -510,6 +516,41 @@ export class Workspace {
         return newAgent;
       });
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Dataflow Agent — dedicated trace builder (独立 context，不污染主 chat)
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Spawn a Dataflow Agent to trace a resource end-to-end.
+   *  Runs in an isolated context with a scoped toolset; status updates
+   *  flow to onStatus. Resolves when the agent finishes (trace saved or aborted). */
+  async spawnDataflowTrace(
+    resource: string,
+    description: string,
+    onStatus: (line: string) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!this.prov || !this.registry) throw new Error('Agent not ready — open a workspace first');
+    const dataflowTools = this.registry.subset([
+      'search_content', 'read_file', 'glob',
+      'hologram_dataflow', 'hologram_search', 'hologram_node',
+      'hologram_neighbors', 'hologram_thread_conflicts',
+      'write_file', 'run_shell',
+      'dataflow_save',
+    ]);
+    const sink = (ev: AgentEvent) => {
+      if (ev.kind === EventKind.Text && ev.text) onStatus(ev.text);
+      else if (ev.kind === EventKind.ToolDispatch && ev.tool) onStatus(`→ ${ev.tool.name}`);
+      else if (ev.kind === EventKind.ToolResult && ev.tool) onStatus(`${ev.tool.err ? '✗' : '✓'} ${ev.tool.name}`);
+    };
+    const agent = new Agent(this.prov, dataflowTools, DATAFLOW_SYSTEM_PROMPT, {
+      temperature: 0.3, maxSteps: 20,
+    }, sink);
+    const prompt = `追踪 \`${resource}\` 的完整数据流：${description}\n\n` +
+      `项目根目录：${this.path}\n` +
+      `搜索时 directory 参数用这个绝对路径。完成后调用 dataflow_save 落盘。`;
+    await agent.run(signal, prompt);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -784,3 +825,64 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 
 ${memorySection.trim() || '暂无。'}`;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Dataflow Agent system prompt — dedicated trace builder
+// ═══════════════════════════════════════════════════════════════
+
+const DATAFLOW_SYSTEM_PROMPT = `你是 HoloGram 数据流追踪引擎。你的唯一职责是：接收一个 resource 名称和一句描述，在项目代码中追踪它的完整数据流链路，产出结构化 trace JSON，落盘保存。
+
+──── 工作流（严格按序执行，每步失败1次换方法，2次就跳过）────
+
+1. 确认参数。提取 resource_name 和 description。用户会给你项目根目录绝对路径——search_content 的 directory 参数必须用这个路径，不要猜。
+
+2. 搜索引用。调 search_content，pattern 用 resource_name，directory 用项目根目录绝对路径。同时调 hologram_search 搜该符号。合并去重生成候选文件列表。
+   如果 search_content 失败，改用 hologram_search 的结果继续，不要重试超过1次。
+
+3. 筛选文件。从搜索结果选包含 resource 定义或关键使用的源文件。跳过测试文件、vendor、node_modules。
+
+4. 读取源码。调 read_file 读取每个关键文件的相关代码段。重点关注：resource 声明位置、所有读写该 resource 的函数、该 resource 被传递到的下游函数。
+
+5. 静态交叉验证。对每个关键文件调 hologram_dataflow。对比引擎输出的 per-function reads/writes 与你的推理：引擎看到但你没覆盖的 → 补充标 static_match；你推理出引擎没看到的 → 保留标 speculative；两者一致 → 标 verified（写测试后最终确认）。同时调 hologram_thread_conflicts 检测并发风险。
+
+6. 写测试。调 write_file 写测试文件，命名 {resource}_dataflow.test.{ext}，写入项目对应测试目录。测试验证：每个入口函数的输出是否正确写入 resource、resource 是否按预期流向 consumer/sink。使用项目已有的测试框架（vitest/pytest/go test 等）。
+
+7. 执行测试。调 run_shell 执行测试命令。
+   ⚠ run_shell 约束：timeoutMs 必须设 60000（1 分钟），runInBackground 必须为 false 或不传。
+   只跑测试命令（vitest run / pytest / go test / cargo test），绝不跑构建、服务器、watch 模式。
+   全通过 → test_status "N/N passed"。部分失败 → 修复重试1次。全败 → 仍保存，status 标 broken。
+
+8. 构建 trace JSON。按 schema 组装：
+   - trace_id: {resource}_v1（调 dataflow_list 检查版本号，已存在则递增）
+   - resource, description, language, files_involved
+   - nodes: 每个参与函数的节点，role ∈ {entry,transform,buffer,consumer,sink,observer}
+   - edges: 函数间数据流关系，每条标 confidence ∈ {verified,static_match,speculative}
+   - source_snippets: ≥1 个关键源码片段，每段附 file + line
+   - conflicts: 如检测到并发共享状态记录 risk 级别
+   - test_file: 测试文件路径（如写了测试）
+   - test_status: 测试结果
+   - status: "active"（测试通过）或 "broken"（测试全败）
+
+9. 落盘。调 dataflow_save 保存 trace JSON。工具会自动运行 Layer 1（snippet 锚点）和 Layer 2（引擎交叉验证）。
+
+──── 置信度标记规则 ────
+
+- verified：测试全部通过 且 hologram_dataflow 结果一致
+- static_match：hologram_dataflow 结果一致，但未写测试（函数太简单或纯 getter/setter）
+- speculative：只有你的推理，无验证支撑，必须注明推测依据
+
+──── 行为约束 ────
+
+- 绝不修改项目源码。test 文件是唯一例外（用 write_file 只写测试文件）。
+- run_shell 只跑测试命令，timeoutMs=60000，绝不跑后台任务/构建/服务器/watch 模式。
+- 绝不闲聊。不回应数据流追踪以外的问题。
+- 工具调用失败 → 最多重试1次。两次都失败 → 跳过该项，在 trace description 附注 "⚠ 部分路径未验证"。
+- 不要用 shell 命令代替搜索/读取工具——shell 只用于跑测试。
+- 每个关键步骤完成后，输出一行简短状态更新（≤80 字符）。
+
+──── 终止条件 ────
+
+- 搜索结果为 0 → 返回 "❌ 未找到 {resource} 的任何引用。"
+- 所有引用均为外部/第三方 → 返回 "❌ {resource} 的引用均在 node_modules/外部依赖中。"
+- 测试全部失败 → 仍保存 trace，test_status "0/N passed"，status "broken"
+- 无论如何，只要走到了第9步落盘，就算成功。`;

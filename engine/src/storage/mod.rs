@@ -10,5 +10,6 @@ pub mod string_arena;
 
 pub use memory::{LoadProgress, MemoryIndex};
 pub use sqlite::SqliteDb;
+pub use rusqlite::Connection;
 pub use store::GraphStore;
 pub use incremental::IncrementalUpdater;

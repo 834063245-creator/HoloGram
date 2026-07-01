@@ -77,6 +77,17 @@ export class ToolRegistry {
   filterReadOnly(): Tool[] {
     return this.all().filter(t => t.readOnly());
   }
+
+  /** Return a new ToolRegistry containing only the named tools (in given order).
+   *  Missing names are skipped silently. Used to build scoped agent toolsets. */
+  subset(names: string[]): ToolRegistry {
+    const sub = new ToolRegistry();
+    for (const n of names) {
+      const t = this.tools.get(n);
+      if (t) sub.register(t);
+    }
+    return sub;
+  }
 }
 
 // ---- Hologram 图查询工具 (25 tools — 与引擎 MCP 双线对齐) ----
@@ -542,6 +553,120 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_unused', args),
+    },
+    // ── Dataflow engine (per-file reads/writes/shared state) ──
+    {
+      name: () => 'hologram_dataflow',
+      description: () =>
+        'Per-function variable reads/writes, cross-function shared state, async triggers, and call sequences. Run on specific files to answer "where is X written?", "who reads Y?", "which functions share Z?". Returns per-file scopes (name/reads/writes/triggers/awaits_callbacks/sequence_calls) + shared state (var/readers/writers). Use to trace data movement within a file.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'File paths to analyze, e.g. ["src/auth.js", "src/db.js"]',
+          },
+        },
+        required: ['files'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_dataflow', args),
+    },
+  ];
+}
+
+// ═══════════════════════════════════════════════════════
+// Dataflow trace management tools — Agent-driven trace lifecycle
+// save: Dataflow Agent 专用；query/list/delete: 主 Agent + 面板
+// ═══════════════════════════════════════════════════════
+
+export function createDataflowTools(exec: ToolExecutor): Tool[] {
+  return [
+    {
+      name: () => 'dataflow_save',
+      description: () =>
+        'Save a dataflow trace to persistent storage. trace_json must be a complete JSON object with trace_id, resource, description, language, files_involved, nodes, edges, source_snippets, and test metadata. On save, Layer 1 (snippet anchor) and Layer 2 (dataflow engine cross-validation) run automatically, updating edge confidence and status. Used by the Dataflow Agent after tracing a resource.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          trace_json: { type: 'string', description: 'Complete trace JSON string' },
+        },
+        required: ['trace_json'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('dataflow_save', args),
+    },
+    {
+      name: () => 'dataflow_query',
+      description: () =>
+        'Query a saved dataflow trace by trace_id (exact) or resource (returns latest version). Returns the complete trace JSON including nodes, edges, source_snippets, test_status.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          trace_id: { type: 'string', description: 'Exact trace id, e.g. "logBuffer_v1"' },
+          resource: { type: 'string', description: 'Resource name (returns latest version)' },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('dataflow_query', args),
+    },
+    {
+      name: () => 'dataflow_list',
+      description: () =>
+        'List all saved dataflow traces with optional filters. Returns summaries (trace_id, resource, description, language, status, test_status, verified_at) without the full trace_json.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          language: { type: 'string', description: 'Filter by language (e.g. "typescript")' },
+          status: { type: 'string', description: 'Filter by status: active|stale|broken|deprecated' },
+          limit: { type: 'integer', description: 'Max results (default 50)', default: 50 },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('dataflow_list', args),
+    },
+    {
+      name: () => 'dataflow_delete',
+      description: () =>
+        'Delete a dataflow trace. Default is soft-delete (status → deprecated). Set hard=true to permanently remove.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          trace_id: { type: 'string', description: 'Trace id to delete' },
+          hard: { type: 'boolean', description: 'Hard delete (default false = soft delete)', default: false },
+        },
+        required: ['trace_id'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('dataflow_delete', args),
+    },
+    {
+      name: () => 'dataflow_verify',
+      description: () =>
+        '重新验证一条 trace：重跑 source_snippets 锚点检测 + hologram_dataflow 静态交叉验证 + 关联测试文件（如存在）。更新 verified_at、test_status、status 字段。代码变更后用此工具检查 trace 是否仍然有效。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          trace_id: { type: 'string', description: '要验证的 trace id' },
+        },
+        required: ['trace_id'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('dataflow_verify', args),
+    },
+    {
+      name: () => 'dataflow_stale_check',
+      description: () =>
+        '检查一条或全部 trace 是否因代码变更而过期。对每条 trace 重跑 snippet 锚点验证 + 检查 files_involved 文件是否仍存在。过期的 trace status 标为 stale。不传 trace_id = 检查全部 active/stale trace。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          trace_id: { type: 'string', description: '要检查的 trace id（不传 = 全量检查）' },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('dataflow_stale_check', args),
     },
   ];
 }
