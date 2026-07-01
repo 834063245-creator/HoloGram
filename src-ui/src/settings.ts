@@ -82,7 +82,7 @@ const DEFAULTS: AppSettings = {
   },
   display: {
     language: 'zh',
-    fontScale: 1.0,
+    fontScale: 1.2,
   },
 };
 
