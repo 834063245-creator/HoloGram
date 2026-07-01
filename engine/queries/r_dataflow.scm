@@ -1,18 +1,12 @@
 ;; R dataflow queries
-
-;; Writes
-(assign left: (identifier) @write)
-(left_assignment right: (identifier) @write)
-(equals_assignment left: (identifier) @write)
-;; Function params
-(formal_parameters (identifier) @write)
+;; tree-sitter-r 1.2 — minimal: reads + scope + sequences only.
+;; Write/assign patterns omitted (R uses <- binary operator, node types unknown).
 
 ;; All identifiers — engine filters to reads
 (identifier) @read
 
 ;; Scope boundaries
 (function_definition) @scope_fn
-(lambda_definition) @scope_fn
 
 ;; Sequences
 (call) @sequence

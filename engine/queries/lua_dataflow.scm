@@ -1,9 +1,6 @@
 ;; Lua dataflow queries
-
-;; Writes
-(assignment_statement variable: (identifier) @write)
-(variable_declaration name: (identifier) @write)
-(local_variable_declaration name: (identifier) @write)
+;; tree-sitter-lua 0.2 — minimal: reads + scope + sequences only.
+;; Write patterns omitted (grammar node types unknown for this version).
 
 ;; All identifiers — engine filters to reads
 (identifier) @read
