@@ -540,24 +540,50 @@ Dataflow Panel ──invoke()──→ dataflow_traces 表 ←──内置工具
 
 ## 实施路径
 
-### Phase 1 — 存储 + 面板（本 sprint）
+### Phase 1 — 存储 + 面板 + 专用 Agent（目标：能追一条 trace 并落盘）
 
-1. `dataflow_traces` 表建在 `ensure_schema()`
-2. `hologram_dataflow_save` / `query` / `list` / `delete` 四个工具，save 时自动跑 Layer 1+2
-3. 前端 dataflow-panel.ts（浮动窗口 + 列表 + 详情）
-4. app-shell 注册面板
+**后端：**
 
-### Phase 2 — 验证 + 维护
+1. `dataflow_traces` 表建在 `sqlite.rs` 的 `ensure_schema()`，含索引
+2. Tauri command `dataflow_save`：验证 trace schema → Layer 1 snippet 锚点 → Layer 2 引擎交叉验证 → 计算节点/边的 confidence → INSERT/UPDATE
+3. Tauri command `dataflow_query`、`dataflow_list`、`dataflow_delete`：按 trace_id/resource 查询、列表、软删除
 
-5. `hologram_dataflow_verify`（Layer 1-2 重跑 + 测试重跑）
-6. `hologram_dataflow_stale_check`（Layer 3 符号引用检测）
-7. Git hook / watcher 联动：相关文件变更时自动标记 stale
+**前端引擎侧：**
 
-### Phase 3 — 面板增强
+4. `src-ui/src/agent/tool.ts`：
+   - Dataflow Agent 的 `dataflow_save` 工具注册（read_only=false）
+   - 主 Agent 的 `dataflow_query` / `dataflow_list` / `dataflow_delete` / `dataflow_verify` / `dataflow_stale_check` 工具注册
+   - `ToolRegistry` 加 `subset(names: string[])` 方法，从完整注册表裁剪出 ~10 个工具的子集
+5. Dataflow Agent system prompt 写入常量（上一节完整 prompt）
 
-8. 新建 trace 的引导对话框（resource + 描述 → 注入 chat prompt）
-9. 面板内嵌编辑器：编辑 trace 的 nodes/edges/description（手动微调）
-10. trace 版本 diff：同一 resource 的 v1 vs v2 对比
+**前端 UI：**
+
+6. `src-ui/index.html`：面板 div + CSS（浮动窗口、左侧列表、右侧详情、状态日志区）
+7. `src-ui/src/ui/dataflow-panel.ts`：
+   - 浮动面板类（跟 chat 同级，可拖拽 resize）
+   - 左侧 TraceList：调 `invoke("dataflow_list")` 渲染列表，带 status 图标
+   - 右侧 TraceDetail：调 `invoke("dataflow_query")`，复用 `formatDataflowCard()` 渲染
+   - 新建按钮：弹出对话框 → 创建 `Agent(dataflow)` 实例 → 注入构造好的 prompt → 状态日志实时更新
+8. `src-ui/src/ui/app-shell.ts`：注册 dataflow panel 到面板切换
+
+**验证目标：** 手动触发一次 logBuffer 追踪，Agent 自动追完整条链路 → 落盘 → 面板左侧显示 ✅ active。
+
+---
+
+### Phase 2 — 验证 + 维护（目标：trace 不会悄悄变旧）
+
+9. Tauri command `dataflow_verify`：重跑 Layer 1-2 + 重跑关联测试文件（如存在），更新 `verified_at` / `test_status`
+10. Tauri command `dataflow_stale_check`：Layer 3 符号引用完整性检测。对每个 resource 调 `hologram_search` → 对比上次保存的引用集 → 新出现引用者 → status 标 stale
+11. Watcher 联动：engine watcher 检测到 `files_involved` 中的文件变更 → 自动调 `dataflow_stale_check(trace_id)` → 更新状态
+
+---
+
+### Phase 3 — 面板增强（目标：便利性）
+
+12. 新建 trace 引导优化：resource 输入框加自动补全（从 `hologram_search` 拿候选符号名）
+13. 重追踪：对 stale trace 点"重追"，复用原有 resource + description，Agent 自动重新建 trace（version 号递增）
+14. 面板内嵌编辑器：手动微调 trace 的 nodes/edges/description（语法高亮 JSON）
+15. trace 版本 diff：同一 resource 的 v1 vs v2 对比
 
 ---
 
