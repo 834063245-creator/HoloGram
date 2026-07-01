@@ -304,6 +304,173 @@ CREATE INDEX idx_dt_status   ON dataflow_traces(status);
 
 4. **并行隔离。** 用户可以一边跟主 Agent 聊重构方案，一边让数据流 Agent 在后台追 `auth_flow`。两个 Agent 互不干扰，各自消费自己的 context，各自独立 stream。
 
+### 工具分配矩阵
+
+| 工具 | Dataflow Agent | 主 Agent | 理由 |
+|------|:---:|:---:|------|
+| `search_content` | ✅ | ✅ | 两个都需要 |
+| `read_file` | ✅ | ✅ | |
+| `glob` | ✅ | ✅ | |
+| `hologram_dataflow` | ✅ | ✅ | 一个交叉验证，一个快速诊断 |
+| `hologram_node` | ✅ | ✅ | |
+| `hologram_search` | ✅ | ✅ | |
+| `hologram_neighbors` | ✅ | ✅ | |
+| `hologram_thread_conflicts` | ✅ | ✅ | 检测共享状态并发风险 |
+| `write_file` | ✅ 仅test | ✅ | dataflow Agent 只写 test 文件 |
+| `run_shell` | ✅ 仅vitest | ✅ | dataflow Agent 只跑测试 |
+| `dataflow_save` | ✅ | ❌ | 只有 worker 写，主 Agent 不负责建 trace |
+| `dataflow_query` | ❌ | ✅ | 用户问"logBuffer 的数据流是什么" |
+| `dataflow_list` | ❌ | ✅ | 用户问"有哪些数据流" |
+| `dataflow_delete` | ❌ | ✅ | 用户操作，非 worker 职责 |
+| `dataflow_verify` | ❌ | ✅ | 用户操作 |
+| `dataflow_stale_check` | ❌ | ✅ | 维护操作 |
+| `edit_file` | ❌ | ✅ | dataflow Agent 绝不修改源码 |
+| `agent_spawn` | ❌ | ✅ | 防止嵌套 |
+
+Dataflow Agent 有效工具：~10 个（只保留分析和数据流保存能力）。
+
+### Dataflow Agent 完整 system prompt
+
+```
+你是 HoloGram 数据流追踪引擎。你的唯一职责是：接收一个 resource 名称和
+一句描述，在项目代码中追踪它的完整数据流链路，产出结构化 trace JSON，落盘保存。
+
+──── 工作流（严格按序执行） ────
+
+1. 确认参数。
+   提取 resource_name 和 description。缺失任何一项 → 拒绝执行，告知用户。
+
+2. 搜索引用。
+   调 search_content 搜 resource_name 在项目中的所有出现位置。
+   同时调 hologram_search 在结构图中搜索该符号。
+   合并两个来源，去重，生成候选文件列表。
+
+3. 筛选文件。
+   从搜索结果中选出包含该 resource 定义或关键使用的源文件。
+   只选应用代码文件，跳过测试文件、vendor、node_modules。
+
+4. 读取源码。
+   调 read_file 读取每个关键文件的相关代码段。
+   重点关注：resource 的声明/初始化位置、所有读写该 resource 的函数、
+   该 resource 被传递到的下游函数。
+
+5. 静态交叉验证。
+   对每个关键文件调 hologram_dataflow。
+   对比引擎输出的 per-function reads/writes 与你的推理结果：
+   - 引擎看到但你没覆盖的 → 补充到 trace，标记 confidence: static_match
+   - 你推理出但引擎没看到的 → 保留，标记 confidence: speculative
+   - 两者一致 → 标记 confidence: verified（下一步写测试后最终确认）
+   同时调 hologram_thread_conflicts 检测该 resource 的并发访问风险。
+
+6. 写测试。
+   为数据流关键路径写测试文件，命名规则 {resource}_dataflow.test.{ext}，
+   写入项目对应测试目录。测试应验证：
+   - 每个入口函数的输出是否正确写入 resource
+   - resource 是否按预期流向 consumer/sink
+   - 并发场景下是否存在非预期的交错写入（如有）
+   使用项目已有的测试框架（vitest/pytest/go test 等）。
+
+7. 执行测试。
+   调 run_shell 执行对应测试框架的命令。确认全部通过。
+   如部分失败 → 修复测试后重试。全败 → 仍保存，status 标 broken。
+
+8. 构建 trace JSON。
+   按 dataflow_traces 表的 schema 组装完整 JSON：
+   - trace_id: {resource}_v1（调 dataflow_list 检查，如已存在则递增版本号）
+   - resource: resource_name
+   - description: 用户给的描述
+   - language: 主要涉及文件的编程语言
+   - files_involved: 涉及的文件路径列表
+   - nodes: 每个参与函数的节点，标注 role（entry/transform/buffer/consumer/sink/observer）
+   - edges: 函数间的数据流关系，每条标注 confidence
+   - source_snippets: 至少 1 个关键源码片段，每段附 file + line
+   - conflicts: 如检测到并发共享状态，记录 risk 级别
+
+9. 落盘。
+   调 dataflow_save 保存 trace JSON。工具执行后会自动运行 Layer 1（snippet 锚点）
+   和 Layer 2（引擎交叉验证），结果写入 verified_at 和 test_status。
+
+──── 置信度标记规则 ────
+
+- verified：测试全部通过 且 hologram_dataflow 结果一致
+- static_match：hologram_dataflow 结果一致，但未写测试（函数太简单或纯 getter/setter）
+- speculative：只有你的推理，无任何验证手段支撑。必须注明推测依据
+
+──── 行为约束 ────
+
+- 绝不修改项目源码。test 文件是唯一例外。
+- 绝不闲聊。不回应数据流追踪以外的问题。
+- 工具调用失败 → 重试 1 次。两次都失败 → 跳过该项，
+  在 trace JSON 中标明原因并在 description 字段附注 "⚠ 部分路径未验证: ..."
+- 每个关键步骤完成后，向 sink 发一条简短状态更新。
+- 状态消息格式：单行纯文本，不超过 80 字符。
+  示例："[搜索完成] 找到 7 处引用，涉及 3 个文件"
+        "[分析完成] 2 个文件，5 个函数，3 个共享变量"
+        "[测试完成] 4/4 passed · src/log Buffer_dataflow.test.ts"
+        "[保存完成] logBuffer_v1 → SQLite"
+
+──── 终止条件 ────
+
+- 搜索结果为 0 → 返回 "❌ 未找到 {resource} 的任何引用。请确认 resource 名称正确。"
+- 所有引用均为外部/第三方 → 返回 "❌ {resource} 的所有引用均在 node_modules/外部依赖中，无法建立项目内 trace。"
+- 测试全部失败 → 仍然保存 trace，但 test_status 标为 "0/N passed"，status 标为 "broken"
+```
+
+### 主 Agent 新增工具定义
+
+`src-ui/src/agent/tool.ts` 中为主 Agent 新增 5 个内置工具（全部 read_only）：
+
+```typescript
+// ── Dataflow trace management (read-only, internal) ──
+{
+  name: 'dataflow_query',
+  read_only: true,
+  description: '查询一条已保存的数据流 trace。参数 trace_id 或 resource（二选一）。返回完整 trace JSON，包含 nodes、edges、source_snippets、test_status 等。',
+}
+{
+  name: 'dataflow_list',
+  read_only: true,
+  description: '列出项目中所有已保存的数据流 trace。可选过滤：language、status。返回 id、resource、description、status、test_status。',
+}
+{
+  name: 'dataflow_verify',
+  read_only: true,
+  description: '重新验证一条 trace：重跑 source_snippets 锚点检测 + hologram_dataflow 静态交叉验证 + 关联测试文件。更新 verified_at 和 test_status 字段。',
+}
+{
+  name: 'dataflow_stale_check',
+  read_only: true,
+  description: '检查一条或全部 trace 是否因代码变更而过期。对每个 res_ource 调 hologram_search 全项目搜符号 → 对比上次保存时的引用集 → 新出现的引用者标记状态为 stale。',
+}
+```
+
+`dataflow_delete` 是唯一的写操作工具：
+
+```typescript
+{
+  name: 'dataflow_delete',
+  read_only: false,
+  description: '删除（软删除）一条数据流 trace。将 status 设为 deprecated。',
+}
+```
+
+主 Agent 调用这些工具的场景示例：
+
+```
+用户: "有哪些数据流？"
+→ Agent 调 dataflow_list → 返回 6 条 trace，3 active，1 stale，2 broken
+→ Agent: "项目中有 6 条数据流 trace。3 条活跃：logBuffer、auth_flow、session_mgr。
+   1 条过期：config_loader 需要重新追踪。2 条已损坏：..."
+
+用户: "logBuffer 的完整数据流是什么？"
+→ Agent 调 dataflow_query(resource: "logBuffer")
+→ 拿到完整 trace JSON → 解读并回答
+
+用户: "auth 代码改了，之前那个 trace 还准吗？"
+→ Agent 调 dataflow_stale_check(trace_id: "auth_flow_v1")
+→ 返回 stale → Agent 建议重新追踪
+```
+
 ### Agent 实例化方式
 
 ```typescript
@@ -311,30 +478,33 @@ CREATE INDEX idx_dt_status   ON dataflow_traces(status);
 import { Agent } from '../agent/agent';
 import { toolRegistry } from '../agent/tool';
 
+// Dataflow Agent 只用工具的子集 —— 筛选出以 analytics/dataflow 为主的工具
+// 实际实现中，可以在 ToolRegistry 上加一个 .subset(names: string[]) 方法
+const dataflowTools = toolRegistry.subset([
+  'search_content', 'read_file', 'glob',
+  'hologram_dataflow', 'hologram_search', 'hologram_node',
+  'hologram_neighbors', 'hologram_thread_conflicts',
+  'write_file', 'run_shell',
+  'dataflow_save',
+]);
+
 const dataflowAgent = new Agent(
-  provider,           // 共享 Provider（同 API key + model）
-  toolRegistry,       // 共享 ToolRegistry（同一套工具）
-  DATAFLOW_SYSTEM_PROMPT,
+  provider,              // 共享 Provider
+  dataflowTools,         // 精简版 ToolRegistry（~10 工具）
+  DATAFLOW_SYSTEM_PROMPT, // 上面的完整 prompt
   {
-    temperature: 0.3,  // 更低温度，数据流分析不需要创造性
-    maxSteps: 20,       // 比主 Agent 更多步数（复杂链路需要更多跳）
+    temperature: 0.3,    // 低温度，输出更确定
+    maxSteps: 20,        // 复杂链路需要更多步
   },
-  dataflowEventSink    // 专用 EventSink → 面板状态日志，不进主 chat
+  dataflowEventSink      // 专用 EventSink → 面板状态日志
 );
 ```
-
-### Dataflow Agent system prompt 要点
-
-- 角色：数据流分析专家，不是通用编程助手。只追踪数据移动和变换。
-- 工作流：搜索 resource → 读源文件 → 调 hologram_dataflow 交叉验证 → 写测试 → 调 dataflow_save 落盘
-- 输出约束：必须产出符合 trace schema 的 JSON；必须附带 source_snippets（每段标 file + line）；confidence 标记优先级（verified > speculative > dynamic）
-- 禁止：闲聊、偏离追踪任务、修改与 trace 无关的代码
 
 ### 前端文件变更
 
 | 文件 | 说明 |
 |------|------|
-| `src-ui/src/agent/tool.ts` | 注册 6 个内置工具定义（dataflow_save/query/list/delete/verify/stale_check），映射到 Tauri invoke |
+| `src-ui/src/agent/tool.ts` | 新增 6 个内置工具定义。Dataflow Agent 用 subset 取出 ~10 个，主 Agent 用完整注册表 + 新增的 5 个管理工具。 |
 | `src-ui/src/ui/dataflow-panel.ts` | 浮动面板 + 专用 Agent 实例。左侧 trace 列表（调 `invoke("dataflow_list")`）+ 右侧详情（调 `invoke("dataflow_query")`）+ 新建时创建 `Agent(dataflow)` 实例驱动追踪 |
 | `src-ui/index.html` | 面板 div + CSS |
 | `src-ui/src/ui/app-shell.ts` | 注册 dataflow panel |
