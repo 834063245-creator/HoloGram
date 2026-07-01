@@ -538,15 +538,25 @@ pub fn synthesize_via_queries(
     // they just create an extra Awaits edge.)
 
     // ── Phase 5: Shares (cross-function shared state) ──
+    let mut var_to_writers: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (sid, wvars) in &scope_writes {
+        for v in wvars {
+            var_to_writers.entry(v.as_str()).or_default().insert(sid.as_str());
+        }
+    }
     for (scope_id, read_vars) in &scope_reads {
         if scope_id == file { continue; }
         for v in read_vars {
-            let is_shared = module_vars.contains(v)
-                || scope_writes.iter().any(|(sid, wvars)| sid != scope_id && wvars.contains(v));
-            if is_shared {
+            if module_vars.contains(v) {
                 let mid = medium_id_for(graph, v, file, 0);
                 let eid = format!("shr_{}_{}_{}", ff, scope_id, v);
                 added += insert_edge(graph, &eid, scope_id, &mid, EdgeKind::Shares, 3, None);
+            } else if let Some(writers) = var_to_writers.get(v.as_str()) {
+                if writers.len() > 1 || !writers.contains(scope_id.as_str()) {
+                    let mid = medium_id_for(graph, v, file, 0);
+                    let eid = format!("shr_{}_{}_{}", ff, scope_id, v);
+                    added += insert_edge(graph, &eid, scope_id, &mid, EdgeKind::Shares, 3, None);
+                }
             }
         }
     }
