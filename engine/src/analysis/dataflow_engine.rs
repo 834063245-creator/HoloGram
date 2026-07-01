@@ -410,8 +410,9 @@ pub fn synthesize_via_queries(
             scope_stack.push((child, String::new()));
         }
     }
-    // Sort by range size ascending — tightest scope first for O(n) lookup
-    scopes.sort_by_key(|s| s.end - s.start);
+    // Sort by start descending — inner scopes (nested) always start after outer
+    // scopes, so the FIRST match is the tightest enclosing scope. O(1) amortized.
+    scopes.sort_by_key(|s| -(s.start as i64));
 
     // ── Phase 2: collect captures ──
     let mut write_offsets: HashSet<usize> = HashSet::new();
@@ -578,8 +579,9 @@ pub fn synthesize_via_queries(
 }
 
 /// Find the tightest enclosing scope for a byte offset.
+/// ponytail: scopes sorted by start descending — nested scopes always have
+/// larger start bytes, so first match is tightest. Amortized O(1) per capture.
 fn find_scope(offset: usize, scopes: &[Scope]) -> Option<String> {
-    // scopes are sorted by range size ascending — first match is tightest
     for s in scopes {
         if offset >= s.start && offset <= s.end {
             return Some(s.name.clone());
