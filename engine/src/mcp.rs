@@ -136,9 +136,41 @@ fn tool_definitions() -> Vec<Value> {
             &[]),
 
         // ── Dataflow tracing (1) ──
-        tool_def("hologram_dataflow", "Trace variable dataflow in specific files. Runs tree-sitter queries to detect per-function reads/writes, cross-function shared state, async triggers, and call sequences. Use to answer \"where is X written?\", \"who reads Y?\", \"which functions share Z?\". Returns structured per-scope data — no graph nodes created.",
+        tool_def("hologram_dataflow", "\
+Trace variable-level dataflow inside specific source files. \
+Runs tree-sitter queries to detect per-function reads, writes, cross-function \
+shared state, async triggers (await), and call sequences.\n\
+\n\
+WHEN TO USE (do NOT call for structural questions like calls/imports/inheritance):\n\
+- \"where is X defined/written?\" / \"who reads Y?\" / \"which functions touch Z?\"\n\
+- \"does variable db cross function boundaries?\" / \"is this state shared?\"\n\
+- \"what does function foo() read and write?\"\n\
+- \"trace the data dependencies of config\"\n\
+\n\
+TYPICAL WORKFLOW:\n\
+1. hologram_search(\"db\") or hologram_explore → find candidate files\n\
+2. hologram_dataflow({files: [...]}) with the top 3-10 most relevant files\n\
+3. Read the source of key functions if you need more context\n\
+\n\
+INPUT: files — array of strings, absolute or relative to project root.\n\
+Example: {\"files\": [\"src/db.rs\", \"src/auth.py\"]}\n\
+\n\
+OUTPUT per file: {\n\
+  \"scopes\": [{ \"name\": \"fn_name\", \"reads\": [\"x\",\"y\"], \"writes\": [\"z\"],\n\
+                \"triggers\": [\"await_target\"], \"awaits_callbacks\": [...],\n\
+                \"sequence_calls\": [\"a\",\"b\",\"c\"] }],\n\
+  \"shared\": [{ \"var\": \"db\", \"readers\": [\"query\",\"cache\"],\n\
+               \"writers\": [\"init_db\"] }]\n\
+}\n\
+Reads/writes/triggers/sequence_calls are scoped per function (includes methods, \
+lambdas, closures). shared lists variables accessed by multiple functions — \
+these are cross-cutting state worth investigating for coupling/threading risks.\n\
+Module-level variables (outside any function) appear under scope name \"<module>\".\n\
+\n\
+LIMITATIONS: 18 languages supported (py,js,ts,rs,go,java,c,cpp,cs,rb,php,\
+lua,swift,dart,scala,zig,ex,sh,r). On-demand only — does NOT create graph nodes.",
             &[
-                ("files", "array", "List of file paths to trace dataflow in"),
+                ("files", "array", "Array of file path strings, e.g. [\"src/auth.js\", \"src/db.js\"]"),
             ],
             &["files"]),
     ]
