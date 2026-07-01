@@ -6,10 +6,11 @@
 
 import { invoke } from '../bridge';
 import { shell } from './app-shell';
-import { formatDataflowCard } from './chat';
+import { iconHtml } from './icons';
 
 const STATUS_ICON: Record<string, string> = {
-  active: '✅', stale: '⚠️', broken: '❌', deprecated: '⛔',
+  active: iconHtml('check-circle', 13), stale: iconHtml('alert-circle', 13),
+  broken: iconHtml('close', 13), deprecated: iconHtml('block', 13),
 };
 
 export class DataflowPanel {
@@ -54,8 +55,9 @@ export class DataflowPanel {
     this.header.innerHTML = `<span class="df-panel-title">数据流追踪</span>`;
     const closeBtn = document.createElement('button');
     closeBtn.className = 'df-panel-close';
-    closeBtn.textContent = '×';
+    closeBtn.innerHTML = iconHtml('close', 15);
     closeBtn.onclick = () => this.close();
+    closeBtn.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
     this.header.appendChild(closeBtn);
     this.el.appendChild(this.header);
 
@@ -69,7 +71,7 @@ export class DataflowPanel {
     left.className = 'df-list';
     const toolbar = document.createElement('div');
     toolbar.className = 'df-list-toolbar';
-    toolbar.innerHTML = `<button class="df-btn-new">+ 新建</button><button class="df-btn-refresh">🔄</button>`;
+    toolbar.innerHTML = `<button class="df-btn-new">${iconHtml('plus', 14)} 新建</button><button class="df-btn-refresh">${iconHtml('refresh', 14)}</button>`;
     this.listEl = document.createElement('div');
     this.listEl.className = 'df-list-items';
     left.appendChild(toolbar);
@@ -131,6 +133,12 @@ export class DataflowPanel {
     body.appendChild(this.detailEl);
     this.el.appendChild(body);
 
+    // corner bracket decorations
+    const corners = document.createElement('div');
+    corners.className = 'df-corners';
+    corners.innerHTML = '<span class="df-cb-bottom df-cb-bl"></span><span class="df-cb-bottom df-cb-br"></span>';
+    this.el.appendChild(corners);
+
     // resize grip
     this.grip = document.createElement('div');
     this.grip.className = 'df-grip';
@@ -173,7 +181,7 @@ export class DataflowPanel {
     } catch (e: any) {
       const row = document.createElement('div');
       row.className = 'df-status-line df-status-err';
-      row.textContent = `✗ ${e?.message || e}`;
+      row.textContent = `✕ ${e?.message || e}`;
       this.statusEl.appendChild(row);
     }
   }
@@ -243,9 +251,25 @@ export class DataflowPanel {
         `<div class="df-snip"><div class="df-snip-name">${k} · ${s?.file || ''}:${s?.line || ''}</div>
          <pre class="df-snip-code">${this.escapeHtml(s?.code || '')}</pre></div>`).join('');
 
-      // 复用 formatDataflowCard：trace nodes/edges → {results:[{file,scopes,shared}]}
-      const dfCardHtml = this.traceToDataflowCard(t);
-      const edgeCount = (Array.isArray(t.edges) ? t.edges : []).length;
+      const nodes: any[] = Array.isArray(t.nodes) ? t.nodes : [];
+      const edges: any[] = Array.isArray(t.edges) ? t.edges : [];
+
+      // Confidence stats
+      const confCounts: Record<string, number> = {};
+      for (const e of edges) {
+        const c = e.confidence || 'speculative';
+        confCounts[c] = (confCounts[c] || 0) + 1;
+      }
+      const confBadges = [
+        confCounts['verified'] ? `<span class="df-conf-badge df-conf-verified">✓ ${confCounts['verified']} verified</span>` : '',
+        confCounts['static_match'] ? `<span class="df-conf-badge df-conf-static">~ ${confCounts['static_match']} match</span>` : '',
+        confCounts['speculative'] ? `<span class="df-conf-badge df-conf-spec">? ${confCounts['speculative']} speculative</span>` : '',
+      ].filter(Boolean).join(' ');
+
+      // Nodes table
+      const nodesHtml = nodes.length > 0 ? this.buildNodesTable(nodes) : '';
+      // Edges table
+      const edgesHtml = edges.length > 0 ? this.buildEdgesTable(edges) : '';
 
       this.detailEl.innerHTML = `
         <div class="df-detail-hdr">
@@ -253,19 +277,26 @@ export class DataflowPanel {
           <span class="df-detail-status">${STATUS_ICON[t.status] || ''} ${t.status || ''}</span>
         </div>
         <div class="df-detail-meta">
-          <div><b>资源:</b> ${t.resource || ''}</div>
-          <div><b>描述:</b> ${t.description || ''}</div>
-          <div><b>语言:</b> ${t.language || ''} · <b>测试:</b> ${t.test_status || '—'} · <b>边:</b> ${edgeCount}</div>
+          <div><b>资源:</b> ${this.escapeHtml(t.resource || '')}</div>
+          <div><b>描述:</b> ${this.escapeHtml(t.description || '')}</div>
+          <div>
+            <b>语言:</b> ${t.language || '—'}
+            · <b>节点:</b> ${nodes.length}
+            · <b>边:</b> ${edges.length}
+            · <b>测试:</b> ${t.test_status || '—'}
+          </div>
+          ${confBadges ? `<div class="df-conf-row">${confBadges}</div>` : ''}
         </div>
-        <div class="df-detail-section"><div class="df-section-hdr">数据流</div>${dfCardHtml}</div>
+        ${nodesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">节点 <span class="df-sect-count">${nodes.length}</span></div>${nodesHtml}</div>` : ''}
+        ${edgesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">边 <span class="df-sect-count">${edges.length}</span></div>${edgesHtml}</div>` : ''}
         ${snips ? `<div class="df-detail-section"><div class="df-section-hdr">源码片段</div>${snips}</div>` : ''}
         <div class="df-detail-actions">
-          <button class="df-btn-verify" data-tid="${t.trace_id}">🔁 重验证</button>
-          <button class="df-btn-stale" data-tid="${t.trace_id}">🔍 过期检查</button>
-          <button class="df-btn-retrace" data-tid="${t.trace_id}">🔄 重追踪</button>
-          <button class="df-btn-edit" data-tid="${t.trace_id}">✏ 编辑</button>
-          <button class="df-btn-diff" data-tid="${t.trace_id}">📊 版本对比</button>
-          <button class="df-btn-del" data-tid="${t.trace_id}">🗑 删除</button>
+          <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 重验证</button>
+          <button class="df-btn-stale" data-tid="${t.trace_id}">${iconHtml('eye', 13)} 过期检查</button>
+          <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
+          <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
+          <button class="df-btn-diff" data-tid="${t.trace_id}">${iconHtml('diff', 13)} 版本对比</button>
+          <button class="df-btn-del" data-tid="${t.trace_id}">${iconHtml('trash', 13)} 删除</button>
         </div>`;
       const delBtn = this.detailEl.querySelector('.df-btn-del') as HTMLElement | null;
       if (delBtn) delBtn.onclick = async () => {
@@ -283,8 +314,8 @@ export class DataflowPanel {
           const res = JSON.parse(raw);
           await this.showDetail(t.trace_id);
           this.refresh();
-          this.showBanner(`✓ 重验证完成 · 状态: ${res.status} · 锚点: ${res.snippets_ok ? '✓' : '✗'} · 测试: ${res.test_status || '无'}`, 'ok');
-        } catch (e: any) { verifyBtn.textContent = `✗ ${e?.message || e}`; }
+          this.showBanner(`${iconHtml('check-circle', 13)} 重验证完成 · 状态: ${res.status} · 锚点: ${res.snippets_ok ? iconHtml('check-circle', 11) : iconHtml('close', 11)} · 测试: ${res.test_status || '无'}`, 'ok');
+        } catch (e: any) { verifyBtn.textContent = `✕ ${e?.message || e}`; }
       };
       const staleBtn = this.detailEl.querySelector('.df-btn-stale') as HTMLElement | null;
       if (staleBtn) staleBtn.onclick = async () => {
@@ -297,11 +328,11 @@ export class DataflowPanel {
           this.refresh();
           if (r) {
             this.showBanner(r.stale
-              ? `⚠ 已过期 · 锚点: ${r.snippets_ok ? '✓' : '✗'} · 文件存在: ${r.files_exist ? '✓' : '✗'}`
-              : `✓ 未过期 · 锚点: ${r.snippets_ok ? '✓' : '✗'} · 文件存在: ${r.files_exist ? '✓' : '✗'}`,
+              ? `${iconHtml('alert-circle', 13)} 已过期 · 锚点: ${r.snippets_ok ? iconHtml('check-circle', 11) : iconHtml('close', 11)} · 文件存在: ${r.files_exist ? iconHtml('check-circle', 11) : iconHtml('close', 11)}`
+              : `${iconHtml('check-circle', 13)} 未过期 · 锚点: ${r.snippets_ok ? iconHtml('check-circle', 11) : iconHtml('close', 11)} · 文件存在: ${r.files_exist ? iconHtml('check-circle', 11) : iconHtml('close', 11)}`,
               r.stale ? 'warn' : 'ok');
           }
-        } catch (e: any) { staleBtn.textContent = `✗ ${e?.message || e}`; }
+        } catch (e: any) { staleBtn.textContent = `✕ ${e?.message || e}`; }
       };
       // 重追踪：复用 resource + description，spawn 新 Agent，version 自动递增
       const retraceBtn = this.detailEl.querySelector('.df-btn-retrace') as HTMLElement | null;
@@ -320,9 +351,9 @@ export class DataflowPanel {
             this.statusEl.scrollTop = this.statusEl.scrollHeight;
           }, ctrl.signal);
           await this.refresh();
-          this.showBanner('✓ 重追踪完成', 'ok');
+          this.showBanner(`${iconHtml('check-circle', 13)} 重追踪完成`, 'ok');
         } catch (e: any) {
-          this.showBanner(`✗ 重追踪失败: ${e?.message || e}`, 'err');
+          this.showBanner(`${iconHtml('close', 13)} 重追踪失败: ${e?.message || e}`, 'err');
         }
         retraceBtn.textContent = '🔄 重追踪';
       };
@@ -357,9 +388,9 @@ export class DataflowPanel {
             await invoke<string>('dataflow_save', { traceJson: JSON.stringify(parsed) });
             this.showDetail(t.trace_id);
             this.refresh();
-            this.showBanner('✓ 已保存', 'ok');
+            this.showBanner(`${iconHtml('check-circle', 13)} 已保存`, 'ok');
           } catch (e: any) {
-            this.showBanner(`✗ 保存失败: ${e?.message || e}`, 'err');
+            this.showBanner(`${iconHtml('close', 13)} 保存失败: ${e?.message || e}`, 'err');
           }
         };
       };
@@ -389,48 +420,57 @@ export class DataflowPanel {
     }
   }
 
-  /** 把 trace 的 nodes/edges 转成 formatDataflowCard 期望的 {results:[{file,scopes,shared}]} 格式。
-   *  ponytail: 按 file 分组 function nodes，从 edges 推 reads/writes/triggers/shared。
-   *  上限：简单映射，不处理 sequence_calls/awaits（trace edges 没有这两种 kind 的细分）。 */
-  private traceToDataflowCard(t: any): string {
-    const nodes: any[] = Array.isArray(t.nodes) ? t.nodes : [];
-    const edges: any[] = Array.isArray(t.edges) ? t.edges : [];
-    const filesMap = new Map<string, { scopes: any[]; shared: any[] }>();
-    for (const n of nodes) {
-      const f = n.file || '(unknown)';
-      if (!filesMap.has(f)) filesMap.set(f, { scopes: [], shared: [] });
-      const entry = filesMap.get(f)!;
-      if (n.kind === 'function' || n.role) {
-        const fromEdges = edges.filter(e => e.from === n.id);
-        entry.scopes.push({
-          name: n.id,
-          reads: fromEdges.filter(e => e.kind === 'reads').map(e => e.to),
-          writes: fromEdges.filter(e => e.kind === 'writes').map(e => e.to),
-          triggers: fromEdges.filter(e => e.kind === 'triggers').map(e => e.to),
-          awaits_callbacks: fromEdges.filter(e => e.kind === 'awaits').map(e => e.to),
-          sequence_calls: fromEdges.filter(e => e.kind === 'sequences' || e.kind === 'calls').map(e => e.to),
-        });
-      }
-    }
-    // shared: kind=shares 的 edges，按 to（变量名）聚合 readers/writers
-    const sharedMap = new Map<string, { readers: string[]; writers: string[] }>();
-    for (const e of edges) {
-      if (e.kind === 'shares') {
-        if (!sharedMap.has(e.to)) sharedMap.set(e.to, { readers: [], writers: [] });
-        // ponytail: shares 边的 from 既可能是 reader 也可能是 writer，按 trace 无歧义区分时归入两者
-        const sh = sharedMap.get(e.to)!;
-        if (!sh.readers.includes(e.from)) sh.readers.push(e.from);
-        if (!sh.writers.includes(e.from)) sh.writers.push(e.from);
-      }
-    }
-    // 把 shared 挂到第一个文件（formatDataflowCard 按文件渲染 shared）
-    const results = Array.from(filesMap.entries()).map(([file, v], i) => ({
-      file,
-      scopes: v.scopes,
-      shared: i === 0 ? Array.from(sharedMap.entries()).map(([vr, rw]) => ({ var: vr, readers: rw.readers, writers: rw.writers })) : [],
-    }));
-    const json = JSON.stringify({ results });
-    return formatDataflowCard(json) || '<div class="df-empty">无数据流信息</div>';
+  /** 节点 kind → SVG icon 名 */
+  private nodeKindIcon(kind: string): string {
+    const map: Record<string, string> = {
+      function: 'code', method: 'code', class: 'code',
+      variable: 'dot', constant: 'dot', parameter: 'dot',
+      file: 'file', module: 'file',
+      event: 'zap', trigger: 'zap', timer: 'clock',
+      queue: 'layers', cache: 'layers', database: 'layers',
+    };
+    return iconHtml(map[kind] || 'dot', 12);
+  }
+
+  /** Compact trace nodes table */
+  private buildNodesTable(nodes: any[]): string {
+    const rows = nodes.slice(0, 50).map((n: any) => {
+      const loc = n.file ? `${this.escapeHtml(n.file)}${n.line ? ':' + n.line : ''}` : '—';
+      return `<div class="df-nodes-tr">
+        <span class="df-nodes-kind">${this.nodeKindIcon(n.kind)} ${this.escapeHtml(n.kind || '')}</span>
+        <span class="df-nodes-id">${this.escapeHtml(n.id || '')}</span>
+        ${n.role ? `<span class="df-nodes-role">${this.escapeHtml(n.role)}</span>` : '<span></span>'}
+        <span class="df-nodes-loc">${loc}</span>
+      </div>`;
+    }).join('');
+    const more = nodes.length > 50
+      ? `<div class="df-table-more">… 及其他 ${nodes.length - 50} 个节点</div>` : '';
+    return `<div class="df-nodes-table">
+      <div class="df-nodes-th"><span>Kind</span><span>ID</span><span>Role</span><span>位置</span></div>
+      ${rows}${more}</div>`;
+  }
+
+  /** Compact trace edges table with confidence badges */
+  private buildEdgesTable(edges: any[]): string {
+    const CONF_CLASS: Record<string, string> = {
+      verified: 'df-conf-verified', static_match: 'df-conf-static', speculative: 'df-conf-spec',
+    };
+    const rows = edges.slice(0, 100).map((e: any) => {
+      const conf = e.confidence || 'speculative';
+      const confCls = CONF_CLASS[conf] || 'df-conf-spec';
+      return `<div class="df-edges-tr">
+        <span class="df-edges-from">${this.escapeHtml(e.from || '')}</span>
+        <span class="df-edges-arrow">→</span>
+        <span class="df-edges-to">${this.escapeHtml(e.to || '')}</span>
+        <span class="df-edges-kind">${this.escapeHtml(e.kind || '')}</span>
+        <span class="df-edges-conf"><span class="${confCls}">${conf}</span></span>
+      </div>`;
+    }).join('');
+    const more = edges.length > 100
+      ? `<div class="df-table-more">… 及其他 ${edges.length - 100} 条边</div>` : '';
+    return `<div class="df-edges-table">
+      <div class="df-edges-th"><span>From</span><span></span><span>To</span><span>Kind</span><span>置信度</span></div>
+      ${rows}${more}</div>`;
   }
 
   /** 逐字段 diff 两个 trace 版本：nodes（id 差集）、edges（from→to:kind 差集）、元数据变化。 */
@@ -463,7 +503,7 @@ export class DataflowPanel {
     if (old) old.remove();
     const banner = document.createElement('div');
     banner.className = `df-banner df-banner-${kind}`;
-    banner.textContent = text;
+    banner.innerHTML = text;
     this.detailEl.insertBefore(banner, this.detailEl.firstChild);
     setTimeout(() => { banner.style.opacity = '0'; setTimeout(() => banner.remove(), 500); }, 4000);
   }
