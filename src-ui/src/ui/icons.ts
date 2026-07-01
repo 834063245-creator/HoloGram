@@ -68,7 +68,7 @@ const icons: Record<string, IconDef> = {
   },
   timeline: {
     label: '时间轴',
-    path: '<circle cx="5" cy="5" r="2"/><polyline points="5,7 5,13 8,12"/><line x1="5" y1="3" x2="13" y2="9"/><circle cx="13" cy="10" r="2"/>',
+    path: '<line x1="9" y1="2" x2="9" y2="16"/><circle cx="9" cy="4" r="1.3"/><line x1="10.3" y1="4" x2="14" y2="4"/><circle cx="9" cy="9" r="1.3"/><line x1="10.3" y1="9" x2="15" y2="9"/><circle cx="9" cy="14" r="1.3"/><line x1="10.3" y1="14" x2="12" y2="14"/>',
   },
   settings: {
     label: '设置',
@@ -76,7 +76,7 @@ const icons: Record<string, IconDef> = {
   },
   constraints: {
     label: '约束',
-    path: '<circle cx="9" cy="4" r="2.5"/><line x1="5" y1="5.8" x2="13" y2="12.2"/><circle cx="5" cy="13" r="2.5"/><circle cx="13" cy="13" r="2.5"/>',
+    path: '<rect x="4" y="8" width="10" height="8" rx="1"/><circle cx="9" cy="9.5" r="1.2"/><line x1="9" y1="9.5" x2="9" y2="11.5"/><path d="M6.5 8 L6.5 5.5 A2.5 2.5 0 0 1 11.5 5.5 L11.5 8"/>',
   },
   terminal: {
     label: '终端',
@@ -309,6 +309,36 @@ const icons: Record<string, IconDef> = {
   'expand-all': {
     label: '展开全部',
     path: '<rect x="3" y="3" width="12" height="12" rx="1" fill="none"/><polyline points="6,11 9,8 12,11"/>',
+  },
+
+  // ── Dataflow ──
+  dataflow: {
+    label: '数据流',
+    path: '<circle cx="4" cy="6" r="2"/><circle cx="14" cy="6" r="2"/><circle cx="9" cy="14" r="2"/><line x1="5.5" y1="7.5" x2="8" y2="12"/><line x1="12.5" y1="7.5" x2="10" y2="12"/><line x1="8.5" y1="12.5" x2="9.5" y2="12.5"/>',
+  },
+  'arrow-down': {
+    label: '读取',
+    path: '<line x1="9" y1="3" x2="9" y2="15"/><polyline points="5,10 9,15 13,10"/>',
+  },
+  'arrow-up': {
+    label: '写入',
+    path: '<line x1="9" y1="15" x2="9" y2="3"/><polyline points="5,8 9,3 13,8"/>',
+  },
+  'arrow-right': {
+    label: '流向',
+    path: '<line x1="3" y1="9" x2="15" y2="9"/><polyline points="10,5 15,9 10,13"/>',
+  },
+  layers: {
+    label: '共享',
+    path: '<rect x="3" y="3" width="12" height="10" rx="1"/><rect x="5" y="5" width="12" height="10" rx="1"/>',
+  },
+  zap: {
+    label: '触发',
+    path: '<polygon points="10,2 6,9 9,9 7,16 13,9 10,9 12,2"/>',
+  },
+  hourglass: {
+    label: '等待',
+    path: '<path d="M6 3 L12 3 L9 8 L12 13 L6 13 L9 8 Z"/><line x1="5" y1="15" x2="13" y2="15"/>',
   },
 };
 
