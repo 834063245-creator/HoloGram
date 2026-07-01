@@ -3565,6 +3565,12 @@ function formatToolResult(toolName: string, text: string, truncated: boolean, ar
   let body = text;
   if (truncated) body += '\n…[截断]…';
 
+  // ── hologram_dataflow — inline flow card ──
+  if (toolName === 'hologram_dataflow') {
+    const card = formatDataflowCard(text);
+    if (card) return card;
+  }
+
   // ── JSON: pretty-print in code block ──
   try {
     const parsed = JSON.parse(body);
@@ -3612,6 +3618,134 @@ function formatToolResult(toolName: string, text: string, truncated: boolean, ar
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Dataflow inline card renderer ──
+
+interface DfScope {
+  name: string;
+  reads: string[];
+  writes: string[];
+  triggers: string[];
+  awaits_callbacks: string[];
+  sequence_calls: string[];
+}
+
+interface DfShared {
+  var: string;
+  readers: string[];
+  writers: string[];
+}
+
+interface DfFileResult {
+  file: string;
+  error?: string;
+  scopes?: DfScope[];
+  shared?: DfShared[];
+}
+
+function formatDataflowCard(text: string): string | null {
+  let data: { results: DfFileResult[] };
+  try { data = JSON.parse(text); } catch { return null; }
+  if (!data?.results?.length) return null;
+
+  let html = '<div class="df-card">';
+  for (const fr of data.results) {
+    html += '<div class="df-file">';
+    // File header
+    html += `<div class="df-file-hdr">📄 ${escapeHtml(fr.file)}</div>`;
+
+    if (fr.error) {
+      html += `<div class="df-empty">⚠ ${escapeHtml(fr.error)}</div>`;
+      html += '</div>';
+      continue;
+    }
+
+    // ── Scopes (per-function) ──
+    const scopes = fr.scopes || [];
+    for (const s of scopes) {
+      html += '<div class="df-scope">';
+      html += `<div class="df-scope-name">⚡ ${escapeHtml(s.name)}</div>`;
+
+      // Reads & writes as colored tags
+      const hasRW = (s.reads && s.reads.length > 0) || (s.writes && s.writes.length > 0);
+      if (hasRW) {
+        html += '<div class="df-tags">';
+        if (s.reads && s.reads.length > 0) {
+          html += `<span class="df-label">reads</span>`;
+          for (const v of s.reads) {
+            html += `<span class="df-tag df-tag-read">📖 ${escapeHtml(v)}</span>`;
+          }
+        }
+        if (s.writes && s.writes.length > 0) {
+          html += `<span class="df-label">writes</span>`;
+          for (const v of s.writes) {
+            html += `<span class="df-tag df-tag-write">✏ ${escapeHtml(v)}</span>`;
+          }
+        }
+        html += '</div>';
+      }
+
+      // Sequence calls as flow chain: f1 → f2 → f3
+      if (s.sequence_calls && s.sequence_calls.length > 0) {
+        html += '<div class="df-flow">';
+        html += '<span class="df-label">sequence</span>';
+        for (let i = 0; i < s.sequence_calls.length; i++) {
+          if (i > 0) html += '<span class="df-flow-arrow">→</span>';
+          html += `<span class="df-flow-item">${escapeHtml(s.sequence_calls[i])}</span>`;
+        }
+        html += '</div>';
+      }
+
+      // Triggers & awaits as tags
+      const hasAsync = (s.triggers && s.triggers.length > 0) || (s.awaits_callbacks && s.awaits_callbacks.length > 0);
+      if (hasAsync) {
+        html += '<div class="df-tags">';
+        if (s.triggers && s.triggers.length > 0) {
+          html += '<span class="df-label">triggers</span>';
+          for (const t of s.triggers) {
+            html += `<span class="df-tag df-tag-trigger">🔗 ${escapeHtml(t)}</span>`;
+          }
+        }
+        if (s.awaits_callbacks && s.awaits_callbacks.length > 0) {
+          html += '<span class="df-label">awaits</span>';
+          for (const cb of s.awaits_callbacks) {
+            html += `<span class="df-tag df-tag-await">⏳ ${escapeHtml(cb)}</span>`;
+          }
+        }
+        html += '</div>';
+      }
+
+      html += '</div>'; // .df-scope
+    }
+
+    // ── Shared state ──
+    const shared = fr.shared || [];
+    if (shared.length > 0) {
+      html += '<div class="df-shared">';
+      html += '<div class="df-shared-title">🔄 跨函数共享状态</div>';
+      for (const sh of shared) {
+        html += `<div class="df-shared-var">${escapeHtml(sh.var)}</div>`;
+        html += '<div class="df-shared-row">';
+        if (sh.readers && sh.readers.length > 0) {
+          html += `<span><span class="df-label">readers</span> ${sh.readers.map(escapeHtml).join(', ')}</span>`;
+        }
+        if (sh.writers && sh.writers.length > 0) {
+          html += `<span><span class="df-label">writers</span> ${sh.writers.map(escapeHtml).join(', ')}</span>`;
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    if (!scopes.length && !shared.length) {
+      html += '<div class="df-empty">未检测到数据流（无函数作用域或跨函数共享变量）</div>';
+    }
+
+    html += '</div>'; // .df-file
+  }
+  html += '</div>'; // .df-card
+  return html;
 }
 
 function truncateArgs(args: string, max = 60): string {
