@@ -84,6 +84,233 @@ static JS_FUNC_KINDS: &[&str] = &[
 
 static JS_CLASS_KINDS: &[&str] = &["class_declaration"];
 
+// ── Rust config ──
+
+static RS_SKIP_NAMES: &[&str] = &[
+    "self","Self","true","false","None","Ok","Err","Some","Option","Result",
+    "String","str","Vec","HashMap","HashSet","Box","Rc","Arc","Cell","RefCell",
+    "Mutex","RwLock","i8","i16","i32","i64","u8","u16","u32","u64","f32","f64",
+    "usize","isize","bool","char","println","eprintln","format","dbg","panic",
+    "assert","assert_eq","assert_ne","Ok","try","unwrap","expect","clone","copy",
+    "drop","into","from","new","default","len","is_empty","push","pop","insert",
+    "remove","get","iter","next","map","filter","collect","fold","std","core",
+    "alloc","main","crate","super",
+];
+
+static RS_FUNC_KINDS: &[&str] = &["function_item","closure_expression"];
+static RS_CLASS_KINDS: &[&str] = &["impl_item","struct_item","enum_item","trait_item"];
+
+// ── Go config ──
+
+static GO_SKIP_NAMES: &[&str] = &[
+    "nil","true","false","iota","string","int","int8","int16","int32","int64",
+    "uint","uint8","uint16","uint32","uint64","float32","float64","bool","byte",
+    "rune","error","complex64","complex128","uintptr","print","println","len",
+    "cap","make","new","append","copy","delete","close","panic","recover","defer",
+    "go","chan","map","range","select","func","interface","struct","type","var",
+    "const","fmt","context","Context","err","Err","main","init",
+];
+
+static GO_FUNC_KINDS: &[&str] = &["function_declaration","method_declaration","func_literal"];
+static GO_CLASS_KINDS: &[&str] = &["type_declaration"];
+
+// ── Java config ──
+
+static JAVA_SKIP_NAMES: &[&str] = &[
+    "this","super","null","true","false","System","String","Object","Class",
+    "Integer","Long","Double","Float","Boolean","Byte","Short","Character",
+    "Math","Arrays","Collections","List","Map","Set","ArrayList","HashMap",
+    "HashSet","Optional","Stream","StringBuilder","Exception","RuntimeException",
+    "Override","Deprecated","SuppressWarnings","out","err","in","println","print",
+    "equals","hashCode","toString","clone","finalize","getClass","notify","wait",
+    "valueOf","parseInt","parseLong","of","main",
+];
+
+static JAVA_FUNC_KINDS: &[&str] = &["method_declaration","constructor_declaration","lambda_expression"];
+static JAVA_CLASS_KINDS: &[&str] = &["class_declaration","interface_declaration","enum_declaration"];
+
+// ── C/C++ config ──
+
+static C_SKIP_NAMES: &[&str] = &[
+    "NULL","nullptr","true","false","printf","scanf","fprintf","sprintf","snprintf",
+    "malloc","calloc","realloc","free","sizeof","typeof","memcpy","memset","memcmp",
+    "memmove","strlen","strcpy","strncpy","strcmp","strncmp","strcat","strncat",
+    "strdup","strstr","strchr","strrchr","atoi","atol","atof","itoa","sprintf",
+    "stdin","stdout","stderr","std","cout","cin","cerr","endl","vector","string",
+    "map","set","pair","make_pair","shared_ptr","unique_ptr","weak_ptr","move",
+    "forward","static_cast","dynamic_cast","const_cast","reinterpret_cast",
+    "main","argc","argv","void","int","char","float","double","long","short",
+    "unsigned","signed","const","volatile","auto","extern","register","static",
+    "size_t","ssize_t","ptrdiff_t","FILE",
+];
+
+static C_FUNC_KINDS: &[&str] = &["function_definition","lambda_expression"];
+static C_CLASS_KINDS: &[&str] = &["class_specifier","struct_specifier","union_specifier"];
+
+// ── C# config ──
+
+static CS_SKIP_NAMES: &[&str] = &[
+    "null","true","false","this","base","var","string","int","long","double",
+    "float","bool","char","byte","short","decimal","object","dynamic","void",
+    "System","Console","Math","Convert","String","StringBuilder","List",
+    "Dictionary","Array","Enumerable","Task","async","await","WriteLine",
+    "Write","ReadLine","ToString","Equals","GetHashCode","GetType","Main",
+];
+
+static CS_FUNC_KINDS: &[&str] = &["method_declaration","constructor_declaration","lambda_expression"];
+static CS_CLASS_KINDS: &[&str] = &["class_declaration","struct_declaration","interface_declaration","enum_declaration"];
+
+// ── Ruby config ──
+
+static RB_SKIP_NAMES: &[&str] = &[
+    "nil","true","false","self","puts","print","p","pp","gets","raise","require",
+    "include","extend","attr_accessor","attr_reader","attr_writer","new",
+    "initialize","to_s","inspect","class","module","def","end","do","if",
+    "else","elsif","unless","while","until","for","break","next","return",
+    "Array","Hash","String","Symbol","Integer","Float","Regexp","Proc","Lambda",
+    "Enumerable","Object","Kernel","Module",
+];
+
+static RB_FUNC_KINDS: &[&str] = &["method","lambda","block"];
+static RB_CLASS_KINDS: &[&str] = &["class","module"];
+
+// ── Lua config ──
+
+static LUA_SKIP_NAMES: &[&str] = &[
+    "nil","true","false","print","pairs","ipairs","next","type","tostring",
+    "tonumber","assert","error","pcall","xpcall","require","module","select",
+    "unpack","pack","rawget","rawset","rawlen","rawequal","setmetatable",
+    "getmetatable","string","math","table","io","os","debug","coroutine",
+    "utf8","self","arg","_G","_ENV","_VERSION",
+];
+
+static LUA_FUNC_KINDS: &[&str] = &["function_declaration","function_definition"];
+static LUA_CLASS_KINDS: &[&str] = &[];
+
+// ── PHP config ──
+
+static PHP_SKIP_NAMES: &[&str] = &[
+    "null","true","false","this","self","static","parent","echo","print",
+    "isset","empty","unset","die","exit","require","include","require_once",
+    "include_once","array","list","count","strlen","str_replace","substr",
+    "trim","explode","implode","json_encode","json_decode","sprintf","printf",
+    "var_dump","print_r","array_map","array_filter","array_reduce","array_keys",
+    "array_values","in_array","date","time","strtotime","PDO","Exception",
+    "Error","Throwable","stdClass","__construct","__destruct","__toString",
+    "_GET","_POST","_SERVER","_SESSION","_COOKIE","_FILES","_REQUEST","_ENV",
+    "GLOBALS","php","PHP_EOL","DIRECTORY_SEPARATOR",
+];
+
+static PHP_FUNC_KINDS: &[&str] = &["method_declaration","function_definition","arrow_function"];
+static PHP_CLASS_KINDS: &[&str] = &["class_declaration","interface_declaration","trait_declaration"];
+
+// ── Swift config ──
+
+static SWIFT_SKIP_NAMES: &[&str] = &[
+    "nil","true","false","self","Self","print","debugPrint","fatalError",
+    "precondition","assert","String","Int","Double","Float","Bool","Array",
+    "Dictionary","Set","Optional","Result","Error","Task","async","await",
+    "guard","let","var","func","class","struct","enum","protocol","extension",
+    "throws","rethrows","try","catch","throw","where","Swift","SwiftUI",
+    "UIKit","Foundation","Combine","SwiftData",
+];
+
+static SWIFT_FUNC_KINDS: &[&str] = &["function_declaration","method_declaration","closure_expression"];
+static SWIFT_CLASS_KINDS: &[&str] = &["class_declaration","struct_declaration","enum_declaration","protocol_declaration"];
+
+// ── Dart config ──
+
+static DART_SKIP_NAMES: &[&str] = &[
+    "null","true","false","this","super","print","debugPrint","String","int",
+    "double","bool","num","List","Map","Set","Object","dynamic","void","Future",
+    "Stream","async","await","yield","assert","throw","rethrow","try","catch",
+    "finally","new","const","final","var","static","library","import","export",
+    "part","Flutter","Widget","BuildContext","Material","Cupertino",
+];
+
+static DART_FUNC_KINDS: &[&str] = &["function_declaration","method_declaration","function_expression"];
+static DART_CLASS_KINDS: &[&str] = &["class_declaration","enum_declaration","mixin_declaration"];
+
+// ── Scala config ──
+
+static SCALA_SKIP_NAMES: &[&str] = &[
+    "null","true","false","this","super","println","print","String","Int","Long",
+    "Double","Float","Boolean","Byte","Short","Char","Unit","Any","Nothing",
+    "Option","Some","None","List","Map","Set","Seq","Array","Vector","Either",
+    "Left","Right","Try","Success","Failure","Future","Await","await","implicitly",
+    "scala","Predef","require","assert","assume","???",
+];
+
+static SCALA_FUNC_KINDS: &[&str] = &["function_definition","method_definition","lambda_expression"];
+static SCALA_CLASS_KINDS: &[&str] = &["class_definition","object_definition","trait_definition"];
+
+// ── Zig config ──
+
+static ZIG_SKIP_NAMES: &[&str] = &[
+    "null","true","false","undefined","void","bool","u8","u16","u32","u64",
+    "i8","i16","i32","i64","f32","f64","usize","isize","comptime_int",
+    "comptime_float","anytype","type","error","@import","@export","@extern",
+    "@intCast","@floatCast","@intFromFloat","@floatFromInt","@ptrCast",
+    "@as","@sizeOf","@alignOf","@typeInfo","@typeName","@embedFile",
+    "print","@memset","@memcpy","@panic","std","builtin","main",
+];
+
+static ZIG_FUNC_KINDS: &[&str] = &["function_declaration"];
+static ZIG_CLASS_KINDS: &[&str] = &[];
+
+// ── Elixir config ──
+
+static EX_SKIP_NAMES: &[&str] = &[
+    "nil","true","false","__MODULE__","__DIR__","__ENV__","__CALLER__",
+    "inspect","to_string","length","hd","tl","elem","put_elem","tuple_size",
+    "is_list","is_map","is_tuple","is_atom","is_integer","is_float","is_binary",
+    "is_pid","is_function","is_boolean","is_nil","is_number","is_port",
+    "is_reference","Enum","Map","List","String","Keyword","IO","Kernel",
+    "Module","Process","Agent","GenServer","Task","Supervisor","Logger",
+    "raise","throw","exit","receive","send","spawn","spawn_link","spawn_monitor",
+    "self","make_ref","apply","def","defp","defmacro","defmacrop","use","import",
+    "require","alias","case","cond","if","unless","with","for","try","rescue",
+];
+
+static EX_FUNC_KINDS: &[&str] = &["function","anonymous_function"];
+static EX_CLASS_KINDS: &[&str] = &["module","defmodule"];
+
+// ── Bash config ──
+
+static SH_SKIP_NAMES: &[&str] = &[
+    "echo","printf","cd","ls","pwd","cat","cp","mv","rm","mkdir","rmdir",
+    "chmod","chown","ln","touch","grep","awk","sed","sort","uniq","wc","head",
+    "tail","cut","tr","tee","xargs","find","which","type","export","unset",
+    "readonly","declare","local","shift","source","exit","return","test",
+    "true","false","null","HOME","PATH","USER","SHELL","PWD","OLDPWD",
+    "IFS","PS1","PS2","PS3","PS4","RANDOM","SECONDS","LINENO","FUNCNAME",
+    "BASHPID","BASH_VERSION","BASH_SOURCE","BASH_LINENO","HOSTNAME","OSTYPE",
+];
+
+static SH_FUNC_KINDS: &[&str] = &["function_definition"];
+static SH_CLASS_KINDS: &[&str] = &[];
+
+// ── R config ──
+
+static R_SKIP_NAMES: &[&str] = &[
+    "NULL","NA","NaN","Inf","TRUE","FALSE","T","F","print","cat","summary",
+    "str","head","tail","length","nrow","ncol","dim","names","rownames",
+    "colnames","class","typeof","mode","attributes","attr","levels","nlevels",
+    "as.character","as.numeric","as.integer","as.logical","as.factor","as.matrix",
+    "as.data.frame","as.list","as.vector","c","list","matrix","data.frame",
+    "factor","rep","seq","seq_len","seq_along","sample","sort","order","rank",
+    "which","which.min","which.max","match","%in%","is.na","is.null","is.nan",
+    "is.infinite","is.finite","mean","median","sd","var","min","max","sum",
+    "prod","range","quantile","cor","cov","table","aggregate","merge","subset",
+    "transform","apply","lapply","sapply","tapply","mapply","library","require",
+    "install.packages","read.csv","write.csv","read.table","write.table",
+    "plot","hist","boxplot","barplot","par","dev.off","png","pdf",
+    "if","else","for","while","repeat","break","next","function","return",
+];
+
+static R_FUNC_KINDS: &[&str] = &["function_definition","lambda_definition"];
+static R_CLASS_KINDS: &[&str] = &[];
+
 // ── Capture type ──
 
 #[derive(Debug, Clone)]
@@ -352,20 +579,80 @@ fn find_scope(offset: usize, scopes: &[Scope]) -> Option<String> {
 // ═══════════════════════════════════════════════════════════════
 
 pub fn python_config() -> LangDataflowConfig {
-    LangDataflowConfig {
-        query_src: include_str!("../../queries/python_dataflow.scm"),
-        skip_names: PY_BUILTINS,
-        func_kinds: PY_FUNC_KINDS,
-        class_kinds: PY_CLASS_KINDS,
-    }
+    LangDataflowConfig { query_src: include_str!("../../queries/python_dataflow.scm"), skip_names: PY_BUILTINS, func_kinds: PY_FUNC_KINDS, class_kinds: PY_CLASS_KINDS }
+}
+pub fn js_ts_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/js_ts_dataflow.scm"), skip_names: JS_SKIP_NAMES, func_kinds: JS_FUNC_KINDS, class_kinds: JS_CLASS_KINDS }
+}
+pub fn rust_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/rust_dataflow.scm"), skip_names: RS_SKIP_NAMES, func_kinds: RS_FUNC_KINDS, class_kinds: RS_CLASS_KINDS }
+}
+pub fn go_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/go_dataflow.scm"), skip_names: GO_SKIP_NAMES, func_kinds: GO_FUNC_KINDS, class_kinds: GO_CLASS_KINDS }
+}
+pub fn java_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/java_dataflow.scm"), skip_names: JAVA_SKIP_NAMES, func_kinds: JAVA_FUNC_KINDS, class_kinds: JAVA_CLASS_KINDS }
+}
+pub fn c_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/c_dataflow.scm"), skip_names: C_SKIP_NAMES, func_kinds: C_FUNC_KINDS, class_kinds: C_CLASS_KINDS }
+}
+pub fn csharp_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/csharp_dataflow.scm"), skip_names: CS_SKIP_NAMES, func_kinds: CS_FUNC_KINDS, class_kinds: CS_CLASS_KINDS }
+}
+pub fn ruby_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/ruby_dataflow.scm"), skip_names: RB_SKIP_NAMES, func_kinds: RB_FUNC_KINDS, class_kinds: RB_CLASS_KINDS }
+}
+pub fn lua_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/lua_dataflow.scm"), skip_names: LUA_SKIP_NAMES, func_kinds: LUA_FUNC_KINDS, class_kinds: LUA_CLASS_KINDS }
+}
+pub fn php_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/php_dataflow.scm"), skip_names: PHP_SKIP_NAMES, func_kinds: PHP_FUNC_KINDS, class_kinds: PHP_CLASS_KINDS }
+}
+pub fn swift_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/swift_dataflow.scm"), skip_names: SWIFT_SKIP_NAMES, func_kinds: SWIFT_FUNC_KINDS, class_kinds: SWIFT_CLASS_KINDS }
+}
+pub fn dart_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/dart_dataflow.scm"), skip_names: DART_SKIP_NAMES, func_kinds: DART_FUNC_KINDS, class_kinds: DART_CLASS_KINDS }
+}
+pub fn scala_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/scala_dataflow.scm"), skip_names: SCALA_SKIP_NAMES, func_kinds: SCALA_FUNC_KINDS, class_kinds: SCALA_CLASS_KINDS }
+}
+pub fn zig_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/zig_dataflow.scm"), skip_names: ZIG_SKIP_NAMES, func_kinds: ZIG_FUNC_KINDS, class_kinds: ZIG_CLASS_KINDS }
+}
+pub fn elixir_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/elixir_dataflow.scm"), skip_names: EX_SKIP_NAMES, func_kinds: EX_FUNC_KINDS, class_kinds: EX_CLASS_KINDS }
+}
+pub fn bash_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/bash_dataflow.scm"), skip_names: SH_SKIP_NAMES, func_kinds: SH_FUNC_KINDS, class_kinds: SH_CLASS_KINDS }
+}
+pub fn r_config() -> LangDataflowConfig {
+    LangDataflowConfig { query_src: include_str!("../../queries/r_dataflow.scm"), skip_names: R_SKIP_NAMES, func_kinds: R_FUNC_KINDS, class_kinds: R_CLASS_KINDS }
 }
 
-pub fn js_ts_config() -> LangDataflowConfig {
-    LangDataflowConfig {
-        query_src: include_str!("../../queries/js_ts_dataflow.scm"),
-        skip_names: JS_SKIP_NAMES,
-        func_kinds: JS_FUNC_KINDS,
-        class_kinds: JS_CLASS_KINDS,
+/// Map a file extension to (grammar_key, dataflow_config). Returns None for unsupported languages.
+pub fn config_for_ext(ext: &str) -> Option<(&'static str, LangDataflowConfig)> {
+    match ext {
+        "py" | "pyi" | "pyx" => Some(("py", python_config())),
+        "js" | "jsx" | "mjs" | "cjs" => Some(("js", js_ts_config())),
+        "ts" | "tsx" | "mts" | "cts" => Some(("ts", js_ts_config())),
+        "rs" => Some(("rs", rust_config())),
+        "go" => Some(("go", go_config())),
+        "java" => Some(("java", java_config())),
+        "c" | "h" => Some(("c", c_config())),
+        "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => Some(("cpp", c_config())),
+        "cs" => Some(("cs", csharp_config())),
+        "rb" => Some(("rb", ruby_config())),
+        "lua" => Some(("lua", lua_config())),
+        "php" => Some(("php", php_config())),
+        "swift" => Some(("swift", swift_config())),
+        "dart" => Some(("dart", dart_config())),
+        "scala" | "sc" => Some(("scala", scala_config())),
+        "zig" => Some(("zig", zig_config())),
+        "ex" | "exs" => Some(("ex", elixir_config())),
+        "sh" | "bash" => Some(("bash", bash_config())),
+        "r" | "R" => Some(("r", r_config())),
+        _ => None,
     }
 }
 
