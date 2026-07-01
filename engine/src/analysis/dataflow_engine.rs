@@ -583,6 +583,70 @@ fn sorted(set: &HashSet<String>) -> Vec<String> {
     v
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Engine-native API: query_dataflow_files
+// ═══════════════════════════════════════════════════════════════
+
+/// Result for one file in a batch dataflow query.
+#[derive(Debug, Clone)]
+pub struct DataflowFileResult {
+    pub file: String,
+    pub result: Result<FileDataflow, String>,
+}
+
+/// Run dataflow queries across multiple files. Each file is read from disk,
+/// parsed with tree-sitter, and queried via `query_file_dataflow`.
+/// Returns one result per file — errors (missing file, parse failure,
+/// unsupported language) are captured per-file, not propagated.
+///
+/// This is the engine-native entry point for Agent workflows. Call it
+/// directly from within a workflow to trace variable flows across files.
+pub fn query_dataflow_files(files: &[std::path::PathBuf]) -> Vec<DataflowFileResult> {
+    files.iter().map(|p| {
+        let file = p.to_string_lossy().replace('\\', "/");
+        let source = match std::fs::read_to_string(p) {
+            Ok(s) => s,
+            Err(e) => return DataflowFileResult {
+                file: file.clone(),
+                result: Err(format!("read failed: {e}")),
+            },
+        };
+        let ext = file.rsplit('.').next().unwrap_or("");
+        let (grammar_key, config) = match config_for_ext(ext) {
+            Some(x) => x,
+            None => return DataflowFileResult {
+                file: file.clone(),
+                result: Err(format!("unsupported extension: .{ext}")),
+            },
+        };
+        let lang = match crate::engine::GRAMMAR_LOADER.get(grammar_key) {
+            Some(l) => l,
+            None => return DataflowFileResult {
+                file: file.clone(),
+                result: Err(format!("grammar not loaded for {grammar_key}")),
+            },
+        };
+        let mut parser = tree_sitter::Parser::new();
+        if let Err(e) = parser.set_language(&lang) {
+            return DataflowFileResult {
+                file: file.clone(),
+                result: Err(format!("parser init failed: {e}")),
+            };
+        }
+        let tree = match parser.parse(&source, None) {
+            Some(t) => t,
+            None => return DataflowFileResult {
+                file: file.clone(),
+                result: Err("parse returned None".into()),
+            },
+        };
+        DataflowFileResult {
+            file,
+            result: query_file_dataflow(lang, &source, &tree, &config),
+        }
+    }).collect()
+}
+
 /// Find the tightest enclosing scope for a byte offset.
 /// ponytail: scopes sorted by start descending — nested scopes always have
 /// larger start bytes, so first match is tightest. Amortized O(1) per capture.
@@ -828,5 +892,19 @@ def foo():
 "#);
         let foo = find_scope(&df, "foo");
         assert_eq!(foo.sequence_calls.len(), 3, "foo should have 3 sequence calls, got {:?}", foo.sequence_calls);
+    }
+
+    #[test]
+    fn test_query_files() {
+        let tmp = std::env::temp_dir().join("_df_files_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.py"), "x = 1\ndef foo():\n    y = x + 1\n").unwrap();
+        let results = super::query_dataflow_files(&[tmp.join("a.py")]);
+        assert_eq!(results.len(), 1);
+        let df = results[0].result.as_ref().expect("query should succeed");
+        let foo = df.scopes.iter().find(|s| s.name == "foo");
+        assert!(foo.is_some(), "should find scope foo");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

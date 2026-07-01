@@ -134,6 +134,13 @@ fn tool_definitions() -> Vec<Value> {
                 ("kind_filter", "string", "Node kinds to include, comma-separated. Default: \"function,class\". Options: symbol, function, class, module, interface, medium, temporal."),
             ],
             &[]),
+
+        // ── Dataflow tracing (1) ──
+        tool_def("hologram_dataflow", "Trace variable dataflow in specific files. Runs tree-sitter queries to detect per-function reads/writes, cross-function shared state, async triggers, and call sequences. Use to answer \"where is X written?\", \"who reads Y?\", \"which functions share Z?\". Returns structured per-scope data — no graph nodes created.",
+            &[
+                ("files", "array", "List of file paths to trace dataflow in"),
+            ],
+            &["files"]),
     ]
 }
 
@@ -332,6 +339,7 @@ impl McpServer {
             "hologram_policy_check" => self.tool_policy_check(&args, id),
             "hologram_node" => self.tool_node(&args, id),
             "hologram_unused" => self.tool_unused(&args, id),
+            "hologram_dataflow" => self.tool_dataflow(&args, id),
             _ => McpServer::error_response(id, -32601, &format!("Tool not found: {}", tool_name)),
         }
     }
@@ -1309,6 +1317,56 @@ impl McpServer {
                 })).collect::<Vec<_>>(),
             })
         })
+    }
+
+    /// Trace variable dataflow in specific files.
+    ///
+    /// Unlike other MCP tools, this does NOT go through `with_store`/`with_graph`
+    /// because it needs source code + tree-sitter parsing, not persisted graph data.
+    /// Calls the pure query engine (`query_dataflow_files`) directly.
+    fn tool_dataflow(&self, args: &Value, id: &Value) -> Value {
+        let files: Vec<String> = args.get("files")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        if files.is_empty() {
+            return McpServer::error_response(id, -32602, "files is required and must be a non-empty array");
+        }
+
+        let project_root = self.project_root();
+        let paths: Vec<std::path::PathBuf> = files.iter().map(|f| {
+            let p = std::path::Path::new(f);
+            if p.is_absolute() { p.to_path_buf() } else { project_root.join(p) }
+        }).collect();
+
+        let results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
+
+        let json_results: Vec<Value> = results.iter().map(|r| {
+            match &r.result {
+                Ok(df) => {
+                    json!({
+                        "file": r.file,
+                        "scopes": df.scopes.iter().map(|s| json!({
+                            "name": s.name,
+                            "reads": s.reads,
+                            "writes": s.writes,
+                            "triggers": s.triggers,
+                            "awaits_callbacks": s.awaits_callbacks,
+                            "sequence_calls": s.sequence_calls,
+                        })).collect::<Vec<_>>(),
+                        "shared": df.shared.iter().map(|sh| json!({
+                            "var": sh.var,
+                            "readers": sh.readers,
+                            "writers": sh.writers,
+                        })).collect::<Vec<_>>(),
+                    })
+                }
+                Err(e) => json!({ "file": r.file, "error": e }),
+            }
+        }).collect();
+
+        Self::result_or_error(id, json!({ "results": json_results }))
     }
 }
 
