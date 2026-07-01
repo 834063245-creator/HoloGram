@@ -1511,13 +1511,14 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 26, "26 tools defined");
+        assert_eq!(tools.len(), 27, "27 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"hologram_neighbors"));
         assert!(names.contains(&"hologram_analyze"));
         assert!(names.contains(&"hologram_run_preflight"));
         assert!(names.contains(&"hologram_rename"));
+        assert!(names.contains(&"hologram_dataflow"));
     }
 
     #[test]
