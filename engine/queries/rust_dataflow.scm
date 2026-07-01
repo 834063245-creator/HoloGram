@@ -4,8 +4,7 @@
 (let_declaration pattern: (identifier) @write)
 (assignment_expression left: (identifier) @write)
 (compound_assignment_expr left: (identifier) @write)
-;; fn params
-(parameters (identifier) @write)
+;; Closure params
 (closure_parameters (identifier) @write)
 
 ;; All identifiers — engine filters to reads

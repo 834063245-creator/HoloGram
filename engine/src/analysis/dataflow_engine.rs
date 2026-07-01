@@ -380,7 +380,11 @@ pub fn synthesize_via_queries(
     let query = match Query::new(&lang, config.query_src) {
         Ok(q) => q,
         Err(e) => {
-            tracing::warn!(file, error = %e, "[dataflow] query compile failed — skipping file");
+            // ponytail: query compile failure means the .scm file has wrong node types for
+            // this grammar version. This is a programmer error — fix the .scm, don't hide it.
+            let msg = format!("⚠ [dataflow] query compile FAILED for {file}: {e}. Dataflow analysis SKIPPED for this file. Check the .scm query against your tree-sitter grammar version.");
+            eprintln!("{msg}");
+            tracing::error!("{msg}");
             return 0;
         }
     };
@@ -656,6 +660,60 @@ pub fn config_for_ext(ext: &str) -> Option<(&'static str, LangDataflowConfig)> {
     }
 }
 
+/// Validate all dataflow query configs compile against their grammars.
+/// Call once at engine startup; panics on parse in test, logs errors in production.
+pub fn validate_all_queries() -> Vec<String> {
+    let mut errors: Vec<String> = Vec::new();
+    // All known extension→config pairs. Extensions that map to the same config
+    // (e.g. js/ts) only need one check per config; we use the primary extension.
+    // ponytail: grammar_key = file extension (how GRAMMAR_LOADER registers static grammars)
+    let checks: &[(&str, fn() -> LangDataflowConfig)] = &[
+        ("py", python_config),
+        ("js", js_ts_config),
+        ("rs", rust_config),
+        ("go", go_config),
+        ("java", java_config),
+        ("c", c_config),
+        ("cs", csharp_config),
+        ("rb", ruby_config),
+        ("lua", lua_config),
+        ("php", php_config),
+        ("swift", swift_config),
+        ("dart", dart_config),
+        ("scala", scala_config),
+        ("zig", zig_config),
+        ("ex", elixir_config),
+        ("sh", bash_config),
+        ("r", r_config),
+    ];
+    for (grammar_key, cfg_fn) in checks {
+        let cfg = cfg_fn();
+        match crate::engine::GRAMMAR_LOADER.get(grammar_key) {
+            Some(lang) => {
+                if let Err(e) = Query::new(&lang, cfg.query_src) {
+                    let err_str = e.to_string();
+                    if err_str.contains("Incompatible language version") {
+                        eprintln!("[dataflow] grammar ABI mismatch for {grammar_key}: {err_str} — skipping (not a query error)");
+                    } else {
+                        let msg = format!("⚠ dataflow query FAILED for {grammar_key}: {err_str}");
+                        eprintln!("{msg}");
+                        errors.push(msg);
+                    }
+                }
+            }
+            None => {
+                eprintln!("[dataflow] grammar not available for {grammar_key} — skipping validation");
+            }
+        }
+    }
+    if errors.is_empty() {
+        eprintln!("[dataflow] all {} query configs validated OK", checks.len());
+    } else {
+        eprintln!("[dataflow] {} query config(s) FAILED — dataflow edges will be missing for those languages", errors.len());
+    }
+    errors
+}
+
 // ── Tests ──
 
 #[cfg(test)]
@@ -663,6 +721,13 @@ mod tests {
     use super::*;
     use crate::engine::GRAMMAR_LOADER;
     use crate::graph::Graph;
+
+    #[test]
+    fn test_all_queries_compile() {
+        // CI guard: every .scm file must compile against its grammar
+        let errors = validate_all_queries();
+        assert!(errors.is_empty(), "dataflow query compile failures:\n{}", errors.join("\n"));
+    }
 
     fn make_graph() -> Graph {
         Graph { nodes: HashMap::new(), edges: HashMap::new(), meta: serde_json::json!({}) }

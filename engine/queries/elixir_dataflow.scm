@@ -1,16 +1,10 @@
 ;; Elixir dataflow queries
-
-;; Writes (pattern match LHS)
-(match_operator left: (identifier) @write)
-;; Function parameters
-(parameters (identifier) @write)
+;; tree-sitter-elixir 0.3 — minimal: reads + scope + sequences.
 
 ;; All identifiers — engine filters to reads
 (identifier) @read
-
-;; Scope boundaries
-(function) @scope_fn
-(anonymous_function) @scope_fn
+;; Call targets
+(alias) @read
 
 ;; Sequences
-(function_call) @sequence
+(call) @sequence

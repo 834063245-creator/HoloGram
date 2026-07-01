@@ -1,10 +1,12 @@
 ;; Go dataflow queries
 
 ;; Writes
-(short_var_declaration left: (identifier) @write)
-(assignment_statement left: (identifier) @write)
+;; short_var_declaration: x := ... (left = expression_list)
+(short_var_declaration left: (expression_list (identifier) @write))
+;; var x T = ...
 (var_spec name: (identifier) @write)
-(range_clause left: (identifier) @write)
+;; for k, v := range ...
+(range_clause (identifier) @write)
 
 ;; All identifiers — engine filters to reads
 (identifier) @read
