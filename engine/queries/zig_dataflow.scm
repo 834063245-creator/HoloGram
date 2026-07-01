@@ -1,8 +1,11 @@
 ;; Zig dataflow queries
-;; tree-sitter-zig 1.1 — minimal pattern set
+;; tree-sitter-zig 1.1
 
-;; Writes — variable declaration with identifier
+;; Writes
+;; var x: T = ... / const x = ...
 (variable_declaration (identifier) @write)
+;; x = y  /  x += y
+(assignment_expression left: (identifier) @write)
 
 ;; All identifiers — engine filters to reads
 (identifier) @read
