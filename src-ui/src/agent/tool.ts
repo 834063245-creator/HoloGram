@@ -545,7 +545,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_unused',
       description: () =>
-        'Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending (most impactful first). Defaults to function+class kinds. Use to find dead code candidates before deleting.',
+        'Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending (most impactful first). Covers function, class, and file nodes by default. Use to find dead code candidates before deleting.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -556,8 +556,8 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
           },
           kindFilter: {
             type: 'string',
-            description: 'Comma-separated node kinds (default: "function,class")',
-            default: 'function,class',
+            description: 'Comma-separated node kinds (default: "function,class,file")',
+            default: 'function,class,file',
           },
         },
       }),
