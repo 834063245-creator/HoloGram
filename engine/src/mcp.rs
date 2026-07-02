@@ -15,14 +15,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::analysis::*;
-use crate::community::detect_communities_from_index;
 use crate::engine;
-use crate::engine::GRAMMAR_LOADER;
-use crate::graph::{query, Edge, EdgeKind, Graph, Node, NodeKind};
-use crate::pipeline::discovery::discover_files;
-use crate::routing::preflight::run_full_check;
-use crate::storage::MemoryIndex;
 
 // All graph access goes through Engine (engine::engine_* functions).
 // GRAPH_STORE / CACHED_GRAPH / ANALYZE_LOCK / with_graph_store — all removed.
@@ -164,14 +157,6 @@ fn tool_def(name: &str, desc: &str, props: &[(&str, &str, &str)], required: &[&s
             "required": required,
         }
     })
-}
-
-/// Discover source files in project root using supported language extensions.
-/// ponytail: single helper replaces 4× repeated extension-fetch + discover_files.
-fn discover_source_files(root: &Path, limit: usize) -> Vec<PathBuf> {
-    let exts: Vec<String> = GRAMMAR_LOADER.supported_extensions();
-    let ext_strs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
-    discover_files(root, &ext_strs).into_iter().take(limit).collect()
 }
 
 // ═══════════════════════════════════════════════════════════════
