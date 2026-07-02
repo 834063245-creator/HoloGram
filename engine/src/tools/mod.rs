@@ -610,13 +610,13 @@ fn handler_thread_conflicts(args: &Value) -> Value {
 }
 
 fn handler_coupling_report(args: &Value) -> Value {
-    let module = args.get("module_name").and_then(|v| v.as_str()).unwrap_or("");
+    let module = get_str(args, &["module_name", "module"]);
     if module.is_empty() {
         return json!({"error": "module_name is required"});
     }
     let root = project_root();
     with_store(|idx| {
-        let report = coupling_report_from_index(idx, module);
+        let report = coupling_report_from_index(idx, &module);
         let l1 = report["L1"].as_u64().unwrap_or(0) as u32;
         let l2 = report["L2"].as_u64().unwrap_or(0) as u32;
         let normalized = module.replace('\\', "/");
