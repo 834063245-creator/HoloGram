@@ -1424,6 +1424,7 @@ export class ChatPanel {
           try {
             const html = DOMPurify.sanitize(marked.parse(m.content) as string);
             textEl.innerHTML = html;
+            textEl.dataset.rawMarkdown = m.content;
             textEl.querySelectorAll('pre code').forEach((block) => {
               hljs.highlightElement(block as HTMLElement);
             });
@@ -1477,7 +1478,8 @@ export class ChatPanel {
         copyBtn.title = '复制回复';
         copyBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const txt = (bubble as HTMLElement).innerText || '';
+          const textEl = bubble.querySelector('.msg-text');
+          const txt = (textEl as HTMLElement)?.dataset?.rawMarkdown || textEl?.textContent || '';
           navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
         });
         actions.append(copyBtn);
@@ -2491,6 +2493,7 @@ export class ChatPanel {
       const raw = this._streamTextBuf;
       const html = DOMPurify.sanitize(marked.parse(raw) as string);
       this.currentTextEl.innerHTML = html;
+      this.currentTextEl.dataset.rawMarkdown = raw;
       this.currentTextEl.querySelectorAll('pre code').forEach((block) => {
         hljs.highlightElement(block as HTMLElement);
       });
@@ -2518,6 +2521,7 @@ export class ChatPanel {
       // Replace two-layer streaming DOM with final single-element render
       const html = DOMPurify.sanitize(marked.parse(text) as string);
       this.currentTextEl.innerHTML = html;
+      this.currentTextEl.dataset.rawMarkdown = text;
       this.currentTextEl.querySelectorAll('pre code').forEach((block) => {
         hljs.highlightElement(block as HTMLElement);
       });
@@ -2541,6 +2545,7 @@ export class ChatPanel {
     el.className = 'msg-text msg-markdown';
     const html = DOMPurify.sanitize(marked.parse(text) as string);
     el.innerHTML = html;
+    el.dataset.rawMarkdown = text;
     el.querySelectorAll('pre code').forEach((block) => {
       hljs.highlightElement(block as HTMLElement);
     });
@@ -2563,6 +2568,7 @@ export class ChatPanel {
    *  For user bubbles, actionHost is the row wrapper so buttons sit outside. */
   private addMessageActions(bubble: HTMLElement, actionHost?: HTMLElement): void {
     const host = actionHost || bubble;
+    if (host.querySelector('.msg-actions')) return;
     const textEl = bubble.querySelector('.msg-text');
     if (!textEl) return;
 
@@ -2577,7 +2583,7 @@ export class ChatPanel {
       copyBtn.title = '复制回复';
       copyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const txt = textEl.textContent || '';
+        const txt = (textEl as HTMLElement).dataset?.rawMarkdown || textEl.textContent || '';
         navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
       });
       actions.append(copyBtn);
@@ -3072,6 +3078,7 @@ export class ChatPanel {
     const p = document.createElement('div');
     p.className = 'msg-text';
     p.textContent = text;
+    p.dataset.rawMarkdown = text;
     el.appendChild(p);
     row.appendChild(el);
     this.addMessageActions(el, row);
