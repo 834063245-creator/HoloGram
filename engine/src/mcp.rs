@@ -18,6 +18,7 @@ use tracing::{info, warn};
 use crate::analysis::*;
 use crate::community::detect_communities_from_index;
 use crate::engine;
+use crate::engine::GRAMMAR_LOADER;
 use crate::graph::{query, Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::pipeline::discovery::discover_files;
 use crate::routing::preflight::run_full_check;
@@ -163,6 +164,14 @@ fn tool_def(name: &str, desc: &str, props: &[(&str, &str, &str)], required: &[&s
             "required": required,
         }
     })
+}
+
+/// Discover source files in project root using supported language extensions.
+/// ponytail: single helper replaces 4× repeated extension-fetch + discover_files.
+fn discover_source_files(root: &Path, limit: usize) -> Vec<PathBuf> {
+    let exts: Vec<String> = GRAMMAR_LOADER.supported_extensions();
+    let ext_strs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+    discover_files(root, &ext_strs).into_iter().take(limit).collect()
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -611,8 +620,7 @@ impl McpServer {
         let project_root = self.project_root();
         let paths: Vec<std::path::PathBuf> = if files.is_empty() {
             // Scan project files — limit to avoid OOM on giant projects
-            discover_files(&project_root, &vec![])
-                .into_iter().take(200).collect()
+            discover_source_files(&project_root, 200)
         } else {
             files.iter().map(|f| {
                 let p = std::path::Path::new(f);
@@ -702,10 +710,7 @@ impl McpServer {
 
             // ── Path A: dataflow engine shared vars (primary) ──
             // Scan project files for shared variable access patterns
-            let files: Vec<std::path::PathBuf> = {
-                discover_files(&project_root, &vec![])
-                    .into_iter().take(200).collect()
-            };
+            let files: Vec<std::path::PathBuf> = discover_source_files(&project_root, 200);
             let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
             let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
             let mut var_readers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
@@ -863,10 +868,7 @@ impl McpServer {
         let project_root = self.project_root();
         self.with_store(id, |idx| {
             // ── L4 count from dataflow engine (primary) + graph edges (fallback) ──
-            let files: Vec<std::path::PathBuf> = {
-                discover_files(&project_root, &vec![])
-                    .into_iter().take(200).collect()
-            };
+            let files: Vec<std::path::PathBuf> = discover_source_files(&project_root, 200);
             let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
             let mut l4 = count_l4_from_index(idx); // start with graph edges
             let mut conflict_count = 0usize;
@@ -1270,10 +1272,7 @@ impl McpServer {
         let project_root = self.project_root();
         // Get L4 from dataflow engine before entering with_store
         let dataflow_l4: usize = {
-            let files: Vec<std::path::PathBuf> = {
-                discover_files(&project_root, &vec![])
-                    .into_iter().take(200).collect()
-            };
+            let files: Vec<std::path::PathBuf> = discover_source_files(&project_root, 200);
             let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
             let mut l4 = 0usize;
             for r in &df_results {
