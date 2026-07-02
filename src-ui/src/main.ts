@@ -303,6 +303,7 @@ async function init(): Promise<void> {
         allow: result.allow,
         remember: result.remember || undefined,
         ruleToAdd: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
+        ruleBehavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0].behavior : undefined,
       });
     });
   });

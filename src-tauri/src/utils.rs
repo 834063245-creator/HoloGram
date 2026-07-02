@@ -192,7 +192,7 @@ pub(crate) fn get_ctx(state: &WorkspaceState) -> Result<Arc<PermissionContext>, 
     Ok(handle.permission_ctx.clone())
 }
 
-/// Check MCP/graph tool permission — deny-only, skips ask/allow/safety.
+/// Check MCP/graph tool permission — deny + ask + allow + safety.
 /// MCP tools are read-only; only explicit deny rules should block them.
 /// No workspace = no rules = passthrough (allows diagnostic tools like hologram_status).
 pub(crate) fn check_mcp_permission(
@@ -200,19 +200,33 @@ pub(crate) fn check_mcp_permission(
     state: &tauri::State<'_, WorkspaceState>,
 ) -> Result<(), String> {
     // ponytail: 无工作区 = 无 .hologram/permissions.json = 无自定义规则，放行。
-    // 防止 hologram_status 等诊断工具因前置条件失败而无法诊断引擎状态（循环依赖）。
     let ctx = match get_ctx(state) {
         Ok(ctx) => ctx,
         Err(_) => return Ok(()),
     };
-    // ponytail: use public accessor ctx.read_rules(), not private ctx.rules
     let rules = ctx.read_rules();
+
+    // ① Tool-level Deny — highest priority
     if let Some(rule) = rules.find_deny(tool_name, None) {
         let reason = format!("{} 工具被规则禁止使用", rule.explain());
         drop(rules);
         ctx.audit_deny(tool_name, "", &reason);
         return Err(reason);
     }
+
+    // ② Tool-level Ask — force dialog (previously ignored for MCP tools)
+    if let Some(rule) = rules.find_ask(tool_name, None) {
+        let reason = rule.explain();
+        drop(rules);
+        return Err(format!("{} 工具需要用户确认: {}", tool_name, reason));
+    }
+
+    // ③ Tool-level Allow — explicit allow
+    if rules.find_allow(tool_name, None).is_some() {
+        return Ok(());
+    }
+
+    // ④ No rule matched → Passthrough
     Ok(())
 }
 
@@ -246,7 +260,7 @@ pub(crate) async fn check_permission(
     }
 }
 
-/// Check permission synchronously (no Await — for background tasks: Ask → Deny, spec §4.11).
+/// Check permission synchronously (no Await — for background tasks: Ask → log + deny with clear reason).
 pub(crate) fn check_permission_sync(
     tool: &dyn permissions::Tool,
     ctx: &PermissionContext,
@@ -254,8 +268,17 @@ pub(crate) fn check_permission_sync(
     match has_permission_to_use_tool(tool, ctx) {
         PermissionDecision::Allow => Ok(()),
         PermissionDecision::Deny { reason } => Err(reason),
-        PermissionDecision::Ask { reason, .. } => {
-            Err(format!("后台任务需要用户确认但无法交互: {}", reason))
+        PermissionDecision::Ask { reason, suggestions, .. } => {
+            let target = tool
+                .get_path()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            ctx.audit_deny(tool.name(), &target, &format!("后台任务无法交互，自动拒绝: {}", reason));
+            let hint = match suggestions.first() {
+                Some(s) => format!("\n建议在 .hologram/permissions.json 添加: \"allow\": [\"{}\"]", s.rule),
+                None => String::new(),
+            };
+            Err(format!("后台任务需要用户确认但无法交互: {}。请将对应操作加入 allow 规则或使用前台 Agent 执行。{}", reason, hint))
         }
     }
 }

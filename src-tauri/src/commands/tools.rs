@@ -1741,6 +1741,7 @@ pub(crate) async fn permission_ask_response(
     allow: bool,
     remember: Option<bool>,
     rule_to_add: Option<String>,
+    rule_behavior: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
     // Resolve the pending oneshot channel
@@ -1749,12 +1750,12 @@ pub(crate) async fn permission_ask_response(
     // If user wants to remember, add a session rule (in-memory only).
     // Session rules live for the current app session and are NOT persisted
     // to disk — this is distinct from permanent project rules which the user
-    // edits explicitly in settings. "Always allow" means "always for this
-    // session", not "always forever".
+    // edits explicitly in settings.
     if remember.unwrap_or(false) {
         if let Some(ref rule_str) = rule_to_add {
             if let Ok(ctx) = crate::utils::get_ctx(&state) {
-                let behavior = if allow { "allow" } else { "deny" };
+                // Use suggestion behavior if available, fall back to allow/deny from button
+                let behavior = rule_behavior.as_deref().unwrap_or(if allow { "allow" } else { "deny" });
                 ctx.add_session_rule(rule_str, behavior);
             }
         }

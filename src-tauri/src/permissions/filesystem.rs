@@ -52,9 +52,15 @@ pub fn check_read_permission(
     if let Some(ref resolved_path) = resolved {
         let safety = safety::check_path_safety_read(resolved_path);
         if !safety.safe {
+            let path_str = path_to_match_str(resolved_path);
             return PermissionResult::Ask {
                 reason: format!("安全警告: {}", safety.message),
-                suggestions: vec![],
+                suggestions: vec![
+                    crate::permissions::PermissionUpdate {
+                        rule: format!("Read({})", path_str),
+                        behavior: "allow".into(),
+                    },
+                ],
             };
         }
     }
@@ -63,7 +69,12 @@ pub fn check_read_permission(
     if let Some(rule) = rules.find_ask("Read", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
-            suggestions: vec![],
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("Read({})", match_str),
+                    behavior: "allow".into(),
+                },
+            ],
         };
     }
 
@@ -140,9 +151,15 @@ pub fn check_write_permission(
     // 3. Safety check (bypass-immune) — .git, .hologram, .ssh, etc.
     let safety = safety::check_path_safety(&resolved);
     if !safety.safe {
+        let path_str = path_to_match_str(&resolved);
         return PermissionResult::Ask {
             reason: format!("安全警告: {}", safety.message),
-            suggestions: vec![],
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("Edit({})", path_str),
+                    behavior: "allow".into(),
+                },
+            ],
         };
     }
 
@@ -150,7 +167,12 @@ pub fn check_write_permission(
     if let Some(rule) = rules.find_ask("Edit", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
-            suggestions: vec![],
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("Edit({})", match_str),
+                    behavior: "allow".into(),
+                },
+            ],
         };
     }
 
@@ -249,7 +271,34 @@ mod tests {
             &rules,
             None,
         );
-        assert!(matches!(r, PermissionResult::Ask { .. }));
+        match r {
+            PermissionResult::Ask { suggestions, .. } => {
+                assert!(!suggestions.is_empty(), "safety Ask must include a suggestion");
+                assert!(suggestions[0].rule.starts_with("Edit("), "suggestion should be Edit(path)");
+            }
+            other => panic!("expected Ask, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_read_safety_ask_has_suggestion() {
+        let (s, _root) = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // .bashrc anywhere triggers is_dangerous_file in check_path_safety_read
+        let test_path = format!("{}/.bashrc",
+            std::env::var("USERPROFILE").unwrap_or_default().replace('\\', "/"));
+        let r = check_read_permission(&test_path, &s, &rules, None);
+        match r {
+            PermissionResult::Ask { suggestions, .. } => {
+                assert!(!suggestions.is_empty(), "read safety Ask must include a suggestion");
+            }
+            // May be Allow if path doesn't exist (sandbox canonicalize fails → resolved=None → outside → Ask)
+            // Or Ask if path exists and safety blocks
+            PermissionResult::Allow => {
+                // ok — path doesn't exist on this system
+            }
+            other => panic!("expected Ask or Allow, got: {:?}", other),
+        }
     }
 
     #[test]

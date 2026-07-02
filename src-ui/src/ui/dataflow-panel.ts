@@ -295,17 +295,17 @@ export class DataflowPanel {
         ${edgesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">边 <span class="df-sect-count">${edges.length}</span></div>${edgesHtml}</div>` : ''}
         ${snips ? `<div class="df-detail-section"><div class="df-section-hdr">源码片段</div>${snips}</div>` : ''}
         <div class="df-detail-actions">
-          <button class="df-btn-verify" data-tid="${t.trace_id}">🔁 重验证</button>
-          <button class="df-btn-stale" data-tid="${t.trace_id}">🔍 过期检查</button>
-          <button class="df-btn-retrace" data-tid="${t.trace_id}">🔄 重追踪</button>
-          <button class="df-btn-edit" data-tid="${t.trace_id}">✏ 编辑</button>
-          <button class="df-btn-diff" data-tid="${t.trace_id}">📊 版本对比</button>
-          <button class="df-btn-del" data-tid="${t.trace_id}">🗑 删除</button>
+          <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 重验证</button>
+          <button class="df-btn-stale" data-tid="${t.trace_id}">${iconHtml('eye', 13)} 过期检查</button>
+          <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
+          <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
+          <button class="df-btn-diff" data-tid="${t.trace_id}">${iconHtml('diff', 13)} 版本对比</button>
+          <button class="df-btn-del" data-tid="${t.trace_id}">${iconHtml('trash', 13)} 删除</button>
         </div>`;
       const delBtn = this.detailEl.querySelector('.df-btn-del') as HTMLElement | null;
       if (delBtn) delBtn.onclick = async () => {
-        if (!confirm(`确认删除 trace ${t.trace_id}?`)) return;
-        await invoke<string>('dataflow_delete', { traceId: t.trace_id });
+        if (!confirm(`确认删除 trace ${t.trace_id}? 此操作不可撤销。`)) return;
+        await invoke<string>('dataflow_delete', { traceId: t.trace_id, hard: true });
         this.currentTraceId = null;
         this.refresh();
         this.detailEl.innerHTML = `<div class="df-empty">选择左侧 trace 查看详情</div>`;
@@ -359,7 +359,7 @@ export class DataflowPanel {
         } catch (e: any) {
           this.showBanner(`✗ 重追踪失败: ${e?.message || e}`, 'err');
         }
-        retraceBtn.textContent = '🔄 重追踪';
+        retraceBtn.innerHTML = `${iconHtml('refresh', 13)} 重追踪`;
       };
       // 编辑：textarea 编辑 + 高亮预览双栏，保存调 dataflow_save
       const editBtn = this.detailEl.querySelector('.df-btn-edit') as HTMLElement | null;

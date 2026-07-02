@@ -298,10 +298,17 @@ pub fn has_permission_to_use_tool(
     {
         let rules = ctx.rules.read().unwrap();
         if let Some(rule) = rules.find_ask(tool_name, None) {
+            let suggestion_rule = match &rule.value.content {
+                Some(content) => format!("{}({})", rule.value.tool_name, content),
+                None => rule.value.tool_name.clone(),
+            };
             return PermissionDecision::Ask {
                 request_id: gen_ask_id(),
                 reason: rule.explain(),
-                suggestions: vec![],
+                suggestions: vec![PermissionUpdate {
+                    rule: suggestion_rule,
+                    behavior: "allow".into(),
+                }],
             };
         }
     } // rules lock dropped
@@ -539,6 +546,25 @@ mod smoke {
             "deny rule for hologram_explore should be loaded — check_mcp_permission would return Err"
         );
     }
+
+    /// s9: session rule added with correct behavior via add_session_rule
+    #[test]
+    fn s9_session_rule_uses_given_behavior() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        // Simulate what happens when user clicks "本次会话允许"
+        ctx.add_session_rule("Bash(npm test:*)", "allow");
+        let rules = ctx.read_rules();
+        assert!(
+            rules.find_allow("Bash", Some("npm test --filter=foo")).is_some(),
+            "session allow rule must be findable by content match"
+        );
+        // Verify it's not in the deny list
+        assert!(
+            rules.find_deny("Bash", Some("npm test --filter=foo")).is_none(),
+            "session rule with behavior allow must not appear in deny list"
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -683,5 +709,50 @@ mod regression {
             has_permission_to_use_tool(&tool, &ctx),
             PermissionDecision::Allow
         ));
+    }
+
+    /// Gap 5 — 系统 Ask 规则必须带 suggestion
+    /// Git(push) 有系统 Ask 规则（load_system_rules），返回的 Ask 必须包含非空 suggestions。
+    #[test]
+    fn r6_system_ask_rule_generates_suggestion() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        let tool = GitTool {
+            repo_path: root.to_string_lossy().to_string(),
+            subcommand: "push".into(),
+        };
+        match has_permission_to_use_tool(&tool, &ctx) {
+            PermissionDecision::Ask { suggestions, .. } => {
+                assert!(
+                    !suggestions.is_empty(),
+                    "system Ask rule must generate a suggestion for 'always allow'"
+                );
+                assert!(
+                    suggestions[0].rule.contains("Git") && suggestions[0].rule.contains("push"),
+                    "suggestion should reference the matched rule, got: {}",
+                    suggestions[0].rule
+                );
+            }
+            other => panic!("expected Ask for Git(push), got: {:?}", other),
+        }
+    }
+
+    /// Gap 3 — sync denial error must include suggestion rule
+    /// When Ask would fire but sync mode can't show dialog, the error message
+    /// must tell the user exactly what rule to add to permissions.json.
+    #[test]
+    fn r9_sync_deny_error_includes_suggestion() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        // BashTool with a dangerous (but not critical) command triggers Ask
+        let tool = crate::tools::BashTool {
+            command: "sudo make install".into(),
+        };
+        let err = crate::utils::check_permission_sync(&tool, &ctx).unwrap_err();
+        assert!(
+            err.contains("allow"),
+            "sync denial must include rule suggestion, got: {}",
+            err
+        );
     }
 }
