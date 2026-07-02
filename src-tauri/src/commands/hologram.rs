@@ -654,7 +654,7 @@ pub(crate) async fn hologram_unused(
 ) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_unused", &state)?;
     let lim = limit.unwrap_or(20).min(200);
-    let kinds_str = kind_filter.unwrap_or_else(|| "function,class".into());
+    let kinds_str = kind_filter.unwrap_or_else(|| "function,class,file".into());
     let kinds: Vec<String> = kinds_str.split(',').map(|s| s.trim().to_string()).collect();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_store(move |idx| {
