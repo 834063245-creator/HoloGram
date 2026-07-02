@@ -4,14 +4,11 @@
 
 use tauri::{Emitter, Manager};
 use serde_json;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::io::Read;
 use std::thread;
 use std::time::Duration;
 use base64::Engine;
-use crate::utils;
-use crate::WorkspaceState;
 use crate::mcp_manager::McpManager;
 use crate::unity_manager::UnityManager;
 use crate::agent_isolation::{AgentIsolation, IsolationKind};
@@ -19,13 +16,8 @@ use std::net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 
 use hologram_engine as engine;
 use engine::engine as engine_api;
-use engine::graph::Graph;
-use engine::graph::{Node, NodeKind, Edge, EdgeKind};
-use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
-    graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
-use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
+use engine::analysis::graph_summary;
 use engine::graph::query;
-use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 use engine::tools::ToolRegistry;
 
 // ═══════════════════════════════════════════════════════
@@ -201,41 +193,6 @@ pub(crate) async fn list_directory_flat(
     .map_err(|e| format!("目录列表任务失败: {e}"))?
 }
 
-/// Flat listing: one level, children always null. Sort: dirs first, alpha.
-fn list_dir_flat(root: &std::path::Path) -> Vec<crate::utils::DirEntry> {
-    let mut entries: Vec<crate::utils::DirEntry> = Vec::new();
-    // ponytail: 只隐藏 VCS 内部目录 — 其他全显示, git ignored 着色在前端处理
-    let skip_dirs: std::collections::HashSet<&str> = [
-        ".git", ".hg", ".svn",
-    ].iter().cloned().collect();
-
-    let readdir = match std::fs::read_dir(root) {
-        Ok(r) => r,
-        Err(_) => return entries,
-    };
-
-    for entry in readdir.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        let is_dir = path.is_dir();
-        if is_dir && skip_dirs.contains(name.as_str()) {
-            continue;
-        }
-        entries.push(crate::utils::DirEntry {
-            name,
-            path: path.to_string_lossy().to_string(),
-            is_dir,
-            children: None,
-        });
-    }
-
-    entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir)
-            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-
-    entries
-}
 
 #[tauri::command]
 pub(crate) async fn read_file_content(
@@ -706,12 +663,6 @@ pub(crate) async fn search_content(
 // Coding Agent: glob — file pattern matching
 // ═══════════════════════════════════════════════════════
 
-#[derive(serde::Serialize)]
-struct GlobEntry {
-    path: String,
-    name: String,
-}
-
 #[tauri::command]
 pub(crate) async fn glob(
     pattern: String,
@@ -1036,18 +987,6 @@ fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
     }
     Ok(results)
 }
-/// URL-encode a string.
-fn urlencoding(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            b' ' => out.push('+'),
-            _ => { out.push('%'); out.push_str(&format!("{:02X}", b)); }
-        }
-    }
-    out
-}
 
 #[tauri::command]
 pub(crate) async fn web_fetch(
@@ -1277,81 +1216,6 @@ pub(crate) async fn load_binary_graph(
     }
 
     Err("No cached binary graph found".into())
-}
-
-
-/// Generate hologram_graph_files.json from an existing hologram_graph.json.
-/// Pure Rust — no Python dependency. Groups nodes by file, aggregates edge counts.
-fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
-    let graph_path = format!("{}/hologram_graph.json", project_path);
-    let files_path = format!("{}/hologram_graph_files.json", project_path);
-
-    let content = std::fs::read_to_string(&graph_path)
-        .map_err(|e| format!("Cannot read graph: {}", e))?;
-    let g: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid graph JSON: {}", e))?;
-
-    // Group nodes by file
-    let mut file_nodes: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    if let Some(nodes) = g.get("nodes").and_then(|v| v.as_array()) {
-        for n in nodes {
-            let loc = n.get("location").and_then(|v| v.as_str()).unwrap_or("");
-            // Extract file path from "file.py:123" or "file.py"
-            let file = loc.split(':').next().unwrap_or("").to_string();
-            if !file.is_empty() {
-                if let Some(id) = n.get("id").and_then(|v| v.as_str()) {
-                    file_nodes.entry(file).or_default().push(id.to_string());
-                }
-            }
-        }
-    }
-
-    // Build node_id → file lookup in O(N) — avoids O(N*E) find_node_file scan
-    let node_file: std::collections::HashMap<&str, &str> = g.get("nodes")
-        .and_then(|v| v.as_array())
-        .map(|nodes| {
-            nodes.iter().filter_map(|n| {
-                let id = n.get("id").and_then(|v| v.as_str())?;
-                let file = n.get("location").and_then(|v| v.as_str()).unwrap_or("")
-                    .split(':').next().unwrap_or("");
-                if file.is_empty() { None } else { Some((id, file)) }
-            }).collect()
-        }).unwrap_or_default();
-
-    // Count edges per file pair
-    let mut file_edges: std::collections::HashMap<(String, String), u32> = std::collections::HashMap::new();
-    if let Some(edges) = g.get("edges").and_then(|v| v.as_array()) {
-        for e in edges {
-            let src = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
-            let tgt = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
-            let src_file = node_file.get(src).copied().unwrap_or("");
-            let tgt_file = node_file.get(tgt).copied().unwrap_or("");
-            if !src_file.is_empty() && !tgt_file.is_empty() && src_file != tgt_file {
-                *file_edges.entry((src_file.to_string(), tgt_file.to_string())).or_default() += 1;
-            }
-        }
-    }
-
-    let file_graph: serde_json::Value = serde_json::json!({
-        "nodes": file_nodes.iter().map(|(f, ids)| serde_json::json!({
-            "id": f,
-            "name": f.split('/').last().unwrap_or(f),
-            "type": "file",
-            "location": f,
-            "symbol_count": ids.len(),
-        })).collect::<Vec<_>>(),
-        "edges": file_edges.iter().map(|((s, t), count)| serde_json::json!({
-            "source": s,
-            "target": t,
-            "type": "structural",
-            "weight": count,
-        })).collect::<Vec<_>>(),
-        "meta": g.get("meta").cloned().unwrap_or(serde_json::json!({})),
-    });
-
-    std::fs::write(&files_path, serde_json::to_string(&file_graph).unwrap_or_default())
-        .map_err(|e| format!("Cannot write file graph: {}", e))?;
-    Ok("ok".to_string())
 }
 
 /// 分析项目并返回完整图 JSON（从 CACHED_GRAPH 序列化）。

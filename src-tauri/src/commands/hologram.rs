@@ -46,61 +46,6 @@ pub(crate) async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle
     crate::utils::run_analyze_with_progress(target, app, true).await
 }
 
-/// Run engine analysis while polling progress and emitting frontend events.
-async fn run_analyze_with_progress(target: String, app: tauri::AppHandle, force: bool) -> Result<String, String> {
-    let target_clone = target.clone();
-    let app_clone = app.clone();
-    let scheduled = std::time::Instant::now();
-
-    // Spawn analysis in a blocking thread
-    let mut analyze_handle = tokio::task::spawn_blocking(move || {
-        crate::utils::direct_analyze(&target_clone, force)
-    });
-
-    // Poll progress until the blocking task finishes (don't exit early on Ready —
-    // queued analyzes wait on analyze_lock while state stays Ready).
-    loop {
-        tokio::select! {
-            res = &mut analyze_handle => {
-                match res {
-                    Ok(result) => return result,
-                    Err(e) => return Err(format!("分析任务失败: {}", e)),
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
-                let state = engine_api::engine_state();
-                match state {
-                    engine_api::EngineState::Analyzing { phase, current, total, file, started_at_ms, .. } => {
-                        let _ = app_clone.emit("analyze-phase", serde_json::json!({
-                            "phase": phase.clone(),
-                            "message": phase,
-                        }));
-                        if total > 0 {
-                            let _ = app_clone.emit("analyze-progress", serde_json::json!({
-                                "current": current,
-                                "total": total,
-                                "file": file,
-                            }));
-                        }
-                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                        let elapsed = now_ms.saturating_sub(started_at_ms);
-                        let _ = app_clone.emit("analyze-heartbeat", serde_json::json!({
-                            "label": phase,
-                            "elapsed": format!("{:.1}s", elapsed as f64 / 1000.0),
-                        }));
-                    }
-                    _ => {
-                        let elapsed_s = scheduled.elapsed().as_secs_f64();
-                        let _ = app_clone.emit("analyze-heartbeat", serde_json::json!({
-                            "label": "等待分析引擎",
-                            "elapsed": format!("{:.1}s", elapsed_s),
-                        }));
-                    }
-                }
-            }
-        }
-    }
-}
 
 #[tauri::command]
 pub(crate) async fn hologram_neighbors(node_id: String, depth: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
@@ -158,35 +103,6 @@ pub(crate) async fn hologram_graph_diff(before_path: String, _after_path: Option
             }
         })
     }).await.map_err(|e| format!("任务失败: {e}"))?
-}
-
-/// Serialize a GraphDiff as JSON with full node/edge objects (not just counts).
-/// Shared by `hologram_diff` command and `compute_watcher_diff` for watcher events.
-/// Regression: this used to return `.len()` integers, which broke the frontend
-/// `showDiff` that expects `{id, name, ...}` objects — status bar always showed
-/// `+0 / -0 / ~0` and `(5).map(...)` threw.
-fn diff_to_json(before: &Graph, after: &Graph) -> serde_json::Value {
-    let d = before.diff(after);
-    let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| serde_json::json!({
-        "id": n.id, "name": n.name, "type": n.kind.as_str(),
-        "location": n.location,
-    })).collect();
-    let removed_nodes: Vec<_> = d.removed_nodes.iter().map(|n| serde_json::json!({
-        "id": n.id, "name": n.name, "type": n.kind.as_str(),
-    })).collect();
-    let modified_nodes: Vec<_> = d.modified_nodes.iter().map(|(old, new)| serde_json::json!({
-        "node_id": new.id, "name": new.name,
-        "old_kind": old.kind.as_str(), "new_kind": new.kind.as_str(),
-    })).collect();
-    let is_empty = added_nodes.is_empty() && removed_nodes.is_empty() && modified_nodes.is_empty();
-    serde_json::json!({
-        "is_empty": is_empty,
-        "added_nodes": added_nodes,
-        "removed_nodes": removed_nodes,
-        "modified_nodes": modified_nodes,
-        "added_edges": d.added_edges.len(),
-        "removed_edges": d.removed_edges.len(),
-    })
 }
 
 #[tauri::command]
