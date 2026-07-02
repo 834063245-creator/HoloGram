@@ -38,30 +38,11 @@ export function isSamePath(a: string, b: string): boolean {
 
 // ── Arg translation (moved from main.ts) ───────────────────────────
 
-type ArgMap = Record<string, string>;
-const ARG_TRANSLATIONS: Record<string, ArgMap> = {
-  hologram_impact:          { nodeId: 'node_id', maxDepth: 'depth' },
-  hologram_neighbors:       { nodeId: 'node_id' },
-  hologram_path:            { from: 'from_id', to: 'to_id' },
-  hologram_diff:            { beforePath: 'before_path' },
-  hologram_coupling_report: { module: 'module_name' },
-  hologram_community_report:{ minSize: 'min_size' },
-  hologram_history:         { nodeId: 'node_id' },
-  hologram_community:       { nodeId: 'node_id' },
-};
-// ponytail: hologram_rename removed from ARG_TRANSLATIONS — its tool schema
-// already uses camelCase (oldName/newName/dryRun/nodeId), and Tauri invoke
-// handles camelCase→snake_case conversion. translateArgs double-converts.
-
-function translateArgs(tool: string, args: Record<string, unknown>): Record<string, unknown> {
-  const map = ARG_TRANSLATIONS[tool];
-  if (!map) return args;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args)) {
-    out[map[k] || k] = v;
-  }
-  return out;
-}
+// ponytail: 所有 hologram 工具 schema 已用 camelCase (nodeId/maxDepth/from/to/...),
+// Tauri v2 默认 camelCase 重命名 Rust snake_case 参数 → 期望的 JS key 正是这些 camelCase.
+// 旧 ARG_TRANSLATIONS 把 camelCase→snake_case, 方向全反 → 7 个工具 (node/unused/impact/
+// neighbors/path/coupling_report/community) 全部 "missing required key". 删整张表, args 直传.
+// 若新增 hologram 命令: schema 参数名用 camelCase 即可, 无需任何翻译.
 
 // ── Workspace class ─────────────────────────────────────────────────
 
@@ -370,8 +351,7 @@ export class Workspace {
     // Hologram tools
     if (this.graphData) {
       const holoExec: ToolExecutor = async (name, args) => {
-        const mapped = translateArgs(name, args);
-        const result = await invoke<string>(name, mapped);
+        const result = await invoke<string>(name, args);
         return typeof result === 'string' ? result : JSON.stringify(result);
       };
       for (const tool of createHologramTools(holoExec)) { registry.register(tool); }

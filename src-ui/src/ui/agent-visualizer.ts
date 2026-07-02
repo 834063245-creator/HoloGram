@@ -157,6 +157,7 @@ export class AgentVisualizer {
       case 'hologram_impact':
       case 'hologram_neighbors':
       case 'hologram_history':
+      case 'hologram_node':
         n('node_id'); n('nodeId');
         break;
       case 'hologram_coupling_report':
