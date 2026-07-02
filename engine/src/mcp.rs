@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Wenbing Jing. MIT License.
+﻿// Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
 // MCP Server — JSON-RPC over stdin/stdout
@@ -6,7 +6,7 @@
 //
 // Protocol: reads one JSON-RPC request per line from stdin,
 // writes one JSON-RPC response per line to stdout.
-// Supports tools/list and tools/call with all 25 hologram_* tools.
+// Supports tools/list and tools/call with all 27 hologram_* tools (via ToolRegistry).
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -221,7 +221,7 @@ impl McpServer {
             "ping" => McpServer::success_response(&id, json!({})),
             _ => {
                 warn!(method = %method, id = %id, "unknown MCP method");
-                McpServer::error_response(&id, -32601, &format!("Method not found: {}", method))
+                McpServer::error_response(&id, -32603, &format!("Method not found: {}", method))
             }
         };
 
@@ -283,7 +283,7 @@ impl McpServer {
     /// and converts them to proper JSON-RPC error responses.
     fn result_or_error(id: &Value, data: Value) -> Value {
         if let Some(msg) = data.get("error").and_then(|e| e.as_str()) {
-            McpServer::error_response(id, -32000, msg)
+            McpServer::error_response(id, -32603, msg)
         } else {
             McpServer::tool_result(id, data)
         }
@@ -322,1297 +322,9 @@ impl McpServer {
         let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        match tool_name {
-            "hologram_neighbors" => self.tool_neighbors(&args, id),
-            "hologram_impact" => self.tool_impact(&args, id),
-            "hologram_path" => self.tool_path(&args, id),
-            "hologram_history" => self.tool_history(&args, id),
-            "hologram_community" => self.tool_community(&args, id),
-            "hologram_delayed" => self.tool_delayed(&args, id),
-            "hologram_fragile" => self.tool_fragile(&args, id),
-            "hologram_cycle" => self.tool_cycle(&args, id),
-            "hologram_thread_conflicts" => self.tool_thread_conflicts(&args, id),
-            "hologram_coupling_report" => self.tool_coupling_report(&args, id),
-            "hologram_timeline" => self.tool_timeline(&args, id),
-            "hologram_blindspots" => self.tool_blindspots(&args, id),
-            "hologram_run_preflight" | "hologram_preflight" => self.tool_preflight(&args, id),
-            "hologram_search" => self.tool_search(&args, id),
-            "hologram_explore" => self.tool_explore(&args, id),
-            "hologram_graph_summary" => self.tool_graph_summary(&args, id),
-            "hologram_clusters" | "hologram_community_report" => self.tool_community_report(&args, id),
-            "hologram_graph_diff" | "hologram_diff" => self.tool_diff(&args, id),
-            "hologram_analyze" => self.tool_analyze(&args, id),
-            "hologram_run_check" => self.tool_run_check(&args, id),
-            "hologram_run_health" => self.tool_run_health(&args, id),
-            "hologram_rename" => self.tool_rename(&args, id),
-            "hologram_status" => self.tool_status(&args, id),
-            "hologram_policy_check" => self.tool_policy_check(&args, id),
-            "hologram_node" => self.tool_node(&args, id),
-            "hologram_unused" => self.tool_unused(&args, id),
-            "hologram_dataflow" => self.tool_dataflow(&args, id),
-            _ => McpServer::error_response(id, -32601, &format!("Tool not found: {}", tool_name)),
-        }
+        let result = crate::tools::ToolRegistry::dispatch(tool_name, &args);
+        Self::result_or_error(id, result)
     }
-
-    // ══════════════════════════════════════════════════════
-    // Tool implementations
-    // ══════════════════════════════════════════════════════
-
-    /// Run a read-only closure against MemoryIndex via GraphStore.
-    /// Read from the Engine's MemoryIndex. All MCP tools go through this.
-    fn with_store<F>(&self, id: &Value, f: F) -> Value
-    where
-        F: FnOnce(&MemoryIndex) -> Value,
-    {
-        match engine::engine_read(|idx| f(idx)) {
-            Ok(value) => Self::result_or_error(id, value),
-            Err(e) => McpServer::error_response(id, -32000, &e),
-        }
-    }
-
-    /// Read from the Engine via a legacy Graph. All MCP tools go through this.
-    fn with_graph<F>(&self, id: &Value, f: F) -> Value
-    where
-        F: FnOnce(&Graph) -> Value,
-    {
-        match engine::engine_read_graph(|g| f(g)) {
-            Ok(value) => Self::result_or_error(id, value),
-            Err(e) => McpServer::error_response(id, -32000, &e),
-        }
-    }
-
-    fn get_arg_str(args: &Value, keys: &[&str]) -> String {
-        for key in keys {
-            if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
-                if !v.is_empty() { return v.to_string(); }
-            }
-        }
-        String::new()
-    }
-
-    fn get_arg_usize(args: &Value, key: &str, default: usize) -> usize {
-        args.get(key)
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(default)
-    }
-
-    // ── Node ID resolution ──
-    // ponytail: tools accept both full IDs (D:...path...name) and short names.
-    // Resolution order: exact ID → exact name → search → not found.
-
-    /// Resolve node reference in MemoryIndex: exact ID → exact name → not found.
-    fn resolve_in_index(idx: &MemoryIndex, node_id_or_name: &str) -> Option<String> {
-        if idx.get_node(node_id_or_name).is_some() {
-            return Some(node_id_or_name.to_string());
-        }
-        idx.get_nodes_by_name(node_id_or_name).first().cloned()
-    }
-
-    /// Resolve node reference in legacy Graph: exact ID → search → not found.
-    fn resolve_in_graph(g: &Graph, node_id_or_name: &str) -> Option<String> {
-        if g.get_node(node_id_or_name).is_some() {
-            return Some(node_id_or_name.to_string());
-        }
-        query::search_nodes(g, node_id_or_name).first().map(|n| n.id.clone())
-    }
-
-    // ── V1 tools ──
-
-    fn tool_neighbors(&self, args: &Value, id: &Value) -> Value {
-        let node_id = Self::get_arg_str(args, &["node_id", "nodeId"]);
-        if node_id.is_empty() {
-            return McpServer::error_response(id, -32602, "node_id is required");
-        }
-        // Engine MemoryIndex path (primary)
-        match engine::engine_read(|idx| {
-            let resolved = match Self::resolve_in_index(idx, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", node_id)}),
-            };
-            let node = idx.get_node(&resolved).unwrap().clone();
-            let nb = idx.neighbors(&resolved, 1, None);
-            let incoming = idx.get_incoming_edges(&resolved);
-            let outgoing = idx.get_outgoing_edges(&resolved);
-            json!({
-                "node": node_to_value(&node),
-                "neighbor_count": nb.len(),
-                "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
-                "incoming": incoming.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
-                "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
-            })
-        }) {
-            Ok(value) => return Self::result_or_error(id, value),
-            Err(_) => {} // fall through to with_graph fallback
-        }
-        self.with_graph(id, |g| {
-            let resolved = match Self::resolve_in_graph(g, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", node_id)}),
-            };
-            let node = g.get_node(&resolved).unwrap();
-            let nb = query::neighbors(g, &resolved, 1);
-            let incoming: Vec<_> = g.incoming_edges(&resolved).iter().map(|e| edge_to_value(e)).collect();
-            let outgoing: Vec<_> = g.outgoing_edges(&resolved).iter().map(|e| edge_to_value(e)).collect();
-            json!({
-                "node": node_to_value(node),
-                "neighbor_count": nb.len(),
-                "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
-                "incoming": incoming,
-                "outgoing": outgoing,
-            })
-        })
-    }
-
-    fn tool_impact(&self, args: &Value, id: &Value) -> Value {
-        let node_id = Self::get_arg_str(args, &["node_id", "nodeId"]);
-        if node_id.is_empty() {
-            return McpServer::error_response(id, -32602, "node_id is required");
-        }
-        let depth = Self::get_arg_usize(args, "depth", 3);
-        self.with_store(id, |idx| {
-            let resolved = match Self::resolve_in_index(idx, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", node_id)}),
-            };
-            let layers = idx.impact(&resolved, depth);
-            let total_affected: usize = layers.iter().map(|(_, nodes)| nodes.len()).sum();
-            json!({
-                "source_node_id": resolved,
-                "max_depth": depth,
-                "total_affected_nodes": total_affected.saturating_sub(1),
-                "layers": layers.iter().map(|(d, nodes)| json!({"depth": d, "nodes": nodes})).collect::<Vec<_>>(),
-            })
-        })
-    }
-
-    fn tool_path(&self, args: &Value, id: &Value) -> Value {
-        let from_id = Self::get_arg_str(args, &["from_id", "fromId", "from"]);
-        let to_id = Self::get_arg_str(args, &["to_id", "toId", "to"]);
-        if from_id.is_empty() || to_id.is_empty() {
-            return McpServer::error_response(id, -32602, "from_id and to_id are required");
-        }
-        let depth = Self::get_arg_usize(args, "depth", 20).max(1);
-        self.with_store(id, |idx| {
-            let resolved_from = match Self::resolve_in_index(idx, &from_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", from_id)}),
-            };
-            let resolved_to = match Self::resolve_in_index(idx, &to_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", to_id)}),
-            };
-            match idx.shortest_path_with_limits(&resolved_from, &resolved_to, depth, 5000) {
-                Some(path) => json!({"from_id": resolved_from, "to_id": resolved_to, "path_count": 1, "paths": [path]}),
-                None => json!({"from_id": resolved_from, "to_id": resolved_to, "path_count": 0, "paths": []}),
-            }
-        })
-    }
-
-    fn tool_history(&self, args: &Value, id: &Value) -> Value {
-        let node_id = Self::get_arg_str(args, &["node_id", "nodeId"]);
-        if node_id.is_empty() {
-            return McpServer::error_response(id, -32602, "node_id is required");
-        }
-        let decision_history = engine::engine_query_timeline(20).unwrap_or_default();
-        // Engine MemoryIndex path (primary)
-        match engine::engine_read(|idx| {
-            let resolved = match Self::resolve_in_index(idx, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", node_id)}),
-            };
-            let node = idx.get_node(&resolved).unwrap().clone();
-            let dep_count = idx.incoming(&resolved, None).len();
-            let out_count = idx.outgoing(&resolved, None).len();
-            json!({
-                "node": node_to_value(&node),
-                "decision_history": decision_history,
-                "dependency_count": dep_count,
-                "dependent_count": out_count,
-            })
-        }) {
-            Ok(value) => return Self::result_or_error(id, value),
-            Err(_) => {}
-        }
-        self.with_graph(id, |g| {
-            let resolved = match Self::resolve_in_graph(g, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", node_id)}),
-            };
-            let node = g.get_node(&resolved).unwrap();
-            let incoming = g.incoming_edges(&resolved);
-            let outgoing = g.outgoing_edges(&resolved);
-            json!({
-                "node": node_to_value(node),
-                "decision_history": decision_history,
-                "dependency_count": incoming.len(),
-                "dependent_count": outgoing.len(),
-            })
-        })
-    }
-
-    fn tool_community(&self, args: &Value, id: &Value) -> Value {
-        let node_id = Self::get_arg_str(args, &["node_id", "nodeId"]);
-        if node_id.is_empty() {
-            return McpServer::error_response(id, -32602, "node_id is required");
-        }
-        self.with_store(id, |idx| {
-            let resolved = match Self::resolve_in_index(idx, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node {} not found", node_id)}),
-            };
-            // ponytail: read cached community_id instead of re-running full Louvain
-            let cid = match idx.get_node(&resolved).and_then(|n| n.community_id) {
-                Some(c) => c,
-                None => {
-                    // Fallback: community not cached (no analysis run yet) → run Louvain
-                    let communities = detect_communities_from_index(idx, 42);
-                    for (i, comm) in communities.iter().enumerate() {
-                        if comm.contains(&resolved) {
-                            let siblings: Vec<_> = comm.iter().filter(|nid| *nid != &resolved).cloned().collect();
-                            return json!({
-                                "node_id": resolved,
-                                "community": {
-                                    "id": format!("comm_{}", i),
-                                    "level": 0,
-                                    "label": format!("社区 {}", i + 1),
-                                    "node_count": comm.len(),
-                                    "node_ids": comm,
-                                },
-                                "sibling_nodes": siblings,
-                            });
-                        }
-                    }
-                    return json!({"node_id": resolved, "community": null, "message": "Node not in any community"});
-                }
-            };
-            // Collect community members and siblings in one O(V) pass
-            let mut comm_node_ids = Vec::new();
-            let mut siblings = Vec::new();
-            for node in idx.nodes_iter() {
-                if node.community_id == Some(cid) {
-                    comm_node_ids.push(node.id.clone());
-                    if node.id != resolved {
-                        siblings.push(node.id.clone());
-                    }
-                }
-            }
-            json!({
-                "node_id": resolved,
-                "community": {
-                    "id": format!("comm_{}", cid),
-                    "level": 0,
-                    "label": format!("社区 {}", cid + 1),
-                    "node_count": comm_node_ids.len(),
-                    "node_ids": comm_node_ids,
-                },
-                "sibling_nodes": siblings,
-            })
-        })
-    }
-
-    fn tool_delayed(&self, args: &Value, id: &Value) -> Value {
-        // Accept optional `files` parameter; default to project-wide scan limited to 200 files.
-        let files: Vec<String> = args.get("files")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        let project_root = self.project_root();
-        let paths: Vec<std::path::PathBuf> = if files.is_empty() {
-            // Scan project files — limit to avoid OOM on giant projects
-            discover_source_files(&project_root, 200)
-        } else {
-            files.iter().map(|f| {
-                let p = std::path::Path::new(f);
-                if p.is_absolute() { p.to_path_buf() } else { project_root.join(f) }
-            }).collect()
-        };
-
-        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
-        let mut triggers: Vec<Value> = Vec::new();
-        let mut awaits: Vec<Value> = Vec::new();
-        let mut sequences: Vec<Value> = Vec::new();
-        for r in &df_results {
-            if let Ok(df) = &r.result {
-                for s in &df.scopes {
-                    for t in &s.triggers {
-                        triggers.push(json!({
-                            "file": r.file, "scope": s.name,
-                            "target": t, "type": "trigger",
-                        }));
-                    }
-                    for a in &s.awaits_callbacks {
-                        awaits.push(json!({
-                            "file": r.file, "scope": s.name,
-                            "target": a, "type": "await",
-                        }));
-                    }
-                    for seq in &s.sequence_calls {
-                        sequences.push(json!({
-                            "file": r.file, "scope": s.name,
-                            "target": seq, "type": "sequence",
-                        }));
-                    }
-                }
-            }
-        }
-        let total = triggers.len() + awaits.len() + sequences.len();
-        Self::tool_result(id, json!({
-            "total_delayed_edges": total,
-            "triggers_count": triggers.len(), "awaits_count": awaits.len(),
-            "sequences_count": sequences.len(),
-            "triggers": triggers, "awaits": awaits, "sequences": sequences,
-            "_note": "from dataflow engine (on-demand query, no graph storage)",
-        }))
-    }
-
-    // ── V2 analysis tools ──
-
-    fn tool_fragile(&self, args: &Value, id: &Value) -> Value {
-        let limit = Self::get_arg_usize(args, "limit", 5).max(1);
-        self.with_store(id, |idx| {
-            let fragile = fragile_nodes_from_index(idx, limit);
-            json!({ "fragile_modules": fragile, "limit": limit })
-        })
-    }
-
-    fn tool_cycle(&self, args: &Value, id: &Value) -> Value {
-        let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("all");
-        self.with_store(id, |idx| {
-            let classified = classify_cycles_from_index(idx);
-            let all_cycles: Vec<_> = classified["cycles"].as_array()
-                .cloned()
-                .unwrap_or_default();
-            let filtered: Vec<_> = match mode {
-                "data" => all_cycles.into_iter().filter(|c| {
-                    c.get("category").and_then(|v| v.as_str()) == Some("data_persistent")
-                }).collect(),
-                "llm" => all_cycles.into_iter().filter(|c| {
-                    c.get("category").and_then(|v| v.as_str()) == Some("llm_involved")
-                }).collect(),
-                _ => all_cycles,
-            };
-            json!({
-                "total_cycles": filtered.len(),
-                "mode_filter": mode,
-                "cycles": filtered,
-            })
-        })
-    }
-
-    fn tool_thread_conflicts(&self, args: &Value, id: &Value) -> Value {
-        let _node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let project_root = self.project_root();
-        // Use dataflow engine to detect shared variables with multiple writers (concurrency risk)
-        // Also check graph Medium nodes for existing data edges (backward compat)
-        self.with_store(id, |idx| {
-            let mut resources = serde_json::Map::new();
-
-            // ── Path A: dataflow engine shared vars (primary) ──
-            // Scan project files for shared variable access patterns
-            let files: Vec<std::path::PathBuf> = discover_source_files(&project_root, 200);
-            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-            let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-            let mut var_readers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-            for r in &df_results {
-                if let Ok(df) = &r.result {
-                    for s in &df.scopes {
-                        for w in &s.writes {
-                            var_writers.entry(w.clone()).or_default().push(s.name.clone());
-                        }
-                        for rd in &s.reads {
-                            var_readers.entry(rd.clone()).or_default().push(s.name.clone());
-                        }
-                    }
-                    for sh in &df.shared {
-                        for w in &sh.writers {
-                            var_writers.entry(sh.var.clone()).or_default().push(w.clone());
-                        }
-                        for rd in &sh.readers {
-                            var_readers.entry(sh.var.clone()).or_default().push(rd.clone());
-                        }
-                    }
-                }
-            }
-            for (var, writers) in &var_writers {
-                if writers.len() > 1 {
-                    let readers = var_readers.get(var).cloned().unwrap_or_default();
-                    let has_concurrent_write = writers.len() > 1;
-                    resources.insert(var.clone(), json!({
-                        "medium_type": "variable",
-                        "threads": writers.iter().map(|w| json!({"name": w, "access": "W"})).collect::<Vec<_>>(),
-                        "thread_count": writers.len() + readers.len(),
-                        "has_concurrent_write": has_concurrent_write,
-                        "lock_detected": false,
-                        "lock_edges": Vec::<String>::new(),
-                    }));
-                }
-            }
-
-            // ── Path B: graph Medium nodes (backward compat) ──
-            for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
-                if resources.contains_key(&medium.name) { continue; }
-                let incoming = idx.incoming(&medium.id, None);
-                let mut threads_info = Vec::new();
-                let mut has_write = false;
-                let mut lock_edges = Vec::new();
-                for (src_id, kind, _depth, _delay) in &incoming {
-                    if let Some(src) = idx.get_node(src_id) {
-                        let access = if matches!(kind, EdgeKind::Writes) { "W" } else { "R" };
-                        if access == "W" { has_write = true; }
-                        threads_info.push(json!({
-                            "name": src.name,
-                            "location": src.location,
-                            "access": access,
-                        }));
-                    }
-                    if kind.as_str().contains("lock") {
-                        lock_edges.push(format!("{}::{}::{}", src_id, medium.id, kind.as_str()));
-                    }
-                }
-                if !threads_info.is_empty() {
-                    resources.insert(medium.name.clone(), json!({
-                        "medium_type": "medium",
-                        "threads": threads_info,
-                        "thread_count": threads_info.len(),
-                        "has_concurrent_write": has_write,
-                        "lock_detected": !lock_edges.is_empty(),
-                        "lock_edges": lock_edges,
-                    }));
-                }
-            }
-
-            let unlocked_keys: Vec<_> = resources.iter()
-                .filter(|(_, v)| v["has_concurrent_write"].as_bool().unwrap_or(false) && !v["lock_detected"].as_bool().unwrap_or(true))
-                .map(|(k, _)| k.clone())
-                .collect();
-            json!({
-                "resources": resources,
-                "total_shared_resources": resources.len(),
-                "unlocked_concurrent_writes": unlocked_keys.len(),
-                "unlocked_resources": unlocked_keys,
-                "_note": "shared vars from dataflow engine + Medium nodes from graph",
-            })
-        })
-    }
-
-    fn tool_coupling_report(&self, args: &Value, id: &Value) -> Value {
-        let module = args.get("module_name").and_then(|v| v.as_str()).unwrap_or("");
-        if module.is_empty() {
-            return McpServer::error_response(id, -32602, "module_name is required");
-        }
-        let project_root = self.project_root();
-        self.with_store(id, |idx| {
-            // L1/L2 from graph (structural edges)
-            let report = coupling_report_from_index(idx, module);
-            let l1 = report["L1"].as_u64().unwrap_or(0) as u32;
-            let l2 = report["L2"].as_u64().unwrap_or(0) as u32;
-
-            // L3/L4 from dataflow engine (on-demand per module files)
-            let normalized = module.replace('\\', "/");
-            let module_files: Vec<String> = {
-                let mut files: Vec<String> = idx.get_nodes_by_file(&normalized)
-                    .iter()
-                    .filter_map(|nid| idx.get_node(nid))
-                    .filter_map(|n| n.location.as_ref())
-                    .map(|loc| {
-                        let f = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
-                        f.replace('\\', "/")
-                    })
-                    .collect();
-                // Deduplicate
-                let mut seen = std::collections::HashSet::new();
-                files.retain(|f| seen.insert(f.clone()));
-                files
-            };
-            let mut l3 = 0u32; let mut l4 = 0u32;
-            if !module_files.is_empty() {
-                let paths: Vec<std::path::PathBuf> = module_files.iter()
-                    .map(|f| {
-                        let p = std::path::Path::new(f);
-                        if p.is_absolute() { p.to_path_buf() } else { project_root.join(f) }
-                    })
-                    .collect();
-                let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
-                for r in &df_results {
-                    if let Ok(df) = &r.result {
-                        for s in &df.scopes {
-                            l3 += (s.reads.len() + s.writes.len()) as u32;
-                            l4 += (s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len()) as u32;
-                        }
-                        l3 += df.shared.len() as u32;
-                    }
-                }
-            }
-            let total = (l1 + l2 + l3 + l4).max(1) as f64;
-            let fragility = (l4 as f64 * 4.0 + l3 as f64 * 3.0) / total;
-            json!({
-                "module": module, "total_edges": l1 + l2 + l3 + l4,
-                "L1": l1, "L2": l2, "L3": l3, "L4": l4,
-                "fragility": format!("{:.1}", fragility),
-                "_note": "L1/L2 from graph, L3/L4 from dataflow engine",
-            })
-        })
-    }
-
-    fn tool_timeline(&self, args: &Value, id: &Value) -> Value {
-        let limit = Self::get_arg_usize(args, "limit", 100).max(1);
-        let events = engine::engine_query_timeline(limit).unwrap_or_default();
-        McpServer::tool_result(id, json!({ "events": events, "total": events.len() }))
-    }
-
-    // ── V2 boundary ──
-
-    fn tool_blindspots(&self, args: &Value, id: &Value) -> Value {
-        let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
-        let project_root = self.project_root();
-        self.with_store(id, |idx| {
-            // ── L4 count from dataflow engine (primary) + graph edges (fallback) ──
-            let files: Vec<std::path::PathBuf> = discover_source_files(&project_root, 200);
-            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-            let mut l4 = count_l4_from_index(idx); // start with graph edges
-            let mut conflict_count = 0usize;
-            let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-            for r in &df_results {
-                if let Ok(df) = &r.result {
-                    for s in &df.scopes {
-                        l4 = l4.max(s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len());
-                        for w in &s.writes {
-                            var_writers.entry(w.clone()).or_default().push(s.name.clone());
-                        }
-                    }
-                    for sh in &df.shared {
-                        for w in &sh.writers {
-                            var_writers.entry(sh.var.clone()).or_default().push(w.clone());
-                        }
-                    }
-                }
-            }
-            for writers in var_writers.values() {
-                if writers.len() > 1 { conflict_count += 1; }
-            }
-            // Also count graph-based thread conflicts from Medium nodes
-            for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
-                let incoming = idx.incoming(&medium.id, None);
-                let has_write = incoming.iter().any(|(_, kind, _, _)| matches!(kind, EdgeKind::Writes));
-                let has_lock = incoming.iter().any(|(_, kind, _, _)| kind.as_str().contains("lock"));
-                if has_write && !has_lock && incoming.len() > 1 {
-                    conflict_count += 1;
-                }
-            }
-
-            let cycles = detect_cycles_from_index(idx);
-            let blind = find_blindspots(l4, cycles.len(), conflict_count);
-            json!(blind)
-        })
-    }
-
-    // ── V3 preflight ──
-
-    fn tool_preflight(&self, args: &Value, id: &Value) -> Value {
-        let files: Vec<String> = args.get("files")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        if files.is_empty() {
-            return McpServer::error_response(id, -32602, "files list is required");
-        }
-        let project_root = self.project_root();
-        self.with_store(id, |idx| {
-            // ── Structural blast radius from graph ──
-            let mut file_reports = Vec::new();
-            for file in &files {
-                let affected_nodes = idx.get_nodes_by_file(file);
-                let mut total_impact = 0usize;
-                for nid in &affected_nodes {
-                    let layers = idx.impact(nid, 3);
-                    total_impact += layers.iter().map(|(_, nodes)| nodes.len()).sum::<usize>();
-                }
-                file_reports.push(json!({
-                    "file": file,
-                    "direct_nodes": affected_nodes.len(),
-                    "blast_radius": total_impact.saturating_sub(affected_nodes.len()),
-                    "risk": if total_impact > 100 { "high" } else if total_impact > 20 { "medium" } else { "low" },
-                }));
-            }
-
-            // ── Dataflow signals on changed files ──
-            let paths: Vec<std::path::PathBuf> = files.iter()
-                .map(|f| {
-                    let p = std::path::Path::new(f);
-                    if p.is_absolute() { p.to_path_buf() } else { project_root.join(f) }
-                })
-                .collect();
-            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
-            let mut df_signals: Vec<Value> = Vec::new();
-            let mut shared_vars = 0usize;
-            let mut temporal = 0usize;
-            for r in &df_results {
-                if let Ok(df) = &r.result {
-                    for sh in &df.shared {
-                        shared_vars += 1;
-                        df_signals.push(json!({
-                            "level": 3, "file": r.file,
-                            "var": sh.var, "readers": sh.readers, "writers": sh.writers,
-                            "description": format!("共享变量 {}: {} 写, {} 读", sh.var, sh.writers.len(), sh.readers.len()),
-                        }));
-                    }
-                    for s in &df.scopes {
-                        temporal += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
-                        for t in &s.triggers {
-                            df_signals.push(json!({
-                                "level": 4, "file": r.file,
-                                "scope": s.name, "target": t, "kind": "trigger",
-                            }));
-                        }
-                    }
-                }
-            }
-
-            let structural_risk = file_reports.iter()
-                .filter_map(|r| r["risk"].as_str())
-                .max_by_key(|r| match *r { "high" => 3, "medium" => 2, _ => 1 })
-                .unwrap_or("low");
-            // Elevate risk if dataflow signals found
-            let risk_level = if shared_vars > 0 && structural_risk == "low" { "medium" }
-                else if temporal > 5 { "high" }
-                else { structural_risk };
-
-            json!({
-                "files": files,
-                "risk_level": risk_level,
-                "file_reports": file_reports,
-                "dataflow_signals": df_signals,
-                "dataflow_summary": { "shared_vars": shared_vars, "temporal_edges": temporal },
-            })
-        })
-    }
-
-    // ── V3+ parity ──
-
-    fn tool_search(&self, args: &Value, id: &Value) -> Value {
-        let query_str = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-        let limit = Self::get_arg_usize(args, "limit", 20);
-        if query_str.is_empty() {
-            return McpServer::error_response(id, -32602, "query is required");
-        }
-        // Engine FTS5 path (primary — only used when results are non-empty)
-        if let Ok(results) = engine::engine_fts_search(query_str, limit) {
-            if !results.is_empty() {
-                return McpServer::tool_result(id, json!({
-                    "query": query_str,
-                    "count": results.len(),
-                    "results": results.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
-                    "engine": "fts5",
-                }));
-            }
-        }
-        self.with_graph(id, |g| {
-            let results = query::search_nodes(g, query_str);
-            let count = results.len().min(limit);
-            json!({
-                "query": query_str,
-                "count": count,
-                "results": results.iter().take(limit).map(|n| node_to_value(n)).collect::<Vec<_>>(),
-                "engine": "linear",
-            })
-        })
-    }
-
-    fn tool_explore(&self, args: &Value, id: &Value) -> Value {
-        let symbols: Vec<String> = args.get("symbols")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        let query_str = args.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
-        if symbols.is_empty() && query_str.is_none() {
-            return McpServer::error_response(id, -32602, "symbols array or query string is required");
-        }
-        let include_source = args.get("includeSource")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let project_root = self.project_root();
-
-        // Try GraphStore first, fall back to CACHED_GRAPH
-        self.with_graph(id, |g| {
-            explore(g, &project_root, &symbols, query_str.as_deref(), include_source)
-        })
-    }
-
-    fn tool_graph_summary(&self, args: &Value, id: &Value) -> Value {
-        let _ = args;
-        self.with_store(id, |idx| {
-            graph_summary_from_index(idx)
-        })
-    }
-
-    fn tool_community_report(&self, args: &Value, id: &Value) -> Value {
-        let min_size = Self::get_arg_usize(args, "min_size", 3).max(1);
-        let max_nodes = Self::get_arg_usize(args, "max_nodes", 20).max(1).min(200);
-        self.with_store(id, |idx| {
-            // ponytail: group nodes by cached community_id instead of re-running Louvain
-            let mut comm_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
-            let mut has_any = false;
-            for node in idx.nodes_iter() {
-                if let Some(cid) = node.community_id {
-                    comm_map.entry(cid).or_default().push(node.id.clone());
-                    has_any = true;
-                }
-            }
-            // Fallback: no cached communities → run Louvain
-            if !has_any {
-                let communities = detect_communities_from_index(idx, 42);
-                for (i, c) in communities.iter().enumerate() {
-                    comm_map.insert(i, c.clone());
-                }
-            }
-            // Sort communities by size descending
-            let mut communities: Vec<_> = comm_map.into_iter().collect();
-            communities.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-
-            let filtered: Vec<_> = communities.iter()
-                .filter(|(_, c)| c.len() >= min_size)
-                .enumerate()
-                .map(|(display_idx, (cid, node_ids))| {
-                    let truncated = node_ids.len() > max_nodes;
-                    let shown: Vec<_> = node_ids.iter().take(max_nodes).cloned().collect();
-                    let label = Self::derive_comm_label(&node_ids, idx);
-                    json!({
-                        "id": format!("comm_{}", cid),
-                        "size": node_ids.len(),
-                        "node_ids": shown,
-                        "node_ids_truncated": truncated,
-                        "label": label,
-                        "_display_index": display_idx,
-                    })
-                })
-                .collect();
-            json!({
-                "total_communities": filtered.len(),
-                "min_size_filter": min_size,
-                "max_nodes_per_community": max_nodes,
-                "communities": filtered,
-            })
-        })
-    }
-
-    /// Derive a community label from the most common file path among members.
-    fn derive_comm_label(members: &[String], idx: &MemoryIndex) -> String {
-        use std::collections::HashMap;
-        let mut prefix_counts: HashMap<String, usize> = HashMap::new();
-        for nid in members.iter().take(30) {
-            if let Some(node) = idx.get_node(nid) {
-                let loc = node.location.as_deref().unwrap_or("");
-                let file = loc.rsplit(&['/', '\\']).next().unwrap_or(loc);
-                let stem = file.rsplit(':').next().unwrap_or(file);
-                *prefix_counts.entry(stem.to_string()).or_default() += 1;
-            }
-        }
-        prefix_counts
-            .into_iter()
-            .max_by_key(|(_, c)| *c)
-            .map(|(p, _)| p)
-            .unwrap_or_else(|| format!("社区({})", members.len()))
-    }
-
-    fn tool_diff(&self, args: &Value, id: &Value) -> Value {
-        let before_path = args.get("before_path").and_then(|v| v.as_str()).unwrap_or("");
-        if before_path.is_empty() {
-            return McpServer::error_response(id, -32602, "before_path is required");
-        }
-        self.with_graph(id, |after| {
-            // Try to load baseline — auto-create if missing
-            let before = match Graph::from_json_file(before_path) {
-                Ok(g) => g,
-                Err(_) => {
-                    // Baseline doesn't exist yet — save current as baseline
-                    let graph_json = serde_json::to_string_pretty(after).unwrap_or_default();
-                    if let Err(e) = std::fs::write(before_path, &graph_json) {
-                        return json!({"error": format!("无法创建基线: {}", e)});
-                    }
-                    return json!({
-                        "is_empty": true,
-                        "message": "已创建变更基线，再次运行即可比较差异",
-                        "baseline_path": before_path,
-                    });
-                }
-            };
-            let diff = before.diff(&after);
-            let added_nodes: Vec<_> = diff.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
-            let removed_nodes: Vec<_> = diff.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
-            let modified_nodes: Vec<_> = diff.modified_nodes.iter().map(|(old, new)| json!({
-                "node_id": new.id,
-                "name": new.name,
-                "old_kind": old.kind.as_str(),
-                "new_kind": new.kind.as_str(),
-            })).collect();
-            let is_empty = added_nodes.is_empty() && removed_nodes.is_empty() && modified_nodes.is_empty();
-            json!({
-                "is_empty": is_empty,
-                "added_nodes": added_nodes,
-                "removed_nodes": removed_nodes,
-                "modified_nodes": modified_nodes,
-                "added_edges": diff.added_edges.len(),
-                "removed_edges": diff.removed_edges.len(),
-            })
-        })
-    }
-
-    fn tool_analyze(&self, args: &Value, id: &Value) -> Value {
-        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        if path.is_empty() {
-            return McpServer::error_response(id, -32602, "path is required");
-        }
-        let root = PathBuf::from(path);
-        if !root.exists() {
-            return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
-        }
-        info!(%path, "mcp analyze started");
-
-        // Initialize engine for this project (idempotent — no-op if already initialized)
-        if let Err(e) = engine::engine_init(&root) {
-            return McpServer::error_response(id, -32000, &format!("Engine init failed: {}", e));
-        }
-
-        // Reject if analysis already in progress.
-        if engine::engine_state().is_analyzing() {
-            return McpServer::tool_result(id, json!({
-                "status": "already_running",
-                "message": "Analysis already in progress. Call hologram_status to track progress.",
-                "_generator": "HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"
-            }));
-        }
-
-        // Spawn background thread — analysis takes 10-20s, MCP clients
-        // time out at 5s. The thread updates EngineState::Analyzing so
-        // hologram_status can report progress. When done, state → Ready.
-        let root_clone = root.clone();
-        std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                match engine::engine_analyze(&root_clone) {
-                    Ok(result) => {
-                        engine::with_engine(|eng| {
-                            eng.stop_watcher();
-                            eng.start_watcher(root_clone.clone(), None::<Box<dyn Fn(String) + Send + 'static>>);
-                        });
-                        info!(nodes = result.node_count, edges = result.edge_count, secs = result.elapsed_secs, "mcp analyze done (background)");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "mcp analyze failed (background)");
-                    }
-                }
-            })
-            .ok();
-
-        McpServer::tool_result(id, json!({
-            "status": "started",
-            "message": "Analysis running in background. Call hologram_status to track progress; phase becomes 'ready' when done.",
-            "_generator": "HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"
-        }))
-    }
-
-    // ── V3 check + health ──
-
-    fn tool_run_check(&self, args: &Value, id: &Value) -> Value {
-        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        if path.is_empty() {
-            return McpServer::error_response(id, -32602, "path is required");
-        }
-
-        let root = PathBuf::from(path);
-        if !root.exists() {
-            return McpServer::error_response(id, -32000, &format!("Path not found: {}", path));
-        }
-
-        // Save current graph as baseline (via Engine)
-        let before = engine::engine_read_graph(|g| g.clone()).ok();
-
-        // Re-analyze via Engine (handles locking, pipeline, storage internally)
-        match engine::engine_init(&root) {
-            Ok(_) => {}
-            Err(e) => return McpServer::error_response(id, -32000, &format!("Engine init failed: {}", e)),
-        }
-        let analyze_result = match engine::engine_analyze(&root) {
-            Ok(r) => r,
-            Err(e) => return McpServer::error_response(id, -32000, &e),
-        };
-
-        let after = analyze_result.graph.clone();
-        let before_graph = before.unwrap_or_else(|| after.clone());
-
-        let changed_files: Vec<String> = vec![];
-        let check_result = run_full_check(&before_graph, &after, &changed_files, path);
-
-        // Record timeline event
-        let passed = check_result["passed"].as_bool().unwrap_or(true);
-        let violation_count = check_result["violation_count"].as_u64().unwrap_or(0);
-        let event_type = if passed { "commit_clean" } else { "commit_violation" };
-        let summary = if passed {
-            format!("简报通过（{} 违规）", violation_count)
-        } else {
-            format!("简报未通过：{} 条违规", violation_count)
-        };
-        let props = serde_json::json!({
-            "passed": check_result["passed"],
-            "violation_count": check_result["violation_count"],
-        });
-        let _ = engine::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
-
-        McpServer::tool_result(id, check_result)
-    }
-
-    fn tool_run_health(&self, args: &Value, id: &Value) -> Value {
-        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        let days = Self::get_arg_usize(args, "days", 30);
-        if path.is_empty() {
-            return McpServer::error_response(id, -32602, "path is required");
-        }
-        let project_root = self.project_root();
-        // Get L4 from dataflow engine before entering with_store
-        let dataflow_l4: usize = {
-            let files: Vec<std::path::PathBuf> = discover_source_files(&project_root, 200);
-            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-            let mut l4 = 0usize;
-            for r in &df_results {
-                if let Ok(df) = &r.result {
-                    for s in &df.scopes {
-                        l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
-                    }
-                }
-            }
-            l4
-        };
-        self.with_store(id, |idx| {
-            let summary = graph_summary_from_index(idx);
-            let n = idx.node_count().max(1) as f64;
-            let e = idx.edge_count() as f64;
-            let density = (e / n).min(5.0) / 5.0 * 40.0;
-            let cycles = detect_cycles_from_index(idx).len().min(20) as f64;
-            let cycle_score = (1.0 - cycles / 20.0).max(0.0) * 10.0;
-            let fragile = fragile_nodes_from_index(idx, 20);
-            let fragile_count = fragile.len().min(20) as f64;
-            let fragile_score = (1.0 - fragile_count / 20.0).max(0.0) * 20.0;
-            let l4_count = dataflow_l4.max(count_l4_from_index(idx)) as f64;
-            let coupling_ratio = if e > 0.0 { l4_count / e } else { 0.0 };
-            let coupling_score = (1.0 - coupling_ratio).max(0.0) * 30.0;
-            let score = ((density + coupling_score + fragile_score + cycle_score) as u32).min(100);
-            let trend = if n > 0.0 && e / n > 2.0 { "healthy" } else if e > 0.0 { "stable" } else { "needs_edges" };
-            json!({
-                "path": path,
-                "days": days,
-                "current_health": {
-                    "total_nodes": idx.node_count(),
-                    "total_edges": idx.edge_count(),
-                    "score": score,
-                    "trend": trend,
-                    "breakdown": {
-                        "density": (density as u32),
-                        "cycles": (cycle_score as u32),
-                        "fragile": (fragile_score as u32),
-                        "coupling": (coupling_score as u32),
-                    }
-                },
-                "summary": summary,
-                "note": "Health trend requires historical snapshots — showing current state only.",
-            })
-        })
-    }
-
-    fn tool_rename(&self, args: &Value, id: &Value) -> Value {
-        // ponytail: accept both snake_case (MCP) and camelCase (Tauri invoke bridge)
-        let old_name = args.get("old_name").or_else(|| args.get("oldName")).and_then(|v| v.as_str()).unwrap_or("");
-        let new_name = args.get("new_name").or_else(|| args.get("newName")).and_then(|v| v.as_str()).unwrap_or("");
-        let dry_run = args.get("dry_run").or_else(|| args.get("dryRun")).and_then(|v| v.as_bool()).unwrap_or(false);
-        let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str());
-
-        if old_name.is_empty() || new_name.is_empty() {
-            return McpServer::error_response(id, -32602, "old_name and new_name are required");
-        }
-
-        if dry_run {
-            self.with_graph(id, |g| {
-                let matched: Vec<_> = g.nodes.values()
-                    .filter(|n| n.name == old_name)
-                    .collect();
-                if matched.is_empty() {
-                    return json!({"error": format!("No nodes match '{}'", old_name)});
-                }
-                json!({
-                    "dry_run": true,
-                    "old_name": old_name,
-                    "new_name": new_name,
-                    "matched_count": matched.len(),
-                    "matched_nodes": matched.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
-                    "files_to_modify": matched.iter().filter_map(|n| n.location.clone()).collect::<Vec<_>>(),
-                    "message": format!("Dry run: {} nodes would be renamed from '{}' to '{}'. Execute with dry_run=false to commit.", matched.len(), old_name, new_name),
-                })
-            })
-        } else {
-            // Collect matching IDs and rename via Engine
-            let (matched_ids, count) = {
-                match engine::engine_read(|idx| {
-                    let ids: Vec<String> = idx.nodes_iter()
-                        .filter(|n| n.name == old_name)
-                        .map(|n| n.id.clone())
-                        .collect();
-                    (ids.len(), ids)
-                }) {
-                    Ok((0, _)) => return McpServer::error_response(id, -32000, &format!("No nodes match '{}'", old_name)),
-                    Ok((cnt, ids)) => (ids, cnt),
-                    Err(e) => return McpServer::error_response(id, -32000, &e),
-                }
-            };
-            // Apply rename via Engine
-            if let Err(e) = engine::engine_write(|idx| {
-                for nid in &matched_ids {
-                    idx.rename_node_name(nid, &new_name);
-                }
-            }) {
-                return McpServer::error_response(id, -32000, &e);
-            }
-
-            // Persist to disk
-            let _ = engine::engine_save();
-
-            McpServer::tool_result(id, json!({
-                "dry_run": false,
-                "old_name": old_name,
-                "new_name": new_name,
-                "renamed_count": count,
-                "renamed_ids": matched_ids,
-                "note": "Rename applied to graph and persisted to storage. File-level rename on disk is not yet implemented.",
-            }))
-        }
-    }
-
-    fn tool_status(&self, _args: &Value, id: &Value) -> Value {
-        let state = engine::engine_state();
-        match engine::engine_read(|idx| (idx.node_count(), idx.edge_count(), idx.has_aux_indexes())) {
-            Ok((nodes, edges, has_aux)) => {
-                let phase = match state {
-                    engine::EngineState::Ready { .. } => "ready",
-                    engine::EngineState::Analyzing { .. } => "analyzing",
-                    engine::EngineState::Loading { .. } => "loading",
-                    engine::EngineState::Uninitialized => "empty",
-                    engine::EngineState::Error(_) => "error",
-                };
-                let is_watching = engine::with_engine(|eng| eng.is_watching()).unwrap_or(false);
-                McpServer::tool_result(id, json!({
-                    "phase": phase,
-                    "store": "MemoryIndex",
-                    "nodes": nodes,
-                    "edges": edges,
-                    "has_aux_indexes": has_aux,
-                    "is_watching": is_watching,
-                }))
-            }
-            Err(_) => {
-                McpServer::tool_result(id, json!({
-                    "phase": "empty",
-                    "store": "none",
-                    "nodes": 0,
-                    "edges": 0,
-                }))
-            }
-        }
-    }
-
-    fn tool_policy_check(&self, args: &Value, id: &Value) -> Value {
-        // Accept either a full rules array or a single-rule shortcut.
-        let rules: Value = if let Some(r) = args.get("rules").cloned() {
-            r
-        } else if let (Some(source), Some(target)) = (
-            args.get("source").and_then(|v| v.as_str()),
-            args.get("target").and_then(|v| v.as_str()),
-        ) {
-            let mut rule = json!({
-                "name": "ad-hoc",
-                "source": source,
-                "target": target,
-                "message": format!("{} → {} 依赖违规", source, target),
-            });
-            if let Some(kinds) = args.get("edge_kinds") {
-                rule["edge_kinds"] = kinds.clone();
-            }
-            json!([rule])
-        } else {
-            return McpServer::error_response(
-                id,
-                -32602,
-                "Provide either 'rules' (array of rule objects) or both 'source' and 'target' (string patterns).",
-            );
-        };
-
-        self.with_store(id, |idx| policy_check_from_index(idx, &rules))
-    }
-
-    // ── V4 tools: node deep-dive + dead code ──
-
-    /// Complete node deep-dive: identity, degree, community, all edges grouped by kind.
-    /// Replaces hologram_neighbors + hologram_community for a single-node query.
-    fn tool_node(&self, args: &Value, id: &Value) -> Value {
-        let node_id = Self::get_arg_str(args, &["node_id", "nodeId"]);
-        if node_id.is_empty() {
-            return McpServer::error_response(id, -32602, "node_id is required");
-        }
-        self.with_store(id, |idx| {
-            let resolved = match Self::resolve_in_index(idx, &node_id) {
-                Some(rid) => rid,
-                None => return json!({"error": format!("Node '{}' not found in graph", node_id)}),
-            };
-            let node = idx.get_node(&resolved).unwrap().clone();
-            let incoming = idx.get_incoming_edges(&resolved);
-            let outgoing = idx.get_outgoing_edges(&resolved);
-
-            // Group edges by kind for readable output
-            let group_by_kind = |edges: &[Edge]| -> serde_json::Map<String, Value> {
-                let mut groups: serde_json::Map<String, Value> = serde_json::Map::new();
-                for e in edges {
-                    let k = e.kind.as_str().to_string();
-                    groups.entry(k).or_insert_with(|| json!([]))
-                        .as_array_mut().unwrap()
-                        .push(json!({
-                            "id": e.id,
-                            "source": e.source,
-                            "target": e.target,
-                            "coupling_depth": e.coupling_depth,
-                            "cross_file": e.cross_file,
-                            "temporal_delay_sec": e.temporal_delay_sec,
-                        }));
-                }
-                groups
-            };
-
-            json!({
-                "node": node_to_value(&node),
-                "incoming_count": incoming.len(),
-                "outgoing_count": outgoing.len(),
-                "incoming_by_kind": group_by_kind(&incoming),
-                "outgoing_by_kind": group_by_kind(&outgoing),
-            })
-        })
-    }
-
-    /// Find potentially unused symbols — nodes with in_degree == 0.
-    /// Sorted by out_degree descending: the most impactful dead code first.
-    /// Focuses on functions and classes by default.
-    fn tool_unused(&self, args: &Value, id: &Value) -> Value {
-        let limit = Self::get_arg_usize(args, "limit", 20).min(200);
-        let kind_str = args.get("kind_filter")
-            .and_then(|v| v.as_str())
-            .unwrap_or("function,class");
-        let kinds: Vec<&str> = kind_str.split(',').map(|s| s.trim()).collect();
-
-        self.with_store(id, |idx| {
-            let mut candidates: Vec<&Node> = idx.nodes_iter()
-                .filter(|n| {
-                    n.in_degree == 0
-                        && kinds.iter().any(|k| n.kind.as_str() == *k)
-                })
-                .collect();
-
-            // Sort by out_degree descending — most impactful first
-            candidates.sort_by_key(|n| std::cmp::Reverse(n.out_degree));
-            candidates.truncate(limit);
-
-            json!({
-                "total_unused": candidates.len(),
-                "limit": limit,
-                "kind_filter": kind_str,
-                "unused": candidates.iter().map(|n| json!({
-                    "id": n.id,
-                    "name": n.name,
-                    "kind": n.kind.as_str(),
-                    "location": n.location,
-                    "out_degree": n.out_degree,
-                    "community_id": n.community_id,
-                })).collect::<Vec<_>>(),
-            })
-        })
-    }
-
-    /// Trace variable dataflow in specific files.
-    ///
-    /// Unlike other MCP tools, this does NOT go through `with_store`/`with_graph`
-    /// because it needs source code + tree-sitter parsing, not persisted graph data.
-    /// Calls the pure query engine (`query_dataflow_files`) directly.
-    fn tool_dataflow(&self, args: &Value, id: &Value) -> Value {
-        let files: Vec<String> = args.get("files")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-
-        if files.is_empty() {
-            return McpServer::error_response(id, -32602, "files is required and must be a non-empty array");
-        }
-
-        let project_root = self.project_root();
-        let paths: Vec<std::path::PathBuf> = files.iter().map(|f| {
-            let p = std::path::Path::new(f);
-            if p.is_absolute() { p.to_path_buf() } else { project_root.join(p) }
-        }).collect();
-
-        let results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
-
-        let json_results: Vec<Value> = results.iter().map(|r| {
-            match &r.result {
-                Ok(df) => {
-                    json!({
-                        "file": r.file,
-                        "scopes": df.scopes.iter().map(|s| json!({
-                            "name": s.name,
-                            "reads": s.reads,
-                            "writes": s.writes,
-                            "triggers": s.triggers,
-                            "awaits_callbacks": s.awaits_callbacks,
-                            "sequence_calls": s.sequence_calls,
-                        })).collect::<Vec<_>>(),
-                        "shared": df.shared.iter().map(|sh| json!({
-                            "var": sh.var,
-                            "readers": sh.readers,
-                            "writers": sh.writers,
-                        })).collect::<Vec<_>>(),
-                    })
-                }
-                Err(e) => json!({ "file": r.file, "error": e }),
-            }
-        }).collect();
-
-        Self::result_or_error(id, json!({ "results": json_results }))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Serialization helpers
-// ═══════════════════════════════════════════════════════════════
-
-fn node_to_value(n: &Node) -> Value {
-    json!({
-        "id": n.id,
-        "name": n.name,
-        "type": n.kind.as_str(),
-        "kind": n.kind.as_str(),
-        "location": n.location,
-        "in_degree": n.in_degree,
-        "out_degree": n.out_degree,
-        "properties": n.properties,
-        "position": n.position,
-        "community_id": n.community_id,
-    })
-}
-
-fn edge_to_value(e: &Edge) -> Value {
-    json!({
-        "id": e.id,
-        "source": e.source,
-        "target": e.target,
-        "type": e.kind.as_str(),
-        "coupling_depth": e.coupling_depth,
-        "cross_file": e.cross_file,
-        "temporal_delay_sec": e.temporal_delay_sec,
-    })
 }
 
 #[cfg(test)]
@@ -1641,10 +353,12 @@ mod tests {
         McpServer::new(&std::env::temp_dir())
     }
 
-    /// Load a test graph into CACHED_GRAPH. Returns the lock guard so the
-    /// graph stays live until the guard is dropped at the end of the test.
+    /// Load a test graph into Engine's MemoryIndex.
+    /// Returns the lock guard so the graph stays live until the guard
+    /// is dropped at the end of the test.
     fn load_test_graph() -> std::sync::MutexGuard<'static, ()> {
         let guard = MUTEX.lock().unwrap();
+        clear_graph();
         let tmp = std::env::temp_dir().join("hologram_mcp_test");
         let _ = std::fs::create_dir_all(&tmp);
         let _ = engine::engine_init(&tmp);
@@ -1715,7 +429,7 @@ mod tests {
         let req = serde_json::to_string(&make_rpc("bogus/method", json!({}), 1)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32601);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -1741,7 +455,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_nonexistent", json!({}), 2)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32601);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     // ── Tool: neighbors ──
@@ -1753,7 +467,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_neighbors", json!({}), 3)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -1791,7 +505,7 @@ mod tests {
             json!({"node_id": "a"}), 6)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32000);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     // ── Tool: impact ──
@@ -1803,7 +517,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_impact", json!({}), 7)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -1829,7 +543,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_path", json!({}), 9)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -1948,7 +662,7 @@ mod tests {
             json!({}), 17)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -2040,7 +754,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_run_preflight", json!({}), 21)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -2065,7 +779,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_search", json!({}), 23)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -2120,7 +834,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_graph_diff", json!({}), 27)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     // ── Tool: run_health ──
@@ -2132,7 +846,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_run_health", json!({}), 28)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     // ── Tool: rename ──
@@ -2144,7 +858,7 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("hologram_rename", json!({}), 29)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
@@ -2171,7 +885,7 @@ mod tests {
             json!({}), 31)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert_eq!(v["error"]["code"], -32603);
     }
 
     #[test]
