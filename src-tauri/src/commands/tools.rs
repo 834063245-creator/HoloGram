@@ -278,6 +278,15 @@ pub(crate) async fn write_file_content(
         .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
     std::fs::rename(&tmp_path, &rp)
         .map_err(|e| format!("无法保存文件 {}: {}", rp, e))?;
+
+    // Hook: record timeline + update changed_files for 简报
+    if let Some(ref handle) = *state.lock().unwrap() {
+        let short = rp.rsplit(['/', '\\']).next().unwrap_or(&rp);
+        let _ = engine_api::engine_record_timeline("agent_write", Some(&rp), &format!("Agent 写入: {}", short));
+        if let Ok(mut changed) = handle.changed_files.lock() {
+            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        }
+    }
     Ok(())
 }
 
@@ -346,7 +355,17 @@ pub(crate) async fn delete_file_or_dir(
     } else {
         std::fs::remove_file(&real)
             .map_err(|e| format!("无法删除文件 {}: {}", path, e))
+    }?;
+    // Hook: record timeline + update changed_files
+    let rp = real.to_string_lossy().replace('\\', "/");
+    if let Some(ref handle) = *state.lock().unwrap() {
+        let short = rp.rsplit('/').next().unwrap_or(&rp);
+        let _ = engine_api::engine_record_timeline("agent_delete", Some(&rp), &format!("Agent 删除: {}", short));
+        if let Ok(mut changed) = handle.changed_files.lock() {
+            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        }
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -361,7 +380,17 @@ pub(crate) async fn rename_file_or_dir(
     let resolved_from = crate::utils::resolve_write_dispatch(&from, is_agent, &state, &app).await?;
     let resolved_to = crate::utils::resolve_write_dispatch(&to, is_agent, &state, &app).await?;
     std::fs::rename(&resolved_from, &resolved_to)
-        .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))
+        .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))?;
+    // Hook: record timeline + update changed_files
+    let rp = resolved_to.to_string_lossy().replace('\\', "/");
+    if let Some(ref handle) = *state.lock().unwrap() {
+        let short = rp.rsplit('/').next().unwrap_or(&rp);
+        let _ = engine_api::engine_record_timeline("agent_rename", Some(&rp), &format!("Agent 重命名: {}", short));
+        if let Ok(mut changed) = handle.changed_files.lock() {
+            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -379,7 +408,17 @@ pub(crate) async fn move_file(
         .ok_or_else(|| format!("无效路径: {}", source))?;
     let dest = dest_real.join(name);
     std::fs::rename(&src_real, &dest)
-        .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))
+        .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))?;
+    // Hook: record timeline + update changed_files
+    let rp = dest.to_string_lossy().replace('\\', "/");
+    if let Some(ref handle) = *state.lock().unwrap() {
+        let short = rp.rsplit('/').next().unwrap_or(&rp);
+        let _ = engine_api::engine_record_timeline("agent_move", Some(&rp), &format!("Agent 移动: {}", short));
+        if let Ok(mut changed) = handle.changed_files.lock() {
+            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

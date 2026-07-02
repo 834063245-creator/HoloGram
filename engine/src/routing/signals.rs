@@ -10,6 +10,16 @@ fn count_l4_edges(graph: &Graph) -> usize {
     graph.edges.values().filter(|e| e.coupling_depth >= 4).count()
 }
 
+/// Aggregated dataflow signal counts from `query_dataflow_files`.
+pub struct DataflowSignalCounts {
+    pub l3_shared_vars: usize,
+    pub l3_reads: usize,
+    pub l3_writes: usize,
+    pub l4_triggers: usize,
+    pub l4_awaits: usize,
+    pub l4_sequences: usize,
+}
+
 pub struct SignalGenerator {
     matcher: PatternMatcher,
 }
@@ -19,8 +29,10 @@ impl SignalGenerator {
 
     /// Generate change signals by diffing `before` → `after`.
     /// L4/L2 only fire when coupling/cycles **increase** — not for static project state.
+    /// If `df_counts` is provided, uses dataflow engine results for L3/L4 instead of graph edges.
     pub fn generate(&self, before: &Graph, after: &Graph, changed_files: &[String],
-        _coupling_l4_after: usize, cycle_count_after: usize) -> Vec<Value> {
+        _coupling_l4_after: usize, cycle_count_after: usize,
+        df_counts: Option<&DataflowSignalCounts>) -> Vec<Value> {
         let mut signals = Vec::new();
         let l4_before = count_l4_edges(before);
         let l4_after = count_l4_edges(after);
@@ -39,17 +51,28 @@ impl SignalGenerator {
             }
         }
 
-        // L4 — new deep coupling since last baseline
-        if l4_after > l4_before {
+        // L4 — new deep coupling since last baseline (or from dataflow engine)
+        if let Some(df) = df_counts {
+            let df_l4 = df.l4_triggers + df.l4_awaits + df.l4_sequences;
+            if df_l4 > 0 {
+                signals.push(json!({"signal":{"description":format!("{} temporal edge(s) detected by dataflow engine (triggers={}, awaits={}, sequences={}).", df_l4, df.l4_triggers, df.l4_awaits, df.l4_sequences),"file_path":"","line":0,"level":4,"affected_nodes":[]},"level":4}));
+            }
+        } else if l4_after > l4_before {
             let delta = l4_after - l4_before;
             signals.push(json!({"signal":{"description":format!("{} new L4 deep coupling edge(s) since last check.", delta),"file_path":"","line":0,"level":4,"affected_nodes":[]},"level":4}));
         }
 
-        // L3 — shared data
-        for edge in after.edges.values() {
-            if edge.coupling_depth >= 3 && changed_files.iter().any(|f|
-                after.nodes.get(&edge.source).and_then(|n| n.location.as_deref()).unwrap_or("").contains(f)) {
-                signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+        // L3 — shared data (from dataflow engine if available, else graph edges)
+        if let Some(df) = df_counts {
+            if df.l3_shared_vars > 0 {
+                signals.push(json!({"signal":{"description":format!("{} shared variable(s) detected across function boundaries ({} reads, {} writes).", df.l3_shared_vars, df.l3_reads, df.l3_writes),"file_path":"","line":0,"level":3,"affected_nodes":[]},"level":3}));
+            }
+        } else {
+            for edge in after.edges.values() {
+                if edge.coupling_depth >= 3 && changed_files.iter().any(|f|
+                    after.nodes.get(&edge.source).and_then(|n| n.location.as_deref()).unwrap_or("").contains(f)) {
+                    signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+                }
             }
         }
 
@@ -73,7 +96,7 @@ mod tests {
     fn test_signals_empty() {
         let gen = SignalGenerator::new();
         let g = Graph::new();
-        let signals = gen.generate(&g, &g, &[], 0, 0);
+        let signals = gen.generate(&g, &g, &[], 0, 0, None);
         assert!(signals.is_empty());
     }
 
@@ -81,7 +104,7 @@ mod tests {
     fn test_signals_l5_migration() {
         let gen = SignalGenerator::new();
         let g = Graph::new();
-        let signals = gen.generate(&g, &g, &["migrations/0001_init.py".into()], 0, 0);
+        let signals = gen.generate(&g, &g, &["migrations/0001_init.py".into()], 0, 0, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 5);
     }
@@ -90,7 +113,7 @@ mod tests {
     fn test_signals_l5_config() {
         let gen = SignalGenerator::new();
         let g = Graph::new();
-        let signals = gen.generate(&g, &g, &["config.yaml".into()], 0, 0);
+        let signals = gen.generate(&g, &g, &["config.yaml".into()], 0, 0, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 5);
     }
@@ -105,7 +128,7 @@ mod tests {
         let mut e = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e.coupling_depth = 4;
         after.add_edge(e);
-        let signals = gen.generate(&before, &after, &["src/a.rs".into()], 1, 0);
+        let signals = gen.generate(&before, &after, &["src/a.rs".into()], 1, 0, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 4);
     }
@@ -121,7 +144,7 @@ mod tests {
         after.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
         after.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
         after.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
-        let signals = gen.generate(&before, &after, &[], 0, 1);
+        let signals = gen.generate(&before, &after, &[], 0, 1, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 2);
     }
@@ -136,7 +159,7 @@ mod tests {
         g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
         g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
         g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
-        let signals = gen.generate(&g, &g, &[], 0, 1);
+        let signals = gen.generate(&g, &g, &[], 0, 1, None);
         assert!(signals.is_empty(), "same graph should not re-alert on existing cycles");
     }
 
@@ -152,7 +175,7 @@ mod tests {
         e.coupling_depth = 3;
         g.add_edge(e);
 
-        let signals = gen.generate(&g, &g, &["src/handler.rs".into()], 0, 0);
+        let signals = gen.generate(&g, &g, &["src/handler.rs".into()], 0, 0, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 3);
     }
@@ -173,7 +196,7 @@ mod tests {
         after.add_edge(l4);
         let signals = gen.generate(&before, &after,
             &["migrations/init.py".into(), "config.toml".into()],
-            1, 1);
+            1, 1, None);
         // L5: migration + config + serialization? config only = 1 config + 1 migration = 2, L4 delta 1, L2 delta 1
         assert!(signals.len() >= 3);
     }

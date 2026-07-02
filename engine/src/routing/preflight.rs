@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-use crate::analysis::{coupling_report, detect_cycles, thread_conflict_report};
+use crate::analysis::{coupling_report, detect_cycles, thread_conflict_report, dataflow_engine::query_dataflow_files};
 use crate::community::louvain::detect_communities;
 use crate::graph::{Graph, NodeKind};
-use crate::routing::{constraints::{ConstraintConfig, check_constraints}, signals::SignalGenerator, summary::generate_summary};
+use crate::routing::{constraints::{ConstraintConfig, check_constraints}, signals::{DataflowSignalCounts, SignalGenerator}, summary::generate_summary};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -101,7 +101,41 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let cycles = detect_cycles(after);
     let cycle_count = cycles.len();
     let cycles_before = detect_cycles(before).len();
-    let signals = SignalGenerator::new().generate(before, after, changed_files, l4_count, cycle_count);
+
+    // ── Dataflow: run on changed_files for L3/L4 signals ──
+    let df_counts: Option<DataflowSignalCounts> = if !changed_files.is_empty() {
+        let paths: Vec<std::path::PathBuf> = changed_files.iter()
+            .map(|f| std::path::PathBuf::from(f))
+            .collect();
+        let df_results = query_dataflow_files(&paths);
+        let mut l3_shared = 0usize; let mut l3_reads = 0usize; let mut l3_writes = 0usize;
+        let mut l4_triggers = 0usize; let mut l4_awaits = 0usize; let mut l4_seqs = 0usize;
+        for r in &df_results {
+            if let Ok(df) = &r.result {
+                l3_shared += df.shared.len();
+                for s in &df.scopes {
+                    l3_reads += s.reads.len();
+                    l3_writes += s.writes.len();
+                    l4_triggers += s.triggers.len();
+                    l4_awaits += s.awaits_callbacks.len();
+                    l4_seqs += s.sequence_calls.len();
+                }
+            }
+        }
+        let _df_l4_total = l4_triggers + l4_awaits + l4_seqs;
+        Some(DataflowSignalCounts {
+            l3_shared_vars: l3_shared, l3_reads, l3_writes,
+            l4_triggers, l4_awaits, l4_sequences: l4_seqs,
+        })
+    } else {
+        None
+    };
+    // Use dataflow L4 count when available, else fall back to graph edges
+    let effective_l4 = df_counts.as_ref()
+        .map(|d| d.l4_triggers + d.l4_awaits + d.l4_sequences)
+        .unwrap_or(l4_count);
+
+    let signals = SignalGenerator::new().generate(before, after, changed_files, effective_l4, cycle_count, df_counts.as_ref());
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(&signals, &config);
     let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();
