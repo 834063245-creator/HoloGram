@@ -19,7 +19,12 @@ pub fn check(url: &str, rules: &PermissionRules) -> PermissionResult {
     if let Some(rule) = rules.find_ask("WebFetch", Some(url)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
-            suggestions: vec![],
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("WebFetch({})", url),
+                    behavior: "allow".into(),
+                },
+            ],
         };
     }
 

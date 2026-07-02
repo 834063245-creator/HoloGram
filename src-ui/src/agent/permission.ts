@@ -124,7 +124,7 @@ export function showApprovalDialog(
       return btn;
     };
 
-    btnRow.appendChild(makeBtn('始终允许', 'Ctrl+Y', 'perm-btn-always', { allow: true, remember: true }));
+    btnRow.appendChild(makeBtn('本次会话允许', 'Ctrl+Y', 'perm-btn-session', { allow: true, remember: true }));
     btnRow.appendChild(makeBtn('允许', 'Enter', 'perm-btn-once', { allow: true, remember: false }));
     btnRow.appendChild(makeBtn('拒绝', 'Esc', 'perm-btn-deny', { allow: false, remember: false }));
 

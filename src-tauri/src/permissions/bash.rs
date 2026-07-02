@@ -201,6 +201,11 @@ fn looks_like_path(token: &str) -> bool {
             return true;
         }
     }
+    // Plain relative path: contains path separator, not a flag
+    // Catches: src/main.rs, .git/config, sub/dir/file.txt
+    if token.contains('/') || token.contains('\\') {
+        return true;
+    }
     false
 }
 
@@ -215,19 +220,15 @@ pub fn check(
     sandbox: &Sandbox,
     rules: &PermissionRules,
 ) -> PermissionResult {
-    // 1. Content-level Deny rules
+    // 1. Content-level Deny rules — always first, highest priority
     if let Some(rule) = rules.find_deny("Bash", Some(command)) {
         return PermissionResult::Deny {
             reason: rule.explain(),
         };
     }
 
-    // 1.5. Allow rules before danger check — user-trusted commands skip danger detection
-    if rules.find_allow("Bash", Some(command)).is_some() {
-        return PermissionResult::Allow;
-    }
-
-    // 2. Danger pattern check
+    // 2. Danger pattern check — runs BEFORE allow rules.
+    // Critical danger is always blocked regardless of allow rules.
     for (regex, danger) in danger_patterns() {
         if regex.is_match(command) {
             return match danger.severity() {
@@ -251,15 +252,31 @@ pub fn check(
         }
     }
 
-    // 3. Path check — extracted paths must be within sandbox.
-    // Out-of-project paths are escalated to Ask (user dialog), not silently denied,
-    // because path extraction heuristics can produce false positives (e.g. shell
-    // flags like /c on cmd.exe), and the user should be the final arbiter.
+    // 3. Path check — extracted paths must be within sandbox + pass safety.
+    // Out-of-project paths are escalated to Ask (user dialog), not silently denied.
     let paths = extract_command_paths(command);
     for raw_path in &paths {
         let expanded = expand_home(raw_path);
         match sandbox.resolve_read(&expanded) {
-            SandboxResult::Allowed(_) => {}
+            SandboxResult::Allowed(resolved) => {
+                // L3 safety check — bash can write to protected paths (e.g. .git/config)
+                // that the sandbox boundary alone won't catch.
+                let safety = crate::permissions::safety::check_path_safety(&resolved);
+                if !safety.safe {
+                    return PermissionResult::Ask {
+                        reason: format!(
+                            "安全警告: 命令会操作受保护的路径 {} — {}",
+                            raw_path, safety.message
+                        ),
+                        suggestions: vec![
+                            crate::permissions::PermissionUpdate {
+                                rule: format!("Bash({})", command),
+                                behavior: "allow".into(),
+                            },
+                        ],
+                    };
+                }
+            }
             SandboxResult::Denied(reason) => {
                 return PermissionResult::Ask {
                     reason: format!("命令访问了项目外的路径: {} ({})", raw_path, reason),
@@ -278,11 +295,16 @@ pub fn check(
     if let Some(rule) = rules.find_ask("Bash", Some(command)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
-            suggestions: vec![],
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("Bash({})", command),
+                    behavior: "allow".into(),
+                },
+            ],
         };
     }
 
-    // 5. Content-level Allow rules
+    // 5. Content-level Allow rules — after all safety/danger/path checks passed
     if rules.find_allow("Bash", Some(command)).is_some() {
         return PermissionResult::Allow;
     }
@@ -440,6 +462,10 @@ mod tests {
         assert!(!looks_like_path("--flag"));
         assert!(!looks_like_path(""));
         assert!(!looks_like_path("C:")); // just drive letter, no path separator
+        // Plain relative paths with separator
+        assert!(looks_like_path("src/main.rs"));
+        assert!(looks_like_path(".git/config"));
+        assert!(looks_like_path("sub\\dir\\file.txt"));
         // Shell flags: must NOT be treated as paths
         assert!(!looks_like_path("-c"));          // Unix flag
         assert!(!looks_like_path("-p"));          // Unix flag
@@ -462,5 +488,62 @@ mod tests {
         assert!(paths.contains(&"./local.txt".to_string()));
         assert!(paths.contains(&"~/.bashrc".to_string()));
         assert!(paths.contains(&"C:\\foo\\bar.txt".to_string()));
+    }
+
+    // ── Gap 1: Bash L3 safety check ──
+
+    #[test]
+    fn test_bash_protected_path_asks() {
+        // Use absolute path to .git/config inside temp project
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let tmp = std::env::temp_dir().join(format!("holo_bash_safety_{id}"));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".git")).unwrap();
+        std::fs::write(tmp.join(".git/config"), "[core]\n").unwrap();
+        let s = Sandbox::new(&tmp);
+        let rules = PermissionRules::new();
+        let git_config = tmp.join(".git/config");
+        let cmd = format!("echo x > {}", git_config.display());
+        let r = check(&cmd, &s, &rules);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "bash writing to .git/config must be caught by L3 safety, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_bash_normal_path_passthrough() {
+        // Use absolute path inside temp project so sandbox resolves correctly
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let tmp = std::env::temp_dir().join(format!("holo_bash_normal_{id}"));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        let out_file = tmp.join("src/output.txt");
+        let s = Sandbox::new(&tmp);
+        let rules = PermissionRules::new();
+        let cmd = format!("echo hello > {}", out_file.display());
+        let r = check(&cmd, &s, &rules);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(r, PermissionResult::Passthrough),
+            "bash writing inside project with no safety violation should passthrough, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_bash_outside_still_asks() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // cat /etc/passwd — outside project, sandbox boundary still catches it
+        let r = check("cat /etc/passwd", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "out-of-project paths must still trigger Ask via sandbox boundary, got: {:?}", r
+        );
     }
 }

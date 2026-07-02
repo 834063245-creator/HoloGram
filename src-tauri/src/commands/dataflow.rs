@@ -108,12 +108,15 @@ pub(crate) async fn dataflow_save(
         // Layer 1: source_snippets anchor validation
         let snippets_ok = validate_snippets(&trace, &root);
 
-        // Layer 2: dataflow engine cross-validation → update edge confidence
-        cross_validate_edges(&mut trace, &root);
+        // Layer 2: dataflow engine cross-validation — 写入独立字段，不覆盖 Agent 的 confidence
+        let engine_matches = cross_validate_edges(&mut trace, &root);
 
-        if !snippets_ok {
-            trace["status"] = serde_json::json!("stale");
-        }
+        // 验证结果写入 _validation，不改 trace.status
+        trace["_validation"] = serde_json::json!({
+            "snippets_ok": snippets_ok,
+            "engine_matches": engine_matches.0,
+            "engine_misses": engine_matches.1,
+        });
 
         let conn = open_dataflow_db(&root)?;
         dataflow_save_trace(&conn, &trace)
@@ -123,6 +126,8 @@ pub(crate) async fn dataflow_save(
             "trace_id": trace["trace_id"],
             "status": trace["status"],
             "snippets_ok": snippets_ok,
+            "engine_matches": engine_matches.0,
+            "engine_misses": engine_matches.1,
         }).to_string())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
@@ -202,8 +207,8 @@ pub(crate) async fn dataflow_verify(
         // Layer 1: snippet anchors
         let snippets_ok = validate_snippets(&trace, &root);
 
-        // Layer 2: re-cross-validate edges
-        cross_validate_edges(&mut trace, &root);
+        // Layer 2: re-cross-validate edges — 写入独立字段
+        let engine_matches = cross_validate_edges(&mut trace, &root);
 
         // Run linked test if present
         let test_file = trace.get("test_file").and_then(|v| v.as_str()).unwrap_or("");
@@ -223,6 +228,12 @@ pub(crate) async fn dataflow_verify(
         if !test_status.is_empty() {
             trace["test_status"] = serde_json::json!(test_status);
         }
+        trace["_validation"] = serde_json::json!({
+            "snippets_ok": snippets_ok,
+            "engine_matches": engine_matches.0,
+            "engine_misses": engine_matches.1,
+            "verified_at": now,
+        });
 
         // Save updated trace (full JSON) + update meta columns
         dataflow_save_trace(&conn, &trace)
@@ -230,7 +241,9 @@ pub(crate) async fn dataflow_verify(
 
         Ok(serde_json::json!({
             "trace_id": trace_id, "status": status,
-            "snippets_ok": snippets_ok, "test_status": test_status, "verified_at": now,
+            "snippets_ok": snippets_ok, "engine_matches": engine_matches.0,
+            "engine_misses": engine_matches.1,
+            "test_status": test_status, "verified_at": now,
         }).to_string())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
@@ -382,12 +395,15 @@ fn validate_snippets(trace: &serde_json::Value, root: &str) -> bool {
 // calls/defines/imports 边不在 dataflow 引擎范畴，不验证（保持原 confidence）。
 // ═══════════════════════════════════════════════════════
 
-fn cross_validate_edges(trace: &mut serde_json::Value, root: &str) {
+/// Layer 2 cross-validation: 对每条边跑 dataflow 引擎确认，结果写入 edge["engine_match"]。
+/// 不覆盖 Agent 标定的 edge["confidence"]。
+/// 返回 (matches, misses) 计数。
+fn cross_validate_edges(trace: &mut serde_json::Value, root: &str) -> (usize, usize) {
     let files: Vec<String> = trace.get("files_involved")
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
-    if files.is_empty() { return; }
+    if files.is_empty() { return (0, 0); }
 
     let paths: Vec<PathBuf> = files.iter().map(|f| {
         let p = PathBuf::from(f);
@@ -397,22 +413,20 @@ fn cross_validate_edges(trace: &mut serde_json::Value, root: &str) {
 
     let edges = match trace.get_mut("edges").and_then(|v| v.as_array_mut()) {
         Some(e) => e,
-        None => return,
+        None => return (0, 0),
     };
+    let mut matches = 0usize;
+    let mut misses = 0usize;
     for edge in edges.iter_mut() {
         let from = edge.get("from").and_then(|v| v.as_str()).unwrap_or("");
         let to = edge.get("to").and_then(|v| v.as_str()).unwrap_or("");
         let kind = edge.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let cur = edge.get("confidence").and_then(|v| v.as_str()).unwrap_or("speculative");
 
-        if cur == "verified" { continue; }
-
-        if edge_in_dataflow(from, to, kind, &results) {
-            edge["confidence"] = serde_json::json!("static_match");
-        } else {
-            edge["confidence"] = serde_json::json!("speculative");
-        }
+        let hit = edge_in_dataflow(from, to, kind, &results);
+        edge["engine_match"] = serde_json::json!(hit);
+        if hit { matches += 1; } else { misses += 1; }
     }
+    (matches, misses)
 }
 
 fn edge_in_dataflow(from: &str, to: &str, kind: &str, results: &[DataflowFileResult]) -> bool {
