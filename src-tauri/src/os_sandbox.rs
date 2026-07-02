@@ -204,10 +204,13 @@ pub fn assign_to_job(child: &std::process::Child) -> bool {
 // Helpers
 // ═══════════════════════════════════════════════════════════════
 
-/// Double-quote a command for bash -c, escaping internal double quotes.
+/// Single-quote a command for bash -c. Single quotes escape EVERYTHING
+/// (including $, &, !, `, \), only ' itself needs special handling.
+/// ponytail: was double-quote before — broke on 2>&1, $VAR, nested quotes.
 fn quote_cmd(cmd: &str) -> String {
-    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{}\"", escaped)
+    // escape embedded single quotes: close, escape, reopen
+    let escaped = cmd.replace('\'', "'\\''");
+    format!("'{}'", escaped)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1080,27 +1083,25 @@ mod imp {
     unsafe impl Send for AnonPipeReader {}
     impl Unpin for AnonPipeReader {}
 
-    /// Split "bash -c \"...\"" into ("bash", ["-c", "..."]).
-    /// ponytail: simple space-split; complex quoting deferred to CreateProcessW (which
-    /// takes the raw command line).
+    /// Split "bash" -c '...' into ("bash", ["-c", "..."]).
+    /// Handles both single and double quotes — spans inside quotes are not split.
     fn split_cmdline(cmdline: &str) -> (String, Vec<String>) {
         let mut parts: Vec<String> = Vec::new();
         let mut current = String::new();
-        let mut in_quote = false;
+        let mut in_double = false;
+        let mut in_single = false;
         for ch in cmdline.chars() {
             match ch {
-                '"' => {
-                    in_quote = !in_quote;
-                    current.push(ch);
+                '"' if !in_single => {
+                    in_double = !in_double;
+                    // Still push the quote so unquoting can strip it
                 }
-                ' ' if !in_quote => {
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                }
+                ' ' if !in_double && !in_single => {
                     if !current.is_empty() {
-                        // Unquote: strip surrounding double quotes
-                        let clean = if current.starts_with('"') && current.ends_with('"') && current.len() >= 2 {
-                            current[1..current.len()-1].to_string()
-                        } else {
-                            current.clone()
-                        };
+                        let clean = unquote(&current);
                         parts.push(clean);
                         current.clear();
                     }
@@ -1109,16 +1110,21 @@ mod imp {
             }
         }
         if !current.is_empty() {
-            let clean = if current.starts_with('"') && current.ends_with('"') && current.len() >= 2 {
-                current[1..current.len()-1].to_string()
-            } else {
-                current.clone()
-            };
-            parts.push(clean);
+            parts.push(unquote(&current));
         }
         let prog = parts.first().cloned().unwrap_or_default();
         let args = if parts.len() > 1 { parts[1..].to_vec() } else { Vec::new() };
         (prog, args)
+    }
+
+    /// Strip surrounding single or double quotes from a token.
+    fn unquote(s: &str) -> String {
+        if s.len() >= 2 {
+            if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+                return s[1..s.len()-1].to_string();
+            }
+        }
+        s.to_string()
     }
 }
 
