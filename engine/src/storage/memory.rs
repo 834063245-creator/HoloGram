@@ -372,6 +372,21 @@ impl MemoryIndex {
         self.arena.get_handle(s)
     }
 
+    /// Recompute in_degree/out_degree for each node from the deduped bucket lengths.
+    /// Node degrees loaded from SQLite can be stale (old analysis wrote wrong values);
+    /// rederive from actual adjacency so hologram_unused (in_degree==0) is correct.
+    /// ponytail: post-dedup count = unique (src,kind,depth) edges; differs from
+    /// add_edge's per-edge count when duplicates exist, but for ==0 + ranking it's
+    /// the honest number. to_sqlite dumps these back so subsequent cold starts are correct.
+    fn recompute_degrees(&mut self, out_buckets: &[Vec<(u32, u8, u8, f64)>], in_buckets: &[Vec<(u32, u8, u8, f64)>]) {
+        for i in 0..self.node_by_idx.len() {
+            if let Some(node) = self.nodes.get_mut(&self.node_by_idx[i]) {
+                node.in_degree = in_buckets[i].len() as u32;
+                node.out_degree = out_buckets[i].len() as u32;
+            }
+        }
+    }
+
     /// Build MemoryIndex from raw node/edge HashMaps.
     /// Takes ownership — edges are consumed one-by-one during adjacency construction,
     /// so peak memory is ~half of the old clone-everything approach.
@@ -423,6 +438,7 @@ impl MemoryIndex {
             bucket.dedup_by_key(|e| (e.0, e.1, e.2));
         }
 
+        idx.recompute_degrees(&out_buckets, &in_buckets);
         idx.flatten_buckets(&out_buckets, &in_buckets);
         idx
     }
@@ -469,6 +485,7 @@ impl MemoryIndex {
             bucket.dedup_by_key(|e| (e.0, e.1, e.2));
         }
 
+        idx.recompute_degrees(&out_buckets, &in_buckets);
         idx.flatten_buckets(&out_buckets, &in_buckets);
         Ok(idx)
     }
@@ -513,6 +530,7 @@ impl MemoryIndex {
             bucket.dedup_by_key(|e| (e.0, e.1, e.2));
         }
 
+        idx.recompute_degrees(&out_buckets, &in_buckets);
         idx.flatten_buckets(&out_buckets, &in_buckets);
         idx.ensure_aux_indexes();
         Ok(idx)
@@ -1222,6 +1240,36 @@ mod tests {
         let out = idx.outgoing("a", None);
         assert!(out.iter().any(|(_, _, d, _)| *d == 1), "depth=1 entry present");
         assert!(out.iter().any(|(_, _, d, _)| *d == 3), "depth=3 entry present");
+    }
+
+    /// Regression: MemoryIndex loaders (from_existing_graph/from_sqlite/_degraded)
+    /// used to trust the in_degree/out_degree baked into each Node (stale in SQLite),
+    /// so hologram_unused (in_degree==0) returned wrong results. recompute_degrees
+    /// must rederive from actual adjacency, overwriting stale stored values.
+    #[test]
+    fn from_existing_graph_recomputes_degrees_from_adjacency() {
+        let mut nodes = HashMap::new();
+        nodes.insert("a".into(), test_node("a", "A", None));
+        nodes.insert("b".into(), test_node("b", "B", None));
+        nodes.insert("c".into(), test_node("c", "C", None));
+        // Force stale nonzero on b to prove recompute overwrites (not just stays 0)
+        {
+            let nb = nodes.get_mut("b").unwrap();
+            nb.in_degree = 99;
+            nb.out_degree = 99;
+        }
+        let mut edges = HashMap::new();
+        edges.insert("e1".into(), Edge::new("e1", "a", "b", EdgeKind::Calls));
+        edges.insert("e2".into(), Edge::new("e2", "b", "c", EdgeKind::Calls));
+        let idx = MemoryIndex::from_existing_graph(nodes, edges);
+
+        let deg = |id: &str| {
+            let n = idx.get_node(id).expect("node present");
+            (n.in_degree, n.out_degree)
+        };
+        assert_eq!(deg("a"), (0, 1), "a: out=1 (a→b), in=0");
+        assert_eq!(deg("b"), (1, 1), "b: stale 99 must be overwritten to in=1 out=1");
+        assert_eq!(deg("c"), (1, 0), "c: in=1 (b→c), out=0");
     }
 
     #[test]
