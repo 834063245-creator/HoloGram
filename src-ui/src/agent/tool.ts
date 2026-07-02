@@ -525,18 +525,18 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     },
     // ── V4: node deep-dive (supersedes hologram_history) ──
     {
-      name: () => 'hologram_node',
+            name: () => 'hologram_node',
       description: () =>
         'Complete information about a single node: identity (name, kind, degree), community membership, and ALL incoming/outgoing edges grouped by kind (imports, calls, inherits, etc.). Use after hologram_search to deep-dive a specific symbol. Richer than hologram_history which only returns node metadata.',
       parameters: () => ({
         type: 'object',
         properties: {
-          node_id: {
+          nodeId: {
             type: 'string',
             description: 'The node ID or name to query',
           },
         },
-        required: ['node_id'],
+        required: ['nodeId'],
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_node', args),
@@ -554,7 +554,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
             description: 'Max results (default: 20, max: 200)',
             default: 20,
           },
-          kind_filter: {
+          kindFilter: {
             type: 'string',
             description: 'Comma-separated node kinds (default: "function,class")',
             default: 'function,class',
