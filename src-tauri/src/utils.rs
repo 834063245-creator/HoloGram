@@ -290,7 +290,10 @@ pub(crate) async fn require_read(file_path: &str, state: &tauri::State<'_, Works
     let physical_str = physical.to_string_lossy().to_string();
     let tool = tools::ReadTool { path: physical_str.clone() };
     check_permission(&tool, &ctx, app).await?;
-    ctx.resolve_read(&physical_str)
+    // Permission granted — sandbox was already consulted inside check_permission.
+    // Don't re-check sandbox boundary; user-approved external reads must go through.
+    std::fs::canonicalize(&physical)
+        .map_err(|e| format!("无法解析路径 {}: {}", physical_str, e))
 }
 
 pub(crate) async fn require_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -320,7 +323,9 @@ pub(crate) fn resolve_path_user_write(file_path: &str, state: &tauri::State<'_, 
     ctx.resolve_write(&physical_str)
 }
 
-/// ponytail: 根据 _agent 标志选择路径解析方式 — Agent 走权限检查, UI 只解析
+/// ponytail: 根据 is_agent 标志选择路径解析方式 — Agent 走权限检查(弹 Ask), UI 只解析.
+/// 前端必须发 isAgent(camelCase) 匹配 Rust 参数 is_agent; 旧的 _agent 因 Tauri 默认
+/// camelCase 重命名永远对不上, 导致 agent 外部读走 user 路径被沙箱静默硬拒.
 pub(crate) async fn resolve_read_dispatch(
     file_path: &str,
     is_agent: bool,
@@ -381,7 +386,8 @@ pub(crate) fn require_read_sync(file_path: &str, state: &tauri::State<'_, Worksp
     let physical_str = physical.to_string_lossy().to_string();
     let tool = tools::ReadTool { path: physical_str.clone() };
     check_permission_sync(&tool, &ctx)?;
-    ctx.resolve_read(&physical_str)
+    std::fs::canonicalize(&physical)
+        .map_err(|e| format!("无法解析路径 {}: {}", physical_str, e))
 }
 
 pub(crate) async fn require_git(repo_path: &str, subcommand: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
