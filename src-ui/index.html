@@ -2341,6 +2341,46 @@
       50% { opacity: 1; }
     }
 
+    /* ── Attachment pills ── */
+    .attach-pills {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      padding: 0 10px 6px 10px;
+    }
+    .attach-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 6px 2px 4px;
+      background: rgba(20, 40, 70, 0.5); border: 1px solid rgba(60, 100, 180, 0.25);
+      border-radius: 3px; font-size: calc(10px * var(--font-scale));
+      color: var(--text-dim); white-space: nowrap; max-width: 240px;
+      transition: all var(--snap);
+    }
+    .attach-pill:hover {
+      border-color: rgba(80, 130, 220, 0.5); color: var(--text);
+    }
+    .attach-pill-icon { flex-shrink: 0; opacity: 0.5; }
+    .attach-pill-name { overflow: hidden; text-overflow: ellipsis; }
+    .attach-pill-size { flex-shrink: 0; opacity: 0.35; font-size: calc(9px * var(--font-scale)); }
+    .attach-pill-remove {
+      flex-shrink: 0; cursor: pointer; opacity: 0.4; margin-left: 2px;
+      font-size: calc(12px * var(--font-scale)); line-height: 1;
+      transition: opacity var(--snap);
+    }
+    .attach-pill-remove:hover { opacity: 1; color: var(--fail); }
+
+    /* Attached files inside user message bubble */
+    .msg-attach-pills {
+      display: flex; flex-wrap: wrap; gap: 3px;
+      margin-top: 6px; padding-top: 6px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .msg-attach-pill {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 1px 6px; border-radius: 3px;
+      font-size: calc(10px * var(--font-scale));
+      background: rgba(255,255,255,0.06);
+      color: var(--text-dim);
+    }
+
     /* ── Shortcuts tooltip ── */
     .chat-shortcuts-btn {
       position: relative;

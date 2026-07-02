@@ -268,6 +268,10 @@ const icons: Record<string, IconDef> = {
     label: '重新生成',
     path: '<path d="M4 4 A6 6 0 0 1 13 2"/><polyline points="4,4 7.5,4 7.5,1"/><circle cx="13" cy="12" r="4"/><polyline points="10.5,12 12.5,10 14.5,12"/>',
   },
+  'file-plus': {
+    label: '附加文件',
+    path: '<path d="M5 2 L11 2 L15 7 L15 16 L5 16 Z"/><polyline points="11,2 11,7 15,7"/><line x1="9" y1="10" x2="9" y2="14"/><line x1="7" y1="12" x2="11" y2="12"/>',
+  },
 
   // ── P6: Hotspots ──
   fire: {

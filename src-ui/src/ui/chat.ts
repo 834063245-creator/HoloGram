@@ -85,8 +85,12 @@ export class ChatPanel {
   private currentTextEl: HTMLElement | null = null;
   private pendingToolCards = new Map<string, HTMLElement>(); // id → card element
 
-  // Per-session message cache (DOM elements)
+    // Per-session message cache (DOM elements)
   private sessionMessages = new Map<number, HTMLElement[]>();
+
+  // File attachments (dragged/selected files)
+  private attachedFiles: { path: string; name: string; size: number }[] = [];
+  private attachPillsEl: HTMLElement | null = null;
 
   // Panel mode: pill (44px circle) → panel (summoned) → hud (faded) → input (collapsed bar)
   // All states are CSS classes on the SAME element — one morphing container, zero jump.
@@ -1912,6 +1916,12 @@ export class ChatPanel {
     this.stopBtn.innerHTML = iconHtml('stop');
     this.stopBtn.addEventListener('click', () => this.abort());
 
+    // Attachment pills — shows between messages and input when files are attached
+    this.attachPillsEl = document.createElement('div');
+    this.attachPillsEl.className = 'attach-pills';
+    this.attachPillsEl.style.display = 'none';
+    this.panel.appendChild(this.attachPillsEl);
+
     inputWrap.append(this.inputArea, this.sendBtn, this.stopBtn);
     this.panel.appendChild(inputWrap);
 
@@ -2198,7 +2208,8 @@ export class ChatPanel {
     this.turnPairs.push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
 
     // User bubble (original text, focus context is for Agent eyes only)
-    this.appendUserBubble(text);
+    const filesSnapshot = [...this.attachedFiles];
+    this.appendUserBubble(text, filesSnapshot);
     this.scrollBottom();
 
     // Build focus context prefix — tells Agent what the user is looking at
@@ -2211,6 +2222,21 @@ export class ChatPanel {
       focusPrefix += ']\n\n';
     } else if (this._userFocusFile) {
       focusPrefix = `[用户当前正在查看文件 "${this._userFocusFile}"]\n\n`;
+    }
+
+    // Attached files — expose paths so Agent can read them
+    if (this.attachedFiles.length > 0) {
+      focusPrefix += '用户附加了以下文件：\n';
+      for (const f of this.attachedFiles) {
+        const sizeStr = f.size < 1024 ? `${f.size} B` :
+          f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
+          `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
+        focusPrefix += `- \`${f.path}\` (${sizeStr})\n`;
+      }
+      focusPrefix += '你可以用 read_file 读取这些文件。\n\n';
+      // Clear attachments after sending
+      this.attachedFiles = [];
+      this.renderAttachments();
     }
 
     // Start turn separator
@@ -2909,7 +2935,7 @@ export class ChatPanel {
         <button class="chat-slash-trigger" title="命令菜单">
           ${iconHtml('code', 12)}<span class="chat-slash-label">/</span>
         </button>
-        <button class="chat-session-add" title="新建会话">${iconHtml('plus', 12)}</button>
+        <button class="chat-session-add chat-attach-btn" title="附加文件">${iconHtml('file-plus', 13)}</button>
       </div>`;
 
     this._buildModePopup(mode);
@@ -3004,9 +3030,100 @@ export class ChatPanel {
       });
     });
 
-    // + new session
-    this.footerEl.querySelector('.chat-session-add')?.addEventListener('click', () => {
-      this.createNewSession();
+    // Attach file button
+    this.footerEl.querySelector('.chat-attach-btn')?.addEventListener('click', () => {
+      this.openFilePicker();
+    });
+
+    // Drag-and-drop files onto the chat panel
+    this.panel.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    this.panel.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleFileDrop(e);
+    });
+  }
+
+  // ── File attachments ──
+
+  private async openFilePicker(): Promise<void> {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const result = await open({ multiple: true, title: '选择文件', filters: [] });
+      if (!result) return;
+      const paths = Array.isArray(result) ? result : [result];
+      for (const p of paths) {
+        const name = p.replace(/\\/g, '/').split('/').pop() || p;
+        this.addAttachedFile(p, name, 0);
+      }
+    } catch {
+      // Fallback for browser dev mode
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.addEventListener('change', () => {
+        if (!input.files) return;
+        for (let i = 0; i < input.files.length; i++) {
+          const f = input.files[i];
+          const path = (f as any).path || f.name;
+          this.addAttachedFile(path, f.name, f.size);
+        }
+      });
+      input.click();
+    }
+  }
+
+  private handleFileDrop(e: DragEvent): void {
+    const files = e.dataTransfer?.files;
+    if (!files) return;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const path = (f as any).path || f.name;
+      this.addAttachedFile(path, f.name, f.size);
+    }
+  }
+
+  private addAttachedFile(path: string, name: string, size: number): void {
+    // deduplicate
+    if (this.attachedFiles.some(f => f.path === path)) return;
+    this.attachedFiles.push({ path, name, size });
+    this.renderAttachments();
+  }
+
+  private removeAttachedFile(idx: number): void {
+    this.attachedFiles.splice(idx, 1);
+    this.renderAttachments();
+  }
+
+  private renderAttachments(): void {
+    if (!this.attachPillsEl) return;
+    if (this.attachedFiles.length === 0) {
+      this.attachPillsEl.style.display = 'none';
+      this.attachPillsEl.innerHTML = '';
+      return;
+    }
+    this.attachPillsEl.style.display = 'flex';
+    this.attachPillsEl.innerHTML = this.attachedFiles.map((f, i) => {
+      const sizeStr = f.size < 1024 ? `${f.size} B` :
+        f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
+        `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
+      return `<span class="attach-pill" title="${f.path}">
+        <span class="attach-pill-icon">${iconHtml('file', 10)}</span>
+        <span class="attach-pill-name">${f.name}</span>
+        <span class="attach-pill-size">${sizeStr}</span>
+        <span class="attach-pill-remove" data-idx="${i}">×</span>
+      </span>`;
+    }).join('');
+    // Wire remove buttons
+    this.attachPillsEl.querySelectorAll('.attach-pill-remove').forEach(el => {
+      const idx = parseInt((el as HTMLElement).dataset['idx'] || '');
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.removeAttachedFile(idx);
+      });
     });
   }
 
@@ -3069,7 +3186,7 @@ export class ChatPanel {
     this._bumpPillBadge();
   }
 
-  private appendUserBubble(text: string): void {
+  private appendUserBubble(text: string, files?: { path: string; name: string; size: number }[]): void {
     // ponytail: row wrapper so edit/resend buttons sit outside the bubble
     const row = document.createElement('div');
     row.className = 'msg-user-row';
@@ -3080,6 +3197,20 @@ export class ChatPanel {
     p.textContent = text;
     p.dataset.rawMarkdown = text;
     el.appendChild(p);
+
+    // Show attached files in user bubble for visual feedback
+    if (files && files.length > 0) {
+      const pills = document.createElement('div');
+      pills.className = 'msg-attach-pills';
+      pills.innerHTML = files.map(f => {
+        const sizeStr = f.size < 1024 ? `${f.size} B` :
+          f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
+          `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
+        return `<span class="msg-attach-pill">📄 ${f.name} <span class="attach-pill-size">${sizeStr}</span></span>`;
+      }).join('');
+      el.appendChild(pills);
+    }
+
     row.appendChild(el);
     this.addMessageActions(el, row);
     this.msgList.appendChild(row);

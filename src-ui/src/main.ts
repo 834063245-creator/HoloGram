@@ -329,8 +329,11 @@ async function init(): Promise<void> {
         if (alt && (key === 'arrowleft' || key === 'arrowright')) { e.preventDefault(); return; }
         return;
       }
+            // App-specific shortcuts
       if (mod && !shift && !alt && APP_CTRL_KEYS.has(key)) return;
       if (mod && !shift && !alt && APP_CTRL_KEYS_EXTRA.has(key)) return;
+      // Pass-through: standard browser copy/paste/select-all/undo/redo
+      if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'a', 'z', 'y']).has(key)) return;
       if (!mod && !alt && !shift && (key === 'f' || key === 'escape' || key === 'b')) return;
       if (['f1', 'f3', 'f4', 'f5', 'f6', 'f7', 'f10', 'f11', 'f12'].includes(key)) { e.preventDefault(); return; }
       if (mod && !alt) { e.preventDefault(); return; }
