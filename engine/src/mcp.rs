@@ -19,6 +19,7 @@ use crate::analysis::*;
 use crate::community::detect_communities_from_index;
 use crate::engine;
 use crate::graph::{query, Edge, EdgeKind, Graph, Node, NodeKind};
+use crate::pipeline::discovery::discover_files;
 use crate::routing::preflight::run_full_check;
 use crate::storage::MemoryIndex;
 
@@ -602,33 +603,59 @@ impl McpServer {
     }
 
     fn tool_delayed(&self, args: &Value, id: &Value) -> Value {
-        let _ = args;
-        self.with_store(id, |idx| {
-            let mut delayed = Vec::new();
-            for (source, targets) in idx.edges_iter() {
-                for (target, kind, _depth, delay) in targets {
-                    if matches!(kind, EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences) {
-                        let src = idx.get_node(&source);
-                        let tgt = idx.get_node(&target);
-                        delayed.push(json!({
-                            "source": src.map(node_to_value).unwrap_or(json!({"id": &source})),
-                            "target": tgt.map(node_to_value).unwrap_or(json!({"id": &target})),
-                            "delay_sec": delay.unwrap_or(0.0),
-                            "edge_type": kind.as_str(),
+        // Accept optional `files` parameter; default to project-wide scan limited to 200 files.
+        let files: Vec<String> = args.get("files")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let project_root = self.project_root();
+        let paths: Vec<std::path::PathBuf> = if files.is_empty() {
+            // Scan project files — limit to avoid OOM on giant projects
+            discover_files(&project_root, &vec![])
+                .into_iter().take(200).collect()
+        } else {
+            files.iter().map(|f| {
+                let p = std::path::Path::new(f);
+                if p.is_absolute() { p.to_path_buf() } else { project_root.join(f) }
+            }).collect()
+        };
+
+        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
+        let mut triggers: Vec<Value> = Vec::new();
+        let mut awaits: Vec<Value> = Vec::new();
+        let mut sequences: Vec<Value> = Vec::new();
+        for r in &df_results {
+            if let Ok(df) = &r.result {
+                for s in &df.scopes {
+                    for t in &s.triggers {
+                        triggers.push(json!({
+                            "file": r.file, "scope": s.name,
+                            "target": t, "type": "trigger",
+                        }));
+                    }
+                    for a in &s.awaits_callbacks {
+                        awaits.push(json!({
+                            "file": r.file, "scope": s.name,
+                            "target": a, "type": "await",
+                        }));
+                    }
+                    for seq in &s.sequence_calls {
+                        sequences.push(json!({
+                            "file": r.file, "scope": s.name,
+                            "target": seq, "type": "sequence",
                         }));
                     }
                 }
             }
-            let realtime: Vec<_> = delayed.iter().filter(|d| d["delay_sec"].as_f64().unwrap_or(-1.0) == 0.0).cloned().collect();
-            let periodic: Vec<_> = delayed.iter().filter(|d| d["delay_sec"].as_f64().unwrap_or(0.0) > 0.0).cloned().collect();
-            json!({
-                "total_delayed_edges": delayed.len(),
-                "realtime_count": realtime.len(),
-                "periodic_count": periodic.len(),
-                "realtime": realtime,
-                "periodic": periodic,
-            })
-        })
+        }
+        let total = triggers.len() + awaits.len() + sequences.len();
+        Self::tool_result(id, json!({
+            "total_delayed_edges": total,
+            "triggers_count": triggers.len(), "awaits_count": awaits.len(),
+            "sequences_count": sequences.len(),
+            "triggers": triggers, "awaits": awaits, "sequences": sequences,
+            "_note": "from dataflow engine (on-demand query, no graph storage)",
+        }))
     }
 
     // ── V2 analysis tools ──
@@ -667,9 +694,59 @@ impl McpServer {
 
     fn tool_thread_conflicts(&self, args: &Value, id: &Value) -> Value {
         let _node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let project_root = self.project_root();
+        // Use dataflow engine to detect shared variables with multiple writers (concurrency risk)
+        // Also check graph Medium nodes for existing data edges (backward compat)
         self.with_store(id, |idx| {
             let mut resources = serde_json::Map::new();
+
+            // ── Path A: dataflow engine shared vars (primary) ──
+            // Scan project files for shared variable access patterns
+            let files: Vec<std::path::PathBuf> = {
+                discover_files(&project_root, &vec![])
+                    .into_iter().take(200).collect()
+            };
+            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
+            let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            let mut var_readers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        for w in &s.writes {
+                            var_writers.entry(w.clone()).or_default().push(s.name.clone());
+                        }
+                        for rd in &s.reads {
+                            var_readers.entry(rd.clone()).or_default().push(s.name.clone());
+                        }
+                    }
+                    for sh in &df.shared {
+                        for w in &sh.writers {
+                            var_writers.entry(sh.var.clone()).or_default().push(w.clone());
+                        }
+                        for rd in &sh.readers {
+                            var_readers.entry(sh.var.clone()).or_default().push(rd.clone());
+                        }
+                    }
+                }
+            }
+            for (var, writers) in &var_writers {
+                if writers.len() > 1 {
+                    let readers = var_readers.get(var).cloned().unwrap_or_default();
+                    let has_concurrent_write = writers.len() > 1;
+                    resources.insert(var.clone(), json!({
+                        "medium_type": "variable",
+                        "threads": writers.iter().map(|w| json!({"name": w, "access": "W"})).collect::<Vec<_>>(),
+                        "thread_count": writers.len() + readers.len(),
+                        "has_concurrent_write": has_concurrent_write,
+                        "lock_detected": false,
+                        "lock_edges": Vec::<String>::new(),
+                    }));
+                }
+            }
+
+            // ── Path B: graph Medium nodes (backward compat) ──
             for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
+                if resources.contains_key(&medium.name) { continue; }
                 let incoming = idx.incoming(&medium.id, None);
                 let mut threads_info = Vec::new();
                 let mut has_write = false;
@@ -699,6 +776,7 @@ impl McpServer {
                     }));
                 }
             }
+
             let unlocked_keys: Vec<_> = resources.iter()
                 .filter(|(_, v)| v["has_concurrent_write"].as_bool().unwrap_or(false) && !v["lock_detected"].as_bool().unwrap_or(true))
                 .map(|(k, _)| k.clone())
@@ -708,6 +786,7 @@ impl McpServer {
                 "total_shared_resources": resources.len(),
                 "unlocked_concurrent_writes": unlocked_keys.len(),
                 "unlocked_resources": unlocked_keys,
+                "_note": "shared vars from dataflow engine + Medium nodes from graph",
             })
         })
     }
@@ -717,8 +796,57 @@ impl McpServer {
         if module.is_empty() {
             return McpServer::error_response(id, -32602, "module_name is required");
         }
+        let project_root = self.project_root();
         self.with_store(id, |idx| {
-            coupling_report_from_index(idx, module)
+            // L1/L2 from graph (structural edges)
+            let report = coupling_report_from_index(idx, module);
+            let l1 = report["L1"].as_u64().unwrap_or(0) as u32;
+            let l2 = report["L2"].as_u64().unwrap_or(0) as u32;
+
+            // L3/L4 from dataflow engine (on-demand per module files)
+            let normalized = module.replace('\\', "/");
+            let module_files: Vec<String> = {
+                let mut files: Vec<String> = idx.get_nodes_by_file(&normalized)
+                    .iter()
+                    .filter_map(|nid| idx.get_node(nid))
+                    .filter_map(|n| n.location.as_ref())
+                    .map(|loc| {
+                        let f = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
+                        f.replace('\\', "/")
+                    })
+                    .collect();
+                // Deduplicate
+                let mut seen = std::collections::HashSet::new();
+                files.retain(|f| seen.insert(f.clone()));
+                files
+            };
+            let mut l3 = 0u32; let mut l4 = 0u32;
+            if !module_files.is_empty() {
+                let paths: Vec<std::path::PathBuf> = module_files.iter()
+                    .map(|f| {
+                        let p = std::path::Path::new(f);
+                        if p.is_absolute() { p.to_path_buf() } else { project_root.join(f) }
+                    })
+                    .collect();
+                let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
+                for r in &df_results {
+                    if let Ok(df) = &r.result {
+                        for s in &df.scopes {
+                            l3 += (s.reads.len() + s.writes.len()) as u32;
+                            l4 += (s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len()) as u32;
+                        }
+                        l3 += df.shared.len() as u32;
+                    }
+                }
+            }
+            let total = (l1 + l2 + l3 + l4).max(1) as f64;
+            let fragility = (l4 as f64 * 4.0 + l3 as f64 * 3.0) / total;
+            json!({
+                "module": module, "total_edges": l1 + l2 + l3 + l4,
+                "L1": l1, "L2": l2, "L3": l3, "L4": l4,
+                "fragility": format!("{:.1}", fragility),
+                "_note": "L1/L2 from graph, L3/L4 from dataflow engine",
+            })
         })
     }
 
@@ -732,11 +860,36 @@ impl McpServer {
 
     fn tool_blindspots(&self, args: &Value, id: &Value) -> Value {
         let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
+        let project_root = self.project_root();
         self.with_store(id, |idx| {
-            let l4 = count_l4_from_index(idx);
-            let cycles = detect_cycles_from_index(idx);
-            // Count thread conflicts from index (was hardcoded 0)
+            // ── L4 count from dataflow engine (primary) + graph edges (fallback) ──
+            let files: Vec<std::path::PathBuf> = {
+                discover_files(&project_root, &vec![])
+                    .into_iter().take(200).collect()
+            };
+            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
+            let mut l4 = count_l4_from_index(idx); // start with graph edges
             let mut conflict_count = 0usize;
+            let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        l4 = l4.max(s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len());
+                        for w in &s.writes {
+                            var_writers.entry(w.clone()).or_default().push(s.name.clone());
+                        }
+                    }
+                    for sh in &df.shared {
+                        for w in &sh.writers {
+                            var_writers.entry(sh.var.clone()).or_default().push(w.clone());
+                        }
+                    }
+                }
+            }
+            for writers in var_writers.values() {
+                if writers.len() > 1 { conflict_count += 1; }
+            }
+            // Also count graph-based thread conflicts from Medium nodes
             for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
                 let incoming = idx.incoming(&medium.id, None);
                 let has_write = incoming.iter().any(|(_, kind, _, _)| matches!(kind, EdgeKind::Writes));
@@ -745,6 +898,8 @@ impl McpServer {
                     conflict_count += 1;
                 }
             }
+
+            let cycles = detect_cycles_from_index(idx);
             let blind = find_blindspots(l4, cycles.len(), conflict_count);
             json!(blind)
         })
@@ -760,10 +915,11 @@ impl McpServer {
         if files.is_empty() {
             return McpServer::error_response(id, -32602, "files list is required");
         }
+        let project_root = self.project_root();
         self.with_store(id, |idx| {
+            // ── Structural blast radius from graph ──
             let mut file_reports = Vec::new();
             for file in &files {
-                // ponytail: use file_index (O(1) HashMap lookup) instead of O(V) full scan
                 let affected_nodes = idx.get_nodes_by_file(file);
                 let mut total_impact = 0usize;
                 for nid in &affected_nodes {
@@ -777,14 +933,55 @@ impl McpServer {
                     "risk": if total_impact > 100 { "high" } else if total_impact > 20 { "medium" } else { "low" },
                 }));
             }
-            let highest_risk = file_reports.iter()
+
+            // ── Dataflow signals on changed files ──
+            let paths: Vec<std::path::PathBuf> = files.iter()
+                .map(|f| {
+                    let p = std::path::Path::new(f);
+                    if p.is_absolute() { p.to_path_buf() } else { project_root.join(f) }
+                })
+                .collect();
+            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&paths);
+            let mut df_signals: Vec<Value> = Vec::new();
+            let mut shared_vars = 0usize;
+            let mut temporal = 0usize;
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for sh in &df.shared {
+                        shared_vars += 1;
+                        df_signals.push(json!({
+                            "level": 3, "file": r.file,
+                            "var": sh.var, "readers": sh.readers, "writers": sh.writers,
+                            "description": format!("共享变量 {}: {} 写, {} 读", sh.var, sh.writers.len(), sh.readers.len()),
+                        }));
+                    }
+                    for s in &df.scopes {
+                        temporal += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
+                        for t in &s.triggers {
+                            df_signals.push(json!({
+                                "level": 4, "file": r.file,
+                                "scope": s.name, "target": t, "kind": "trigger",
+                            }));
+                        }
+                    }
+                }
+            }
+
+            let structural_risk = file_reports.iter()
                 .filter_map(|r| r["risk"].as_str())
                 .max_by_key(|r| match *r { "high" => 3, "medium" => 2, _ => 1 })
                 .unwrap_or("low");
+            // Elevate risk if dataflow signals found
+            let risk_level = if shared_vars > 0 && structural_risk == "low" { "medium" }
+                else if temporal > 5 { "high" }
+                else { structural_risk };
+
             json!({
                 "files": files,
-                "risk_level": highest_risk,
+                "risk_level": risk_level,
                 "file_reports": file_reports,
+                "dataflow_signals": df_signals,
+                "dataflow_summary": { "shared_vars": shared_vars, "temporal_edges": temporal },
             })
         })
     }
@@ -1070,6 +1267,24 @@ impl McpServer {
         if path.is_empty() {
             return McpServer::error_response(id, -32602, "path is required");
         }
+        let project_root = self.project_root();
+        // Get L4 from dataflow engine before entering with_store
+        let dataflow_l4: usize = {
+            let files: Vec<std::path::PathBuf> = {
+                discover_files(&project_root, &vec![])
+                    .into_iter().take(200).collect()
+            };
+            let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
+            let mut l4 = 0usize;
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
+                    }
+                }
+            }
+            l4
+        };
         self.with_store(id, |idx| {
             let summary = graph_summary_from_index(idx);
             let n = idx.node_count().max(1) as f64;
@@ -1080,7 +1295,7 @@ impl McpServer {
             let fragile = fragile_nodes_from_index(idx, 20);
             let fragile_count = fragile.len().min(20) as f64;
             let fragile_score = (1.0 - fragile_count / 20.0).max(0.0) * 20.0;
-            let l4_count = count_l4_from_index(idx) as f64;
+            let l4_count = dataflow_l4.max(count_l4_from_index(idx)) as f64;
             let coupling_ratio = if e > 0.0 { l4_count / e } else { 0.0 };
             let coupling_score = (1.0 - coupling_ratio).max(0.0) * 30.0;
             let score = ((density + coupling_score + fragile_score + cycle_score) as u32).min(100);

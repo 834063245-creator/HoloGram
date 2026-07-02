@@ -176,7 +176,15 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
         case 'read_file_content':
         case 'read_file': {
           const fp = String(args['filePath'] || args['file_path'] || '');
-          if (fp) snippet = ctx.getImpactSummary(fp);
+          if (fp) {
+            snippet = ctx.getImpactSummary(fp);
+            // If file has functions, suggest dataflow trace
+            const nodes = ctx.getNodesInFile(fp);
+            const hasFuncs = nodes.some(n => n.kind === 'function' || n.kind === 'method');
+            if (hasFuncs && snippet) {
+              snippet += ' 共享变量/异步链 → hologram_dataflow 追踪。';
+            }
+          }
           break;
         }
         case 'search_code': {
@@ -187,7 +195,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
         case 'run_shell': {
           const cmd = String(args['command'] || '');
           if (/pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd)) {
-            snippet = '💡 测试跑完后可用 hologram_impact 检查最近修改的波及范围。';
+            snippet = '🧪 测试完成后建议: 1) hologram_run_check 查看简报 2) hologram_impact 检查变更波及范围';
           }
           break;
         }
@@ -289,7 +297,8 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
     name: 'graph-preflight',
 
     shouldCheck(toolName: string): boolean {
-      return toolName === 'edit_file' || toolName === 'write_file';
+      return ['edit_file', 'write_file', 'write_file_content',
+              'delete_file_or_dir', 'rename_file_or_dir', 'move_file'].includes(toolName);
     },
 
     check(toolName: string, args: Record<string, unknown>): string | null {
