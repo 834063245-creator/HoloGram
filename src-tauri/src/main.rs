@@ -12,7 +12,7 @@ mod mcp_manager;
 mod pty_manager;
 mod lsp_manager;
 mod unity_manager;
-mod engine_client;
+
 mod permissions;
 mod tools;
 mod sandbox;
