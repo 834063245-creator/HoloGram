@@ -16,7 +16,7 @@ import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
-import { ToolRegistry, createHologramTools, createCodingTools, createDataflowTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createCodingTools, createDataflowTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 import { showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { TaskManager, createTaskTools } from './agent/task';
@@ -24,6 +24,45 @@ import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
+import type { Tool } from './agent/tool';
+
+// ═══════════════════════════════════════════════════════
+// Dynamic tool loading from engine registry
+// ═══════════════════════════════════════════════════════
+
+interface McpSchema {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: string;
+    properties: Record<string, { type: string; description: string }>;
+    required: string[];
+  };
+}
+
+async function loadHologramSchemas(): Promise<McpSchema[]> {
+  try {
+    const raw = await invoke<string>('hologram_tools_list');
+    return JSON.parse(raw) as McpSchema[];
+  } catch {
+    return [];
+  }
+}
+
+function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
+  const required = schema.inputSchema.required || [];
+  return {
+    name: () => schema.name,
+    description: () => schema.description,
+    parameters: () => ({
+      type: 'object',
+      properties: schema.inputSchema.properties,
+      required,
+    }),
+    readOnly: () => !['hologram_analyze', 'hologram_run_check', 'hologram_rename'].includes(schema.name),
+    execute: (args: Record<string, unknown>) => exec(schema.name, args),
+  };
+}
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { bus } from './ui/events';
@@ -348,15 +387,16 @@ export class Workspace {
 
     const registry = new ToolRegistry();
 
-    // Hologram tools
+    // Hologram tools — dynamic from engine registry
     if (this.graphData) {
       const holoExec: ToolExecutor = async (name, args) => {
-        const result = await invoke<string>(name, args);
+        const result = await invoke<string>('hologram_call', { tool: name, args });
         return typeof result === 'string' ? result : JSON.stringify(result);
       };
-      for (const tool of createHologramTools(holoExec)) { registry.register(tool); }
+      const schemas = await loadHologramSchemas();
+      for (const tool of schemas.map(s => mcpSchemaToTool(s, holoExec))) { registry.register(tool); }
       for (const tool of createDataflowTools(holoExec)) { registry.register(tool); }
-      dbg('setupAgent', `${createHologramTools(holoExec).length} hologram tools registered`);
+      dbg('setupAgent', `${schemas.length} hologram tools registered (dynamic)`);
     }
 
     // Coding tools
@@ -461,7 +501,8 @@ export class Workspace {
           return typeof result === 'string' ? result : JSON.stringify(result);
         };
         if (ws.graphData) {
-          for (const tool of createHologramTools(factoryExec)) r.register(tool);
+          const schemas = await loadHologramSchemas();
+          for (const tool of schemas.map(s => mcpSchemaToTool(s, factoryExec))) r.register(tool);
           for (const tool of createDataflowTools(factoryExec)) r.register(tool);
         }
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);

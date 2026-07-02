@@ -26,6 +26,7 @@ pub mod pipeline;
 pub mod routing;
 pub mod storage;
 pub mod engine;
+pub mod tools;
 pub mod mcp;
 pub mod logging;
 pub mod path_utils;

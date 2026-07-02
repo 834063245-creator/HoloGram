@@ -26,6 +26,22 @@ use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
 use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
 use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
+use engine::tools::ToolRegistry;
+
+// ═══════════════════════════════════════════════════════
+// Hologram engine tool dispatch — single entry for all engine tools
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+pub(crate) fn hologram_call(tool: String, args: serde_json::Value) -> Result<String, String> {
+    Ok(ToolRegistry::dispatch(&tool, &args).to_string())
+}
+
+#[tauri::command]
+pub(crate) fn hologram_tools_list() -> Result<String, String> {
+    let schemas = ToolRegistry::global().tools_list();
+    Ok(serde_json::to_string(&schemas).unwrap_or_default())
+}
 
 // ═══════════════════════════════════════════════════════
 // Background job system — timeout + background + output + kill

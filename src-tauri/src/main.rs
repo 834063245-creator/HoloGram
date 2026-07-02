@@ -90,6 +90,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             // ── Hologram graph commands ──
+            commands::tools::hologram_tools_list,
+            commands::tools::hologram_call,
             commands::hologram::get_full_graph,
             commands::hologram::hologram_analyze,
             commands::hologram::hologram_neighbors,
