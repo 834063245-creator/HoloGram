@@ -36,10 +36,29 @@ impl ConstraintConfig {
 pub fn check_constraints(signals: &[Value], config: &ConstraintConfig) -> Value {
     let mut violations = Vec::new();
     let mut passed = 0usize;
+    let allowlist: Vec<&str> = config.allowlist_files.iter().map(|s| s.as_str()).collect();
+    let denylist: Vec<&str> = config.denylist_keywords.iter().map(|s| s.as_str()).collect();
     for s in signals {
         let level = s["level"].as_u64().unwrap_or(0) as u8;
-        let enabled = match level { 5=>true, 4=>config.routing_l4, 3=>config.routing_l3, 2=>config.routing_l2, _=>false };
-        if enabled { violations.push(s.clone()); } else { passed += 1; }
+        // Description may be at s.signal.description (SignalGenerator) or s.desc (test flat format)
+        let desc = s.get("signal").and_then(|sig| sig.get("description")).and_then(|v| v.as_str())
+            .or_else(|| s.get("desc").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let denied = !denylist.is_empty() && denylist.iter().any(|k| desc.contains(k));
+        // Affected nodes may be at s.signal.affected_nodes (SignalGenerator) or absent (flat format)
+        let files: Vec<&str> = s.get("signal")
+            .and_then(|sig| sig.get("affected_nodes"))
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let allowed = !allowlist.is_empty() && !files.is_empty()
+            && files.iter().all(|f| allowlist.iter().any(|a| f.contains(a)));
+        let enabled = match level { 5 => true, 4 => config.routing_l4, 3 => config.routing_l3, 2 => config.routing_l2, _ => false };
+        if denied || (enabled && !allowed) {
+            violations.push(s.clone());
+        } else {
+            passed += 1;
+        }
     }
     json!({ "passed": violations.is_empty(), "violations": violations, "violation_count": violations.len(), "passed_count": passed })
 }
@@ -107,5 +126,28 @@ mod tests {
         let r = check_constraints(&signals, &c);
         assert_eq!(r["violation_count"], 0);
         assert_eq!(r["passed_count"], 1);
+    }
+
+    #[test]
+    fn test_allowlist_filters_signals() {
+        let mut c = ConstraintConfig::defaults();
+        c.allowlist_files = vec!["src/legacy/".into()];
+        let signals = vec![
+            json!({"signal": {"description": "L4 coupling edge", "affected_nodes": ["src/legacy/a.rs"]}, "level": 4}),
+            json!({"signal": {"description": "L3 shared data", "affected_nodes": ["src/new/b.rs"]}, "level": 3}),
+        ];
+        let r = check_constraints(&signals, &c);
+        assert_eq!(r["violation_count"], 1, "legacy file allowed, new file still flagged");
+    }
+
+    #[test]
+    fn test_denylist_triggers_on_keyword() {
+        let mut c = ConstraintConfig::defaults();
+        c.routing_l4 = false;
+        let signals = vec![
+            json!({"signal": {"description": "Found a dangerous DELETE statement", "affected_nodes": []}, "level": 4}),
+        ];
+        let r = check_constraints(&signals, &c);
+        assert_eq!(r["violation_count"], 1, "denylist keyword should override level toggle");
     }
 }

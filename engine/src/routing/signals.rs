@@ -69,9 +69,21 @@ impl SignalGenerator {
             }
         } else {
             for edge in after.edges.values() {
-                if edge.coupling_depth >= 3 && changed_files.iter().any(|f|
-                    after.nodes.get(&edge.source).and_then(|n| n.location.as_deref()).unwrap_or("").contains(f)) {
-                    signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+                if edge.coupling_depth >= 3 {
+                    let loc = after.nodes.get(&edge.source)
+                        .and_then(|n| n.location.as_deref())
+                        .unwrap_or("");
+                    // Use path-aware matching: file must match a path segment, not arbitrary substring
+                    let is_affected = changed_files.iter().any(|f| {
+                        let f_norm = f.replace('\\', "/");
+                        let loc_norm = loc.replace('\\', "/");
+                        loc_norm == f_norm
+                            || loc_norm.starts_with(&format!("{}/", f_norm))
+                            || f_norm.ends_with(&format!("/{}", loc_norm.rsplit('/').next().unwrap_or(&loc_norm)))
+                    });
+                    if is_affected {
+                        signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+                    }
                 }
             }
         }
