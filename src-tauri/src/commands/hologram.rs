@@ -11,10 +11,20 @@ use engine::engine as engine_api;
 use engine::graph::Graph;
 use engine::graph::{Node, NodeKind, Edge, EdgeKind};
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
-    graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
+    graph_summary, find_blindspots, policy_check_from_index};
 use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
 use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
+use engine::analysis::dataflow_engine;
+use engine::pipeline::discovery;
+
+/// Discover source files using supported language extensions, capped at limit.
+fn discover_source_files(root: &PathBuf, limit: usize) -> Vec<PathBuf> {
+    let exts: Vec<String> = engine::engine::GRAMMAR_LOADER.supported_extensions();
+    let ext_strs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+    discovery::discover_files(root, &ext_strs)
+        .into_iter().take(limit).collect()
+}
 
 #[tauri::command]
 pub(crate) async fn get_full_graph(
@@ -223,7 +233,34 @@ pub(crate) async fn hologram_coupling_report(module: String, state: tauri::State
     crate::utils::check_mcp_permission("hologram_coupling_report", &state)?;
     let m = module.clone();
     tokio::task::spawn_blocking(move || {
-        crate::utils::with_graph(move |g| coupling_report(g, &m))
+        let v = engine_api::engine_read_graph(|g| {
+            let report = coupling_report(g, &m);
+            let l1 = report["L1"].as_u64().unwrap_or(0) as u32;
+            let l2 = report["L2"].as_u64().unwrap_or(0) as u32;
+            // L3/L4 from dataflow engine
+            let root = crate::utils::project_root();
+            let files = discover_source_files(&root, 200);
+            let df_results = dataflow_engine::query_dataflow_files(&files);
+            let mut l3 = 0u32; let mut l4 = 0u32;
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        l3 += (s.reads.len() + s.writes.len()) as u32;
+                        l4 += (s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len()) as u32;
+                    }
+                    l3 += df.shared.len() as u32;
+                }
+            }
+            let total = (l1 + l2 + l3 + l4).max(1) as f64;
+            let fragility = (l4 as f64 * 4.0 + l3 as f64 * 3.0) / total;
+            serde_json::json!({
+                "module": m, "total_edges": l1 + l2 + l3 + l4,
+                "L1": l1, "L2": l2, "L3": l3, "L4": l4,
+                "fragility": format!("{:.1}", fragility),
+                "_note": "L1/L2 from graph, L3/L4 from dataflow engine",
+            })
+        })?;
+        Ok(serde_json::to_string(&v).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
@@ -232,14 +269,45 @@ pub(crate) async fn hologram_blindspots(threshold: Option<f64>, state: tauri::St
     crate::utils::check_mcp_permission("hologram_blindspots", &state)?;
     let _ = threshold;
     tokio::task::spawn_blocking(move || {
-        crate::utils::with_graph(move |g| {
-            let c = coupling_report(g, "");
+        let v = engine_api::engine_read_graph(|g| {
+            // L4 from dataflow engine + thread conflicts
+            let root = crate::utils::project_root();
+            let files = discover_source_files(&root, 200);
+            let df_results = dataflow_engine::query_dataflow_files(&files);
+            let mut l4 = 0usize;
+            let mut conflict_count = 0usize;
+            let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
+                        for w in &s.writes {
+                            var_writers.entry(w.clone()).or_default().push(s.name.clone());
+                        }
+                    }
+                    for sh in &df.shared {
+                        for w in &sh.writers {
+                            var_writers.entry(sh.var.clone()).or_default().push(w.clone());
+                        }
+                    }
+                }
+            }
+            for writers in var_writers.values() {
+                if writers.len() > 1 { conflict_count += 1; }
+            }
+            // Also count graph-based thread conflicts from Medium nodes
+            for medium in g.nodes.values().filter(|n| n.kind == NodeKind::Medium) {
+                let incoming: Vec<_> = g.edges.values()
+                    .filter(|e| e.target == medium.id)
+                    .collect();
+                let has_write = incoming.iter().any(|e| e.kind == EdgeKind::Writes);
+                let has_read = incoming.iter().any(|e| e.kind == EdgeKind::Reads);
+                if has_write && has_read { conflict_count += 1; }
+            }
             let cycles = detect_cycles(g);
-            let no_files: Vec<String> = vec![];
-            let conflicts = thread_conflict_report(g, &no_files);
-            let l4_count = c["L4"].as_u64().unwrap_or(0) as usize;
-            find_blindspots(l4_count, cycles.len(), conflicts["conflict_count"].as_u64().unwrap_or(0) as usize)
-        })
+            find_blindspots(l4, cycles.len(), conflict_count)
+        })?;
+        Ok(serde_json::to_string(&v).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
@@ -248,10 +316,83 @@ pub(crate) async fn hologram_thread_conflicts(severity: Option<String>, state: t
     crate::utils::check_mcp_permission("hologram_thread_conflicts", &state)?;
     let node_id = severity.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
-        crate::utils::with_graph(move |g| {
-            let filter: Vec<String> = if node_id.is_empty() { vec![] } else { vec![node_id.clone()] };
-            thread_conflict_report(g, &filter)
-        })
+        let v = engine_api::engine_read_graph(|g| {
+            let mut resources = serde_json::Map::new();
+            // Path A: dataflow engine shared vars (primary)
+            let root = crate::utils::project_root();
+            let files = discover_source_files(&root, 200);
+            let df_results = dataflow_engine::query_dataflow_files(&files);
+            let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            let mut var_readers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        for w in &s.writes {
+                            var_writers.entry(w.clone()).or_default().push(s.name.clone());
+                        }
+                        for rd in &s.reads {
+                            var_readers.entry(rd.clone()).or_default().push(s.name.clone());
+                        }
+                    }
+                    for sh in &df.shared {
+                        for w in &sh.writers {
+                            var_writers.entry(sh.var.clone()).or_default().push(w.clone());
+                        }
+                        for rd in &sh.readers {
+                            var_readers.entry(sh.var.clone()).or_default().push(rd.clone());
+                        }
+                    }
+                }
+            }
+            for (var, writers) in &var_writers {
+                if writers.len() > 1 {
+                    let readers = var_readers.get(var).cloned().unwrap_or_default();
+                    resources.insert(var.clone(), serde_json::json!({
+                        "medium_type": "variable",
+                        "threads": writers.iter().map(|w| serde_json::json!({"name": w, "access": "W"})).collect::<Vec<_>>(),
+                        "thread_count": writers.len() + readers.len(),
+                        "has_concurrent_write": true,
+                        "lock_detected": false,
+                        "lock_edges": Vec::<String>::new(),
+                    }));
+                }
+            }
+            // Path B: graph Medium nodes (backward compat)
+            for medium in g.nodes.values().filter(|n| n.kind == NodeKind::Medium) {
+                if resources.contains_key(&medium.name) { continue; }
+                let incoming: Vec<_> = g.edges.values().filter(|e| e.target == medium.id).collect();
+                let mut threads_info = Vec::new();
+                let mut has_write = false;
+                for e in &incoming {
+                    let access = match e.kind { EdgeKind::Writes => "W", EdgeKind::Reads => "R", _ => continue, };
+                    if e.kind == EdgeKind::Writes { has_write = true; }
+                    if let Some(src) = g.nodes.get(&e.source) {
+                        threads_info.push(serde_json::json!({"name": src.name, "access": access}));
+                    }
+                }
+                if !threads_info.is_empty() {
+                    resources.insert(medium.name.clone(), serde_json::json!({
+                        "medium_type": "variable",
+                        "threads": threads_info,
+                        "thread_count": threads_info.len(),
+                        "has_concurrent_write": has_write,
+                        "lock_detected": false,
+                        "lock_edges": Vec::<String>::new(),
+                    }));
+                }
+            }
+            let unlocked_keys: Vec<_> = resources.iter()
+                .filter(|(_, v)| v["has_concurrent_write"].as_bool().unwrap_or(false) && !v["lock_detected"].as_bool().unwrap_or(true))
+                .map(|(k, _)| k.clone())
+                .collect();
+            serde_json::json!({
+                "resources": resources, "conflicts": resources.values().collect::<Vec<_>>(),
+                "conflict_count": unlocked_keys.len(), "threads": resources.len(),
+                "unlocked_concurrent_writes": unlocked_keys.len(), "unlocked_resources": unlocked_keys,
+                "_note": "shared vars from dataflow engine + Medium nodes from graph",
+            })
+        })?;
+        Ok(serde_json::to_string(&v).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
@@ -409,11 +550,24 @@ pub(crate) async fn hologram_run_health(path: Option<String>, days: Option<i32>,
     let target = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
     let d = days.unwrap_or(30);
     tokio::task::spawn_blocking(move || {
-        crate::utils::with_graph(move |g| {
+        let v = engine_api::engine_read_graph(|g| {
             let c = coupling_report(g, "");
             let cycles = detect_cycles(g);
             let fragile = fragile_nodes(g, 10);
-            let l4 = c["L4"].as_u64().unwrap_or(0) as f64;
+            // L4 from dataflow engine
+            let root = crate::utils::project_root();
+            let files = discover_source_files(&root, 200);
+            let df_results = dataflow_engine::query_dataflow_files(&files);
+            let mut dataflow_l4 = 0usize;
+            for r in &df_results {
+                if let Ok(df) = &r.result {
+                    for s in &df.scopes {
+                        dataflow_l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
+                    }
+                }
+            }
+            let graph_l4 = c["L4"].as_u64().unwrap_or(0) as usize;
+            let l4 = dataflow_l4.max(graph_l4) as f64;
             let density = if g.node_count() > 0 {
                 (l4 / g.node_count() as f64 * 100.0).min(100.0)
             } else { 0.0 };
@@ -426,14 +580,15 @@ pub(crate) async fn hologram_run_health(path: Option<String>, days: Option<i32>,
                     "trend": "stable"
                 },
                 "days": d, "path": target,
-                "note": "趋势数据需历史快照 — 仅展示当前状态",
+                "note": "L4 from dataflow engine + graph",
                 "summary": {
                     "nodes_total": g.node_count(), "edges_total": g.edge_count(),
-                    "symbols": g.node_count(), "media": 0, "temporals": 0,
+                    "symbols": g.node_count(), "media": 0, "temporals": dataflow_l4,
                     "edge_types": {"calls": 0, "defines": 0, "imports": 0}
                 }
             })
-        })
+        })?;
+        Ok(serde_json::to_string(&v).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
@@ -539,14 +694,41 @@ pub(crate) async fn hologram_community(node_id: String, state: tauri::State<'_, 
 pub(crate) async fn hologram_delayed(state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_delayed", &state)?;
     tokio::task::spawn_blocking(move || {
-        crate::utils::with_graph(move |g| {
-            use engine::graph::EdgeKind;
-            let delayed: Vec<_> = g.edges.values()
-                .filter(|e| matches!(e.kind, EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences))
-                .map(|e| serde_json::json!({"source": e.source, "target": e.target, "type": e.kind.as_str()}))
-                .collect();
-            serde_json::json!(delayed)
-        })
+        let root = crate::utils::project_root();
+        let files = discover_source_files(&root, 200);
+        let df_results = dataflow_engine::query_dataflow_files(&files);
+        let mut triggers: Vec<serde_json::Value> = Vec::new();
+        let mut awaits: Vec<serde_json::Value> = Vec::new();
+        let mut sequences: Vec<serde_json::Value> = Vec::new();
+        for r in &df_results {
+            if let Ok(df) = &r.result {
+                for s in &df.scopes {
+                    for t in &s.triggers {
+                        triggers.push(serde_json::json!({
+                            "file": r.file, "scope": s.name, "target": t, "type": "trigger",
+                        }));
+                    }
+                    for a in &s.awaits_callbacks {
+                        awaits.push(serde_json::json!({
+                            "file": r.file, "scope": s.name, "target": a, "type": "await",
+                        }));
+                    }
+                    for seq in &s.sequence_calls {
+                        sequences.push(serde_json::json!({
+                            "file": r.file, "scope": s.name, "target": seq, "type": "sequence",
+                        }));
+                    }
+                }
+            }
+        }
+        let total = triggers.len() + awaits.len() + sequences.len();
+        Ok(serde_json::to_string(&serde_json::json!({
+            "total_delayed_edges": total,
+            "triggers_count": triggers.len(), "awaits_count": awaits.len(),
+            "sequences_count": sequences.len(),
+            "triggers": triggers, "awaits": awaits, "sequences": sequences,
+            "_note": "from dataflow engine (on-demand query, no graph storage)",
+        })).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
