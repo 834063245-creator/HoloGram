@@ -16,7 +16,7 @@ import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
-import { ToolRegistry, createHologramTools, createCodingTools, createDataflowTools, createSubAgentTool, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createHologramTools, createCodingTools, createDataflowTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 import { showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { TaskManager, createTaskTools } from './agent/task';
@@ -382,19 +382,19 @@ export class Workspace {
     // Coding tools
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
       if (name === 'run_shell' && args['runInBackground']) {
-        const taskId = await invoke<string>('run_shell', { ...args, _agent: true });
+        const taskId = await agentInvoke<string>('run_shell', args);
         let done = false;
         while (!done) {
           await new Promise(r => setTimeout(r, 300));
           try {
-            const status: any = await invoke<any>('bash_output', { taskId, _agent: true });
+            const status: any = await agentInvoke<any>('bash_output', { taskId });
             if (status.output && onProgress) onProgress(status.output);
             if (status.done) { done = true; return status.output || '(无输出)'; }
           } catch { done = true; return '(后台任务已结束)'; }
         }
         return '';
       }
-      const result = await invoke<string>(name, { ...args, _agent: true });
+      const result = await agentInvoke<string>(name, args);
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
     for (const tool of createCodingTools(codingExec, prov)) { registry.register(tool); }
@@ -477,7 +477,7 @@ export class Workspace {
             : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, disableThinking: s.agent?.disableThinking });
         const r = new ToolRegistry();
         const factoryExec: ToolExecutor = async (name, args) => {
-          const result = await invoke<string>(name, { ...args, _agent: true });
+          const result = await agentInvoke<string>(name, args);
           return typeof result === 'string' ? result : JSON.stringify(result);
         };
         if (ws.graphData) {

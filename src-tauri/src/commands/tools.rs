@@ -37,7 +37,7 @@ pub(crate) async fn exec_command(
     cwd: Option<String>,
     timeout_ms: Option<u64>,
     run_in_background: Option<bool>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -52,7 +52,7 @@ pub(crate) async fn exec_command(
         crate::utils::require_read_sync(&dir, &state)?
     } else {
         crate::utils::require_command(&command, &state, &app).await?;
-        crate::utils::resolve_read_dispatch(&dir, _agent.unwrap_or(false), &state, &app).await?
+        crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?
     };
     let physical_dir_str = physical_dir.to_string_lossy().to_string();
 
@@ -147,11 +147,11 @@ pub(crate) async fn bash_kill(job_id: u32) -> Result<String, String> {
 #[tauri::command]
 pub(crate) async fn list_directory(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
-    let root = crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     // ponytail: list_dir_recursive does recursive fs::read_dir + is_dir
     // synchronously. On large projects this blocks the async worker for
     // seconds — same class of bug as serialize_cached_graph.
@@ -170,11 +170,11 @@ pub(crate) async fn list_directory(
 #[tauri::command]
 pub(crate) async fn list_directory_flat(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
-    let root = crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
             return Err(format!("不是有效目录: {}", path));
@@ -226,11 +226,11 @@ pub(crate) async fn read_file_content(
     file_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = crate::utils::resolve_read_dispatch(&file_path, _agent.unwrap_or(false), &state, &app).await?;
+    let real_path = crate::utils::resolve_read_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     let content = std::fs::read_to_string(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     let lines: Vec<&str> = content.lines().collect();
@@ -248,11 +248,11 @@ pub(crate) async fn read_file_content(
 #[tauri::command]
 pub(crate) async fn read_file_base64(
     file_path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = crate::utils::resolve_read_dispatch(&file_path, _agent.unwrap_or(false), &state, &app).await?;
+    let real_path = crate::utils::resolve_read_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     let bytes = std::fs::read(&real_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
@@ -262,11 +262,11 @@ pub(crate) async fn read_file_base64(
 pub(crate) async fn write_file_content(
     file_path: String,
     content: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real_path = crate::utils::resolve_write_dispatch(&file_path, _agent.unwrap_or(false), &state, &app).await?;
+    let real_path = crate::utils::resolve_write_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
         std::fs::create_dir_all(parent)
@@ -320,11 +320,11 @@ pub(crate) fn log_append(
 #[tauri::command]
 pub(crate) async fn create_directory(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let resolved = crate::utils::resolve_write_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    let resolved = crate::utils::resolve_write_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     std::fs::create_dir_all(&resolved)
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
@@ -343,11 +343,11 @@ pub(crate) fn get_global_memory_dir() -> String {
 #[tauri::command]
 pub(crate) async fn delete_file_or_dir(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = crate::utils::resolve_write_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    let real = crate::utils::resolve_write_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     if !real.exists() { return Err(format!("路径不存在: {}", path)); }
     if real.is_dir() {
         std::fs::remove_dir_all(&real)
@@ -372,11 +372,11 @@ pub(crate) async fn delete_file_or_dir(
 pub(crate) async fn rename_file_or_dir(
     from: String,
     to: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let is_agent = _agent.unwrap_or(false);
+    let is_agent = is_agent.unwrap_or(false);
     let resolved_from = crate::utils::resolve_write_dispatch(&from, is_agent, &state, &app).await?;
     let resolved_to = crate::utils::resolve_write_dispatch(&to, is_agent, &state, &app).await?;
     std::fs::rename(&resolved_from, &resolved_to)
@@ -397,11 +397,11 @@ pub(crate) async fn rename_file_or_dir(
 pub(crate) async fn move_file(
     source: String,
     dest_dir: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let is_agent = _agent.unwrap_or(false);
+    let is_agent = is_agent.unwrap_or(false);
     let src_real = crate::utils::resolve_read_dispatch(&source, is_agent, &state, &app).await?;
     let dest_real = crate::utils::resolve_write_dispatch(&dest_dir, is_agent, &state, &app).await?;
     let name = src_real.file_name()
@@ -424,11 +424,11 @@ pub(crate) async fn move_file(
 #[tauri::command]
 pub(crate) async fn open_in_explorer(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    let real = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     #[cfg(target_os = "windows")]
     {
         if real.is_dir() {
@@ -485,11 +485,11 @@ pub(crate) async fn search_code(
     head_limit: Option<usize>,
     offset: Option<usize>,
     glob_filter: Option<String>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let root = crate::utils::resolve_read_dispatch(&directory, _agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&directory, is_agent.unwrap_or(false), &state, &app).await?;
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
         Some(regex::RegexBuilder::new(&pattern)
@@ -675,14 +675,14 @@ pub(crate) async fn search_content(
     context_lines: Option<usize>, output_mode: Option<String>,
     show_line_numbers: Option<bool>, head_limit: Option<usize>,
     offset: Option<usize>, glob_filter: Option<String>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     search_code(
         directory, pattern, file_types, max_results, use_regex,
         context_lines, output_mode, show_line_numbers, head_limit,
-        offset, glob_filter, _agent, state, app,
+        offset, glob_filter, is_agent, state, app,
     ).await
 }
 
@@ -700,12 +700,12 @@ struct GlobEntry {
 pub(crate) async fn glob(
     pattern: String,
     path: Option<String>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
-    let root = crate::utils::resolve_read_dispatch(&dir, _agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?;
 
     let glob_pattern = glob::Pattern::new(&pattern)
         .map_err(|e| format!("无效的 glob 模式: {}", e))?;
@@ -768,11 +768,11 @@ pub(crate) async fn edit_file(
     old_string: String,
     new_string: String,
     replace_all: Option<bool>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let is_agent = _agent.unwrap_or(false);
+    let is_agent = is_agent.unwrap_or(false);
     // ponytail: edit = read then write — Agent needs both checks, UI skips rules
     crate::utils::resolve_read_dispatch(&file_path, is_agent, &state, &app).await?;
     let resolved = crate::utils::resolve_write_dispatch(&file_path, is_agent, &state, &app).await?;
@@ -1411,11 +1411,11 @@ pub(crate) async fn analyze_in_background(path: String, app: tauri::AppHandle) -
 #[tauri::command]
 pub(crate) async fn git_tree_status(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     let porcelain = crate::utils::run_git(path, vec![
         "status".to_string(), "--porcelain".to_string(),
         "--ignored".to_string(), "--untracked-files".to_string(),
@@ -1461,11 +1461,11 @@ pub(crate) async fn git_tree_status(
 #[tauri::command]
 pub(crate) async fn git_status(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     let branch = crate::utils::run_git(path.clone(), vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]).await.unwrap_or_default();
     let branch = branch.trim().to_string();
 
@@ -1498,11 +1498,11 @@ pub(crate) async fn git_status(
 pub(crate) async fn git_diff_unstaged(
     path: String,
     file: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--".to_string(), file.clone()]).await
 }
 
@@ -1510,11 +1510,11 @@ pub(crate) async fn git_diff_unstaged(
 pub(crate) async fn git_diff_staged(
     path: String,
     file: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()]).await
 }
 
@@ -1522,11 +1522,11 @@ pub(crate) async fn git_diff_staged(
 pub(crate) async fn git_stage(
     path: String,
     files: Vec<String>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stage", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "stage", is_agent.unwrap_or(false), &state, &app).await?;
     let mut args: Vec<String> = vec!["add".to_string()];
     args.extend(files.iter().map(|s| s.to_string()));
     crate::utils::run_git(path, args).await
@@ -1536,11 +1536,11 @@ pub(crate) async fn git_stage(
 pub(crate) async fn git_unstage(
     path: String,
     files: Vec<String>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "unstage", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "unstage", is_agent.unwrap_or(false), &state, &app).await?;
     let mut args: Vec<String> = vec!["reset".to_string(), "HEAD".to_string(), "--".to_string()];
     args.extend(files.iter().map(|s| s.to_string()));
     crate::utils::run_git(path, args).await
@@ -1549,11 +1549,11 @@ pub(crate) async fn git_unstage(
 #[tauri::command]
 pub(crate) async fn git_stage_all(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stage", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "stage", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["add".to_string(), "-A".to_string()]).await
 }
 
@@ -1561,44 +1561,44 @@ pub(crate) async fn git_stage_all(
 pub(crate) async fn git_commit(
     path: String,
     message: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "commit", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "commit", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["commit".to_string(), "-m".to_string(), message.clone()]).await
 }
 
 #[tauri::command]
 pub(crate) async fn git_push(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "push", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "push", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["push".to_string()]).await
 }
 
 #[tauri::command]
 pub(crate) async fn git_pull(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "pull", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "pull", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["pull".to_string()]).await
 }
 
 #[tauri::command]
 pub(crate) async fn git_fetch(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "fetch", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "fetch", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["fetch".to_string(), "--all".to_string(), "--prune".to_string()]).await
 }
 
@@ -1606,11 +1606,11 @@ pub(crate) async fn git_fetch(
 pub(crate) async fn git_log(
     path: String,
     limit: Option<i32>,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     let n = limit.unwrap_or(20);
     let raw = crate::utils::run_git(
         path.clone(),
@@ -1640,11 +1640,11 @@ pub(crate) async fn git_log(
 #[tauri::command]
 pub(crate) async fn git_init(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "init", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "init", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["init".to_string()]).await
 }
 
@@ -1653,11 +1653,11 @@ pub(crate) async fn git_init(
 #[tauri::command]
 pub(crate) async fn git_list_branches(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     let out = crate::utils::run_git(path.clone(), vec!["branch".to_string(), "--format=%(refname:short)".to_string()]).await?;
     let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
     // Find current branch (marked with *)
@@ -1671,11 +1671,11 @@ pub(crate) async fn git_list_branches(
 pub(crate) async fn git_checkout(
     path: String,
     branch: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "checkout", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "checkout", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["checkout".to_string(), branch.clone()]).await
 }
 
@@ -1683,33 +1683,33 @@ pub(crate) async fn git_checkout(
 pub(crate) async fn git_create_branch(
     path: String,
     name: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "create_branch", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "create_branch", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["checkout".to_string(), "-b".to_string(), name.clone()]).await
 }
 
 #[tauri::command]
 pub(crate) async fn git_stash_push(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stash_push", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "stash_push", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["stash".to_string(), "push".to_string()]).await
 }
 
 #[tauri::command]
 pub(crate) async fn git_stash_pop(
     path: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stash_pop", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "stash_pop", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["stash".to_string(), "pop".to_string()]).await
 }
 
@@ -1727,11 +1727,11 @@ pub(crate) async fn git_stash_list(
 pub(crate) async fn git_discard(
     path: String,
     file: String,
-    _agent: Option<bool>,
+    is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "discard", _agent.unwrap_or(false), &state, &app).await?;
+    crate::utils::require_git_dispatch(&path, "discard", is_agent.unwrap_or(false), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["checkout".to_string(), "--".to_string(), file.clone()]).await
 }
 

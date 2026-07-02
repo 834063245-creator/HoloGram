@@ -6,6 +6,7 @@
 import type { Provider, ToolSchema } from '../provider/types';
 import { ChunkType } from '../provider/types';
 import { bus } from '../ui/events';
+import { invoke } from '../bridge';
 
 // ---- Tool 接口 ----
 
@@ -98,6 +99,15 @@ export class ToolRegistry {
 /** Tool executor: invokes tools via MCP (fast, persistent) or CLI (fallback).
  *  onProgress is an optional callback for streaming partial output during execution. */
 export type ToolExecutor = (toolName: string, args: Record<string, unknown>, onProgress?: (chunk: string) => void) => Promise<string>;
+
+/** Agent → backend invoke 包装。恒定注入 isAgent:true，让 Rust 命令走权限路径
+ *  (require_read/require_write/git_dispatch) 而非沙箱化的 user-UI 路径。
+ *  camelCase 契约: Rust 参数 `is_agent` ↔ JS key `isAgent`。
+ *  旧名 `_agent` 因 Tauri 默认 camelCase 重命名永远匹配不上 → is_agent 恒 false
+ *  → agent 文件操作被沙箱静默硬拒且不弹 Ask（见 tests/agent-exec.test.ts 守护）。 */
+export async function agentInvoke<T = string>(name: string, args: Record<string, unknown>): Promise<T> {
+  return invoke<T>(name, { ...args, isAgent: true });
+}
 
 export function createHologramTools(exec: ToolExecutor): Tool[] {
   return [
