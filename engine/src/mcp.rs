@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::engine;
+use crate::graph::{EdgeKind, Graph, Node, NodeKind};
 
 // All graph access goes through Engine (engine::engine_* functions).
 // GRAPH_STORE / CACHED_GRAPH / ANALYZE_LOCK / with_graph_store — all removed.
