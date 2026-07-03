@@ -15,8 +15,10 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
+#[cfg(test)]
 use crate::engine;
-use crate::graph::{EdgeKind, Graph, Node, NodeKind};
+#[cfg(test)]
+use crate::graph::{EdgeKind, Node, NodeKind};
 
 // All graph access goes through Engine (engine::engine_* functions).
 // GRAPH_STORE / CACHED_GRAPH / ANALYZE_LOCK / with_graph_store — all removed.
@@ -167,6 +169,7 @@ fn tool_def(name: &str, desc: &str, props: &[(&str, &str, &str)], required: &[&s
 pub struct McpServer {
     /// Path to the project root directory (for re-analysis, timeline, etc.)
     /// Wrapped in Mutex so tool_analyze can switch projects at runtime.
+    #[allow(dead_code)] // legacy field; tools now use global ENGINE, but kept for future per-server routing
     project_root: Mutex<PathBuf>,
 }
 
@@ -178,6 +181,7 @@ impl McpServer {
     }
 
     /// Get a clone of the current project root.
+    #[allow(dead_code)] // legacy; tools now use global ENGINE
     fn project_root(&self) -> PathBuf {
         self.project_root.lock().unwrap().clone()
     }

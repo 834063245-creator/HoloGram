@@ -127,6 +127,7 @@ pub fn status() -> SandboxStatus {
 
 /// Check whether OS sandbox is available. Same as status() but named for
 /// the spec-compatible API (spec §6.6–§6.7).
+#[allow(dead_code)] // spec API, not yet called from UI
 pub fn is_sandbox_available() -> SandboxStatus {
     status()
 }
@@ -218,6 +219,7 @@ fn quote_cmd(cmd: &str) -> String {
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
+#[allow(dead_code)] // Windows FFI for future sandbox phases (AppContainer, etc.)
 mod imp {
     use std::io::{self, Read};
     use std::os::windows::process::{CommandExt, ExitStatusExt};

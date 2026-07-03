@@ -3,8 +3,6 @@
 // Workspace lifecycle Tauri commands.
 
 use tauri;
-use crate::utils;
-use crate::WorkspaceState;
 
 #[tauri::command]
 pub(crate) async fn workspace_activate(

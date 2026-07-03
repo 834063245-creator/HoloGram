@@ -3,16 +3,15 @@
 // Hologram graph query and analysis Tauri commands.
 
 use tauri;
-use tauri::Emitter;
 use serde_json;
 use std::path::PathBuf;
 use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::graph::Graph;
-use engine::graph::{Node, NodeKind, Edge, EdgeKind};
+use engine::graph::{NodeKind, Edge, EdgeKind};
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, find_blindspots, policy_check_from_index};
-use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
+use engine::community::detect_communities;
 use engine::graph::query;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 use engine::analysis::dataflow_engine;
@@ -230,7 +229,7 @@ pub(crate) async fn hologram_blindspots(threshold: Option<f64>, state: tauri::St
 #[tauri::command]
 pub(crate) async fn hologram_thread_conflicts(severity: Option<String>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_thread_conflicts", &state)?;
-    let node_id = severity.unwrap_or_default();
+    let _node_id = severity.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         let v = engine_api::engine_read_graph(|g| {
             let mut resources = serde_json::Map::new();
@@ -343,13 +342,19 @@ pub(crate) async fn hologram_rename(
 ) -> Result<String, String> {
     // ponytail: deny-only 对 stub 安全，真 rename 实现前必须改为 require_write
     crate::utils::check_mcp_permission("hologram_rename", &state)?;
-    let _ = node_id; let on = old_name.clone(); let nn = new_name.clone();
+    let on = old_name.clone(); let nn = new_name.clone();
     let dr = dry_run.unwrap_or(true);
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
-            let matched: Vec<_> = g.nodes.values()
-                .filter(|n| n.name == on || n.id.contains(&on))
-                .collect();
+            // If node_id is provided, match ONLY that node (disambiguation).
+            // Otherwise fall back to name-based matching.
+            let matched: Vec<_> = if let Some(ref nid) = node_id {
+                g.nodes.values().filter(|n| n.id == *nid).collect()
+            } else {
+                g.nodes.values()
+                    .filter(|n| n.name == on || n.id.contains(&on))
+                    .collect()
+            };
             if matched.is_empty() {
                 serde_json::json!({"error": format!("没有匹配 '{}' 的节点", on)})
             } else if dr {
@@ -805,6 +810,7 @@ pub(crate) async fn hologram_hotspots(
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
+#[allow(dead_code)] // stub — not yet wired into the invoke_handler
 pub(crate) async fn hologram_workspace_conflict(
     path_a: String,
     path_b: String,

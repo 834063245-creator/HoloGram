@@ -26,20 +26,27 @@ mod commands;
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use tauri::Manager;
 
 // Re-export WorkspaceState so commands can reference it as crate::WorkspaceState
 pub(crate) type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
 
 // Engine imports — needed by tests (mod tests below uses super::*)
+#[cfg(test)]
 use hologram_engine as engine;
+#[cfg(test)]
 use engine::engine as engine_api;
+#[cfg(test)]
 use engine::graph::Graph;
+#[cfg(test)]
 use engine::graph::{Node, NodeKind, Edge, EdgeKind};
+#[cfg(test)]
 use engine::analysis::{fragile_nodes, detect_cycles, coupling_report,
     graph_summary, thread_conflict_report, find_blindspots, policy_check_from_index};
+#[cfg(test)]
 use engine::community::{detect_communities, detect_hierarchical_communities_with_base};
+#[cfg(test)]
 use engine::graph::query;
+#[cfg(test)]
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
 
 /// Set the active workspace — now a no-op stub. Use workspace_activate instead.

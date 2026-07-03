@@ -155,6 +155,7 @@ pub fn load_project_rules(project_root: &Path) -> Vec<PermissionRule> {
 /// Append a single rule to the project permissions.json.
 /// Creates the file + directory if they don't exist.
 /// Deduplicates: same rule string in same section won't be added twice.
+#[allow(dead_code)] // API ready, not yet called from UI
 pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) {
     let path = project_root.join(".hologram").join("permissions.json");
     if let Some(parent) = path.parent() {
