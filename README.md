@@ -10,7 +10,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-417%2B%20total-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-363%2B%20total-brightgreen" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows-blue" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
@@ -50,7 +50,7 @@
 
 | **🌍 跨语言统一 IR** | **🤖 图为 Agent 而生** | **🔬 自举验证** |
 |---|---|---|
-| 26 门语言全部映射到同一张图——不是分别解析再拼接，而是一个统一中间表示。TypeScript 调 Python、Rust 调 Go，跨语言依赖链照样追踪。引擎内置 tree-sitter 适配器，每种语言的 import / call / 符号定义统一建模。 | 不是"把源文件丢给 LLM 让它自己看"。全库依赖提前算好，存进 MemoryIndex（邻接表 + 倒排索引）+ SQLite FTS5。Agent 调工具拿的是**结构化依赖数据**，不是源文件。一次调用几十行 JSON = 原本要读十几个文件才能拼出的依赖全景。 | HoloGram 用自己的引擎分析自己的代码库。项目根目录下的依赖图随时可查——既是质量保障，也是活样本。380 个 Rust 测试 + 37 个前端测试，每次提交前引擎自检。 |
+| 26 门语言全部映射到同一张图——不是分别解析再拼接，而是一个统一中间表示。TypeScript 调 Python、Rust 调 Go，跨语言依赖链照样追踪。引擎内置 tree-sitter 适配器，每种语言的 import / call / 符号定义统一建模。 | 不是"把源文件丢给 LLM 让它自己看"。全库依赖提前算好，存进 MemoryIndex（邻接表 + 倒排索引）+ SQLite FTS5。Agent 调工具拿的是**结构化依赖数据**，不是源文件。一次调用几十行 JSON = 原本要读十几个文件才能拼出的依赖全景。 | HoloGram 用自己的引擎分析自己的代码库。项目根目录下的依赖图随时可查——既是质量保障，也是活样本。363 个 Rust 测试 + 37 个前端测试，每次提交前引擎自检。 |
 
 ---
 
@@ -106,11 +106,11 @@ HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统�
 
 | 🧠 耦合诊断 | ⚡ 全量引擎 | 🛡️ 约束门禁 |
 |---|---|---|
-| L1 同包 → L2 跨包 → L3 数据/IO → L4 时序/异步。L4 穿透自动标红。动态调度合成：callback / observer 边自动检测。 | 存储引擎 v3：MemoryIndex（邻接表 O(degree) 查询）+ SqliteDb（FTS5 全文搜索）+ 增量更新（watcher → 防抖 → 原子 swap）。合并管线 v3/v4：逐批并行解析 + 序列化合并 + 全局边去重（625× 削减）。 | YAML 自定义规则：模块隔离、import 白名单、表访问限制。违规编码在 JSON 中，可直接入 CI 流水线。 |
+| L1 同包 → L2 跨包 → L3 数据/IO → L4 时序/异步。L1/L2 由结构图预计算，L3/L4 由数据流引擎按需查询（17 门语言 .scm query）。L4 穿透自动标红。动态调度合成：callback / observer 边自动检测。 | 存储引擎 v3：MemoryIndex（邻接表 O(degree) 查询）+ SqliteDb（FTS5 全文搜索）+ 增量更新（watcher → 防抖 → 原子 swap）。合并管线 v3/v4：逐批并行解析 + 序列化合并 + 全局边去重（625× 削减）。 | YAML 自定义规则：模块隔离、import 白名单、表访问限制。违规编码在 JSON 中，可直接入 CI 流水线。 |
 
 | 📦 序列化 | 🔌 MCP 长驻 | ✅ 测试 |
 |---|---|---|
-| JSON 通用交换 · MessagePack 二进制冷启秒开 · SQLite + FTS5。缓存优先：已有缓存即显，后台静默更新。 | JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。Tauri 启动时自动 spawn。 | 380 Rust `#[test]`：图模型、适配器、管线、耦合、社区发现、路由、存储引擎、MCP 协议全覆盖。 |
+| JSON 通用交换 · MessagePack 二进制冷启秒开 · SQLite + FTS5。缓存优先：已有缓存即显，后台静默更新。 | JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。Tauri 启动时自动 spawn。 | 363 Rust `#[test]`：图模型、适配器、管线、耦合、社区发现、路由、存储引擎、MCP 协议全覆盖。 |
 
 ### 图数据模型
 
@@ -129,9 +129,9 @@ HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统�
 
 | 类 | 包含 | 说明 |
 |---|---|---|
-| **结构边** | `imports` `calls` `inherits` `defines` | 导入、调用、继承、定义 |
-| **数据边** | `reads` `writes` `shares` | 读/写/共享数据，自动追踪 → Medium 节点 |
-| **时序边** | `triggers` `awaits` `sequences` | 异步触发、等待、顺序执行，带 `temporal_delay_sec` |
+| **结构边** | `imports` `calls` `inherits` `defines` | 导入、调用、继承、定义 — 管道预计算，存入图 |
+| **数据边** | `reads` `writes` `shares` | 读/写/共享数据 — 数据流引擎按需查询（17 门语言 .scm query），不预存图 |
+| **时序边** | `triggers` `awaits` `sequences` | 异步触发、等待、顺序执行 — 数据流引擎按需查询，带 `temporal_delay_sec` |
 
 每条边附加 `coupling_depth`（L1-L4）、`cross_file`、`direction`、`lsp_resolved`。
 
@@ -159,7 +159,7 @@ HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统�
 
 | 工具 | 参数 | 说明 |
 |------|------|------|
-| **fragile** | `limit` 返回条数（默认 5） | Top N 脆弱模块，按 L4 封装穿透密度排名。 |
+| **fragile** | `limit` 返回条数（默认 5） | Top N 脆弱模块，按文件级排名：结构耦合分（L1/L2 fan-in + coupling depth）+ 数据流 boost（L4×4 + L3×3，按需查询数据流引擎）。 |
 | **cycle** | `mode` 过滤器：`all` / `data` / `llm`（默认 all） | 循环依赖检测，按模式分类返回。 |
 | **thread_conflicts** | `node_id` 可选 | 线程 × 共享资源冲突矩阵。扫描项目 + 图 Medium 节点。 |
 | **coupling_report** | `module_name` 模块文件路径（必填） | 完整 L1-L4 耦合深度分布（L1/L2 来自结构图，L3/L4 来自数据流引擎）+ fragility score。 |
@@ -237,7 +237,7 @@ Agent 的工具集由两部分组成：MCP 引擎提供的 27 个图查询工具
 | 7. 动态调度合成 | addEventListener / .on() / .then() / .subscribe() 回调边补充 |
 | 8. 社区发现 + DB | Leiden 层次社区发现（Phase 1 扁平 + Phase 2 层级），MemoryIndex + SQLite 持久化 |
 
-> 数据流追踪改为按需查询（`hologram_dataflow`），不再在管道中预计算。
+> 数据流追踪改为按需查询（`hologram_dataflow` / `hologram_delayed` / `hologram_coupling_report` / `hologram_fragile` / `hologram_blindspots` 调用时实时查询数据流引擎），不再在管道中预计算。L1/L2 边存入图，L3/L4 边按需查询。17 门语言通过 tree-sitter .scm query 支持。
 
 ### 智能过滤（四级）
 
@@ -512,8 +512,8 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
             │ Rust 引擎 (engine/)                                             │
             │ 合并管线 v3/v4 · 全局边去重 (625×) · 27 MCP 工具               │
             │ MemoryIndex + SQLite FTS5 · 增量更新 · StringArena 字符串池    │
-            │ 数据流引擎 (1055 行) · 8 框架路由 · 8 LSP 后端 · 动态调度合成  │
-            │ 社区发现 (Leiden) · 四级过滤 · 380 tests                       │
+            │ 数据流引擎 (.scm query · 17 语言) · 8 框架路由 · 8 LSP 后端    │
+            │ 动态调度合成 · 社区发现 (Leiden) · 四级过滤 · 363 tests       │
             └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -524,7 +524,7 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 ## 开发
 
 ```bash
-cd engine && cargo test              # 380 tests
+cd engine && cargo test              # 363 tests
 cd engine && cargo build --release   # 编译引擎
 cargo tauri build                    # 打包桌面应用
 cd src-ui && npm run build           # 类型检查 + 打包前端
