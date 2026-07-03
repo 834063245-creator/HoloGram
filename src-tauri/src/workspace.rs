@@ -18,7 +18,7 @@
 // Managed as Tauri state: State<Arc<Mutex<Option<WorkspaceHandle>>>>
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -94,7 +94,8 @@ impl WorkspaceHandle {
             let poll_interval = Duration::from_secs(1);
             let debounce = Duration::from_secs(2);
             let mut consecutive_failures: u32 = 0;
-            let mut pending_changed: Vec<String> = Vec::new();
+            // (path, action) — action is "modified" / "created" / "removed"
+            let mut pending_changed: Vec<(String, String)> = Vec::new();
             let mut last_change_at: Option<std::time::Instant> = None;
 
             while running.load(Ordering::SeqCst) {
@@ -106,24 +107,25 @@ impl WorkspaceHandle {
 
                 let current_mtimes = collect_file_mtimes(&path);
 
-                let mut changed: Vec<String> = Vec::new();
+                // Detect changes with action tags for the incremental updater
+                let mut changed: Vec<(String, String)> = Vec::new();
                 for (fp, mt) in &current_mtimes {
                     match last_mtimes.get(fp) {
-                        Some(old) if old != mt => changed.push(fp.clone()),
-                        None => changed.push(fp.clone()),
+                        Some(old) if old != mt => changed.push((fp.clone(), "modified".into())),
+                        None => changed.push((fp.clone(), "created".into())),
                         _ => {}
                     }
                 }
                 for fp in last_mtimes.keys() {
                     if !current_mtimes.contains_key(fp) {
-                        changed.push(fp.clone());
+                        changed.push((fp.clone(), "removed".into()));
                     }
                 }
 
                 if !changed.is_empty() {
-                    for fp in &changed {
-                        if !pending_changed.contains(fp) {
-                            pending_changed.push(fp.clone());
+                    for (fp, action) in &changed {
+                        if !pending_changed.iter().any(|(p, _)| p == fp) {
+                            pending_changed.push((fp.clone(), action.clone()));
                         }
                     }
                     last_change_at = Some(std::time::Instant::now());
@@ -143,19 +145,32 @@ impl WorkspaceHandle {
                 let changed = std::mem::take(&mut pending_changed);
                 last_change_at = None;
 
+                // Extract just the paths for consumers that don't need actions
+                let changed_paths: Vec<String> = changed.iter().map(|(p, _)| p.clone()).collect();
+
                 // ponytail: snapshot old graph before re-analysis so we can diff
                 let before_graph = engine_api::engine_read_graph(|g| g.clone()).ok();
 
-                if let Some(_json) = run_engine_analysis(&path, &changed) {
+                // Try incremental update first (Phase 1-3: re-parse changed files,
+                // intra-file diff, cross-file edge repair). Falls back to full
+                // re-analysis automatically if incremental fails or validation
+                // threshold (0.85 edge retention) is not met.
+                let changed_for_engine: Vec<(PathBuf, String)> = changed.iter()
+                    .map(|(p, a)| (PathBuf::from(p), a.clone()))
+                    .collect();
+                let root = Path::new(&path);
+                let analysis_ok = engine_api::engine_try_incremental(root, &changed_for_engine).is_ok();
+
+                if analysis_ok {
                     last_mtimes = current_mtimes;
                     consecutive_failures = 0;
 
                     if let Ok(mut last) = changed_files.lock() {
-                        *last = changed.clone();
+                        *last = changed_paths.clone();
                     }
 
                     // Dataflow trace stale check: if any changed file is in a trace's files_involved, mark stale
-                    check_dataflow_traces_stale(&path, &changed);
+                    check_dataflow_traces_stale(&path, &changed_paths);
 
                     // ponytail: compute diff between old and new graph for incremental update
                     let diff_json = compute_watcher_diff(before_graph.as_ref());
@@ -268,17 +283,6 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
         }
     }
     map
-}
-
-/// Run a full engine analysis for the changed files and return the JSON result.
-fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<String> {
-    match crate::utils::direct_analyze(project_path, true) {
-        Ok(json) => Some(json),
-        Err(e) => {
-            eprintln!("[hologram] engine analysis failed: {e}");
-            None
-        }
-    }
 }
 
 /// Compute diff between previous graph and current engine graph for incremental update.
