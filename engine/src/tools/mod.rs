@@ -135,7 +135,31 @@ fn get_usize(args: &Value, key: &str, default: usize) -> usize {
     args.get(key)
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
-        .unwrap_or(default)
+        .unwrap_or_else(|| {
+            // Try camelCase variant (e.g. "min_size" → "minSize")
+            let camel = snake_to_camel(key);
+            args.get(&camel)
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(default)
+        })
+}
+
+/// Convert snake_case to camelCase (e.g. "min_size" → "minSize", "node_id" → "nodeId")
+fn snake_to_camel(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut upper = false;
+    for ch in s.chars() {
+        if ch == '_' {
+            upper = true;
+        } else if upper {
+            result.push(ch.to_ascii_uppercase());
+            upper = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 fn project_root() -> PathBuf {
@@ -436,7 +460,7 @@ fn handler_delayed(args: &Value) -> Value {
         .unwrap_or_default();
     let root = project_root();
     let paths: Vec<PathBuf> = if files.is_empty() {
-        discover_source_files(&root, 200)
+        discover_source_files(&root, 500)
     } else {
         files
             .iter()
@@ -488,9 +512,99 @@ fn handler_delayed(args: &Value) -> Value {
 
 fn handler_fragile(args: &Value) -> Value {
     let limit = get_usize(args, "limit", 5).max(1);
+    let root = project_root();
     with_store(|idx| {
-        let fragile = fragile_nodes_from_index(idx, limit);
-        json!({"fragile_modules": fragile, "limit": limit})
+        // ── Step 1: Aggregate graph structure scores per file ──
+        // Walk all nodes, group by file (from location), sum fan + coupling penalty.
+        let mut file_scores: std::collections::HashMap<String, (f64, usize)> = std::collections::HashMap::new();
+        for node in idx.nodes_iter() {
+            let loc = match node.location.as_ref() {
+                Some(l) => l.replace('\\', "/"),
+                None => continue,
+            };
+            let file_path = loc.rsplit_once(':').map(|(f, _)| f.to_string()).unwrap_or(loc);
+
+            let out = idx.outgoing(&node.id, None);
+            let incoming = idx.incoming(&node.id, None);
+            let fan = (out.len() + incoming.len()) as f64;
+            let coupling_penalty: f64 = out.iter()
+                .map(|(_, _, depth, _)| (*depth as f64).powi(2))
+                .chain(incoming.iter().map(|(_, _, depth, _)| (*depth as f64).powi(2)))
+                .sum::<f64>() / fan.max(1.0);
+            let node_score = fan * (1.0 + coupling_penalty);
+
+            file_scores.entry(file_path)
+                .and_modify(|(s, c)| { *s += node_score; *c += 1; })
+                .or_insert((node_score, 1));
+        }
+
+        // ── Step 2: Query dataflow engine for per-file L3/L4 ──
+        let files: Vec<PathBuf> = discover_source_files(&root, 500);
+        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
+        let mut file_l3l4: std::collections::HashMap<String, (u32, u32)> = std::collections::HashMap::new();
+        for r in &df_results {
+            if let Ok(df) = &r.result {
+                let mut l3 = 0u32;
+                let mut l4 = 0u32;
+                for s in &df.scopes {
+                    l3 += (s.reads.len() + s.writes.len()) as u32;
+                    l4 += (s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len()) as u32;
+                }
+                l3 += df.shared.len() as u32;
+                let key = r.file.replace('\\', "/");
+                file_l3l4.entry(key).and_modify(|(e3, e4)| { *e3 += l3; *e4 += l4; }).or_insert((l3, l4));
+            }
+        }
+
+        // ── Step 3: Merge structure + dataflow into per-file fragility ──
+        let mut scored: Vec<(f64, String, u32, u32, usize)> = Vec::new();
+        for (file, (struct_score, node_count)) in &file_scores {
+            // Normalize structure score by node count (average fragility per node)
+            let avg_struct = struct_score / (*node_count as f64).max(1.0);
+            // Match L3/L4 by file path (try both directions)
+            let mut l3 = 0u32;
+            let mut l4 = 0u32;
+            for (df_file, (d3, d4)) in &file_l3l4 {
+                if file.ends_with(df_file.as_str()) || df_file.ends_with(file.as_str()) || file == df_file {
+                    l3 = *d3;
+                    l4 = *d4;
+                    break;
+                }
+            }
+            // Final score: structure foundation + dataflow penalty
+            // Structure is the base; L4 weighs 4x, L3 weighs 3x (same ratio as coupling_report)
+            let df_penalty = (l4 as f64) * 4.0 + (l3 as f64) * 3.0;
+            let total = avg_struct + df_penalty;
+            scored.push((total, file.clone(), l3, l4, *node_count));
+        }
+
+        // Also include files that have dataflow but no graph nodes (rare but possible)
+        for (df_file, (l3, l4)) in &file_l3l4 {
+            let already = scored.iter().any(|(_, f, _, _, _)| f == df_file || df_file.ends_with(f.as_str()) || f.ends_with(df_file.as_str()));
+            if !already && (*l3 > 0 || *l4 > 0) {
+                let df_penalty = (*l4 as f64) * 4.0 + (*l3 as f64) * 3.0;
+                scored.push((df_penalty, df_file.clone(), *l3, *l4, 0));
+            }
+        }
+
+        // ── Step 4: Sort and format ──
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        let result: Vec<serde_json::Value> = scored.iter().map(|(score, file, l3, l4, nodes)| {
+            let short_name = file.rsplit('/').next().unwrap_or(file).to_string();
+            json!({
+                "module": short_name,
+                "file": file,
+                "fragility_score": format!("{:.1}", score),
+                "l3_edges": l3,
+                "l4_edges": l4,
+                "node_count": nodes,
+                "_score_breakdown": format!("struct={:.1} + L3×3={} + L4×4={}", score - (*l4 as f64) * 4.0 - (*l3 as f64) * 3.0, l3, l4),
+            })
+        }).collect();
+
+        json!({"fragile_modules": result, "limit": limit})
     })
 }
 
@@ -518,11 +632,11 @@ fn handler_cycle(args: &Value) -> Value {
 }
 
 fn handler_thread_conflicts(args: &Value) -> Value {
-    let _node_id = args.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str()).map(|s| s.to_string());
     let root = project_root();
     with_store(|idx| {
         let mut resources = serde_json::Map::new();
-        let files: Vec<PathBuf> = discover_source_files(&root, 200);
+        let files: Vec<PathBuf> = discover_source_files(&root, 500);
         let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
         let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         let mut var_readers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
@@ -682,7 +796,7 @@ fn handler_blindspots(args: &Value) -> Value {
     let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
     let root = project_root();
     with_store(|idx| {
-        let files: Vec<PathBuf> = discover_source_files(&root, 200);
+        let files: Vec<PathBuf> = discover_source_files(&root, 500);
         let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
         let mut l4 = count_l4_from_index(idx);
         let mut conflict_count = 0usize;
@@ -690,7 +804,7 @@ fn handler_blindspots(args: &Value) -> Value {
         for r in &df_results {
             if let Ok(df) = &r.result {
                 for s in &df.scopes {
-                    l4 = l4.max(s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len());
+                    l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
                     for w in &s.writes {
                         var_writers.entry(w.clone()).or_default().push(s.name.clone());
                     }
@@ -896,7 +1010,7 @@ fn handler_clusters(args: &Value) -> Value {
 }
 
 fn handler_diff(args: &Value) -> Value {
-    let before_path = args.get("before_path").and_then(|v| v.as_str()).unwrap_or("");
+    let before_path = args.get("before_path").or_else(|| args.get("beforePath")).and_then(|v| v.as_str()).unwrap_or("");
     if before_path.is_empty() {
         return json!({"error": "before_path is required"});
     }
@@ -1016,7 +1130,7 @@ fn handler_run_health(args: &Value) -> Value {
     }
     let root = project_root();
     let dataflow_l4: usize = {
-        let files: Vec<PathBuf> = discover_source_files(&root, 200);
+        let files: Vec<PathBuf> = discover_source_files(&root, 500);
         let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
         let mut l4 = 0usize;
         for r in &df_results {

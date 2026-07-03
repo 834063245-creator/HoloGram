@@ -85,6 +85,8 @@ export interface AgentOptions {
   compactRatio?: number;
   /** Minimum recent messages kept verbatim */
   recentKeep?: number;
+  /** Max output tokens per turn (0 = provider default 32000) */
+  maxTokens?: number;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -133,6 +135,7 @@ export class Agent {
   private maxSteps: number;
   private temperature: number;
   private pricing: Pricing | undefined;
+  private maxTokens: number;
 
   // Context management
   private contextWindow: number;
@@ -175,6 +178,7 @@ export class Agent {
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
+    this.maxTokens = opts.maxTokens ?? 0;
     this.contextWindow = opts.contextWindow ?? 1000000; // 1M tokens default — covers all current models, triggers compaction only when truly needed
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
@@ -386,7 +390,7 @@ export class Agent {
       messages: sanitizeToolPairing(this.session),
       tools: this.tools.schemas(),
       temperature: this.temperature,
-      max_tokens: 0, // use provider default
+      max_tokens: this.maxTokens,
     });
 
     let text = '';
