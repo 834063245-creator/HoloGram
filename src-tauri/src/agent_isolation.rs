@@ -35,6 +35,7 @@ pub struct AgentIsolation {
 
 impl AgentIsolation {
     /// Create a no-isolation instance (agent works directly in main repo).
+    #[allow(dead_code)] // not yet wired into the agent isolation UI flow
     pub fn none(main_repo_path: &Path) -> Self {
         Self {
             kind: IsolationKind::None,

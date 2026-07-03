@@ -3,24 +3,18 @@
 // Utility functions shared across Tauri commands.
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use base64::Engine;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tracing_appender::non_blocking::WorkerGuard;
 use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::graph::Graph;
-use engine::storage::SqliteDb;
-use engine::storage::MemoryIndex;
 use serde_json;
 use crate::os_sandbox;
 use crate::workspace;
 use crate::permissions;
-use crate::agent_isolation::{AgentIsolation, IsolationKind};
 use crate::permissions::{PermissionContext, PermissionDecision, has_permission_to_use_tool, register_ask};
 use crate::tools;
 use engine::community::detect_hierarchical_communities_with_base;

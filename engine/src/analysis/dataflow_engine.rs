@@ -333,7 +333,7 @@ enum CapKind {
     TriggerCall,
     AwaitCb,
     AwaitFn,
-    ThenMethod(String),
+    ThenMethod(#[allow(dead_code)] String),
     Sequence(String), // call target name
 }
 
