@@ -4,6 +4,7 @@
 use crate::analysis::{coupling_report, detect_cycles, thread_conflict_report, dataflow_engine::query_dataflow_files};
 use crate::community::louvain::detect_communities;
 use crate::graph::{Graph, NodeKind};
+use crate::pipeline::discovery::is_ignored_path;
 use crate::routing::{constraints::{ConstraintConfig, check_constraints}, signals::{DataflowSignalCounts, SignalGenerator}, summary::generate_summary};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -83,6 +84,15 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
 
 /// run_full_check — equivalent of Python preflight.py run_full_check()
 pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _project_root: &str) -> Value {
+    // Filter out changes to ignored directories (.hologram, .git, node_modules, etc.)
+    // These are tooling/runtime artifacts — not user source code — and should not
+    // generate constraint violations in the briefing.
+    let changed_files: Vec<String> = changed_files.iter()
+        .filter(|f| !is_ignored_path(f))
+        .cloned()
+        .collect();
+    let changed_files = changed_files.as_slice();
+
     // First open: establish baseline quietly — don't audit the whole project.
     if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
         return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
@@ -403,5 +413,41 @@ mod tests {
         assert!(!r["passed"].as_bool().unwrap(), "real changes should not pass");
         assert!(r["violation_count"].as_u64().unwrap() > 0, "should have violations");
         assert!(r["new_cycles"].as_u64().unwrap() > 0, "should detect new cycles");
+    }
+
+    /// Regression: changes to `.hologram/` or other ignored directories must NOT
+    /// produce violations. Previously, `.hologram/baseline.json` matched the
+    /// config-file pattern (`.json$`) and triggered a false L5 violation.
+    #[test]
+    fn test_preflight_filters_ignored_paths() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+
+        // Only ignored paths → should be quiet (no violations)
+        let r = run_full_check(&g, &g, &[
+            ".hologram/baseline.json".into(),
+            ".hologram/memory/context.json".into(),
+            ".git/HEAD".into(),
+            "node_modules/express/index.js".into(),
+        ], ".");
+        assert!(r["passed"].as_bool().unwrap(), "ignored paths should not produce violations");
+        assert_eq!(r["violation_count"], 0, "ignored paths should have zero violations");
+        assert_eq!(r["total_changed_files"], 0, "ignored paths should be filtered out");
+    }
+
+    /// Mixed: ignored paths + real source files → only real files counted.
+    #[test]
+    fn test_preflight_filters_ignored_mixed_with_real() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+
+        let r = run_full_check(&g, &g, &[
+            ".hologram/baseline.json".into(),  // ignored — would be L5 false positive
+            "migrations/0001_init.py".into(),   // real — should be L5
+        ], ".");
+        // Only the migration file should produce a violation
+        assert!(!r["passed"].as_bool().unwrap(), "migration file should produce violation");
+        assert_eq!(r["violation_count"], 1, "only 1 violation from migration, not from .hologram");
+        assert_eq!(r["total_changed_files"], 1, "only 1 real changed file");
     }
 }
