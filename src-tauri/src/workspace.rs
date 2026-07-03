@@ -160,9 +160,19 @@ impl WorkspaceHandle {
                     // ponytail: compute diff between old and new graph for incremental update
                     let diff_json = compute_watcher_diff(before_graph.as_ref());
 
+                    // Read actual node/edge counts from the engine store so the
+                    // frontend's `nc > 0` guard passes and it fetches the fresh graph.
+                    // Previously this was hardcoded to 0, causing every graph-updated
+                    // event to be silently ignored — the backend store was updated but
+                    // the frontend kept showing stale data until the user manually
+                    // clicked "re-analyze".
+                    let (nc, ec) = engine_api::engine_read(|idx| (idx.node_count(), idx.edge_count()))
+                        .unwrap_or((0, 0));
+
                     let mut summary = serde_json::json!({
-                        "total_nodes": 0,
-                        "node_count": 0,
+                        "total_nodes": nc,
+                        "node_count": nc,
+                        "edge_count": ec,
                         "meta": { "source_root": &path }
                     });
                     if let Some(d) = &diff_json {
