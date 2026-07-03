@@ -5,7 +5,7 @@
 // Provider | Agent | 显示 三个标签页
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化
 
-import { loadSettings, saveSettings, persistSecrets, updateProvider, addProvider, removeProvider } from '../settings';
+import { loadSettings, saveSettings, persistSecrets, addProvider, removeProvider } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
 import { setLang } from '../i18n';
 import type { Lang } from '../i18n';
@@ -172,12 +172,13 @@ export class SettingsPanel {
           </div>
           <div class="sp-add-form" style="display:none">
             <input class="sp-input sp-add-name" placeholder="Provider 名称（如 glm）" style="margin-bottom:6px">
+            <input type="password" class="sp-input sp-add-key" placeholder="API Key（可选，稍后也能填）" style="margin-bottom:6px">
             <div style="display:flex;gap:6px;align-items:center">
               <select class="sp-input sp-add-kind" style="flex:1">
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic</option>
               </select>
-              <button class="sp-btn-sm sp-btn-confirm-add">确认</button>
+              <button class="sp-btn-sm sp-btn-confirm-add">确认添加</button>
               <button class="sp-btn-sm sp-btn-cancel-add">取消</button>
             </div>
             <div class="sp-add-error" style="display:none;color:#f66;font-size:11px;margin-top:4px"></div>
@@ -361,25 +362,28 @@ export class SettingsPanel {
     // Save button
     this.panel.querySelector('.sp-btn-save')?.addEventListener('click', () => this.doSave());
 
-    // Provider selector
+    // Provider selector — sync form values BEFORE switching
     const sel = this.panel.querySelector('[data-field="activeProvider"]') as HTMLSelectElement;
     if (sel) {
       sel.addEventListener('change', () => {
+        this.syncFormToWorking();
         this.workingSettings.activeProvider = sel.value;
-        this.render(); // re-render to show correct provider fields
+        this.render();
       });
     }
 
-    // Add provider flow
+    // Add provider flow — name + kind + API key all in one form
     const addBtn = this.panel.querySelector('.sp-btn-add-provider') as HTMLElement;
     const form = this.panel.querySelector('.sp-add-form') as HTMLElement;
     const nameInput = this.panel.querySelector('.sp-add-name') as HTMLInputElement;
     const kindSel = this.panel.querySelector('.sp-add-kind') as HTMLSelectElement;
+    const keyInputAdd = this.panel.querySelector('.sp-add-key') as HTMLInputElement;
     const errEl = this.panel.querySelector('.sp-add-error') as HTMLElement;
 
     addBtn?.addEventListener('click', () => {
       form.style.display = 'block';
       nameInput.value = '';
+      keyInputAdd.value = '';
       errEl.style.display = 'none';
       nameInput.focus();
     });
@@ -402,18 +406,30 @@ export class SettingsPanel {
       }
       try {
         const kind = kindSel.value as 'anthropic' | 'openai';
+        const key = (keyInputAdd?.value || '').trim();
         this.workingSettings = addProvider(this.workingSettings, name, kind);
+        // If user typed a key in the add form, write it immediately
+        if (key) {
+          const added = this.workingSettings.providers.find((p) => p.name === name);
+          if (added) added.apiKey = key;
+        }
         this.dirty = true;
         form.style.display = 'none';
         this.render();
+        // Auto-focus the API Key field so user can continue filling if key was empty
+        if (!key) {
+          const keyEl = this.panel.querySelector('.sp-key-input') as HTMLInputElement;
+          keyEl?.focus();
+        }
       } catch (e: any) {
         errEl.textContent = e.message || '添加失败';
         errEl.style.display = 'block';
       }
     });
 
-    // Remove provider
+    // Remove provider — sync first, then delete
     this.panel.querySelector('.sp-btn-rm-provider')?.addEventListener('click', () => {
+      this.syncFormToWorking();
       const active = this.workingSettings.providers.find((p) => p.name === this.workingSettings.activeProvider);
       if (!active) return;
       if (this.workingSettings.providers.length <= 1) {
@@ -520,28 +536,40 @@ export class SettingsPanel {
 
   // ── Save ──
 
-  private doSave(): void {
+  /** Read current provider form values into workingSettings. Call before any re-render. */
+  private syncFormToWorking(): void {
     const s = this.workingSettings;
     const active = s.providers.find((p) => p.name === s.activeProvider);
     if (!active) return;
 
-    // Read form values for current provider
     const apiKeyEl = this.panel.querySelector('[data-field="apiKey"]') as HTMLInputElement;
     const modelEl = this.panel.querySelector('[data-field="model"]') as HTMLInputElement;
     const baseUrlEl = this.panel.querySelector('[data-field="baseUrl"]') as HTMLInputElement;
     const thinkingEl = this.panel.querySelector('[data-field="thinking"]') as HTMLSelectElement | null;
+    const maxTokEl = this.panel.querySelector('[data-field="maxTokens"]') as HTMLInputElement;
 
     if (apiKeyEl) active.apiKey = apiKeyEl.value.trim();
     if (modelEl) active.model = modelEl.value.trim();
     if (baseUrlEl) active.baseUrl = baseUrlEl.value.trim();
     if (thinkingEl) active.thinking = thinkingEl.value;
-    const maxTokEl = this.panel.querySelector('[data-field="maxTokens"]') as HTMLInputElement;
     if (maxTokEl) active.maxTokens = parseInt(maxTokEl.value) || 0;
+  }
 
-    // Update provider in settings
-    s.providers = s.providers.map((p) =>
-      p.name === active.name ? { ...active } : p,
-    );
+  private doSave(): void {
+    // Sync form values first
+    this.syncFormToWorking();
+
+    const s = this.workingSettings;
+    const active = s.providers.find((p) => p.name === s.activeProvider);
+    if (!active) return;
+
+    // Validate: warn if key is empty
+    if (!active.apiKey || active.apiKey.trim() === '') {
+      if (!confirm(`Provider "${active.name}" 的 API Key 为空，保存后 Agent 无法工作。仍要保存？`)) return;
+    }
+    if (!active.model || active.model.trim() === '') {
+      if (!confirm(`Provider "${active.name}" 的模型名称为空，Agent 无法发送请求。仍要保存？`)) return;
+    }
 
     // Read Agent form values
     const tempEl = this.panel.querySelector('[data-field="temperature"]') as HTMLInputElement;
@@ -568,14 +596,6 @@ export class SettingsPanel {
     saveSettings(s);
     // Also persist API keys to system encrypted storage (DPAPI)
     persistSecrets(s).catch(() => {});
-    const rawLS2 = (typeof localStorage !== 'undefined') ? localStorage.getItem('hologram_settings') : null;
-    let verifyLen = '?';
-    if (rawLS2) {
-      try { const p2 = JSON.parse(rawLS2); const ap = p2.providers?.find((pp:any) => pp.name === active.name); verifyLen = String((ap?.apiKey || '').length); } catch { verifyLen = 'parseErr'; }
-    }
-    console.error('[DIAG] saved. verify localStorage keyLen=', verifyLen);
-    const st = document.getElementById('status-text');
-    if (st) st.textContent = `[settings] saved, ls verify=${verifyLen}`;
     setLang(s.display.language);
     bus.emit('lang:changed', { lang: s.display.language });
     this.originalSettings = structuredClone(s);
