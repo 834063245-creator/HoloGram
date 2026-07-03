@@ -87,7 +87,7 @@ pub(crate) async fn hologram_path(from: String, to: String, state: tauri::State<
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
-#[tauri::command]
+#[tauri::command(name = "hologram_diff")]
 pub(crate) async fn hologram_graph_diff(before_path: String, _after_path: Option<String>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_diff", &state)?;
     let bp = before_path.clone();
