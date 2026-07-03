@@ -1990,3 +1990,46 @@ pub(crate) fn agent_isolation_prune(
         Err(e) => Err(e),
     }
 }
+
+// ═══════════════════════════════════════════════════════
+// Tests — verify hologram_call dispatches all tools
+// ═══════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hologram_tools_list_returns_27_tools() {
+        let raw = hologram_tools_list().expect("hologram_tools_list should succeed");
+        let tools: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("should parse");
+        assert_eq!(tools.len(), 27, "must have exactly 27 hologram tools");
+        for tool in &tools {
+            let name = tool["name"].as_str().expect("every tool must have a name");
+            assert!(name.starts_with("hologram_"), "tool name must start with hologram_: {name}");
+        }
+    }
+
+    #[test]
+    fn hologram_call_dispatches_all_27_tools_no_not_found() {
+        let raw = hologram_tools_list().expect("hologram_tools_list should succeed");
+        let tools: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("should parse");
+
+        for tool in &tools {
+            let name = tool["name"].as_str().unwrap();
+            let result = hologram_call(name.to_string(), serde_json::json!({}));
+            match result {
+                Ok(output) => {
+                    let v: serde_json::Value = serde_json::from_str(&output).expect("should be valid JSON");
+                    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                        assert!(
+                            !err.contains("Tool not found"),
+                            "Tool '{name}' not found in ToolRegistry::dispatch — did you add it to the match block?"
+                        );
+                    }
+                }
+                Err(e) => panic!("hologram_call('{name}') failed: {e}"),
+            }
+        }
+    }
+}
