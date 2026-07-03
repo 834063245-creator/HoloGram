@@ -1219,6 +1219,16 @@ pub fn engine_analyze(project_root: &Path) -> Result<AnalyzeResult, String> {
     engine.analyze(project_root)
 }
 
+/// Try incremental update first, fall back to full re-analysis.
+/// Called by the Tauri shell's file watcher so it doesn't always do
+/// a full re-analysis when only a few files changed.
+pub fn engine_try_incremental(
+    root: &Path,
+    changed_files: &[(PathBuf, String)],
+) -> Result<(), String> {
+    Engine::handle_watcher_changes(root, changed_files, &None)
+}
+
 // ═══════════════════════════════════════════════════════════════
 // LSP Type-Aware Call Resolution
 // ═══════════════════════════════════════════════════════════════
