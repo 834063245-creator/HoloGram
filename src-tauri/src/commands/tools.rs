@@ -18,6 +18,7 @@ use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::analysis::graph_summary;
 use engine::graph::query;
+use engine::pipeline::discovery::is_ignored_path;
 use engine::tools::ToolRegistry;
 
 // ═══════════════════════════════════════════════════════
@@ -253,11 +254,14 @@ pub(crate) async fn write_file_content(
         .map_err(|e| format!("无法保存文件 {}: {}", rp, e))?;
 
     // Hook: record timeline + update changed_files for 简报
+    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
     if let Some(ref handle) = *state.lock().unwrap() {
         let short = rp.rsplit(['/', '\\']).next().unwrap_or(&rp);
         let _ = engine_api::engine_record_timeline("agent_write", Some(&rp), &format!("Agent 写入: {}", short));
-        if let Ok(mut changed) = handle.changed_files.lock() {
-            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        if !is_ignored_path(&rp) {
+            if let Ok(mut changed) = handle.changed_files.lock() {
+                if !changed.contains(&rp) { changed.push(rp.clone()); }
+            }
         }
     }
     Ok(())
@@ -330,12 +334,15 @@ pub(crate) async fn delete_file_or_dir(
             .map_err(|e| format!("无法删除文件 {}: {}", path, e))
     }?;
     // Hook: record timeline + update changed_files
+    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
     let rp = real.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         let short = rp.rsplit('/').next().unwrap_or(&rp);
         let _ = engine_api::engine_record_timeline("agent_delete", Some(&rp), &format!("Agent 删除: {}", short));
-        if let Ok(mut changed) = handle.changed_files.lock() {
-            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        if !is_ignored_path(&rp) {
+            if let Ok(mut changed) = handle.changed_files.lock() {
+                if !changed.contains(&rp) { changed.push(rp.clone()); }
+            }
         }
     }
     Ok(())
@@ -355,12 +362,15 @@ pub(crate) async fn rename_file_or_dir(
     std::fs::rename(&resolved_from, &resolved_to)
         .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))?;
     // Hook: record timeline + update changed_files
+    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         let short = rp.rsplit('/').next().unwrap_or(&rp);
         let _ = engine_api::engine_record_timeline("agent_rename", Some(&rp), &format!("Agent 重命名: {}", short));
-        if let Ok(mut changed) = handle.changed_files.lock() {
-            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        if !is_ignored_path(&rp) {
+            if let Ok(mut changed) = handle.changed_files.lock() {
+                if !changed.contains(&rp) { changed.push(rp.clone()); }
+            }
         }
     }
     Ok(())
@@ -383,12 +393,15 @@ pub(crate) async fn move_file(
     std::fs::rename(&src_real, &dest)
         .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))?;
     // Hook: record timeline + update changed_files
+    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
     let rp = dest.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         let short = rp.rsplit('/').next().unwrap_or(&rp);
         let _ = engine_api::engine_record_timeline("agent_move", Some(&rp), &format!("Agent 移动: {}", short));
-        if let Ok(mut changed) = handle.changed_files.lock() {
-            if !changed.contains(&rp) { changed.push(rp.clone()); }
+        if !is_ignored_path(&rp) {
+            if let Ok(mut changed) = handle.changed_files.lock() {
+                if !changed.contains(&rp) { changed.push(rp.clone()); }
+            }
         }
     }
     Ok(())
@@ -832,11 +845,14 @@ pub(crate) async fn edit_file(
         .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
 
     // Record timeline event + update changed files for check (简报)
+    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
     if let Some(ref handle) = *state.lock().unwrap() {
         let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
         let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
-        if let Ok(mut changed) = handle.changed_files.lock() {
-            if !changed.contains(&file_path) { changed.push(file_path.clone()); }
+        if !is_ignored_path(&file_path) {
+            if let Ok(mut changed) = handle.changed_files.lock() {
+                if !changed.contains(&file_path) { changed.push(file_path.clone()); }
+            }
         }
     }
 

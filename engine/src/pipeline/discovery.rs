@@ -90,22 +90,41 @@ fn collect_gitignore_dirs(root: &Path) -> HashSet<String> {
     dirs
 }
 
+/// Hardcoded common exclusions (tooling, VCS, build artifacts, HoloGram runtime).
+/// Shared by file discovery, watcher, and briefing (preflight) to ensure
+/// consistent filtering across all subsystems.
+pub const IGNORED_DIRS: &[&str] = &[
+    ".git", "__pycache__", "node_modules", "venv", ".venv", "env",
+    ".tox", ".mypy_cache", ".pytest_cache", ".hg", ".svn",
+    "dist", "build", "target", ".eggs", "*.egg-info",
+    ".hologram", "htmlcov", ".reasonix", ".codegraph", ".ruff_cache",
+    ".next", ".nuxt", "out", ".angular", ".cache", "coverage",
+    "vendored", "generated", "tests",
+];
+
 /// Check if a directory entry should be excluded from traversal.
 fn is_excluded(entry: &walkdir::DirEntry, gitignore_dirs: &HashSet<String>) -> bool {
     let name = entry.file_name().to_str().unwrap_or("");
     if !entry.file_type().is_dir() {
         return false;
     }
-    // Hardcoded common exclusions (tooling, VCS, build artifacts)
-    const HARDCODED: &[&str] = &[
-        ".git", "__pycache__", "node_modules", "venv", ".venv", "env",
-        ".tox", ".mypy_cache", ".pytest_cache", ".hg", ".svn",
-        "dist", "build", "target", ".eggs", "*.egg-info",
-        ".hologram", "htmlcov", ".reasonix", ".codegraph", ".ruff_cache",
-        ".next", ".nuxt", "out", ".angular", ".cache", "coverage",
-        "vendored", "generated", "tests",
-    ];
-    HARDCODED.contains(&name) || gitignore_dirs.contains(name)
+    IGNORED_DIRS.contains(&name) || gitignore_dirs.contains(name)
+}
+
+/// Check if a file path falls within any ignored directory.
+/// Used by the briefing system (preflight) to filter out changes to files
+/// in `.hologram/`, `.git/`, `node_modules/`, etc. — these are tooling/runtime
+/// artifacts, not user source code, and should not generate constraint violations.
+///
+/// Handles both `/` and `\` path separators for cross-platform compatibility.
+pub fn is_ignored_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    for component in normalized.split('/') {
+        if IGNORED_DIRS.contains(&component) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -187,5 +206,38 @@ mod tests {
         assert!(!names.contains(&"bundle.js".to_string()), "dist/ should be excluded by nested .gitignore");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_is_ignored_path_hologram() {
+        assert!(is_ignored_path("D:/projects/myapp/.hologram/baseline.json"));
+        assert!(is_ignored_path("D:/projects/myapp/.hologram/memory/ctx.json"));
+        assert!(is_ignored_path(".hologram/cache/graph.json"));
+    }
+
+    #[test]
+    fn test_is_ignored_path_git() {
+        assert!(is_ignored_path("D:/projects/myapp/.git/HEAD"));
+        assert!(is_ignored_path("D:/projects/myapp/.git/config"));
+    }
+
+    #[test]
+    fn test_is_ignored_path_node_modules() {
+        assert!(is_ignored_path("D:/projects/myapp/node_modules/express/index.js"));
+        assert!(is_ignored_path("node_modules/react/index.js"));
+    }
+
+    #[test]
+    fn test_is_ignored_path_source_files() {
+        assert!(!is_ignored_path("D:/projects/myapp/src/main.rs"));
+        assert!(!is_ignored_path("src/handler.py"));
+        assert!(!is_ignored_path("app/config/settings.yaml"));
+    }
+
+    #[test]
+    fn test_is_ignored_path_windows_backslash() {
+        assert!(is_ignored_path("D:\\projects\\myapp\\.hologram\\baseline.json"));
+        assert!(is_ignored_path("D:\\projects\\myapp\\node_modules\\express\\index.js"));
+        assert!(!is_ignored_path("D:\\projects\\myapp\\src\\main.rs"));
     }
 }
