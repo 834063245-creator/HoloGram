@@ -7,7 +7,7 @@ import { Chunk, ChunkType, Message, Provider, Request, Role, classifyError, sani
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
-const DEFAULT_MAX_TOKENS = 200000;
+const DEFAULT_MAX_TOKENS = 32000; // ponytail: safe ceiling across providers
 
 interface AnthropicConfig {
   name?: string;

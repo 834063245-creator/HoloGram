@@ -5,7 +5,7 @@
 // Provider | Agent | 显示 三个标签页
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化
 
-import { loadSettings, saveSettings, persistSecrets, updateProvider } from '../settings';
+import { loadSettings, saveSettings, persistSecrets, updateProvider, addProvider, removeProvider } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
 import { setLang } from '../i18n';
 import type { Lang } from '../i18n';
@@ -148,7 +148,7 @@ export class SettingsPanel {
 
   // ── Tab renderers ──
 
-  private renderProviderTab(active: { name: string; kind: string; apiKey: string; model: string; baseUrl: string; thinking?: string }): string {
+  private renderProviderTab(active: { name: string; kind: string; apiKey: string; model: string; baseUrl: string; thinking?: string; maxTokens?: number }): string {
     const s = this.workingSettings;
     const isAnthropic = active.kind === 'anthropic';
 
@@ -164,7 +164,23 @@ export class SettingsPanel {
           <div class="sp-section-title">当前 Provider</div>
           <div class="sp-field">
             <label class="sp-label">Provider</label>
-            <select class="sp-select" data-field="activeProvider">${providerOpts}</select>
+            <div class="sp-provider-row">
+              <select class="sp-select" data-field="activeProvider" style="flex:1">${providerOpts}</select>
+              <button class="sp-btn-sm sp-btn-add-provider" title="添加 Provider">+ 添加</button>
+              <button class="sp-btn-sm sp-btn-rm-provider" title="删除当前 Provider">删除</button>
+            </div>
+          </div>
+          <div class="sp-add-form" style="display:none">
+            <input class="sp-input sp-add-name" placeholder="Provider 名称（如 glm）" style="margin-bottom:6px">
+            <div style="display:flex;gap:6px;align-items:center">
+              <select class="sp-input sp-add-kind" style="flex:1">
+                <option value="openai">OpenAI 兼容</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+              <button class="sp-btn-sm sp-btn-confirm-add">确认</button>
+              <button class="sp-btn-sm sp-btn-cancel-add">取消</button>
+            </div>
+            <div class="sp-add-error" style="display:none;color:#f66;font-size:11px;margin-top:4px"></div>
           </div>
         </div>
 
@@ -184,6 +200,12 @@ export class SettingsPanel {
             <input type="text" class="sp-input" data-field="model"
                    value="${escapeAttr(active.model)}"
                    placeholder="deepseek-chat">
+          </div>
+          <div class="sp-field">
+            <label class="sp-label">Max Tokens <span class="sp-hint-sub">（0 = 默认 32000）</span></label>
+            <input type="number" class="sp-input sp-input-num" data-field="maxTokens"
+                   value="${active.maxTokens || 0}" min="0" step="1000"
+                   placeholder="0">
           </div>
           <div class="sp-field">
             <label class="sp-label">Base URL</label>
@@ -348,6 +370,66 @@ export class SettingsPanel {
       });
     }
 
+    // Add provider flow
+    const addBtn = this.panel.querySelector('.sp-btn-add-provider') as HTMLElement;
+    const form = this.panel.querySelector('.sp-add-form') as HTMLElement;
+    const nameInput = this.panel.querySelector('.sp-add-name') as HTMLInputElement;
+    const kindSel = this.panel.querySelector('.sp-add-kind') as HTMLSelectElement;
+    const errEl = this.panel.querySelector('.sp-add-error') as HTMLElement;
+
+    addBtn?.addEventListener('click', () => {
+      form.style.display = 'block';
+      nameInput.value = '';
+      errEl.style.display = 'none';
+      nameInput.focus();
+    });
+
+    this.panel.querySelector('.sp-btn-cancel-add')?.addEventListener('click', () => {
+      form.style.display = 'none';
+    });
+
+    this.panel.querySelector('.sp-btn-confirm-add')?.addEventListener('click', () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        errEl.textContent = '名称不能为空';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+        errEl.textContent = '名称只能包含字母、数字、下划线和连字符';
+        errEl.style.display = 'block';
+        return;
+      }
+      try {
+        const kind = kindSel.value as 'anthropic' | 'openai';
+        this.workingSettings = addProvider(this.workingSettings, name, kind);
+        this.dirty = true;
+        form.style.display = 'none';
+        this.render();
+      } catch (e: any) {
+        errEl.textContent = e.message || '添加失败';
+        errEl.style.display = 'block';
+      }
+    });
+
+    // Remove provider
+    this.panel.querySelector('.sp-btn-rm-provider')?.addEventListener('click', () => {
+      const active = this.workingSettings.providers.find((p) => p.name === this.workingSettings.activeProvider);
+      if (!active) return;
+      if (this.workingSettings.providers.length <= 1) {
+        alert('至少保留一个 Provider');
+        return;
+      }
+      if (!confirm(`确定删除 Provider "${active.name}"？此操作不可撤销。`)) return;
+      try {
+        this.workingSettings = removeProvider(this.workingSettings, active.name);
+        this.dirty = true;
+        this.render();
+      } catch (e: any) {
+        alert(e.message || '删除失败');
+      }
+    });
+
     // Key visibility toggle
     this.panel.querySelector('.sp-key-toggle')?.addEventListener('click', () => {
       const input = this.panel.querySelector('.sp-key-input') as HTMLInputElement;
@@ -453,6 +535,8 @@ export class SettingsPanel {
     if (modelEl) active.model = modelEl.value.trim();
     if (baseUrlEl) active.baseUrl = baseUrlEl.value.trim();
     if (thinkingEl) active.thinking = thinkingEl.value;
+    const maxTokEl = this.panel.querySelector('[data-field="maxTokens"]') as HTMLInputElement;
+    if (maxTokEl) active.maxTokens = parseInt(maxTokEl.value) || 0;
 
     // Update provider in settings
     s.providers = s.providers.map((p) =>

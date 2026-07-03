@@ -11,6 +11,7 @@ export interface ProviderSettings {
   baseUrl: string;
   model: string;
   thinking?: string; // Anthropic extended thinking
+  maxTokens?: number; // 0 = provider default (32000)
 }
 
 export interface AgentSettings {
@@ -170,6 +171,40 @@ export function updateProvider(
       p.name === name ? { ...p, ...patch } : p,
     ),
   };
+}
+
+export function addProvider(
+  s: AppSettings,
+  name: string,
+  kind: 'anthropic' | 'openai',
+): AppSettings {
+  if (s.providers.find((p) => p.name === name)) {
+    throw new Error(`Provider "${name}" 已存在`);
+  }
+  const baseUrl = kind === 'anthropic'
+    ? 'https://api.anthropic.com'
+    : 'https://api.openai.com/v1';
+  return {
+    ...s,
+    activeProvider: name,
+    providers: [...s.providers, {
+      kind,
+      name,
+      apiKey: '',
+      baseUrl,
+      model: '',
+      maxTokens: 0,
+    }],
+  };
+}
+
+export function removeProvider(s: AppSettings, name: string): AppSettings {
+  const idx = s.providers.findIndex((p) => p.name === name);
+  if (idx < 0) throw new Error(`Provider "${name}" 不存在`);
+  if (s.providers.length <= 1) throw new Error('至少保留一个 Provider');
+  const next = s.providers.filter((p) => p.name !== name);
+  const active = s.activeProvider === name ? next[0].name : s.activeProvider;
+  return { ...s, activeProvider: active, providers: next };
 }
 
 // ---- Pricing (per 1M tokens) ----

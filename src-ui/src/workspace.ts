@@ -448,6 +448,7 @@ export class Workspace {
     this.registry = registry;
     this.agent = new Agent(prov, registry, systemPrompt, {
       pricing, temperature, maxSteps, contextWindow,
+      maxTokens: active.maxTokens ?? 0,
     }, chatPanel.sink);
 
     // Sub-agent tool
@@ -521,6 +522,7 @@ export class Workspace {
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature, maxSteps: s.agent?.maxSteps,
           contextWindow: s.agent?.contextWindow,
+          maxTokens: act.maxTokens ?? 0,
         }, chatPanel.sink);
         if (hookCtx) {
           const hooks = new HookRegistry();

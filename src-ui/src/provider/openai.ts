@@ -6,7 +6,7 @@
 
 import { Chunk, ChunkType, Message, Provider, Request, Role, classifyError, sanitizeToolPairing } from './types';
 
-const DEFAULT_MAX_TOKENS = 200000;
+const DEFAULT_MAX_TOKENS = 32000; // ponytail: safe ceiling across providers (GLM caps at 131072)
 
 interface OpenAIConfig {
   name?: string;
