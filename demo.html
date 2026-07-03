@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🔮 HoloGram 全息观测站 — 比赛演示</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--void:#030812;--void-deep:#010408;--panel-bg:rgba(4,12,28,0.92);--panel-edge:rgba(54,82,128,0.28);--starlight:#e2edff;--starlight-dim:rgba(205,225,252,0.94);--text-muted:rgba(155,175,200,0.78);--signal:#68a8ff;--signal-bright:#8cc4ff;--signal-glow:rgba(80,140,240,0.35);--sol:#f0b848;--sol-bright:#ffcc60;--sol-glow:rgba(240,170,50,0.3);--nebula:#a088e0;--nebula-bright:#c0a8ff;--anomaly-red:#f04848;--anomaly-orange:#f07838;--anomaly-green:#48cc68;--pass:#3da55d;--fail:#d94444;--warn:#d69622;--toolbar-h:42px;--status-h:28px;--font-mono:'JetBrains Mono','Cascadia Code',monospace;--font-hud:'Orbitron',system-ui,sans-serif;--font-body:'Noto Sans SC',system-ui,sans-serif;--text-faint:rgba(135,165,205,0.62);--text-dim:rgba(145,180,220,0.72);--text-soft:rgba(160,195,235,0.80)}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--void);color:var(--starlight-dim);font-family:var(--font-body);font-size:13px;line-height:1.5;-webkit-font-smoothing:auto;text-rendering:optimizeLegibility;text-shadow:0 0 1px rgba(0,0,0,0.35)}
+::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(60,90,140,0.35);border-radius:2px}::-webkit-scrollbar-thumb:hover{background:rgba(80,120,180,0.5)}
+#space{position:fixed;inset:0;z-index:0;overflow:hidden}
+#space .ambient{position:absolute;inset:0;background:radial-gradient(900px 600px at 65% 35%,rgba(12,28,60,0.28),transparent 70%),radial-gradient(600px 400px at 25% 55%,rgba(8,16,40,0.22),transparent 65%),var(--void-deep)}
+#space .holo-grid{position:absolute;inset:-20%;z-index:2;background-image:linear-gradient(rgba(48,72,120,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(48,72,120,0.04) 1px,transparent 1px);background-size:80px 80px;transform:perspective(800px) rotateX(60deg);animation:gp 12s ease-in-out infinite;opacity:0.55}
+@keyframes gp{0%,100%{opacity:0.45}50%{opacity:0.65}}
+.orbital-ring{position:absolute;top:50%;left:50%;border-radius:50%;border:1px solid rgba(60,100,180,0.08);pointer-events:none;animation:os 60s linear infinite}
+.orbital-ring.r1{width:520px;height:520px;margin-left:-260px;margin-top:-260px;transform:rotateX(65deg) rotateZ(25deg)}
+.orbital-ring.r2{width:680px;height:680px;margin-left:-340px;margin-top:-340px;border-color:rgba(60,100,180,0.05);animation:os 85s linear infinite reverse;transform:rotateX(62deg) rotateZ(-15deg)}
+@keyframes os{from{transform:rotateX(65deg) rotateZ(0deg)}to{transform:rotateX(65deg) rotateZ(360deg)}}
+#scanlines{position:fixed;inset:0;z-index:9998;pointer-events:none;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);opacity:0.018}
+#vignette{position:fixed;inset:0;z-index:1;pointer-events:none;background:radial-gradient(ellipse at center,transparent 50%,rgba(3,8,18,0.55) 82%,rgba(3,8,18,0.78) 100%)}
+.stars{position:absolute;inset:0;pointer-events:none}
+.s1{background-image:radial-gradient(0.8px 0.8px at 5% 8%,rgba(200,220,255,0.8),transparent),radial-gradient(0.6px 0.6px at 12% 18%,rgba(190,215,255,0.6),transparent),radial-gradient(0.7px 0.7px at 22% 5%,rgba(210,230,255,0.7),transparent),radial-gradient(0.9px 0.9px at 60% 25%,rgba(220,240,255,0.85),transparent),radial-gradient(0.7px 0.7px at 75% 20%,rgba(200,220,255,0.65),transparent),radial-gradient(0.8px 0.8px at 88% 25%,rgba(210,230,255,0.75),transparent),radial-gradient(0.8px 0.8px at 30% 38%,rgba(210,230,255,0.7),transparent),radial-gradient(0.7px 0.7px at 52% 42%,rgba(200,220,255,0.6),transparent),radial-gradient(0.8px 0.8px at 38% 58%,rgba(210,230,255,0.65),transparent),radial-gradient(0.7px 0.7px at 58% 62%,rgba(200,220,255,0.6),transparent),radial-gradient(0.8px 0.8px at 78% 65%,rgba(210,230,255,0.65),transparent),radial-gradient(0.8px 0.8px at 35% 82%,rgba(210,230,255,0.6),transparent);animation:dd 160s linear infinite}
+.s2{background-image:radial-gradient(1px 1px at 10% 12%,rgba(240,190,80,0.5),transparent),radial-gradient(1px 1px at 50% 28%,rgba(170,140,230,0.45),transparent),radial-gradient(0.9px 0.9px at 85% 22%,rgba(170,140,230,0.4),transparent),radial-gradient(1px 1px at 42% 35%,rgba(240,190,80,0.45),transparent);animation:dm 130s linear infinite}
+.s3{background-image:radial-gradient(1.2px 1.2px at 8% 15%,rgba(230,240,255,0.9),transparent),radial-gradient(1.5px 1.5px at 28% 20%,rgba(230,240,255,0.8),transparent),radial-gradient(1.4px 1.4px at 62% 25%,rgba(230,240,255,0.75),transparent),radial-gradient(1.5px 1.5px at 90% 28%,rgba(230,240,255,0.85),transparent),radial-gradient(1.4px 1.4px at 35% 50%,rgba(230,240,255,0.75),transparent);animation:dn 90s linear infinite}
+@keyframes dd{from{transform:translate(0,0)}to{transform:translate(-8px,-12px)}}@keyframes dm{from{transform:translate(0,0)}to{transform:translate(6px,-9px)}}@keyframes dn{from{transform:translate(0,0)}to{transform:translate(-4px,-6px)}}
+#toolbar{position:fixed;top:0;left:0;right:0;height:var(--toolbar-h);z-index:100;background:linear-gradient(180deg,rgba(8,16,32,0.98),rgba(3,8,20,0.94));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(60,100,180,0.12);box-shadow:0 6px 28px rgba(0,0,0,0.5);display:flex;align-items:center;padding:0 14px;gap:0}
+#toolbar::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(100,160,250,0.22) 30%,rgba(80,140,240,0.08) 50%,rgba(100,160,250,0.22) 70%,transparent);opacity:0.5}
+#toolbar .sep{width:1px;height:18px;margin:0 4px;background:linear-gradient(to bottom,transparent,rgba(90,140,230,0.32) 50%,transparent)}
+#toolbar .spacer{flex:1}
+#tb-logo{font-family:var(--font-hud);font-size:14px;font-weight:700;letter-spacing:3.5px;background:linear-gradient(105deg,rgba(100,160,240,0.5),rgba(140,200,255,0.8) 18%,rgba(210,235,255,1) 36%,rgba(140,200,255,0.8) 54%,rgba(100,160,240,0.5) 72%,rgba(140,200,255,0.8) 90%,rgba(100,160,240,0.5));background-size:220% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:ls 4s ease-in-out infinite;margin-right:2px;user-select:none;text-shadow:none}
+@keyframes ls{0%,100%{background-position:100% 50%}50%{background-position:0% 50%}}
+#toolbar button{min-height:26px;padding:0 10px;font-size:10.5px;font-weight:400;letter-spacing:0.4px;background:transparent;color:var(--text-soft);border:1px solid transparent;cursor:pointer;border-radius:2px;display:flex;align-items:center;gap:5px;transition:all 0.15s;user-select:none;font-family:var(--font-body)}
+#toolbar button:hover{color:rgba(215,235,255,0.9);border-color:rgba(80,135,220,0.25);box-shadow:inset 0 0 14px rgba(80,140,240,0.05)}
+#toolbar button.active{color:var(--signal-bright);border-color:rgba(80,135,220,0.3)}
+#tb-path{color:var(--text-faint);font-family:var(--font-mono);font-size:9px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#graph{position:fixed;top:var(--toolbar-h);left:0;right:0;bottom:var(--status-h);z-index:2;user-select:none;cursor:grab}
+#graph:active{cursor:grabbing}
+#graph canvas{outline:none;display:block}
+#graph-labels{position:absolute;inset:0;pointer-events:none;z-index:4}
+.node-label{position:absolute;font-size:11px;font-weight:500;transform:translate(-50%,-50%);text-shadow:0 0 6px rgba(0,0,0,0.8),0 0 12px rgba(0,0,0,0.5);white-space:nowrap;pointer-events:none;transition:opacity 0.3s}
+#graph-legend{position:absolute;bottom:32px;left:10px;z-index:15;pointer-events:auto;background:var(--panel-bg);border:1px solid var(--panel-edge);border-radius:8px;padding:8px 14px;font-family:var(--font-mono);font-size:11px;color:var(--starlight-dim);opacity:0.65;display:flex;flex-direction:row;gap:18px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:opacity 0.25s}
+#graph-legend:hover{opacity:1}
+#graph-legend .ls{display:flex;flex-direction:column;gap:3px}
+#graph-legend .lt{font-family:var(--font-hud);font-size:9px;letter-spacing:1.5px;color:rgba(140,180,230,0.62);margin-bottom:1px}
+#graph-legend .lr{display:flex;align-items:center;gap:7px;cursor:pointer;transition:background 0.15s}
+#graph-legend .lr:hover{background:rgba(80,140,240,0.1);border-radius:4px}
+#graph-legend .sw{width:10px;height:10px;border-radius:50%;box-shadow:0 0 6px currentColor;flex-shrink:0}
+#graph-legend .ew{width:18px;height:2.5px;border-radius:1px;flex-shrink:0}
+#graph-tooltip{position:absolute;pointer-events:none;z-index:55;background:rgba(4,10,24,0.94);backdrop-filter:blur(10px);border:1px solid rgba(60,100,170,0.25);border-radius:6px;padding:7px 10px;font-size:10px;opacity:0;transform:translateY(5px);transition:opacity 0.12s,transform 0.12s;max-width:280px;box-shadow:0 6px 20px rgba(0,0,0,0.4)}
+#graph-tooltip.visible{opacity:1;transform:translateY(0)}
+#graph-tooltip .ttn{font-weight:600;color:var(--starlight);font-size:11px}
+#graph-tooltip .ttm{font-family:var(--font-mono);font-size:8px;margin-top:1px;color:var(--signal)}
+#graph-tooltip .ttl{font-family:var(--font-mono);font-size:8px;color:rgba(120,160,215,0.62);margin-top:2px}
+#detail-card{position:absolute;z-index:56;pointer-events:auto;background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid rgba(60,100,180,0.3);border-radius:6px;padding:14px 16px;width:260px;opacity:0;transform:translateY(4px) scale(0.97);transition:opacity 0.16s,transform 0.16s;box-shadow:0 12px 36px rgba(0,0,0,0.5);display:none;flex-direction:column;gap:8px}
+#detail-card.visible{opacity:1;transform:translateY(0) scale(1);display:flex}
+#detail-card .dch{display:flex;align-items:flex-start;gap:6px}
+#detail-card .dcn{font-weight:600;color:var(--starlight);font-size:13px;flex:1}
+#detail-card .dct{font-family:var(--font-hud);font-size:9px;letter-spacing:1px;color:var(--signal-bright);text-transform:uppercase}
+#detail-card .dcl{font-family:var(--font-mono);font-size:9px;color:var(--text-faint);word-break:break-all}
+#detail-card .dcs{display:flex;gap:12px;font-family:var(--font-mono)}
+#detail-card .dcsi{display:flex;flex-direction:column;align-items:center}
+#detail-card .dcsv{font-size:14px;font-weight:700;color:var(--signal-bright)}
+#detail-card .dcsl{font-size:8px;color:var(--text-faint);text-transform:uppercase}
+#detail-card .dca{display:flex;gap:6px;flex-wrap:wrap}
+#detail-card .dcb{font-size:10px;padding:4px 10px;background:rgba(60,100,180,0.15);border:1px solid rgba(80,130,220,0.25);color:var(--starlight-dim);border-radius:3px;cursor:pointer;transition:all 0.15s;font-family:var(--font-body)}
+#detail-card .dcb:hover{background:rgba(80,140,240,0.25);color:var(--starlight)}
+#detail-card .dccx{background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:14px;padding:0 2px}
+#detail-card .dccx:hover{color:var(--starlight)}
+#chat-panel{position:fixed;bottom:42px;right:16px;width:360px;max-height:60vh;background:var(--panel-bg);backdrop-filter:blur(20px) saturate(0.6);border:1px solid rgba(70,110,180,0.36);border-radius:8px;z-index:50;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.3),0 0 22px rgba(60,100,180,0.1)}
+#chat-panel .ch-h{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid rgba(60,100,180,0.15)}
+#chat-panel .ch-t{font-family:var(--font-hud);font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--signal-bright);flex:1}
+#chat-panel .ch-d{width:8px;height:8px;border-radius:50%;background:var(--anomaly-green);box-shadow:0 0 8px var(--anomaly-green);animation:dp 2s ease-in-out infinite}
+@keyframes dp{0%,100%{opacity:1}50%{opacity:0.4}}
+#chat-panel .ch-m{flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:10px;min-height:200px;max-height:380px}
+#chat-panel .ch-i{padding:8px 14px;border-top:1px solid rgba(60,100,180,0.15);display:flex;gap:8px}
+#chat-panel .ch-input{flex:1;background:rgba(4,10,22,0.6);border:1px solid rgba(50,80,140,0.2);border-radius:4px;padding:6px 10px;color:var(--starlight-dim);font-family:var(--font-body);font-size:12px;outline:none}
+#chat-panel .ch-input:focus{border-color:rgba(80,130,220,0.45)}
+#chat-panel .ch-send{padding:6px 14px;background:rgba(60,100,180,0.2);border:1px solid rgba(80,130,220,0.3);color:var(--signal-bright);border-radius:4px;cursor:pointer;font-size:12px;font-family:var(--font-body);transition:all 0.15s}
+#chat-panel .ch-send:hover{background:rgba(80,140,240,0.3)}
+.msg{display:flex;flex-direction:column;gap:4px;animation:mi 0.3s ease}
+@keyframes mi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.msg-u{align-items:flex-end}
+.msg-u .mb{background:rgba(60,100,180,0.2);border:1px solid rgba(80,130,220,0.2);color:var(--starlight)}
+.msg-a .mb{background:rgba(4,12,28,0.6);border:1px solid rgba(50,80,140,0.15);color:var(--starlight-dim)}
+.mb{padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.5;max-width:90%;word-wrap:break-word}
+.mr{font-size:9px;font-family:var(--font-hud);letter-spacing:1px;text-transform:uppercase;color:var(--text-faint)}
+.tc{background:rgba(4,12,28,0.8);border:1px solid rgba(50,80,140,0.2);border-radius:4px;padding:8px 10px;margin-top:4px;font-size:11px}
+.tc .tch{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:10px;color:var(--signal)}
+.tc .tcb{margin-top:4px;color:var(--text-dim);font-size:10px;font-family:var(--font-mono);white-space:pre-wrap}
+.tc .tcs{font-size:9px;color:var(--anomaly-green);margin-left:auto}
+#status-bar{position:fixed;bottom:0;left:0;right:0;height:var(--status-h);z-index:100;background:linear-gradient(180deg,rgba(3,8,20,0.94),rgba(8,16,32,0.98));backdrop-filter:blur(14px);border-top:1px solid rgba(60,100,180,0.1);display:flex;align-items:center;padding:0 14px;gap:16px;font-size:10px;font-family:var(--font-mono);color:var(--text-dim)}
+#status-bar .si{display:flex;align-items:center;gap:5px;white-space:nowrap}
+#status-bar .sd{width:6px;height:6px;border-radius:50%;background:var(--anomaly-green);box-shadow:0 0 6px var(--anomaly-green)}
+#status-bar .sd.w{background:var(--sol);box-shadow:0 0 6px var(--sol)}
+#status-bar .ss{width:1px;height:12px;background:rgba(60,100,200,0.12)}
+#dock{position:fixed;bottom:var(--status-h);left:50%;transform:translateX(-50%);z-index:80;display:flex;gap:2px;padding:4px 8px;background:rgba(4,12,28,0.7);backdrop-filter:blur(14px);border-radius:8px 8px 0 0;border:1px solid rgba(60,100,180,0.12);border-bottom:none;box-shadow:0 -2px 16px rgba(0,0,0,0.3)}
+.dt{display:flex;align-items:center;gap:5px;padding:5px 14px;font-size:10px;font-family:var(--font-body);color:var(--text-faint);cursor:pointer;border-radius:4px;transition:all 0.15s;border:1px solid transparent;user-select:none}
+.dt:hover{color:var(--starlight-dim);background:rgba(30,50,80,0.3)}
+.dt.active{color:var(--signal-bright);background:rgba(60,100,180,0.18);border-color:rgba(80,130,220,0.25)}
+.side-panel{position:fixed;top:calc(var(--toolbar-h) + 8px);width:300px;max-height:calc(100vh - var(--toolbar-h) - var(--status-h) - 60px);background:var(--panel-bg);backdrop-filter:blur(20px) saturate(0.6);border:1px solid rgba(60,100,180,0.2);border-radius:8px;z-index:40;display:flex;flex-direction:column;overflow:hidden;transition:transform 0.28s cubic-bezier(0.23,1,0.32,1),opacity 0.28s;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+#left-panel{left:8px}#right-panel{right:8px}
+.side-panel.hidden{transform:translateX(-110%);opacity:0;pointer-events:none}
+#right-panel.hidden{transform:translateX(110%)}
+.sp-h{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(60,100,180,0.12)}
+.sp-t{font-family:var(--font-hud);font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--signal-bright);flex:1}
+.sp-c{background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:14px;padding:0 2px}.sp-c:hover{color:var(--starlight)}
+.sp-b{flex:1;overflow-y:auto;padding:10px 14px}
+.ci{background:rgba(4,12,28,0.5);border:1px solid rgba(50,80,140,0.15);border-radius:4px;padding:8px 10px;margin-bottom:8px;font-size:11px}
+.ci .cl{display:inline-block;padding:1px 6px;border-radius:2px;font-size:9px;font-family:var(--font-hud);font-weight:700;margin-right:6px}
+.ci .cl.l5{background:rgba(240,72,72,0.2);color:var(--anomaly-red);border:1px solid rgba(240,72,72,0.3)}
+.ci .cl.l4{background:rgba(240,120,56,0.2);color:var(--anomaly-orange);border:1px solid rgba(240,120,56,0.3)}
+.ci .cl.l3{background:rgba(240,184,72,0.2);color:var(--sol);border:1px solid rgba(240,184,72,0.3)}
+.ci .cl.l2{background:rgba(72,204,104,0.15);color:var(--anomaly-green);border:1px solid rgba(72,204,104,0.25)}
+.ci .cdesc{color:var(--starlight-dim);line-height:1.4}
+.ci .cfile{font-family:var(--font-mono);font-size:9px;color:var(--text-faint);margin-top:3px}
+.tl{position:relative;padding-left:20px;padding-bottom:12px;font-size:11px}
+.tl::before{content:'';position:absolute;left:5px;top:4px;bottom:0;width:1px;background:rgba(60,100,180,0.15)}
+.tl:last-child::before{display:none}
+.tl .td{position:absolute;left:2px;top:3px;width:7px;height:7px;border-radius:50%;background:var(--signal);box-shadow:0 0 6px var(--signal-glow)}
+.tl .td.w{background:var(--sol);box-shadow:0 0 6px var(--sol-glow)}
+.tl .td.f{background:var(--anomaly-red);box-shadow:0 0 6px rgba(240,72,72,0.4)}
+.tl .tt{font-family:var(--font-mono);font-size:8px;color:var(--text-faint)}
+.tl .tx{color:var(--starlight-dim);margin-top:1px}
+.tl .tf{font-family:var(--font-mono);font-size:8px;color:var(--text-faint);margin-top:1px}
+.in{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;font-size:11px;cursor:pointer;transition:background 0.15s}
+.in:hover{background:rgba(60,100,180,0.12)}
+.in .ind{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.in .inn{flex:1;font-family:var(--font-mono);font-size:10px;color:var(--starlight-dim)}
+.in .inde{font-size:9px;color:var(--text-faint);font-family:var(--font-hud)}
+#boot-overlay{position:fixed;inset:0;z-index:9999;background:var(--void-deep);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:20px;transition:opacity 0.8s ease}
+#boot-overlay.done{opacity:0;pointer-events:none}
+#boot-overlay .bl{font-family:var(--font-hud);font-size:28px;font-weight:800;letter-spacing:8px;background:linear-gradient(105deg,rgba(100,160,240,0.5),rgba(210,235,255,1) 36%,rgba(100,160,240,0.5));background-size:220% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:ls 3s ease-in-out infinite;text-shadow:none}
+#boot-overlay .bs{font-family:var(--font-mono);font-size:11px;color:var(--text-faint);letter-spacing:1px}
+#boot-overlay .bb{width:240px;height:2px;background:rgba(60,100,180,0.15);border-radius:1px;overflow:hidden}
+#boot-overlay .bbf{height:100%;width:0;background:linear-gradient(90deg,rgba(80,140,240,0.4),rgba(120,180,255,0.8));border-radius:1px;transition:width 0.3s ease;box-shadow:0 0 8px rgba(80,140,240,0.4)}
+#demo-hint{position:fixed;top:calc(var(--toolbar-h) + 8px);left:50%;transform:translateX(-50%);z-index:30;background:rgba(4,12,28,0.85);backdrop-filter:blur(10px);border:1px solid rgba(60,100,180,0.2);border-radius:6px;padding:6px 16px;font-size:11px;color:var(--text-dim);font-family:var(--font-mono);display:flex;align-items:center;gap:8px;transition:opacity 0.5s}
+#demo-hint .dhp{width:6px;height:6px;border-radius:50%;background:var(--signal);box-shadow:0 0 8px var(--signal-glow);animation:dp 1.5s ease-in-out infinite}
+#impact-overlay{position:absolute;top:10px;right:10px;z-index:20;display:none;background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid rgba(240,120,56,0.3);border-radius:8px;padding:12px 16px;width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.5);flex-direction:column;gap:8px}
+#impact-overlay.visible{display:flex}
+#impact-overlay .io-title{font-family:var(--font-hud);font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--anomaly-orange);display:flex;align-items:center;gap:6px}
+#impact-overlay .io-close{margin-left:auto;background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:14px}
+#impact-overlay .io-summary{font-size:11px;color:var(--text-dim);line-height:1.5}
+#impact-overlay .io-list{max-height:300px;overflow-y:auto}
+</style>
+</head>
+<body>
+
+<div id="boot-overlay">
+  <div class="bl">HOLOGRAM</div>
+  <div class="bs" id="boot-status">正在初始化分析引擎...</div>
+  <div class="bb"><div class="bbf" id="boot-bar"></div></div>
+</div>
+
+<div id="space">
+  <div class="ambient"></div>
+  <div class="stars s1"></div>
+  <div class="stars s2"></div>
+  <div class="stars s3"></div>
+  <div class="holo-grid"></div>
+  <div class="orbital-ring r1"></div>
+  <div class="orbital-ring r2"></div>
+</div>
+<div id="vignette"></div>
+<div id="scanlines"></div>
+
+<div id="toolbar">
+  <span id="tb-logo">HOLOGRAM</span>
+  <div class="sep"></div>
+  <button id="btn-reanalyze">🔄 分析</button>
+  <div class="sep"></div>
+  <button id="btn-fold">🌌 星系</button>
+  <button id="btn-blast">💥 波及</button>
+  <button id="btn-check" class="active">✅ 约束</button>
+  <button id="btn-timeline">📅 时间线</button>
+  <div class="sep"></div>
+  <span id="tb-path">/mock/nebula-project</span>
+  <div class="spacer"></div>
+  <span style="font-family:var(--font-mono);font-size:10px;color:var(--anomaly-green)">● READY</span>
+  <div class="sep"></div>
+  <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-faint)">:9777</span>
+</div>
+
+<div id="graph">
+  <div id="graph-labels"></div>
+  <div id="graph-legend"></div>
+  <div id="graph-tooltip"></div>
+  <div id="detail-card"></div>
+  <div id="impact-overlay">
+    <div class="io-title">💥 波及分析 <button class="io-close" id="io-close">✕</button></div>
+    <div class="io-summary" id="impact-summary"></div>
+    <div class="io-list" id="impact-list"></div>
+  </div>
+</div>
+
+<div id="demo-hint">
+  <div class="dhp"></div>
+  <span>拖拽旋转 · 滚轮缩放 · 点击节点查看详情 · 按 B 键波及分析</span>
+</div>
+
+<div class="side-panel" id="left-panel">
+  <div class="sp-h">
+    <span class="sp-t">⚡ 约束审计</span>
+    <span style="font-size:10px;font-family:var(--font-mono);color:var(--fail)">未通过</span>
+    <button class="sp-c" id="lp-close">✕</button>
+  </div>
+  <div class="sp-b" id="check-body"></div>
+</div>
+
+<div class="side-panel hidden" id="right-panel">
+  <div class="sp-h">
+    <span class="sp-t">📅 变更时间线</span>
+    <button class="sp-c" id="rp-close">✕</button>
+  </div>
+  <div class="sp-b" id="timeline-body"></div>
+</div>
+
+<div id="chat-panel">
+  <div class="ch-h">
+    <div class="ch-d"></div>
+    <span class="ch-t">AGENT</span>
+    <span style="font-size:9px;font-family:var(--font-mono);color:var(--text-faint)">Claude 4</span>
+  </div>
+  <div class="ch-m" id="chat-messages"></div>
+  <div class="ch-i">
+    <input type="text" class="ch-input" id="chat-input" placeholder="问 Agent 任何关于代码的问题..." />
+    <button class="ch-send" id="chat-send">发送</button>
+  </div>
+</div>
+
+<div id="dock">
+  <div class="dt active" id="dt-left">⚡ 约束审计</div>
+  <div class="dt" id="dt-right">📅 时间线</div>
+  <div class="dt" id="dt-impact">💥 波及分析</div>
+</div>
+
+<div id="status-bar">
+  <div class="si"><div class="sd"></div><span>引擎就绪</span></div>
+  <div class="ss"></div>
+  <div class="si"><span>节点: </span><span style="color:var(--signal-bright)" id="sb-nodes">38</span></div>
+  <div class="si"><span>边: </span><span style="color:var(--signal-bright)" id="sb-edges">57</span></div>
+  <div class="si"><span>社区: </span><span style="color:var(--signal-bright)">6</span></div>
+  <div class="ss"></div>
+  <div class="si"><div class="sd w"></div><span>1 个 L5 违规</span></div>
+  <div class="spacer"></div>
+  <div class="si"><span>布局: </span><span style="color:var(--text-soft)">CPU(community)</span></div>
+  <div class="ss"></div>
+  <div class="si"><span>语言: </span><span style="color:var(--text-soft)">TypeScript</span></div>
+  <div class="ss"></div>
+  <div class="si"><span style="color:var(--text-faint)">© 2026 Wenbing Jing · MIT</span></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// HoloGram Demo — 纯 Canvas 2D 实现，零外部依赖
+// 复用项目的力导向布局算法 + 配色方案 + 数据结构
+// ═══════════════════════════════════════════════════════════════
+
+// ── 数据 (from mock-data.ts) ──
+const NODES=[
+{id:"router",name:"Router",type:"class",loc:"nebula/core/router.ts:12"},
+{id:"middleware",name:"MiddlewareChain",type:"class",loc:"nebula/core/middleware.ts:8"},
+{id:"request",name:"Request",type:"class",loc:"nebula/core/request.ts:5"},
+{id:"response",name:"Response",type:"class",loc:"nebula/core/response.ts:5"},
+{id:"server",name:"Server",type:"class",loc:"nebula/core/server.ts:20"},
+{id:"config_loader",name:"ConfigLoader",type:"class",loc:"nebula/core/config.ts:15"},
+{id:"plugin_registry",name:"PluginRegistry",type:"class",loc:"nebula/core/plugins.ts:22"},
+{id:"error_handler",name:"ErrorHandler",type:"class",loc:"nebula/core/errors.ts:10"},
+{id:"route_parser",name:"route_parser",type:"function",loc:"nebula/core/parser.ts:3"},
+{id:"mime_resolver",name:"mime_resolver",type:"function",loc:"nebula/core/mime.ts:7"},
+{id:"auth_provider",name:"AuthProvider",type:"interface",loc:"nebula/core/auth.ts:4"},
+{id:"session_store",name:"SessionStore",type:"interface",loc:"nebula/core/session.ts:6"},
+{id:"database",name:"DatabasePool",type:"database",loc:"nebula/data/database.ts:30"},
+{id:"query_builder",name:"QueryBuilder",type:"class",loc:"nebula/data/query.ts:18"},
+{id:"model_base",name:"Model",type:"class",loc:"nebula/data/model.ts:12"},
+{id:"migration_runner",name:"MigrationRunner",type:"class",loc:"nebula/data/migrations.ts:25"},
+{id:"cache_store",name:"CacheStore",type:"cache",loc:"nebula/data/cache.ts:14"},
+{id:"redis_adapter",name:"RedisAdapter",type:"class",loc:"nebula/data/redis.ts:20"},
+{id:"file_storage",name:"FileStorage",type:"medium",loc:"nebula/data/storage.ts:8"},
+{id:"queue_broker",name:"QueueBroker",type:"queue",loc:"nebula/data/queue.ts:22"},
+{id:"logger",name:"Logger",type:"class",loc:"nebula/utils/logger.ts:10"},
+{id:"validator",name:"Validator",type:"class",loc:"nebula/utils/validate.ts:16"},
+{id:"serializer",name:"Serializer",type:"class",loc:"nebula/utils/serialize.ts:8"},
+{id:"tokenizer",name:"tokenizer",type:"function",loc:"nebula/utils/token.ts:4"},
+{id:"rate_limiter",name:"RateLimiter",type:"class",loc:"nebula/utils/ratelimit.ts:14"},
+{id:"crypto_utils",name:"crypto_utils",type:"function",loc:"nebula/utils/crypto.ts:6"},
+{id:"email_sender",name:"EmailSender",type:"class",loc:"nebula/utils/email.ts:20"},
+{id:"scheduler",name:"TaskScheduler",type:"temporal",loc:"nebula/temporal/scheduler.ts:18"},
+{id:"job_worker",name:"JobWorker",type:"thread",loc:"nebula/temporal/worker.ts:22"},
+{id:"cron_trigger",name:"CronTrigger",type:"trigger",loc:"nebula/temporal/cron.ts:12"},
+{id:"event_bus",name:"EventBus",type:"class",loc:"nebula/temporal/events.ts:15"},
+{id:"timer_pool",name:"TimerPool",type:"timer",loc:"nebula/temporal/timer.ts:28"},
+{id:"worker_pool",name:"WorkerPool",type:"thread",loc:"nebula/temporal/pool.ts:30"},
+{id:"payment_gateway",name:"PaymentGateway",type:"medium",loc:"nebula/adapters/payment.ts:15"},
+{id:"s3_uploader",name:"S3Uploader",type:"medium",loc:"nebula/adapters/s3.ts:22"},
+{id:"smtp_client",name:"SMTPClient",type:"medium",loc:"nebula/adapters/smtp.ts:18"},
+{id:"oauth_flow",name:"OAuthFlow",type:"class",loc:"nebula/adapters/oauth.ts:12"},
+{id:"websocket_hub",name:"WebSocketHub",type:"class",loc:"nebula/adapters/ws.ts:25"},
+];
+const EDGES=[
+["server","router","import",1],["server","middleware","import",1],["server","config_loader","import",1],
+["server","plugin_registry","import",2],["server","error_handler","import",1],["router","route_parser","import",1],
+["router","request","import",1],["router","response","import",1],["middleware","request","import",2],
+["middleware","response","import",2],["middleware","auth_provider","import",2],["middleware","session_store","import",2],
+["error_handler","logger","import",1],["error_handler","response","data",2],["mime_resolver","response","import",1],
+["config_loader","file_storage","import",2],["model_base","database","import",1],["model_base","query_builder","import",1],
+["query_builder","database","data",1],["migration_runner","database","data",1],["migration_runner","file_storage","import",2],
+["cache_store","redis_adapter","import",1],["cache_store","serializer","import",2],["queue_broker","redis_adapter","import",1],
+["queue_broker","serializer","import",2],["file_storage","s3_uploader","import",1],["email_sender","smtp_client","import",1],
+["auth_provider","crypto_utils","import",1],["auth_provider","database","data",2],["session_store","cache_store","data",1],
+["session_store","crypto_utils","import",2],["auth_provider","oauth_flow","import",2],["oauth_flow","payment_gateway","import",3],
+["rate_limiter","cache_store","data",1],["rate_limiter","tokenizer","import",2],["validator","serializer","import",1],
+["validator","logger","import",1],["scheduler","job_worker","temporal",1],["scheduler","cron_trigger","temporal",1],
+["scheduler","queue_broker","data",2],["job_worker","database","data",2],["job_worker","logger","import",1],
+["event_bus","job_worker","temporal",1],["event_bus","websocket_hub","temporal",1],["worker_pool","job_worker","temporal",1],
+["worker_pool","timer_pool","temporal",1],["timer_pool","cache_store","data",2],["server","cache_store","import",2],
+["router","validator","import",2],["middleware","rate_limiter","import",2],["server","websocket_hub","import",2],
+["scheduler","email_sender","import",3],["payment_gateway","database","data",3],["websocket_hub","event_bus","temporal",2],
+["plugin_registry","file_storage","import",3],["router","cache_store","data",3],["middleware","database","data",4],
+["scheduler","payment_gateway","temporal",3],["response","serializer","data",1],
+];
+const COMMUNITIES=[
+{id:"c1",label:"Core/HTTP Layer",nodes:["router","middleware","request","response","server","route_parser","mime_resolver","error_handler","auth_provider","session_store"]},
+{id:"c2",label:"Data & Storage",nodes:["database","query_builder","model_base","migration_runner","cache_store","redis_adapter","file_storage","queue_broker"]},
+{id:"c3",label:"Utilities",nodes:["logger","validator","serializer","tokenizer","rate_limiter","crypto_utils","email_sender"]},
+{id:"c4",label:"Temporal & Async",nodes:["scheduler","job_worker","cron_trigger","event_bus","timer_pool","worker_pool"]},
+{id:"c5",label:"External Adapters",nodes:["payment_gateway","s3_uploader","smtp_client","oauth_flow","websocket_hub"]},
+{id:"c6",label:"Configuration",nodes:["config_loader","plugin_registry"]},
+];
+const NODE_COLORS={symbol:'#6ab0ff',function:'#4ad8c8',method:'#4ad8c8',class:'#7fd84a',module:'#d8d84a',interface:'#f0a850',variable:'#f07070',constant:'#d850b0',medium:'#f0c060',file:'#f0c060',database:'#e0a040',cache:'#d09030',queue:'#c08020',temporal:'#c098ff',thread:'#c098ff',timer:'#a880ff',trigger:'#9068ff'};
+const EDGE_COLORS={import:'#4adfdf',calls:'#4a9adf',data:'#ff5566',temporal:'#ff8833',inherits:'#ff66dd'};
+const TYPE_LABELS={symbol:'SYM',function:'FN',method:'MTH',class:'CLS',module:'MOD',variable:'VAR',constant:'CST',interface:'IFC',medium:'MED',file:'FILE',database:'DB',cache:'CACHE',queue:'Q',temporal:'TMP',thread:'THR',timer:'TIM',trigger:'TRG'};
+const CHECK_DATA=[
+{level:5,desc:"API签名变更: MiddlewareChain.process() 返回值类型变化",file:"nebula/core/middleware.ts:42",old:"Promise<Response>",new:"Promise<Response | null>"},
+{level:4,desc:"CacheStore 直接访问 DatabasePool 内部状态（跨层穿透）",file:"nebula/data/cache.ts:88"},
+{level:3,desc:"TaskScheduler 新增对 PaymentGateway 的延迟依赖",file:"nebula/temporal/scheduler.ts:120"},
+{level:2,desc:"RateLimiter 修改后波及 3 个模块",file:"nebula/utils/ratelimit.ts:55"},
+];
+const TIMELINE_DATA=[
+{time:"1小时前",type:"commit",text:"feat: 添加 WebSocket 实时推送支持",file:"",dot:""},
+{time:"58分钟前",type:"file",text:"新增 WebSocketHub 类",file:"nebula/adapters/ws.ts",dot:""},
+{time:"57分钟前",type:"file",text:"EventBus 增加广播通道",file:"nebula/temporal/events.ts",dot:""},
+{time:"30分钟前",type:"file",text:"重构中间件链执行逻辑",file:"nebula/core/middleware.ts",dot:"w"},
+{time:"28分钟前",type:"blindspot",text:"检测到 L4 封装穿透: CacheStore → DatabasePool",file:"nebula/data/cache.ts",dot:"f"},
+{time:"15分钟前",type:"file",text:"限流算法从固定窗口改为滑动窗口",file:"nebula/utils/ratelimit.ts",dot:""},
+{time:"2分钟前",type:"check",text:"运行 hologram check",file:"",dot:""},
+];
+
+// ── Canvas 2D Renderer ──
+const container=document.getElementById('graph');
+const labelsContainer=document.getElementById('graph-labels');
+const tooltipEl=document.getElementById('graph-tooltip');
+const detailCard=document.getElementById('detail-card');
+const canvas=document.createElement('canvas');
+const ctx=canvas.getContext('2d');
+container.appendChild(canvas);
+
+let W=0,H=0,DPR=Math.min(window.devicePixelRatio,2);
+let camX=0,camY=0,camZoom=1;
+let targetCamX=0,targetCamY=0,targetCamZoom=1;
+let nodePos=[],nodeScreen=[],deg=[],maxDeg=1;
+let hoveredIdx=-1,selectedIdx=-1;
+let blastMode=false,blastSource=-1,blastSet=new Set();
+let foldView=false;
+let isDragging=false,dragStartX=0,dragStartY=0,dragCamX=0,dragCamY=0;
+let pulseTime=0;
+let labelEls=[];
+
+function resize(){
+  W=container.clientWidth;
+  H=container.clientHeight;
+  canvas.width=W*DPR;
+  canvas.height=H*DPR;
+  canvas.style.width=W+'px';
+  canvas.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+
+// ── 3D → 2D layout (force-directed, then project) ──
+function computeLayout(){
+  const n=NODES.length;
+  const nodeIdx=new Map();
+  NODES.forEach((nd,i)=>nodeIdx.set(nd.id,i));
+
+  // Community assignment
+  const commMap=new Map();
+  COMMUNITIES.forEach((c,ci)=>c.nodes.forEach(nid=>commMap.set(nodeIdx.get(nid),ci)));
+
+  // 3D positions per community
+  const pos3d=new Float32Array(n*3);
+  const groups=new Map();
+  for(let i=0;i<n;i++){
+    const c=commMap.has(i)?commMap.get(i):-1;
+    if(!groups.has(c))groups.set(c,[]);
+    groups.get(c).push(i);
+  }
+
+  const pairs=[];
+  EDGES.forEach(e=>{
+    const s=nodeIdx.get(e[0]),t=nodeIdx.get(e[1]);
+    if(s!==undefined&&t!==undefined)pairs.push([s,t]);
+  });
+
+  // Community centers on a sphere
+  const C=groups.size;
+  const centers=fibonacciSphere3D(C,180);
+  let gi=0;
+  for(const [commId,members] of groups){
+    const m=members.length;
+    const localShell=Math.max(30,Math.cbrt(m)*30);
+    let lp=fibonacciSphere3D(m,localShell);
+    // Force relaxation (rep=600, att=0.018, damp=0.72 — LOCKED params)
+    const lv=new Float32Array(m*3);
+    const localPairs=pairs.filter(([s,t])=>members.includes(s)&&members.includes(t))
+      .map(([s,t])=>[members.indexOf(s),members.indexOf(t)]);
+    const rep=600,att=0.018,damp=0.72;
+    const REP_CAP=localShell*8,ATT_CAP=localShell,VEL_CAP=localShell*0.25;
+    for(let iter=0;iter<50;iter++){
+      for(let i=0;i<m;i++){
+        for(let j=i+1;j<m;j++){
+          const dx=lp[i*3]-lp[j*3],dy=lp[i*3+1]-lp[j*3+1],dz=lp[i*3+2]-lp[j*3+2];
+          const d=Math.max(0.3,Math.sqrt(dx*dx+dy*dy+dz*dz));
+          const f=Math.min(rep/(d*d+1),REP_CAP);
+          lv[i*3]+=dx/d*f;lv[i*3+1]+=dy/d*f;lv[i*3+2]+=dz/d*f;
+          lv[j*3]-=dx/d*f;lv[j*3+1]-=dy/d*f;lv[j*3+2]-=dz/d*f;
+        }
+      }
+      for(const [s,t] of localPairs){
+        const dx=lp[s*3]-lp[t*3],dy=lp[s*3+1]-lp[t*3+1],dz=lp[s*3+2]-lp[t*3+2];
+        const d=Math.max(0.3,Math.sqrt(dx*dx+dy*dy+dz*dz));
+        const f=Math.min(d*att,ATT_CAP);
+        lv[s*3]-=dx/d*f;lv[s*3+1]-=dy/d*f;lv[s*3+2]-=dz/d*f;
+        lv[t*3]+=dx/d*f;lv[t*3+1]+=dy/d*f;lv[t*3+2]+=dz/d*f;
+      }
+      for(let i=0;i<m*3;i++){lv[i]*=damp;lp[i]+=lv[i];}
+    }
+    const cx=centers[gi*3],cy=centers[gi*3+1],cz=centers[gi*3+2];
+    for(let li=0;li<m;li++){
+      const idx=members[li];
+      pos3d[idx*3]=cx+lp[li*3];
+      pos3d[idx*3+1]=cy+lp[li*3+1];
+      pos3d[idx*3+2]=cz+lp[li*3+2];
+    }
+    gi++;
+  }
+
+  // Center
+  let mx=0,my=0,mz=0;
+  for(let i=0;i<n;i++){mx+=pos3d[i*3];my+=pos3d[i*3+1];mz+=pos3d[i*3+2];}
+  mx/=n;my/=n;mz/=n;
+  for(let i=0;i<n;i++){pos3d[i*3]-=mx;pos3d[i*3+1]-=my;pos3d[i*3+2]-=mz;}
+
+  // Project 3D → 2D with rotation
+  const rotY=pulseTime*0.03; // slow auto-rotation
+  const rotX=0.4;
+  nodePos=new Array(n);
+  for(let i=0;i<n;i++){
+    const x=pos3d[i*3],y=pos3d[i*3+1],z=pos3d[i*3+2];
+    // Rotate Y
+    const x1=x*Math.cos(rotY)+z*Math.sin(rotY);
+    const z1=-x*Math.sin(rotY)+z*Math.cos(rotY);
+    // Rotate X
+    const y2=y*Math.cos(rotX)-z1*Math.sin(rotX);
+    const z2=y*Math.sin(rotX)+z1*Math.cos(rotX);
+    nodePos[i]={x:x1,y:y2,z:z2};
+  }
+
+  // Compute degrees
+  deg=new Array(n).fill(0);
+  EDGES.forEach(e=>{
+    const s=nodeIdx.get(e[0]),t=nodeIdx.get(e[1]);
+    if(s!==undefined&&t!==undefined){deg[s]++;deg[t]++;}
+  });
+  maxDeg=Math.max(...deg,1);
+}
+
+function fibonacciSphere3D(n,r){
+  const pos=new Float32Array(n*3);
+  const phi=Math.PI*(3-Math.sqrt(5));
+  for(let i=0;i<n;i++){
+    const y=1-(i/(n-1||1))*2,rr=Math.sqrt(1-y*y),theta=phi*i;
+    pos[i*3]=Math.cos(theta)*rr*r;
+    pos[i*3+1]=y*r;
+    pos[i*3+2]=Math.sin(theta)*rr*r;
+  }
+  return pos;
+}
+
+// ── Render ──
+function worldToScreen(wx,wy){
+  return{x:(wx-camX)*camZoom+W/2,y:(wy-camY)*camZoom+H/2};
+}
+function screenToWorld(sx,sy){
+  return{x:(sx-W/2)/camZoom+camX,y:(sy-H/2)/camZoom+camY};
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+
+  // Compute screen positions
+  const n=NODES.length;
+  nodeScreen=new Array(n);
+  for(let i=0;i<n;i++){
+    const s=worldToScreen(nodePos[i].x,nodePos[i].y);
+    nodeScreen[i]={x:s.x,y:s.y,z:nodePos[i].z};
+  }
+
+  // Sort by z for painter's algorithm
+  const order=[...Array(n).keys()].sort((a,b)=>nodePos[a].z-nodePos[b].z);
+
+  // ── Draw edges ──
+  const nodeIdxMap=new Map();
+  NODES.forEach((nd,i)=>nodeIdxMap.set(nd.id,i));
+  ctx.lineCap='round';
+  for(const e of EDGES){
+    const si=nodeIdxMap.get(e[0]),ti=nodeIdxMap.get(e[1]);
+    if(si===undefined||ti===undefined)continue;
+    const s=nodeScreen[si],t=nodeScreen[ti];
+    const depth=e[3]||1;
+    let alpha=0.04+depth*0.025;
+    let color=EDGE_COLORS[e[2]]||'#4adfdf';
+
+    // Blast highlight
+    if(blastMode){
+      if(blastSet.has(si)&&blastSet.has(ti)){
+        alpha=0.5;
+        color='#ff8833';
+      }else{
+        alpha=0.01;
+      }
+    }
+
+    const grad=ctx.createLinearGradient(s.x,s.y,t.x,t.y);
+    const hexA=hexToRgba(color,alpha);
+    grad.addColorStop(0,hexA);
+    grad.addColorStop(0.5,hexToRgba(color,alpha*1.3));
+    grad.addColorStop(1,hexA);
+    ctx.strokeStyle=grad;
+    ctx.lineWidth=Math.max(0.3,1.0+depth*0.3);
+    ctx.beginPath();
+    ctx.moveTo(s.x,s.y);
+    ctx.lineTo(t.x,t.y);
+    ctx.stroke();
+  }
+
+  // ── Draw nodes (back to front) ──
+  if(!foldView){
+    for(const i of order){
+      const nd=NODES[i];
+      const kind=(nd.type||'symbol').toLowerCase();
+      const color=NODE_COLORS[kind]||'#6ab0ff';
+      const s=nodeScreen[i];
+      const zFactor=(nodePos[i].z+300)/600; // 0..1, front=brighter
+      const baseScale=0.8+(deg[i]/maxDeg)*2.8;
+      const screenScale=baseScale*camZoom*(0.5+zFactor*0.5);
+
+      // Dim non-blast nodes
+      let dim=1;
+      if(blastMode&&!blastSet.has(i))dim=0.15;
+
+      // Outer glow
+      const glowR=Math.max(2,screenScale*6);
+      const glowGrad=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,glowR);
+      glowGrad.addColorStop(0,hexToRgba(color,0.5*dim));
+      glowGrad.addColorStop(0.3,hexToRgba(color,0.2*dim));
+      glowGrad.addColorStop(1,hexToRgba(color,0));
+      ctx.fillStyle=glowGrad;
+      ctx.fillRect(s.x-glowR,s.y-glowR,glowR*2,glowR*2);
+
+      // Core
+      const coreR=Math.max(1,screenScale*1.2);
+      const coreGrad=ctx.createRadialGradient(s.x-coreR*0.3,s.y-coreR*0.3,0,s.x,s.y,coreR);
+      coreGrad.addColorStop(0,hexToRgba('#ffffff',0.9*dim));
+      coreGrad.addColorStop(0.3,hexToRgba(color,0.85*dim));
+      coreGrad.addColorStop(1,hexToRgba(color,0.3*dim));
+      ctx.fillStyle=coreGrad;
+      ctx.beginPath();
+      ctx.arc(s.x,s.y,coreR,0,Math.PI*2);
+      ctx.fill();
+
+      // Hover ring
+      if(i===hoveredIdx){
+        ctx.strokeStyle=hexToRgba('#8cc4ff',0.6);
+        ctx.lineWidth=1.5;
+        ctx.beginPath();
+        ctx.arc(s.x,s.y,coreR*2.2,0,Math.PI*2);
+        ctx.stroke();
+      }
+      // Selected ring
+      if(i===selectedIdx){
+        ctx.strokeStyle=hexToRgba('#ffcc60',0.7);
+        ctx.lineWidth=2;
+        ctx.beginPath();
+        ctx.arc(s.x,s.y,coreR*2.5,0,Math.PI*2);
+        ctx.stroke();
+      }
+      // Blast source ring
+      if(blastMode&&i===blastSource){
+        const pulse=1+Math.sin(pulseTime*4)*0.15;
+        ctx.strokeStyle=hexToRgba('#ff8833',0.6);
+        ctx.lineWidth=2;
+        ctx.beginPath();
+        ctx.arc(s.x,s.y,coreR*3*pulse,0,Math.PI*2);
+        ctx.stroke();
+      }
+    }
+  } else {
+    // Fold view: draw community clouds
+    const nodeIdxMap=new Map();
+    NODES.forEach((nd,i)=>nodeIdxMap.set(nd.id,i));
+    COMMUNITIES.forEach((c,ci)=>{
+      const members=c.nodes.map(nid=>nodeIdxMap.get(nid)).filter(i=>i!==undefined);
+      if(members.length===0)return;
+      let cx=0,cy=0;
+      members.forEach(i=>{cx+=nodeScreen[i].x;cy+=nodeScreen[i].y;});
+      cx/=members.length;cy/=members.length;
+      const hue=ci/COMMUNITIES.length;
+      const col=hslToHex(hue*360,0.55,0.52);
+      const r=Math.cbrt(members.length)*30*camZoom;
+      const grad=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(10,r));
+      grad.addColorStop(0,hexToRgba(col,0.4));
+      grad.addColorStop(0.5,hexToRgba(col,0.15));
+      grad.addColorStop(1,hexToRgba(col,0));
+      ctx.fillStyle=grad;
+      ctx.fillRect(cx-r,cy-r,r*2,r*2);
+      // Community label
+      ctx.font='bold 13px Orbitron, sans-serif';
+      ctx.fillStyle=hexToRgba(col,0.9);
+      ctx.textAlign='center';
+      ctx.fillText(c.label,cx,cy);
+    });
+  }
+
+  // Update labels
+  updateLabels();
+}
+
+function hexToRgba(hex,a){
+  if(hex.startsWith('rgba'))return hex;
+  const r=parseInt(hex.slice(1,3),16);
+  const g=parseInt(hex.slice(3,5),16);
+  const b=parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+function hslToHex(h,s,l){
+  s/=100;l/=100;
+  const k=n=>(n+h/30)%12;
+  const f=n=>l-s*Math.max(-1,Math.min(k(n)-3,9-k(n),1));
+  const r=Math.round(f(0)*255),g=Math.round(f(8)*255),b=Math.round(f(4)*255);
+  return '#'+[r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+
+function updateLabels(){
+  const n=NODES.length;
+  while(labelEls.length<n){
+    const el=document.createElement('div');
+    el.className='node-label';
+    labelsContainer.appendChild(el);
+    labelEls.push(el);
+  }
+  for(let i=0;i<n;i++){
+    const el=labelEls[i];
+    if(foldView){el.style.opacity='0';continue;}
+    const nd=NODES[i];
+    const kind=(nd.type||'symbol').toLowerCase();
+    el.textContent=nd.name;
+    el.style.color=NODE_COLORS[kind]||'#6ab0ff';
+    const s=nodeScreen[i];
+    el.style.left=s.x+'px';
+    el.style.top=s.y+'px';
+    const degFactor=deg[i]/maxDeg;
+    const zFactor=(nodePos[i].z+300)/600;
+    el.style.opacity=(0.3+degFactor*0.5)*(0.4+zFactor*0.6);
+    if(blastMode&&!blastSet.has(i))el.style.opacity='0.05';
+  }
+}
+
+// ── Interaction ──
+function getNodeAt(sx,sy){
+  for(let i=NODES.length-1;i>=0;i--){
+    const s=nodeScreen[i];
+    if(!s)continue;
+    const baseScale=0.8+(deg[i]/maxDeg)*2.8;
+    const r=Math.max(4,baseScale*camZoom*1.5);
+    const dx=sx-s.x,dy=sy-s.y;
+    if(dx*dx+dy*dy<r*r)return i;
+  }
+  return-1;
+}
+
+canvas.addEventListener('pointerdown',e=>{
+  isDragging=true;
+  dragStartX=e.clientX;
+  dragStartY=e.clientY;
+  dragCamX=camX;
+  dragCamY=camY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const sx=e.clientX-rect.left;
+  const sy=e.clientY-rect.top;
+  if(isDragging){
+    const dx=e.clientX-dragStartX;
+    const dy=e.clientY-dragStartY;
+    camX=dragCamX-dx/camZoom;
+    camY=dragCamY-dy/camZoom;
+    targetCamX=camX;
+    targetCamY=camY;
+    hideTooltip();
+  }else{
+    const idx=getNodeAt(sx,sy);
+    if(idx!==hoveredIdx){
+      hoveredIdx=idx;
+      if(idx>=0)showTooltip(idx,sx,sy);
+      else hideTooltip();
+    }else if(idx>=0){
+      showTooltip(idx,sx,sy);
+    }
+  }
+});
+canvas.addEventListener('pointerup',e=>{
+  if(isDragging){
+    const dx=e.clientX-dragStartX;
+    const dy=e.clientY-dragStartY;
+    isDragging=false;
+    if(dx*dx+dy*dy<16){
+      // Click
+      const rect=canvas.getBoundingClientRect();
+      const sx=e.clientX-rect.left;
+      const sy=e.clientY-rect.top;
+      const idx=getNodeAt(sx,sy);
+      if(idx>=0){
+        selectedIdx=idx;
+        showDetailCard(idx,sx,sy);
+      }else{
+        hideDetailCard();
+      }
+    }
+  }
+});
+canvas.addEventListener('pointerleave',()=>{hoveredIdx=-1;hideTooltip();});
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const rect=canvas.getBoundingClientRect();
+  const sx=e.clientX-rect.left;
+  const sy=e.clientY-rect.top;
+  const before=screenToWorld(sx,sy);
+  const factor=e.deltaY>0?0.9:1.1;
+  camZoom*=factor;
+  camZoom=Math.max(0.2,Math.min(camZoom,10));
+  const after=screenToWorld(sx,sy);
+  camX+=before.x-after.x;
+  camY+=before.y-after.y;
+  targetCamX=camX;targetCamY=camY;targetCamZoom=camZoom;
+},{passive:false});
+
+window.addEventListener('keydown',e=>{
+  if(e.key==='b'||e.key==='B'){
+    if(blastMode)exitBlastMode();
+    else if(hoveredIdx>=0)startBlastMode(hoveredIdx);
+    else if(selectedIdx>=0)startBlastMode(selectedIdx);
+  }
+  if(e.key==='Escape'){
+    if(blastMode)exitBlastMode();
+    hideDetailCard();
+  }
+});
+window.addEventListener('resize',()=>{resize();});
+
+function showTooltip(idx,sx,sy){
+  const nd=NODES[idx];
+  const kind=(nd.type||'symbol').toLowerCase();
+  tooltipEl.innerHTML=`<div class="ttn">${nd.name}</div><div class="ttm">${TYPE_LABELS[kind]||kind} · 度=${deg[idx]}</div><div class="ttl">${nd.loc}</div>`;
+  tooltipEl.style.left=(sx+14)+'px';
+  tooltipEl.style.top=(sy+14)+'px';
+  tooltipEl.classList.add('visible');
+}
+function hideTooltip(){tooltipEl.classList.remove('visible');}
+
+function showDetailCard(idx,sx,sy){
+  const nd=NODES[idx];
+  const kind=(nd.type||'symbol').toLowerCase();
+  const color=NODE_COLORS[kind]||'#6ab0ff';
+  let outCount=0,inCount=0;
+  EDGES.forEach(e=>{
+    if(e[0]===nd.id)outCount++;
+    if(e[1]===nd.id)inCount++;
+  });
+  detailCard.innerHTML=`
+    <div class="dch">
+      <div class="dcn" style="color:${color}">${nd.name}</div>
+      <span class="dct">${TYPE_LABELS[kind]||kind}</span>
+      <button class="dccx" id="dc-close">✕</button>
+    </div>
+    <div class="dcl">${nd.loc}</div>
+    <div class="dcs">
+      <div class="dcsi"><div class="dcsv">${deg[idx]}</div><div class="dcsl">度</div></div>
+      <div class="dcsi"><div class="dcsv">${outCount}</div><div class="dcsl">出边</div></div>
+      <div class="dcsi"><div class="dcsv">${inCount}</div><div class="dcsl">入边</div></div>
+    </div>
+    <div class="dca">
+      <button class="dcb" id="dc-blast">💥 波及分析</button>
+      <button class="dcb" id="dc-focus">🎯 聚焦</button>
+      <button class="dcb" id="dc-ask">💬 问Agent</button>
+    </div>`;
+  detailCard.style.left=Math.min(sx+20,W-280)+'px';
+  detailCard.style.top=Math.max(sy-50,10)+'px';
+  detailCard.classList.add('visible');
+  document.getElementById('dc-close').onclick=hideDetailCard;
+  document.getElementById('dc-blast').onclick=()=>{startBlastMode(idx);hideDetailCard();};
+  document.getElementById('dc-focus').onclick=()=>focusNode(idx);
+  document.getElementById('dc-ask').onclick=()=>askAgent(nd.name);
+}
+function hideDetailCard(){detailCard.classList.remove('visible');selectedIdx=-1;}
+
+function focusNode(idx){
+  targetCamX=nodePos[idx].x;
+  targetCamY=nodePos[idx].y;
+  targetCamZoom=Math.max(camZoom,2.5);
+}
+
+// ── Blast mode ──
+function startBlastMode(idx){
+  blastMode=true;blastSource=idx;
+  const nodeIdxMap=new Map();
+  NODES.forEach((nd,i)=>nodeIdxMap.set(nd.id,i));
+  blastSet=new Set([idx]);
+  const queue=[{id:NODES[idx].id,depth:0}];
+  const impacts=[];
+  while(queue.length>0){
+    const cur=queue.shift();
+    if(cur.depth>=3)continue;
+    EDGES.forEach(e=>{
+      let nextId=null;
+      if(e[0]===cur.id)nextId=e[1];
+      else if(e[1]===cur.id)nextId=e[0];
+      if(nextId&&!blastSet.has(nodeIdxMap.get(nextId))){
+        const ni=nodeIdxMap.get(nextId);
+        blastSet.add(ni);
+        impacts.push({idx:ni,depth:cur.depth+1,name:NODES[ni].name,kind:(NODES[ni].type||'symbol').toLowerCase()});
+        queue.push({id:nextId,depth:cur.depth+1});
+      }
+    });
+  }
+  const overlay=document.getElementById('impact-overlay');
+  document.getElementById('impact-summary').innerHTML=`从 <b style="color:var(--signal-bright)">${NODES[idx].name}</b> 出发，波及 <b style="color:var(--anomaly-orange)">${impacts.length}</b> 个节点（3层以内）`;
+  document.getElementById('impact-list').innerHTML=impacts.map(im=>{
+    const c=NODE_COLORS[im.kind]||'#6ab0ff';
+    return `<div class="in" data-idx="${im.idx}">
+      <div class="ind" style="background:${c};box-shadow:0 0 6px ${c}"></div>
+      <div class="inn">${im.name}</div>
+      <div class="inde">L${im.depth}</div>
+    </div>`;
+  }).join('');
+  // Bind click
+  document.querySelectorAll('#impact-list .in').forEach(el=>{
+    el.onclick=()=>focusNode(parseInt(el.dataset.idx));
+  });
+  overlay.classList.add('visible');
+}
+function exitBlastMode(){
+  blastMode=false;blastSource=-1;blastSet=new Set();
+  document.getElementById('impact-overlay').classList.remove('visible');
+}
+function runImpactDemo(){
+  const idx=NODES.findIndex(n=>n.id==='middleware');
+  if(idx>=0)startBlastMode(idx);
+}
+
+// ── Fold view ──
+function toggleFoldView(){foldView=!foldView;}
+
+// ── Reanalyze ──
+function reanalyzeDemo(){
+  const btn=document.getElementById('btn-reanalyze');
+  btn.textContent='⏳ 分析中...';
+  setTimeout(()=>{
+    btn.textContent='🔄 分析';
+    computeLayout();
+  },1200);
+}
+
+// ── Toolbar ──
+document.getElementById('btn-check').onclick=()=>showPanel('left');
+document.getElementById('btn-timeline').onclick=()=>showPanel('right');
+document.getElementById('btn-blast').onclick=runImpactDemo;
+document.getElementById('btn-fold').onclick=toggleFoldView;
+document.getElementById('btn-reanalyze').onclick=reanalyzeDemo;
+document.getElementById('lp-close').onclick=()=>togglePanel('left');
+document.getElementById('rp-close').onclick=()=>togglePanel('right');
+document.getElementById('io-close').onclick=()=>exitBlastMode();
+document.getElementById('dt-left').onclick=()=>showPanel('left');
+document.getElementById('dt-right').onclick=()=>showPanel('right');
+document.getElementById('dt-impact').onclick=runImpactDemo;
+
+function togglePanel(side){
+  const el=side==='left'?document.getElementById('left-panel'):document.getElementById('right-panel');
+  el.classList.toggle('hidden');
+  document.querySelectorAll('.dt').forEach(t=>t.classList.remove('active'));
+}
+function showPanel(side){
+  document.getElementById('left-panel').classList.toggle('hidden',side!=='left');
+  document.getElementById('right-panel').classList.toggle('hidden',side!=='right');
+  document.querySelectorAll('.dt').forEach((t,i)=>{
+    t.classList.toggle('active',(side==='left'&&i===0)||(side==='right'&&i===1));
+  });
+}
+
+function renderCheck(){
+  document.getElementById('check-body').innerHTML=CHECK_DATA.map(c=>`
+    <div class="ci">
+      <span class="cl l${c.level}">L${c.level}</span>
+      <span class="cdesc">${c.desc}</span>
+      ${c.old?`<div style="margin-top:4px;font-family:var(--font-mono);font-size:9px;color:var(--text-faint)">${c.old} → <span style="color:var(--anomaly-red)">${c.new}</span></div>`:''}
+      <div class="cfile">${c.file}</div>
+    </div>`).join('')+
+    `<div style="margin-top:8px;padding:8px;border-radius:4px;background:rgba(72,204,104,0.08);border:1px solid rgba(72,204,104,0.15);font-size:10px;color:var(--anomaly-green)">✓ 通过: L1 可见破坏 · 文件格式一致性 · 类型检查 · 导入排序</div>`;
+}
+function renderTimeline(){
+  document.getElementById('timeline-body').innerHTML=TIMELINE_DATA.map(t=>`
+    <div class="tl">
+      <div class="td ${t.dot}"></div>
+      <div class="tt">${t.time}</div>
+      <div class="tx">${t.text}</div>
+      ${t.file?`<div class="tf">${t.file}</div>`:''}
+    </div>`).join('');
+}
+
+// ── Chat ──
+const chatMessages=document.getElementById('chat-messages');
+const chatInput=document.getElementById('chat-input');
+const chatSend=document.getElementById('chat-send');
+
+function addMessage(role,text,toolCard){
+  const msg=document.createElement('div');
+  msg.className='msg '+(role==='user'?'msg-u':'msg-a');
+  const bubble=document.createElement('div');
+  bubble.className='mb';
+  bubble.innerHTML=text;
+  const roleLabel=document.createElement('div');
+  roleLabel.className='mr';
+  roleLabel.textContent=role==='user'?'你':'AGENT';
+  msg.appendChild(roleLabel);
+  msg.appendChild(bubble);
+  if(toolCard){
+    const tc=document.createElement('div');
+    tc.className='tc';
+    tc.innerHTML=toolCard;
+    msg.appendChild(tc);
+  }
+  chatMessages.appendChild(msg);
+  chatMessages.scrollTop=chatMessages.scrollHeight;
+}
+
+function askAgent(name){
+  chatInput.value=`${name} 的依赖链是什么？改了会不会炸？`;
+  chatInput.focus();
+}
+
+function countReachable(node){
+  const nodeIdxMap=new Map();NODES.forEach((n,i)=>nodeIdxMap.set(n.id,i));
+  const visited=new Set([nodeIdxMap.get(node.id)]);
+  const queue=[nodeIdxMap.get(node.id)];
+  while(queue.length>0){
+    const cur=queue.shift();
+    EDGES.forEach(e=>{
+      let next=-1;
+      if(e[0]===node.id)next=nodeIdxMap.get(e[1]);
+      else if(e[1]===node.id)next=nodeIdxMap.get(e[0]);
+      if(next>=0&&!visited.has(next)){visited.add(next);queue.push(next);}
+    });
+  }
+  return visited.size-1;
+}
+
+const AGENT_RESPONSES=[
+{q:/依赖|邻居|连接|连着/i,a:node=>{
+  const outgoing=EDGES.filter(e=>e[0]===node.id).map(e=>NODES.find(n=>n.id===e[1]).name);
+  const incoming=EDGES.filter(e=>e[1]===node.id).map(e=>NODES.find(n=>n.id===e[0]).name);
+  return `<b>${node.name}</b> 的依赖关系：<br>📤 它依赖: ${outgoing.join(', ')||'无'}<br>📥 被依赖: ${incoming.join(', ')||'无'}<br><br>📊 耦合度: <span style="color:var(--sol-bright)">${outgoing.length+incoming.length}</span> 条边`;
+},tool:node=>{
+  const outgoing=EDGES.filter(e=>e[0]===node.id);
+  return `<div class="tch">🔧 hologram_neighbors <span class="tcs">✓ 完成</span></div><div class="tcb">node_id: "${node.id}"\noutgoing: ${outgoing.length} edges\nincoming: ${EDGES.filter(e=>e[1]===node.id).length} edges\nneighbor_count: ${outgoing.length+EDGES.filter(e=>e[1]===node.id).length}</div>`;
+}},
+{q:/波及|炸|影响|impact/i,a:node=>{
+  const nodeIdxMap=new Map();NODES.forEach((n,i)=>nodeIdxMap.set(n.id,i));
+  const visited=new Set([nodeIdxMap.get(node.id)]);
+  const queue=[{idx:nodeIdxMap.get(node.id),depth:0}];
+  let count=0;
+  while(queue.length>0){
+    const cur=queue.shift();
+    if(cur.depth>=3)continue;
+    EDGES.forEach(e=>{
+      let next=-1;
+      if(e[0]===node.id)next=nodeIdxMap.get(e[1]);
+      else if(e[1]===node.id)next=nodeIdxMap.get(e[0]);
+      if(next>=0&&!visited.has(next)){visited.add(next);count++;queue.push({idx:next,depth:cur.depth+1});}
+    });
+  }
+  return `改 <b>${node.name}</b> 会波及 <b style="color:var(--anomaly-orange)">${count}</b> 个节点（3层以内）。<br>⚠️ 风险等级: <span style="color:${count>7?'var(--anomaly-red)':'var(--sol)'}">${count>7?'高':'中'}</span><br><br>建议: ${count>7?'改动影响范围大，建议拆分或增加测试覆盖':'影响可控，正常开发即可'}`;
+},tool:node=>`<div class="tch">🔧 hologram_impact <span class="tcs">✓ 完成</span></div><div class="tcb">node_id: "${node.id}"\nreachable_count: ${countReachable(node)}\nmax_depth: 3\nrisk: medium</div>`},
+{q:/风险|脆弱|fragile/i,a:()=>"📊 项目高风险模块排行：<br>1. <span style='color:var(--anomaly-red)'>DatabasePool</span> — fragility 0.92, fan-in 12<br>2. <span style='color:var(--sol-bright)'>CacheStore</span> — fragility 0.87, fan-in 8<br>3. <span style='color:var(--sol)'>TaskScheduler</span> — fragility 0.81, fan-in 5",tool:"<div class='tch'>🔧 hologram_fragile <span class='tcs'>✓ 完成</span></div><div class='tcb'>limit: 5\nresults: 3 fragile nodes found</div>"},
+{q:/循环|cycle|依赖环/i,a:()=>"🔁 检测到 1 个循环依赖：<br><span style='color:var(--anomaly-red)'>CacheStore → RedisAdapter → Serializer → CacheStore</span><br>深度: 3<br>建议: 考虑引入接口抽象打破循环",tool:"<div class='tch'>🔧 hologram_cycle <span class='tcs'>✓ 完成</span></div><div class='tcb'>mode: all\ncycles: 1\ntotal: 1</div>"},
+{q:/检查|约束|check|audit/i,a:()=>"⚡ 约束审计结果：<br>❌ <span style='color:var(--anomaly-red)'>1 个 L5 违规</span> — API签名变更<br>⚠️ <span style='color:var(--anomaly-orange)'>1 个 L4 违规</span> — 跨层穿透<br>⚠️ <span style='color:var(--sol)'>1 个 L3 违规</span> — 延迟依赖<br>ℹ️ <span style='color:var(--anomaly-green)'>1 个 L2 违规</span> — 波及3模块<br><br>波及半径: 7 · 跨社区边: 3",tool:"<div class='tch'>🔧 hologram_run_check <span class='tcs'>✓ 完成</span></div><div class='tcb'>passed: false\nl5_violations: 1\nl4_violations: 1\nblast_radius: 7</div>"},
+];
+
+function handleChat(){
+  const text=chatInput.value.trim();
+  if(!text)return;
+  addMessage('user',text);
+  chatInput.value='';
+  let matchedNode=NODES.find(n=>text.toLowerCase().includes(n.name.toLowerCase()));
+  let response=null;
+  for(const r of AGENT_RESPONSES){if(r.q.test(text)){response=r;break;}}
+  setTimeout(()=>{
+    if(response){
+      const a=response.a(matchedNode||NODES[0]);
+      const tool=typeof response.tool==='function'?response.tool(matchedNode||NODES[0]):response.tool;
+      addMessage('ai',a,tool);
+    }else if(matchedNode){
+      addMessage('ai',`<b>${matchedNode.name}</b> 是一个 <span style="color:var(--signal-bright)">${TYPE_LABELS[(matchedNode.type||'symbol').toLowerCase()]||matchedNode.type}</span>，位于 <span style="font-family:var(--font-mono);font-size:10px">${matchedNode.loc}</span>。<br>度数: ${deg[NODES.indexOf(matchedNode)]} · 它是这个项目中的重要模块。`);
+    }else{
+      addMessage('ai','我可以帮你分析代码依赖关系、波及影响、循环依赖、约束违规等。试试问：<br>• "Router 的依赖链是什么？"<br>• "改 middleware 会不会炸？"<br>• "检查一下约束"<br>• "有哪些循环依赖？"');
+    }
+  },600);
+}
+chatSend.onclick=handleChat;
+chatInput.addEventListener('keydown',e=>{if(e.key==='Enter')handleChat();});
+
+// ── Legend ──
+document.getElementById('graph-legend').innerHTML=`
+  <div class="ls">
+    <div class="lt">节点类型</div>
+    <div class="lr"><span class="sw" style="background:#4ad8c8;color:#4ad8c8"></span> 函数</div>
+    <div class="lr"><span class="sw" style="background:#7fd84a;color:#7fd84a"></span> 类</div>
+    <div class="lr"><span class="sw" style="background:#f0a850;color:#f0a850"></span> 接口</div>
+    <div class="lr"><span class="sw" style="background:#f0c060;color:#f0c060"></span> 存储</div>
+    <div class="lr"><span class="sw" style="background:#c098ff;color:#c098ff"></span> 时序</div>
+  </div>
+  <div class="ls">
+    <div class="lt">边类型</div>
+    <div class="lr"><span class="ew" style="background:#4adfdf"></span> import</div>
+    <div class="lr"><span class="ew" style="background:#ff5566"></span> data</div>
+    <div class="lr"><span class="ew" style="background:#ff8833"></span> temporal</div>
+  </div>`;
+
+// ── Boot sequence ──
+function bootSequence(){
+  const steps=[
+    {text:"正在初始化分析引擎...",progress:15,delay:400},
+    {text:"tree-sitter 解析 38 个文件...",progress:35,delay:600},
+    {text:"构建依赖图 (38 节点, 57 边)...",progress:55,delay:500},
+    {text:"Leiden 社区检测: 6 个社区...",progress:70,delay:400},
+    {text:"计算 3D 力导向布局...",progress:85,delay:500},
+    {text:"渲染星图...",progress:95,delay:300},
+    {text:"就绪",progress:100,delay:200},
+  ];
+  let si=0;
+  function next(){
+    if(si>=steps.length){
+      setTimeout(()=>{
+        document.getElementById('boot-overlay').classList.add('done');
+        setTimeout(()=>{document.getElementById('demo-hint').style.opacity='0';},5000);
+      },300);
+      return;
+    }
+    const s=steps[si];
+    document.getElementById('boot-status').textContent=s.text;
+    document.getElementById('boot-bar').style.width=s.progress+'%';
+    si++;
+    setTimeout(next,s.delay);
+  }
+  next();
+}
+
+// ── Animation loop ──
+let lastTime=0;
+function animate(time){
+  requestAnimationFrame(animate);
+  const dt=(time-lastTime)/1000;
+  lastTime=time;
+  pulseTime+=dt;
+
+  // Smooth camera
+  camX+=(targetCamX-camX)*0.1;
+  camY+=(targetCamY-camY)*0.1;
+  camZoom+=(targetCamZoom-camZoom)*0.1;
+
+  // Recompute layout periodically for auto-rotation (lightweight)
+  if(Math.floor(pulseTime*30)!==Math.floor((pulseTime-dt)*30)){
+    computeLayout();
+  }
+
+  render();
+}
+
+// ── Init ──
+resize();
+renderCheck();
+renderTimeline();
+computeLayout();
+bootSequence();
+animate(0);
+
+setTimeout(()=>{
+  addMessage('ai','👋 我是 HoloGram Agent。我可以帮你分析代码依赖、评估波及风险、检查约束违规。<br><br>试试问我：<br>• "middleware 改了会不会炸？"<br>• "Router 的邻居有哪些？"<br>• "检查约束"');
+},2500);
+</script>
+</body>
+</html>

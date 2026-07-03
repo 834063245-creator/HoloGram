@@ -125,6 +125,14 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
   } catch { /* dynamic import failed — non-critical */ }
 }
 
+/** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。removeProvider 时调用。 */
+export async function removeSecret(providerName: string): Promise<void> {
+  try {
+    const { invoke } = await import('./bridge');
+    await invoke('credential_delete', { provider: providerName });
+  } catch { /* no encrypted store or key not found — non-critical */ }
+}
+
 /** 从系统加密存储恢复 API Key（仅填充 apiKey 为空的 provider）。loadSettings 后用。 */
 export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
   try {
