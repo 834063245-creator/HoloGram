@@ -3307,7 +3307,7 @@ export class ChatPanel {
     let subCmd = '';
     if (tool.name === 'run_shell' || tool.name === 'bash_output') {
       try {
-        const a = JSON.parse(tool.args);
+        const a = JSON.parse(tool.args || '{}');
         subCmd = (a.command || '').slice(0, 80);
         if ((a.command || '').length > 80) subCmd += '…';
       } catch { /* ignore */ }

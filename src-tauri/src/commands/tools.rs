@@ -1367,23 +1367,43 @@ pub(crate) async fn git_status(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
-    let branch = crate::utils::run_git(path.clone(), vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]).await.unwrap_or_default();
-    let branch = branch.trim().to_string();
+    // ponytail: single process — `git status --branch --porcelain` gives us branch name,
+    // ahead/behind counts, and file status in one call instead of three.
+    let branch_porcelain = crate::utils::run_git(path.clone(), vec![
+        "status".to_string(), "--branch".to_string(), "--porcelain".to_string(),
+    ]).await.unwrap_or_default();
 
+    // Parse the ## header line: "## main...origin/main [ahead 1, behind 2]"
+    let mut branch = String::new();
     let mut ahead = 0i32;
     let mut behind = 0i32;
-    if !branch.is_empty() {
-        // Ahead/behind vs upstream
-        if let Ok(ab) = crate::utils::run_git(path.clone(), vec!["rev-list".to_string(), "--left-right".to_string(), "--count".to_string(), format!("...origin/{}", branch)]).await {
-            let parts: Vec<&str> = ab.trim().split('\t').collect();
-            if parts.len() == 2 {
-                ahead = parts[0].trim().parse().unwrap_or(0);   // left  = HEAD 独有的
-                behind = parts[1].trim().parse().unwrap_or(0);  // right = origin 独有的
+    let first_line = branch_porcelain.lines().next().unwrap_or("");
+    if first_line.starts_with("## ") {
+        let header = &first_line[3..]; // strip "## "
+        // Extract branch name (before "...", if upstream exists)
+        if let Some(dot_pos) = header.find("...") {
+            branch = header[..dot_pos].to_string();
+            // Parse ahead/behind from the rest
+            let rest = &header[dot_pos..];
+            for part in rest.split(['[', ']', ',']) {
+                let trimmed = part.trim();
+                if let Some(num) = trimmed.strip_prefix("ahead ") {
+                    ahead = num.parse().unwrap_or(0);
+                } else if let Some(num) = trimmed.strip_prefix("behind ") {
+                    behind = num.parse().unwrap_or(0);
+                }
             }
+        } else {
+            branch = header.trim().to_string();
         }
     }
 
-    let porcelain = crate::utils::run_git(path.clone(), vec!["status".to_string(), "--porcelain".to_string()]).await.unwrap_or_default();
+    // Remaining lines (skip the ## header) are the porcelain file status
+    let porcelain = branch_porcelain
+        .lines()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .join("\n");
     let files = crate::utils::parse_status(&porcelain);
 
     let result = serde_json::json!({
