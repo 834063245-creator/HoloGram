@@ -351,7 +351,12 @@ export class ChatPanel {
       };
       document.addEventListener('keydown', onKey);
 
-      this.msgList.appendChild(card);
+      // Insert into the current assistant bubble so it flows with the agent's turn
+      if (this.currentBubble) {
+        this.currentBubble.appendChild(card);
+      } else {
+        this.msgList.appendChild(card);
+      }
       this.scrollBottom();
     });
   }
