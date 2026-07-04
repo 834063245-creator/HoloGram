@@ -239,7 +239,7 @@ pub(crate) async fn write_file_content(
     is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let real_path = crate::utils::resolve_write_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
@@ -254,7 +254,6 @@ pub(crate) async fn write_file_content(
         .map_err(|e| format!("无法保存文件 {}: {}", rp, e))?;
 
     // Hook: record timeline + update changed_files for 简报
-    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
     if let Some(ref handle) = *state.lock().unwrap() {
         let short = rp.rsplit(['/', '\\']).next().unwrap_or(&rp);
         let _ = engine_api::engine_record_timeline("agent_write", Some(&rp), &format!("Agent 写入: {}", short));
@@ -264,7 +263,13 @@ pub(crate) async fn write_file_content(
             }
         }
     }
-    Ok(())
+
+    let size = content.len();
+    Ok(if size < 1024 {
+        format!("已写入 {} ({} B)", rp, size)
+    } else {
+        format!("已写入 {} ({:.1} KB)", rp, size as f64 / 1024.0)
+    })
 }
 
 // ═══════════════════════════════════════════════════════
@@ -806,7 +811,7 @@ pub(crate) async fn edit_file(
                                 if !changed.contains(&file_path) { changed.push(file_path.clone()); }
                             }
                         }
-                        return Ok("已替换 1 处匹配（容错模式：逐行对齐）".to_string());
+                        return Ok(format!("已替换 1 处匹配（容错模式：逐行对齐）— {}", file_path));
                     }
                     break; // first-line matched once, no need to scan further
                 }
@@ -857,9 +862,9 @@ pub(crate) async fn edit_file(
     }
 
     Ok(if replace_all {
-        format!("已替换 {} 处匹配", count)
+        format!("已替换 {} 处匹配 — {}", count, file_path)
     } else {
-        "已替换 1 处匹配".to_string()
+        format!("已替换 1 处匹配 — {}", file_path)
     })
 }
 
