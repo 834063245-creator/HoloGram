@@ -57,18 +57,16 @@
 ## 截图
 
 <p align="center">
-  <img src="assets/screenshots/01-star-graph.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/02-galaxy-fold.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/03-agent-chat.png" width="32%" />
+  <img src="assets/screenshots/01.png" width="24%" />&nbsp;
+  <img src="assets/screenshots/02.png" width="24%" />&nbsp;
+  <img src="assets/screenshots/03.png" width="24%" />&nbsp;
+  <img src="assets/screenshots/04.png" width="24%" />
 </p>
 <p align="center">
-  <img src="assets/screenshots/04-impact-analysis.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/05-constraint-check.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/08-detail-card.png" width="32%" />
-</p>
-<p align="center">
-  <img src="assets/screenshots/10-translator.png" width="65%" />
-  <br/><sub>🔄 代码翻译器 — 选中源文件，LLM 逐行翻译，三栏并排审计</sub>
+  <img src="assets/screenshots/05.png" width="24%" />&nbsp;
+  <img src="assets/screenshots/06.png" width="24%" />&nbsp;
+  <img src="assets/screenshots/07.png" width="24%" />&nbsp;
+  <img src="assets/screenshots/08.png" width="24%" />
 </p>
 
 ---
