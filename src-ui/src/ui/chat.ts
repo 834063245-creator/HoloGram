@@ -2708,17 +2708,21 @@ export class ChatPanel {
       const lastMsg = this.messages[lastIdx];
       if (lastMsg.role === 'assistant' && lastMsg._id === this._streamingAssistantId) {
         const oldEl = this.msgList.children[lastIdx] as HTMLElement;
-        // If the user has expanded a reasoning block or there's a pending
-        // permission card, skip replaceWith — destroying the DOM mid-interaction
-        // would kill GSAP tweens and event targets.
-        const hasOpenReasoning = oldEl.querySelector('.msg-reasoning-open');
-        const hasPendingPerm = oldEl.querySelector('.perm-inline-card .msg-perm-btns');
-        if (hasOpenReasoning || hasPendingPerm) {
-          this.scrollBottom();
-          return;
-        }
+        // Preserve permission cards across DOM replacement — they live in
+        // DOM but not in the message model.
+        const permCards = Array.from(oldEl.querySelectorAll('.perm-inline-card'));
         const el = renderMessage(lastMsg, callbacks);
         el.dataset.messageId = lastMsg._id;
+        for (const card of permCards) el.appendChild(card);
+        // Keep reasoning blocks open if they were open before
+        const wasOpen = oldEl.querySelector('.msg-reasoning-open');
+        if (wasOpen) {
+          for (const block of el.querySelectorAll('.msg-reasoning')) {
+            block.querySelector('.msg-reasoning-content')?.classList.add('msg-reasoning-open');
+            const tgl = block.querySelector('.msg-reasoning-toggle');
+            if (tgl) tgl.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
+          }
+        }
         oldEl.replaceWith(el);
         this.scrollBottom();
         return;
@@ -3299,11 +3303,31 @@ export class ChatPanel {
     nameEl.className = 'tool-name';
     nameEl.innerHTML = `${icon} ${tool.name}`;
 
+    // Show command subtitle for run_shell / bash_output
+    let subCmd = '';
+    if (tool.name === 'run_shell' || tool.name === 'bash_output') {
+      try {
+        const a = JSON.parse(tool.args);
+        subCmd = (a.command || '').slice(0, 80);
+        if ((a.command || '').length > 80) subCmd += '…';
+      } catch { /* ignore */ }
+    }
+
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'tool-name-wrap';
+    nameWrap.appendChild(nameEl);
+    if (subCmd) {
+      const sub = document.createElement('div');
+      sub.className = 'tool-name-sub';
+      sub.textContent = subCmd;
+      nameWrap.appendChild(sub);
+    }
+
     const status = document.createElement('span');
     status.className = 'tool-status tool-status-running';
     status.innerHTML = iconHtml('dot', 10);
 
-    header.append(nameEl, status);
+    header.append(nameWrap, status);
     header.addEventListener('click', () => this.toggleToolCard(card));
 
     const resultEl = document.createElement('div');
