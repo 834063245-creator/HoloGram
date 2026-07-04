@@ -625,6 +625,19 @@ export class Agent {
           result = result + '\n\n[注意: 图上下文增强失败（hook error），以下结果为原始工具输出]';
         }
       }
+
+      // Notify timeline + schedule a briefing check. Timeline gets
+      // the raw write event; the debounced check produces violations.
+      const WRITE_TOOLS = new Set([
+        'edit_file', 'write_file', 'write_file_content',
+        'delete_file_or_dir', 'rename_file_or_dir', 'move_file',
+        'git_commit', 'git_discard',
+      ]);
+      if (!errMsg && WRITE_TOOLS.has(call.name)) {
+        bus.emit('timeline:refresh');
+        bus.emit('check:schedule');
+      }
+
       // Re-check after execution — the tool may have been slow
       if (signal.aborted) throw new Error('aborted');
     } catch (e: any) {

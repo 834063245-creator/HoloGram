@@ -12,6 +12,7 @@
 // Switching workspaces is atomic: old.deactivate() → new = Workspace.open() → assign.
 
 import { invoke, listen } from './bridge';
+import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
@@ -106,7 +107,8 @@ export class Workspace {
   // ── Check state ──
   checkRunning: boolean = false;
   checkPending: boolean = false;
-  checkTimer: ReturnType<typeof setTimeout> | null = null;
+    checkTimer: ReturnType<typeof setTimeout> | null = null;
+  private _checkPanel: CheckPanel | null = null;
 
   // ── Agent setup guards ──
   agentSetupRunning: boolean = false;
@@ -145,11 +147,15 @@ export class Workspace {
   ): Promise<Workspace> {
     const ws = new Workspace(path);
     ws._active = true;
+    ws._checkPanel = checkPanel;
     // ponytail: wire callbacks immediately so progress listeners inside this
     // method can push status updates. Without this, the entire analysis phase
     // is silent — onStatusChange was assigned AFTER open() returned.
     ws.onStatusChange = callbacks?.onStatusChange ?? null;
     ws.onLoadingChange = callbacks?.onLoadingChange ?? null;
+
+    // Auto-schedule check when agent writes files
+    bus.on('check:schedule', () => ws.scheduleCheck());
 
     // 1. Register workspace with backend
     ws.onStatusChange?.('正在初始化引擎...');
@@ -582,6 +588,7 @@ export class Workspace {
 
   async runCheck(checkPanel: CheckPanel): Promise<void> {
     if (!this.path) return;
+    this._checkPanel = checkPanel; // store for scheduleCheck
     if (this.checkRunning) { this.checkPending = true; return; }
     if (this.checkTimer) { clearTimeout(this.checkTimer); this.checkTimer = null; }
 
@@ -606,9 +613,19 @@ export class Workspace {
       if (this.checkPending) {
         this.checkPending = false;
         if (this.checkTimer) clearTimeout(this.checkTimer);
-        this.checkTimer = setTimeout(() => { this.checkTimer = null; if (!this.checkRunning) this.runCheck(checkPanel); }, 2000);
+        this.checkTimer = setTimeout(() => { this.checkTimer = null; if (!this.checkRunning) this.runCheck(this._checkPanel!); }, 2000);
       }
     }
+  }
+
+  /** Debounced check — call whenever agent writes files. 3s delay batches multiple writes. */
+  scheduleCheck(): void {
+    if (!this._checkPanel) return;
+    if (this.checkTimer) clearTimeout(this.checkTimer);
+    this.checkTimer = setTimeout(() => {
+      this.checkTimer = null;
+      if (!this.checkRunning) this.runCheck(this._checkPanel!);
+    }, 3000);
   }
 
   // ═══════════════════════════════════════════════════════════════

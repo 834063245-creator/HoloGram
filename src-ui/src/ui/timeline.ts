@@ -26,6 +26,11 @@ interface TimelineData {
 }
 
 const TYPE_ICONS: Record<string, string> = {
+  agent_write: iconHtml('save', 10),
+  agent_edit: iconHtml('edit', 10),
+  agent_delete: iconHtml('trash', 10),
+  agent_rename: iconHtml('edit', 10),
+  agent_move: iconHtml('edit', 10),
   file_changed: iconHtml('edit', 10),
   data_file_changed: iconHtml('save', 10),
   commit: iconHtml('bookmark', 10),
@@ -34,9 +39,15 @@ const TYPE_ICONS: Record<string, string> = {
   commit_violation: iconHtml('alert', 10),
   commit_clean: iconHtml('check-circle', 10),
   check: iconHtml('chart', 10),
+  analyze: iconHtml('refresh', 10),
 };
 
 const TYPE_LABELS: Record<string, string> = {
+  agent_write: '写入',
+  agent_edit: '编辑',
+  agent_delete: '删除',
+  agent_rename: '重命名',
+  agent_move: '移动',
   file_changed: '文件变更',
   data_file_changed: '数据变更',
   commit: 'Commit',
@@ -45,6 +56,7 @@ const TYPE_LABELS: Record<string, string> = {
   commit_violation: '变更风险',
   commit_clean: '变更通过',
   check: '简报',
+  analyze: '重分析',
 };
 
 export class TimelinePanel {
