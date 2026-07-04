@@ -66,7 +66,6 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
 }
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
-import { bus } from './ui/events';
 import { dbg } from './ui/debug';
 
 // ── Path util ──────────────────────────────────────────────────────
