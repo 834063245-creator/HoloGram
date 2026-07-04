@@ -110,19 +110,21 @@ pub(crate) async fn exec_command(
                     .map(|v| String::from_utf8_lossy(&v).to_string())
                     .unwrap_or_default();
 
+                let full_output = if stdout.is_empty() && stderr.is_empty() {
+                    "(无输出)".into()
+                } else {
+                    format!("{}{}", stdout, stderr)
+                };
+
                 if !status.success() {
-                    return Err(format!(
-                        "命令失败 (exit code: {}):\n{}{}",
+                    return Ok(format!(
+                        "[exit code: {}]\n{}",
                         status.code().unwrap_or(-1),
-                        stderr,
-                        if stdout.len() > 500 { format!("{}...", &stdout[..500]) } else { stdout }
+                        full_output
                     ));
                 }
 
-                if stdout.is_empty() && stderr.is_empty() {
-                    return Ok("(无输出)".into());
-                }
-                return Ok(format!("{}{}", stdout, stderr));
+                return Ok(full_output);
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
