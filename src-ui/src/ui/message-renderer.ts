@@ -233,14 +233,10 @@ function renderReasoningBlock(text: string, blockIndex: number, callbacks?: Rend
   content.className = 'msg-reasoning-content';
   content.textContent = text;
 
-  // Restore expanded state from model (survives DOM replacement across streaming frames)
-  const startExpanded = callbacks?.isReasoningExpanded?.(blockIndex) ?? false;
-  if (startExpanded) {
-    content.classList.add('msg-reasoning-open');
-    toggle.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
-  } else {
-    toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
-  }
+  // Always start expanded — clicking during CoT streaming is unreliable due
+  // to DOM replacement, so default to showing all reasoning content.
+  content.classList.add('msg-reasoning-open');
+  toggle.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
 
   // Click handled by delegated listener on msgList (chat.ts) —
   // survives replaceWith during CoT streaming.
