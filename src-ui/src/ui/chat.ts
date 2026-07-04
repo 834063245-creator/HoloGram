@@ -309,14 +309,17 @@ export class ChatPanel {
     reason: string,
     subject: string,
   ): Promise<{ allow: boolean; remember: boolean }> {
-    this.summonPanel();
+    // Only summon the panel if it's not already open — avoids a full
+    // morphToMode animation cycle (killTweens → removeClasses → height
+    // snap → fadeContentIn 0→1) that makes the chat flash white.
+    if (this.mode !== 'panel') this.summonPanel();
     return new Promise((resolve) => {
       const card = document.createElement('div');
       card.className = 'perm-inline-card';
 
       const header = document.createElement('div');
       header.className = 'perm-inline-header';
-      header.innerHTML = `${iconHtml('lock', 12)} <span>授权请求</span>`;
+      header.innerHTML = `${iconHtml('shield', 14)} <span>授权请求</span>`;
 
       const toolEl = document.createElement('div');
       toolEl.className = 'perm-inline-tool';
