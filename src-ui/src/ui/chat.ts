@@ -1914,11 +1914,26 @@ export class ChatPanel {
       this.toggleReasoning(toggle, content);
     });
 
-    // Scroll tracking: pause auto-scroll when user scrolls up during streaming.
-    // Resume when they scroll back to within 40px of bottom.
+    // Scroll tracking: use wheel (mouse) + touchstart (mobile) to detect
+    // user-initiated scroll-up.  The generic `scroll` event also fires on
+    // programmatic scrollBottom() calls — those can race with streaming DOM
+    // updates (rAF + replaceWith) and produce a stale dist > 40, falsely
+    // setting _userScrolledUp when the user never touched anything.
+    this.msgList.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0) this._userScrolledUp = true;
+    });
+    this.msgList.addEventListener('touchstart', () => {
+      // After touch start, check if user ended up scrolled away from bottom
+      setTimeout(() => {
+        const dist = this.msgList.scrollHeight - this.msgList.scrollTop - this.msgList.clientHeight;
+        if (dist > 40) this._userScrolledUp = true;
+      }, 150);
+    });
+    // Use scroll event only for the "back at bottom → resume" direction
     this.msgList.addEventListener('scroll', () => {
+      if (!this._userScrolledUp) return; // nothing to resume
       const dist = this.msgList.scrollHeight - this.msgList.scrollTop - this.msgList.clientHeight;
-      this._userScrolledUp = dist > 40;
+      if (dist <= 40) this._userScrolledUp = false;
     });
 
     // Welcome hint
