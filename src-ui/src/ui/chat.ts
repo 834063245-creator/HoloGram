@@ -2805,6 +2805,19 @@ export class ChatPanel {
       case EventKind.Usage:
         if (ev.usage?.total_tokens) {
           this._updateTokens(ev.usage.total_tokens);
+          const u = ev.usage;
+          const total = u.total_tokens ?? 0;
+          const cached = u.cache_hit_tokens ?? 0;
+          const missTokens = u.cache_miss_tokens ?? 0;
+          const inputTokens = cached + missTokens;
+          const hitRate = inputTokens > 0 ? (cached / inputTokens * 100) : 0;
+          let label = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
+          label += ' tok';
+          if (cached > 0) label += ` · ${cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached} cache`;
+          if (cached > 0) label += ` · ${hitRate.toFixed(0)}% 命中`;
+          this.lastUsageText = label;
+          this.totalTokensUsed = total;
+          this.updateFooter();
           this._syncMessagesToDOM();
         }
         break;
