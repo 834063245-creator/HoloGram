@@ -154,7 +154,26 @@ function renderToolCard(
   const icon = tool.readOnly ? iconHtml('search', 12) : iconHtml('code', 12);
   nameEl.innerHTML = `${icon} ${tool.label || tool.name}`;
 
-  // Status dot
+  // Subtitle: show command for run_shell / bash_output so user can tell what's running
+  let subtitleText = '';
+  if (tool.name === 'run_shell' || tool.name === 'bash_output') {
+    try {
+      const a = JSON.parse(tool.args);
+      subtitleText = (a.command || '').slice(0, 80);
+      if ((a.command || '').length > 80) subtitleText += '…';
+    } catch { /* ignore parse errors */ }
+  }
+
+  const nameWrap = document.createElement('div');
+  nameWrap.className = 'tool-name-wrap';
+  nameWrap.appendChild(nameEl);
+  if (subtitleText) {
+    const sub = document.createElement('div');
+    sub.className = 'tool-name-sub';
+    sub.textContent = subtitleText;
+    nameWrap.appendChild(sub);
+  }
+  header.appendChild(nameWrap);
   const status = document.createElement('span');
   if (tool.status === 'running') {
     status.className = 'tool-status tool-status-running';

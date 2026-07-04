@@ -1379,6 +1379,12 @@
     }
     .msg-tool-header:hover { background: rgba(18, 30, 50, 0.7); }
     .tool-name { font-weight: 600; color: var(--signal-bright); }
+    .tool-name-wrap { min-width: 0; }
+    .tool-name-sub {
+      font-size: calc(8px * var(--font-scale)); font-weight: 400;
+      color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; max-width: 260px;
+    }
     .tool-args {
       color: var(--text-dim);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
