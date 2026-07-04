@@ -8,7 +8,6 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import { gsap } from 'gsap';
-import { iconHtml } from './icons';
 import type {
   AssistantMessage,
   AssistantPart,
