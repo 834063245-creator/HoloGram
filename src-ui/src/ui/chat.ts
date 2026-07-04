@@ -3903,9 +3903,12 @@ export class ChatPanel {
   }
 
   private scrollBottom(): void {
-    if (this._userScrolledUp) return;
+    // Only suppress auto-scroll during active text streaming, not during
+    // tool execution or between turns.  Otherwise one manual scroll-up
+    // during a long tool call freezes the view for the rest of the turn.
+    if (this._userScrolledUp && this._streamingAssistantId) return;
     requestAnimationFrame(() => {
-      if (this._userScrolledUp) return; // re-check inside rAF
+      if (this._userScrolledUp && this._streamingAssistantId) return;
       this.msgList.scrollTop = this.msgList.scrollHeight;
     });
   }
