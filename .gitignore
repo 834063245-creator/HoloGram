@@ -51,6 +51,7 @@ test_projects/
 *.db
 .last_project
 hologram_graph.json
+graph_snapshot.json
 hologram_before.json
 hologram_full.json
 chat_sessions.json
