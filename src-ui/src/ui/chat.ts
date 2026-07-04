@@ -20,6 +20,24 @@ import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import gsap from 'gsap';
 
+// ── New message model (data-driven render) ──
+import {
+  type ChatMessage,
+  type UserMessage,
+  type AssistantMessage,
+  type AssistantPart,
+  type MessageId,
+  type FileAttachment,
+  nextMsgId,
+  resetMsgIdCounter,
+  createUserMessage,
+  createAssistantMessage,
+  createNoticeMessage,
+  lastTextPart,
+  findToolPart,
+} from './message-model';
+import { renderMessage, type RenderCallbacks } from './message-renderer';
+
 /** Copy-to-clipboard with visual feedback. Shows check-circle icon for 1.5s then restores copy icon. */
 function showCopiedFeedback(btn: HTMLElement, iconSize = 12): void {
   const copyHtml = iconHtml('copy', iconSize);
@@ -78,7 +96,13 @@ export class ChatPanel {
   private abortCtrl: AbortController | null = null;
   private running = false;
 
-  // Current message DOM refs (streaming targets)
+  // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
+  // All chat messages are stored here. The renderer builds DOM from this array.
+  // Streaming updates mutate the last assistant message → then re-render only that one.
+  private messages: ChatMessage[] = [];
+  /** The ID of the assistant message currently being streamed (null = none). */
+  private _streamingAssistantId: MessageId | null = null;
+  // Legacy fields — kept for backward compat during migration, will be removed
   private currentBubble: HTMLElement | null = null;
   private currentReasoning: HTMLElement | null = null;
   private currentReasoningContent: HTMLElement | null = null;
@@ -87,8 +111,10 @@ export class ChatPanel {
   private completedToolCount = 0; // ponytail: group completed tools into summary
   private toolSummaryEl: HTMLElement | null = null; // "已执行 N 个工具" line
 
-    // Per-session message cache (DOM elements)
+    // Per-session message cache (DOM elements) — legacy
   private sessionMessages = new Map<number, HTMLElement[]>();
+  // Per-session message model cache (ChatMessage[]) — new
+  private sessionMessageModels = new Map<number, ChatMessage[]>();
 
   // File attachments (dragged/selected files)
   private attachedFiles: { path: string; name: string; size: number }[] = [];
@@ -233,6 +259,9 @@ export class ChatPanel {
     this.toolUsage.clear();
     this.toolHistory = [];
     this.renderSessionTabs();
+    this.messages = [];
+    resetMsgIdCounter();
+    this._streamingAssistantId = null;
     this.msgList.innerHTML = '';
     this.addNotice('已连接到当前项目', 'info');
   }
@@ -1043,6 +1072,9 @@ export class ChatPanel {
     this.activeIdx = this.sessions.length - 1;
     this.renderSessionTabs();
     // Clear displayed messages for the new session
+    this.messages = [];
+    resetMsgIdCounter();
+    this._streamingAssistantId = null;
     this.msgList.innerHTML = '';
     this.inputHistory = [];
     this.historyIdx = 0;
@@ -1059,26 +1091,40 @@ export class ChatPanel {
     if (!sid) return;
     const children = Array.from(this.msgList.children) as HTMLElement[];
     this.sessionMessages.set(sid, children);
+    // Also save the message model so restoreMessages can use the new renderer
+    this.sessionMessageModels.set(sid, [...this.messages]);
   }
 
   private restoreMessages(): void {
     this.msgList.innerHTML = '';
     const sid = this.sessions[this.activeIdx]?.id;
     if (!sid) return;
-    const cached = this.sessionMessages.get(sid);
-    if (cached) {
-      for (const el of cached) {
-        this.msgList.appendChild(el.cloneNode(true));
-      }
-      // Staggered entrance for restored bubbles
-      const bubbles = this.msgList.querySelectorAll('.msg-bubble');
-      gsap.fromTo(bubbles,
-        { y: 10, opacity: 0 },
-        { y: 0, opacity: 1, duration: 0.25, ease: 'power2.out', stagger: 0.04, clearProps: 'transform,opacity' },
-      );
+
+    // Try to restore from message model cache first
+    const cachedMessages = this.sessionMessageModels.get(sid);
+    if (cachedMessages) {
+      this.messages = cachedMessages;
+      this._syncMessagesToDOM();
+      return;
     }
-    // Re-wire all interactive handlers lost by cloneNode
-    this._reWireHandlers();
+
+    // Fall back: rebuild from agent session (no DOM cloning — that bypassed
+    // the model and got wiped by the next _syncMessagesToDOM).
+    if (this.agent) {
+      this._rebuildMessagesFromSession();
+      this._syncMessagesToDOM();
+      // Re-wire node-link click handlers
+      this.msgList.querySelectorAll('.node-link').forEach((link) => {
+        link.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const name = (link as HTMLElement).dataset['nodename'] || '';
+          if (name && this.starGraph) {
+            const found = this.starGraph.focusNode(name);
+            if (!found) this.addNotice(`未在图中找到 "${name}"`, 'info');
+          }
+        });
+      });
+    }
     this.scrollBottom();
   }
 
@@ -1447,157 +1493,21 @@ export class ChatPanel {
     if (idx >= 0) this.closeSession(idx);
   }
 
-  /** Walk through active agent's session array and build DOM bubbles.
-   *  Also rebuilds turnPairs so edit/resend/retry work on restored messages. */
+  /** Walk through active agent's session array and build ChatMessage[] + turnPairs. */
   private renderRestoredSession(): void {
-    const agent = this.agent;
-    if (!agent) return;
+    if (!this.agent) return;
+    this._rebuildMessagesFromSession();
+    this._syncMessagesToDOM();
 
-    const msgs = agent.getSession();
-    // Index tool results by call_id
-    const toolResults = new Map<string, string>();
-    for (const m of msgs) {
-      if (m.role === 'tool' && m.tool_call_id) {
-        toolResults.set(m.tool_call_id, m.content || '');
+    // Wire up turnPairs userBubble refs
+    let pairIdx = 0;
+    const userRows = this.msgList.querySelectorAll<HTMLElement>('.msg-user-row');
+    userRows.forEach((row) => {
+      if (pairIdx < this.turnPairs.length) {
+        this.turnPairs[pairIdx].userBubble = row;
+        pairIdx++;
       }
-    }
-
-    // Rebuild turnPairs — track session indices to restore editing/retry
-    this.turnPairs = [];
-    let pendingUserText: string | null = null;
-    let pendingUserRow: HTMLElement | null = null;
-    let pendingSessionIdx = -1;
-    let sessionIdx = 0;
-
-    for (const m of msgs) {
-      const idx = sessionIdx++;
-
-      if (m.role === 'system') continue;
-
-      if (m.role === 'user') {
-        if (m.content?.startsWith('<compacted-context>')) {
-          const el = document.createElement('div');
-          el.className = 'msg-notice msg-notice-info';
-          el.textContent = '📋 上下文已压缩';
-          this.msgList.appendChild(el);
-          continue;
-        }
-        // Finalize previous pair before starting a new one
-        if (pendingUserText && pendingUserRow) {
-          this.turnPairs.push({ userText: pendingUserText, userBubble: pendingUserRow, assistantBubble: null, sessionIndex: pendingSessionIdx });
-        }
-        pendingUserText = m.content || '';
-        pendingSessionIdx = idx;
-        this.appendUserBubble(m.content || '');
-        pendingUserRow = this.msgList.lastElementChild as HTMLElement;
-        continue;
-      }
-
-      if (m.role === 'tool') continue; // handled inline with tool cards
-
-      if (m.role === 'assistant') {
-        const bubble = document.createElement('div');
-        bubble.className = 'msg-bubble assistant';
-
-        // Reasoning (collapsed by default)
-        if (m.reasoning_content) {
-          const reasoning = document.createElement('div');
-          reasoning.className = 'msg-reasoning';
-          const toggle = document.createElement('button');
-          toggle.className = 'msg-reasoning-toggle';
-          toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
-          const content = document.createElement('div');
-          content.className = 'msg-reasoning-content';
-          content.textContent = m.reasoning_content;
-          toggle.addEventListener('click', () => this.toggleReasoning(toggle, content));
-          reasoning.append(toggle, content);
-          bubble.appendChild(reasoning);
-        }
-
-        // Text content — markdown rendered
-        if (m.content) {
-          const textEl = document.createElement('div');
-          textEl.className = 'msg-text msg-markdown';
-          try {
-            const html = DOMPurify.sanitize(marked.parse(m.content) as string);
-            textEl.innerHTML = html;
-            textEl.dataset.rawMarkdown = m.content;
-            textEl.querySelectorAll('pre code').forEach((block) => {
-              hljs.highlightElement(block as HTMLElement);
-            });
-          } catch {
-            textEl.textContent = m.content;
-          }
-          bubble.appendChild(textEl);
-        }
-
-        // Tool calls — render as completed cards with results
-        if (m.tool_calls) {
-          for (const tc of m.tool_calls) {
-            const card = document.createElement('div');
-            card.className = 'msg-tool-card';
-            const header = document.createElement('div');
-            header.className = 'msg-tool-header';
-
-            const nameEl = document.createElement('span');
-            nameEl.className = 'tool-name';
-            nameEl.innerHTML = `${iconHtml('check-circle', 12)} ${tc.name}`;
-
-            const argsEl = document.createElement('span');
-            argsEl.className = 'tool-args';
-            if (tc.arguments) {
-              argsEl.textContent = truncateArgs(tc.arguments);
-              argsEl.title = tc.arguments;
-            }
-
-            const status = document.createElement('span');
-            status.className = 'tool-status tool-ok';
-            status.innerHTML = iconHtml('check-circle', 12);
-
-            header.append(nameEl, argsEl, status);
-            header.addEventListener('click', () => this.toggleToolCard(card));
-
-            const resultEl = document.createElement('div');
-            resultEl.className = 'msg-tool-result';
-            resultEl.textContent = toolResults.get(tc.id) || '(无输出)';
-
-            card.append(header, resultEl);
-            bubble.appendChild(card);
-          }
-        }
-
-        // Message actions (copy button)
-        const actions = document.createElement('div');
-        actions.className = 'msg-actions';
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'msg-action-btn';
-        copyBtn.innerHTML = iconHtml('copy', 12);
-        copyBtn.title = '复制回复';
-        copyBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const textEl = bubble.querySelector('.msg-text');
-          const txt = (textEl as HTMLElement)?.dataset?.rawMarkdown || textEl?.textContent || '';
-          navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
-        });
-        actions.append(copyBtn);
-        bubble.appendChild(actions);
-
-        this.msgList.appendChild(bubble);
-        this.animateBubbleIn(bubble);
-
-        // Link to pending user turn
-        if (pendingUserText && pendingUserRow) {
-          this.turnPairs.push({ userText: pendingUserText, userBubble: pendingUserRow, assistantBubble: bubble, sessionIndex: pendingSessionIdx });
-          pendingUserText = null;
-          pendingUserRow = null;
-        }
-      }
-    }
-
-    // Flush any trailing user message without assistant response
-    if (pendingUserText && pendingUserRow) {
-      this.turnPairs.push({ userText: pendingUserText, userBubble: pendingUserRow, assistantBubble: null, sessionIndex: pendingSessionIdx });
-    }
+    });
 
     // Re-wire node-link click handlers
     this.msgList.querySelectorAll('.node-link').forEach((link) => {
@@ -1613,6 +1523,104 @@ export class ChatPanel {
 
     this.scrollBottom();
     this.addNotice(`已恢复 ${this.sessions.length} 个会话`, 'info');
+  }
+
+  /** Populate this.messages[] + this.turnPairs from this.agent.getSession().
+   *  Pure data rebuild — no DOM sync, no notices. */
+  private _rebuildMessagesFromSession(): void {
+    const agent = this.agent;
+    if (!agent) return;
+
+    const msgs = agent.getSession();
+
+    // Reset messages and rebuild from session data
+    resetMsgIdCounter();
+    this.messages = [];
+    this.turnPairs = [];
+
+    // Index tool results by call_id so we can attach outputs to tool parts
+    const toolResults = new Map<string, string>();
+    for (const m of msgs) {
+      if (m.role === 'tool' && m.tool_call_id) {
+        toolResults.set(m.tool_call_id, m.content || '');
+      }
+    }
+
+    let pendingUserText: string | null = null;
+    let pendingUserId: MessageId | null = null;
+    let pendingSessionIdx = -1;
+    let sessionIdx = 0;
+
+    for (const m of msgs) {
+      const idx = sessionIdx++;
+
+      if (m.role === 'system') continue;
+
+      if (m.role === 'user') {
+        if (m.content?.startsWith('<compacted-context>')) {
+          this.messages.push(createNoticeMessage('📋 上下文已压缩', 'info'));
+          continue;
+        }
+        // Finalize previous pair
+        if (pendingUserText && pendingUserId) {
+          this.turnPairs.push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+        }
+        pendingUserText = m.content || '';
+        pendingUserId = nextMsgId();
+        pendingSessionIdx = idx;
+        const um = createUserMessage(m.content || '', undefined, idx);
+        this.messages.push(um);
+        pendingUserId = um._id;
+        continue;
+      }
+
+      if (m.role === 'tool') continue;
+
+      if (m.role === 'assistant') {
+        const am = createAssistantMessage(pendingUserId || '');
+        am.status = 'done';
+
+        // Reasoning
+        if (m.reasoning_content) {
+          am.parts.push({ type: 'reasoning', text: m.reasoning_content });
+        }
+
+        // Tool calls — output comes from matching tool-result messages
+        if (m.tool_calls) {
+          for (const tc of m.tool_calls) {
+            am.parts.push({
+              type: 'tool',
+              toolId: tc.id,
+              name: tc.name,
+              args: tc.arguments || '',
+              label: tc.name,
+              readOnly: false,
+              status: 'done',
+              output: toolResults.get(tc.id),
+            });
+          }
+        }
+
+        // Text content — always add if present, regardless of tool calls
+        if (m.content) {
+          am.parts.push({ type: 'text', text: m.content, finalised: true });
+        }
+
+        this.messages.push(am);
+
+        // Link to pending user turn
+        if (pendingUserText) {
+          this.turnPairs.push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+          pendingUserText = null;
+          pendingUserId = null;
+        }
+      }
+    }
+
+    // Flush any trailing user message
+    if (pendingUserText) {
+      this.turnPairs.push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+    }
   }
 
   // ── History panel — browse saved conversation files ──
@@ -2115,6 +2123,9 @@ export class ChatPanel {
     if (this.activeIdx >= 0) this.saveCurrentMessages();
     this.agent.newSession(); // 递增 sessionGen，旧 run 检测到 gen 变化自动丢弃
     // Clear message list UI and accumulated state
+    this.messages = [];
+    resetMsgIdCounter();
+    this._streamingAssistantId = null;
     this.msgList.innerHTML = '';
     this.inputHistory = [];
     this.historyIdx = 0;
@@ -2207,32 +2218,12 @@ export class ChatPanel {
       this.addNotice('正在压缩上下文…', 'info');
       const ctrl = new AbortController();
       this.agent.compactNow(ctrl.signal).then(() => {
+        this.messages = [];
+        resetMsgIdCounter();
+        this._streamingAssistantId = null;
         this.msgList.innerHTML = '';
-        // Rebuild message list from agent session
-        const msgs = this.agent!.getSession();
-        for (const m of msgs) {
-          if (m.role === 'system') continue;
-          if (m.role === 'user' && m.content?.startsWith('<compacted-context>')) {
-            const el = document.createElement('div');
-            el.className = 'msg-notice msg-notice-info';
-            el.textContent = '📋 上下文已压缩';
-            this.msgList.appendChild(el);
-            continue;
-          }
-          if (m.role === 'user') {
-            this.appendUserBubble(m.content || '');
-          }
-          if (m.role === 'assistant') {
-            const bubble = document.createElement('div');
-            bubble.className = 'msg-bubble assistant';
-            const textEl = document.createElement('div');
-            textEl.className = 'msg-text msg-markdown';
-            textEl.textContent = m.content || '';
-            bubble.appendChild(textEl);
-            this.msgList.appendChild(bubble);
-          }
-        }
-        this.scrollBottom();
+        // Use renderRestoredSession which now uses messages[]
+        this.renderRestoredSession();
       }).catch((err) => {
         this.addNotice(`压缩失败: ${err.message}`, 'error');
       });
@@ -2421,50 +2412,405 @@ export class ChatPanel {
     }
   }
 
-  // ── Event Sink — render Agent events to DOM ──
+  // ═══════════════════════════════════════════════════════
+  // Data-driven message model — replaces manual DOM append
+  // ═══════════════════════════════════════════════════════
+
+  /** Get the assistant message currently being streamed, or create one. */
+  private _streamingAssistant(): AssistantMessage {
+    if (this._streamingAssistantId) {
+      const found = this.messages.find(
+        (m) => m.role === 'assistant' && m._id === this._streamingAssistantId,
+      );
+      if (found) return found as AssistantMessage;
+    }
+    // Create a new one — find the last user message to link to
+    const lastUser = [...this.messages].reverse().find((m) => m.role === 'user');
+    const assistant = createAssistantMessage(lastUser?._id ?? '');
+    this.messages.push(assistant);
+    this._streamingAssistantId = assistant._id;
+    return assistant;
+  }
+
+  /** Append reasoning text — accumulates into the last reasoning part if one exists. */
+  private _appendReasoningPart(text: string): void {
+    const assistant = this._streamingAssistant();
+    const last = assistant.parts.length > 0
+      ? assistant.parts[assistant.parts.length - 1]
+      : null;
+    if (last && last.type === 'reasoning') {
+      last.text += text;
+    } else {
+      assistant.parts.push({ type: 'reasoning', text });
+    }
+  }
+
+  /** Append streaming text — merges into the last text part if one exists. */
+  private _appendTextPart(text: string): void {
+    const assistant = this._streamingAssistant();
+    const last = lastTextPart(assistant.parts);
+    if (last && !last.finalised) {
+      last.text += text;
+    } else {
+      assistant.parts.push({ type: 'text', text, finalised: false });
+    }
+  }
+
+  /** Mark the last text part as finalised (streaming text is complete for this step). */
+  private _finaliseTextPart(): void {
+    const assistant = this._streamingAssistant();
+    const last = lastTextPart(assistant.parts);
+    if (last) last.finalised = true;
+  }
+
+  /** Add or update a tool part. Called from ToolDispatch (create) and ToolProgress (update output). */
+  private _upsertToolPart(
+    toolId: string,
+    name: string,
+    args: string,
+    label: string,
+    readOnly: boolean,
+    status: 'pending' | 'running' | 'done' | 'error',
+    output?: string,
+    err?: string,
+    truncated?: boolean,
+  ): void {
+    const assistant = this._streamingAssistant();
+    const existing = findToolPart(assistant.parts, toolId);
+    if (existing) {
+      existing.status = status;
+      if (output !== undefined) existing.output = (existing.output || '') + output;
+      if (err !== undefined) existing.err = err;
+      if (truncated !== undefined) existing.truncated = truncated;
+      // Update args if they grew (partial → complete)
+      if (args && args.length > existing.args.length) existing.args = args;
+    } else {
+      assistant.parts.push({
+        type: 'tool',
+        toolId, name, args, label, readOnly, status, output, err, truncated,
+      });
+    }
+  }
+
+  /** Update token usage on the current assistant. */
+  private _updateTokens(tokensUsed: number): void {
+    this.totalTokensUsed += tokensUsed;
+    const assistant = this._streamingAssistant();
+    assistant.tokensUsed = (assistant.tokensUsed || 0) + tokensUsed;
+  }
+
+  /** Push a notice message to the log. */
+  private _addNoticeMessage(text: string, level: 'info' | 'warn' | 'error'): void {
+    this.messages.push(createNoticeMessage(text, level));
+    this._syncMessagesToDOM();
+    this.scrollBottom();
+  }
+
+  /** Mark the current streaming assistant as done and start a new turn. */
+  private _finaliseStreamingAssistant(): void {
+    const assistant = this.messages.find(
+      (m) => m.role === 'assistant' && m._id === this._streamingAssistantId,
+    ) as AssistantMessage | undefined;
+    if (assistant) {
+      assistant.status = 'done';
+      // Finalise any remaining text parts
+      for (const part of assistant.parts) {
+        if (part.type === 'text') (part as any).finalised = true;
+      }
+    }
+    this._streamingAssistantId = null;
+    this._streamTextBuf = '';
+  }
+
+  // ── Expanded reasoning blocks (survives DOM replacement during streaming) ──
+  private _expandedReasoning = new Set<number>();
+
+  /** Build the renderer callback bag — resolves user text, handles edit/resend. */
+  private _renderCallbacks(): RenderCallbacks {
+    return {
+      isReasoningExpanded: (idx) => this._expandedReasoning.has(idx),
+      onToggleReasoning: (idx) => {
+        if (this._expandedReasoning.has(idx)) this._expandedReasoning.delete(idx);
+        else this._expandedReasoning.add(idx);
+      },
+      onEditUserMessage: (msg) => {
+        if (this.running) { this.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
+        this.inputArea.value = msg.text;
+        this.inputArea.style.height = 'auto';
+        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+        this.inputArea.focus();
+        this.inputArea.selectionStart = this.inputArea.selectionEnd = msg.text.length;
+        this._retractUserMessage(msg);
+      },
+      onResendUserMessage: (msg) => {
+        if (this.running) { this.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
+        this.inputArea.value = msg.text;
+        this._retractUserMessage(msg);
+        this.sendMessage();
+      },
+      onRetryAssistant: (assistant, _userText) => {
+        if (this.running) { this.addNotice('Agent 正在运行，请先停止再重试', 'warn'); return; }
+        // Find the user message this assistant was responding to
+        const pair = this.turnPairs.find(
+          (tp) =>
+            tp.assistantBubble &&
+            tp.assistantBubble.dataset.messageId === assistant._id,
+        );
+        const userText = pair?.userText || '';
+        if (!userText) return;
+        this.inputArea.value = '';
+        this.setRunning(true);
+        this.addTurnSep();
+        if (!this.agent) return;
+        const sessIdx = this.agent.getSession().length;
+        this.turnPairs.push({
+          userText,
+          userBubble: null,
+          assistantBubble: null,
+          sessionIndex: sessIdx,
+        });
+        this.abortCtrl = new AbortController();
+        this.agent
+          .run(this.abortCtrl.signal, userText)
+          .catch((err: any) => {
+            if (!err.message?.includes('aborted')) {
+              this.addErrorNotice(err.message || String(err), '', [
+                {
+                  label: '重试',
+                  onClick: () => {
+                    this.inputArea.value = userText;
+                    this.sendMessage();
+                  },
+                },
+              ]);
+            }
+          })
+          .finally(() => {
+            this.setRunning(false);
+            this.abortCtrl = null;
+            this.finishTurn();
+          });
+      },
+      onCopyText: (text, button) => {
+        navigator.clipboard.writeText(text).then(() => showCopiedFeedback(button, 12)).catch(() => {});
+      },
+      onToggleToolCard: (card) => {
+        card.classList.toggle('tool-expanded');
+      },
+    };
+  }
+
+  /** Remove a user message from the messages array and take it out of the agent session. */
+  private _retractUserMessage(msg: UserMessage): void {
+    const idx = this.messages.indexOf(msg as any as ChatMessage);
+    if (idx >= 0) {
+      // Remove the user message and its assistant response
+      const toRemove: number[] = [idx];
+      // Find the assistant that responded to this
+      for (let i = idx + 1; i < this.messages.length; i++) {
+        const m = this.messages[i];
+        if (m.role === 'assistant' && (m as AssistantMessage).respondingTo === msg._id) {
+          toRemove.push(i);
+          break;
+        } else if (m.role === 'user') {
+          break; // next user message → stop
+        }
+      }
+      for (const i of toRemove.reverse()) {
+        this.messages.splice(i, 1);
+      }
+    }
+    // Also retract from agent session
+    if (msg.sessionIndex >= 0) {
+      this.agent?.retractTurnAt(msg.sessionIndex);
+    }
+    this._syncMessagesToDOM();
+  }
+
+  /** Re-render a single message at the given index (in-place DOM replace). */
+  private _rerenderMessageAt(index: number): void {
+    const msg = this.messages[index];
+    if (!msg) return;
+    const callbacks = this._renderCallbacks();
+    const el = renderMessage(msg, callbacks);
+    // Track message ID on the element so turnPairs can find it
+    el.dataset.messageId = msg._id;
+    const children = this.msgList.children;
+    if (index < children.length) {
+      children[index].replaceWith(el);
+    } else {
+      this.msgList.appendChild(el);
+    }
+    // If this is an assistant message done rendering, inject code block buttons
+    if (msg.role === 'assistant' && (msg as AssistantMessage).status === 'done') {
+      // injectCodeBlockButtons is in message-renderer.ts
+    }
+  }
+
+  /** Full sync: rebuild DOM from messages[]. Efficient for streaming (only last changes). */
+  private _syncMessagesToDOM(): void {
+    const callbacks = this._renderCallbacks();
+    const currentChildCount = this.msgList.children.length;
+    const msgCount = this.messages.length;
+
+    // If only the last message changed (streaming), re-render just that
+    if (
+      msgCount === currentChildCount &&
+      msgCount > 0 &&
+      this._streamingAssistantId
+    ) {
+      const lastIdx = msgCount - 1;
+      const lastMsg = this.messages[lastIdx];
+      if (lastMsg.role === 'assistant' && lastMsg._id === this._streamingAssistantId) {
+        const el = renderMessage(lastMsg, callbacks);
+        el.dataset.messageId = lastMsg._id;
+        this.msgList.children[lastIdx].replaceWith(el);
+        this.scrollBottom();
+        return;
+      }
+    }
+
+    // Full rebuild
+    const existing = Array.from(this.msgList.children);
+
+    for (let i = 0; i < msgCount; i++) {
+      const msg = this.messages[i];
+      const el = renderMessage(msg, callbacks);
+      el.dataset.messageId = msg._id;
+      if (i < existing.length) {
+        existing[i].replaceWith(el);
+        existing[i] = el;
+      } else {
+        this.msgList.appendChild(el);
+      }
+    }
+
+    // Remove excess children
+    while (this.msgList.children.length > msgCount) {
+      this.msgList.lastChild?.remove();
+    }
+
+    this.scrollBottom();
+  }
+
+  // ── Throttled rAF sync — avoids O(n²) re-render on high-frequency streams ──
+  private _syncPending = false;
+  private _scheduleSync(): void {
+    if (this._syncPending) return;
+    this._syncPending = true;
+    requestAnimationFrame(() => {
+      this._syncPending = false;
+      this._syncMessagesToDOM();
+    });
+  }
+
+  // ── Event Sink — render Agent events to DOM (NEW data-driven path) ──
 
   private renderEvent(ev: AgentEvent): void {
     switch (ev.kind) {
       case EventKind.TurnStarted:
-        this.finishCurrentTurn();
+        this._finaliseStreamingAssistant();
+        // Link assistant bubble to last turn pair before resetting
+        if (this.turnPairs.length > 0) {
+          const bubbles = this.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
+          const lastBubble = bubbles[bubbles.length - 1];
+          if (lastBubble) this.turnPairs[this.turnPairs.length - 1].assistantBubble = lastBubble;
+        }
+        this.pendingToolCards.clear();
+        this.resetReasoningBlock();
+        this.completedToolCount = 0;
+        if (this.toolSummaryEl) { this.toolSummaryEl.remove(); this.toolSummaryEl = null; }
+        this._expandedReasoning.clear();
+        this.currentBubble = null;
+        this.currentTextEl = null;
+        this._streamTextBuf = '';
+        this._streamStableLen = 0;
+        this._streamStableEl = null;
+        this._streamUnstableEl = null;
         break;
 
       case EventKind.Reasoning:
-        if (ev.text) this.appendReasoning(ev.text);
+        if (ev.text) {
+          const isFirst = !this._streamingAssistantId;
+          this._appendReasoningPart(ev.text);
+          // First chunk: show bubble immediately. Subsequent: rAF throttle.
+          if (isFirst) this._syncMessagesToDOM();
+          else this._scheduleSync();
+        }
         break;
 
       case EventKind.Text:
-        if (ev.text) this.appendText(ev.text, false);
+        if (ev.text) {
+          const isFirst = !this._streamingAssistantId;
+          this._appendTextPart(ev.text);
+          if (isFirst) this._syncMessagesToDOM();
+          else this._scheduleSync();
+        }
         break;
 
       case EventKind.Message:
         if (ev.text) {
-          // Markdown 渲染：流式阶段用 textContent 积累的纯文本，完成后一次性渲染
-          this.renderMarkdownText(ev.text);
+          this._finaliseTextPart();
         }
-        this.flushReasoning();
-        this.flushText();
+        // ponytail: flushReasoning/flushText are legacy no-ops in the data-driven path;
+        // kept as markers — the next turn's Reasoning will create a new part naturally.
+        this._syncMessagesToDOM();
         this.linkifyNodeNames();
         break;
 
       case EventKind.ToolDispatch:
-        this.handleToolDispatch(ev.tool!);
+        if (ev.tool) {
+          const t = ev.tool;
+          this._recordToolUsage(t.name, t.args || '');
+          this._updateStatusBar('running', `执行 ${t.name}`);
+          this._upsertToolPart(
+            t.id, t.name, t.args || '', t.name,
+            t.read_only ?? false,
+            t.partial ? 'pending' : 'running',
+          );
+          // Tool dispatch is low-frequency — render immediately so user sees feedback
+          this._syncMessagesToDOM();
+        }
         break;
 
       case EventKind.ToolProgress:
-        this.handleToolProgress(ev.tool!);
+        if (ev.tool) {
+          const t = ev.tool;
+          this._upsertToolPart(
+            t.id, t.name, t.args || '', t.name,
+            t.read_only ?? false,
+            'running',
+            t.output, // append output
+          );
+          // Streaming tool output — throttle to animation frame
+          this._scheduleSync();
+        }
         break;
 
       case EventKind.ToolResult:
-        this.handleToolResult(ev.tool!);
+        if (ev.tool) {
+          const t = ev.tool;
+          this._upsertToolPart(
+            t.id, t.name, t.args || '', t.name,
+            t.read_only ?? false,
+            t.err ? 'error' : 'done',
+            !t.err ? t.output : undefined,
+            t.err,
+            t.truncated,
+          );
+          this._syncMessagesToDOM();
+        }
         break;
 
       case EventKind.Usage:
-        this.addUsage(ev);
+        if (ev.usage?.total_tokens) {
+          this._updateTokens(ev.usage.total_tokens);
+          this._syncMessagesToDOM();
+        }
         break;
 
       case EventKind.Notice:
-        this.addNotice(ev.text || '', ev.level || 'info');
+        this._addNoticeMessage(ev.text || '', ev.level || 'info');
         break;
     }
   }
@@ -2487,9 +2833,12 @@ export class ChatPanel {
       this.reasoningBlockToggle = document.createElement('button');
       this.reasoningBlockToggle.className = 'msg-reasoning-toggle';
       this.reasoningBlockToggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
-      this.reasoningBlockToggle.addEventListener('click', () => {
-        const content = this.reasoningBlockToggle!.nextElementSibling as HTMLElement;
-        if (content) this.toggleReasoning(this.reasoningBlockToggle!, content);
+      // Capture toggle + content locally — the class-level refs get reset
+      // by flushReasoning() between rounds, so closure over `this.xxx` is wrong.
+      const capturedToggle = this.reasoningBlockToggle;
+      const capturedContent = this.reasoningBlockContent;
+      capturedToggle.addEventListener('click', () => {
+        if (capturedContent) this.toggleReasoning(capturedToggle, capturedContent);
       });
 
       this.reasoningBlockContent = document.createElement('div');
@@ -2502,8 +2851,10 @@ export class ChatPanel {
   }
 
   private flushReasoning(): void {
-    // Keep the reasoning block for the turn — don't null it.
-    // It will be reset in finishTurn().
+    // Close the current reasoning block so the next LLM reasoning round
+    // creates a fresh collapsible block instead of appending to the old one.
+    // The DOM elements stay visible in the bubble; we just null the refs.
+    this.resetReasoningBlock();
   }
 
   private resetReasoningBlock(): void {
@@ -2947,45 +3298,81 @@ export class ChatPanel {
     this.updateToolSummary();
   }
 
-  /** Collapse completed tool cards into a compact summary line. */
+  /** Collapse completed tool cards into a compact summary line.
+   *  Accumulates across rounds — existing collapsed cards stay hidden and
+   *  are counted into the total. New cards are folded and added to the count. */
   private updateToolSummary(): void {
     if (!this.currentBubble) return;
 
-    // Remove old summary
-    if (this.toolSummaryEl) {
-      this.toolSummaryEl.remove();
-      this.toolSummaryEl = null;
-    }
+    // Only fold cards that haven't been collapsed yet
+    const freshCards = this.currentBubble.querySelectorAll('.msg-tool-card.tool-done:not([data-collapsed])');
+    if (freshCards.length === 0) return;
 
-    const doneCards = this.currentBubble.querySelectorAll('.msg-tool-card.tool-done');
-    if (doneCards.length < 3) return;
+    // Count already-collapsed cards from previous rounds
+    const prevCollapsed = this.currentBubble.querySelectorAll('.msg-tool-card.tool-done[data-collapsed]');
+    const prevCount = prevCollapsed.length;
 
-    // Collect tool names
+    // Fold fresh cards
     const names: string[] = [];
-    doneCards.forEach((c) => {
+    freshCards.forEach((c) => {
       const nameEl = c.querySelector('.tool-name');
       if (nameEl) names.push(nameEl.textContent?.trim() || '');
-      // Hide individual cards
       (c as HTMLElement).style.display = 'none';
+      (c as HTMLElement).dataset['collapsed'] = '1';
     });
 
-    // Create summary
-    this.toolSummaryEl = document.createElement('div');
-    this.toolSummaryEl.className = 'msg-tool-summary';
-    const unique = [...new Set(names)];
-    const label = unique.slice(0, 3).join(', ') + (unique.length > 3 ? ` 等 ${unique.length} 个` : '');
-    this.toolSummaryEl.innerHTML = `${iconHtml('check-circle', 12)} 已执行 ${doneCards.length} 个工具：<span>${label}</span>`;
-    this.toolSummaryEl.style.cursor = 'pointer';
-    this.toolSummaryEl.title = '点击展开所有工具';
+    const total = prevCount + freshCards.length;
+    if (total < 3) {
+      // Un-hide everything if total is too low for a summary
+      freshCards.forEach((c) => {
+        (c as HTMLElement).style.display = '';
+        delete (c as HTMLElement).dataset['collapsed'];
+      });
+      if (prevCollapsed.length > 0) {
+        prevCollapsed.forEach((c) => {
+          (c as HTMLElement).style.display = '';
+          delete (c as HTMLElement).dataset['collapsed'];
+        });
+        if (this.toolSummaryEl) { this.toolSummaryEl.remove(); this.toolSummaryEl = null; }
+      }
+      return;
+    }
+
+    // Update or create summary
+    const unique = [...new Set(names)].slice(0, 3);
+    const label = unique.join(', ') + (names.length > 3 ? ` 等 ${names.length} 个` : '');
+
+    if (this.toolSummaryEl) {
+      // Update existing summary — increment count
+      const countSpan = this.toolSummaryEl.querySelector('.tool-summary-count');
+      if (countSpan) countSpan.textContent = String(total);
+      this.toolSummaryEl.innerHTML = `${iconHtml('check-circle', 12)} 已执行 <span class="tool-summary-count">${total}</span> 个工具`;
+    } else {
+      // Create new summary
+      this.toolSummaryEl = document.createElement('div');
+      this.toolSummaryEl.className = 'msg-tool-summary';
+      this.toolSummaryEl.innerHTML = `${iconHtml('check-circle', 12)} 已执行 <span class="tool-summary-count">${total}</span> 个工具`;
+      this.toolSummaryEl.style.cursor = 'pointer';
+      this.toolSummaryEl.title = '点击展开所有工具';
+
+      // Insert before the first tool card (collapsed or not)
+      const firstCard = this.currentBubble.querySelector('.msg-tool-card');
+      if (firstCard) {
+        firstCard.parentNode?.insertBefore(this.toolSummaryEl, firstCard);
+      } else {
+        this.currentBubble.appendChild(this.toolSummaryEl);
+      }
+    }
+
     this.toolSummaryEl.addEventListener('click', () => {
-      doneCards.forEach((c) => { (c as HTMLElement).style.display = ''; });
+      const allCollapsed = this.currentBubble!.querySelectorAll('.msg-tool-card.tool-done[data-collapsed]');
+      allCollapsed.forEach((c) => {
+        (c as HTMLElement).style.display = '';
+        delete (c as HTMLElement).dataset['collapsed'];
+      });
       this.toolSummaryEl?.remove();
       this.toolSummaryEl = null;
     });
-
-    // Insert summary before the first completed card
-    const firstDone = doneCards[0];
-    firstDone.parentNode?.insertBefore(this.toolSummaryEl, firstDone);
   }
 
   // ── Usage ──
@@ -3019,12 +3406,10 @@ export class ChatPanel {
 
   // ── Notice ──
 
+  // ponytail: single entry point — all notices go through the message model
+  // so _syncMessagesToDOM() never wipes them.
   private addNotice(text: string, level: 'info' | 'warn' | 'error'): void {
-    const el = document.createElement('div');
-    el.className = `msg-notice msg-notice-${level}`;
-    el.textContent = text;
-    this.msgList.appendChild(el);
-    this.scrollBottom();
+    this._addNoticeMessage(text, level);
   }
 
   // ── Footer — model badge, slash commands, usage ──
@@ -3322,53 +3707,48 @@ export class ChatPanel {
     this._bumpPillBadge();
   }
 
-  private appendUserBubble(text: string, files?: { path: string; name: string; size: number }[]): void {
-    // ponytail: row wrapper so edit/resend buttons sit outside the bubble
-    const row = document.createElement('div');
-    row.className = 'msg-user-row';
-    const el = document.createElement('div');
-    el.className = 'msg-bubble user';
-    const p = document.createElement('div');
-    p.className = 'msg-text';
-    p.textContent = text;
-    p.dataset.rawMarkdown = text;
-    el.appendChild(p);
+  private appendUserBubble(text: string, files?: { path: string; name: string; size: number }[], skipActions?: boolean): void {
+    // Push to the data model — _syncMessagesToDOM() will handle rendering
+    const fileAttachments: FileAttachment[] = (files || []).map((f) => ({
+      path: f.path,
+      name: f.name,
+      size: f.size,
+    }));
+    const userMsg = createUserMessage(text, fileAttachments.length > 0 ? fileAttachments : undefined);
+    this.messages.push(userMsg);
 
-    // Show attached files in user bubble for visual feedback
-    if (files && files.length > 0) {
-      const pills = document.createElement('div');
-      pills.className = 'msg-attach-pills';
-      pills.innerHTML = files.map(f => {
-        const sizeStr = f.size < 1024 ? `${f.size} B` :
-          f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
-          `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
-        return `<span class="msg-attach-pill">📄 ${f.name} <span class="attach-pill-size">${sizeStr}</span></span>`;
-      }).join('');
-      el.appendChild(pills);
-    }
-
-    row.appendChild(el);
-    this.addMessageActions(el, row);
-    this.msgList.appendChild(row);
-    this.animateBubbleIn(el);
-    // Track in turnPairs so retractTurn can find it
+    // Track in turnPairs
     const pair = this.turnPairs[this.turnPairs.length - 1];
-    if (pair) pair.userBubble = row;
+    if (pair) pair.userBubble = null; // will be set after DOM sync
+
+    // Sync to DOM
+    this._syncMessagesToDOM();
+
+    // Now find the rendered DOM element and link it
+    const rows = this.msgList.querySelectorAll('.msg-user-row');
+    const row = rows[rows.length - 1] as HTMLElement | undefined;
+    if (row && pair) pair.userBubble = row;
+
+    if (row) this.animateBubbleIn(row.querySelector('.msg-bubble.user') as HTMLElement);
   }
 
   private addTurnSep(): void {
-    const sep = document.createElement('div');
-    sep.className = 'msg-turn-sep';
-    this.msgList.appendChild(sep);
+    // No-op with the new message model — visual separation is handled
+    // by margins/padding on .msg-bubble elements via CSS.
   }
 
   /** Finalize current assistant bubble — link to latest turnPair, reset streaming state.
    *  Called at TurnStarted boundaries (including mid-run inserts) and at run end. */
   private finishCurrentTurn(): void {
+    this._finaliseStreamingAssistant();
     this.flushReasoning();
     this.flushText();
-    if (this.turnPairs.length > 0 && this.currentBubble) {
-      this.turnPairs[this.turnPairs.length - 1].assistantBubble = this.currentBubble;
+    this._syncMessagesToDOM();
+    // ponytail: data-driven path — find last assistant bubble in DOM after sync
+    if (this.turnPairs.length > 0) {
+      const bubbles = this.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
+      const lastBubble = bubbles[bubbles.length - 1];
+      if (lastBubble) this.turnPairs[this.turnPairs.length - 1].assistantBubble = lastBubble;
     }
     this.pendingToolCards.clear();
     this.resetReasoningBlock();
@@ -3399,8 +3779,12 @@ export class ChatPanel {
   // ── Node name linking ──
 
   private linkifyNodeNames(): void {
-    if (!this.starGraph || !this.currentBubble) return;
-    const texts = this.currentBubble.querySelectorAll('.msg-text');
+    if (!this.starGraph) return;
+    // Find the last assistant bubble in the DOM
+    const bubbles = this.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
+    const target = bubbles[bubbles.length - 1];
+    if (!target) return;
+    const texts = target.querySelectorAll('.msg-text');
     for (const el of texts) {
       this.autoLink(el as HTMLElement);
     }

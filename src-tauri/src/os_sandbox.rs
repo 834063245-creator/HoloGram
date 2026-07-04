@@ -430,11 +430,13 @@ mod imp {
         Cmd,
     }
 
-    pub fn detect_shell() -> Shell {
+    /// Cached shell detection — only runs once, reused across all spawns.
+    static DETECTED_SHELL: std::sync::OnceLock<Shell> = std::sync::OnceLock::new();
+
+    fn detect_shell_inner() -> Shell {
         // ponytail: Git Bash provides native UTF-8 encoding — no GBK/UTF-8
         // conversion layer. cmd.exe uses the system code page which corrupts
-        // Chinese characters. We use DETACHED_PROCESS (not CREATE_NO_WINDOW)
-        // which avoids the msys-2.0.dll + Job Object STATUS_DLL_INIT_FAILED issue.
+        // Chinese characters.
         let bash_candidates = [
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files (x86)\Git\bin\bash.exe",
@@ -445,7 +447,12 @@ mod imp {
             }
         }
         // Try to locate via where.exe git → Git\cmd\git.exe → ..\bin\bash.exe
-        if let Ok(output) = std::process::Command::new("where").arg("git").output() {
+        // CREATE_NO_WINDOW: suppress cmd.exe flash on every spawn (ponytail #2047).
+        if let Ok(output) = std::process::Command::new("where")
+            .arg("git")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 let git_path = line.trim();
                 if let Some(cmd_dir) = std::path::Path::new(git_path).parent() {
@@ -465,6 +472,12 @@ mod imp {
             }
         }
         Shell::Cmd
+    }
+
+    /// Detect the best available shell. Result is cached — only runs once.
+    /// Calls `detect_shell_inner()` on first invocation, returns cached `Shell` afterwards.
+    pub fn detect_shell() -> Shell {
+        DETECTED_SHELL.get_or_init(detect_shell_inner).clone()
     }
 
     /// Convert a Windows path to POSIX form for Git Bash.

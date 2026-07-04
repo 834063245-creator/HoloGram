@@ -533,9 +533,7 @@ export class Agent {
           output: o.output,
         });
       }
-      if (o.truncated && o.truncMsg) {
-        this.sink({ kind: EventKind.Notice, level: 'info', text: o.truncMsg });
-      }
+      // ponytail: truncation already shown inline in tool card output — skip the noisy notice
     }
 
     // Storm breaker
