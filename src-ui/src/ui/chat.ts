@@ -102,6 +102,8 @@ export class ChatPanel {
   private messages: ChatMessage[] = [];
   /** The ID of the assistant message currently being streamed (null = none). */
   private _streamingAssistantId: MessageId | null = null;
+  /** User scrolled up during streaming — pause auto-scroll until they scroll back to bottom. */
+  private _userScrolledUp = false;
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
   // Legacy fields — kept for backward compat during migration, will be removed
@@ -567,22 +569,15 @@ export class ChatPanel {
     </div>`;
     html += '</div>';
 
-    // System prompt preview
+    // System prompt (scrollable, full content)
     html += '<div class="chat-context-section">';
     html += '<div class="chat-context-section-label">系统提示词</div>';
     const sysMsg = this.agent?.getSession()?.find(m => m.role === 'system');
     if (sysMsg?.content) {
-      const preview = sysMsg.content.length > 500 ? sysMsg.content.slice(0, 500) + '…' : sysMsg.content;
-      html += `<div class="chat-context-system-prompt">${escapeHtml(preview)}</div>`;
+      html += `<pre class="chat-context-system-prompt">${escapeHtml(sysMsg.content)}</pre>`;
     } else {
       html += '<div class="chat-context-empty">Agent 未就绪</div>';
     }
-    html += '</div>';
-
-    // Memory items
-    html += '<div class="chat-context-section">';
-    html += '<div class="chat-context-section-label">已配置工具</div>';
-    html += '<div class="chat-context-empty">使用默认工具集</div>';
     html += '</div>';
 
     // Session stats
@@ -865,6 +860,7 @@ export class ChatPanel {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
     cancelPendingApprovals();
+    this.closeHistory();
     shell.notifyPanelChanged();
   }
 
@@ -906,6 +902,7 @@ export class ChatPanel {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
     cancelPendingApprovals();
+    this.closeHistory();
     shell.notifyPanelChanged();
   }
 
@@ -978,19 +975,20 @@ export class ChatPanel {
 
   private renderSessionTabs(): void {
     this.sessionTabs.innerHTML = '';
+    const multi = this.sessions.length > 1;
+    this.sessionTabs.style.display = multi ? '' : 'none';
+
     for (let i = 0; i < this.sessions.length; i++) {
       const s = this.sessions[i];
       const tab = document.createElement('button');
       tab.className = 'chat-session-tab';
       if (i === this.activeIdx) tab.classList.add('active');
-      // Short label
       const shortLabel = s.label.length > 8 ? s.label.slice(0, 7) + '…' : s.label;
       tab.textContent = shortLabel;
       tab.title = `${s.label} (点击切换)`;
       tab.addEventListener('click', () => this.switchSession(i));
 
-      if (this.sessions.length > 1) {
-        // Close button on each tab
+      if (multi) {
         const xBtn = document.createElement('span');
         xBtn.className = 'chat-session-x';
         xBtn.innerHTML = '×';
@@ -1002,6 +1000,15 @@ export class ChatPanel {
         tab.appendChild(xBtn);
       }
       this.sessionTabs.appendChild(tab);
+    }
+
+    // When multiple sessions: "对话" tab shows active session name
+    const chatTab = this.tabBar.querySelector<HTMLElement>('.chat-panel-tab[data-tab="chat"]');
+    if (chatTab) {
+      const activeSess = this.sessions[this.activeIdx];
+      chatTab.textContent = multi && activeSess
+        ? (activeSess.label.length > 6 ? activeSess.label.slice(0, 5) + '…' : activeSess.label)
+        : '对话';
     }
   }
 
@@ -1900,6 +1907,13 @@ export class ChatPanel {
       this.toggleReasoning(toggle, content);
     });
 
+    // Scroll tracking: pause auto-scroll when user scrolls up during streaming.
+    // Resume when they scroll back to within 40px of bottom.
+    this.msgList.addEventListener('scroll', () => {
+      const dist = this.msgList.scrollHeight - this.msgList.scrollTop - this.msgList.clientHeight;
+      this._userScrolledUp = dist > 40;
+    });
+
     // Welcome hint
     const hint = document.createElement('div');
     hint.className = 'chat-hint';
@@ -2173,6 +2187,9 @@ export class ChatPanel {
     if (!this.agent || this.running) return;
     this.setRunning(true);
 
+    // Reset auto-scroll for this new turn
+    this._userScrolledUp = false;
+
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
 
@@ -2199,6 +2216,9 @@ export class ChatPanel {
   }
 
   private async sendMessage(): Promise<void> {
+    // Reset auto-scroll for this new turn
+    this._userScrolledUp = false;
+
     const text = this.inputArea.value.trim();
     if (!text) return;
 
@@ -3872,7 +3892,9 @@ export class ChatPanel {
   }
 
   private scrollBottom(): void {
+    if (this._userScrolledUp) return;
     requestAnimationFrame(() => {
+      if (this._userScrolledUp) return; // re-check inside rAF
       this.msgList.scrollTop = this.msgList.scrollHeight;
     });
   }
