@@ -1045,7 +1045,7 @@ function truncationHint(toolName: string): string {
   switch (toolName) {
     case 'read_file_content':
       return '此工具支持 offset/limit 分页。用 offset 翻到下一段，或缩小 limit 范围。';
-    case 'search_code':
+        case 'search_content':
       return '用 maxResults 参数减少返回条数，或用更精确的 pattern + fileTypes 过滤。';
     case 'run_shell':
       return '用更精确的命令（管道过滤如 | head -n 100），或 runInBackground + bash_output 分批读取。';
