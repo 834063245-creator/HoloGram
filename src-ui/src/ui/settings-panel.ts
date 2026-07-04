@@ -5,7 +5,7 @@
 // Provider | Agent | 显示 三个标签页
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化
 
-import { loadSettings, saveSettings, persistSecrets, addProvider, removeProvider } from '../settings';
+import { loadSettings, saveSettings, persistSecrets, addProvider, removeProvider, removeSecret } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
 import { setLang } from '../i18n';
 import type { Lang } from '../i18n';
@@ -416,6 +416,7 @@ export class SettingsPanel {
         this.dirty = true;
         form.style.display = 'none';
         this.render();
+        this.dirty = true; // ponytail: render() resets dirty, re-apply after add
         // Auto-focus the API Key field so user can continue filling if key was empty
         if (!key) {
           const keyEl = this.panel.querySelector('.sp-key-input') as HTMLInputElement;
@@ -438,7 +439,9 @@ export class SettingsPanel {
       }
       if (!confirm(`确定删除 Provider "${active.name}"？此操作不可撤销。`)) return;
       try {
-        this.workingSettings = removeProvider(this.workingSettings, active.name);
+        const removedName = active.name;
+        this.workingSettings = removeProvider(this.workingSettings, removedName);
+        removeSecret(removedName).catch(() => {});
         this.dirty = true;
         this.render();
       } catch (e: any) {
@@ -561,7 +564,10 @@ export class SettingsPanel {
 
     const s = this.workingSettings;
     const active = s.providers.find((p) => p.name === s.activeProvider);
-    if (!active) return;
+    if (!active) {
+      alert(`保存失败：找不到 Provider "${s.activeProvider}"。请刷新设置面板重试。`);
+      return;
+    }
 
     // Validate: warn if key is empty
     if (!active.apiKey || active.apiKey.trim() === '') {

@@ -102,13 +102,47 @@ fn cred_path() -> PathBuf {
     base.join("com.hologram.app").join("credentials.enc")
 }
 
-/// Store an API key for a provider.
-/// Uses JSON for safe round-trip: keys containing `=` or newlines survive.
+/// Load the full credential map from the encrypted file.
+/// Returns empty map if file doesn't exist or is corrupted.
+fn load_cred_map() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let encrypted = match std::fs::read(cred_path()) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::Map::new()),
+        Err(e) => return Err(format!("read credentials: {}", e)),
+    };
+    let plain = dpapi_decrypt(&encrypted)?;
+    let s = String::from_utf8(plain).map_err(|e| format!("invalid cred: {}", e))?;
+    // v4.2: multi-provider map {"deepseek": "sk-...", "glm": "sk-..."}
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+        if let Some(map) = v.as_object() {
+            // Already v4.2 format — return clone
+            return Ok(map.clone());
+        }
+        // v4.1 single-provider format: {"provider":"deepseek","key":"sk-..."}
+        // Migrate to v4.2 map
+        if let (Some(prov), Some(key)) = (v.get("provider").and_then(|p| p.as_str()), v.get("key").and_then(|k| k.as_str())) {
+            let mut map = serde_json::Map::new();
+            map.insert(prov.to_string(), serde_json::Value::String(key.to_string()));
+            return Ok(map);
+        }
+    }
+    // Legacy format: provider=key per line — migrate to v4.2 map
+    let mut map = serde_json::Map::new();
+    for line in s.lines() {
+        if let Some((prov, key)) = line.split_once('=') {
+            map.insert(prov.to_string(), serde_json::Value::String(key.to_string()));
+        }
+    }
+    Ok(map)
+}
+
+/// Store an API key for a provider. Multi-provider safe — reads existing keys, merges, writes back.
 pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
     let dir = cred_path().parent().unwrap().to_path_buf();
     std::fs::create_dir_all(&dir).ok();
-    // JSON avoids corruption when key contains '=' or '\n'
-    let data = serde_json::json!({"provider": provider, "key": key}).to_string();
+    let mut map = load_cred_map().unwrap_or_default();
+    map.insert(provider.to_string(), serde_json::Value::String(key.to_string()));
+    let data = serde_json::Value::Object(map).to_string();
     let encrypted = dpapi_encrypt(data.as_bytes())?;
     std::fs::write(cred_path(), encrypted)
         .map_err(|e| format!("write credentials: {}", e))
@@ -116,27 +150,21 @@ pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
 
 /// Retrieve an API key for a provider.
 pub fn get_api_key(provider: &str) -> Result<Option<String>, String> {
-    let encrypted = match std::fs::read(cred_path()) {
-        Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("read credentials: {}", e)),
-    };
-    let plain = dpapi_decrypt(&encrypted)?;
-    let s = String::from_utf8(plain).map_err(|e| format!("invalid cred: {}", e))?;
-    // Try JSON first (v4.1), fall back to legacy provider=key for old creds
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-        if v.get("provider").and_then(|p| p.as_str()) == Some(provider) {
-            return Ok(v.get("key").and_then(|k| k.as_str()).map(|k| k.to_string()));
-        }
-        return Ok(None);
+    let map = load_cred_map()?;
+    Ok(map.get(provider).and_then(|v| v.as_str()).map(|s| s.to_string()))
+}
+
+/// Delete a single provider's API key from the encrypted store.
+pub fn delete_api_key(provider: &str) -> Result<(), String> {
+    let mut map = load_cred_map().unwrap_or_default();
+    if !map.contains_key(provider) {
+        return Ok(()); // already gone — not an error
     }
-    // Legacy format: provider=key per line
-    for line in s.lines() {
-        if let Some((prov, key)) = line.split_once('=') {
-            if prov == provider { return Ok(Some(key.to_string())); }
-        }
-    }
-    Ok(None)
+    map.remove(provider);
+    let data = serde_json::Value::Object(map).to_string();
+    let encrypted = dpapi_encrypt(data.as_bytes())?;
+    std::fs::write(cred_path(), encrypted)
+        .map_err(|e| format!("write credentials: {}", e))
 }
 
 /// Delete all stored credentials.

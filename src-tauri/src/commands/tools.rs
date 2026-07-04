@@ -1855,6 +1855,11 @@ pub(crate) fn credential_get(provider: String) -> Result<Option<String>, String>
 }
 
 #[tauri::command]
+pub(crate) fn credential_delete(provider: String) -> Result<(), String> {
+    crate::credential::delete_api_key(&provider)
+}
+
+#[tauri::command]
 pub(crate) fn credential_clear() -> Result<(), String> {
     crate::credential::clear_credentials()
 }

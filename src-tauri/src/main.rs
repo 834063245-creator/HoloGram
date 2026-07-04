@@ -220,6 +220,7 @@ fn main() {
             // ── Credential ──
             commands::tools::credential_store,
             commands::tools::credential_get,
+            commands::tools::credential_delete,
             commands::tools::credential_clear,
             // ── PTY ──
             pty_manager::pty_spawn,
