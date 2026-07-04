@@ -771,8 +771,7 @@ export class StarGraph {
 
   // Full-FX extras
   private _nodeBaseHSL: Array<{ h: number; s: number; l: number }> = [];
-  private edgeParticles!: THREE.Points;
-  private edgeParticleData: { edgeIdx: number; t: number; speed: number; dir: number }[] = [];
+  // Edge flow handled inside edgeLineGroups — dashed overlays animated via dashOffset
 
   // Diagnostics
   private _diagMsg = '';
@@ -3435,7 +3434,7 @@ export class StarGraph {
     while (this.highlightEdgeGroup.children.length) {
       this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     }
-    if (this.edgeParticles) this.edgeParticles.visible = false;
+    // edge flow handled inside edgeLineGroups — no separate particle cleanup needed
     if (this.enteredGalaxyId) {
       // Layer 2: inside a galaxy — show its nodes + internal edges as a constellation
       this._showConstellation(this.enteredGalaxyId);
@@ -3461,7 +3460,7 @@ export class StarGraph {
       (lines.material as any).opacity =
         edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
     }
-    if (this.edgeParticles) this.edgeParticles.visible = true;
+    // edge flow visibility restored via edgeLineGroups
     this._disposeFoldChildren();
     this.clearCrossEdgeFlow();
     this.galaxyClouds = []; this.galaxyGlows = [];
@@ -4663,20 +4662,62 @@ export class StarGraph {
       const B = 2000;
       for (let b = 0; b < g.verts.length; b += B * 6) {
         const v = g.verts.slice(b, b + B * 6), cl = g.colors.slice(b, b + B * 6);
-        const geo = new LineSegmentsGeometry();
-        geo.setPositions(v);
-        geo.setColors(cl);
         const opacity = edgeOpacityByDepth(g.depth);
-        const mat = new LineMaterial({
+        const lw = edgeWidthByDepth(g.depth);
+
+        // ── Base: solid dim line (structural skeleton) ──
+        const baseGeo = new LineSegmentsGeometry();
+        baseGeo.setPositions(v);
+        baseGeo.setColors(cl);
+        const baseMat = new LineMaterial({
           vertexColors: true, transparent: true, opacity,
-          linewidth: edgeWidthByDepth(g.depth),
-          resolution, depthWrite: false, blending: THREE.AdditiveBlending,
+          linewidth: lw, resolution, depthWrite: false, blending: THREE.AdditiveBlending,
         });
-        const lines = new LineSegments2(geo, mat);
-        lines.userData['edgeDepth'] = g.depth;
-        lines.userData['edgeType'] = g.edgeType;
-        lines.computeLineDistances();
-        this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
+        const baseLines = new LineSegments2(baseGeo, baseMat);
+        baseLines.userData['edgeDepth'] = g.depth;
+        baseLines.userData['edgeType'] = g.edgeType;
+        baseLines.computeLineDistances();
+        this.edgeGroup.add(baseLines); this.edgeLineGroups.push(baseLines);
+
+        // ── Flow: dashed overlay — bright dashes flow source→target via dashOffset ──
+        const flowGeo = new LineSegmentsGeometry();
+        flowGeo.setPositions([...v]); // clone — separate geometry for dashed line distances
+        flowGeo.setColors(cl);
+        const flowMat = new LineMaterial({
+          vertexColors: true, transparent: true,
+          opacity: 0.02,                        // ponytail: slightly above base — subtle flow
+          linewidth: lw,
+          resolution, depthWrite: false, blending: THREE.AdditiveBlending,
+          dashed: true,
+          dashScale: 1,
+          dashSize: 2.5,                        // small bright "packet"
+          gapSize: 35,                          // large gap → 2-4 dashes per edge
+          dashOffset: Math.random() * 37.5,
+        });
+        flowMat.userData['pulsePhase'] = Math.random() * Math.PI * 2; // for opacity breathing
+        flowMat.userData['flowSpeed'] = 0.8 + g.depth * 0.35;        // deeper = faster
+
+        // ── Comet-tail shader: soft fade at dash edges instead of hard clip ──
+        flowMat.onBeforeCompile = (shader) => {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            'if ( mod( vLineDistance + dashOffset, dashSize + gapSize ) > dashSize ) discard; // todo - FIX',
+            `float _cfPos = mod( vLineDistance + dashOffset, dashSize + gapSize );
+            float _cfFade = dashSize * 0.4;
+            // leading edge fade-in
+            if (_cfPos < _cfFade) alpha *= _cfPos / _cfFade;
+            // trailing edge fade-out
+            if (_cfPos > dashSize - _cfFade) alpha *= (dashSize - _cfPos) / _cfFade;
+            // gap — keep discard
+            if (_cfPos > dashSize) discard;`
+          );
+        };
+
+        const flowLines = new LineSegments2(flowGeo, flowMat);
+        flowLines.userData['edgeDepth'] = g.depth;
+        flowLines.userData['edgeType'] = g.edgeType;
+        flowLines.userData['isFlowOverlay'] = true;
+        flowLines.computeLineDistances();
+        this.edgeGroup.add(flowLines); this.edgeLineGroups.push(flowLines);
       }
     }
   }
@@ -5137,72 +5178,25 @@ export class StarGraph {
   // Kept as no-op for backward compat — called from _renderImpl after init.
   private initTwinkleData(_n: number): void { /* no-op: phase/speed baked into GPU attrs in buildNodes */ }
 
-  private initEdgeParticles(pos: Float32Array, data: EdgeData[]): void {
-    // Remove old
-    if (this.edgeParticles) { this.galaxyGroup.remove(this.edgeParticles); (this.edgeParticles.material as THREE.Material).dispose(); this.edgeParticles.geometry.dispose(); }
-    this.edgeParticleData = [];
-    if (data.length === 0) return;
+  // ── Edge flow: built into edgeLineGroups as dashed overlay in buildEdges() ──
+  // ponytail: no separate particle system — dashOffset animation on LineMaterial handles flow.
+  private initEdgeParticles(_pos: Float32Array, _data: EdgeData[]): void { /* no-op: flow dashes built in buildEdges */ }
 
-    const isFull = true;
-    const isMinimal = false;
-    if (isMinimal) return; // no particles in minimal mode
-
-    // Dense visible flow particles — data pulse along edges
-    const count = isFull ? Math.min(5000, data.length * 6) : Math.min(2000, data.length * 3);
-    const pPos = new Float32Array(count * 3);
-    const pCol = new Float32Array(count * 3);
-
-    for (let i = 0; i < count; i++) {
-      const ei = Math.floor(Math.random() * data.length);
-      const d = data[ei];
-      const t = Math.random();
-      pPos[i * 3]     = pos[d.s * 3]     + (pos[d.t * 3]     - pos[d.s * 3])     * t;
-      pPos[i * 3 + 1] = pos[d.s * 3 + 1] + (pos[d.t * 3 + 1] - pos[d.s * 3 + 1]) * t;
-      pPos[i * 3 + 2] = pos[d.s * 3 + 2] + (pos[d.t * 3 + 2] - pos[d.s * 3 + 2]) * t;
-
-      // Visible but not overpowering
-      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-      const bright = 0.5 + Math.random() * 0.7;
-      pCol[i * 3] = Math.min(1, c.r * bright);
-      pCol[i * 3 + 1] = Math.min(1, c.g * bright);
-      pCol[i * 3 + 2] = Math.min(1, c.b * bright);
-
-      this.edgeParticleData.push({
-        edgeIdx: ei, t,
-        speed: (isFull ? 0.004 : 0.002) + Math.random() * (isFull ? 0.014 : 0.006),
-        dir: Math.random() > 0.5 ? 1 : -1,
-      });
-    }
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
-    const mat = new THREE.PointsMaterial({
-      size: isFull ? 2.2 : 1.3,
-      map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true,
-      opacity: isFull ? 0.85 : 0.6,
-    });
-    this.edgeParticles = new THREE.Points(geo, mat);
-    this.galaxyGroup.add(this.edgeParticles);
-  }
-
+  // ── Animate edge flow — decrement dashOffset on all dashed edge materials ──
   private animateEdgeParticles(): void {
-    if (!this.edgeParticles || this.edgeParticleData.length === 0) return;
-    const posArr = this.edgeParticles.geometry.attributes['position'].array as Float32Array;
-    const nPos = this.nodePositions;
-    for (let i = 0; i < this.edgeParticleData.length; i++) {
-      const pd = this.edgeParticleData[i];
-      const d = this.edgeDataList[pd.edgeIdx];
-      if (!d) continue;
-      pd.t += pd.speed * pd.dir;
-      if (pd.t > 1) { pd.t = 1; pd.dir = -1; }
-      if (pd.t < 0) { pd.t = 0; pd.dir = 1; }
-      posArr[i * 3]     = nPos[d.s * 3]     + (nPos[d.t * 3]     - nPos[d.s * 3])     * pd.t;
-      posArr[i * 3 + 1] = nPos[d.s * 3 + 1] + (nPos[d.t * 3 + 1] - nPos[d.s * 3 + 1]) * pd.t;
-      posArr[i * 3 + 2] = nPos[d.s * 3 + 2] + (nPos[d.t * 3 + 2] - nPos[d.s * 3 + 2]) * pd.t;
+    // ponytail: speed varies by coupling depth, opacity breathes slowly — "alive" without being louder
+    const baseSpeed = 1.2;
+    const pulseFreq = 0.7; // slow breath — ~9s cycle
+    const pulseAmp = 0.004; // subtle ±0.004 around base 0.015
+    const baseOpacity = 0.02;
+    for (const lines of this.edgeLineGroups) {
+      const mat = lines.material as LineMaterial;
+      if (!mat.dashed) continue;
+      const flowSpeed = (mat.userData['flowSpeed'] as number) || baseSpeed;
+      const phase = (mat.userData['pulsePhase'] as number) || 0;
+      mat.dashOffset -= flowSpeed;
+      mat.opacity = baseOpacity + Math.sin(this.pulseTime * pulseFreq + phase) * pulseAmp;
     }
-    this.edgeParticles.geometry.attributes['position'].needsUpdate = true;
   }
 
   // ── Animate ──────────────────────────────────────────────
