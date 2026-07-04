@@ -17,7 +17,7 @@ import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { ToolRegistry, createCodingTools, createDataflowTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
-import { showApprovalDialog } from './agent/permission';
+// ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
@@ -441,8 +441,7 @@ export class Workspace {
     const maxSteps = mode.maxSteps;
     const contextWindow = agentOpts.contextWindow ?? 0;
 
-    // ponytail: permission rules now evaluated in Rust has_permission_to_use_tool()
-    // Dialog rendering still uses showApprovalDialog via permission-ask event → main.ts bridge
+    // ponytail: permission rules evaluated in Rust, dialog rendered inline in chat panel
 
     this.prov = prov;
     this.registry = registry;

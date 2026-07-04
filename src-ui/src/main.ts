@@ -25,7 +25,7 @@ import { AgentVisualizer } from './ui/agent-visualizer';
 import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 import { Workspace, isSamePath } from './workspace';
-import { showApprovalDialog } from './agent/permission';
+// ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 
 // ── Worker layout helper ──
 
@@ -288,7 +288,7 @@ async function init(): Promise<void> {
     }
   });
 
-  // ── Backend permission-ask → frontend dialog bridge ──
+  // ── Backend permission-ask → frontend inline chat card bridge ──
   await listen('permission-ask', (event: any) => {
     const p = event.payload as {
       requestId: string;
@@ -297,7 +297,7 @@ async function init(): Promise<void> {
       reason: string;
       suggestions: Array<{ rule: string; behavior: string }>;
     };
-    showApprovalDialog(p.tool, p.reason, { path: p.path }).then((result) => {
+    chatPanel.showPermissionCard(p.tool, p.reason, p.path).then((result) => {
       invoke('permission_ask_response', {
         requestId: p.requestId,
         allow: result.allow,

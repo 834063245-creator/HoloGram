@@ -1499,7 +1499,54 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       PERMISSION MODAL — Security Clearance Hologram
+       PERMISSION INLINE CARD — embedded in chat, no modal overlay
+       ═══════════════════════════════════════════════════════════════ */
+    .perm-inline-card {
+      margin: 10px 12px; padding: calc(12px * var(--font-scale)) calc(14px * var(--font-scale));
+      background: rgba(20, 35, 60, 0.55);
+      border: 1px solid rgba(80, 140, 240, 0.18);
+      border-radius: 6px;
+      animation: permSlideIn 0.25s ease;
+      transition: border-color 0.3s ease, background 0.3s ease;
+    }
+    .perm-inline-card.perm-inline-allowed {
+      border-color: rgba(61, 165, 93, 0.3); background: rgba(61, 165, 93, 0.06);
+    }
+    .perm-inline-card.perm-inline-denied {
+      border-color: rgba(217, 68, 68, 0.2); background: rgba(217, 68, 68, 0.04);
+    }
+    @keyframes permSlideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .perm-inline-header {
+      display: flex; align-items: center; gap: 6px;
+      font-size: calc(10px * var(--font-scale)); font-weight: 600;
+      color: var(--signal, #68a8ff); text-transform: uppercase; letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    .perm-inline-tool {
+      font-family: var(--font-mono, monospace);
+      font-size: calc(13px * var(--font-scale)); font-weight: 700;
+      color: var(--starlight, #e0e8f8); margin-bottom: 4px;
+    }
+    .perm-inline-desc {
+      font-size: calc(11px * var(--font-scale));
+      color: var(--text-muted, rgba(145, 165, 190, 0.65));
+      margin-bottom: 8px; line-height: 1.5;
+    }
+    .perm-inline-subject {
+      font-family: var(--font-mono, monospace);
+      font-size: calc(10px * var(--font-scale));
+      color: rgba(160, 190, 220, 0.55);
+      background: rgba(0, 0, 0, 0.25);
+      padding: calc(3px * var(--font-scale)) calc(8px * var(--font-scale));
+      border-radius: 3px; margin-bottom: 8px;
+      word-break: break-all;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       PERMISSION MODAL — Security Clearance Hologram (unused, kept for reference)
        ═══════════════════════════════════════════════════════════════ */
 
     .perm-overlay {
