@@ -402,9 +402,14 @@ export class ChatPanel {
       // Promise hangs forever waiting for a click that never comes.
       this._userScrolledUp = false;
 
-      // Insert into the current assistant bubble so it flows with the agent's turn
-      if (this.currentBubble) {
-        this.currentBubble.appendChild(card);
+      // Insert directly into msgList, NOT into currentBubble.  The
+      // streaming DOM path (_doSyncMessagesToDOM) does replaceWith on
+      // the bubble every rAF frame, which forces us to detach + re-
+      // attach the card (triggering layout + scroll events that falsely
+      // set _userScrolledUp).  As a sibling of the assistant bubble,
+      // the card lives outside the streaming render path entirely.
+      if (this.currentBubble && this.currentBubble.parentNode) {
+        this.currentBubble.parentNode.insertBefore(card, this.currentBubble.nextSibling);
       } else {
         this.msgList.appendChild(card);
       }
@@ -2765,12 +2770,8 @@ export class ChatPanel {
       const lastMsg = this.messages[lastIdx];
       if (lastMsg.role === 'assistant' && lastMsg._id === this._streamingAssistantId) {
         const oldEl = this.msgList.children[lastIdx] as HTMLElement;
-        // Preserve permission cards across DOM replacement — they live in
-        // DOM but not in the message model.
-        const permCards = Array.from(oldEl.querySelectorAll('.perm-inline-card'));
         const el = renderMessage(lastMsg, callbacks);
         el.dataset.messageId = lastMsg._id;
-        for (const card of permCards) el.appendChild(card);
         // Keep reasoning blocks open if they were open before
         const wasOpen = oldEl.querySelector('.msg-reasoning-open');
         if (wasOpen) {
