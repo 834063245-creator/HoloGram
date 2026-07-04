@@ -15,7 +15,12 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
         };
     }
 
-    // 2. Content-level Ask rules
+    // 2. Content-level Allow rules — user/session/project rules override system Ask
+    if rules.find_allow("Git", Some(subcommand)).is_some() {
+        return PermissionResult::Allow;
+    }
+
+    // 3. Content-level Ask rules — only reached if no Allow rule matched
     if let Some(rule) = rules.find_ask("Git", Some(subcommand)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -26,11 +31,6 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
                 },
             ],
         };
-    }
-
-    // 3. Content-level Allow rules
-    if rules.find_allow("Git", Some(subcommand)).is_some() {
-        return PermissionResult::Allow;
     }
 
     // 4. Safe read-only subcommands → Passthrough (central engine will allow)

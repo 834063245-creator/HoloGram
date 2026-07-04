@@ -15,7 +15,12 @@ pub fn check(url: &str, rules: &PermissionRules) -> PermissionResult {
         };
     }
 
-    // 2. Content-level Ask rules
+    // 2. Content-level Allow rules — user/session/project rules override system Ask
+    if rules.find_allow("WebFetch", Some(url)).is_some() {
+        return PermissionResult::Allow;
+    }
+
+    // 3. Content-level Ask rules — only reached if no Allow rule matched
     if let Some(rule) = rules.find_ask("WebFetch", Some(url)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -26,11 +31,6 @@ pub fn check(url: &str, rules: &PermissionRules) -> PermissionResult {
                 },
             ],
         };
-    }
-
-    // 3. Content-level Allow rules
-    if rules.find_allow("WebFetch", Some(url)).is_some() {
-        return PermissionResult::Allow;
     }
 
     // 4. Passthrough — engine's default SSRF check handles the rest
