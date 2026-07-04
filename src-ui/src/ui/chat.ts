@@ -11,7 +11,7 @@ import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
 import { shell } from './app-shell';
-import { cancelPendingApprovals } from '../agent/permission';
+import { cancelPendingApprovals, registerPendingCard, unregisterPendingCard } from '../agent/permission';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
 import type { Message, ToolSchema } from '../provider/types';
@@ -268,6 +268,80 @@ export class ChatPanel {
     this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
     // Small delay to let panel animate open before sending
     setTimeout(() => this.sendMessage(), 200);
+  }
+
+  /** Render a permission request inline in the chat — no modal, no outside-click-to-deny. */
+  showPermissionCard(
+    toolName: string,
+    reason: string,
+    subject: string,
+  ): Promise<{ allow: boolean; remember: boolean }> {
+    this.summonPanel();
+    return new Promise((resolve) => {
+      const card = document.createElement('div');
+      card.className = 'perm-inline-card';
+
+      const header = document.createElement('div');
+      header.className = 'perm-inline-header';
+      header.innerHTML = `${iconHtml('lock', 12)} <span>授权请求</span>`;
+
+      const toolEl = document.createElement('div');
+      toolEl.className = 'perm-inline-tool';
+      toolEl.textContent = toolName;
+
+      const descEl = document.createElement('div');
+      descEl.className = 'perm-inline-desc';
+      descEl.textContent = reason.length > 200 ? reason.slice(0, 197) + '...' : reason;
+
+      const btnRow = document.createElement('div');
+      btnRow.className = 'msg-perm-btns';
+
+      const resolveAndClose = (result: { allow: boolean; remember: boolean }) => {
+        document.removeEventListener('keydown', onKey);
+        unregisterPendingCard(resolve);
+        // Replace buttons with result label
+        const label = result.allow
+          ? (result.remember ? '已允许（本次会话）' : '已允许')
+          : '已拒绝';
+        btnRow.innerHTML = `<span class="msg-perm-result">${iconHtml(result.allow ? 'check-circle' : 'close', 12)} ${label}</span>`;
+        card.classList.add(result.allow ? 'perm-inline-allowed' : 'perm-inline-denied');
+        resolve(result);
+      };
+      registerPendingCard(resolve);
+
+      const makeBtn = (label: string, cssClass: string, result: { allow: boolean; remember: boolean }) => {
+        const btn = document.createElement('button');
+        btn.className = `msg-perm-btn ${cssClass}`;
+        btn.textContent = label;
+        btn.addEventListener('click', (e) => { e.stopPropagation(); resolveAndClose(result); });
+        return btn;
+      };
+
+      btnRow.appendChild(makeBtn('本次会话允许', 'perm-always', { allow: true, remember: true }));
+      btnRow.appendChild(makeBtn('允许', 'perm-once', { allow: true, remember: false }));
+      btnRow.appendChild(makeBtn('拒绝', 'perm-deny', { allow: false, remember: false }));
+
+      card.appendChild(header);
+      if (subject) {
+        const subEl = document.createElement('div');
+        subEl.className = 'perm-inline-subject';
+        subEl.textContent = subject.length > 120 ? subject.slice(0, 117) + '...' : subject;
+        card.appendChild(subEl);
+      }
+      card.appendChild(toolEl);
+      card.appendChild(descEl);
+      card.appendChild(btnRow);
+
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Enter') { e.preventDefault(); resolveAndClose({ allow: true, remember: false }); }
+        else if (e.key === 'Escape') { e.preventDefault(); resolveAndClose({ allow: false, remember: false }); }
+        else if (e.key === 'y' && e.ctrlKey) { e.preventDefault(); resolveAndClose({ allow: true, remember: true }); }
+      };
+      document.addEventListener('keydown', onKey);
+
+      this.msgList.appendChild(card);
+      this.scrollBottom();
+    });
   }
 
   close(): void {
