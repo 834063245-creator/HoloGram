@@ -8,21 +8,20 @@
 import { bus } from '../ui/events';
 
 /** Track inline permission cards so they can be dismissed on abort. */
-const pendingCards: Array<{ resolve: (r: { allow: boolean; remember: boolean }) => void }> = [];
+const pendingCards: Array<{ resolve: (r: { allow: boolean; remember: boolean }) => void; cleanup: () => void }> = [];
 
-export function registerPendingCard(resolve: (r: { allow: boolean; remember: boolean }) => void): void {
-  pendingCards.push({ resolve });
+export function registerPendingCard(
+  resolve: (r: { allow: boolean; remember: boolean }) => void,
+  cleanup: () => void,
+): void {
+  pendingCards.push({ resolve, cleanup });
 }
 
-export function unregisterPendingCard(resolve: (r: { allow: boolean; remember: boolean }) => void): void {
-  const idx = pendingCards.findIndex((p) => p.resolve === resolve);
-  if (idx >= 0) pendingCards.splice(idx, 1);
-}
-
-/** Dismiss all pending permission cards with "deny" — called on abort/stop. */
+/** Dismiss all pending permission cards — called on abort/stop. */
 export function cancelPendingApprovals(): void {
   while (pendingCards.length > 0) {
     const p = pendingCards.pop()!;
+    p.cleanup();
     p.resolve({ allow: false, remember: false });
   }
 }
