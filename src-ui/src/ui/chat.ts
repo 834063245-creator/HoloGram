@@ -2704,9 +2704,14 @@ export class ChatPanel {
       const lastIdx = msgCount - 1;
       const lastMsg = this.messages[lastIdx];
       if (lastMsg.role === 'assistant' && lastMsg._id === this._streamingAssistantId) {
+        const oldEl = this.msgList.children[lastIdx] as HTMLElement;
+        // Preserve inline permission cards — they live in DOM but not in the
+        // message model, so replaceWith would destroy them without this step.
+        const permCards = Array.from(oldEl.querySelectorAll('.perm-inline-card'));
         const el = renderMessage(lastMsg, callbacks);
         el.dataset.messageId = lastMsg._id;
-        this.msgList.children[lastIdx].replaceWith(el);
+        for (const card of permCards) el.appendChild(card);
+        oldEl.replaceWith(el);
         this.scrollBottom();
         return;
       }
