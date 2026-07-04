@@ -11,7 +11,7 @@ import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
 import { shell } from './app-shell';
-import { cancelPendingApprovals, registerPendingCard, unregisterPendingCard } from '../agent/permission';
+import { cancelPendingApprovals, registerPendingCard } from '../agent/permission';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
 import type { Message, ToolSchema } from '../provider/types';
@@ -296,18 +296,30 @@ export class ChatPanel {
       const btnRow = document.createElement('div');
       btnRow.className = 'msg-perm-btns';
 
-      const resolveAndClose = (result: { allow: boolean; remember: boolean }) => {
+      const cleanupCard = () => {
         document.removeEventListener('keydown', onKey);
-        unregisterPendingCard(resolve);
-        // Replace buttons with result label
-        const label = result.allow
-          ? (result.remember ? '已允许（本次会话）' : '已允许')
-          : '已拒绝';
-        btnRow.innerHTML = `<span class="msg-perm-result">${iconHtml(result.allow ? 'check-circle' : 'close', 12)} ${label}</span>`;
-        card.classList.add(result.allow ? 'perm-inline-allowed' : 'perm-inline-denied');
+        // Collapse to a one-line notice so streaming replies don't look displaced
+        card.style.transition = 'all 0.25s ease';
+        card.style.maxHeight = card.scrollHeight + 'px';
+        requestAnimationFrame(() => {
+          const resultLabel = resultRef.allow
+            ? (resultRef.remember ? '本次会话已允许' : '已允许')
+            : '已拒绝';
+          const icon = resultRef.allow ? 'check-circle' : 'close';
+          const color = resultRef.allow ? 'var(--pass, #48cc68)' : 'var(--fail, #d94444)';
+          card.innerHTML = `<span style="font-size:calc(11px*var(--font-scale));color:${color};display:flex;align-items:center;gap:6px;padding:4px 0">${iconHtml(icon, 12)} ${toolName} — ${resultLabel}</span>`;
+          card.className = 'msg-notice ' + (resultRef.allow ? 'msg-notice-info' : 'msg-notice-warn');
+          card.style.maxHeight = '40px';
+        });
+      };
+
+      let resultRef: { allow: boolean; remember: boolean } = { allow: false, remember: false };
+      const resolveAndClose = (result: { allow: boolean; remember: boolean }) => {
+        resultRef = result;
+        cleanupCard();
         resolve(result);
       };
-      registerPendingCard(resolve);
+      registerPendingCard(resolve, cleanupCard);
 
       const makeBtn = (label: string, cssClass: string, result: { allow: boolean; remember: boolean }) => {
         const btn = document.createElement('button');
