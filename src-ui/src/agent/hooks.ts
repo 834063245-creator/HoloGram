@@ -5,7 +5,7 @@
 //
 // 两层架构：
 //   1. PreflightHook（pre-tool）：edit_file / write_file 之前 → ⚠️ 警告注入结果顶部
-//   2. GraphContextHook（post-tool）：read_file / search_code 之后 → 📊 符号概览注入结果顶部
+//   2. GraphContextHook（post-tool）：read_file / search_content / glob / list_directory / hologram_dataflow / hologram_search / hologram_node / git_diff / run_shell 之后 → 📊 符号概览注入结果顶部
 //
 // 设计约束：
 //   - 注入内容 < 800 字符，避免膨胀 token
@@ -162,7 +162,8 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 
     shouldEnrich(toolName: string): boolean {
       // edit_file / write_file 由 preflight hook 处理，此处不重复
-      return ['read_file_content', 'read_file', 'search_code', 'run_shell'].includes(toolName);
+      return ['read_file_content', 'read_file', 'search_content', 'glob', 'list_directory',
+               'hologram_dataflow', 'hologram_search', 'hologram_node', 'git_diff', 'run_shell'].includes(toolName);
     },
 
     async enrich(toolName: string, args: Record<string, unknown>, result: string): Promise<string> {
@@ -187,8 +188,47 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           }
           break;
         }
-        case 'search_code': {
+        case 'search_content': {
           const files = extractFilesFromSearchResult(result);
+          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          break;
+        }
+        case 'glob': {
+          const files = extractFilesFromGlobResult(result);
+          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          break;
+        }
+        case 'list_directory': {
+          const files = extractSourceFilesFromDirList(result);
+          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          break;
+        }
+        case 'hologram_dataflow': {
+          const vars = extractSharedVarsFromDataflow(result);
+          if (vars.length > 0) {
+            snippet = `共享变量: ${vars.map(v => `\`${v}\``).join(', ')}。→ 用 hologram_impact 追踪下游影响`;
+          }
+          break;
+        }
+        case 'hologram_search': {
+          const nodes = extractNodesFromSearchResult(result);
+          if (nodes.length > 0) {
+            const names = nodes.map(n => `\`${n.name}\``).join(', ');
+            snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 hologram_neighbors 查看依赖`;
+          }
+          break;
+        }
+        case 'hologram_node': {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.community) {
+              snippet = `社区归属: ${parsed.community}。→ 调 hologram_community 查看同社区节点`;
+            }
+          } catch {}
+          break;
+        }
+        case 'git_diff': {
+          const files = extractFilesFromDiffResult(result);
           if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
           break;
         }
@@ -196,6 +236,8 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           const cmd = String(args['command'] || '');
           if (/pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd)) {
             snippet = '🧪 测试完成后建议: 1) hologram_run_check 查看简报 2) hologram_impact 检查变更波及范围';
+          } else if (/npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd)) {
+            snippet = '🔧 构建/安装完成后建议: 跑相关测试确认无回归，必要时调 hologram_run_check 查看项目健康 snapshot';
           }
           break;
         }
@@ -228,6 +270,63 @@ function extractFilesFromSearchResult(result: string): string[] {
     }
   } catch { /* not JSON, ignore */ }
   return [];
+}
+
+// ── 辅助解析函数（供 GraphContextHook enrich 使用）──
+
+function extractFilesFromGlobResult(result: string): string[] {
+  const lines = result.split('\n').map(l => l.trim()).filter(Boolean);
+  // glob 输出格式：每行一个文件路径
+  return lines.filter(l => /\.(ts|rs|py|js|tsx|jsx|go|java|cpp|c|h|hpp)$/i.test(l)).slice(0, 5);
+}
+
+function extractSourceFilesFromDirList(result: string): string[] {
+  const files: string[] = [];
+  const lines = result.split('\n');
+  for (const line of lines) {
+    const pathMatch = line.match(/path:\s*(\S+)/i);
+    const typeMatch = line.match(/type:\s*file/i);
+    if (pathMatch && typeMatch) {
+      const fp = pathMatch[1];
+      if (/\.(ts|rs|py|js|tsx|jsx|go|java|cpp|c|h|hpp)$/i.test(fp)) {
+        files.push(fp);
+        if (files.length >= 5) break;
+      }
+    }
+  }
+  return files;
+}
+
+function extractSharedVarsFromDataflow(result: string): string[] {
+  try {
+    const parsed = JSON.parse(result);
+    if (parsed.shared_state && Array.isArray(parsed.shared_state)) {
+      return parsed.shared_state.map((s: any) => s.var || '').filter(Boolean).slice(0, 5);
+    }
+  } catch {}
+  return [];
+}
+
+function extractNodesFromSearchResult(result: string): { name: string }[] {
+  try {
+    const parsed = JSON.parse(result);
+    const arr = parsed.results || parsed.matches || [];
+    if (Array.isArray(arr)) {
+      return arr.map((r: any) => ({ name: r.name || r.id || '' })).filter(n => n.name).slice(0, 5);
+    }
+  } catch {}
+  return [];
+}
+
+function extractFilesFromDiffResult(result: string): string[] {
+  const files = new Set<string>();
+  const lines = result.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^\+\+\+ [ab]\/(.+)/);
+    if (match) files.add(match[1]);
+    if (files.size >= 5) break;
+  }
+  return [...files];
 }
 
 // ── GraphContext 实现（基于 fileIndex） ──
@@ -298,11 +397,40 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
     shouldCheck(toolName: string): boolean {
       return ['edit_file', 'write_file', 'write_file_content',
-              'delete_file_or_dir', 'rename_file_or_dir', 'move_file'].includes(toolName);
+              'delete_file_or_dir', 'rename_file_or_dir', 'move_file',
+              'git_discard', 'git_checkout', 'git_commit'].includes(toolName);
     },
 
     check(toolName: string, args: Record<string, unknown>): string | null {
-      const fp = String(args['filePath'] || args['file_path'] || '');
+      // ── git_checkout: 无具体文件，通用警告 ──
+      if (toolName === 'git_checkout') {
+        const branch = String(args['branch'] || '');
+        return [
+          `⚠️ [切换分支] 即将切换到 \`${branch}\`。`,
+          `│  切换前请确认当前工作区已提交或暂存，避免丢失未保存的修改。`,
+          `│  → 先用 git_status 确认状态，必要时 git_stash_push 暂存。`,
+        ].join('\n');
+      }
+
+      // ── git_commit: 无具体文件，通用警告 ──
+      if (toolName === 'git_commit') {
+        return [
+          `⚠️ [提交] 即将创建提交。`,
+          `│  → 先用 git_diff --staged 确认暂存区变更。`,
+          `│  → 若涉及核心模块，建议调 hologram_impact 检查波及范围后再推送。`,
+        ].join('\n');
+      }
+
+      // ── git_discard: 拼接 repo 根 + 相对路径 ──
+      let fp: string;
+      if (toolName === 'git_discard') {
+        const repoPath = String(args['path'] || '');
+        const file = String(args['file'] || '');
+        fp = repoPath ? `${repoPath.replace(/\\/g, '/')}/${file}` : file;
+      } else {
+        fp = String(args['filePath'] || args['file_path'] || '');
+      }
+
       if (!fp) return null;
 
       const nodes = ctx.getNodesInFile(fp);
@@ -324,9 +452,10 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
       else riskLevel = 'LOW    ';
 
       const fileName = fp.replace(/\\/g, '/').split('/').pop() || fp;
+      const verb = toolName === 'git_discard' ? '丢弃修改' : '修改';
 
       const lines = [
-        `⚠️ [自动影响分析] 即将修改 \`${fileName}\``,
+        `⚠️ [自动影响分析] 即将${verb} \`${fileName}\``,
         `│  文件内 ${nodes.length} 个符号，${totalFanIn} 个外部依赖者。`,
       ];
 
@@ -343,7 +472,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
       if (riskLevel.trim() !== 'LOW') {
         const topName = topSymbols[0].name;
-        lines.push(`│  → 修改前建议调 hologram_impact "${topName}" 查看完整波及范围`);
+        lines.push(`│  → ${verb}前建议调 hologram_impact "${topName}" 查看完整波及范围`);
       }
 
       return lines.join('\n');
