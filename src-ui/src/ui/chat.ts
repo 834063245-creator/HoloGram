@@ -102,6 +102,8 @@ export class ChatPanel {
   private messages: ChatMessage[] = [];
   /** The ID of the assistant message currently being streamed (null = none). */
   private _streamingAssistantId: MessageId | null = null;
+  /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
+  private _syncRafId: number | null = null;
   // Legacy fields — kept for backward compat during migration, will be removed
   private currentBubble: HTMLElement | null = null;
   private currentReasoning: HTMLElement | null = null;
@@ -1149,12 +1151,8 @@ export class ChatPanel {
       const card = header.parentElement;
       if (card) header.addEventListener('click', () => this.toggleToolCard(card));
     });
-    // Reasoning toggle (GSAP)
-    this.msgList.querySelectorAll('.msg-reasoning-toggle').forEach((el) => {
-      const toggle = el as HTMLElement;
-      const content = toggle.parentElement?.querySelector('.msg-reasoning-content') as HTMLElement;
-      if (content) toggle.addEventListener('click', () => this.toggleReasoning(toggle, content));
-    });
+    // Reasoning toggle — handled by delegated listener on msgList (buildDOM).
+    // No direct handlers here — they'd conflict and cause double-toggle.
     // Copy buttons
     this.msgList.querySelectorAll('.msg-action-btn').forEach((el) => {
       const btn = el as HTMLElement;
@@ -1869,6 +1867,30 @@ export class ChatPanel {
     this.msgList.className = 'chat-messages';
     this.chatPanel.appendChild(this.msgList);
 
+    // Delegated click: reasoning toggle survives replaceWith during streaming.
+    // msgList itself is never replaced — only its children are.  This handler
+    // catches clicks even when the button DOM node was just recreated.
+    this.msgList.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const toggle = target.closest('.msg-reasoning-toggle') as HTMLElement | null;
+      if (!toggle) return;
+      const block = toggle.closest('.msg-reasoning') as HTMLElement | null;
+      if (!block) return;
+      const content = block.querySelector('.msg-reasoning-content') as HTMLElement | null;
+      if (!content) return;
+      // Find blockIndex so _expandedReasoning survives DOM replacement
+      const bubble = block.closest('.msg-bubble');
+      if (bubble) {
+        const blocks = Array.from(bubble.querySelectorAll(':scope > .msg-reasoning'));
+        const idx = blocks.indexOf(block);
+        if (idx >= 0) {
+          if (this._expandedReasoning.has(idx)) this._expandedReasoning.delete(idx);
+          else this._expandedReasoning.add(idx);
+        }
+      }
+      this.toggleReasoning(toggle, content);
+    });
+
     // Welcome hint
     const hint = document.createElement('div');
     hint.className = 'chat-hint';
@@ -2520,6 +2542,11 @@ export class ChatPanel {
     }
     this._streamingAssistantId = null;
     this._streamTextBuf = '';
+    // Cancel any pending streaming rAF to avoid a stale render after finalisation
+    if (this._syncRafId !== null) {
+      cancelAnimationFrame(this._syncRafId);
+      this._syncRafId = null;
+    }
   }
 
   // ── Expanded reasoning blocks (survives DOM replacement during streaming) ──
@@ -2649,6 +2676,21 @@ export class ChatPanel {
 
   /** Full sync: rebuild DOM from messages[]. Efficient for streaming (only last changes). */
   private _syncMessagesToDOM(): void {
+    // During streaming, batch DOM updates to animation frames.  This prevents
+    // rapid replaceWith calls from destroying event listeners (e.g. reasoning
+    // toggle button) between mousedown and click — the button stays alive.
+    if (this._streamingAssistantId) {
+      if (this._syncRafId !== null) return; // already scheduled this frame
+      this._syncRafId = requestAnimationFrame(() => {
+        this._syncRafId = null;
+        this._doSyncMessagesToDOM();
+      });
+      return;
+    }
+    this._doSyncMessagesToDOM();
+  }
+
+  private _doSyncMessagesToDOM(): void {
     const callbacks = this._renderCallbacks();
     const currentChildCount = this.msgList.children.length;
     const msgCount = this.messages.length;
