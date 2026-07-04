@@ -242,50 +242,8 @@ function renderReasoningBlock(text: string, blockIndex: number, callbacks?: Rend
     toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
   }
 
-  toggle.addEventListener('click', () => {
-    gsap.killTweensOf(content);
-    const isOpen = content.classList.contains('msg-reasoning-open');
-    if (isOpen) {
-      gsap.to(content, {
-        height: 0,
-        opacity: 0,
-        paddingTop: 0,
-        paddingBottom: 0,
-        marginTop: 0,
-        duration: 0.2,
-        ease: 'power2.in',
-        onComplete: () => {
-          content.classList.remove('msg-reasoning-open');
-          gsap.set(content, { clearProps: 'all' });
-          toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
-        },
-      });
-      callbacks?.onToggleReasoning?.(blockIndex);
-    } else {
-      content.classList.add('msg-reasoning-open');
-      content.style.display = 'block';
-      const h = content.scrollHeight;
-      content.style.display = '';
-      gsap.fromTo(
-        content,
-        { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0 },
-        {
-          height: h,
-          opacity: 1,
-          paddingTop: '',
-          paddingBottom: '',
-          marginTop: '',
-          duration: 0.25,
-          ease: 'power2.out',
-          onComplete: () => {
-            gsap.set(content, { clearProps: 'all' });
-          },
-        },
-      );
-      toggle.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
-      callbacks?.onToggleReasoning?.(blockIndex);
-    }
-  });
+  // Click handled by delegated listener on msgList (chat.ts) —
+  // survives replaceWith during CoT streaming.
 
   block.append(toggle, content);
   return block;
