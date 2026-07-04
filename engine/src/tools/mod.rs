@@ -838,6 +838,7 @@ fn handler_blindspots(args: &Value) -> Value {
 fn handler_preflight(args: &Value) -> Value {
     let files: Vec<String> = args
         .get("files")
+        .or_else(|| args.get("path"))
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
@@ -1416,40 +1417,40 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "hologram_neighbors",
             description: "Get first-order neighbors of a node, grouped by edge type (structural, data, temporal). Returns incoming and outgoing edges with coupling depth.",
-            params: &[p!("node_id", "string", "The node ID")],
-            required: &["node_id"],
+            params: &[p!("nodeId", "string", "The node ID")],
+            required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
             name: "hologram_impact",
             description: "BFS impact analysis from a source node. Returns layered results at each distance level with edge types and temporal delay info. Useful for estimating blast radius of a change.",
-            params: &[p!("node_id", "string", "The source node ID"), p!("depth", "integer", "BFS max depth (default 3)")],
-            required: &["node_id"],
+            params: &[p!("nodeId", "string", "The source node ID"), p!("depth", "integer", "BFS max depth (default 3)")],
+            required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
             name: "hologram_path",
             description: "Find all paths between two nodes. Each path includes hop count and edge types along the route. Useful for understanding indirect dependencies.",
-            params: &[p!("from_id", "string", "Source node ID"), p!("to_id", "string", "Target node ID"), p!("depth", "integer", "BFS search depth limit (default 20)")],
-            required: &["from_id", "to_id"],
+            params: &[p!("from", "string", "Source node ID"), p!("to", "string", "Target node ID"), p!("depth", "integer", "BFS search depth limit (default 20)")],
+            required: &["from", "to"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
             name: "hologram_history",
             description: "Get decision history for a node — shows which past decisions involved this node. Returns dependency/dependent counts and timeline events.",
-            params: &[p!("node_id", "string", "The node ID")],
-            required: &["node_id"],
+            params: &[p!("nodeId", "string", "The node ID")],
+            required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
             name: "hologram_community",
             description: "Get community information for a node — its community ID, parent community, and sibling nodes. Uses Leiden algorithm for community detection.",
-            params: &[p!("node_id", "string", "The node ID")],
-            required: &["node_id"],
+            params: &[p!("nodeId", "string", "The node ID")],
+            required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
@@ -1481,7 +1482,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "hologram_thread_conflicts",
             description: "Get thread vs resource conflict matrix. Detects shared variables with multiple writers (concurrency risk) and medium nodes with concurrent access patterns.",
-            params: &[p!("node_id", "string", "Optional node ID — if omitted, returns global conflict matrix")],
+            params: &[p!("nodeId", "string", "Optional node ID — if omitted, returns global conflict matrix")],
             required: &[],
             read_only: true,
             category: "analysis",
@@ -1489,8 +1490,8 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "hologram_coupling_report",
             description: "Get complete coupling depth distribution (L1-L4 statistics) for a specific module. L1=imports, L2=calls/inheritance, L3=data sharing, L4=temporal/async coupling.",
-            params: &[p!("module_name", "string", "Module file name or path")],
-            required: &["module_name"],
+            params: &[p!("module", "string", "Module file name or path")],
+            required: &["module"],
             read_only: true,
             category: "analysis",
         },
@@ -1515,8 +1516,8 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "hologram_run_preflight",
             description: "Pre-flight change impact analysis. Given a list of files you plan to change, estimates blast radius, risk level, shared variable impacts, and temporal edge signals before you commit.",
-            params: &[p!("files", "array", "List of file paths that would be changed")],
-            required: &["files"],
+            params: &[p!("path", "array", "List of file paths that would be changed")],
+            required: &["path"],
             read_only: true,
             category: "preflight",
         },
@@ -1556,8 +1557,8 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "hologram_graph_diff",
             description: "Compare the current dependency graph against a baseline snapshot. Shows added/removed/modified nodes and edge count changes. Auto-creates baseline on first run.",
-            params: &[p!("before_path", "string", "Path to the baseline graph JSON file")],
-            required: &["before_path"],
+            params: &[p!("beforePath", "string", "Path to the baseline graph JSON file")],
+            required: &["beforePath"],
             read_only: true,
             category: "operations",
         },
@@ -1619,8 +1620,8 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "hologram_node",
             description: "Complete deep-dive into a single node — identity metadata, in/out degree, community membership, and all incoming/outgoing edges grouped by kind. Combines neighbors + community in one call.",
-            params: &[p!("node_id", "string", "The node ID")],
-            required: &["node_id"],
+            params: &[p!("nodeId", "string", "The node ID")],
+            required: &["nodeId"],
             read_only: true,
             category: "graph",
         },

@@ -270,7 +270,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       parameters: () => ({
         type: 'object',
         properties: {
-          node_id: {
+          nodeId: {
             type: 'string',
             description: 'Optional node ID — if omitted, returns global conflict matrix',
           },

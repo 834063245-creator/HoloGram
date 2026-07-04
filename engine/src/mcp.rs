@@ -55,15 +55,15 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         // ── V1 tools (7) ──
         tool_def("hologram_neighbors", "Get first-order neighbors of a node, grouped by edge type (structural/data/temporal).",
-            &[("node_id", "string", "The node ID")], &["node_id"]),
+            &[("nodeId", "string", "The node ID")], &["nodeId"]),
         tool_def("hologram_impact", "BFS impact analysis from a node. Returns layered results with distance, edge types, and temporal delay info.",
-            &[("node_id", "string", "The source node ID"), ("depth", "integer", "BFS max depth (default 3)")], &["node_id"]),
+            &[("nodeId", "string", "The source node ID"), ("depth", "integer", "BFS max depth (default 3)")], &["nodeId"]),
         tool_def("hologram_path", "Find all paths between two nodes. Each path includes hop count and edge types.",
-            &[("from_id", "string", "Source node ID"), ("to_id", "string", "Target node ID"), ("depth", "integer", "BFS search depth limit (default 20)")], &["from_id", "to_id"]),
+            &[("from", "string", "Source node ID"), ("to", "string", "Target node ID"), ("depth", "integer", "BFS search depth limit (default 20)")], &["from", "to"]),
         tool_def("hologram_history", "Get decision history for a node — what decisions involved this node.",
-            &[("node_id", "string", "The node ID")], &["node_id"]),
+            &[("nodeId", "string", "The node ID")], &["nodeId"]),
         tool_def("hologram_community", "Get community information for a node — its community, parent, and sibling nodes.",
-            &[("node_id", "string", "The node ID")], &["node_id"]),
+            &[("nodeId", "string", "The node ID")], &["nodeId"]),
         tool_def("hologram_delayed", "Get all nodes connected via temporal edges with non-null delays.",
             &[], &[]),
         // ponytail: hologram_changes removed — merged into hologram_timeline (timeline with limit=1 covers it)
@@ -74,9 +74,9 @@ fn tool_definitions() -> Vec<Value> {
         tool_def("hologram_cycle", "Get all detected data flow cycles. Filter by mode: all, data, llm.",
             &[("mode", "string", "Filter: all, data, or llm (default all)")], &[]),
         tool_def("hologram_thread_conflicts", "Get thread × resource conflict matrix.",
-            &[("node_id", "string", "Optional node ID — if omitted, returns global matrix")], &[]),
+            &[("nodeId", "string", "Optional node ID — if omitted, returns global matrix")], &[]),
         tool_def("hologram_coupling_report", "Get complete coupling depth distribution (L1-L4 stats).",
-            &[("module_name", "string", "Module file name or path")], &["module_name"]),
+            &[("module", "string", "Module file name or path")], &["module"]),
         tool_def("hologram_timeline", "Query the causal audit timeline.",
             &[("limit", "integer", "Max events to return (default 100)"), ("since", "string", "ISO timestamp filter (optional)")], &[]),
 
@@ -86,7 +86,7 @@ fn tool_definitions() -> Vec<Value> {
 
         // ── V3 preflight (1) ──
         tool_def("hologram_run_preflight", "Pre-flight check: analyze what would happen if the given files change.",
-            &[("files", "array", "List of file paths that would be changed")], &["files"]),
+            &[("path", "array", "List of file paths that would be changed")], &["path"]),
 
         // ── V3+ parity (5) ──
         tool_def("hologram_search", "Fuzzy search for nodes by name or ID.",
@@ -99,7 +99,7 @@ fn tool_definitions() -> Vec<Value> {
             &[("min_size", "integer", "Minimum community size to report (default 3)"),
               ("max_nodes", "integer", "Max node IDs per community in output (default 20, max 200)")], &[]),
         tool_def("hologram_graph_diff", "Diff the current graph against a baseline snapshot.",
-            &[("before_path", "string", "Path to the baseline graph JSON file")], &["before_path"]),
+            &[("beforePath", "string", "Path to the baseline graph JSON file")], &["beforePath"]),
         tool_def("hologram_analyze", "Re-analyze a project directory and reload the graph.",
             &[("path", "string", "Project root directory path")], &["path"]),
 
@@ -123,7 +123,7 @@ fn tool_definitions() -> Vec<Value> {
 
         // ── V4 node deep-dive (1) ──
         tool_def("hologram_node", "Complete information about a single node — identity, degree, community, and all incoming/outgoing edges grouped by kind. Use after hologram_search to dive into a specific symbol, or when you need the full picture of a known node in one call instead of hologram_neighbors + hologram_community.",
-            &[("node_id", "string", "The node ID")], &["node_id"]),
+            &[("nodeId", "string", "The node ID")], &["nodeId"]),
 
         // ── V4 dead code detection (1) ──
         tool_def("hologram_unused", "Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending so the most impactful candidates appear first. Defaults to functions and classes; use kind_filter to expand scope.",
