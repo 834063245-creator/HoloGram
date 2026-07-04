@@ -65,7 +65,12 @@ pub fn check_read_permission(
         }
     }
 
-    // 4. Content-level Ask rules
+    // 4. Content-level Allow rules — user/session/project rules override system Ask
+    if rules.find_allow("Read", Some(&match_str)).is_some() {
+        return PermissionResult::Allow;
+    }
+
+    // 5. Content-level Ask rules — only reached if no Allow rule matched
     if let Some(rule) = rules.find_ask("Read", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -76,11 +81,6 @@ pub fn check_read_permission(
                 },
             ],
         };
-    }
-
-    // 5. Content-level Allow rules — explicit allow can grant out-of-project access
-    if rules.find_allow("Read", Some(&match_str)).is_some() {
-        return PermissionResult::Allow;
     }
 
     // 6. Within project → Allow; outside → Ask user (not silent Deny).
@@ -163,7 +163,12 @@ pub fn check_write_permission(
         };
     }
 
-    // 4. Content-level Ask rules
+    // 4. Content-level Allow rules — user/session/project rules override system Ask
+    if rules.find_allow("Edit", Some(&match_str)).is_some() {
+        return PermissionResult::Allow;
+    }
+
+    // 5. Content-level Ask rules — only reached if no Allow rule matched
     if let Some(rule) = rules.find_ask("Edit", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -174,11 +179,6 @@ pub fn check_write_permission(
                 },
             ],
         };
-    }
-
-    // 5. Content-level Allow rules
-    if rules.find_allow("Edit", Some(&match_str)).is_some() {
-        return PermissionResult::Allow;
     }
 
     // 6. Within project root → Allow (write after safety check passed)

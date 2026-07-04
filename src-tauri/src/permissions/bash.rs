@@ -291,7 +291,12 @@ pub fn check(
         }
     }
 
-    // 4. Content-level Ask rules
+    // 4. Content-level Allow rules — user/session/project rules override system Ask
+    if rules.find_allow("Bash", Some(command)).is_some() {
+        return PermissionResult::Allow;
+    }
+
+    // 5. Content-level Ask rules — only reached if no Allow rule matched
     if let Some(rule) = rules.find_ask("Bash", Some(command)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -302,11 +307,6 @@ pub fn check(
                 },
             ],
         };
-    }
-
-    // 5. Content-level Allow rules — after all safety/danger/path checks passed
-    if rules.find_allow("Bash", Some(command)).is_some() {
-        return PermissionResult::Allow;
     }
 
     // 6. Passthrough — no rules matched, let engine decide
