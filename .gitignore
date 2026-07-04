@@ -98,6 +98,10 @@ FIX-*.md
 AGENT_MEMORY_SYSTEM.txt
 .mcp.json.bak
 
+# Build log / debug output
+*_warnings.txt
+*_check.txt
+
 # Grammar build artifacts
 grammars/build/
 
