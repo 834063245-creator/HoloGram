@@ -2540,13 +2540,16 @@ export class ChatPanel {
         if (part.type === 'text') (part as any).finalised = true;
       }
     }
-    this._streamingAssistantId = null;
-    this._streamTextBuf = '';
-    // Cancel any pending streaming rAF to avoid a stale render after finalisation
+    // Flush pending rAF sync BEFORE clearing _streamingAssistantId so the
+    // streaming incremental path is taken one last time — avoids a full
+    // DOM rebuild that would cause a visible scroll-to-top-then-bottom jump.
     if (this._syncRafId !== null) {
       cancelAnimationFrame(this._syncRafId);
       this._syncRafId = null;
+      this._doSyncMessagesToDOM();
     }
+    this._streamingAssistantId = null;
+    this._streamTextBuf = '';
   }
 
   // ── Expanded reasoning blocks (survives DOM replacement during streaming) ──
@@ -2705,12 +2708,17 @@ export class ChatPanel {
       const lastMsg = this.messages[lastIdx];
       if (lastMsg.role === 'assistant' && lastMsg._id === this._streamingAssistantId) {
         const oldEl = this.msgList.children[lastIdx] as HTMLElement;
-        // Preserve inline permission cards — they live in DOM but not in the
-        // message model, so replaceWith would destroy them without this step.
-        const permCards = Array.from(oldEl.querySelectorAll('.perm-inline-card'));
+        // If the user has expanded a reasoning block or there's a pending
+        // permission card, skip replaceWith — destroying the DOM mid-interaction
+        // would kill GSAP tweens and event targets.
+        const hasOpenReasoning = oldEl.querySelector('.msg-reasoning-open');
+        const hasPendingPerm = oldEl.querySelector('.perm-inline-card .msg-perm-btns');
+        if (hasOpenReasoning || hasPendingPerm) {
+          this.scrollBottom();
+          return;
+        }
         const el = renderMessage(lastMsg, callbacks);
         el.dataset.messageId = lastMsg._id;
-        for (const card of permCards) el.appendChild(card);
         oldEl.replaceWith(el);
         this.scrollBottom();
         return;
