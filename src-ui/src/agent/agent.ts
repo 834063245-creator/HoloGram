@@ -298,7 +298,7 @@ export class Agent {
       });
 
       // ---- Stream ----
-      const { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1);
+      let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1);
       if (err) {
         log.error('agent', 'stream error', { error: String(err.message || err) });
         throw err;
@@ -331,11 +331,20 @@ export class Agent {
         this.sink({ kind: EventKind.Notice, level: 'warn', text: warnMsg });
       }
 
-      // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls
-      if (!text && calls.length === 0 && this._pendingInserts.length === 0) {
-        log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
-        this.sink({ kind: EventKind.Notice, level: 'warn', text: 'Provider 本次调用了但无内容返回，已跳过此轮。' });
-        return;
+      // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls.
+      // When the model produces reasoning but no visible output (common after short tool
+      // results like git_stage), synthesize a minimal content so the message can be pushed.
+      // If the user inserted a message during streaming, keep looping — don't exit.
+      if (!text && calls.length === 0) {
+        if (this._pendingInserts.length > 0 || reasoning) {
+          // Model produced reasoning → push with fallback content; loop continues
+          // if user inserted messages, ends normally if not.
+          text = reasoning ? '(思考完成)' : '(等待中)';
+        } else {
+          log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
+          this.sink({ kind: EventKind.Notice, level: 'warn', text: 'Provider 本次调用了但无内容返回，已跳过此轮。' });
+          return;
+        }
       }
 
       // Store assistant turn (reasoning kept for display, not re-uploaded)
