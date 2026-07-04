@@ -395,6 +395,13 @@ export class ChatPanel {
       };
       document.addEventListener('keydown', onKey);
 
+      // Force-reset scroll suppression: this is a blocking interaction
+      // point and the user MUST see the card.  If _userScrolledUp was
+      // set during earlier text streaming in this turn, scrollBottom()
+      // would silently skip — the card lands off-screen and the
+      // Promise hangs forever waiting for a click that never comes.
+      this._userScrolledUp = false;
+
       // Insert into the current assistant bubble so it flows with the agent's turn
       if (this.currentBubble) {
         this.currentBubble.appendChild(card);
