@@ -2569,12 +2569,18 @@ export class ChatPanel {
         if (part.type === 'text') (part as any).finalised = true;
       }
     }
-    // Flush pending rAF sync BEFORE clearing _streamingAssistantId so the
-    // streaming incremental path is taken one last time — avoids a full
-    // DOM rebuild that would cause a visible scroll-to-top-then-bottom jump.
+    // Flush ALL pending render gates BEFORE clearing _streamingAssistantId.
+    // _syncRafId = direct rAF from _syncMessagesToDOM,
+    // _syncPending = outer rAF from _scheduleSync (double-buffered).
     if (this._syncRafId !== null) {
       cancelAnimationFrame(this._syncRafId);
       this._syncRafId = null;
+    }
+    this._syncPending = false;
+    // Always run one final render while _streamingAssistantId is still set —
+    // takes the streaming incremental path instead of a full rebuild, avoiding
+    // a visible scroll-to-top-then-bottom jump.
+    if (this._streamingAssistantId) {
       this._doSyncMessagesToDOM();
     }
     this._streamingAssistantId = null;
@@ -2712,7 +2718,7 @@ export class ChatPanel {
     // rapid replaceWith calls from destroying event listeners (e.g. reasoning
     // toggle button) between mousedown and click — the button stays alive.
     if (this._streamingAssistantId) {
-      if (this._syncRafId !== null) return; // already scheduled this frame
+      if (this._syncRafId !== null || this._syncPending) return; // already scheduled this frame
       this._syncRafId = requestAnimationFrame(() => {
         this._syncRafId = null;
         this._doSyncMessagesToDOM();
@@ -2782,13 +2788,18 @@ export class ChatPanel {
   }
 
   // ── Throttled rAF sync — avoids O(n²) re-render on high-frequency streams ──
+  // ponytail: _scheduleSync is now a thin wrapper that reuses _syncMessagesToDOM's
+  // single rAF gate (_syncRafId). The old double-buffering (_syncPending → rAF →
+  // _syncMessagesToDOM → rAF → _doSyncMessagesToDOM) added 2-frame latency and
+  // left a gap where renders could be dropped by _finaliseStreamingAssistant.
   private _syncPending = false;
   private _scheduleSync(): void {
-    if (this._syncPending) return;
+    if (this._syncPending || this._syncRafId !== null) return;
     this._syncPending = true;
-    requestAnimationFrame(() => {
+    this._syncRafId = requestAnimationFrame(() => {
+      this._syncRafId = null;
       this._syncPending = false;
-      this._syncMessagesToDOM();
+      this._doSyncMessagesToDOM();
     });
   }
 
