@@ -84,6 +84,8 @@ export class ChatPanel {
   private currentReasoningContent: HTMLElement | null = null;
   private currentTextEl: HTMLElement | null = null;
   private pendingToolCards = new Map<string, HTMLElement>(); // id → card element
+  private completedToolCount = 0; // ponytail: group completed tools into summary
+  private toolSummaryEl: HTMLElement | null = null; // "已执行 N 个工具" line
 
     // Per-session message cache (DOM elements)
   private sessionMessages = new Map<number, HTMLElement[]>();
@@ -2469,34 +2471,45 @@ export class ChatPanel {
 
   // ── Reasoning (collapsible) ──
 
+  // ponytail: accumulate all reasoning in a turn into ONE collapsible block.
+  // The toggle is created once; subsequent reasoning blocks append to the same content.
+  private reasoningBlock: HTMLElement | null = null;
+  private reasoningBlockContent: HTMLElement | null = null;
+  private reasoningBlockToggle: HTMLElement | null = null;
+
   private appendReasoning(text: string): void {
-    if (!this.currentReasoning) {
-      // Ensure we have an assistant bubble
-      this.ensureAssistantBubble();
+    this.ensureAssistantBubble();
 
-      this.currentReasoning = document.createElement('div');
-      this.currentReasoning.className = 'msg-reasoning';
+    if (!this.reasoningBlock) {
+      this.reasoningBlock = document.createElement('div');
+      this.reasoningBlock.className = 'msg-reasoning';
 
-      const toggle = document.createElement('button');
-      toggle.className = 'msg-reasoning-toggle';
-      toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
-      toggle.addEventListener('click', () => {
-        const content = toggle.nextElementSibling as HTMLElement;
-        if (content) this.toggleReasoning(toggle, content);
+      this.reasoningBlockToggle = document.createElement('button');
+      this.reasoningBlockToggle.className = 'msg-reasoning-toggle';
+      this.reasoningBlockToggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
+      this.reasoningBlockToggle.addEventListener('click', () => {
+        const content = this.reasoningBlockToggle!.nextElementSibling as HTMLElement;
+        if (content) this.toggleReasoning(this.reasoningBlockToggle!, content);
       });
 
-      this.currentReasoningContent = document.createElement('div');
-      this.currentReasoningContent.className = 'msg-reasoning-content';
+      this.reasoningBlockContent = document.createElement('div');
+      this.reasoningBlockContent.className = 'msg-reasoning-content';
 
-      this.currentReasoning.append(toggle, this.currentReasoningContent);
-      this.currentBubble!.appendChild(this.currentReasoning);
+      this.reasoningBlock.append(this.reasoningBlockToggle, this.reasoningBlockContent);
+      this.currentBubble!.appendChild(this.reasoningBlock);
     }
-    this.currentReasoningContent!.textContent += text;
+    this.reasoningBlockContent!.textContent += text;
   }
 
   private flushReasoning(): void {
-    this.currentReasoning = null;
-    this.currentReasoningContent = null;
+    // Keep the reasoning block for the turn — don't null it.
+    // It will be reset in finishTurn().
+  }
+
+  private resetReasoningBlock(): void {
+    this.reasoningBlock = null;
+    this.reasoningBlockContent = null;
+    this.reasoningBlockToggle = null;
   }
 
   // ── Text (streaming → assistant bubble) ──
@@ -2847,9 +2860,6 @@ export class ChatPanel {
       return;
     }
 
-    // ponytail: don't flush text here — EventKind.Message already finalized it
-    // (full dispatch) or it's still streaming (partial dispatch from ToolCallStart).
-    // Flushing prematurely causes renderMarkdownText to double-render later.
     this.ensureAssistantBubble();
 
     const card = document.createElement('div');
@@ -2859,33 +2869,22 @@ export class ChatPanel {
     const cat = ChatPanel.toolCategory(tool.name);
     card.classList.add(`tool-cat-${cat}`);
 
+    // ponytail: compact header — icon + name + status only, no args column
     const header = document.createElement('div');
     header.className = 'msg-tool-header';
 
-    const isSubAgent = tool.name === 'agent_spawn';
-    const icon = isSubAgent
-      ? iconHtml('puzzle', 13)
-      : tool.read_only
-        ? iconHtml('search', 13)
-        : iconHtml('chevron-right', 13);
+    const icon = tool.read_only
+      ? iconHtml('search', 12)
+      : iconHtml('code', 12);
     const nameEl = document.createElement('span');
     nameEl.className = 'tool-name';
     nameEl.innerHTML = `${icon} ${tool.name}`;
 
     const status = document.createElement('span');
-    status.className = 'tool-status';
-    status.innerHTML = tool.partial
-      ? `<span class="tool-status-spin">${iconHtml('dot', 10)}</span>`
-      : iconHtml('blink-dot', 10);
+    status.className = 'tool-status tool-status-running';
+    status.innerHTML = iconHtml('dot', 10);
 
-    const argsEl = document.createElement('span');
-    argsEl.className = 'tool-args';
-    if (tool.args) {
-      argsEl.textContent = truncateArgs(tool.args);
-      argsEl.title = tool.args;
-    }
-
-    header.append(nameEl, argsEl, status);
+    header.append(nameEl, status);
     header.addEventListener('click', () => this.toggleToolCard(card));
 
     const resultEl = document.createElement('div');
@@ -2916,31 +2915,77 @@ export class ChatPanel {
     const card = this.pendingToolCards.get(tool.id);
     if (!card) return;
 
+    this.pendingToolCards.delete(tool.id);
+    this.completedToolCount++;
+
     const status = card.querySelector('.tool-status') as HTMLElement;
     if (status) {
-      status.innerHTML = tool.err
-        ? iconHtml('close', 12)
-        : iconHtml('check-circle', 12);
+      status.innerHTML = tool.err ? iconHtml('close', 12) : iconHtml('check-circle', 12);
       status.className = `tool-status ${tool.err ? 'tool-err' : 'tool-ok'}`;
+      status.style.opacity = '0.6';
     }
+
+    // Collapse header to minimal height
+    card.classList.add('tool-done');
+    const header = card.querySelector('.msg-tool-header') as HTMLElement;
+    if (header) header.style.padding = '2px 8px';
 
     const resultEl = card.querySelector('.msg-tool-result') as HTMLElement;
     if (resultEl) {
-      const text = tool.err || tool.output || '(无输出)';
+      const text = tool.err || tool.output || '';
       resultEl.innerHTML = formatToolResult(tool.name, text, !!tool.truncated, tool.args);
-      // Syntax highlight code blocks in the result
       resultEl.querySelectorAll('pre code').forEach((block) => {
         hljs.highlightElement(block as HTMLElement);
       });
     }
 
-    // Auto-expand on error
     if (tool.err) {
       card.classList.add('tool-expanded');
     }
 
-    // Graph visualization is now handled by AgentVisualizer via EventBus
-    // (single entry point — eliminates the old triple-call bug)
+    // ponytail: group completed tools behind a summary when we have 3+
+    this.updateToolSummary();
+  }
+
+  /** Collapse completed tool cards into a compact summary line. */
+  private updateToolSummary(): void {
+    if (!this.currentBubble) return;
+
+    // Remove old summary
+    if (this.toolSummaryEl) {
+      this.toolSummaryEl.remove();
+      this.toolSummaryEl = null;
+    }
+
+    const doneCards = this.currentBubble.querySelectorAll('.msg-tool-card.tool-done');
+    if (doneCards.length < 3) return;
+
+    // Collect tool names
+    const names: string[] = [];
+    doneCards.forEach((c) => {
+      const nameEl = c.querySelector('.tool-name');
+      if (nameEl) names.push(nameEl.textContent?.trim() || '');
+      // Hide individual cards
+      (c as HTMLElement).style.display = 'none';
+    });
+
+    // Create summary
+    this.toolSummaryEl = document.createElement('div');
+    this.toolSummaryEl.className = 'msg-tool-summary';
+    const unique = [...new Set(names)];
+    const label = unique.slice(0, 3).join(', ') + (unique.length > 3 ? ` 等 ${unique.length} 个` : '');
+    this.toolSummaryEl.innerHTML = `${iconHtml('check-circle', 12)} 已执行 ${doneCards.length} 个工具：<span>${label}</span>`;
+    this.toolSummaryEl.style.cursor = 'pointer';
+    this.toolSummaryEl.title = '点击展开所有工具';
+    this.toolSummaryEl.addEventListener('click', () => {
+      doneCards.forEach((c) => { (c as HTMLElement).style.display = ''; });
+      this.toolSummaryEl?.remove();
+      this.toolSummaryEl = null;
+    });
+
+    // Insert summary before the first completed card
+    const firstDone = doneCards[0];
+    firstDone.parentNode?.insertBefore(this.toolSummaryEl, firstDone);
   }
 
   // ── Usage ──
@@ -3326,6 +3371,9 @@ export class ChatPanel {
       this.turnPairs[this.turnPairs.length - 1].assistantBubble = this.currentBubble;
     }
     this.pendingToolCards.clear();
+    this.resetReasoningBlock();
+    this.completedToolCount = 0;
+    if (this.toolSummaryEl) { this.toolSummaryEl.remove(); this.toolSummaryEl = null; }
     this.currentBubble = null;
     this.currentTextEl = null;
     this._streamTextBuf = '';
