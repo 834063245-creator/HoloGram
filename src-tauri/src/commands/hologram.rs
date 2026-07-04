@@ -47,10 +47,11 @@ pub(crate) async fn hologram_analyze(path: Option<String>, app: tauri::AppHandle
 
 
 #[tauri::command]
-pub(crate) async fn hologram_neighbors(node_id: String, depth: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_neighbors(nodeId: String, depth: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_neighbors", &state)?;
     let d = depth.unwrap_or(2) as usize;
-    let nid = node_id.clone();
+    let nid = nodeId.clone();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
             let nb = query::neighbors(g, &nid, d);
@@ -60,10 +61,11 @@ pub(crate) async fn hologram_neighbors(node_id: String, depth: Option<i32>, stat
 }
 
 #[tauri::command]
-pub(crate) async fn hologram_impact(node_id: String, max_depth: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_impact(nodeId: String, maxDepth: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_impact", &state)?;
-    let d = max_depth.unwrap_or(3) as usize;
-    let nid = node_id.clone();
+    let d = maxDepth.unwrap_or(3) as usize;
+    let nid = nodeId.clone();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
             let layers = query::impact(g, &nid, d);
@@ -87,9 +89,10 @@ pub(crate) async fn hologram_path(from: String, to: String, state: tauri::State<
 }
 
 #[tauri::command(name = "hologram_diff")]
-pub(crate) async fn hologram_graph_diff(before_path: String, _after_path: Option<String>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_graph_diff(beforePath: String, _afterPath: Option<String>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_diff", &state)?;
-    let bp = before_path.clone();
+    let bp = beforePath.clone();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |current| {
             match Graph::from_json_file(&bp) {
@@ -227,9 +230,10 @@ pub(crate) async fn hologram_blindspots(threshold: Option<f64>, state: tauri::St
 }
 
 #[tauri::command]
-pub(crate) async fn hologram_thread_conflicts(severity: Option<String>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_thread_conflicts(nodeId: Option<String>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_thread_conflicts", &state)?;
-    let _node_id = severity.unwrap_or_default();
+    let _node_id = nodeId.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         let v = engine_api::engine_read_graph(|g| {
             let mut resources = serde_json::Map::new();
@@ -312,9 +316,10 @@ pub(crate) async fn hologram_thread_conflicts(severity: Option<String>, state: t
 }
 
 #[tauri::command]
-pub(crate) async fn hologram_clusters(resolution: Option<f64>, min_size: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_clusters(resolution: Option<f64>, minSize: Option<i32>, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_community_report", &state)?;
-    let _ = resolution; let ms = min_size.unwrap_or(3);
+    let _ = resolution; let ms = minSize.unwrap_or(3);
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
             let communities = detect_communities(g, 42);
@@ -336,19 +341,20 @@ pub(crate) async fn hologram_graph_summary(state: tauri::State<'_, crate::Worksp
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub(crate) async fn hologram_rename(
-    old_name: String, new_name: String, dry_run: Option<bool>, node_id: Option<String>,
+    oldName: String, newName: String, dryRun: Option<bool>, nodeId: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     // ponytail: deny-only 对 stub 安全，真 rename 实现前必须改为 require_write
     crate::utils::check_mcp_permission("hologram_rename", &state)?;
-    let on = old_name.clone(); let nn = new_name.clone();
-    let dr = dry_run.unwrap_or(true);
+    let on = oldName.clone(); let nn = newName.clone();
+    let dr = dryRun.unwrap_or(true);
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
-            // If node_id is provided, match ONLY that node (disambiguation).
+            // If nodeId is provided, match ONLY that node (disambiguation).
             // Otherwise fall back to name-based matching.
-            let matched: Vec<_> = if let Some(ref nid) = node_id {
+            let matched: Vec<_> = if let Some(ref nid) = nodeId {
                 g.nodes.values().filter(|n| n.id == *nid).collect()
             } else {
                 g.nodes.values()
@@ -514,9 +520,10 @@ pub(crate) async fn hologram_run_health(path: Option<String>, days: Option<i32>,
 }
 
 #[tauri::command]
-pub(crate) async fn hologram_history(node_id: String, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_history(nodeId: String, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_history", &state)?;
-    let nid = node_id.clone();
+    let nid = nodeId.clone();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
             g.get_node(&nid).map(|n| serde_json::json!({
@@ -529,9 +536,10 @@ pub(crate) async fn hologram_history(node_id: String, state: tauri::State<'_, cr
 
 // ── V4: hologram_node — complete node info + edges grouped by kind ──
 #[tauri::command]
-pub(crate) async fn hologram_node(node_id: String, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_node(nodeId: String, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_node", &state)?;
-    let nid = node_id.clone();
+    let nid = nodeId.clone();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_store(move |idx| {
             let node = match idx.get_node(&nid) {
@@ -598,9 +606,10 @@ pub(crate) async fn hologram_unused(
 }
 
 #[tauri::command]
-pub(crate) async fn hologram_community(node_id: String, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+#[allow(non_snake_case)]
+pub(crate) async fn hologram_community(nodeId: String, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_community", &state)?;
-    let nid = node_id.clone();
+    let nid = nodeId.clone();
     tokio::task::spawn_blocking(move || {
         crate::utils::with_graph(move |g| {
             let communities = detect_communities(g, 42);

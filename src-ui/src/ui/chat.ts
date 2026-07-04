@@ -2830,6 +2830,9 @@ export class ChatPanel {
       this.reasoningBlock = document.createElement('div');
       this.reasoningBlock.className = 'msg-reasoning';
 
+      this.reasoningBlockContent = document.createElement('div');
+      this.reasoningBlockContent.className = 'msg-reasoning-content';
+
       this.reasoningBlockToggle = document.createElement('button');
       this.reasoningBlockToggle.className = 'msg-reasoning-toggle';
       this.reasoningBlockToggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
@@ -2838,11 +2841,8 @@ export class ChatPanel {
       const capturedToggle = this.reasoningBlockToggle;
       const capturedContent = this.reasoningBlockContent;
       capturedToggle.addEventListener('click', () => {
-        if (capturedContent) this.toggleReasoning(capturedToggle, capturedContent);
+        this.toggleReasoning(capturedToggle, capturedContent);
       });
-
-      this.reasoningBlockContent = document.createElement('div');
-      this.reasoningBlockContent.className = 'msg-reasoning-content';
 
       this.reasoningBlock.append(this.reasoningBlockToggle, this.reasoningBlockContent);
       this.currentBubble!.appendChild(this.reasoningBlock);
