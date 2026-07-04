@@ -193,7 +193,7 @@ export class SettingsPanel {
               <input type="password" class="sp-input sp-key-input" data-field="apiKey"
                      value="${escapeAttr(active.apiKey)}"
                      placeholder="sk-…">
-              <button class="sp-key-toggle" title="显示/隐藏">${iconHtml('search', 12)}</button>
+              <button class="sp-key-toggle" title="显示/隐藏">${iconHtml('eye', 14)}</button>
             </div>
           </div>
           <div class="sp-field">
@@ -226,12 +226,7 @@ export class SettingsPanel {
               <option value="off" ${active.thinking === 'off' ? 'selected' : ''}>关闭</option>
             </select>
             <div class="sp-hint-sub">Anthropic extended thinking 努力等级。等级越高思考越深（越费 token）。</div>
-          </div>` : ''}
-        </div>
-        <div class="sp-hint">
-          ${isAnthropic
-            ? 'Anthropic: 从 <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a> 获取 Key'
-            : 'DeepSeek: 从 <a href="https://platform.deepseek.com/" target="_blank">platform.deepseek.com</a> 获取 Key'}
+                    </div>` : ''}
         </div>
       </div>`;
   }

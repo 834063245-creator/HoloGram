@@ -8,6 +8,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import { gsap } from 'gsap';
+import { iconHtml } from './icons';
 import type {
   AssistantMessage,
   AssistantPart,
@@ -528,12 +529,13 @@ export function injectCodeBlockButtons(bubble: HTMLElement): void {
     const container = document.createElement('div');
     container.className = 'pre-code-actions';
     const copyBtn = document.createElement('button');
-    copyBtn.className = 'pre-code-action-btn';
-    copyBtn.textContent = '复制';
+    copyBtn.className = 'pre-code-btn';
+    copyBtn.innerHTML = iconHtml('copy', 10);
+    copyBtn.title = '复制代码';
     copyBtn.addEventListener('click', () => {
       const code = pre.querySelector('code');
       if (code) {
-        navigator.clipboard.writeText(code.textContent || '').catch(() => {});
+        navigator.clipboard.writeText(code.textContent || '').then(() => showCopiedFeedback(copyBtn, 10)).catch(() => {});
       }
     });
     container.append(copyBtn);

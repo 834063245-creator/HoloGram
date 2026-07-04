@@ -257,9 +257,9 @@ pub(crate) async fn write_file_content(
 
     // Hook: record timeline + update changed_files for 简报
     if let Some(ref handle) = *state.lock().unwrap() {
-        let short = rp.rsplit(['/', '\\']).next().unwrap_or(&rp);
-        let _ = engine_api::engine_record_timeline("agent_write", Some(&rp), &format!("Agent 写入: {}", short));
         if !is_ignored_path(&rp) {
+            let short = rp.rsplit(['/', '\\']).next().unwrap_or(&rp);
+            let _ = engine_api::engine_record_timeline("agent_write", Some(&rp), &format!("Agent 写入: {}", short));
             if let Ok(mut changed) = handle.changed_files.lock() {
                 if !changed.contains(&rp) { changed.push(rp.clone()); }
             }
@@ -267,11 +267,13 @@ pub(crate) async fn write_file_content(
     }
 
     let size = content.len();
-    Ok(if size < 1024 {
-        format!("已写入 {} ({} B)", rp, size)
-    } else {
-        format!("已写入 {} ({:.1} KB)", rp, size as f64 / 1024.0)
-    })
+    let preview = preview_content(&content, 80, 20);
+    Ok(format!(
+        "已写入 {} ({})\n```\n{}\n```",
+        rp,
+        if size < 1024 { format!("{} B", size) } else { format!("{:.1} KB", size as f64 / 1024.0) },
+        preview
+    ))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -341,12 +343,12 @@ pub(crate) async fn delete_file_or_dir(
             .map_err(|e| format!("无法删除文件 {}: {}", path, e))
     }?;
     // Hook: record timeline + update changed_files
-    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
+    // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = real.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
-        let short = rp.rsplit('/').next().unwrap_or(&rp);
-        let _ = engine_api::engine_record_timeline("agent_delete", Some(&rp), &format!("Agent 删除: {}", short));
         if !is_ignored_path(&rp) {
+            let short = rp.rsplit('/').next().unwrap_or(&rp);
+            let _ = engine_api::engine_record_timeline("agent_delete", Some(&rp), &format!("Agent 删除: {}", short));
             if let Ok(mut changed) = handle.changed_files.lock() {
                 if !changed.contains(&rp) { changed.push(rp.clone()); }
             }
@@ -369,12 +371,12 @@ pub(crate) async fn rename_file_or_dir(
     std::fs::rename(&resolved_from, &resolved_to)
         .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))?;
     // Hook: record timeline + update changed_files
-    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
+    // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
-        let short = rp.rsplit('/').next().unwrap_or(&rp);
-        let _ = engine_api::engine_record_timeline("agent_rename", Some(&rp), &format!("Agent 重命名: {}", short));
         if !is_ignored_path(&rp) {
+            let short = rp.rsplit('/').next().unwrap_or(&rp);
+            let _ = engine_api::engine_record_timeline("agent_rename", Some(&rp), &format!("Agent 重命名: {}", short));
             if let Ok(mut changed) = handle.changed_files.lock() {
                 if !changed.contains(&rp) { changed.push(rp.clone()); }
             }
@@ -400,12 +402,12 @@ pub(crate) async fn move_file(
     std::fs::rename(&src_real, &dest)
         .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))?;
     // Hook: record timeline + update changed_files
-    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
+    // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = dest.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
-        let short = rp.rsplit('/').next().unwrap_or(&rp);
-        let _ = engine_api::engine_record_timeline("agent_move", Some(&rp), &format!("Agent 移动: {}", short));
         if !is_ignored_path(&rp) {
+            let short = rp.rsplit('/').next().unwrap_or(&rp);
+            let _ = engine_api::engine_record_timeline("agent_move", Some(&rp), &format!("Agent 移动: {}", short));
             if let Ok(mut changed) = handle.changed_files.lock() {
                 if !changed.contains(&rp) { changed.push(rp.clone()); }
             }
@@ -807,13 +809,34 @@ pub(crate) async fn edit_file(
                         crate::utils::write_atomic(&file_path, &trimmed)?;
                         // Record timeline event for whitespace-tolerant edit
                         if let Some(ref handle) = *state.lock().unwrap() {
-                            let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
-                            let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
-                            if let Ok(mut changed) = handle.changed_files.lock() {
-                                if !changed.contains(&file_path) { changed.push(file_path.clone()); }
+                            if !is_ignored_path(&file_path) {
+                                let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
+                                let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
+                                if let Ok(mut changed) = handle.changed_files.lock() {
+                                    if !changed.contains(&file_path) { changed.push(file_path.clone()); }
+                                }
                             }
                         }
-                        return Ok(format!("已替换 1 处匹配（容错模式：逐行对齐）— {}", file_path));
+                        // Build inline diff snippet for this tolerance match
+                        let match_line = start + 1; // 1-indexed
+                        let ctx_start = start.saturating_sub(3);
+                        let ctx_end = (start + old_lines.len() + 3).min(file_lines.len());
+                        let mut ds = String::new();
+                        for i in ctx_start..start {
+                            if i < file_lines.len() { ds.push_str(&format!("  {}\n", file_lines[i])); }
+                        }
+                        for ol in &old_lines { ds.push_str(&format!("- {}\n", ol)); }
+                        for (k, nl) in new_ls.iter().enumerate() {
+                            ds.push_str(&format!("+ {}{}\n", if k == 0 { &prefix } else { "" }, nl));
+                        }
+                        for i in (start + old_lines.len())..ctx_end {
+                            if i < file_lines.len() { ds.push_str(&format!("  {}\n", file_lines[i])); }
+                        }
+                        let ds = ds.trim_end().to_string();
+                        return Ok(format!(
+                            "已替换 1 处匹配（容错模式：逐行对齐）— {} (第 {} 行附近)\n```diff\n{}\n```",
+                            file_path, match_line, ds
+                        ));
                     }
                     break; // first-line matched once, no need to scan further
                 }
@@ -852,22 +875,78 @@ pub(crate) async fn edit_file(
         .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
 
     // Record timeline event + update changed files for check (简报)
-    // Skip changed_files tracking for ignored paths (.hologram, .git, etc.)
+    // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     if let Some(ref handle) = *state.lock().unwrap() {
-        let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
-        let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
         if !is_ignored_path(&file_path) {
+            let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
+            let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
             if let Ok(mut changed) = handle.changed_files.lock() {
                 if !changed.contains(&file_path) { changed.push(file_path.clone()); }
             }
         }
     }
 
-    Ok(if replace_all {
-        format!("已替换 {} 处匹配 — {}", count, file_path)
+    // Compute the line number of the first match for meaningful output
+    let first_match_line = content.lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(old_string.lines().next().unwrap_or("")))
+        .map(|(i, _)| i + 1)
+        .unwrap_or(0);
+    let line_info = if first_match_line > 0 {
+        format!(" (第 {} 行附近)", first_match_line)
     } else {
-        format!("已替换 1 处匹配 — {}", file_path)
+        String::new()
+    };
+
+    // Build a compact diff snippet — old → new with surrounding context
+    let diff_snippet = build_edit_snippet(&content, &old_string, &new_string, first_match_line);
+
+    Ok(if replace_all {
+        format!(
+            "已替换 {} 处匹配 — {}{}\n```diff\n{}\n```",
+            count, file_path, line_info, diff_snippet
+        )
+    } else {
+        format!(
+            "已替换 1 处匹配 — {}{}\n```diff\n{}\n```",
+            file_path, line_info, diff_snippet
+        )
     })
+}
+
+/// Build a compact diff snippet showing old → new with surrounding context (3 lines each side).
+fn build_edit_snippet(content: &str, old: &str, new: &str, match_line: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let ctx_start = match_line.saturating_sub(4);
+    let ctx_end = (match_line + old.lines().count() + 3).min(lines.len());
+
+    let mut out = String::new();
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    for i in ctx_start..match_line.saturating_sub(1) {
+        if i < lines.len() { out.push_str(&format!("  {}\n", lines[i])); }
+    }
+    for ol in &old_lines {
+        out.push_str(&format!("- {}\n", ol));
+    }
+    for nl in &new_lines {
+        out.push_str(&format!("+ {}\n", nl));
+    }
+    let after_start = match_line.saturating_sub(1) + old_lines.len();
+    for i in after_start..ctx_end {
+        if i < lines.len() { out.push_str(&format!("  {}\n", lines[i])); }
+    }
+    out.trim_end().to_string()
+}
+
+/// Preview the first `max_lines` lines of content, truncating each line to `max_width` chars.
+fn preview_content(content: &str, max_width: usize, max_lines: usize) -> String {
+    content.lines()
+        .take(max_lines)
+        .map(|l| if l.len() > max_width { format!("{}…", &l[..max_width]) } else { l.to_string() })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ═══════════════════════════════════════════════════════

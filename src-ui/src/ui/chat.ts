@@ -312,7 +312,13 @@ export class ChatPanel {
     // Only summon the panel if it's not already open — avoids a full
     // morphToMode animation cycle (killTweens → removeClasses → height
     // snap → fadeContentIn 0→1) that makes the chat flash white.
-    if (this.mode !== 'panel') this.summonPanel();
+    // When we DO need to open, kill GSAP tweens first: morphToMode has
+    // an `if (this._animating) return` guard that silently bails during
+    // streaming, leaving the card invisible in a collapsed input bar.
+    if (this.mode !== 'panel') {
+      this.killPanelTweens();
+      this.summonPanel();
+    }
     return new Promise((resolve) => {
       const card = document.createElement('div');
       card.className = 'perm-inline-card';
