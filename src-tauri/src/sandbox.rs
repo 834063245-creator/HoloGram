@@ -28,7 +28,17 @@ impl Sandbox {
     }
 
     /// Validate a read operation against `path`.
+    /// Global memory paths bypass the project sandbox (same as writes).
     pub fn resolve_read(&self, path: &Path) -> SandboxResult {
+        // Global memory bypass
+        if Self::is_global_memory_path(path) {
+            let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if is_symlink_or_junction(path) {
+                return SandboxResult::Denied("global memory symlinks are not allowed".into());
+            }
+            return SandboxResult::Allowed(real);
+        }
+
         let real = match std::fs::canonicalize(path) {
             Ok(p) => p,
             Err(_) => {
@@ -59,8 +69,36 @@ impl Sandbox {
         ))
     }
 
-    /// Validate a write operation. Dead-locked to project directory.
+    /// Check if this path is under the global memory directory.
+    /// Agent-managed memories live outside the project sandbox by design.
+    fn is_global_memory_path(path: &Path) -> bool {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        if home.is_empty() { return false; }
+        let gm = PathBuf::from(&home).join(".hologram").join("global_memory");
+        // Check both the raw path and canonicalized versions
+        path.starts_with(&gm) || {
+            std::fs::canonicalize(path)
+                .map(|p| p.starts_with(&gm))
+                .unwrap_or(false)
+        }
+    }
+
+    /// Validate a write operation. Dead-locked to project directory,
+    /// with an exception for the global memory directory (agent-managed).
     pub fn resolve_write(&self, path: &Path) -> SandboxResult {
+        // Global memory bypass: agent writes to ~/.hologram/global_memory/
+        // are always allowed regardless of project sandbox boundary.
+        if Self::is_global_memory_path(path) {
+            let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            // Safety check still applies — don't allow symlinks in memory paths
+            if is_symlink_or_junction(path) {
+                return SandboxResult::Denied("global memory symlinks are not allowed".into());
+            }
+            return SandboxResult::Allowed(real);
+        }
+
         let real = match std::fs::canonicalize(path) {
             Ok(p) => p,
             Err(_) => {
