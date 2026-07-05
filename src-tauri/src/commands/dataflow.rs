@@ -89,6 +89,7 @@ pub(crate) async fn hologram_dataflow(
 #[tauri::command]
 pub(crate) async fn dataflow_save(
     trace_json: String,
+    overwrite: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     crate::utils::check_mcp_permission("dataflow_save", &state)?;
@@ -98,11 +99,22 @@ pub(crate) async fn dataflow_save(
         let mut trace: serde_json::Value = serde_json::from_str(&trace_json)
             .map_err(|e| format!("parse trace_json: {}", e))?;
 
-        if trace.get("trace_id").and_then(|v| v.as_str()).is_none() {
-            return Err("trace_json missing trace_id".into());
-        }
+        let trace_id = trace.get("trace_id").and_then(|v| v.as_str())
+            .ok_or_else(|| "trace_json missing trace_id".to_string())?;
         if trace.get("resource").and_then(|v| v.as_str()).is_none() {
             return Err("trace_json missing resource".into());
+        }
+
+        // Guard: if not overwrite, reject duplicate trace_id (Agent must generate unique ids)
+        if !overwrite.unwrap_or(false) {
+            let conn = open_dataflow_db(&root)?;
+            if dataflow_query_trace(&conn, Some(trace_id), None)
+                .map_err(|e| format!("query: {}", e))?
+                .is_some() {
+                return Err(format!(
+                    "trace_id {} 已存在，Agent 须调 dataflow_list 查版本并递增后重试", trace_id
+                ));
+            }
         }
 
         // Layer 1: source_snippets anchor validation
@@ -118,8 +130,9 @@ pub(crate) async fn dataflow_save(
             "engine_misses": engine_matches.1,
         });
 
-        let conn = open_dataflow_db(&root)?;
-        dataflow_save_trace(&conn, &trace)
+        // ponytail: re-open conn — borrow checker won't let us keep it across the early guard
+        let conn2 = open_dataflow_db(&root)?;
+        dataflow_save_trace(&conn2, &trace)
             .map_err(|e| format!("save trace: {}", e))?;
 
         Ok(serde_json::json!({
