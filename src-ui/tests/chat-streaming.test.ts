@@ -118,7 +118,9 @@ describe('_doSyncMessagesToDOM streaming path', () => {
     const el = msgList.children[0] as HTMLElement;
     const card = document.createElement('div'); card.className = 'perm-inline-card';
     card.innerHTML = '<div class="msg-perm-btns"><button>允许</button></div>';
-    el.appendChild(card);
+    // Permission cards live as msgList siblings, not inside the bubble
+    // (see chat.ts:405-410 — avoids being destroyed by replaceWith during streaming)
+    msgList.insertBefore(card, el.nextSibling);
 
     (panel as any).messages[0].parts = [{ type: 'text', text: 'hello world', finalised: false }];
     (panel as any)._doSyncMessagesToDOM();

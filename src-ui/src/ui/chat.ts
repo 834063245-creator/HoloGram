@@ -2790,8 +2790,20 @@ export class ChatPanel {
       }
     }
 
-    // Full rebuild
+    // Full rebuild — preserve injected siblings (permission cards) across re-render.
+    // Streaming executor (Window B) can trigger this while a perm card is showing.
     const existing = Array.from(this.msgList.children);
+
+    // Collect injected elements (perm cards, task notifications) to preserve
+    const injects: { el: Element; afterIdx: number }[] = [];
+    for (let i = 0; i < existing.length; i++) {
+      const el = existing[i];
+      if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification')) {
+        injects.push({ el, afterIdx: i - 1 }); // re-insert after the preceding message
+        existing.splice(i, 1);
+        i--;
+      }
+    }
 
     for (let i = 0; i < msgCount; i++) {
       const msg = this.messages[i];
@@ -2805,9 +2817,19 @@ export class ChatPanel {
       }
     }
 
-    // Remove excess children
+    // Remove excess children (skip injects — already removed above)
     while (this.msgList.children.length > msgCount) {
-      this.msgList.lastChild?.remove();
+      const last = this.msgList.lastChild;
+      if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification'))) {
+        break; // don't remove injects
+      }
+      last?.remove();
+    }
+
+    // Re-insert preserved injects after their original preceding message
+    for (const { el, afterIdx } of injects) {
+      const ref = this.msgList.children[afterIdx + 1] || null;
+      this.msgList.insertBefore(el, ref);
     }
 
     this.scrollBottom();
