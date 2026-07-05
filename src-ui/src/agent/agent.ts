@@ -412,6 +412,21 @@ export class Agent {
 
       lastErr = result.err;
 
+      // Reactive compact: if the error is "prompt too long", compact and retry
+      // regardless of whether the error is normally retryable.
+      if (this.isContextLengthError(lastErr) && !this.compactStuck && !this.compactRunning) {
+        log.info('agent', 'reactive compact triggered by context-length error');
+        this.sink({ kind: EventKind.Notice, level: 'warn', text: '上下文过长，自动压缩后重试…' });
+        try {
+          await this.compactNow(signal);
+          // compactNow replaced this.session — skip backoff, retry immediately
+          continue;
+        } catch {
+          // compactNow failed — fall through to normal retry/abort logic
+          this.sink({ kind: EventKind.Notice, level: 'warn', text: '自动压缩失败，尝试直接重试…' });
+        }
+      }
+
       // Don't retry non-retryable errors
       if (!isRetryable(lastErr)) return result;
 
@@ -760,6 +775,38 @@ export class Agent {
   private compactRunning = false;
   private sessionGen = 0;
 
+  /** Estimate token count from message character count.
+   *  ponytail: ~3.5 chars/token is conservative for CJK+code mix.
+   *  Used when API hasn't returned usage yet, so compaction can trigger
+   *  BEFORE sending the request — prevents 400 "prompt too long" errors. */
+  private tokenCountWithEstimation(): number {
+    let totalChars = 0;
+    for (const m of this.session) {
+      if (typeof m.content === 'string') totalChars += m.content.length;
+      if (m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          totalChars += (tc.name?.length || 0) + (tc.arguments?.length || 0);
+        }
+      }
+      if (m.reasoning_content) totalChars += m.reasoning_content.length;
+    }
+    return Math.ceil(totalChars / 3.5);
+  }
+
+  /** Check if an error looks like a context-length exceedance. */
+  private isContextLengthError(err: Error): boolean {
+    const msg = (err.message || String(err)).toLowerCase();
+    return (
+      msg.includes('prompt is too long') ||
+      msg.includes('context length') ||
+      msg.includes('too many tokens') ||
+      msg.includes('maximum context') ||
+      msg.includes('reduce the length') ||
+      msg.includes('token limit') ||
+      msg.includes('400') && (msg.includes('token') || msg.includes('context') || msg.includes('prompt'))
+    );
+  }
+
   /** Manual compaction trigger (from /compact command). Returns summary text or error. */
   async compactNow(signal: AbortSignal): Promise<string> {
     if (this.compactRunning) throw new Error('compaction already in progress');
@@ -801,9 +848,15 @@ export class Agent {
 
   private maybeCompact(usage: Usage | undefined): void {
     if (this.contextWindow <= 0) return;
-    if (!usage || usage.total_tokens <= 0) return;
 
-    const ratio = usage.total_tokens / this.contextWindow;
+    // Use API-reported tokens when available, fall back to char-based estimation.
+    // Estimation allows compaction to trigger BEFORE the first API call returns,
+    // preventing 400 "prompt too long" on the very next request.
+    const estimated = (usage && usage.total_tokens > 0)
+      ? usage.total_tokens
+      : this.tokenCountWithEstimation();
+    const ratio = estimated / this.contextWindow;
+
     if (ratio < this.compactRatio) {
       this.compactStuck = false;
       return;
@@ -853,6 +906,20 @@ export class Agent {
       ++this.sessionGen;
       this.stormSig = '';
       this.stormCount = 0;
+
+      // Check if compaction helped enough — if still above 95%, we're stuck
+      const postEstimate = this.tokenCountWithEstimation();
+      if (postEstimate / this.contextWindow > 0.95) {
+        this.compactStuck = true;
+        this.compactRunning = false;
+        this.sink({
+          kind: EventKind.Notice,
+          level: 'warn',
+          text: `压缩后上下文仍占用 ${(postEstimate / this.contextWindow * 100).toFixed(0)}%。建议用 /new 开启新会话。`,
+        });
+        return;
+      }
+
       this.compactStuck = false;
       this.compactRunning = false;
       this.sink({
