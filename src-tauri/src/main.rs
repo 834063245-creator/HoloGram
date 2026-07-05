@@ -131,6 +131,7 @@ fn main() {
             commands::dataflow::hologram_dataflow,
             commands::dataflow::dataflow_save,
             commands::dataflow::dataflow_query,
+            commands::dataflow::dataflow_delete,
             commands::hologram::get_full_graph,
             // ── Workspace commands ──
             commands::workspace::workspace_activate,

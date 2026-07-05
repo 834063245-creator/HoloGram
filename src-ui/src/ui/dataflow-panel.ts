@@ -1,21 +1,17 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// DataflowPanel — live dataflow explorer.
-// Entry: NL query → engine resolves symbols → graph flow + per-function reads/writes/triggers.
-// Results persisted via dataflow_save → .hologram/dataflow/ JSON files.
+// DataflowPanel — trace browser. Agent produces traces → dataflow_save → panel renders.
+// Quick explore (engine-powered) available as secondary fallback.
 
 import { invoke } from '../bridge';
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
 
-const HISTORY_KEY = 'hologram_dataflow_history';
-const MAX_HISTORY = 50;
-
-interface HistoryEntry {
+interface TraceSummary {
+  traceId: string;
   query: string;
-  timestamp: number;
-  symbolsFound: number;
-  traceId?: string;
+  createdAt: string;
+  hasContent: boolean;
 }
 
 export class DataflowPanel {
@@ -25,19 +21,33 @@ export class DataflowPanel {
   private right!: HTMLElement;
   private grip!: HTMLElement;
   private openState = false;
-  private history: HistoryEntry[] = [];
-  private resultData: any = null;
 
   /** Called when NL query fails heuristic symbol resolution. Agent resolves NL→symbols. */
   onParseQuery?: (nl: string) => Promise<string[]>;
+
+  private traces: TraceSummary[] = [];
+  private selectedTraceId: string | null = null;
+  private selectedTrace: any = null;
+  private tracesLoaded = false; // ponytail: in-memory cache, re-read only on save/refresh
 
   private dragging = false;
   private resizing = false;
   private dragStart = { x: 0, y: 0, elX: 0, elY: 0, w: 0, h: 0 };
 
   constructor(container: HTMLElement) {
-    this.loadHistory();
     this.buildDOM(container);
+    // Auto-refresh when Agent saves a new trace (browser-native, no bus dep)
+    window.addEventListener('dataflow:saved', () => {
+      this.tracesLoaded = false;
+      if (this.openState) this.loadTraceList();
+    });
+    // Reset on workspace switch — traces are scoped per workspace
+    window.addEventListener('workspace:switched', () => {
+      this.tracesLoaded = false;
+      this.selectedTraceId = null;
+      this.selectedTrace = null;
+      if (this.openState) this.loadTraceList();
+    });
   }
 
   // ── DOM ───────────────────────────────────────────────
@@ -69,60 +79,20 @@ export class DataflowPanel {
     body.className = 'df-panel-body';
     Object.assign(body.style, { display: 'flex', flex: '1', minHeight: '0', overflow: 'hidden' });
 
-    // left: query + history
+    // left: trace list + quick explore
     this.left = document.createElement('div');
     this.left.className = 'df-left';
-    Object.assign(this.left.style, { width: '240px', minWidth: '180px', display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(40,70,130,0.15)' });
-
-    // query input area
-    const inputArea = document.createElement('div');
-    inputArea.className = 'df-query-area';
-    const input = document.createElement('textarea');
-    input.className = 'df-query-input';
-    input.placeholder = '符号名 或 自然语言…\n如: logBuffer 怎么写入落盘的';
-    input.rows = 3;
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.doExplore(input.value.trim()); }
-    });
-    const btn = document.createElement('button');
-    btn.className = 'df-query-btn';
-    btn.innerHTML = `${iconHtml('search', 13)} 探索`;
-    btn.onclick = () => this.doExplore(input.value.trim());
-    inputArea.appendChild(input);
-    inputArea.appendChild(btn);
-    this.left.appendChild(inputArea);
-
-    // history
-    const histHdr = document.createElement('div');
-    histHdr.className = 'df-hist-hdr';
-    histHdr.textContent = '历史';
-    const clearHist = document.createElement('button');
-    clearHist.className = 'df-hist-clear';
-    clearHist.textContent = '清空';
-    clearHist.onclick = () => { this.history = []; this.saveHistory(); this.renderHistory(); };
-    histHdr.appendChild(clearHist);
-    this.left.appendChild(histHdr);
-
-    const histList = document.createElement('div');
-    histList.className = 'df-hist-list';
-    this.left.appendChild(histList);
-
+    Object.assign(this.left.style, { width: '260px', minWidth: '180px', display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(40,70,130,0.15)' });
     body.appendChild(this.left);
 
-    // right: results
+    // right: trace content
     this.right = document.createElement('div');
     this.right.className = 'df-right';
-    Object.assign(this.right.style, { flex: '1', overflow: 'auto', padding: '12px' });
-    this.right.innerHTML = `<div class="df-empty">输入查询，探索代码数据流。</div>`;
+    Object.assign(this.right.style, { flex: '1', overflow: 'auto', padding: '14px' });
+    this.right.innerHTML = `<div class="df-empty">加载已存追踪…</div>`;
     body.appendChild(this.right);
 
     this.el.appendChild(body);
-
-    // corner brackets
-    const corners = document.createElement('div');
-    corners.className = 'df-corners';
-    corners.innerHTML = '<span class="df-cb-bottom df-cb-bl"></span><span class="df-cb-bottom df-cb-br"></span>';
-    this.el.appendChild(corners);
 
     // resize grip
     this.grip = document.createElement('div');
@@ -135,339 +105,6 @@ export class DataflowPanel {
     this.header.addEventListener('pointerdown', (e) => this.onDragStart(e));
     this.grip.addEventListener('pointerdown', (e) => this.onResizeStart(e));
     this.el.addEventListener('pointerdown', () => this.bringToFront());
-
-    this.renderHistory();
-  }
-
-  // ── Explore ───────────────────────────────────────────
-
-  private async doExplore(query: string): Promise<void> {
-    if (!query) return;
-    this.right.innerHTML = `<div class="df-loading">探索中…</div>`;
-
-    try {
-      // 1. Graph-level: NL→symbols + flow paths + relationships
-      let raw = await invoke<string>('hologram_explore', { query, symbols: [], includeSource: true });
-      let explore = JSON.parse(raw);
-
-      // 2. NL fallback: heuristic parser missed → let Agent resolve NL→symbols
-      if ((explore.meta?.totalSymbolsFound || 0) === 0 && this.onParseQuery) {
-        try {
-          const symbols = await this.onParseQuery(query);
-          if (symbols.length > 0) {
-            raw = await invoke<string>('hologram_explore', { query, symbols, includeSource: true });
-            explore = JSON.parse(raw);
-          }
-        } catch { /* Agent unavailable — continue with empty results */ }
-      }
-
-      this.resultData = explore;
-
-      // 3. Collect unique file paths from results
-      const fileSet = new Set<string>();
-      (explore.flow?.path || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
-      (explore.sourceCode || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
-      (explore.blastRadius?.dependents || []).forEach((d: any) => { if (d.file) fileSet.add(d.file); });
-
-      // 4. Dataflow engine: per-function reads/writes/triggers on discovered files
-      let dfResult: any = null;
-      const files = Array.from(fileSet);
-      if (files.length > 0) {
-        try {
-          const dfRaw = await invoke<string>('hologram_dataflow', { files });
-          dfResult = JSON.parse(dfRaw);
-        } catch { /* dataflow engine optional — graph results still render */ }
-      }
-
-      this.renderResults(explore, dfResult);
-
-      // 5. Persist engine results (Agent↔panel shared storage)
-      const symbolsFound = explore.meta?.totalSymbolsFound || 0;
-      try {
-        const saveResult = await invoke<string>('dataflow_save', {
-          query,
-          exploreResult: JSON.stringify(explore),
-          dataflowResult: dfResult ? JSON.stringify(dfResult) : null,
-        });
-        const { traceId } = JSON.parse(saveResult);
-        this.history.unshift({ query, timestamp: Date.now(), symbolsFound, traceId });
-      } catch {
-        // dataflow_save unavailable (no workspace) — fallback to localStorage-only
-        this.history.unshift({ query, timestamp: Date.now(), symbolsFound });
-      }
-
-      if (this.history.length > MAX_HISTORY) this.history.length = MAX_HISTORY;
-      this.saveHistory();
-      this.renderHistory();
-    } catch (e: any) {
-      this.right.innerHTML = `<div class="df-empty">探索失败: ${e?.message || e}</div>`;
-    }
-  }
-
-  // ── Render results ────────────────────────────────────
-
-  private renderResults(explore: any, dfResult: any): void {
-    const meta = explore.meta || {};
-    const flow = explore.flow;
-    const relationships = explore.relationships || {};
-    const sourceCode = explore.sourceCode || [];
-    const blastRadius = explore.blastRadius || {};
-    const alerts = explore.architectureAlerts || {};
-
-    const parts: string[] = [];
-
-    // Meta
-    parts.push(`<div class="df-result-meta">
-      <span>${iconHtml('search', 12)} ${meta.totalSymbolsFound || 0} 个符号</span>
-      <span>${iconHtml('file', 12)} ${meta.totalFilesScanned || 0} 个文件</span>
-      ${dfResult ? `<span>${iconHtml('code', 12)} dataflow 引擎</span>` : ''}
-      ${meta.hint ? `<span class="df-meta-hint">${this.esc(meta.hint)}</span>` : ''}
-    </div>`);
-
-    // Flow
-    if (flow && flow.path) {
-      parts.push(this.renderFlow(flow));
-    }
-
-    // ═══ Dataflow engine: per-function reads/writes/triggers ═══
-    if (dfResult) {
-      parts.push(this.renderDataflow(dfResult));
-    }
-
-    // Relationships
-    const relKeys = Object.keys(relationships);
-    if (relKeys.length > 0) {
-      parts.push(this.renderRelationships(relationships, relKeys));
-    }
-
-    // Source code
-    if (sourceCode.length > 0) {
-      parts.push(this.renderSourceCode(sourceCode));
-    }
-
-    // Blast radius
-    const deps = blastRadius.dependents || [];
-    const tests = blastRadius.tests || [];
-    if (deps.length > 0 || tests.length > 0) {
-      parts.push(this.renderBlastRadius(deps, tests));
-    }
-
-    // Architecture alerts
-    const alertKeys = Object.keys(alerts).filter(k => {
-      const v = alerts[k];
-      return v && (Array.isArray(v) ? v.length > 0 : true);
-    });
-    if (alertKeys.length > 0) {
-      parts.push(this.renderAlerts(alerts, alertKeys));
-    }
-
-    this.right.innerHTML = parts.join('') || `<div class="df-empty">未找到匹配的数据流。</div>`;
-  }
-
-  /** Render per-file dataflow engine results: scopes (reads/writes/triggers) + shared vars */
-  private renderDataflow(dfResult: any): string {
-    const results: any[] = dfResult.results || [];
-    if (results.length === 0) return '';
-
-    let html = `<div class="df-section"><div class="df-section-hdr">数据流引擎 (tree-sitter)</div>`;
-
-    for (const r of results) {
-      if (r.error) {
-        html += `<div class="df-df-file"><span class="df-df-fname">${this.esc(r.file)}</span> <span class="df-meta-hint">${this.esc(r.error)}</span></div>`;
-        continue;
-      }
-      const scopes: any[] = r.scopes || [];
-      const shared: any[] = r.shared || [];
-      if (scopes.length === 0 && shared.length === 0) continue;
-
-      html += `<div class="df-df-file">
-        <div class="df-df-fname">${this.esc(r.file)}</div>`;
-
-      // Scopes table: function → reads/writes/triggers
-      if (scopes.length > 0) {
-        html += `<table class="df-df-table">
-          <thead><tr><th>函数</th><th>读取</th><th>写入</th><th>触发</th><th>异步/回调</th><th>调用序列</th></tr></thead><tbody>`;
-        for (const s of scopes) {
-          html += `<tr>
-            <td class="df-df-scope">${this.esc(s.name)}</td>
-            <td>${(s.reads || []).map(this.esc).join(', ') || '—'}</td>
-            <td>${(s.writes || []).map(this.esc).join(', ') || '—'}</td>
-            <td>${(s.triggers || []).map(this.esc).join(', ') || '—'}</td>
-            <td>${(s.awaits_callbacks || []).map(this.esc).join(', ') || '—'}</td>
-            <td>${(s.sequence_calls || []).map(this.esc).join(', ') || '—'}</td>
-          </tr>`;
-        }
-        html += `</tbody></table>`;
-      }
-
-      // Shared variables: var → readers / writers
-      if (shared.length > 0) {
-        html += `<div class="df-df-shared-hdr">共享变量</div>`;
-        for (const sh of shared) {
-          html += `<div class="df-df-shared">
-            <span class="df-df-var">${this.esc(sh.var)}</span>
-            <span class="df-df-rw">读: ${(sh.readers || []).map(this.esc).join(', ') || '—'}</span>
-            <span class="df-df-rw">写: ${(sh.writers || []).map(this.esc).join(', ') || '—'}</span>
-          </div>`;
-        }
-      }
-
-      html += `</div>`;
-    }
-
-    html += `</div>`;
-    return html;
-  }
-
-  private renderFlow(flow: any): string {
-    const steps = flow.path || [];
-    if (steps.length === 0) return '';
-
-    const rows = steps.map((s: any) => {
-      if (s.edge) {
-        return `<div class="df-flow-edge">
-          <span class="df-flow-arrow">↓</span>
-          <span class="df-flow-ekind">${this.esc(s.edge)}</span>
-        </div>`;
-      }
-      const loc = s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—';
-      return `<div class="df-flow-node">
-        <span class="df-flow-kind">${this.esc(s.kind || '')}</span>
-        <span class="df-flow-name">${this.esc(s.name || '')}</span>
-        <span class="df-flow-loc">${this.esc(loc)}</span>
-      </div>`;
-    }).join('');
-
-    return `<div class="df-section">
-      <div class="df-section-hdr">数据流路径 (${Math.floor(steps.length / 2) + 1} 节点, ${Math.floor(steps.length / 2)} 跳)</div>
-      <div class="df-flow">${rows}</div>
-    </div>`;
-  }
-
-  private renderRelationships(relationships: any, keys: string[]): string {
-    const rows = keys.map(kind => {
-      const edges = relationships[kind] || [];
-      const items = edges.slice(0, 30).map((e: any) =>
-        `<div class="df-rel-item"><span class="df-rel-src">${this.esc(e.source)}</span> → <span class="df-rel-tgt">${this.esc(e.target)}</span></div>`
-      ).join('');
-      const more = edges.length > 30 ? `<div class="df-table-more">…及其他 ${edges.length - 30} 条</div>` : '';
-      return `<div class="df-rel-group">
-        <div class="df-rel-kind">${this.esc(kind)} (${edges.length})</div>
-        ${items}${more}
-      </div>`;
-    }).join('');
-
-    return `<div class="df-section">
-      <div class="df-section-hdr">关系</div>
-      ${rows}
-    </div>`;
-  }
-
-  private renderSourceCode(sources: any[]): string {
-    const snippets = sources.slice(0, 8).map((s: any) =>
-      `<div class="df-src-item">
-        <div class="df-src-loc">${this.esc(s.file || '')}${s.line ? ':' + s.line : ''}</div>
-        <pre class="df-src-code">${this.esc(s.code || '')}</pre>
-      </div>`
-    ).join('');
-    const more = sources.length > 8 ? `<div class="df-table-more">…及其他 ${sources.length - 8} 个片段</div>` : '';
-
-    return `<div class="df-section">
-      <div class="df-section-hdr">源码 (${sources.length})</div>
-      ${snippets}${more}
-    </div>`;
-  }
-
-  private renderBlastRadius(dependents: any[], tests: any[]): string {
-    const depItems = dependents.slice(0, 20).map((d: any) =>
-      `<div class="df-br-item">${this.esc(d.name)} <span class="df-br-loc">${this.esc(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`
-    ).join('');
-    const testItems = tests.slice(0, 10).map((t: any) =>
-      `<div class="df-br-item df-br-test">🧪 ${this.esc(t.name)} <span class="df-br-loc">${this.esc(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`
-    ).join('');
-
-    return `<div class="df-section">
-      <div class="df-section-hdr">影响范围</div>
-      ${dependents.length > 0 ? `<div class="df-br-sub">依赖者 (${dependents.length})</div>${depItems}${dependents.length > 20 ? `<div class="df-table-more">…及其他 ${dependents.length - 20} 个</div>` : ''}` : ''}
-      ${tests.length > 0 ? `<div class="df-br-sub">相关测试 (${tests.length})</div>${testItems}${tests.length > 10 ? `<div class="df-table-more">…及其他 ${tests.length - 10} 个</div>` : ''}` : ''}
-    </div>`;
-  }
-
-  private renderAlerts(alerts: any, keys: string[]): string {
-    const rows = keys.map(k => {
-      const v = alerts[k];
-      const display = Array.isArray(v) ? `${v.length} 项` : String(v);
-      return `<div class="df-alert-row"><span class="df-alert-key">${this.esc(k)}</span>: ${this.esc(display)}</div>`;
-    }).join('');
-    return `<div class="df-section">
-      <div class="df-section-hdr">架构提醒</div>
-      ${rows}
-    </div>`;
-  }
-
-  // ── History ───────────────────────────────────────────
-
-  private loadHistory(): void {
-    try {
-      const raw = localStorage.getItem(HISTORY_KEY);
-      this.history = raw ? JSON.parse(raw) : [];
-    } catch { this.history = []; }
-  }
-
-  private saveHistory(): void {
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(this.history)); } catch { /* quota exceeded */ }
-  }
-
-  private renderHistory(): void {
-    const list = this.left.querySelector('.df-hist-list');
-    if (!list) return;
-    if (this.history.length === 0) {
-      list.innerHTML = `<div class="df-empty">暂无历史</div>`;
-      return;
-    }
-    list.innerHTML = this.history.map((h, i) => {
-      const time = new Date(h.timestamp);
-      const timeStr = `${time.getMonth() + 1}/${time.getDate()} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
-      const savedBadge = h.traceId ? ` <span class="df-hist-saved">💾</span>` : '';
-      return `<div class="df-hist-item" data-idx="${i}">
-        <div class="df-hist-query">${this.esc(h.query.length > 40 ? h.query.slice(0, 40) + '…' : h.query)}${savedBadge}</div>
-        <div class="df-hist-sub">${timeStr} · ${h.symbolsFound} 符号</div>
-      </div>`;
-    }).join('');
-    list.querySelectorAll('.df-hist-item').forEach((el) => {
-      (el as HTMLElement).onclick = () => {
-        const idx = parseInt((el as HTMLElement).dataset['idx'] || '0');
-        const entry = this.history[idx];
-        if (!entry) return;
-        const input = this.left.querySelector('.df-query-input') as HTMLTextAreaElement;
-        if (input) input.value = entry.query;
-        // Load saved trace if available, otherwise re-run live query
-        if (entry.traceId) {
-          this.loadTrace(entry.traceId);
-        } else {
-          this.doExplore(entry.query);
-        }
-      };
-    });
-  }
-
-  /** Load a saved trace from dataflow_query and render it. */
-  private async loadTrace(traceId: string): Promise<void> {
-    this.right.innerHTML = `<div class="df-loading">加载已保存结果…</div>`;
-    try {
-      const raw = await invoke<string>('dataflow_query', { traceId });
-      const trace = JSON.parse(raw);
-      const explore = trace.exploreResult ? JSON.parse(trace.exploreResult) : null;
-      const dfResult = trace.dataflowResult ? JSON.parse(trace.dataflowResult) : null;
-      if (explore) {
-        this.resultData = explore;
-        this.renderResults(explore, dfResult);
-      } else {
-        this.right.innerHTML = `<div class="df-empty">已保存结果为空。</div>`;
-      }
-    } catch (e: any) {
-      this.right.innerHTML = `<div class="df-empty">加载失败: ${e?.message || e} — 点击按钮重新探索</div>`;
-    }
   }
 
   // ── Open / close ──────────────────────────────────────
@@ -480,6 +117,7 @@ export class DataflowPanel {
     this.el.style.display = 'flex';
     this.bringToFront();
     shell.notifyPanelChanged();
+    if (!this.tracesLoaded) this.loadTraceList();
   }
 
   close(): void {
@@ -493,6 +131,430 @@ export class DataflowPanel {
 
   private bringToFront(): void {
     this.el.style.zIndex = String(Math.max(78, Number(this.el.style.zIndex) + 1));
+  }
+
+  // ── Trace list ────────────────────────────────────────
+
+  private async loadTraceList(): Promise<void> {
+    try {
+      const raw = await invoke<string>('dataflow_query', { list: true });
+      const data = JSON.parse(raw);
+      this.traces = data.traces || [];
+      this.tracesLoaded = true;
+    } catch {
+      this.traces = [];
+    }
+    this.renderTraceList();
+    if (!this.selectedTraceId && this.traces.length === 0) {
+      this.renderRightEmpty();
+    }
+  }
+
+  private renderTraceList(): void {
+    this.left.innerHTML = '';
+    this.left.style.cssText = 'width:260px; min-width:180px; display:flex; flex-direction:column; border-right:1px solid rgba(40,70,130,0.15);';
+
+    // Header
+    const hdr = document.createElement('div');
+    hdr.className = 'df-trace-list-hdr';
+    hdr.innerHTML = `<span>已存追踪 (${this.traces.length})</span>`;
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'df-hist-clear';
+    refreshBtn.innerHTML = `${iconHtml('search', 11)} 刷新`;
+    refreshBtn.onclick = () => this.loadTraceList();
+    hdr.appendChild(refreshBtn);
+    this.left.appendChild(hdr);
+
+    // Trace list
+    const list = document.createElement('div');
+    list.className = 'df-hist-list';
+    if (this.traces.length === 0) {
+      list.innerHTML = `<div class="df-empty" style="padding:16px 12px; line-height:1.6;">
+        暂无已存追踪。<br><br>
+        在对话中让 Agent 追踪数据流，<br>
+        结果会出现在这里。
+      </div>`;
+    } else {
+      list.innerHTML = this.traces.map((t) => {
+        const time = new Date(t.createdAt);
+        const timeStr = `${time.getMonth() + 1}/${time.getDate()} ${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+        const badge = t.hasContent ? ' <span class="df-trace-agent-badge">Agent</span>' : ' <span class="df-trace-engine-badge">引擎</span>';
+        const sel = t.traceId === this.selectedTraceId ? ' df-hist-item-sel' : '';
+        return `<div class="df-hist-item${sel}" data-tid="${t.traceId}">
+          <div class="df-hist-query">${this.esc(t.query.length > 50 ? t.query.slice(0, 50) + '…' : t.query)}${badge}</div>
+          <div class="df-hist-sub">${timeStr}</div>
+          <button class="df-hist-del" data-tid="${t.traceId}" title="删除此追踪">${iconHtml('close', 10)}</button>
+        </div>`;
+      }).join('');
+
+      list.querySelectorAll('.df-hist-item').forEach((el) => {
+        (el as HTMLElement).onclick = () => {
+          const tid = (el as HTMLElement).dataset['tid'];
+          if (tid) this.selectTrace(tid);
+        };
+      });
+      list.querySelectorAll('.df-hist-del').forEach((btn) => {
+        (btn as HTMLElement).onclick = async (e) => {
+          e.stopPropagation();
+          const tid = (btn as HTMLElement).dataset['tid'];
+          if (tid) await this.deleteTrace(tid);
+        };
+      });
+    }
+    this.left.appendChild(list);
+
+    // Quick explore (引擎直查，不落盘；Agent 追踪在聊天面板里做)
+    const exploreArea = document.createElement('div');
+    exploreArea.className = 'df-query-area';
+    const lbl = document.createElement('div');
+    lbl.className = 'df-hist-sub';
+    lbl.style.cssText = 'margin-bottom:4px;';
+    lbl.textContent = '引擎直查（不保存）';
+    exploreArea.appendChild(lbl);
+    const input = document.createElement('textarea');
+    input.className = 'df-query-input';
+    input.placeholder = '符号名或查询…';
+    input.rows = 2;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.doExplore(input.value.trim()); }
+    });
+    const btn = document.createElement('button');
+    btn.className = 'df-query-btn';
+    btn.innerHTML = `${iconHtml('search', 13)} 探索`;
+    btn.onclick = () => this.doExplore(input.value.trim());
+    exploreArea.appendChild(input);
+    exploreArea.appendChild(btn);
+    this.left.appendChild(exploreArea);
+  }
+
+  private async deleteTrace(traceId: string): Promise<void> {
+    try {
+      await invoke<string>('dataflow_delete', { traceId });
+      // Remove from local cache
+      this.traces = this.traces.filter(t => t.traceId !== traceId);
+      if (this.selectedTraceId === traceId) {
+        this.selectedTraceId = null;
+        this.selectedTrace = null;
+        this.renderRightEmpty();
+      }
+      this.renderTraceList();
+    } catch (e: any) {
+      console.error('[dataflow] delete failed:', e);
+    }
+  }
+
+  // ── Select & render trace ─────────────────────────────
+
+  private async selectTrace(traceId: string): Promise<void> {
+    this.selectedTraceId = traceId;
+    this.right.innerHTML = `<div class="df-loading">加载中…</div>`;
+    // Re-render list to highlight selected
+    this.renderTraceList();
+
+    try {
+      const raw = await invoke<string>('dataflow_query', { traceId });
+      this.selectedTrace = JSON.parse(raw);
+      this.renderTraceContent(this.selectedTrace);
+    } catch (e: any) {
+      this.right.innerHTML = `<div class="df-empty">加载失败: ${e?.message || e}</div>`;
+    }
+  }
+
+  private renderTraceContent(trace: any): void {
+    const content = trace.content;
+    const exploreResult = trace.exploreResult ? (typeof trace.exploreResult === 'string' ? JSON.parse(trace.exploreResult) : trace.exploreResult) : null;
+    const dataflowResult = trace.dataflowResult ? (typeof trace.dataflowResult === 'string' ? JSON.parse(trace.dataflowResult) : trace.dataflowResult) : null;
+
+    const parts: string[] = [];
+
+    // Meta bar
+    const time = trace.createdAt ? new Date(trace.createdAt) : null;
+    const timeStr = time ? `${time.getMonth() + 1}/${time.getDate()} ${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}` : '未知';
+    parts.push(`<div class="df-trace-meta-bar">
+      <span class="df-trace-meta-q">${this.esc(trace.query || '')}</span>
+      <span class="df-trace-meta-t">${timeStr}</span>
+      <span class="df-trace-meta-id">${this.esc(trace.traceId || '')}</span>
+    </div>`);
+
+    // Primary: Agent content (markdown)
+    if (content) {
+      parts.push(`<div class="df-trace-body">${this.renderMd(content)}</div>`);
+    }
+
+    // Secondary: engine data (collapsed by default)
+    if (exploreResult || dataflowResult) {
+      parts.push(`<details class="df-engine-data">
+        <summary class="df-engine-summary">引擎原始数据</summary>
+        <div class="df-engine-body">`);
+      if (exploreResult) {
+        parts.push(this.renderEngineExplore(exploreResult));
+      }
+      if (dataflowResult) {
+        parts.push(this.renderEngineDataflow(dataflowResult));
+      }
+      parts.push(`</div></details>`);
+    }
+
+    if (!content && !exploreResult && !dataflowResult) {
+      parts.push(`<div class="df-empty">此追踪内容为空。</div>`);
+    }
+
+    this.right.innerHTML = parts.join('');
+  }
+
+  private renderRightEmpty(): void {
+    this.right.innerHTML = `<div class="df-empty df-empty-welcome">
+      <div class="df-empty-icon">◈</div>
+      <div>选择左侧已存追踪查看数据流。</div>
+      <div class="df-empty-sub">或使用底部快速探索查询引擎。</div>
+    </div>`;
+  }
+
+  // ── Markdown renderer (minimal) ───────────────────────
+
+  private renderMd(text: string): string {
+    if (!text) return '';
+    const blocks = text.split(/\n\n+/);
+    return blocks.map(block => {
+      const trimmed = block.trim();
+      if (!trimmed) return '';
+      const lines = trimmed.split('\n');
+      const first = lines[0].trim();
+
+      // Code block
+      if (first.startsWith('```')) {
+        const lang = first.slice(3).trim();
+        const codeLines = lines.slice(1);
+        // Remove trailing ```
+        const lastIdx = codeLines.findIndex(l => l.trim() === '```');
+        const code = lastIdx >= 0 ? codeLines.slice(0, lastIdx) : codeLines;
+        return `<pre class="df-md-code">${this.esc(code.join('\n'))}</pre>`;
+      }
+
+      // Heading
+      if (first.startsWith('## ')) {
+        return `<h3 class="df-md-h3">${this.inlineMd(first.slice(3))}</h3>`;
+      }
+      if (first.startsWith('### ')) {
+        return `<h4 class="df-md-h4">${this.inlineMd(first.slice(4))}</h4>`;
+      }
+
+      // HR
+      if (first === '---' || first === '***' || first === '___') {
+        return '<hr class="df-md-hr">';
+      }
+
+      // List
+      if (first.match(/^[-*]\s/)) {
+        const items = lines.filter(l => l.trim()).map(l =>
+          `<li>${this.inlineMd(l.replace(/^[-*]\s*/, ''))}</li>`
+        ).join('');
+        return `<ul class="df-md-ul">${items}</ul>`;
+      }
+
+      // Numbered list
+      if (first.match(/^\d+\.\s/)) {
+        const items = lines.filter(l => l.trim()).map(l =>
+          `<li>${this.inlineMd(l.replace(/^\d+\.\s*/, ''))}</li>`
+        ).join('');
+        return `<ol class="df-md-ol">${items}</ol>`;
+      }
+
+      // Table (simple: pipe-separated)
+      if (first.startsWith('|') && first.endsWith('|')) {
+        return this.renderMdTable(lines);
+      }
+
+      // Blockquote
+      if (first.startsWith('> ')) {
+        const text = lines.map(l => l.replace(/^>\s?/, '')).join('\n');
+        return `<blockquote class="df-md-bq">${this.inlineMd(text)}</blockquote>`;
+      }
+
+      // Paragraph (join all lines)
+      return `<p class="df-md-p">${this.inlineMd(trimmed.replace(/\n/g, ' '))}</p>`;
+    }).join('');
+  }
+
+  private inlineMd(text: string): string {
+    return this.esc(text)
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/\*(.+?)\*/g, '<i>$1</i>')
+      .replace(/`(.+?)`/g, '<code class="df-md-inline-code">$1</code>')
+      .replace(/→/g, '<span class="df-md-arrow">→</span>');
+  }
+
+  private renderMdTable(lines: string[]): string {
+    if (lines.length < 2) return '';
+    // Header row
+    const headerCells = lines[0].split('|').filter(c => c.trim());
+    const thead = `<thead><tr>${headerCells.map(c => `<th>${this.inlineMd(c.trim())}</th>`).join('')}</tr></thead>`;
+    // Body (skip separator line like |---|)
+    const bodyRows = lines.slice(1).filter(l => !l.match(/^\|[\s\-:|]+\|$/));
+    const tbody = bodyRows.length > 0
+      ? `<tbody>${bodyRows.map(row => {
+          const cells = row.split('|').filter(c => c.trim());
+          return `<tr>${cells.map(c => `<td>${this.inlineMd(c.trim())}</td>`).join('')}</tr>`;
+        }).join('')}</tbody>`
+      : '';
+    return `<table class="df-md-table">${thead}${tbody}</table>`;
+  }
+
+  // ── Legacy engine renderers (fallback for old traces) ─
+
+  private renderEngineExplore(explore: any): string {
+    const parts: string[] = [];
+    const meta = explore.meta || {};
+    const flow = explore.flow;
+    const relationships = explore.relationships || {};
+    const sourceCode = explore.sourceCode || [];
+    const blastRadius = explore.blastRadius || {};
+    const alerts = explore.architectureAlerts || {};
+
+    parts.push(`<div class="df-result-meta">
+      <span>${iconHtml('search', 12)} ${meta.totalSymbolsFound || 0} 符号</span>
+      <span>${iconHtml('file', 12)} ${meta.totalFilesScanned || 0} 文件</span>
+    </div>`);
+
+    if (flow && flow.path) parts.push(this.renderFlow(flow));
+    if (Object.keys(relationships).length) parts.push(this.renderRelationships(relationships, Object.keys(relationships)));
+    if (sourceCode.length) parts.push(this.renderSourceCode(sourceCode));
+    if ((blastRadius.dependents || []).length || (blastRadius.tests || []).length) parts.push(this.renderBlastRadius(blastRadius.dependents || [], blastRadius.tests || []));
+    const alertKeys = Object.keys(alerts).filter(k => alerts[k] && (Array.isArray(alerts[k]) ? alerts[k].length > 0 : true));
+    if (alertKeys.length) parts.push(this.renderAlerts(alerts, alertKeys));
+
+    return parts.join('');
+  }
+
+  private renderEngineDataflow(dfResult: any): string {
+    const results: any[] = dfResult.results || [];
+    if (results.length === 0) return '';
+    let html = `<div class="df-section"><div class="df-section-hdr">数据流引擎 (tree-sitter)</div>`;
+    for (const r of results) {
+      if (r.error) {
+        html += `<div class="df-df-file"><span class="df-df-fname">${this.esc(r.file)}</span> <span class="df-meta-hint">${this.esc(r.error)}</span></div>`;
+        continue;
+      }
+      const scopes: any[] = r.scopes || [];
+      const shared: any[] = r.shared || [];
+      if (scopes.length === 0 && shared.length === 0) continue;
+      html += `<div class="df-df-file"><div class="df-df-fname">${this.esc(r.file)}</div>`;
+      if (scopes.length > 0) {
+        html += `<table class="df-df-table"><thead><tr><th>函数</th><th>读取</th><th>写入</th><th>触发</th><th>异步/回调</th><th>调用序列</th></tr></thead><tbody>`;
+        for (const s of scopes) {
+          html += `<tr><td class="df-df-scope">${this.esc(s.name)}</td>
+            <td>${(s.reads || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.writes || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.triggers || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.awaits_callbacks || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.sequence_calls || []).map(this.esc).join(', ') || '—'}</td></tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+      if (shared.length > 0) {
+        html += `<div class="df-df-shared-hdr">共享变量</div>`;
+        for (const sh of shared) {
+          html += `<div class="df-df-shared"><span class="df-df-var">${this.esc(sh.var)}</span>
+            <span class="df-df-rw">读: ${(sh.readers || []).map(this.esc).join(', ') || '—'}</span>
+            <span class="df-df-rw">写: ${(sh.writers || []).map(this.esc).join(', ') || '—'}</span></div>`;
+        }
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  private renderFlow(flow: any): string {
+    const steps = flow.path || [];
+    if (steps.length === 0) return '';
+    const rows = steps.map((s: any) => {
+      if (s.edge) {
+        return `<div class="df-flow-edge"><span class="df-flow-arrow">↓</span><span class="df-flow-ekind">${this.esc(s.edge)}</span></div>`;
+      }
+      const loc = s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—';
+      return `<div class="df-flow-node"><span class="df-flow-kind">${this.esc(s.kind || '')}</span><span class="df-flow-name">${this.esc(s.name || '')}</span><span class="df-flow-loc">${this.esc(loc)}</span></div>`;
+    }).join('');
+    return `<div class="df-section"><div class="df-section-hdr">数据流路径 (${Math.floor(steps.length / 2) + 1} 节点, ${Math.floor(steps.length / 2)} 跳)</div><div class="df-flow">${rows}</div></div>`;
+  }
+
+  private renderRelationships(relationships: any, keys: string[]): string {
+    const rows = keys.map(kind => {
+      const edges = relationships[kind] || [];
+      const items = edges.slice(0, 30).map((e: any) =>
+        `<div class="df-rel-item"><span class="df-rel-src">${this.esc(e.source)}</span> → <span class="df-rel-tgt">${this.esc(e.target)}</span></div>`).join('');
+      const more = edges.length > 30 ? `<div class="df-table-more">…及其他 ${edges.length - 30} 条</div>` : '';
+      return `<div class="df-rel-group"><div class="df-rel-kind">${this.esc(kind)} (${edges.length})</div>${items}${more}</div>`;
+    }).join('');
+    return `<div class="df-section"><div class="df-section-hdr">关系</div>${rows}</div>`;
+  }
+
+  private renderSourceCode(sources: any[]): string {
+    const snippets = sources.slice(0, 8).map((s: any) =>
+      `<div class="df-src-item"><div class="df-src-loc">${this.esc(s.file || '')}${s.line ? ':' + s.line : ''}</div><pre class="df-src-code">${this.esc(s.code || '')}</pre></div>`).join('');
+    const more = sources.length > 8 ? `<div class="df-table-more">…及其他 ${sources.length - 8} 个片段</div>` : '';
+    return `<div class="df-section"><div class="df-section-hdr">源码 (${sources.length})</div>${snippets}${more}</div>`;
+  }
+
+  private renderBlastRadius(dependents: any[], tests: any[]): string {
+    const depItems = dependents.slice(0, 20).map((d: any) =>
+      `<div class="df-br-item">${this.esc(d.name)} <span class="df-br-loc">${this.esc(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`).join('');
+    const testItems = tests.slice(0, 10).map((t: any) =>
+      `<div class="df-br-item df-br-test">🧪 ${this.esc(t.name)} <span class="df-br-loc">${this.esc(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`).join('');
+    return `<div class="df-section"><div class="df-section-hdr">影响范围</div>
+      ${dependents.length > 0 ? `<div class="df-br-sub">依赖者 (${dependents.length})</div>${depItems}${dependents.length > 20 ? `<div class="df-table-more">…及其他 ${dependents.length - 20} 个</div>` : ''}` : ''}
+      ${tests.length > 0 ? `<div class="df-br-sub">相关测试 (${tests.length})</div>${testItems}${tests.length > 10 ? `<div class="df-table-more">…及其他 ${tests.length - 10} 个</div>` : ''}` : ''}</div>`;
+  }
+
+  private renderAlerts(alerts: any, keys: string[]): string {
+    const rows = keys.map(k => {
+      const v = alerts[k];
+      const display = Array.isArray(v) ? `${v.length} 项` : String(v);
+      return `<div class="df-alert-row"><span class="df-alert-key">${this.esc(k)}</span>: ${this.esc(display)}</div>`;
+    }).join('');
+    return `<div class="df-section"><div class="df-section-hdr">架构提醒</div>${rows}</div>`;
+  }
+
+  // ── Quick explore (engine, secondary) ─────────────────
+
+  private async doExplore(query: string): Promise<void> {
+    if (!query) return;
+    this.selectedTraceId = null;
+    this.selectedTrace = null;
+    this.right.innerHTML = `<div class="df-loading">探索中…</div>`;
+
+    try {
+      let raw = await invoke<string>('hologram_explore', { query, symbols: [], includeSource: true });
+      let explore = JSON.parse(raw);
+
+      if ((explore.meta?.totalSymbolsFound || 0) === 0 && this.onParseQuery) {
+        try {
+          const symbols = await this.onParseQuery(query);
+          if (symbols.length > 0) {
+            raw = await invoke<string>('hologram_explore', { query, symbols, includeSource: true });
+            explore = JSON.parse(raw);
+          }
+        } catch { /* Agent unavailable */ }
+      }
+
+      const fileSet = new Set<string>();
+      (explore.flow?.path || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
+      (explore.sourceCode || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
+      (explore.blastRadius?.dependents || []).forEach((d: any) => { if (d.file) fileSet.add(d.file); });
+
+      let dfResult: any = null;
+      const files = Array.from(fileSet);
+      if (files.length > 0) {
+        try {
+          const dfRaw = await invoke<string>('hologram_dataflow', { files });
+          dfResult = JSON.parse(dfRaw);
+        } catch { /* optional */ }
+      }
+
+      this.right.innerHTML = this.renderEngineExplore(explore) + (dfResult ? this.renderEngineDataflow(dfResult) : '');
+    } catch (e: any) {
+      this.right.innerHTML = `<div class="df-empty">探索失败: ${e?.message || e}</div>`;
+    }
   }
 
   // ── Drag ──────────────────────────────────────────────
@@ -551,6 +613,8 @@ export class DataflowPanel {
     this.grip.removeEventListener('pointermove', this.onResizeMove);
     this.grip.removeEventListener('pointerup', this.onResizeEnd);
   };
+
+  // ── Util ──────────────────────────────────────────────
 
   private esc(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

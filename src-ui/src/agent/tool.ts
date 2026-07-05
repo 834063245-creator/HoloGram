@@ -583,31 +583,60 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       readOnly: () => true,
       execute: (args) => exec('hologram_dataflow', args),
     },
-    // ── dataflow_save — persist engine query results to .hologram/dataflow/ ──
+    // ── dataflow_save — persist Agent-produced trace to .hologram/dataflow/ ──
     {
       name: () => 'dataflow_save',
       description: () =>
-        '保存数据流探索结果到 .hologram/dataflow/，供面板历史查看。先调 hologram_explore 或 hologram_dataflow 拿到结果，再调此工具保存。面板可加载已保存结果。',
+        '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。content 是你写的结构化追踪报告（markdown），会直接渲染给用户。query 是用户原始问题，用于索引。一次追踪调一次 save。',
       parameters: () => ({
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: '原始查询字符串，用于面板历史展示',
+            description: '用户原始查询，用于面板列表展示和后续检索',
+          },
+          content: {
+            type: 'string',
+            description: '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。',
           },
           exploreResult: {
             type: 'string',
-            description: 'hologram_explore 返回的完整 JSON 字符串（可选）',
+            description: 'hologram_explore 返回的完整 JSON 字符串（可选，引擎原始数据）',
           },
           dataflowResult: {
             type: 'string',
-            description: 'hologram_dataflow 返回的完整 JSON 字符串（可选）',
+            description: 'hologram_dataflow 返回的完整 JSON 字符串（可选，引擎原始数据）',
           },
         },
-        required: ['query'],
+        required: ['query', 'content'],
       }),
       readOnly: () => false,
-      execute: (args) => agentInvoke('dataflow_save', args),
+      execute: async (args) => {
+        const result = await agentInvoke('dataflow_save', args);
+        window.dispatchEvent(new CustomEvent('dataflow:saved'));
+        return result;
+      },
+    },
+    // ── dataflow_query — load saved traces ──
+    {
+      name: () => 'dataflow_query',
+      description: () =>
+        '查询已保存的数据流追踪结果。traceId 为空时列出所有已存追踪的摘要（traceId/query/createdAt）。传 traceId 加载完整追踪内容（含 Agent 写的 content 和引擎原始数据）。用于回顾之前的分析结论、对比变更前后的数据流。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          traceId: {
+            type: 'string',
+            description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。',
+          },
+          list: {
+            type: 'boolean',
+            description: '传 true 返回轻量摘要列表（不传 traceId 时默认开启）',
+          },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => agentInvoke('dataflow_query', args),
     },
   ];
 }
