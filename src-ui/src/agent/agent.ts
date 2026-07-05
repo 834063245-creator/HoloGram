@@ -18,6 +18,7 @@ import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { bus } from '../ui/events';
 import { log } from './logger';
 import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
+import { SessionStore } from './session-store';
 
 // ---- Event types ----
 
@@ -89,6 +90,8 @@ export interface AgentOptions {
   recentKeep?: number;
   /** Max output tokens per turn (0 = provider default 32000) */
   maxTokens?: number;
+  /** Session ID for persistence. Generated if not provided. */
+  sessionId?: string;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -171,12 +174,17 @@ export class Agent {
   // Pending memory updates (queued from memory:saved event, applied at safe boundary)
   private _pendingMemoryUpdates: string[] = [];
 
+  // Session persistence
+  sessionId: string;
+  private sessionStore: SessionStore | null = null;
+
   constructor(
     prov: Provider,
     tools: ToolRegistry,
     systemPrompt: string,
     opts: AgentOptions = {},
     sink: EventSink = () => {},
+    sessionStore?: SessionStore,
   ) {
     this.prov = prov;
     this.tools = tools;
@@ -188,6 +196,9 @@ export class Agent {
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
     this.sink = sink;
+
+    this.sessionId = opts.sessionId || `session-${Date.now()}`;
+    this.sessionStore = sessionStore || null;
 
     this.session = [];
     if (systemPrompt) {
@@ -217,6 +228,38 @@ export class Agent {
   setSession(msgs: Message[]): void {
     this.session = msgs;
     ++this.sessionGen;
+  }
+
+  /** Fire-and-forget session save — never blocks the agent loop. */
+  private _saveSession(): void {
+    if (!this.sessionStore) return;
+    this.sessionStore.save(this.sessionId, this.session).catch(() => {});
+  }
+
+  /** Resume from a persisted session. Returns null if session not found or empty. */
+  static async resume(
+    prov: Provider,
+    tools: ToolRegistry,
+    systemPrompt: string,
+    sessionId: string,
+    sessionStore: SessionStore,
+    opts: AgentOptions = {},
+    sink: EventSink = () => {},
+  ): Promise<Agent | null> {
+    const msgs = await sessionStore.load(sessionId);
+    if (msgs.length === 0) return null;
+
+    const agent = new Agent(prov, tools, '', { ...opts, sessionId }, sink, sessionStore);
+    // Restore system prompt at position 0
+    if (systemPrompt) {
+      if (msgs.length > 0 && msgs[0].role === 'system') {
+        msgs[0] = { role: 'system', content: systemPrompt };
+      } else {
+        msgs.unshift({ role: 'system', content: systemPrompt });
+      }
+    }
+    agent.setSession(msgs);
+    return agent;
   }
 
   getLastUsage(): Usage | undefined {
@@ -384,7 +427,10 @@ export class Agent {
         tool_calls: calls,
       });
 
-      if (calls.length === 0 && this._pendingInserts.length === 0) return; // model gave final answer — but keep looping if user inserted messages
+      if (calls.length === 0 && this._pendingInserts.length === 0) {
+        this._saveSession();
+        return; // model gave final answer — but keep looping if user inserted messages
+      }
 
       // ---- Execute ----
       log.info('agent', 'execute batch', {
@@ -400,6 +446,9 @@ export class Agent {
           name: calls[i].name,
         });
       }
+
+      // Save session after each complete turn (fire-and-forget)
+      this._saveSession();
 
       // Compact if needed before next turn
       this.maybeCompact(usage);
