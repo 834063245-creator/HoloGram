@@ -51,13 +51,16 @@ pub(crate) async fn hologram_dataflow(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// dataflow_save — persist engine query results as JSON
+// dataflow_save — persist Agent-produced trace content as JSON
 // ═══════════════════════════════════════════════════════════════
 // ponytail: JSON files in .hologram/dataflow/ — no SQLite schema, no migrations.
+// `content` is the Agent's free-form trace (markdown or structured text).
+// `exploreResult` / `dataflowResult` are legacy engine dumps; still accepted.
 
 #[tauri::command]
 pub(crate) async fn dataflow_save(
     query: String,
+    content: Option<String>,
     explore_result: Option<String>,
     dataflow_result: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
@@ -73,6 +76,7 @@ pub(crate) async fn dataflow_save(
     let record = serde_json::json!({
         "traceId": trace_id,
         "query": query,
+        "content": content,
         "exploreResult": explore_result,
         "dataflowResult": dataflow_result,
         "createdAt": now.to_rfc3339(),
@@ -86,12 +90,15 @@ pub(crate) async fn dataflow_save(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// dataflow_query — list recent traces or load a specific one
+// dataflow_query — list summaries or load a specific trace
 // ═══════════════════════════════════════════════════════════════
+// trace_id=Some → load full trace. trace_id=None + list=true → summaries.
+// trace_id=None + list=false/absent → full content list (legacy).
 
 #[tauri::command]
 pub(crate) async fn dataflow_query(
     trace_id: Option<String>,
+    list: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     let root = crate::utils::workspace_path(&state)?;
@@ -109,7 +116,7 @@ pub(crate) async fn dataflow_query(
         return Ok(content);
     }
 
-    // List recent traces (newest first)
+    // Collect entries (newest first)
     let mut entries: Vec<_> = fs::read_dir(&dir)
         .map_err(|e| format!("读取目录失败: {e}"))?
         .filter_map(|e| e.ok())
@@ -122,10 +129,50 @@ pub(crate) async fn dataflow_query(
         .collect();
 
     entries.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Summary mode — lightweight list for panel/Agent browsing
+    if list.unwrap_or(false) {
+        let summaries: Vec<serde_json::Value> = entries.into_iter().take(100).filter_map(|(p, _)| {
+            let raw = fs::read_to_string(&p).ok()?;
+            let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            Some(serde_json::json!({
+                "traceId": v.get("traceId").and_then(|x| x.as_str()).unwrap_or(""),
+                "query": v.get("query").and_then(|x| x.as_str()).unwrap_or(""),
+                "createdAt": v.get("createdAt").and_then(|x| x.as_str()).unwrap_or(""),
+                "hasContent": v.get("content").and_then(|x| x.as_str()).map(|c| !c.is_empty()).unwrap_or(false),
+            }))
+        }).collect();
+        return Ok(serde_json::json!({ "traces": summaries }).to_string());
+    }
+
+    // Full content list (legacy)
     let traces: Vec<serde_json::Value> = entries.into_iter().take(50).filter_map(|(p, _)| {
         let content = fs::read_to_string(&p).ok()?;
         serde_json::from_str::<serde_json::Value>(&content).ok()
     }).collect();
 
     Ok(serde_json::json!({ "traces": traces }).to_string())
+}
+
+// ═══════════════════════════════════════════════════════════════
+// dataflow_delete — remove a saved trace
+// ═══════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub(crate) async fn dataflow_delete(
+    trace_id: String,
+    state: tauri::State<'_, crate::WorkspaceState>,
+) -> Result<String, String> {
+    let root = crate::utils::workspace_path(&state)?;
+    let path = PathBuf::from(&root)
+        .join(".hologram")
+        .join("dataflow")
+        .join(format!("{trace_id}.json"));
+
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("删除失败: {e}"))?;
+        Ok(serde_json::json!({ "deleted": trace_id }).to_string())
+    } else {
+        Err(format!("追踪记录不存在: {trace_id}"))
+    }
 }
