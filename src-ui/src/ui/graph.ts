@@ -905,8 +905,10 @@ export class StarGraph {
     // ── Post-processing pipeline ──
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // ponytail: bloom at 1/4 resolution — full-res bloom on 4K pixelRatio=2
+    // is ~16M pixels × 5 blur passes = GPU murder. Quarter-res fixes it.
     this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(container.clientWidth, container.clientHeight),
+      new THREE.Vector2(Math.floor(container.clientWidth / 4), Math.floor(container.clientHeight / 4)),
       0.35,  // strength — low default, bright objects still bloom on hover
       0.3,   // radius — tight bloom, no global glow fog
       0.85,  // threshold — only bright things bloom (hover highlights)
@@ -4198,7 +4200,6 @@ export class StarGraph {
       await this._renderImpl(graph);
     } catch (e) {
       console.error('[StarGraph] render crashed:', e);
-      // Attempt recovery: clear state, show minimal status
       try { this.clearGraph(); } catch { /* best effort */ }
       this.updateStatus(0, 0);
     }
@@ -4665,7 +4666,7 @@ export class StarGraph {
         const opacity = edgeOpacityByDepth(g.depth);
         const lw = edgeWidthByDepth(g.depth);
 
-        // ── Base: solid dim line (structural skeleton) ──
+        // ── Base: solid dim line with subtle flow breathing ──
         const baseGeo = new LineSegmentsGeometry();
         baseGeo.setPositions(v);
         baseGeo.setColors(cl);
@@ -4673,51 +4674,12 @@ export class StarGraph {
           vertexColors: true, transparent: true, opacity,
           linewidth: lw, resolution, depthWrite: false, blending: THREE.AdditiveBlending,
         });
+        // ponytail: static edge opacity — no per-frame breathing, set once
         const baseLines = new LineSegments2(baseGeo, baseMat);
         baseLines.userData['edgeDepth'] = g.depth;
         baseLines.userData['edgeType'] = g.edgeType;
         baseLines.computeLineDistances();
         this.edgeGroup.add(baseLines); this.edgeLineGroups.push(baseLines);
-
-        // ── Flow: dashed overlay — bright dashes flow source→target via dashOffset ──
-        const flowGeo = new LineSegmentsGeometry();
-        flowGeo.setPositions([...v]); // clone — separate geometry for dashed line distances
-        flowGeo.setColors(cl);
-        const flowMat = new LineMaterial({
-          vertexColors: true, transparent: true,
-          opacity: 0.02,                        // ponytail: slightly above base — subtle flow
-          linewidth: lw,
-          resolution, depthWrite: false, blending: THREE.AdditiveBlending,
-          dashed: true,
-          dashScale: 1,
-          dashSize: 2.5,                        // small bright "packet"
-          gapSize: 35,                          // large gap → 2-4 dashes per edge
-          dashOffset: Math.random() * 37.5,
-        });
-        flowMat.userData['pulsePhase'] = Math.random() * Math.PI * 2; // for opacity breathing
-        flowMat.userData['flowSpeed'] = 0.8 + g.depth * 0.35;        // deeper = faster
-
-        // ── Comet-tail shader: soft fade at dash edges instead of hard clip ──
-        flowMat.onBeforeCompile = (shader) => {
-          shader.fragmentShader = shader.fragmentShader.replace(
-            'if ( mod( vLineDistance + dashOffset, dashSize + gapSize ) > dashSize ) discard; // todo - FIX',
-            `float _cfPos = mod( vLineDistance + dashOffset, dashSize + gapSize );
-            float _cfFade = dashSize * 0.4;
-            // leading edge fade-in
-            if (_cfPos < _cfFade) alpha *= _cfPos / _cfFade;
-            // trailing edge fade-out
-            if (_cfPos > dashSize - _cfFade) alpha *= (dashSize - _cfPos) / _cfFade;
-            // gap — keep discard
-            if (_cfPos > dashSize) discard;`
-          );
-        };
-
-        const flowLines = new LineSegments2(flowGeo, flowMat);
-        flowLines.userData['edgeDepth'] = g.depth;
-        flowLines.userData['edgeType'] = g.edgeType;
-        flowLines.userData['isFlowOverlay'] = true;
-        flowLines.computeLineDistances();
-        this.edgeGroup.add(flowLines); this.edgeLineGroups.push(flowLines);
       }
     }
   }
@@ -5182,27 +5144,18 @@ export class StarGraph {
   // ponytail: no separate particle system — dashOffset animation on LineMaterial handles flow.
   private initEdgeParticles(_pos: Float32Array, _data: EdgeData[]): void { /* no-op: flow dashes built in buildEdges */ }
 
-  // ── Animate edge flow — decrement dashOffset on all dashed edge materials ──
-  private animateEdgeParticles(): void {
-    // ponytail: speed varies by coupling depth, opacity breathes slowly — "alive" without being louder
-    const baseSpeed = 1.2;
-    const pulseFreq = 0.7; // slow breath — ~9s cycle
-    const pulseAmp = 0.004; // subtle ±0.004 around base 0.015
-    const baseOpacity = 0.02;
-    for (const lines of this.edgeLineGroups) {
-      const mat = lines.material as LineMaterial;
-      if (!mat.dashed) continue;
-      const flowSpeed = (mat.userData['flowSpeed'] as number) || baseSpeed;
-      const phase = (mat.userData['pulsePhase'] as number) || 0;
-      mat.dashOffset -= flowSpeed;
-      mat.opacity = baseOpacity + Math.sin(this.pulseTime * pulseFreq + phase) * pulseAmp;
-    }
-  }
-
   // ── Animate ──────────────────────────────────────────────
+
+  private _lastFrameTime = 0;
 
   private animate(): void {
     this.animId = requestAnimationFrame(() => this.animate());
+
+    // ponytail: cap at 30fps — GTX 1060 can't hold 60 on 2846 nodes + 6193 edges
+    const now = performance.now();
+    if (now - this._lastFrameTime < 33.33) return;
+    this._lastFrameTime = now;
+
     const isMinimal = false;
     const isFull = true;
     // Auto-rotation disabled
@@ -5214,8 +5167,7 @@ export class StarGraph {
       this.holoGrid.position.y = Math.min(this.camera.position.y, this.holoGridY);
     }
 
-    if (!isMinimal) this.animateEdgeParticles();
-    if (isMinimal) {
+    if (false) { // ponytail: minimal-mode fast path (disabled — isMinimal always false)
       this.controls.update();
       this.composer.render();
       return;
@@ -5347,6 +5299,8 @@ export class StarGraph {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    // ponytail: bloom at 1/4 res — composer.setSize resets it to full, clamp back
+    this.bloomPass.resolution.set(Math.floor(w / 4), Math.floor(h / 4));
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).resolution.set(w, h);
     }
