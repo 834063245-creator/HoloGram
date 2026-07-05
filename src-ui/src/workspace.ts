@@ -579,7 +579,7 @@ export class Workspace {
       else if (ev.kind === EventKind.ToolResult && ev.tool) onStatus(`${ev.tool.err ? '✗' : '✓'} ${ev.tool.name}`);
     };
     const agent = new Agent(this.prov, dataflowTools, DATAFLOW_SYSTEM_PROMPT, {
-      temperature: 0.3, maxSteps: 20,
+      temperature: 0.3, maxSteps: 0, contextWindow: 500_000,
     }, sink);
     const prompt = `用户输入：${query}\n\n` +
       `项目根目录：${this.path}\n` +

@@ -831,7 +831,7 @@ export class Agent {
       }
       if (m.reasoning_content) totalChars += m.reasoning_content.length;
     }
-    return Math.ceil(totalChars / 3.5);
+    return Math.ceil(totalChars / 2.5);
   }
 
   /** Check if an error looks like a context-length exceedance. */
@@ -859,12 +859,31 @@ export class Agent {
       const tailCount = Math.max(4, this.recentKeep);
       const start = Math.max(head + 4, msgs.length - tailCount); // at least 4 compactable messages
       if (start - head < 4) {
-        this.sink({ kind: EventKind.Notice, level: 'info', text: '对话太短，无需压缩' });
-        return '';
+        // ponytail: not enough messages to summarize but context is too long → force-truncate
+        const truncated: Message[] = [
+          ...msgs.slice(0, head),
+          { role: 'user' as const, content: '<truncated-context>\n前面的消息因上下文过长已被截断。\n</truncated-context>' },
+          ...msgs.slice(Math.max(head, msgs.length - tailCount)),
+        ];
+        this.session = truncated;
+        ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this.sink({ kind: EventKind.Notice, level: 'info', text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
+        return 'truncated';
       }
       const region = msgs.slice(head, start);
       const summary = await this.summarizeRegion(signal, region);
-      if (!summary) return '';
+      if (!summary) {
+        // ponytail: summarization failed, force-truncate as fallback
+        const truncated: Message[] = [
+          ...msgs.slice(0, head),
+          { role: 'user' as const, content: '<truncated-context>\n前面的消息因压缩失败已被截断。\n</truncated-context>' },
+          ...msgs.slice(Math.max(head, msgs.length - tailCount)),
+        ];
+        this.session = truncated;
+        ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this.sink({ kind: EventKind.Notice, level: 'info', text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
+        return 'truncated';
+      }
 
       const compacted: Message[] = [
         ...msgs.slice(0, head),

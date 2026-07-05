@@ -596,11 +596,12 @@ export function createDataflowTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'dataflow_save',
       description: () =>
-        'Save a dataflow trace to persistent storage. traceJson must be a complete JSON object with traceId, resource, description, language, files_involved, nodes, edges, source_snippets, and test metadata. On save, Layer 1 (snippet anchor) and Layer 2 (dataflow engine cross-validation) run automatically, updating edge confidence and status. Used by the Dataflow Agent after tracing a resource.',
+        'Save a dataflow trace to persistent storage. traceJson must be a complete JSON object with trace_id, resource, description, language, files_involved, nodes, edges, source_snippets, and test metadata. On save, Layer 1 (snippet anchor) and Layer 2 (dataflow engine cross-validation) run automatically. Set overwrite:true when updating an existing trace (e.g. adding test metadata). Omit or set false when creating a new trace — the backend will reject duplicate trace_ids.',
       parameters: () => ({
         type: 'object',
         properties: {
           traceJson: { type: 'string', description: 'Complete trace JSON string' },
+          overwrite: { type: 'boolean', description: 'Set true to overwrite an existing trace. Set false or omit when creating new traces.' },
         },
         required: ['traceJson'],
       }),

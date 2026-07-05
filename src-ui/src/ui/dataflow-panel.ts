@@ -299,7 +299,6 @@ export class DataflowPanel {
           <button class="df-btn-test" data-tid="${t.trace_id}">${iconHtml('link', 13)} ${t.test_file ? '测试 ✓' : '绑定测试'}</button>
           <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
           <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
-          <button class="df-btn-diff" data-tid="${t.trace_id}">${iconHtml('diff', 13)} 版本对比</button>
           <button class="df-btn-del" data-tid="${t.trace_id}">${iconHtml('trash', 13)} 删除</button>
         </div>`;
       const delBtn = this.detailEl.querySelector('.df-btn-del') as HTMLElement | null;
@@ -336,7 +335,7 @@ export class DataflowPanel {
           testBtn.onclick = async () => {
             if (!confirm(`解绑测试文件 ${t.test_file}?`)) return;
             const updated = { ...t, test_file: '', test_status: '' };
-            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated) });
+            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated), overwrite: true });
             await this.showDetail(t.trace_id);
             this.refresh();
             this.showBanner(`${iconHtml('check-circle', 13)} 已解绑测试`, 'ok');
@@ -355,7 +354,7 @@ export class DataflowPanel {
               if (!selected) return;
               const path = selected as string;
               const updated = { ...t, test_file: path };
-              await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated) });
+              await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated), overwrite: true });
               await this.showDetail(t.trace_id);
               this.refresh();
               this.showBanner(`${iconHtml('check-circle', 13)} 已绑定测试: ${path}`, 'ok');
@@ -368,20 +367,26 @@ export class DataflowPanel {
       // 重追踪：复用 resource + description，spawn 新 Agent，version 自动递增
       const retraceBtn = this.detailEl.querySelector('.df-btn-retrace') as HTMLElement | null;
       if (retraceBtn) retraceBtn.onclick = async () => {
-        if (!this.onNewTrace) return;
+        if (!this.onNewTrace) { this.showBanner('工作区未打开', 'warn'); return; }
         retraceBtn.textContent = '追踪中…';
         this.statusEl.style.display = 'block';
         this.statusEl.innerHTML = `<div class="df-status-title">重追踪 ${t.resource}…</div>`;
         const ctrl = new AbortController();
         try {
-          await this.onNewTrace(`重新追踪 ${t.resource}：${t.description || '数据流追踪'}`, (line) => {
+          const oldResource = t.resource;
+          const oldTraceId = t.trace_id;
+          await this.onNewTrace(`重新追踪 ${oldResource}：${t.description || '数据流追踪'}`, (line) => {
             const row = document.createElement('div');
             row.className = 'df-status-line';
             row.textContent = line;
             this.statusEl.appendChild(row);
             this.statusEl.scrollTop = this.statusEl.scrollHeight;
           }, ctrl.signal);
+          // deprecate old version, then refresh to show only the new active one
+          await invoke<string>('dataflow_delete', { traceId: oldTraceId, hard: false });
           await this.refresh();
+          const newest = this.traces.find((tr: any) => tr.resource === oldResource && tr.status !== 'deprecated');
+          if (newest) this.showDetail(newest.trace_id);
           this.showBanner('✓ 重追踪完成', 'ok');
         } catch (e: any) {
           this.showBanner(`✗ 重追踪失败: ${e?.message || e}`, 'err');
@@ -416,7 +421,7 @@ export class DataflowPanel {
         save.onclick = async () => {
           try {
             const parsed = JSON.parse(ta.value);
-            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(parsed) });
+            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(parsed), overwrite: true });
             this.showDetail(t.trace_id);
             this.refresh();
             this.showBanner(`${iconHtml('check-circle', 13)} 已保存`, 'ok');
@@ -424,26 +429,6 @@ export class DataflowPanel {
             this.showBanner(`${iconHtml('close', 13)} 保存失败: ${e?.message || e}`, 'err');
           }
         };
-      };
-      // 版本对比：取最新两个版本，逐字段 diff nodes/edges/元数据
-      const diffBtn = this.detailEl.querySelector('.df-btn-diff') as HTMLElement | null;
-      if (diffBtn) diffBtn.onclick = async () => {
-        try {
-          const listRaw = await invoke<string>('dataflow_list', { limit: 100 });
-          const versions = (JSON.parse(listRaw).traces || [])
-            .filter((x: any) => x.resource === t.resource)
-            .sort((a: any, b: any) => a.trace_id.localeCompare(b.trace_id));
-          if (versions.length < 2) {
-            this.showBanner('只有 1 个版本，无需对比', 'warn');
-            return;
-          }
-          const v1 = JSON.parse(await invoke<string>('dataflow_query', { traceId: versions[versions.length - 2].trace_id })).trace;
-          const v2 = JSON.parse(await invoke<string>('dataflow_query', { traceId: versions[versions.length - 1].trace_id })).trace;
-          const diffHtml = this.diffTraces(v1, v2, versions[versions.length - 2].trace_id, versions[versions.length - 1].trace_id);
-          this.detailEl.innerHTML = `<div class="df-diff"><div class="df-section-hdr">${t.resource} 版本对比</div>${diffHtml}
-            <button class="df-btn-back">← 返回</button></div>`;
-          (this.detailEl.querySelector('.df-btn-back') as HTMLElement).onclick = () => this.showDetail(t.trace_id);
-        } catch (e: any) { this.showBanner(`✗ 对比失败: ${e?.message || e}`, 'err'); }
       };
     } catch (e: any) {
       this.detailEl.innerHTML = `<div class="df-empty">渲染失败: ${e?.message || e}</div>`;
@@ -502,31 +487,6 @@ export class DataflowPanel {
     return `<div class="df-edges-table">
       <div class="df-edges-th"><span>From</span><span></span><span>To</span><span>Kind</span><span>置信度</span></div>
       ${rows}${more}</div>`;
-  }
-
-  /** 逐字段 diff 两个 trace 版本：nodes（id 差集）、edges（from→to:kind 差集）、元数据变化。 */
-  private diffTraces(v1: any, v2: any, id1: string, id2: string): string {
-    const n1: Set<string> = new Set((v1?.nodes || []).map((n: any) => n.id));
-    const n2: Set<string> = new Set((v2?.nodes || []).map((n: any) => n.id));
-    const addedNodes: string[] = [...n2].filter(x => !n1.has(x));
-    const removedNodes: string[] = [...n1].filter(x => !n2.has(x));
-    const e1: Set<string> = new Set((v1?.edges || []).map((e: any) => `${e.from}→${e.to}:${e.kind}`));
-    const e2: Set<string> = new Set((v2?.edges || []).map((e: any) => `${e.from}→${e.to}:${e.kind}`));
-    const addedEdges: string[] = [...e2].filter(x => !e1.has(x));
-    const removedEdges: string[] = [...e1].filter(x => !e2.has(x));
-    const metaChanges: string[] = [];
-    for (const k of ['status', 'test_status', 'language', 'description']) {
-      const a = v1?.[k] || '', b = v2?.[k] || '';
-      if (a !== b) metaChanges.push(`${k}: "${a}" → "${b}"`);
-    }
-    const row = (label: string, items: string[], cls: string) =>
-      items.length ? `<div class="df-diff-row df-diff-${cls}"><span class="df-diff-label">${label}</span> ${items.map(this.escapeHtml).join(', ')}</div>` : '';
-    return `<div class="df-diff-versions">${id1} → ${id2}</div>
-      <div class="df-diff-section"><div class="df-diff-hdr">元数据</div>${metaChanges.length ? metaChanges.map(m => `<div class="df-diff-row">${this.escapeHtml(m)}</div>`).join('') : '<div class="df-empty">无变化</div>'}</div>
-      <div class="df-diff-section"><div class="df-diff-hdr">节点 (+${addedNodes.length} -${removedNodes.length})</div>
-        ${row('新增', addedNodes, 'add')}${row('移除', removedNodes, 'del')}${(!addedNodes.length && !removedNodes.length) ? '<div class="df-empty">无变化</div>' : ''}</div>
-      <div class="df-diff-section"><div class="df-diff-hdr">边 (+${addedEdges.length} -${removedEdges.length})</div>
-        ${row('新增', addedEdges, 'add')}${row('移除', removedEdges, 'del')}${(!addedEdges.length && !removedEdges.length) ? '<div class="df-empty">无变化</div>' : ''}</div>`;
   }
 
   private showBanner(text: string, kind: 'ok' | 'warn' | 'err'): void {
