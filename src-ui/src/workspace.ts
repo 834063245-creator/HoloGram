@@ -401,7 +401,12 @@ export class Workspace {
       };
       const schemas = await loadHologramSchemas();
       for (const tool of schemas.map(s => mcpSchemaToTool(s, holoExec))) { registry.register(tool); }
-      for (const tool of createDataflowTools(holoExec)) { registry.register(tool); }
+      // Dataflow tools are Tauri commands, not hologram MCP tools — use agentInvoke
+      const dataflowExec: ToolExecutor = async (name, args) => {
+        const result = await agentInvoke<string>(name, args);
+        return typeof result === 'string' ? result : JSON.stringify(result);
+      };
+      for (const tool of createDataflowTools(dataflowExec)) { registry.register(tool); }
       dbg('setupAgent', `${schemas.length} hologram tools registered (dynamic)`);
     }
 
