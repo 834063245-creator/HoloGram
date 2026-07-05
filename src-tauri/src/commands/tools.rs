@@ -221,6 +221,22 @@ pub(crate) async fn read_file_content(
     Ok(numbered.join("\n"))
 }
 
+/// Batch-read multiple memory files at once — avoids N IPC round-trips.
+/// Returns a JSON map: { "path": "content", ... }
+#[tauri::command]
+pub(crate) fn read_memory_batch(
+    paths: Vec<String>,
+) -> Result<String, String> {
+    let mut map = serde_json::Map::new();
+    for path in &paths {
+        match std::fs::read_to_string(path) {
+            Ok(content) => { map.insert(path.clone(), serde_json::Value::String(content)); }
+            Err(_) => { map.insert(path.clone(), serde_json::Value::Null); }
+        }
+    }
+    serde_json::to_string(&map).map_err(|e| format!("序列化失败: {}", e))
+}
+
 #[tauri::command]
 pub(crate) async fn read_file_base64(
     file_path: String,

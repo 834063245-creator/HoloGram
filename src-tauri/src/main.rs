@@ -152,6 +152,7 @@ fn main() {
             commands::tools::list_directory,
             commands::tools::list_directory_flat,
             commands::tools::read_file_content,
+            commands::tools::read_memory_batch,
             commands::tools::read_file_base64,
             commands::tools::write_file_content,
             commands::tools::log_append,
