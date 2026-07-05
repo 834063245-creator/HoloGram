@@ -40,6 +40,9 @@ const TYPE_ICONS: Record<string, string> = {
   commit_clean: iconHtml('check-circle', 10),
   check: iconHtml('chart', 10),
   analyze: iconHtml('refresh', 10),
+  incremental_update: iconHtml('refresh', 10),
+  incremental_fallback: iconHtml('alert', 10),
+  watcher_full_reanalyze: iconHtml('refresh', 10),
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -57,6 +60,9 @@ const TYPE_LABELS: Record<string, string> = {
   commit_clean: '变更通过',
   check: '简报',
   analyze: '重分析',
+  incremental_update: '增量更新',
+  incremental_fallback: '增量回退',
+  watcher_full_reanalyze: '全量重分析',
 };
 
 export class TimelinePanel {
@@ -218,6 +224,20 @@ export class TimelinePanel {
       html += `<button class="tl-ask-btn" title="问 Agent 关于这次变更">${iconHtml('agent', 10)}</button>`;
       html += `</div>`;
       if (ev.summary) html += `<div class="tl-event-summary">${escapeHtml(ev.summary)}${isCheckEvent ? ` <span class="tl-check-badge ${checkPassed ? 'tl-check-badge-pass' : 'tl-check-badge-fail'}">${checkPassed ? '✓ 通过' : '✗ 未通过'}</span>` : ''}</div>`;
+      // Render clickable file chips from properties.files (e.g. ["src/ui/timeline.ts (modified)", ...])
+      const filesProp = ev.properties?.['files'];
+      if (Array.isArray(filesProp) && filesProp.length > 0) {
+        html += '<div class="tl-event-files">';
+        for (const entry of filesProp) {
+          const entryStr = String(entry);
+          // "path/to/file.ts (modified)" → {relPath, action}
+          const m = entryStr.match(/^(.+?)\s+\(([^)]+)\)$/);
+          const relPath = m ? m[1] : entryStr;
+          const action = m ? m[2] : '';
+          html += `<span class="tl-file-chip" data-tl-relpath="${escapeHtml(relPath)}" title="${escapeHtml(entryStr)}">${escapeHtml(relPath)}<span class="tl-file-chip-action">${escapeHtml(action)}</span></span>`;
+        }
+        html += '</div>';
+      }
       html += `</div></div>`;
     }
 
@@ -272,6 +292,18 @@ export class TimelinePanel {
               break;
             }
           }
+        }
+      });
+    });
+
+    // Wire up file-chip clicks → open file via relative path
+    this.content.querySelectorAll('.tl-file-chip').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const relPath = (el as HTMLElement).dataset['tlRelpath'];
+        if (relPath && this.path) {
+          const fullPath = this.path.replace(/\\/g, '/').replace(/\/$/, '') + '/' + relPath;
+          shell.navigateToFile(fullPath);
         }
       });
     });

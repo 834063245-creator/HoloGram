@@ -110,7 +110,7 @@ describe('ChatPanel session persistence', () => {
   // ═══════════════════════════════════════════════════════════════
 
   describe('stripLineNumbers', () => {
-    const strip = (s: string) => (ChatPanel as any).stripLineNumbers(s);
+    const strip = (s: string) => ChatPanel.stripLineNumbers(s);
 
     it('removes single line number prefix', () => {
       const input = '     1\t{"id":1,"label":"test"}';

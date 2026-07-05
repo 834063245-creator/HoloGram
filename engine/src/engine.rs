@@ -972,11 +972,24 @@ impl Engine {
                     "[engine watcher] incremental done in {:.1}s",
                     elapsed
                 );
+                // ponytail: show relative paths so frontend can render clickable links.
+                // Cap at 5 to keep summary readable.
+                let file_entries: Vec<String> = changed_files.iter()
+                    .map(|(p, a)| {
+                        let rel = p.strip_prefix(root).unwrap_or(p);
+                        format!("{} ({})", rel.display(), a)
+                    })
+                    .collect();
+                let summary = if file_entries.len() <= 5 {
+                    file_entries.join("  ")
+                } else {
+                    format!("{} … +{} more", file_entries[..5].join("  "), file_entries.len() - 5)
+                };
                 let _ = engine_record_timeline_with_props(
                     "incremental_update",
                     None,
-                    &format!("增量更新完成：{} 文件，{:.1}s", count, elapsed),
-                    &serde_json::json!({"count": count, "elapsed_secs": elapsed}),
+                    &summary,
+                    &serde_json::json!({"count": count, "elapsed_secs": elapsed, "files": file_entries}),
                 );
                 if let Some(ref cb) = on_change {
                     cb(String::from(r#"{"status":"updated"}"#));

@@ -3225,6 +3225,18 @@
       font-size: calc(10px * var(--font-scale)); color: var(--starlight-dim); line-height: 1.35;
       margin-top: 1px; word-break: break-word;
     }
+    .tl-event-files { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .tl-file-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-family: var(--font-mono); font-size: calc(9px * var(--font-scale));
+      color: var(--signal); background: rgba(145,180,225,0.06);
+      border: 1px solid rgba(145,180,225,0.12); border-radius: 3px;
+      padding: 1px 6px; cursor: pointer; transition: all var(--snap);
+    }
+    .tl-file-chip:hover { background: rgba(145,180,225,0.14); border-color: var(--signal); }
+    .tl-file-chip-action {
+      font-size: calc(8px * var(--font-scale)); color: var(--text-muted);
+    }
     .tl-event-meta { font-size: calc(10px * var(--font-scale)); color: var(--text-muted); margin-top: 1px; }
     .tl-event-nodes { font-size: calc(10px * var(--font-scale)); color: var(--text-muted); margin-top: 2px; }
     .tl-event-node-link {
