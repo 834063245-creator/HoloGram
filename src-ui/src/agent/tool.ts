@@ -583,12 +583,34 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       readOnly: () => true,
       execute: (args) => exec('hologram_dataflow', args),
     },
+    // ── dataflow_save — persist engine query results to .hologram/dataflow/ ──
+    {
+      name: () => 'dataflow_save',
+      description: () =>
+        '保存数据流探索结果到 .hologram/dataflow/，供面板历史查看。先调 hologram_explore 或 hologram_dataflow 拿到结果，再调此工具保存。面板可加载已保存结果。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: '原始查询字符串，用于面板历史展示',
+          },
+          exploreResult: {
+            type: 'string',
+            description: 'hologram_explore 返回的完整 JSON 字符串（可选）',
+          },
+          dataflowResult: {
+            type: 'string',
+            description: 'hologram_dataflow 返回的完整 JSON 字符串（可选）',
+          },
+        },
+        required: ['query'],
+      }),
+      readOnly: () => false,
+      execute: (args) => agentInvoke('dataflow_save', args),
+    },
   ];
 }
-
-// ═══════════════════════════════════════════════════════
-// (dataflow trace management tools removed — engine queries replace them)
-// ═══════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════
 // MCP 动态工具工厂 — Step 1: 从 MCP tools/list 自动生成

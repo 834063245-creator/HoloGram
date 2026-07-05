@@ -367,6 +367,32 @@ async function init(): Promise<void> {
    // Dataflow panel (floating window)
    dataflowPanel = new DataflowPanel(document.body);
 
+   // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
+   dataflowPanel.onParseQuery = async (nl: string): Promise<string[]> => {
+     try {
+       if (!workspace?.prov) return [];
+       const gen = workspace.prov.stream(new AbortController().signal, {
+         messages: [{
+           role: 'user',
+           content: `Extract code symbol names (functions, classes, modules, variables) from this query. Return ONLY a JSON array of strings, nothing else. If no symbols found, return [].\n\nQuery: "${nl}"`,
+         }],
+         tools: [],
+         temperature: 0,
+         max_tokens: 200,
+       });
+       const { ChunkType } = await import('./provider/types');
+       const parts: string[] = [];
+       for await (const chunk of gen) {
+         if (chunk.type === ChunkType.Text && chunk.text) parts.push(chunk.text);
+       }
+       const text = parts.join('').trim();
+       // Extract JSON array from response
+       const match = text.match(/\[[\s\S]*\]/);
+       if (match) return JSON.parse(match[0]);
+       return [];
+     } catch { return []; }
+   };
+
   // ── AppShell wiring — replaces bus commands with explicit dispatch ──
   // Register all panels so shell knows who's open
   shell.register({ id: 'check', isOpen: () => checkPanel.isOpen() });

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // DataflowPanel — live dataflow explorer.
 // Entry: NL query → engine resolves symbols → graph flow + per-function reads/writes/triggers.
-// No trace storage, no Agent snapshots. Both graph engine + dataflow engine results.
+// Results persisted via dataflow_save → .hologram/dataflow/ JSON files.
 
 import { invoke } from '../bridge';
 import { shell } from './app-shell';
@@ -15,6 +15,7 @@ interface HistoryEntry {
   query: string;
   timestamp: number;
   symbolsFound: number;
+  traceId?: string;
 }
 
 export class DataflowPanel {
@@ -26,6 +27,9 @@ export class DataflowPanel {
   private openState = false;
   private history: HistoryEntry[] = [];
   private resultData: any = null;
+
+  /** Called when NL query fails heuristic symbol resolution. Agent resolves NL→symbols. */
+  onParseQuery?: (nl: string) => Promise<string[]>;
 
   private dragging = false;
   private resizing = false;
@@ -143,17 +147,29 @@ export class DataflowPanel {
 
     try {
       // 1. Graph-level: NL→symbols + flow paths + relationships
-      const raw = await invoke<string>('hologram_explore', { query, symbols: [], includeSource: true });
-      const explore = JSON.parse(raw);
+      let raw = await invoke<string>('hologram_explore', { query, symbols: [], includeSource: true });
+      let explore = JSON.parse(raw);
+
+      // 2. NL fallback: heuristic parser missed → let Agent resolve NL→symbols
+      if ((explore.meta?.totalSymbolsFound || 0) === 0 && this.onParseQuery) {
+        try {
+          const symbols = await this.onParseQuery(query);
+          if (symbols.length > 0) {
+            raw = await invoke<string>('hologram_explore', { query, symbols, includeSource: true });
+            explore = JSON.parse(raw);
+          }
+        } catch { /* Agent unavailable — continue with empty results */ }
+      }
+
       this.resultData = explore;
 
-      // 2. Collect unique file paths from results
+      // 3. Collect unique file paths from results
       const fileSet = new Set<string>();
       (explore.flow?.path || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
       (explore.sourceCode || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
       (explore.blastRadius?.dependents || []).forEach((d: any) => { if (d.file) fileSet.add(d.file); });
 
-      // 3. Dataflow engine: per-function reads/writes/triggers on discovered files
+      // 4. Dataflow engine: per-function reads/writes/triggers on discovered files
       let dfResult: any = null;
       const files = Array.from(fileSet);
       if (files.length > 0) {
@@ -165,9 +181,21 @@ export class DataflowPanel {
 
       this.renderResults(explore, dfResult);
 
-      // save to history
+      // 5. Persist engine results (Agent↔panel shared storage)
       const symbolsFound = explore.meta?.totalSymbolsFound || 0;
-      this.history.unshift({ query, timestamp: Date.now(), symbolsFound });
+      try {
+        const saveResult = await invoke<string>('dataflow_save', {
+          query,
+          exploreResult: JSON.stringify(explore),
+          dataflowResult: dfResult ? JSON.stringify(dfResult) : null,
+        });
+        const { traceId } = JSON.parse(saveResult);
+        this.history.unshift({ query, timestamp: Date.now(), symbolsFound, traceId });
+      } catch {
+        // dataflow_save unavailable (no workspace) — fallback to localStorage-only
+        this.history.unshift({ query, timestamp: Date.now(), symbolsFound });
+      }
+
       if (this.history.length > MAX_HISTORY) this.history.length = MAX_HISTORY;
       this.saveHistory();
       this.renderHistory();
@@ -400,8 +428,9 @@ export class DataflowPanel {
     list.innerHTML = this.history.map((h, i) => {
       const time = new Date(h.timestamp);
       const timeStr = `${time.getMonth() + 1}/${time.getDate()} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
+      const savedBadge = h.traceId ? ` <span class="df-hist-saved">💾</span>` : '';
       return `<div class="df-hist-item" data-idx="${i}">
-        <div class="df-hist-query">${this.esc(h.query.length > 40 ? h.query.slice(0, 40) + '…' : h.query)}</div>
+        <div class="df-hist-query">${this.esc(h.query.length > 40 ? h.query.slice(0, 40) + '…' : h.query)}${savedBadge}</div>
         <div class="df-hist-sub">${timeStr} · ${h.symbolsFound} 符号</div>
       </div>`;
     }).join('');
@@ -409,13 +438,36 @@ export class DataflowPanel {
       (el as HTMLElement).onclick = () => {
         const idx = parseInt((el as HTMLElement).dataset['idx'] || '0');
         const entry = this.history[idx];
-        if (entry) {
-          const input = this.left.querySelector('.df-query-input') as HTMLTextAreaElement;
-          if (input) input.value = entry.query;
+        if (!entry) return;
+        const input = this.left.querySelector('.df-query-input') as HTMLTextAreaElement;
+        if (input) input.value = entry.query;
+        // Load saved trace if available, otherwise re-run live query
+        if (entry.traceId) {
+          this.loadTrace(entry.traceId);
+        } else {
           this.doExplore(entry.query);
         }
       };
     });
+  }
+
+  /** Load a saved trace from dataflow_query and render it. */
+  private async loadTrace(traceId: string): Promise<void> {
+    this.right.innerHTML = `<div class="df-loading">加载已保存结果…</div>`;
+    try {
+      const raw = await invoke<string>('dataflow_query', { traceId });
+      const trace = JSON.parse(raw);
+      const explore = trace.exploreResult ? JSON.parse(trace.exploreResult) : null;
+      const dfResult = trace.dataflowResult ? JSON.parse(trace.dataflowResult) : null;
+      if (explore) {
+        this.resultData = explore;
+        this.renderResults(explore, dfResult);
+      } else {
+        this.right.innerHTML = `<div class="df-empty">已保存结果为空。</div>`;
+      }
+    } catch (e: any) {
+      this.right.innerHTML = `<div class="df-empty">加载失败: ${e?.message || e} — 点击按钮重新探索</div>`;
+    }
   }
 
   // ── Open / close ──────────────────────────────────────
