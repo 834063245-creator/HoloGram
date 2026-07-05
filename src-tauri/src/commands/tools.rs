@@ -960,7 +960,16 @@ fn build_edit_snippet(content: &str, old: &str, new: &str, match_line: usize) ->
 fn preview_content(content: &str, max_width: usize, max_lines: usize) -> String {
     content.lines()
         .take(max_lines)
-        .map(|l| if l.len() > max_width { format!("{}…", &l[..max_width]) } else { l.to_string() })
+        .map(|l| {
+            if l.len() <= max_width {
+                l.to_string()
+            } else {
+                // ponytail: byte-slice on &str panics inside multi-byte chars (e.g. CJK).
+                // chars().take() always lands on a char boundary.
+                let truncated: String = l.chars().take(max_width).collect();
+                format!("{}…", truncated)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2141,6 +2150,46 @@ pub(crate) fn agent_isolation_prune(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_content_ascii_short_lines_passthrough() {
+        let input = "hello\nworld\nfoo bar baz";
+        let out = preview_content(input, 80, 20);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn preview_content_truncates_long_ascii_line() {
+        let input = "a".repeat(100);
+        let out = preview_content(&input, 80, 20);
+        assert!(out.ends_with('…'), "should end with ellipsis: {out:?}");
+        assert_eq!(out.chars().count(), 81); // 80 chars + '…' (3 bytes)
+    }
+
+    #[test]
+    fn preview_content_does_not_panic_on_multibyte_utf8() {
+        // '给' is 3 bytes (0xE7 0xBB 0x99). 79 bytes of ASCII + '给' = 82 bytes.
+        // max_width=80 would land inside '给' at byte 80 — the old byte-slice panicked.
+        let input = "x".repeat(79) + "给中文内容测试";
+        let out = preview_content(&input, 80, 20);
+        assert!(out.ends_with('…'), "should truncate safely at char boundary: {out:?}");
+    }
+
+    #[test]
+    fn preview_content_all_cjk_line_truncated() {
+        let input = "中".repeat(100);
+        let out = preview_content(&input, 80, 20);
+        assert!(out.ends_with('…'), "should truncate CJK-only line: {out:?}");
+        // 80 CJK chars = 240 bytes, should produce 80 chars + '…'
+        assert_eq!(out.chars().count(), 81);
+    }
+
+    #[test]
+    fn preview_content_respects_max_lines() {
+        let input = "a\nb\nc\nd\ne\nf";
+        let out = preview_content(input, 80, 2);
+        assert_eq!(out.lines().count(), 2);
+    }
 
     #[test]
     fn hologram_tools_list_returns_27_tools() {

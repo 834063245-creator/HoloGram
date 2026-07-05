@@ -1197,7 +1197,7 @@ export class ChatPanel {
 
   /** Strip read_file_content's cat -n line numbers. Rust backend always returns
    *  "{:>6}\t{content}" format. Session JSON files need this stripped before parse. */
-  private static stripLineNumbers(text: string): string {
+  static stripLineNumbers(text: string): string {
     return text.split('\n').map(l => l.replace(/^\s*\d+\t/, '')).join('\n');
   }
 
