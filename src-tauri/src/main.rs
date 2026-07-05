@@ -130,13 +130,6 @@ fn main() {
             commands::hologram::hologram_gate_check,
             commands::dataflow::hologram_dataflow,
             commands::hologram::get_full_graph,
-            // ── Dataflow trace management ──
-            commands::dataflow::dataflow_save,
-            commands::dataflow::dataflow_query,
-            commands::dataflow::dataflow_list,
-            commands::dataflow::dataflow_delete,
-            commands::dataflow::dataflow_verify,
-            commands::dataflow::dataflow_stale_check,
             // ── Workspace commands ──
             commands::workspace::workspace_activate,
             commands::workspace::workspace_deactivate,
