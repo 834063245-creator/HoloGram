@@ -16,6 +16,19 @@
 import { invoke } from '../bridge';
 import type { Tool } from './tool';
 
+// ── Fact-save authorization (self-consuming sentinel) ──
+// /remember command sets this; the next hologram_memory_save consumes it.
+// Agent has no way to call authorizeFactSave() — only chat.ts's /remember handler can.
+let _factAuthorized = false;
+/** Called by /remember handler BEFORE sending the save prompt to the Agent. */
+export function authorizeFactSave(): void { _factAuthorized = true; }
+/** Consume the authorization. Returns true exactly once per /remember. */
+function consumeFactAuthorization(): boolean {
+  const was = _factAuthorized;
+  _factAuthorized = false;
+  return was;
+}
+
 // ── Types ──
 
 type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
@@ -357,15 +370,16 @@ function parseFrontmatter(raw: string): MemoryFile {
 
   const name = (fm.match(/^name:\s*(.+)$/m) || [])[1]?.trim() || 'unknown';
   const desc = (fm.match(/^description:\s*(.+)$/m) || [])[1]?.trim() || '';
-  const typeRaw = (fm.match(/^\s+type:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
+  // ponytail: accept both indented (under metadata:) and top-level formats
+  const typeRaw = (fm.match(/^\s*type:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
   const type = (
     ['user', 'feedback', 'project', 'reference'] as const
   ).includes(typeRaw as any) ? (typeRaw as MemoryFile['type']) : 'reference';
-  const confRaw = (fm.match(/^\s+confidence:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
+  const confRaw = (fm.match(/^\s*confidence:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
   const confidence = (
     ['fact', 'reference', 'background', 'suppressed'] as const
   ).includes(confRaw as any) ? (confRaw as Confidence) : 'reference';
-  const hitCountRaw = (fm.match(/^\s+hit_count:\s*(\d+)$/m) || [])[1];
+  const hitCountRaw = (fm.match(/^\s*hit_count:\s*(\d+)$/m) || [])[1];
   const hit_count = hitCountRaw ? parseInt(hitCountRaw, 10) : 0;
 
   return { name, description: desc, type, confidence, hit_count, content: body, raw };
@@ -528,9 +542,14 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           confidence = 'reference';
         }
         let factDowngraded = false;
+        const authorized = consumeFactAuthorization();
         if (confidence === 'fact') {
-          confidence = 'reference';
-          factDowngraded = true;
+          if (authorized) {
+            // /remember authorized — fact passes through
+          } else {
+            confidence = 'reference';
+            factDowngraded = true;
+          }
         }
         const scope = (args.scope as 'project' | 'global') || 'project';
         await mm.save(

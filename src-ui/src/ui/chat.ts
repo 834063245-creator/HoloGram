@@ -2274,6 +2274,9 @@ export class ChatPanel {
       }
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
+      // Authorize fact-level save — consumed by the next hologram_memory_save call.
+      // The Agent cannot call this function; only /remember can trigger it.
+      import('../agent/memory.js').then(m => m.authorizeFactSave());
       this.sendAgentText(
         `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
       );
