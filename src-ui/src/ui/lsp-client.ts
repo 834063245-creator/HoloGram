@@ -15,6 +15,9 @@ import type { editor, languages, IRange, IDisposable } from 'monaco-editor';
 
 let lspSessions = new Map<string, number>(); // language -> session_id
 let completionProviders: IDisposable[] = [];
+let hoverProviders: IDisposable[] = [];
+let definitionProviders: IDisposable[] = [];
+let referenceProviders: IDisposable[] = [];
 
 // ── LSP → Monaco CompletionItemKind mapping ──
 // LSP enum values differ from Monaco/VS Code numbering.
@@ -126,6 +129,31 @@ export function didChange(sessionId: number, uri: string, text: string): void {
   }).catch(() => {});
 }
 
+/** Notify LSP that a document is closed. Call when tab is closed. */
+export function didClose(sessionId: number, uri: string): void {
+  invoke('lsp_request', {
+    sessionId,
+    method: 'textDocument/didClose',
+    params: { textDocument: { uri } },
+  }).catch(() => {});
+}
+
+/** Stop all LSP sessions and dispose providers. Call on workspace switch. */
+export async function stopAllLsp(): Promise<void> {
+  for (const p of completionProviders) p.dispose();
+  for (const p of hoverProviders) p.dispose();
+  for (const p of definitionProviders) p.dispose();
+  for (const p of referenceProviders) p.dispose();
+  completionProviders = [];
+  hoverProviders = [];
+  definitionProviders = [];
+  referenceProviders = [];
+  for (const [language, sid] of lspSessions) {
+    await invoke('lsp_stop', { sessionId: sid }).catch(() => {});
+  }
+  lspSessions.clear();
+}
+
 /** Register Monaco completion provider backed by LSP (synchronous response). */
 export function registerCompletionProvider(
   lang: string,
@@ -168,7 +196,7 @@ export function registerHoverProvider(
   sessionId: number,
   monaco: typeof import('monaco-editor'),
 ): void {
-  monaco.languages.registerHoverProvider(lang, {
+  const provider = monaco.languages.registerHoverProvider(lang, {
     provideHover: async (model, position) => {
       try {
         const result = await invoke<any>('lsp_request', {
@@ -206,6 +234,7 @@ export function registerHoverProvider(
       return null;
     },
   });
+  hoverProviders.push(provider);
 }
 
 /** Register Monaco definition provider backed by LSP. */
@@ -214,7 +243,7 @@ export function registerDefinitionProvider(
   sessionId: number,
   monaco: typeof import('monaco-editor'),
 ): void {
-  monaco.languages.registerDefinitionProvider(lang, {
+  const provider = monaco.languages.registerDefinitionProvider(lang, {
     provideDefinition: async (model, position) => {
       try {
         const result = await invoke<any>('lsp_request', {
@@ -248,6 +277,7 @@ export function registerDefinitionProvider(
       return null;
     },
   });
+  definitionProviders.push(provider);
 }
 
 /** Register Monaco references provider backed by LSP. */
@@ -256,7 +286,7 @@ export function registerReferencesProvider(
   sessionId: number,
   monaco: typeof import('monaco-editor'),
 ): void {
-  monaco.languages.registerReferenceProvider(lang, {
+  const provider = monaco.languages.registerReferenceProvider(lang, {
     provideReferences: async (model, position, _context) => {
       try {
         const result = await invoke<any>('lsp_request', {
@@ -289,6 +319,7 @@ export function registerReferencesProvider(
       return null;
     },
   });
+  referenceProviders.push(provider);
 }
 
 /** Listen for LSP diagnostics and apply markers to the editor. */
