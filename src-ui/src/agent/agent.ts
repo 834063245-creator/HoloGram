@@ -13,67 +13,23 @@ import type {
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import { ToolRegistry } from './tool';
 import type { Tool } from './tool';
-// ponytail: PermissionGate removed — rules evaluated in Rust has_permission_to_use_tool()
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { bus } from '../ui/events';
 import { log } from './logger';
 import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
 import { SessionStore } from './session-store';
+import { StreamingToolExecutor } from './streaming-executor';
 
-// ---- Event types ----
-
-export enum EventKind {
-  TurnStarted = 'turn_started',
-  Reasoning = 'reasoning',
-  Text = 'text',
-  Message = 'message',
-  ToolDispatch = 'tool_dispatch',
-  ToolResult = 'tool_result',
-  ToolProgress = 'tool_progress',
-  Usage = 'usage',
-  Notice = 'notice',
-  SessionChanged = 'session_changed',
-}
-
-export interface ToolEvent {
-  id: string;
-  name: string;
-  args?: string;
-  output?: string;
-  err?: string;
-  read_only: boolean;
-  partial?: boolean;
-  truncated?: boolean;
-}
-
-export interface AgentEvent {
-  kind: EventKind;
-  text?: string;
-  reasoning?: string;
-  tool?: ToolEvent;
-  usage?: Usage;
-  pricing?: Pricing;
-  session_hit?: number;
-  session_miss?: number;
-  level?: 'info' | 'warn' | 'error';
-}
-
-export interface Pricing {
-  cache_hit: number;  // per 1M tokens
-  input: number;      // per 1M tokens
-  output: number;     // per 1M tokens
-  currency: string;
-}
-
-export function computeCost(p: Pricing | undefined, u: Usage | undefined): number {
-  if (!p || !u) return 0;
-  return (u.cache_hit_tokens * p.cache_hit +
-    u.cache_miss_tokens * p.input +
-    u.completion_tokens * p.output) / 1_000_000;
-}
-
-/** Sink receives the agent's typed event stream. */
-export type EventSink = (event: AgentEvent) => void;
+// Shared types — also used internally by this file
+import {
+  EventKind,
+  type AgentEvent,
+  type ToolEvent,
+  type Pricing,
+  type EventSink,
+  computeCost,
+} from './agent-types';
+export { EventKind, type ToolEvent, type AgentEvent, type Pricing, type EventSink, computeCost };
 
 // ---- Agent Options ----
 
@@ -368,8 +324,9 @@ export class Agent {
         toolName: 'thinking',
       });
 
-      // ---- Stream ----
-      let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1);
+      // ---- Stream (with streaming tool executor) ----
+      const executor = new StreamingToolExecutor(this.tools, this.sink);
+      let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
         log.error('agent', 'stream error', { error: String(err.message || err) });
         throw err;
@@ -403,13 +360,8 @@ export class Agent {
       }
 
       // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls.
-      // When the model produces reasoning but no visible output (common after short tool
-      // results like git_stage), synthesize a minimal content so the message can be pushed.
-      // If the user inserted a message during streaming, keep looping — don't exit.
       if (!text && calls.length === 0) {
         if (this._pendingInserts.length > 0 || reasoning) {
-          // Model produced reasoning → push with fallback content; loop continues
-          // if user inserted messages, ends normally if not.
           text = reasoning ? '(思考完成)' : '(等待中)';
         } else {
           log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
@@ -429,21 +381,24 @@ export class Agent {
 
       if (calls.length === 0 && this._pendingInserts.length === 0) {
         this._saveSession();
-        return; // model gave final answer — but keep looping if user inserted messages
+        return;
       }
 
-      // ---- Execute ----
-      log.info('agent', 'execute batch', {
+      // ---- Collect tool results (streaming executor ran them during stream) ----
+      log.info('agent', 'collect streaming results', {
         tools: calls.map(c => c.name),
         count: calls.length,
       });
-      const results = await this.executeBatch(signal, calls);
-      for (let i = 0; i < calls.length; i++) {
+      const pendingResults = await executor.awaitRemaining();
+      // Build results in call order
+      const resultsByCallId = new Map(pendingResults.map(r => [r.call.id, r]));
+      for (const call of calls) {
+        const r = resultsByCallId.get(call.id);
         this.session.push({
           role: 'tool',
-          content: results[i],
-          tool_call_id: calls[i].id,
-          name: calls[i].name,
+          content: r?.output || `error: tool "${call.name}" did not produce a result`,
+          tool_call_id: call.id,
+          name: call.name,
         });
       }
 
@@ -464,6 +419,7 @@ export class Agent {
   private async stream(
     signal: AbortSignal,
     turn: number,
+    executor?: StreamingToolExecutor,
   ): Promise<{
     text: string;
     reasoning: string;
@@ -476,10 +432,11 @@ export class Agent {
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (signal.aborted) {
+        executor?.discard();
         return { text: '', reasoning: '', signature: '', calls: [], usage: undefined, err: new Error('aborted') };
       }
 
-      const result = await this.streamOnce(signal, turn);
+      const result = await this.streamOnce(signal, turn, executor);
 
       // Success — no error, or error was already emitted as notice by streamOnce
       if (!result.err) return result;
@@ -507,6 +464,9 @@ export class Agent {
       // Last attempt — give up
       if (attempt >= MAX_RETRIES) break;
 
+      // Discard any tool calls from the failed attempt
+      executor?.discard();
+
       // Backoff before retry
       const delay = backoffDelay(attempt);
       log.info('agent', `stream retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`, { error: String(lastErr.message || lastErr) });
@@ -531,10 +491,13 @@ export class Agent {
     return { text: '', reasoning: '', signature: '', calls: [], usage: undefined, err: lastErr };
   }
 
-  /** Single stream attempt — no retry logic. */
+  /** Single stream attempt — no retry logic.
+   *  When executor is provided, tool calls are added to it immediately
+   *  (execution starts during stream, not after). */
   private async streamOnce(
     signal: AbortSignal,
     _turn: number,
+    executor?: StreamingToolExecutor,
   ): Promise<{
     text: string;
     reasoning: string;
@@ -589,7 +552,11 @@ export class Agent {
             break;
 
           case ChunkType.ToolCall:
-            if (chunk.tool_call) calls.push(chunk.tool_call);
+            if (chunk.tool_call) {
+              calls.push(chunk.tool_call);
+              // Streaming execution: start tool immediately, don't wait for stream end
+              executor?.addTool(chunk.tool_call);
+            }
             break;
 
           case ChunkType.Usage:
