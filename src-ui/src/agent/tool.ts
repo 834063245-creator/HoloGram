@@ -1630,7 +1630,10 @@ export type SubAgentSpawner = (
   mode?: 'fork' | 'fresh',
 ) => Promise<{ text: string; err?: string }>;
 
-export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
+export function createSubAgentTool(
+  spawner: SubAgentSpawner,
+  pool?: import('./coordinator').SubAgentPool,
+): Tool {
   return {
     name: () => 'agent_spawn',
     description: () =>
@@ -1661,9 +1664,31 @@ export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
       if (!prompt) return '(agent_spawn: prompt is required)';
       const mode = subagentType ? 'fresh' : 'fork';
       const callId = (args['_callId'] as string) || `sub_${Date.now()}`;
+
+      // G2: async spawn via pool — fire-and-forget, parent doesn't block
+      if (pool) {
+        const id = pool.spawn(
+          description,
+          async (onMsg) => {
+            const result = await spawner(description, prompt, onMsg, mode);
+            return result;
+          },
+          (chunk) => {
+            onProgress?.(chunk);
+            bus.emit('agent:sub-progress', { parentToolId: callId, text: chunk });
+          },
+        );
+        bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
+        return JSON.stringify({
+          task_id: id,
+          status: 'started',
+          message: `子Agent已启动: ${description}。结果将通过 task-notification 返回。`,
+        });
+      }
+
+      // Fallback: synchronous spawn (legacy behavior, no pool)
       const startTime = performance.now();
       let stepCount = 0;
-
       bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
 
       const wrappedProgress = (chunk: string) => {
@@ -1687,6 +1712,41 @@ export function createSubAgentTool(spawner: SubAgentSpawner): Tool {
 
       if (result.err) return `[子 Agent 错误] ${result.err}`;
       return result.text;
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// agent_message — send follow-up instructions to a running sub-agent
+// ═══════════════════════════════════════════════════════════════
+
+export function createAgentMessageTool(pool?: import('./coordinator').SubAgentPool): Tool {
+  return {
+    name: () => 'agent_message',
+    description: () =>
+      '向运行中的子Agent发送后续指令。子Agent保留之前加载的上下文。仅对通过 agent_spawn 启动的异步子Agent有效。',
+    parameters: () => ({
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: '子Agent ID，由 agent_spawn 返回的 task_id',
+        },
+        message: {
+          type: 'string',
+          description: '后续指令或问题',
+        },
+      },
+      required: ['to', 'message'],
+    }),
+    readOnly: () => false,
+    execute: async (args) => {
+      if (!pool) return 'agent_message 不可用：未启用异步子Agent池。';
+      const to = args['to'] as string;
+      const message = args['message'] as string;
+      if (!to || !message) return '需要 to 和 message 参数。';
+      const ok = pool.sendMessage(to, message);
+      return ok ? '消息已发送' : '子Agent未找到或已结束';
     },
   };
 }
