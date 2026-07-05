@@ -188,6 +188,50 @@ pub(crate) async fn dataflow_delete(
 }
 
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// Shared freshness assessment — single source of truth for active/stale/broken.
+// Both verify (single trace) and stale_check (bulk) route through this.
+// ═══════════════════════════════════════════════════════
+
+struct Freshness {
+    status: String,
+    snippets_ok: bool,
+    files_exist: bool,
+    new_refs: bool,
+    engine_matches: usize,
+    engine_misses: usize,
+    test_status: String,
+}
+
+/// Run all freshness checks on a trace. Does NOT mutate or save.
+fn assess_freshness(trace: &serde_json::Value, root: &str) -> Freshness {
+    let snippets_ok = validate_snippets(trace, root);
+    let files_exist = check_files_exist(trace, root);
+
+    let resource = trace.get("resource").and_then(|v| v.as_str()).unwrap_or("");
+    let known_files: Vec<String> = trace.get("files_involved")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| s.replace('\\', "/")).collect())
+        .unwrap_or_default();
+    let new_refs = if !resource.is_empty() {
+        check_new_references(resource, &known_files)
+    } else { false };
+
+    let test_file = trace.get("test_file").and_then(|v| v.as_str()).unwrap_or("");
+    let test_status = if !test_file.is_empty() {
+        run_linked_test(test_file, root)
+    } else {
+        String::new()
+    };
+
+    let status = if !snippets_ok || !files_exist || new_refs { "stale".to_string() }
+                 else if test_status.starts_with("0/") { "broken".to_string() }
+                 else { "active".to_string() };
+
+    Freshness { status, snippets_ok, files_exist, new_refs,
+        engine_matches: 0, engine_misses: 0, test_status }
+}
+
 // dataflow_verify — re-run Layer 1-2 + linked test, update metadata
 // ═══════════════════════════════════════════════════════
 
@@ -204,54 +248,44 @@ pub(crate) async fn dataflow_verify(
             .map_err(|e| format!("query: {}", e))?
             .ok_or_else(|| format!("trace {} not found", trace_id))?;
 
-        // Layer 1: snippet anchors
-        let snippets_ok = validate_snippets(&trace, &root);
+        // Shared freshness checks (snippets + files_exist + new_refs + test)
+        let mut f = assess_freshness(&trace, &root);
 
-        // Layer 2: re-cross-validate edges — 写入独立字段
+        // Cross-validate edges (mutates trace with _validation data)
         let engine_matches = cross_validate_edges(&mut trace, &root);
-
-        // Run linked test if present
-        let test_file = trace.get("test_file").and_then(|v| v.as_str()).unwrap_or("");
-        let test_status = if !test_file.is_empty() {
-            run_linked_test(test_file, &root)
-        } else {
-            String::new()
-        };
+        f.engine_matches = engine_matches.0;
+        f.engine_misses = engine_matches.1;
 
         let now = chrono::Utc::now().to_rfc3339();
-        let status = if !snippets_ok { "stale".to_string() }
-                     else if test_status.starts_with("0/") { "broken".to_string() }
-                     else { "active".to_string() };
-
-        trace["status"] = serde_json::json!(status);
+        trace["status"] = serde_json::json!(f.status);
         trace["verified_at"] = serde_json::json!(now);
-        if !test_status.is_empty() {
-            trace["test_status"] = serde_json::json!(test_status);
+        if !f.test_status.is_empty() {
+            trace["test_status"] = serde_json::json!(f.test_status);
         }
         trace["_validation"] = serde_json::json!({
-            "snippets_ok": snippets_ok,
-            "engine_matches": engine_matches.0,
-            "engine_misses": engine_matches.1,
+            "snippets_ok": f.snippets_ok,
+            "engine_matches": f.engine_matches,
+            "engine_misses": f.engine_misses,
+            "files_exist": f.files_exist,
+            "new_refs": f.new_refs,
             "verified_at": now,
         });
 
-        // Save updated trace (full JSON) + update meta columns
         dataflow_save_trace(&conn, &trace)
             .map_err(|e| format!("save: {}", e))?;
 
         Ok(serde_json::json!({
-            "trace_id": trace_id, "status": status,
-            "snippets_ok": snippets_ok, "engine_matches": engine_matches.0,
-            "engine_misses": engine_matches.1,
-            "test_status": test_status, "verified_at": now,
+            "trace_id": trace_id, "status": f.status,
+            "snippets_ok": f.snippets_ok, "engine_matches": f.engine_matches,
+            "engine_misses": f.engine_misses, "files_exist": f.files_exist,
+            "new_refs": f.new_refs, "test_status": f.test_status,
+            "verified_at": now,
         }).to_string())
     }).await.map_err(|e| format!("任务失败: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════
-// dataflow_stale_check — Layer 3: detect stale traces
-// 重跑 Layer 1 snippet 锚点 + 检查 files_involved 存在性 +
-// hologram_search 搜 resource → 对比引用集 → 新引用文件标 stale
+// dataflow_stale_check — bulk verify via assess_freshness (same logic as verify)
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
@@ -287,28 +321,15 @@ pub(crate) async fn dataflow_stale_check(
                 Err(_) => continue,
             };
 
-            let snippets_ok = validate_snippets(&trace, &root);
-            let files_exist = check_files_exist(&trace, &root);
+            let f = assess_freshness(&trace, &root);
 
-            // Layer 3: hologram_search 搜 resource → 对比引用集
-            let resource = trace.get("resource").and_then(|v| v.as_str()).unwrap_or("");
-            let known_files: Vec<String> = trace.get("files_involved")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| s.replace('\\', "/")).collect())
-                .unwrap_or_default();
-            let new_refs = if !resource.is_empty() {
-                check_new_references(resource, &known_files)
-            } else { false };
-
-            let is_stale = !snippets_ok || !files_exist || new_refs;
-
-            if is_stale {
+            if f.status == "stale" {
                 let _ = dataflow_update_meta(&conn, tid, "stale", None, None);
             }
             results.push(serde_json::json!({
-                "trace_id": tid, "stale": is_stale,
-                "snippets_ok": snippets_ok, "files_exist": files_exist,
-                "new_refs": new_refs,
+                "trace_id": tid, "stale": f.status == "stale",
+                "snippets_ok": f.snippets_ok, "files_exist": f.files_exist,
+                "new_refs": f.new_refs,
             }));
         }
 

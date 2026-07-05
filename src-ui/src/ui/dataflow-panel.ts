@@ -295,8 +295,7 @@ export class DataflowPanel {
         ${edgesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">边 <span class="df-sect-count">${edges.length}</span></div>${edgesHtml}</div>` : ''}
         ${snips ? `<div class="df-detail-section"><div class="df-section-hdr">源码片段</div>${snips}</div>` : ''}
         <div class="df-detail-actions">
-          <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 重验证</button>
-          <button class="df-btn-stale" data-tid="${t.trace_id}">${iconHtml('eye', 13)} 过期检查</button>
+          <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 验证</button>
           <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
           <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
           <button class="df-btn-diff" data-tid="${t.trace_id}">${iconHtml('diff', 13)} 版本对比</button>
@@ -318,25 +317,14 @@ export class DataflowPanel {
           const res = JSON.parse(raw);
           await this.showDetail(t.trace_id);
           this.refresh();
-          this.showBanner(`${iconHtml('check-circle', 13)} 重验证完成 · 状态: ${res.status} · 锚点: ${res.snippets_ok ? iconHtml('check-circle', 11) : iconHtml('close', 11)} · 测试: ${res.test_status || '无'}`, 'ok');
+          const ok = (b: boolean) => b ? iconHtml('check-circle', 11) : iconHtml('close', 11);
+          const level = res.status === 'active' ? 'ok' : res.status === 'broken' ? 'warn' : 'warn';
+          const icon = res.status === 'active' ? iconHtml('check-circle', 13) :
+                       res.status === 'broken' ? iconHtml('alert-circle', 13) : iconHtml('alert-circle', 13);
+          this.showBanner(
+            `${icon} 验证完成 · 状态: ${res.status} · 锚点: ${ok(res.snippets_ok)} · 文件: ${ok(res.files_exist)} · 新引用: ${res.new_refs ? iconHtml('alert-circle', 11) : iconHtml('check-circle', 11)} · 测试: ${res.test_status || '无'}`,
+            level);
         } catch (e: any) { verifyBtn.textContent = `✕ ${e?.message || e}`; }
-      };
-      const staleBtn = this.detailEl.querySelector('.df-btn-stale') as HTMLElement | null;
-      if (staleBtn) staleBtn.onclick = async () => {
-        staleBtn.textContent = '检查中…';
-        try {
-          const raw = await invoke<string>('dataflow_stale_check', { traceId: t.trace_id });
-          const res = JSON.parse(raw);
-          const r = res.results?.[0];
-          await this.showDetail(t.trace_id);
-          this.refresh();
-          if (r) {
-            this.showBanner(r.stale
-              ? `${iconHtml('alert-circle', 13)} 已过期 · 锚点: ${r.snippets_ok ? iconHtml('check-circle', 11) : iconHtml('close', 11)} · 文件存在: ${r.files_exist ? iconHtml('check-circle', 11) : iconHtml('close', 11)}`
-              : `${iconHtml('check-circle', 13)} 未过期 · 锚点: ${r.snippets_ok ? iconHtml('check-circle', 11) : iconHtml('close', 11)} · 文件存在: ${r.files_exist ? iconHtml('check-circle', 11) : iconHtml('close', 11)}`,
-              r.stale ? 'warn' : 'ok');
-          }
-        } catch (e: any) { staleBtn.textContent = `✕ ${e?.message || e}`; }
       };
       // 重追踪：复用 resource + description，spawn 新 Agent，version 自动递增
       const retraceBtn = this.detailEl.querySelector('.df-btn-retrace') as HTMLElement | null;
