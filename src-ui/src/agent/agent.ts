@@ -30,6 +30,7 @@ export enum EventKind {
   ToolProgress = 'tool_progress',
   Usage = 'usage',
   Notice = 'notice',
+  SessionChanged = 'session_changed',
 }
 
 export interface ToolEvent {
@@ -214,7 +215,7 @@ export class Agent {
   }
 
   /** Retract one turn: remove user message + following assistant + tool messages
-   *  starting at sessionIndex. Caller is responsible for DOM cleanup. */
+   *  starting at sessionIndex. Notifies UI via SessionChanged event. */
   retractTurnAt(sessionIndex: number): void {
     let end = sessionIndex + 1;
     while (end < this.session.length && this.session[end].role !== 'user') {
@@ -222,6 +223,7 @@ export class Agent {
     }
     this.session.splice(sessionIndex, end - sessionIndex);
     ++this.sessionGen;
+    this.sink({ kind: EventKind.SessionChanged });
   }
 
   /** Predicted session index of the next insert. Call before insertMessage to get index. */

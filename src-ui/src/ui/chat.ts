@@ -2950,6 +2950,10 @@ export class ChatPanel {
       case EventKind.Notice:
         this._addNoticeMessage(ev.text || '', ev.level || 'info');
         break;
+
+      case EventKind.SessionChanged:
+        this._syncMessagesToDOM();
+        break;
     }
   }
 
