@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// DataflowPanel — live dataflow explorer powered by hologram_explore.
-// No trace storage, no Agent snapshots. Engine queries only.
-// Type a natural-language query → engine resolves symbols → renders flow live.
+// DataflowPanel — live dataflow explorer.
+// Entry: NL query → engine resolves symbols → graph flow + per-function reads/writes/triggers.
+// No trace storage, no Agent snapshots. Both graph engine + dataflow engine results.
 
 import { invoke } from '../bridge';
 import { shell } from './app-shell';
@@ -43,7 +43,7 @@ export class DataflowPanel {
     this.el.id = 'dataflow-panel';
     Object.assign(this.el.style, {
       position: 'fixed', zIndex: '78',
-      left: '120px', top: '90px', width: '800px', height: '520px',
+      left: '120px', top: '90px', width: '900px', height: '560px',
       display: 'none', flexDirection: 'column',
     });
 
@@ -51,7 +51,7 @@ export class DataflowPanel {
     this.header = document.createElement('div');
     this.header.className = 'df-panel-header';
     Object.assign(this.header.style, { cursor: 'move', userSelect: 'none' });
-    this.header.innerHTML = `<span class="df-panel-title">数据流探索</span>`;
+    this.header.innerHTML = `<span class="df-panel-title">数据流</span>`;
     const closeBtn = document.createElement('button');
     closeBtn.className = 'df-panel-close';
     closeBtn.innerHTML = iconHtml('close', 15);
@@ -75,7 +75,7 @@ export class DataflowPanel {
     inputArea.className = 'df-query-area';
     const input = document.createElement('textarea');
     input.className = 'df-query-input';
-    input.placeholder = '用自然语言描述要追踪的数据流…\n如: logBuffer 怎么写入落盘的';
+    input.placeholder = '符号名 或 自然语言…\n如: logBuffer 怎么写入落盘的';
     input.rows = 3;
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.doExplore(input.value.trim()); }
@@ -142,17 +142,31 @@ export class DataflowPanel {
     this.right.innerHTML = `<div class="df-loading">探索中…</div>`;
 
     try {
-      const raw = await invoke<string>('hologram_explore', {
-        query,
-        symbols: [],
-        includeSource: true,
-      });
-      const data = JSON.parse(raw);
-      this.resultData = data;
-      this.renderResults(data);
+      // 1. Graph-level: NL→symbols + flow paths + relationships
+      const raw = await invoke<string>('hologram_explore', { query, symbols: [], includeSource: true });
+      const explore = JSON.parse(raw);
+      this.resultData = explore;
+
+      // 2. Collect unique file paths from results
+      const fileSet = new Set<string>();
+      (explore.flow?.path || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
+      (explore.sourceCode || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
+      (explore.blastRadius?.dependents || []).forEach((d: any) => { if (d.file) fileSet.add(d.file); });
+
+      // 3. Dataflow engine: per-function reads/writes/triggers on discovered files
+      let dfResult: any = null;
+      const files = Array.from(fileSet);
+      if (files.length > 0) {
+        try {
+          const dfRaw = await invoke<string>('hologram_dataflow', { files });
+          dfResult = JSON.parse(dfRaw);
+        } catch { /* dataflow engine optional — graph results still render */ }
+      }
+
+      this.renderResults(explore, dfResult);
 
       // save to history
-      const symbolsFound = data.meta?.totalSymbolsFound || 0;
+      const symbolsFound = explore.meta?.totalSymbolsFound || 0;
       this.history.unshift({ query, timestamp: Date.now(), symbolsFound });
       if (this.history.length > MAX_HISTORY) this.history.length = MAX_HISTORY;
       this.saveHistory();
@@ -164,13 +178,13 @@ export class DataflowPanel {
 
   // ── Render results ────────────────────────────────────
 
-  private renderResults(data: any): void {
-    const meta = data.meta || {};
-    const flow = data.flow;
-    const relationships = data.relationships || {};
-    const sourceCode = data.sourceCode || [];
-    const blastRadius = data.blastRadius || {};
-    const alerts = data.architectureAlerts || {};
+  private renderResults(explore: any, dfResult: any): void {
+    const meta = explore.meta || {};
+    const flow = explore.flow;
+    const relationships = explore.relationships || {};
+    const sourceCode = explore.sourceCode || [];
+    const blastRadius = explore.blastRadius || {};
+    const alerts = explore.architectureAlerts || {};
 
     const parts: string[] = [];
 
@@ -178,6 +192,7 @@ export class DataflowPanel {
     parts.push(`<div class="df-result-meta">
       <span>${iconHtml('search', 12)} ${meta.totalSymbolsFound || 0} 个符号</span>
       <span>${iconHtml('file', 12)} ${meta.totalFilesScanned || 0} 个文件</span>
+      ${dfResult ? `<span>${iconHtml('code', 12)} dataflow 引擎</span>` : ''}
       ${meta.hint ? `<span class="df-meta-hint">${this.esc(meta.hint)}</span>` : ''}
     </div>`);
 
@@ -186,10 +201,20 @@ export class DataflowPanel {
       parts.push(this.renderFlow(flow));
     }
 
+    // ═══ Dataflow engine: per-function reads/writes/triggers ═══
+    if (dfResult) {
+      parts.push(this.renderDataflow(dfResult));
+    }
+
     // Relationships
     const relKeys = Object.keys(relationships);
     if (relKeys.length > 0) {
       parts.push(this.renderRelationships(relationships, relKeys));
+    }
+
+    // Source code
+    if (sourceCode.length > 0) {
+      parts.push(this.renderSourceCode(sourceCode));
     }
 
     // Blast radius
@@ -197,11 +222,6 @@ export class DataflowPanel {
     const tests = blastRadius.tests || [];
     if (deps.length > 0 || tests.length > 0) {
       parts.push(this.renderBlastRadius(deps, tests));
-    }
-
-    // Source code
-    if (sourceCode.length > 0) {
-      parts.push(this.renderSourceCode(sourceCode));
     }
 
     // Architecture alerts
@@ -213,19 +233,62 @@ export class DataflowPanel {
       parts.push(this.renderAlerts(alerts, alertKeys));
     }
 
-    // Node IDs for 3D linkage
-    const nodeIds = data.nodeIds || [];
-    if (nodeIds.length > 0) {
-      parts.push(`<div class="df-node-ids">
-        <span class="df-section-hdr">图谱节点 (${nodeIds.length})</span>
-        <div class="df-node-id-list">${nodeIds.slice(0, 20).map((id: string) =>
-          `<span class="df-node-id-chip">${this.esc(id)}</span>`).join('')}
-          ${nodeIds.length > 20 ? `<span class="df-node-id-chip">…及其他 ${nodeIds.length - 20} 个</span>` : ''}
-        </div>
-      </div>`);
+    this.right.innerHTML = parts.join('') || `<div class="df-empty">未找到匹配的数据流。</div>`;
+  }
+
+  /** Render per-file dataflow engine results: scopes (reads/writes/triggers) + shared vars */
+  private renderDataflow(dfResult: any): string {
+    const results: any[] = dfResult.results || [];
+    if (results.length === 0) return '';
+
+    let html = `<div class="df-section"><div class="df-section-hdr">数据流引擎 (tree-sitter)</div>`;
+
+    for (const r of results) {
+      if (r.error) {
+        html += `<div class="df-df-file"><span class="df-df-fname">${this.esc(r.file)}</span> <span class="df-meta-hint">${this.esc(r.error)}</span></div>`;
+        continue;
+      }
+      const scopes: any[] = r.scopes || [];
+      const shared: any[] = r.shared || [];
+      if (scopes.length === 0 && shared.length === 0) continue;
+
+      html += `<div class="df-df-file">
+        <div class="df-df-fname">${this.esc(r.file)}</div>`;
+
+      // Scopes table: function → reads/writes/triggers
+      if (scopes.length > 0) {
+        html += `<table class="df-df-table">
+          <thead><tr><th>函数</th><th>读取</th><th>写入</th><th>触发</th><th>异步/回调</th><th>调用序列</th></tr></thead><tbody>`;
+        for (const s of scopes) {
+          html += `<tr>
+            <td class="df-df-scope">${this.esc(s.name)}</td>
+            <td>${(s.reads || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.writes || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.triggers || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.awaits_callbacks || []).map(this.esc).join(', ') || '—'}</td>
+            <td>${(s.sequence_calls || []).map(this.esc).join(', ') || '—'}</td>
+          </tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+
+      // Shared variables: var → readers / writers
+      if (shared.length > 0) {
+        html += `<div class="df-df-shared-hdr">共享变量</div>`;
+        for (const sh of shared) {
+          html += `<div class="df-df-shared">
+            <span class="df-df-var">${this.esc(sh.var)}</span>
+            <span class="df-df-rw">读: ${(sh.readers || []).map(this.esc).join(', ') || '—'}</span>
+            <span class="df-df-rw">写: ${(sh.writers || []).map(this.esc).join(', ') || '—'}</span>
+          </div>`;
+        }
+      }
+
+      html += `</div>`;
     }
 
-    this.right.innerHTML = parts.join('') || `<div class="df-empty">未找到匹配的数据流。</div>`;
+    html += `</div>`;
+    return html;
   }
 
   private renderFlow(flow: any): string {
