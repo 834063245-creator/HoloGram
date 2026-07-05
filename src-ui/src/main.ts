@@ -223,6 +223,7 @@ function notifyAllPanels(ws: Workspace): void {
   chatPanel.setProjectPath(ws.path);
   timelinePanel.setProjectPath(ws.path);
   hotspotsPanel.setProjectPath(ws.path);
+  FileViewer.get().setProjectPath(ws.path);
   if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().load(ws.path);
   window.dispatchEvent(new CustomEvent('workspace:switched'));
 }

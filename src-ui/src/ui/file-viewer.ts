@@ -17,7 +17,8 @@ function getFontScale(): number {
     return parseFloat(v) || 1;
   } catch { return 1; }
 }
-import { startLsp, didOpen, didChange, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
+import { startLsp, didOpen, didChange, didClose, stopAllLsp, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
+import { ChatPanel } from './chat';
 import { FileTranslator } from './file-translator';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -90,6 +91,7 @@ export class FileViewer {
   private tabs: TabData[] = [];
   private activeIdx = -1;
   private state: WindowState;
+  projectPath: string | null = null;
   private dragging = false;
   private resizing = false;
   private dragStart = { x: 0, y: 0, elX: 0, elY: 0, w: 0, h: 0 };
@@ -666,6 +668,11 @@ export class FileViewer {
       if (!confirmed) return;
     }
 
+    // LSP: notify server that document is closed
+    const lang = tab.model.getLanguageId();
+    const sid = lspSessions.get(lang);
+    if (sid) didClose(sid, tab.model.uri.toString());
+
     tab.model.dispose();
     if (tab.diffModels) {
       tab.diffModels.original.dispose();
@@ -688,6 +695,13 @@ export class FileViewer {
   }
 
   // ── Public API ──
+
+  setProjectPath(path: string | null): void {
+    if (this.projectPath && this.projectPath !== path) {
+      stopAllLsp().catch(() => {});
+    }
+    this.projectPath = path;
+  }
 
   async open(filePath: string, opts?: { noAutoPreview?: boolean; line?: number }): Promise<void> {
     const targetLine = opts?.line;
@@ -755,7 +769,9 @@ export class FileViewer {
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
 
     try {
-      const content = await invoke<string>('read_file_content', { filePath: filePath });
+      const raw = await invoke<string>('read_file_content', { filePath: filePath });
+      // ponytail: read_file_content returns cat -n format. Strip before passing to Monaco/LSP.
+      const content = ChatPanel.stripLineNumbers(raw);
 
       // Dispose temp loading model
       loadingModel.dispose();
@@ -786,8 +802,12 @@ export class FileViewer {
         'shell', 'html', 'css', 'scss', 'less', 'yaml', 'yml',
         'scala', 'r', 'nix', 'ocaml',
       ]);
+      // ponytail: use project root as rootUri so LSP can find tsconfig/pyproject/etc.
+      const rootUri = this.projectPath
+        ? `file:///${this.projectPath.replace(/\\/g, '/')}`
+        : `file:///${filePath}`;
       if (!lspSessions.has(language) && LSP_LANGUAGES.has(language)) {
-        startLsp(language, `file:///${filePath}`).then(sid => {
+        startLsp(language, rootUri).then(sid => {
           if (sid !== null) {
             lspSessions.set(language, sid);
             registerCompletionProvider(language, sid, monaco);
