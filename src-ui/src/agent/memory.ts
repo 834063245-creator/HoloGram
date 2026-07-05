@@ -15,6 +15,7 @@
 
 import { invoke } from '../bridge';
 import type { Tool } from './tool';
+import { bus } from '../ui/events';
 
 // ── Fact-save authorization (self-consuming sentinel) ──
 // /remember command sets this; the next hologram_memory_save consumes it.
@@ -179,28 +180,54 @@ export class MemoryManager {
 
   /** Load all non-suppressed memories from both scopes and format as system prompt section.
    *  Global memories load first, project memories overlay (same name = project wins).
+   *  When memory count exceeds threshold, graph-aware relevance filtering is applied
+   *  to keep only the most relevant memories (facts are always included).
    *  Cached for 5 seconds for rapid session creation. */
-  async loadPromptSection(): Promise<string> {
+  async loadPromptSection(graphNodes?: string[]): Promise<string> {
     const now = Date.now();
     if (this._promptSectionCache && (now - this._promptSectionCacheTime) < 5000) {
       return this._promptSectionCache;
     }
 
-    // Collect from all scopes (global first, project overlay)
+    // Collect from all scopes (global first, project overlay).
+    // Use batch read when there are multiple entries to avoid N IPC round-trips.
     const allByName = new Map<string, { mf: MemoryFile; scope: string }>();
     for (const scope of this.scopes()) {
       const entries = await this.list(scope);
+      if (entries.length === 0) continue;
+
+      // Collect file paths for batch read
+      const filePaths = entries.map(e => this.filePath(e.name, scope));
+      let batchResults: Record<string, string | null> = {};
+
+      if (filePaths.length > 1) {
+        try {
+          const raw = await invoke<string>('read_memory_batch', { paths: filePaths });
+          batchResults = JSON.parse(raw);
+        } catch {
+          // Fall back to individual reads below
+        }
+      }
+
       for (const entry of entries) {
-        if (!allByName.has(entry.name)) {
-          const mf = await this.read(entry.name, scope);
-          if (mf && mf.confidence !== 'suppressed') {
+        let mf: MemoryFile | null = null;
+        const fp = this.filePath(entry.name, scope);
+
+        if (batchResults[fp] !== undefined) {
+          // Used batch result
+          const content = batchResults[fp];
+          mf = content !== null ? parseFrontmatter(content) : null;
+        } else {
+          // Fall back to individual read
+          mf = await this.read(entry.name, scope);
+        }
+
+        if (mf && mf.confidence !== 'suppressed') {
+          if (!allByName.has(entry.name)) {
             allByName.set(entry.name, { mf, scope });
           }
-        }
-        // If same name exists in later scope (project), it overrides earlier (global)
-        if (scope === 'project') {
-          const mf = await this.read(entry.name, 'project');
-          if (mf && mf.confidence !== 'suppressed') {
+          // Project scope overlays global (same name)
+          if (scope === 'project') {
             allByName.set(entry.name, { mf, scope: 'project' });
           }
         }
@@ -214,6 +241,36 @@ export class MemoryManager {
       return section;
     }
 
+    // ── Graph-aware relevance filtering ──
+    // When memories > 10, rank by relevance to current graph nodes.
+    // Facts are always included; reference/background compete for remaining slots.
+    const MEMORY_LIMIT = 10;
+    const allItems = [...allByName.values()];
+    const facts = allItems.filter(i => i.mf.confidence === 'fact');
+    const others = allItems.filter(i => i.mf.confidence !== 'fact');
+
+    let itemsToLoad = allItems;
+    if (allItems.length > MEMORY_LIMIT && graphNodes && graphNodes.length > 0) {
+      // Score each non-fact memory by relevance to graph nodes
+      const scored = others.map(item => ({
+        item,
+        score: scoreMemoryRelevance(item.mf, graphNodes!),
+      }));
+      scored.sort((a, b) => b.score - a.score);
+
+      // Take top (MEMORY_LIMIT - facts.length) reference/background + all facts
+      const refLimit = Math.max(0, MEMORY_LIMIT - facts.length);
+      const topRefs = scored.slice(0, refLimit).map(s => s.item);
+      itemsToLoad = [...facts, ...topRefs];
+
+      // If some memories were filtered out, note it
+      const dropped = allItems.length - itemsToLoad.length;
+      if (dropped > 0) {
+        // ponytail: silent filter — the section note below explains it
+        void dropped;
+      }
+    }
+
     // Group by confidence
     const byConfidence: Record<Confidence, Array<{ mf: MemoryFile; scope: string }>> = {
       fact: [],
@@ -222,13 +279,17 @@ export class MemoryManager {
       suppressed: [],
     };
 
-    for (const item of allByName.values()) {
+    for (const item of itemsToLoad) {
       const c = item.mf.confidence || 'reference';
       if (c === 'suppressed') continue;
       byConfidence[c].push(item);
     }
 
     const parts: string[] = [];
+
+    if (itemsToLoad.length < allItems.length && allItems.length > MEMORY_LIMIT) {
+      parts.push(`> 📌 记忆库共 ${allItems.length} 条，已按当前图上下文过滤显示 ${itemsToLoad.length} 条最相关的。`);
+    }
 
     if (byConfidence.fact.length > 0) {
       parts.push('### 🔒 铁律 (fact)\n用户明确要求的规则。仅作提醒——Agent 仍需基于代码和约束做决策:\n');
@@ -412,6 +473,40 @@ function formatMemoryLine(m: MemoryFile, scope?: string): string {
   return `- **${m.description}**${tag} — ${body}`;
 }
 
+/** Score a memory's relevance to the current graph context.
+ *  Higher score = more likely to be relevant to what the user is working on.
+ *  ponytail: simple substring matching against graph node names — no LLM call needed. */
+function scoreMemoryRelevance(mf: MemoryFile, graphNodes: string[]): number {
+  let score = 0;
+  const haystack = (mf.description + ' ' + mf.content + ' ' + mf.name).toLowerCase();
+
+  for (const node of graphNodes) {
+    const lower = node.toLowerCase();
+    // Exact node name match in memory content
+    if (haystack.includes(lower)) {
+      score += 3;
+      // File-name portion match (last segment after / or \) → stronger signal
+      const filePart = lower.split(/[/\\]/).pop() || '';
+      if (filePart && filePart !== lower && haystack.includes(filePart)) {
+        score += 2;
+      }
+    } else {
+      // Partial word matches
+      const parts = lower.split(/[/\\:.#_-]/);
+      for (const part of parts) {
+        if (part.length > 2 && haystack.includes(part)) {
+          score += 1;
+        }
+      }
+    }
+  }
+
+  // Boost: more recently hit memories are likely more relevant
+  score += Math.min(mf.hit_count, 5);
+
+  return score;
+}
+
 // ── Agent Tools ──
 
 /** Create Agent tools for memory operations. All operate on the given MemoryManager. */
@@ -560,6 +655,13 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           confidence,
           scope,
         );
+        // H1: emit event so agent can inject updated memory into running session
+        bus.emit('memory:saved', {
+          name: args.name as string,
+          description: args.description as string,
+          confidence,
+          scope,
+        });
         const downgradeNote = factDowngraded
           ? ' (注意: fact 级别需用户授权，已自动降为 reference)'
           : '';

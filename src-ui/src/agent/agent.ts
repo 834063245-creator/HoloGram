@@ -168,6 +168,9 @@ export class Agent {
   // Pending user message inserts (queued during tool execution, applied at safe boundary)
   private _pendingInserts: string[] = [];
 
+  // Pending memory updates (queued from memory:saved event, applied at safe boundary)
+  private _pendingMemoryUpdates: string[] = [];
+
   constructor(
     prov: Provider,
     tools: ToolRegistry,
@@ -190,6 +193,15 @@ export class Agent {
     if (systemPrompt) {
       this.session.push({ role: 'system', content: systemPrompt });
     }
+
+    // H1: listen for memory saves during session — inject as system-reminder
+    // ponytail: event listener lives as long as this Agent instance; GC cleans it up.
+    bus.on('memory:saved', ({ name, description, confidence }) => {
+      if (!this._pendingMemoryUpdates) this._pendingMemoryUpdates = [];
+      this._pendingMemoryUpdates.push(
+        `记忆已更新: **${description || name}** (${confidence || 'reference'})`,
+      );
+    });
   }
 
   setHooks(hooks: HookRegistry): void { this.hooks = hooks; }
@@ -249,6 +261,18 @@ export class Agent {
     this.sink({ kind: EventKind.TurnStarted });
   }
 
+  /** Apply queued memory updates at a safe boundary.
+   *  Injected as system-reminder so Agent sees updated memories mid-session. */
+  private _applyPendingMemoryUpdates(): void {
+    if (!this._pendingMemoryUpdates?.length) return;
+    const text = this._pendingMemoryUpdates.join('\n');
+    this.session.push({
+      role: 'user',
+      content: `<system-reminder>${text}</system-reminder>`,
+    });
+    this._pendingMemoryUpdates = [];
+  }
+
   /** Start a fresh conversation — keep system prompt, clear everything else. */
   newSession(): void {
     const sys = this.session.length > 0 && this.session[0].role === 'system'
@@ -293,6 +317,7 @@ export class Agent {
 
       // Apply pending user inserts at the safe boundary (after tool results committed)
       this._applyPendingInserts();
+      this._applyPendingMemoryUpdates();
 
       bus.emit('agent:progress', {
         step: step + 1,

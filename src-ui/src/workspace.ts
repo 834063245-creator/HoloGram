@@ -377,7 +377,8 @@ export class Workspace {
     let globalDir: string | undefined;
     try { globalDir = await invoke<string>('get_global_memory_dir'); } catch { /* ignore */ }
     this.memoryManager = new MemoryManager(this.path, globalDir);
-    try { memorySection = await this.memoryManager.loadPromptSection(); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
+    const graphNodes = extractGraphNodeNames(this.graphData);
+    try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
 
     const prov: Provider =
       active.kind === 'anthropic'
@@ -520,7 +521,7 @@ export class Workspace {
         for (const tool of createTaskTools(new TaskManager())) r.register(tool);
         let memSection = '';
         if (mm) {
-          try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }
+          try { memSection = await mm.loadPromptSection(graphNodes); } catch { /* ignore */ }
         }
         const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection), {
           pricing: defaultPricing(act.kind, act.model),
@@ -658,6 +659,29 @@ export class Workspace {
 // buildSystemPrompt — pure function, reads Workspace state
 // ═══════════════════════════════════════════════════════════════
 
+/** Extract node names from graph data for memory relevance filtering.
+ *  ponytail: simple array extract — graphData.nodes contains file/symbol paths. */
+function extractGraphNodeNames(graphData: unknown): string[] | undefined {
+  if (!graphData || typeof graphData !== 'object') return undefined;
+  const gd = graphData as Record<string, unknown>;
+  const nodes = gd.nodes;
+  if (!nodes) return undefined;
+  if (Array.isArray(nodes)) {
+    return nodes.map((n: unknown) => {
+      if (typeof n === 'string') return n;
+      if (typeof n === 'object' && n !== null) {
+        const obj = n as Record<string, unknown>;
+        return String(obj.id || obj.name || obj.file || '');
+      }
+      return '';
+    }).filter(Boolean);
+  }
+  if (typeof nodes === 'object') {
+    return Object.keys(nodes as Record<string, unknown>);
+  }
+  return undefined;
+}
+
 export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
@@ -671,7 +695,7 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 语言：始终用中文回复。代码和文件名用原样标记。
 行为：诚实——不确定的事不说。工具返回空结果不要编造。提示用户可能需要加载项目。`;
     if (memorySection.trim()) {
-      prompt += `\n\n## 记忆库\n${memorySection}`;
+      prompt += `\n\n## 记忆库\n${memorySection}\n\n> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。`;
     }
     return prompt;
   }
@@ -874,7 +898,9 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 
 ### 当前已保存的记忆
 
-${memorySection.trim() || '暂无。'}`;
+${memorySection.trim() || '暂无。'}
+
+> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。`;
 }
 
 // ═══════════════════════════════════════════════════════════════
