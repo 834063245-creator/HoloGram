@@ -287,7 +287,7 @@ export class DataflowPanel {
             <b>语言:</b> ${t.language || '—'}
             · <b>节点:</b> ${nodes.length}
             · <b>边:</b> ${edges.length}
-            · <b>测试:</b> ${t.test_status || '—'}
+            · <b>测试:</b> ${t.test_file ? `<code class="df-test-file">${this.escapeHtml(t.test_file)}</code>` : '—'} ${t.test_status || ''}
           </div>
           ${confBadges ? `<div class="df-conf-row">${confBadges}</div>` : ''}
         </div>
@@ -296,6 +296,7 @@ export class DataflowPanel {
         ${snips ? `<div class="df-detail-section"><div class="df-section-hdr">源码片段</div>${snips}</div>` : ''}
         <div class="df-detail-actions">
           <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 验证</button>
+          <button class="df-btn-test" data-tid="${t.trace_id}">${iconHtml('link', 13)} ${t.test_file ? '测试 ✓' : '绑定测试'}</button>
           <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
           <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
           <button class="df-btn-diff" data-tid="${t.trace_id}">${iconHtml('diff', 13)} 版本对比</button>
@@ -326,6 +327,44 @@ export class DataflowPanel {
             level);
         } catch (e: any) { verifyBtn.textContent = `✕ ${e?.message || e}`; }
       };
+      // 绑定/解绑测试文件
+      const testBtn = this.detailEl.querySelector('.df-btn-test') as HTMLElement | null;
+      if (testBtn) {
+        if (t.test_file) {
+          // Click to unbind (with confirmation)
+          testBtn.title = `已绑定: ${t.test_file}\n点击解绑`;
+          testBtn.onclick = async () => {
+            if (!confirm(`解绑测试文件 ${t.test_file}?`)) return;
+            const updated = { ...t, test_file: '', test_status: '' };
+            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated) });
+            await this.showDetail(t.trace_id);
+            this.refresh();
+            this.showBanner(`${iconHtml('check-circle', 13)} 已解绑测试`, 'ok');
+          };
+        } else {
+          testBtn.onclick = async () => {
+            try {
+              const { open } = await import('@tauri-apps/plugin-dialog');
+              const selected = await open({
+                title: '选择测试文件',
+                filters: [
+                  { name: '测试文件', extensions: ['test.ts', 'test.js', 'test.py', 'test.go', 'test.rs', 'spec.ts', 'spec.js', 'ts', 'js', 'py', 'go', 'rs'] },
+                  { name: '全部', extensions: ['*'] },
+                ],
+              });
+              if (!selected) return;
+              const path = selected as string;
+              const updated = { ...t, test_file: path };
+              await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated) });
+              await this.showDetail(t.trace_id);
+              this.refresh();
+              this.showBanner(`${iconHtml('check-circle', 13)} 已绑定测试: ${path}`, 'ok');
+            } catch (e: any) {
+              this.showBanner(`绑定失败: ${e?.message || e}`, 'err');
+            }
+          };
+        }
+      }
       // 重追踪：复用 resource + description，spawn 新 Agent，version 自动递增
       const retraceBtn = this.detailEl.querySelector('.df-btn-retrace') as HTMLElement | null;
       if (retraceBtn) retraceBtn.onclick = async () => {
