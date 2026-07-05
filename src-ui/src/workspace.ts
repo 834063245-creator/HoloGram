@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Wenbing Jing. MIT License.
+﻿// Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
 // Workspace — owns all state for one open project.
@@ -17,7 +17,7 @@ import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
-import { ToolRegistry, createCodingTools, createDataflowTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { TaskManager, createTaskTools } from './agent/task';
@@ -401,12 +401,6 @@ export class Workspace {
       };
       const schemas = await loadHologramSchemas();
       for (const tool of schemas.map(s => mcpSchemaToTool(s, holoExec))) { registry.register(tool); }
-      // Dataflow tools are Tauri commands, not hologram MCP tools — use agentInvoke
-      const dataflowExec: ToolExecutor = async (name, args) => {
-        const result = await agentInvoke<string>(name, args);
-        return typeof result === 'string' ? result : JSON.stringify(result);
-      };
-      for (const tool of createDataflowTools(dataflowExec)) { registry.register(tool); }
       dbg('setupAgent', `${schemas.length} hologram tools registered (dynamic)`);
     }
 
@@ -514,7 +508,6 @@ export class Workspace {
         if (ws.graphData) {
           const schemas = await loadHologramSchemas();
           for (const tool of schemas.map(s => mcpSchemaToTool(s, factoryExec))) r.register(tool);
-          for (const tool of createDataflowTools(factoryExec)) r.register(tool);
         }
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
@@ -550,41 +543,6 @@ export class Workspace {
         return newAgent;
       });
     }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // Dataflow Agent — dedicated trace builder (独立 context，不污染主 chat)
-  // ═══════════════════════════════════════════════════════════════
-
-  /** Spawn a Dataflow Agent to trace a resource end-to-end from a natural language query.
-   *  Agent parses resource + description from the query itself.
-   *  Runs in an isolated context; status updates flow to onStatus. */
-  async spawnDataflowTrace(
-    query: string,
-    onStatus: (line: string) => void,
-    signal: AbortSignal,
-  ): Promise<void> {
-    if (!this.prov || !this.registry) throw new Error('Agent not ready — open a workspace first');
-    // ponytail: 不带 run_shell/write_file — trace 验证靠 Layer1 snippet 锚点 + Layer2 引擎交叉验证，
-    // 不靠 Agent 写测试（质量不可控、易卡死）。test_status 留空表示"未测试"。
-    const dataflowTools = this.registry.subset([
-      'search_content', 'read_file', 'glob',
-      'hologram_dataflow', 'hologram_search', 'hologram_node',
-      'hologram_neighbors', 'hologram_thread_conflicts',
-      'dataflow_save',
-    ]);
-    const sink = (ev: AgentEvent) => {
-      if (ev.kind === EventKind.Text && ev.text) onStatus(ev.text);
-      else if (ev.kind === EventKind.ToolDispatch && ev.tool) onStatus(`→ ${ev.tool.name}`);
-      else if (ev.kind === EventKind.ToolResult && ev.tool) onStatus(`${ev.tool.err ? '✗' : '✓'} ${ev.tool.name}`);
-    };
-    const agent = new Agent(this.prov, dataflowTools, DATAFLOW_SYSTEM_PROMPT, {
-      temperature: 0.3, maxSteps: 0, contextWindow: 500_000,
-    }, sink);
-    const prompt = `用户输入：${query}\n\n` +
-      `项目根目录：${this.path}\n` +
-      `搜索时 directory 参数用这个绝对路径。从用户输入中自动解析出要追踪的 resource 和一句话描述。完成后调用 dataflow_save 落盘。`;
-    await agent.run(signal, prompt);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -772,16 +730,13 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 | "变更前置检查？" | \`hologram_run_preflight\` — 指定文件列表，模拟影响 |
 | "完整检查？" | \`hologram_run_check\` — 跑约束校验 + 信号分析 |
 
-### 数据流追踪
+### 数据流探索
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "logBuffer 的完整数据流是什么？" | \`dataflow_query\`（resource="logBuffer"）— 查已保存的 trace |
-| "有哪些数据流？" | \`dataflow_list\` — 列出所有已保存 trace |
-| "帮我追 logBuffer 的数据流" | 搜引用(\`search_content\`+\`hologram_search\`) → 读源码(\`read_file\`) → 交叉验证(\`hologram_dataflow\`) → 构建 trace JSON → \`dataflow_save\` 落盘 |
-| "给这条 trace 写个测试" | 正常用 \`write_file\` 写测试文件 → \`run_shell\` 跑测试 → 手动把 test_file/test_status 填进 trace JSON → \`dataflow_save\` 更新 |
-| "auth 代码改了，trace 还准吗？" | \`dataflow_stale_check\`（trace_id）— 检查是否过期 |
-| "重新验证这条 trace" | \`dataflow_verify\`（trace_id）— 重跑锚点+交叉验证+关联测试 |
-| "删掉这条数据流" | \`dataflow_delete\`（trace_id）— 软删除 |
+| "logBuffer 的数据流是什么？" | \`hologram_explore\`（query="logBuffer 数据流"）— 引擎实时解析符号、追踪数据流路径、返回关系+源码+依赖者 |
+| "X 的下游影响是什么？" | \`hologram_impact\` 或 \`hologram_explore\` — 沿调用图追踪波及范围 |
+| "X 和 Y 之间怎么调的？" | \`hologram_path\` — 找最短调用路径 |
+| "X 函数读写了哪些变量？" | \`hologram_dataflow\` — tree-sitter 精确分析 per-function reads/writes/triggers |
 
 ### 文件与搜索
 | 用户问 | 用这个工具 |
@@ -819,7 +774,7 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 3. **模块深挖**：\`neighbors\` 看邻居 → \`coupling_report\` 看耦合 → \`community\` 看上下文 → 分析结构特点（设计合理就说合理，不要硬建议重构）
 4. **路径分析**：\`path\` 找依赖链 → \`impact\` 看链上各节点的波及面 → 描述依赖链特征
 5. **快速确认**：\`neighbors\` / \`graph_summary\` → 确认"没问题"或"改动安全"（最常见的查询，不是每次都要做全套体检）
-6. **数据流追踪**：\`search_content\`+\`hologram_search\` 找引用 → \`read_file\` 读源码 → \`hologram_dataflow\` 交叉验证 → 组装 trace JSON（nodes/edges/source_snippets，confidence 标 verified/static_match/speculative）→ \`dataflow_save\` 落盘。用户要查已有的直接 \`dataflow_query\`
+6. **数据流探索**：用户问"X 的数据流"→ 直接用 \`hologram_explore\`（传自然语言 query）引擎自动解析符号名、追踪路径、返回关系+源码+影响范围。需要 per-function reads/writes 时调 \`hologram_dataflow\`
 
 ## 输出格式
 
@@ -909,53 +864,4 @@ ${memorySection.trim() || '暂无。'}
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Dataflow Agent system prompt — dedicated trace builder
-// ═══════════════════════════════════════════════════════════════
-
-const DATAFLOW_SYSTEM_PROMPT = `你是 HoloGram 数据流追踪引擎。你的唯一职责是：接收一个 resource 名称和一句描述，在项目代码中追踪它的完整数据流链路，产出结构化 trace JSON，落盘保存。
-
-──── 工作流（严格按序执行，每步失败1次换方法，2次就跳过）────
-
-1. 解析输入。用户给的自然语言输入（如"logBuffer 怎么写入落盘的"）。从输入中自己提取 resource_name 和描述——用户不一定给纯符号名，你要理解意图。search_content 的 directory 参数必须用项目根目录绝对路径，不要猜。
-
-2. 搜索引用。调 search_content，pattern 用 resource_name，directory 用项目根目录绝对路径。同时调 hologram_search 搜该符号。合并去重生成候选文件列表。
-   如果 search_content 失败，改用 hologram_search 的结果继续，不要重试超过1次。
-
-3. 筛选文件。从搜索结果选包含 resource 定义或关键使用的源文件。跳过测试文件、vendor、node_modules。
-
-4. 读取源码。调 read_file 读取每个关键文件的相关代码段。重点关注：resource 声明位置、所有读写该 resource 的函数、该 resource 被传递到的下游函数。
-
-5. 静态交叉验证。对每个关键文件调 hologram_dataflow。对比引擎输出的 per-function reads/writes 与你的推理：引擎看到但你没覆盖的 → 补充标 static_match；你推理出引擎没看到的 → 保留标 speculative；两者一致 → 标 verified。同时调 hologram_thread_conflicts 检测并发风险。
-
-6. 构建 trace JSON。按 schema 组装：
-   - trace_id: {resource}_v1（调 dataflow_list 检查版本号，已存在则递增）
-   - resource, description, language, files_involved
-   - nodes: 每个参与函数的节点，role ∈ {entry,transform,buffer,consumer,sink,observer}
-   - edges: 函数间数据流关系，每条标 confidence ∈ {verified,static_match,speculative}
-   - source_snippets: ≥1 个关键源码片段，每段附 file + line
-   - conflicts: 如检测到并发共享状态记录 risk 级别
-   - test_file: 留空
-   - test_status: 留空
-   - status: "active"
-
-7. 落盘。调 dataflow_save 保存 trace JSON。工具会自动运行 Layer 1（snippet 锚点）和 Layer 2（引擎交叉验证）。
-
-──── 置信度标记规则 ────
-
-- verified：hologram_dataflow 结果一致
-- static_match：hologram_dataflow 结果一致，作为静态交叉验证通过
-- speculative：只有你的推理，无验证支撑，必须注明推测依据
-
-──── 行为约束 ────
-
-- 绝不修改项目源码。你没有 write_file 和 run_shell 工具。
-- 绝不闲聊。不回应数据流追踪以外的问题。
-- 工具调用失败 → 最多重试1次。两次都失败 → 跳过该项，在 trace description 附注 "⚠ 部分路径未验证"。
-- 不要用 shell 命令代替工具——你只有列出的工具，用它们。
-- 每个关键步骤完成后，输出一行简短状态更新（≤80 字符）。
-
-──── 终止条件 ────
-
-- 搜索结果为 0 → 返回 "❌ 未找到 {resource} 的任何引用。"
-- 所有引用均为外部/第三方 → 返回 "❌ {resource} 的引用均在 node_modules/外部依赖中。"
-- 无论如何，只要走到了第7步落盘，就算成功。`;
+// (dataflow trace Agent removed — engine queries replace it)

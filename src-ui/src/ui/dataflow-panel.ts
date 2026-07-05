@@ -1,41 +1,40 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// DataflowPanel — floating window for dataflow trace lifecycle management.
-// Left: trace list (invoke dataflow_list). Right: trace detail (invoke dataflow_query).
-// New-trace: spawns a dedicated Dataflow Agent via workspace.spawnDataflowTrace.
+// DataflowPanel — live dataflow explorer powered by hologram_explore.
+// No trace storage, no Agent snapshots. Engine queries only.
+// Type a natural-language query → engine resolves symbols → renders flow live.
 
 import { invoke } from '../bridge';
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
 
-const STATUS_ICON: Record<string, string> = {
-  active: iconHtml('check-circle', 13), stale: iconHtml('alert-circle', 13),
-  broken: iconHtml('close', 13), deprecated: iconHtml('block', 13),
-};
+const HISTORY_KEY = 'hologram_dataflow_history';
+const MAX_HISTORY = 50;
+
+interface HistoryEntry {
+  query: string;
+  timestamp: number;
+  symbolsFound: number;
+}
 
 export class DataflowPanel {
   private el!: HTMLElement;
   private header!: HTMLElement;
-  private listEl!: HTMLElement;
-  private detailEl!: HTMLElement;
-  private statusEl!: HTMLElement;
+  private left!: HTMLElement;
+  private right!: HTMLElement;
   private grip!: HTMLElement;
   private openState = false;
-  private traces: any[] = [];
-  private currentTraceId: string | null = null;
-  private abortCtrl: AbortController | null = null;
+  private history: HistoryEntry[] = [];
+  private resultData: any = null;
 
   private dragging = false;
   private resizing = false;
   private dragStart = { x: 0, y: 0, elX: 0, elY: 0, w: 0, h: 0 };
 
-  private onNewTrace?: (query: string, onStatus: (line: string) => void, signal: AbortSignal) => Promise<void>;
-
   constructor(container: HTMLElement) {
+    this.loadHistory();
     this.buildDOM(container);
   }
-
-  setNewTraceHandler(h: typeof this.onNewTrace): void { this.onNewTrace = h; }
 
   // ── DOM ───────────────────────────────────────────────
 
@@ -44,15 +43,15 @@ export class DataflowPanel {
     this.el.id = 'dataflow-panel';
     Object.assign(this.el.style, {
       position: 'fixed', zIndex: '78',
-      left: '120px', top: '90px', width: '720px', height: '480px',
+      left: '120px', top: '90px', width: '800px', height: '520px',
       display: 'none', flexDirection: 'column',
     });
 
-    // header (drag handle)
+    // header
     this.header = document.createElement('div');
     this.header.className = 'df-panel-header';
     Object.assign(this.header.style, { cursor: 'move', userSelect: 'none' });
-    this.header.innerHTML = `<span class="df-panel-title">数据流追踪</span>`;
+    this.header.innerHTML = `<span class="df-panel-title">数据流探索</span>`;
     const closeBtn = document.createElement('button');
     closeBtn.className = 'df-panel-close';
     closeBtn.innerHTML = iconHtml('close', 15);
@@ -61,82 +60,61 @@ export class DataflowPanel {
     this.header.appendChild(closeBtn);
     this.el.appendChild(this.header);
 
-    // body: list | detail
+    // body
     const body = document.createElement('div');
     body.className = 'df-panel-body';
-    Object.assign(body.style, { display: 'flex', flexDirection: 'row', flex: '1', minHeight: '0' });
+    Object.assign(body.style, { display: 'flex', flex: '1', minHeight: '0', overflow: 'hidden' });
 
-    // left: list
-    const left = document.createElement('div');
-    left.className = 'df-list';
-    const toolbar = document.createElement('div');
-    toolbar.className = 'df-list-toolbar';
-    toolbar.innerHTML = `<button class="df-btn-new">${iconHtml('plus', 14)} 新建</button><button class="df-btn-refresh">${iconHtml('refresh', 14)}</button>`;
-    this.listEl = document.createElement('div');
-    this.listEl.className = 'df-list-items';
-    left.appendChild(toolbar);
-    left.appendChild(this.listEl);
+    // left: query + history
+    this.left = document.createElement('div');
+    this.left.className = 'df-left';
+    Object.assign(this.left.style, { width: '240px', minWidth: '180px', display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(40,70,130,0.15)' });
 
-    // new-trace form (hidden by default) — 自然语言输入
-    const form = document.createElement('div');
-    form.className = 'df-new-form';
-    form.style.display = 'none';
-    form.innerHTML = `
-      <input class="df-input-query" placeholder="用自然语言描述要追的数据流（如：logBuffer 怎么从写入到落盘的）" autocomplete="off" />
-      <div class="df-autocomplete" style="display:none"></div>
-      <div class="df-form-actions">
-        <button class="df-btn-start">开始追踪</button>
-        <button class="df-btn-cancel">取消</button>
-      </div>`;
-    left.appendChild(form);
-
-    // 自然语言输入时联想符号名（帮 Agent 解析 resource，用户也可忽略）
-    const queryInput = form.querySelector('.df-input-query') as HTMLInputElement;
-    const acBox = form.querySelector('.df-autocomplete') as HTMLElement;
-    let acTimer: ReturnType<typeof setTimeout> | null = null;
-    queryInput.addEventListener('input', () => {
-      const q = queryInput.value.trim();
-      if (acTimer) clearTimeout(acTimer);
-      // 从输入里提取最后一个可能是符号名的词（字母/数字/下划线，≥2字符）
-      const m = q.match(/[A-Za-z_][A-Za-z0-9_]{1,}$/);
-      if (!m) { acBox.style.display = 'none'; return; }
-      acTimer = setTimeout(async () => {
-        try {
-          const raw = await invoke<string>('hologram_search', { query: m[0], limit: 8 });
-          const data = JSON.parse(raw);
-          const results = data.results || [];
-          if (results.length === 0) { acBox.style.display = 'none'; return; }
-          acBox.innerHTML = results.map((r: any) =>
-            `<div class="df-ac-item" data-name="${r.name}">${r.name} <span class="df-ac-kind">${r.kind}</span></div>`).join('');
-          acBox.style.display = 'block';
-          acBox.querySelectorAll('.df-ac-item').forEach((el) => {
-            (el as HTMLElement).onclick = () => {
-              // 用选中的符号名替换输入末尾的半截词
-              const v = queryInput.value;
-              queryInput.value = v.slice(0, v.length - m[0].length) + (el as HTMLElement).dataset['name']!;
-              acBox.style.display = 'none';
-            };
-          });
-        } catch { acBox.style.display = 'none'; }
-      }, 200);
+    // query input area
+    const inputArea = document.createElement('div');
+    inputArea.className = 'df-query-area';
+    const input = document.createElement('textarea');
+    input.className = 'df-query-input';
+    input.placeholder = '用自然语言描述要追踪的数据流…\n如: logBuffer 怎么写入落盘的';
+    input.rows = 3;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.doExplore(input.value.trim()); }
     });
-    queryInput.addEventListener('blur', () => { setTimeout(() => { acBox.style.display = 'none'; }, 200); });
+    const btn = document.createElement('button');
+    btn.className = 'df-query-btn';
+    btn.innerHTML = `${iconHtml('search', 13)} 探索`;
+    btn.onclick = () => this.doExplore(input.value.trim());
+    inputArea.appendChild(input);
+    inputArea.appendChild(btn);
+    this.left.appendChild(inputArea);
 
-    // status log (for new-trace progress)
-    this.statusEl = document.createElement('div');
-    this.statusEl.className = 'df-status-log';
-    this.statusEl.style.display = 'none';
-    left.appendChild(this.statusEl);
+    // history
+    const histHdr = document.createElement('div');
+    histHdr.className = 'df-hist-hdr';
+    histHdr.textContent = '历史';
+    const clearHist = document.createElement('button');
+    clearHist.className = 'df-hist-clear';
+    clearHist.textContent = '清空';
+    clearHist.onclick = () => { this.history = []; this.saveHistory(); this.renderHistory(); };
+    histHdr.appendChild(clearHist);
+    this.left.appendChild(histHdr);
 
-    // right: detail
-    this.detailEl = document.createElement('div');
-    this.detailEl.className = 'df-detail';
+    const histList = document.createElement('div');
+    histList.className = 'df-hist-list';
+    this.left.appendChild(histList);
 
-    body.appendChild(left);
-    body.appendChild(this.detailEl);
+    body.appendChild(this.left);
+
+    // right: results
+    this.right = document.createElement('div');
+    this.right.className = 'df-right';
+    Object.assign(this.right.style, { flex: '1', overflow: 'auto', padding: '12px' });
+    this.right.innerHTML = `<div class="df-empty">输入查询，探索代码数据流。</div>`;
+    body.appendChild(this.right);
+
     this.el.appendChild(body);
 
-    // corner bracket decorations
+    // corner brackets
     const corners = document.createElement('div');
     corners.className = 'df-corners';
     corners.innerHTML = '<span class="df-cb-bottom df-cb-bl"></span><span class="df-cb-bottom df-cb-br"></span>';
@@ -149,373 +127,232 @@ export class DataflowPanel {
 
     container.appendChild(this.el);
 
-    // wire buttons
-    (toolbar.querySelector('.df-btn-new') as HTMLElement).onclick = () => {
-      form.style.display = form.style.display === 'none' ? 'block' : 'none';
-    };
-    (toolbar.querySelector('.df-btn-refresh') as HTMLElement).onclick = () => this.refresh();
-    (form.querySelector('.df-btn-cancel') as HTMLElement).onclick = () => { form.style.display = 'none'; };
-    (form.querySelector('.df-btn-start') as HTMLElement).onclick = () => this.onStartTrace(form as HTMLElement);
-
     // drag + resize
     this.header.addEventListener('pointerdown', (e) => this.onDragStart(e));
     this.grip.addEventListener('pointerdown', (e) => this.onResizeStart(e));
-    // 点击面板任意位置置顶
     this.el.addEventListener('pointerdown', () => this.bringToFront());
+
+    this.renderHistory();
   }
 
-  // ── New trace ─────────────────────────────────────────
+  // ── Explore ───────────────────────────────────────────
 
-  private async onStartTrace(form: HTMLElement): Promise<void> {
-    const query = (form.querySelector('.df-input-query') as HTMLInputElement).value.trim();
-    if (!query || !this.onNewTrace) return;
-    form.style.display = 'none';
-    this.statusEl.style.display = 'block';
-    this.statusEl.innerHTML = `<div class="df-status-title">追踪中…</div>`;
-    this.abortCtrl = new AbortController();
+  private async doExplore(query: string): Promise<void> {
+    if (!query) return;
+    this.right.innerHTML = `<div class="df-loading">探索中…</div>`;
+
     try {
-      await this.onNewTrace(query, (line) => {
-        const row = document.createElement('div');
-        row.className = 'df-status-line';
-        row.textContent = line;
-        this.statusEl.appendChild(row);
-        this.statusEl.scrollTop = this.statusEl.scrollHeight;
-      }, this.abortCtrl.signal);
-      this.refresh();
-    } catch (e: any) {
-      const row = document.createElement('div');
-      row.className = 'df-status-line df-status-err';
-      row.textContent = `✕ ${e?.message || e}`;
-      this.statusEl.appendChild(row);
-    }
-  }
-
-  // ── List ──────────────────────────────────────────────
-
-  async refresh(): Promise<void> {
-    try {
-      const raw = await invoke<string>('dataflow_list', { limit: 100 });
+      const raw = await invoke<string>('hologram_explore', {
+        query,
+        symbols: [],
+        includeSource: true,
+      });
       const data = JSON.parse(raw);
-      this.traces = data.traces || [];
-      this.renderList();
+      this.resultData = data;
+      this.renderResults(data);
+
+      // save to history
+      const symbolsFound = data.meta?.totalSymbolsFound || 0;
+      this.history.unshift({ query, timestamp: Date.now(), symbolsFound });
+      if (this.history.length > MAX_HISTORY) this.history.length = MAX_HISTORY;
+      this.saveHistory();
+      this.renderHistory();
     } catch (e: any) {
-      this.listEl.innerHTML = `<div class="df-empty">加载失败: ${e?.message || e}</div>`;
+      this.right.innerHTML = `<div class="df-empty">探索失败: ${e?.message || e}</div>`;
     }
   }
 
-  private renderList(): void {
-    if (this.traces.length === 0) {
-      this.listEl.innerHTML = `<div class="df-empty">暂无 trace。点 + 新建追踪一条数据流。</div>`;
+  // ── Render results ────────────────────────────────────
+
+  private renderResults(data: any): void {
+    const meta = data.meta || {};
+    const flow = data.flow;
+    const relationships = data.relationships || {};
+    const sourceCode = data.sourceCode || [];
+    const blastRadius = data.blastRadius || {};
+    const alerts = data.architectureAlerts || {};
+
+    const parts: string[] = [];
+
+    // Meta
+    parts.push(`<div class="df-result-meta">
+      <span>${iconHtml('search', 12)} ${meta.totalSymbolsFound || 0} 个符号</span>
+      <span>${iconHtml('file', 12)} ${meta.totalFilesScanned || 0} 个文件</span>
+      ${meta.hint ? `<span class="df-meta-hint">${this.esc(meta.hint)}</span>` : ''}
+    </div>`);
+
+    // Flow
+    if (flow && flow.path) {
+      parts.push(this.renderFlow(flow));
+    }
+
+    // Relationships
+    const relKeys = Object.keys(relationships);
+    if (relKeys.length > 0) {
+      parts.push(this.renderRelationships(relationships, relKeys));
+    }
+
+    // Blast radius
+    const deps = blastRadius.dependents || [];
+    const tests = blastRadius.tests || [];
+    if (deps.length > 0 || tests.length > 0) {
+      parts.push(this.renderBlastRadius(deps, tests));
+    }
+
+    // Source code
+    if (sourceCode.length > 0) {
+      parts.push(this.renderSourceCode(sourceCode));
+    }
+
+    // Architecture alerts
+    const alertKeys = Object.keys(alerts).filter(k => {
+      const v = alerts[k];
+      return v && (Array.isArray(v) ? v.length > 0 : true);
+    });
+    if (alertKeys.length > 0) {
+      parts.push(this.renderAlerts(alerts, alertKeys));
+    }
+
+    // Node IDs for 3D linkage
+    const nodeIds = data.nodeIds || [];
+    if (nodeIds.length > 0) {
+      parts.push(`<div class="df-node-ids">
+        <span class="df-section-hdr">图谱节点 (${nodeIds.length})</span>
+        <div class="df-node-id-list">${nodeIds.slice(0, 20).map((id: string) =>
+          `<span class="df-node-id-chip">${this.esc(id)}</span>`).join('')}
+          ${nodeIds.length > 20 ? `<span class="df-node-id-chip">…及其他 ${nodeIds.length - 20} 个</span>` : ''}
+        </div>
+      </div>`);
+    }
+
+    this.right.innerHTML = parts.join('') || `<div class="df-empty">未找到匹配的数据流。</div>`;
+  }
+
+  private renderFlow(flow: any): string {
+    const steps = flow.path || [];
+    if (steps.length === 0) return '';
+
+    const rows = steps.map((s: any) => {
+      if (s.edge) {
+        return `<div class="df-flow-edge">
+          <span class="df-flow-arrow">↓</span>
+          <span class="df-flow-ekind">${this.esc(s.edge)}</span>
+        </div>`;
+      }
+      const loc = s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—';
+      return `<div class="df-flow-node">
+        <span class="df-flow-kind">${this.esc(s.kind || '')}</span>
+        <span class="df-flow-name">${this.esc(s.name || '')}</span>
+        <span class="df-flow-loc">${this.esc(loc)}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="df-section">
+      <div class="df-section-hdr">数据流路径 (${Math.floor(steps.length / 2) + 1} 节点, ${Math.floor(steps.length / 2)} 跳)</div>
+      <div class="df-flow">${rows}</div>
+    </div>`;
+  }
+
+  private renderRelationships(relationships: any, keys: string[]): string {
+    const rows = keys.map(kind => {
+      const edges = relationships[kind] || [];
+      const items = edges.slice(0, 30).map((e: any) =>
+        `<div class="df-rel-item"><span class="df-rel-src">${this.esc(e.source)}</span> → <span class="df-rel-tgt">${this.esc(e.target)}</span></div>`
+      ).join('');
+      const more = edges.length > 30 ? `<div class="df-table-more">…及其他 ${edges.length - 30} 条</div>` : '';
+      return `<div class="df-rel-group">
+        <div class="df-rel-kind">${this.esc(kind)} (${edges.length})</div>
+        ${items}${more}
+      </div>`;
+    }).join('');
+
+    return `<div class="df-section">
+      <div class="df-section-hdr">关系</div>
+      ${rows}
+    </div>`;
+  }
+
+  private renderSourceCode(sources: any[]): string {
+    const snippets = sources.slice(0, 8).map((s: any) =>
+      `<div class="df-src-item">
+        <div class="df-src-loc">${this.esc(s.file || '')}${s.line ? ':' + s.line : ''}</div>
+        <pre class="df-src-code">${this.esc(s.code || '')}</pre>
+      </div>`
+    ).join('');
+    const more = sources.length > 8 ? `<div class="df-table-more">…及其他 ${sources.length - 8} 个片段</div>` : '';
+
+    return `<div class="df-section">
+      <div class="df-section-hdr">源码 (${sources.length})</div>
+      ${snippets}${more}
+    </div>`;
+  }
+
+  private renderBlastRadius(dependents: any[], tests: any[]): string {
+    const depItems = dependents.slice(0, 20).map((d: any) =>
+      `<div class="df-br-item">${this.esc(d.name)} <span class="df-br-loc">${this.esc(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`
+    ).join('');
+    const testItems = tests.slice(0, 10).map((t: any) =>
+      `<div class="df-br-item df-br-test">🧪 ${this.esc(t.name)} <span class="df-br-loc">${this.esc(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`
+    ).join('');
+
+    return `<div class="df-section">
+      <div class="df-section-hdr">影响范围</div>
+      ${dependents.length > 0 ? `<div class="df-br-sub">依赖者 (${dependents.length})</div>${depItems}${dependents.length > 20 ? `<div class="df-table-more">…及其他 ${dependents.length - 20} 个</div>` : ''}` : ''}
+      ${tests.length > 0 ? `<div class="df-br-sub">相关测试 (${tests.length})</div>${testItems}${tests.length > 10 ? `<div class="df-table-more">…及其他 ${tests.length - 10} 个</div>` : ''}` : ''}
+    </div>`;
+  }
+
+  private renderAlerts(alerts: any, keys: string[]): string {
+    const rows = keys.map(k => {
+      const v = alerts[k];
+      const display = Array.isArray(v) ? `${v.length} 项` : String(v);
+      return `<div class="df-alert-row"><span class="df-alert-key">${this.esc(k)}</span>: ${this.esc(display)}</div>`;
+    }).join('');
+    return `<div class="df-section">
+      <div class="df-section-hdr">架构提醒</div>
+      ${rows}
+    </div>`;
+  }
+
+  // ── History ───────────────────────────────────────────
+
+  private loadHistory(): void {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      this.history = raw ? JSON.parse(raw) : [];
+    } catch { this.history = []; }
+  }
+
+  private saveHistory(): void {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(this.history)); } catch { /* quota exceeded */ }
+  }
+
+  private renderHistory(): void {
+    const list = this.left.querySelector('.df-hist-list');
+    if (!list) return;
+    if (this.history.length === 0) {
+      list.innerHTML = `<div class="df-empty">暂无历史</div>`;
       return;
     }
-    this.listEl.innerHTML = this.traces.map((t) => {
-      const icon = STATUS_ICON[t.status] || '❓';
-      const active = t.trace_id === this.currentTraceId ? ' df-item-active' : '';
-      return `<div class="df-item${active}" data-tid="${t.trace_id}">
-        <span class="df-item-icon">${icon}</span>
-        <span class="df-item-res">${t.resource}</span>
-        <span class="df-item-status">${t.test_status || t.status}</span>
+    list.innerHTML = this.history.map((h, i) => {
+      const time = new Date(h.timestamp);
+      const timeStr = `${time.getMonth() + 1}/${time.getDate()} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
+      return `<div class="df-hist-item" data-idx="${i}">
+        <div class="df-hist-query">${this.esc(h.query.length > 40 ? h.query.slice(0, 40) + '…' : h.query)}</div>
+        <div class="df-hist-sub">${timeStr} · ${h.symbolsFound} 符号</div>
       </div>`;
     }).join('');
-    this.listEl.querySelectorAll('.df-item').forEach((el) => {
+    list.querySelectorAll('.df-hist-item').forEach((el) => {
       (el as HTMLElement).onclick = () => {
-        const tid = (el as HTMLElement).dataset['tid']!;
-        this.showDetail(tid);
+        const idx = parseInt((el as HTMLElement).dataset['idx'] || '0');
+        const entry = this.history[idx];
+        if (entry) {
+          const input = this.left.querySelector('.df-query-input') as HTMLTextAreaElement;
+          if (input) input.value = entry.query;
+          this.doExplore(entry.query);
+        }
       };
     });
-  }
-
-  // ── Detail ────────────────────────────────────────────
-
-  private async showDetail(traceId: string): Promise<void> {
-    this.currentTraceId = traceId;
-    this.renderList();
-    this.detailEl.innerHTML = `<div class="df-empty">加载 ${traceId}…</div>`;
-    try {
-      const raw = await invoke<string>('dataflow_query', { traceId });
-      console.debug('[dataflow] query raw:', raw);
-      const data = JSON.parse(raw);
-      const trace = data.trace;
-      if (!trace) {
-        this.detailEl.innerHTML = `<div class="df-empty">未找到 ${traceId}（trace 字段为 null）</div>`;
-        return;
-      }
-      this.renderDetail(trace);
-    } catch (e: any) {
-      this.detailEl.innerHTML = `<div class="df-empty">查询失败: ${e?.message || e}</div>`;
-      console.error('[dataflow] showDetail failed:', e);
-    }
-  }
-
-  private renderDetail(t: any): void {
-    try {
-      const snipObj = t.source_snippets && typeof t.source_snippets === 'object' && !Array.isArray(t.source_snippets)
-        ? t.source_snippets : {};
-      const snips = Object.entries(snipObj).map(([k, s]: [string, any]) =>
-        `<div class="df-snip"><div class="df-snip-name">${k} · ${s?.file || ''}:${s?.line || ''}</div>
-         <pre class="df-snip-code">${this.escapeHtml(s?.code || '')}</pre></div>`).join('');
-
-      const nodes: any[] = Array.isArray(t.nodes) ? t.nodes : [];
-      const edges: any[] = Array.isArray(t.edges) ? t.edges : [];
-
-      // Confidence stats
-      const confCounts: Record<string, number> = {};
-      for (const e of edges) {
-        const c = e.confidence || 'speculative';
-        confCounts[c] = (confCounts[c] || 0) + 1;
-      }
-      const confBadges = [
-        confCounts['verified'] ? `<span class="df-conf-badge df-conf-verified">✓ ${confCounts['verified']} verified</span>` : '',
-        confCounts['static_match'] ? `<span class="df-conf-badge df-conf-static">~ ${confCounts['static_match']} match</span>` : '',
-        confCounts['speculative'] ? `<span class="df-conf-badge df-conf-spec">? ${confCounts['speculative']} speculative</span>` : '',
-      ].filter(Boolean).join(' ');
-
-      // Nodes table
-      const nodesHtml = nodes.length > 0 ? this.buildNodesTable(nodes) : '';
-      // Edges table
-      const edgesHtml = edges.length > 0 ? this.buildEdgesTable(edges) : '';
-
-      this.detailEl.innerHTML = `
-        <div class="df-detail-hdr">
-          <span class="df-detail-tid">${t.trace_id || ''}</span>
-          <span class="df-detail-status">${STATUS_ICON[t.status] || ''} ${t.status || ''}</span>
-        </div>
-        <div class="df-detail-meta">
-          <div><b>资源:</b> ${this.escapeHtml(t.resource || '')}</div>
-          <div><b>描述:</b> ${this.escapeHtml(t.description || '')}</div>
-          <div>
-            <b>语言:</b> ${t.language || '—'}
-            · <b>节点:</b> ${nodes.length}
-            · <b>边:</b> ${edges.length}
-            · <b>测试:</b> ${t.test_file ? `<code class="df-test-file">${this.escapeHtml(t.test_file)}</code>` : '—'} ${t.test_status || ''}
-          </div>
-          ${confBadges ? `<div class="df-conf-row">${confBadges}</div>` : ''}
-        </div>
-        ${nodesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">节点 <span class="df-sect-count">${nodes.length}</span></div>${nodesHtml}</div>` : ''}
-        ${edgesHtml ? `<div class="df-detail-section"><div class="df-section-hdr">边 <span class="df-sect-count">${edges.length}</span></div>${edgesHtml}</div>` : ''}
-        ${snips ? `<div class="df-detail-section"><div class="df-section-hdr">源码片段</div>${snips}</div>` : ''}
-        <div class="df-detail-actions">
-          <button class="df-btn-verify" data-tid="${t.trace_id}">${iconHtml('check-circle', 13)} 验证</button>
-          <button class="df-btn-test" data-tid="${t.trace_id}">${iconHtml('link', 13)} ${t.test_file ? '测试 ✓' : '绑定测试'}</button>
-          <button class="df-btn-retrace" data-tid="${t.trace_id}">${iconHtml('refresh', 13)} 重追踪</button>
-          <button class="df-btn-edit" data-tid="${t.trace_id}">${iconHtml('edit', 13)} 编辑</button>
-          <button class="df-btn-del" data-tid="${t.trace_id}">${iconHtml('trash', 13)} 删除</button>
-        </div>`;
-      const delBtn = this.detailEl.querySelector('.df-btn-del') as HTMLElement | null;
-      if (delBtn) delBtn.onclick = async () => {
-        if (!confirm(`确认删除 trace ${t.trace_id}? 此操作不可撤销。`)) return;
-        await invoke<string>('dataflow_delete', { traceId: t.trace_id, hard: true });
-        this.currentTraceId = null;
-        this.refresh();
-        this.detailEl.innerHTML = `<div class="df-empty">选择左侧 trace 查看详情</div>`;
-      };
-      const verifyBtn = this.detailEl.querySelector('.df-btn-verify') as HTMLElement | null;
-      if (verifyBtn) verifyBtn.onclick = async () => {
-        verifyBtn.textContent = '验证中…';
-        try {
-          const raw = await invoke<string>('dataflow_verify', { traceId: t.trace_id });
-          const res = JSON.parse(raw);
-          await this.showDetail(t.trace_id);
-          this.refresh();
-          const ok = (b: boolean) => b ? iconHtml('check-circle', 11) : iconHtml('close', 11);
-          const level = res.status === 'active' ? 'ok' : res.status === 'broken' ? 'warn' : 'warn';
-          const icon = res.status === 'active' ? iconHtml('check-circle', 13) :
-                       res.status === 'broken' ? iconHtml('alert-circle', 13) : iconHtml('alert-circle', 13);
-          this.showBanner(
-            `${icon} 验证完成 · 状态: ${res.status} · 锚点: ${ok(res.snippets_ok)} · 文件: ${ok(res.files_exist)} · 新引用: ${res.new_refs ? iconHtml('alert-circle', 11) : iconHtml('check-circle', 11)} · 测试: ${res.test_status || '无'}`,
-            level);
-        } catch (e: any) { verifyBtn.textContent = `✕ ${e?.message || e}`; }
-      };
-      // 绑定/解绑测试文件
-      const testBtn = this.detailEl.querySelector('.df-btn-test') as HTMLElement | null;
-      if (testBtn) {
-        if (t.test_file) {
-          // Click to unbind (with confirmation)
-          testBtn.title = `已绑定: ${t.test_file}\n点击解绑`;
-          testBtn.onclick = async () => {
-            if (!confirm(`解绑测试文件 ${t.test_file}?`)) return;
-            const updated = { ...t, test_file: '', test_status: '' };
-            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated), overwrite: true });
-            await this.showDetail(t.trace_id);
-            this.refresh();
-            this.showBanner(`${iconHtml('check-circle', 13)} 已解绑测试`, 'ok');
-          };
-        } else {
-          testBtn.onclick = async () => {
-            try {
-              const { open } = await import('@tauri-apps/plugin-dialog');
-              const selected = await open({
-                title: '选择测试文件',
-                filters: [
-                  { name: '测试文件', extensions: ['test.ts', 'test.js', 'test.py', 'test.go', 'test.rs', 'spec.ts', 'spec.js', 'ts', 'js', 'py', 'go', 'rs'] },
-                  { name: '全部', extensions: ['*'] },
-                ],
-              });
-              if (!selected) return;
-              const path = selected as string;
-              const updated = { ...t, test_file: path };
-              await invoke<string>('dataflow_save', { traceJson: JSON.stringify(updated), overwrite: true });
-              await this.showDetail(t.trace_id);
-              this.refresh();
-              this.showBanner(`${iconHtml('check-circle', 13)} 已绑定测试: ${path}`, 'ok');
-            } catch (e: any) {
-              this.showBanner(`绑定失败: ${e?.message || e}`, 'err');
-            }
-          };
-        }
-      }
-      // 重追踪：复用 resource + description，spawn 新 Agent，version 自动递增
-      const retraceBtn = this.detailEl.querySelector('.df-btn-retrace') as HTMLElement | null;
-      if (retraceBtn) retraceBtn.onclick = async () => {
-        if (!this.onNewTrace) { this.showBanner('工作区未打开', 'warn'); return; }
-        retraceBtn.textContent = '追踪中…';
-        this.statusEl.style.display = 'block';
-        this.statusEl.innerHTML = `<div class="df-status-title">重追踪 ${t.resource}…</div>`;
-        const ctrl = new AbortController();
-        try {
-          const oldResource = t.resource;
-          const oldTraceId = t.trace_id;
-          await this.onNewTrace(`重新追踪 ${oldResource}：${t.description || '数据流追踪'}`, (line) => {
-            const row = document.createElement('div');
-            row.className = 'df-status-line';
-            row.textContent = line;
-            this.statusEl.appendChild(row);
-            this.statusEl.scrollTop = this.statusEl.scrollHeight;
-          }, ctrl.signal);
-          // deprecate old version, then refresh to show only the new active one
-          await invoke<string>('dataflow_delete', { traceId: oldTraceId, hard: false });
-          await this.refresh();
-          const newest = this.traces.find((tr: any) => tr.resource === oldResource && tr.status !== 'deprecated');
-          if (newest) this.showDetail(newest.trace_id);
-          this.showBanner('✓ 重追踪完成', 'ok');
-        } catch (e: any) {
-          this.showBanner(`✗ 重追踪失败: ${e?.message || e}`, 'err');
-        }
-        retraceBtn.innerHTML = `${iconHtml('refresh', 13)} 重追踪`;
-      };
-      // 编辑：textarea 编辑 + 高亮预览双栏，保存调 dataflow_save
-      const editBtn = this.detailEl.querySelector('.df-btn-edit') as HTMLElement | null;
-      if (editBtn) editBtn.onclick = () => {
-        const ta = document.createElement('textarea');
-        ta.className = 'df-edit-area';
-        ta.value = JSON.stringify(t, null, 2);
-        const preview = document.createElement('pre');
-        preview.className = 'df-edit-preview';
-        preview.innerHTML = this.highlightJson(ta.value);
-        const save = document.createElement('button');
-        save.className = 'df-btn-save-edit'; save.textContent = '保存';
-        const cancel = document.createElement('button');
-        cancel.className = 'df-btn-cancel-edit'; cancel.textContent = '取消';
-        const editorRow = document.createElement('div');
-        editorRow.className = 'df-edit-row';
-        editorRow.appendChild(ta);
-        editorRow.appendChild(preview);
-        const wrap = document.createElement('div');
-        wrap.className = 'df-edit-wrap';
-        wrap.appendChild(editorRow); wrap.appendChild(save); wrap.appendChild(cancel);
-        this.detailEl.innerHTML = '';
-        this.detailEl.appendChild(wrap);
-        ta.addEventListener('input', () => { preview.innerHTML = this.highlightJson(ta.value); });
-        ta.addEventListener('scroll', () => { preview.scrollTop = ta.scrollTop; preview.scrollLeft = ta.scrollLeft; });
-        cancel.onclick = () => this.showDetail(t.trace_id);
-        save.onclick = async () => {
-          try {
-            const parsed = JSON.parse(ta.value);
-            await invoke<string>('dataflow_save', { traceJson: JSON.stringify(parsed), overwrite: true });
-            this.showDetail(t.trace_id);
-            this.refresh();
-            this.showBanner(`${iconHtml('check-circle', 13)} 已保存`, 'ok');
-          } catch (e: any) {
-            this.showBanner(`${iconHtml('close', 13)} 保存失败: ${e?.message || e}`, 'err');
-          }
-        };
-      };
-    } catch (e: any) {
-      this.detailEl.innerHTML = `<div class="df-empty">渲染失败: ${e?.message || e}</div>`;
-      console.error('[dataflow] renderDetail failed:', e, t);
-    }
-  }
-
-  /** 节点 kind → SVG icon 名 */
-  private nodeKindIcon(kind: string): string {
-    const map: Record<string, string> = {
-      function: 'code', method: 'code', class: 'code',
-      variable: 'dot', constant: 'dot', parameter: 'dot',
-      file: 'file', module: 'file',
-      event: 'zap', trigger: 'zap', timer: 'clock',
-      queue: 'layers', cache: 'layers', database: 'layers',
-    };
-    return iconHtml(map[kind] || 'dot', 12);
-  }
-
-  /** Compact trace nodes table */
-  private buildNodesTable(nodes: any[]): string {
-    const rows = nodes.slice(0, 50).map((n: any) => {
-      const loc = n.file ? `${this.escapeHtml(n.file)}${n.line ? ':' + n.line : ''}` : '—';
-      return `<div class="df-nodes-tr">
-        <span class="df-nodes-kind">${this.nodeKindIcon(n.kind)} ${this.escapeHtml(n.kind || '')}</span>
-        <span class="df-nodes-id">${this.escapeHtml(n.id || '')}</span>
-        ${n.role ? `<span class="df-nodes-role">${this.escapeHtml(n.role)}</span>` : '<span></span>'}
-        <span class="df-nodes-loc">${loc}</span>
-      </div>`;
-    }).join('');
-    const more = nodes.length > 50
-      ? `<div class="df-table-more">… 及其他 ${nodes.length - 50} 个节点</div>` : '';
-    return `<div class="df-nodes-table">
-      <div class="df-nodes-th"><span>Kind</span><span>ID</span><span>Role</span><span>位置</span></div>
-      ${rows}${more}</div>`;
-  }
-
-  /** Compact trace edges table with confidence badges */
-  private buildEdgesTable(edges: any[]): string {
-    const CONF_CLASS: Record<string, string> = {
-      verified: 'df-conf-verified', static_match: 'df-conf-static', speculative: 'df-conf-spec',
-    };
-    const rows = edges.slice(0, 100).map((e: any) => {
-      const conf = e.confidence || 'speculative';
-      const confCls = CONF_CLASS[conf] || 'df-conf-spec';
-      return `<div class="df-edges-tr">
-        <span class="df-edges-from">${this.escapeHtml(e.from || '')}</span>
-        <span class="df-edges-arrow">→</span>
-        <span class="df-edges-to">${this.escapeHtml(e.to || '')}</span>
-        <span class="df-edges-kind">${this.escapeHtml(e.kind || '')}</span>
-        <span class="df-edges-conf"><span class="${confCls}">${conf}</span></span>
-      </div>`;
-    }).join('');
-    const more = edges.length > 100
-      ? `<div class="df-table-more">… 及其他 ${edges.length - 100} 条边</div>` : '';
-    return `<div class="df-edges-table">
-      <div class="df-edges-th"><span>From</span><span></span><span>To</span><span>Kind</span><span>置信度</span></div>
-      ${rows}${more}</div>`;
-  }
-
-  private showBanner(text: string, kind: 'ok' | 'warn' | 'err'): void {
-    const old = this.detailEl.querySelector('.df-banner');
-    if (old) old.remove();
-    const banner = document.createElement('div');
-    banner.className = `df-banner df-banner-${kind}`;
-    banner.innerHTML = text;
-    this.detailEl.insertBefore(banner, this.detailEl.firstChild);
-    setTimeout(() => { banner.style.opacity = '0'; setTimeout(() => banner.remove(), 500); }, 4000);
-  }
-
-  private escapeHtml(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  /** 轻量 JSON 语法高亮：key/string/number/boolean/null 着色。不依赖外部库。 */
-  private highlightJson(s: string): string {
-    const esc = this.escapeHtml(s);
-    return esc.replace(
-      /("(?:\\.|[^"\\])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+\.?\d*)/g,
-      (m, _g1, isKey) => {
-        if (m.startsWith('"')) {
-          if (isKey) return `<span class="df-jk">${m}</span>`;
-          return `<span class="df-js">${m}</span>`;
-        }
-        if (m === 'true' || m === 'false' || m === 'null') return `<span class="df-jb">${m}</span>`;
-        return `<span class="df-jn">${m}</span>`;
-      });
   }
 
   // ── Open / close ──────────────────────────────────────
@@ -527,7 +364,6 @@ export class DataflowPanel {
     this.openState = true;
     this.el.style.display = 'flex';
     this.bringToFront();
-    this.refresh();
     shell.notifyPanelChanged();
   }
 
@@ -535,7 +371,6 @@ export class DataflowPanel {
     if (!this.openState) return;
     this.openState = false;
     this.el.style.display = 'none';
-    if (this.abortCtrl) this.abortCtrl.abort();
     shell.notifyPanelChanged();
   }
 
@@ -579,8 +414,8 @@ export class DataflowPanel {
   private onResizeStart(e: PointerEvent): void {
     e.stopPropagation();
     this.resizing = true;
-    this.dragStart.w = parseInt(this.el.style.width) || 720;
-    this.dragStart.h = parseInt(this.el.style.height) || 480;
+    this.dragStart.w = parseInt(this.el.style.width) || 800;
+    this.dragStart.h = parseInt(this.el.style.height) || 520;
     this.dragStart.x = e.clientX; this.dragStart.y = e.clientY;
     this.grip.setPointerCapture(e.pointerId);
     this.grip.addEventListener('pointermove', this.onResizeMove);
@@ -591,8 +426,8 @@ export class DataflowPanel {
     if (!this.resizing) return;
     const dw = e.clientX - this.dragStart.x;
     const dh = e.clientY - this.dragStart.y;
-    this.el.style.width = `${Math.max(420, this.dragStart.w + dw)}px`;
-    this.el.style.height = `${Math.max(280, this.dragStart.h + dh)}px`;
+    this.el.style.width = `${Math.max(480, this.dragStart.w + dw)}px`;
+    this.el.style.height = `${Math.max(300, this.dragStart.h + dh)}px`;
   };
 
   private onResizeEnd = (e: PointerEvent): void => {
@@ -601,6 +436,10 @@ export class DataflowPanel {
     this.grip.removeEventListener('pointermove', this.onResizeMove);
     this.grip.removeEventListener('pointerup', this.onResizeEnd);
   };
+
+  private esc(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
 
   destroy(): void { this.el.remove(); }
 }
