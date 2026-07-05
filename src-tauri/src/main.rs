@@ -129,6 +129,8 @@ fn main() {
             commands::hologram::hologram_record_event,
             commands::hologram::hologram_gate_check,
             commands::dataflow::hologram_dataflow,
+            commands::dataflow::dataflow_save,
+            commands::dataflow::dataflow_query,
             commands::hologram::get_full_graph,
             // ── Workspace commands ──
             commands::workspace::workspace_activate,

@@ -774,7 +774,7 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 3. **模块深挖**：\`neighbors\` 看邻居 → \`coupling_report\` 看耦合 → \`community\` 看上下文 → 分析结构特点（设计合理就说合理，不要硬建议重构）
 4. **路径分析**：\`path\` 找依赖链 → \`impact\` 看链上各节点的波及面 → 描述依赖链特征
 5. **快速确认**：\`neighbors\` / \`graph_summary\` → 确认"没问题"或"改动安全"（最常见的查询，不是每次都要做全套体检）
-6. **数据流探索**：用户问"X 的数据流"→ 直接用 \`hologram_explore\`（传自然语言 query）引擎自动解析符号名、追踪路径、返回关系+源码+影响范围。需要 per-function reads/writes 时调 \`hologram_dataflow\`
+6. **数据流探索**：用户问"X 的数据流"→ 直接用 \`hologram_explore\`（传自然语言 query）引擎自动解析符号名、追踪路径、返回关系+源码+影响范围。需要 per-function reads/writes 时调 \`hologram_dataflow\`。探索完成后可以调 \`dataflow_save\` 把结果持久化到 .hologram/dataflow/，方便面板历史查看
 
 ## 输出格式
 
