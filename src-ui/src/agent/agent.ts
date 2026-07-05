@@ -17,6 +17,7 @@ import type { Tool } from './tool';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { bus } from '../ui/events';
 import { log } from './logger';
+import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
 
 // ---- Event types ----
 
@@ -384,9 +385,65 @@ export class Agent {
     );
   }
 
-  // ---- Private: stream ----
+  // ---- Private: stream (with retry) ----
 
   private async stream(
+    signal: AbortSignal,
+    turn: number,
+  ): Promise<{
+    text: string;
+    reasoning: string;
+    signature: string;
+    calls: ToolCall[];
+    usage: Usage | undefined;
+    err: Error | undefined;
+  }> {
+    let lastErr: Error | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (signal.aborted) {
+        return { text: '', reasoning: '', signature: '', calls: [], usage: undefined, err: new Error('aborted') };
+      }
+
+      const result = await this.streamOnce(signal, turn);
+
+      // Success — no error, or error was already emitted as notice by streamOnce
+      if (!result.err) return result;
+
+      lastErr = result.err;
+
+      // Don't retry non-retryable errors
+      if (!isRetryable(lastErr)) return result;
+
+      // Last attempt — give up
+      if (attempt >= MAX_RETRIES) break;
+
+      // Backoff before retry
+      const delay = backoffDelay(attempt);
+      log.info('agent', `stream retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`, { error: String(lastErr.message || lastErr) });
+      this.sink({
+        kind: EventKind.Notice,
+        level: 'warn',
+        text: `模型调用失败，${(delay / 1000).toFixed(1)}s 后重试 (${attempt + 1}/${MAX_RETRIES})…`,
+      });
+
+      const aborted = await sleepWithAbort(delay, signal);
+      if (aborted) {
+        return { text: '', reasoning: '', signature: '', calls: [], usage: undefined, err: new Error('aborted') };
+      }
+    }
+
+    // Retries exhausted
+    this.sink({
+      kind: EventKind.Notice,
+      level: 'error',
+      text: `模型调用失败，已重试 ${MAX_RETRIES} 次：${lastErr?.message || '未知错误'}。请检查网络连接和 API 设置。`,
+    });
+    return { text: '', reasoning: '', signature: '', calls: [], usage: undefined, err: lastErr };
+  }
+
+  /** Single stream attempt — no retry logic. */
+  private async streamOnce(
     signal: AbortSignal,
     _turn: number,
   ): Promise<{
