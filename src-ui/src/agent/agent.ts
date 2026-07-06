@@ -48,6 +48,8 @@ export interface AgentOptions {
   maxTokens?: number;
   /** Session ID for persistence. Generated if not provided. */
   sessionId?: string;
+  /** Called after each session save (fire-and-forget, never blocks the loop). */
+  onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -133,6 +135,7 @@ export class Agent {
   // Session persistence
   sessionId: string;
   private sessionStore: SessionStore | null = null;
+  private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
 
   constructor(
     prov: Provider,
@@ -155,6 +158,7 @@ export class Agent {
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this.sessionStore = sessionStore || null;
+    this._onSessionPersisted = opts.onSessionPersisted;
 
     this.session = [];
     if (systemPrompt) {
@@ -190,6 +194,9 @@ export class Agent {
   private _saveSession(): void {
     if (!this.sessionStore) return;
     this.sessionStore.save(this.sessionId, this.session).catch(() => {});
+    if (this._onSessionPersisted) {
+      try { this._onSessionPersisted(this.sessionId, this.session); } catch { /* best-effort */ }
+    }
   }
 
   /** Resume from a persisted session. Returns null if session not found or empty. */
