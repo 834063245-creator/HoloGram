@@ -19,7 +19,11 @@ pub struct GoLspContext<'a> {
     pub imports: HashMap<String, String>,
     pub enclosing_func_qn: Option<String>,
     pub resolved_calls: Vec<ResolvedCall>,
+    /// Recursion depth guard — cap walk depth to avoid stack overflow.
+    pub walk_depth: u32,
 }
+
+const MAX_WALK_DEPTH: u32 = 64;
 
 impl<'a> GoLspContext<'a> {
     pub fn new(source: &'a str, registry: &'a TypeRegistry, package_qn: &str) -> Self {
@@ -31,6 +35,7 @@ impl<'a> GoLspContext<'a> {
             imports: HashMap::new(),
             enclosing_func_qn: None,
             resolved_calls: Vec::new(),
+            walk_depth: 0,
         }
     }
 
@@ -321,6 +326,29 @@ fn resolve_builtin_type(name: &str) -> Option<Type> {
     }
 }
 
+/// Interface sole-implementer ranking: if `receiver_qn` is an interface
+/// and exactly one concrete type in the registry implements it + declares
+/// `method_name`, return ("lsp_interface_resolve", 0.95). Otherwise
+/// return the default ("go_method", 0.90).
+fn go_interface_strategy(registry: &TypeRegistry, receiver_qn: &str, method_name: &str) -> (&'static str, f32) {
+    let Some(rt) = registry.lookup_type(receiver_qn) else {
+        return ("go_method", 0.90);
+    };
+    if !rt.is_interface {
+        return ("go_method", 0.90);
+    }
+    let mut count = 0u32;
+    for (_qn, cand) in &registry.types_by_qn {
+        if cand.is_interface || cand.alias_of.is_some() { continue; }
+        if !cand.bases.iter().any(|b| b == receiver_qn) { continue; }
+        if cand.methods.contains_key(method_name) {
+            count += 1;
+            if count > 1 { break; }
+        }
+    }
+    if count == 1 { ("lsp_interface_resolve", 0.95) } else { ("go_method", 0.90) }
+}
+
 pub fn process_go_statement(ctx: &mut GoLspContext, node: Node) {
     if node.kind().is_empty() { return; }
     let k = node.kind();
@@ -435,7 +463,7 @@ fn go_bind_range_targets(ctx: &mut GoLspContext, left: Node, key_t: &Type, val_t
     }
 }
 
-pub fn resolve_go_calls(ctx: &mut GoLspContext, node: Node) {
+pub fn resolve_go_calls_inner(ctx: &mut GoLspContext, node: Node) {
     if node.kind().is_empty() { return; }
     let k = node.kind();
 
@@ -448,8 +476,15 @@ pub fn resolve_go_calls(ctx: &mut GoLspContext, node: Node) {
 
     let nc = node.named_child_count();
     for i in 0..nc {
-        resolve_go_calls(ctx, node.named_child(i).unwrap_or(node));
+        resolve_go_calls_inner(ctx, node.named_child(i).unwrap_or(node));
     }
+}
+
+pub fn resolve_go_calls(ctx: &mut GoLspContext, node: Node) {
+    if ctx.walk_depth >= MAX_WALK_DEPTH { return; }
+    ctx.walk_depth += 1;
+    resolve_go_calls_inner(ctx, node);
+    ctx.walk_depth -= 1;
 }
 
 pub fn emit_go_call(ctx: &mut GoLspContext, call_node: Node) {
@@ -491,7 +526,11 @@ pub fn emit_go_call(ctx: &mut GoLspContext, call_node: Node) {
                 }
                 Type::Named { qn } | Type::Template { name: qn, .. } => {
                     if let Some(f) = go_lookup_field_or_method(ctx.registry, qn, fname) {
-                        ctx.emit(&f.qualified_name, "go_method", 0.90);
+                        // Interface sole-implementer: if receiver is an interface
+                        // and exactly one concrete type implements it, rank at 0.95
+                        // so the concrete method wins over interface type_dispatch.
+                        let (strategy, conf) = go_interface_strategy(ctx.registry, qn, fname);
+                        ctx.emit(&f.qualified_name, strategy, conf);
                     }
                 }
                 Type::Builtin { name } if name != "nil" => {

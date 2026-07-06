@@ -27,3 +27,4 @@ pub(crate) mod ts_lsp;
 pub(crate) mod c_lsp;
 pub(crate) mod php_lsp;
 pub(crate) mod kotlin_lsp;
+pub(crate) mod rust_lsp;
