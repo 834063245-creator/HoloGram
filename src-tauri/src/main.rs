@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_isolation;
+mod aura_memory;
 mod mcp_manager;
 mod pty_manager;
 mod lsp_manager;
@@ -219,6 +220,14 @@ fn main() {
             commands::tools::credential_get,
             commands::tools::credential_delete,
             commands::tools::credential_clear,
+            // ── AuraSDK memory ──
+            aura_memory::aura_init,
+            aura_memory::aura_recall,
+            aura_memory::aura_recall_text,
+            aura_memory::aura_store,
+            aura_memory::aura_count,
+            aura_memory::aura_maintenance,
+            aura_memory::aura_shutdown,
             // ── PTY ──
             pty_manager::pty_spawn,
             pty_manager::pty_write,
