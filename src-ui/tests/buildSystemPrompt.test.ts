@@ -8,7 +8,7 @@ vi.mock('../src/ui/check', () => ({ CheckPanel: class {} }));
 vi.mock('../src/agent/agent', () => ({ Agent: class {} }));
 vi.mock('../src/agent/tool', () => ({
   ToolRegistry: class { register() {} alias() {} all() { return []; } schemas() { return []; } get() { return null; } },
-  createHologramTools: () => [],
+  createHologramTestTools: () => [],
   createCodingTools: () => [],
   createSubAgentTool: () => ({}),
 }));
