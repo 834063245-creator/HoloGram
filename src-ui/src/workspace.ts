@@ -20,6 +20,7 @@ import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
+import { memoryBundleHealth, memoryBundleRecall, memoryBundleAnalyze, memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot } from './agent/hooks';
@@ -380,6 +381,35 @@ export class Workspace {
     this.memoryManager.initAura().catch(() => {}); // fire-and-forget, best-effort
     const graphNodes = extractGraphNodeNames(this.graphData);
     try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
+
+    // ── Memory Bundle: semantic recall + feature extraction ──
+    let memoryBundleSection = '';
+    try {
+      const bundleOnline = await memoryBundleHealth();
+      if (bundleOnline) {
+        // Get project name from path for a contextual recall query
+        const projectName = this.path.split(/[/\\]/).pop() || 'project';
+        const recallQuery = `项目 ${projectName} 的相关记忆、架构决策、最近工作`;
+        const [recallResult, analyzeResult] = await Promise.all([
+          memoryBundleRecall(recallQuery, 10, true),
+          memoryBundleAnalyze(projectName, 'holo', ''),
+        ]);
+        const parts: string[] = [];
+        if (recallResult?.facts_text?.trim()) {
+          parts.push(`### 语义记忆\n${recallResult.facts_text}`);
+        }
+        if (analyzeResult?.emotion) {
+          parts.push(`用户当前情绪: ${analyzeResult.emotion.category} (v=${analyzeResult.emotion.valence.toFixed(2)}, a=${analyzeResult.emotion.arousal.toFixed(2)})`);
+        }
+        if (analyzeResult?.tags?.length) {
+          parts.push(`相关标签: ${analyzeResult.tags.join(', ')}`);
+        }
+        memoryBundleSection = parts.join('\n');
+        if (memoryBundleSection) {
+          this.onStatusChange?.(`[记忆场] 已连接`);
+        }
+      }
+    } catch (e) { console.warn('[setupAgent] memory bundle unavailable:', e); }
     // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条
     if (memorySection.trim()) {
       const memLines = memorySection.split('\n').filter(l => l.startsWith('- ')).length;
@@ -482,7 +512,7 @@ export class Workspace {
 
     const pricing = defaultPricing(active.kind, active.model);
     const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
-    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap);
+    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection);
     const agentOpts = settings.agent || {};
 
     const mode = CHAT_MODES.find(m => m.id === agentOpts.chatMode) || CHAT_MODES[0];
@@ -495,6 +525,14 @@ export class Workspace {
     this.prov = prov;
     this.registry = registry;
     this.agent = new Agent(prov, registry, systemPrompt, {
+      onSessionPersisted: (_sid: string, messages: Array<{role: string; content: unknown}>) => {
+        // Fire-and-forget: ingest session into memory bundle
+        // If bundle is unreachable, this silently fails — nothing is blocked.
+        memoryBundleIngest(
+          messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+          'holo', _sid,
+        ).catch(() => {});
+      },
       pricing, temperature, maxSteps, contextWindow,
       maxTokens: active.maxTokens ?? 0,
     }, chatPanel.sink);
@@ -729,7 +767,7 @@ function extractGraphNodeNames(graphData: unknown): string[] | undefined {
   return undefined;
 }
 
-export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapshot = ''): string {
+export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapshot = '', memoryBundleSection = ''): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
@@ -958,7 +996,8 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 
 ${memorySection.trim() || '暂无。'}
 
-> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。`;
+> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。
+${memoryBundleSection ? `\n## 语义记忆场\n${memoryBundleSection}\n` : ''}`;
 }
 
 // ═══════════════════════════════════════════════════════════════
