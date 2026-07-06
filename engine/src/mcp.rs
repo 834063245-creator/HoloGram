@@ -51,6 +51,7 @@ pub fn parse_serve_args() -> Option<Option<String>> {
 // Tool definitions — MCP tools/list schema
 // ═══════════════════════════════════════════════════════════════
 
+#[allow(dead_code)] // superseded by ToolRegistry::tools_list()
 fn tool_definitions() -> Vec<Value> {
     vec![
         // ── V1 tools (7) ──
@@ -142,6 +143,7 @@ fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+#[allow(dead_code)] // superseded by ToolRegistry::tools_list()
 fn tool_def(name: &str, desc: &str, props: &[(&str, &str, &str)], required: &[&str]) -> Value {
     let mut properties = serde_json::Map::new();
     for (pname, ptype, pdesc) in props {

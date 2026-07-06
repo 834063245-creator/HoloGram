@@ -479,8 +479,8 @@ impl Engine {
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());
         }
-        let parse_cache = std::mem::take(&mut result.parse_cache);
-        let discovered_files = std::mem::take(&mut result.discovered_files);
+        let _parse_cache = std::mem::take(&mut result.parse_cache);
+        let _discovered_files = std::mem::take(&mut result.discovered_files);
         set_progress("解析完成", result.files_parsed, result.files_discovered,
             &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
@@ -1252,6 +1252,7 @@ fn reparse_for_lsp(source: &str, ext: &str) -> Option<tree_sitter::Tree> {
 
 /// Run LSP type-aware call resolution on all source files in the project.
 /// Rewrites CALLS edges in the graph with resolved target QNs.
+#[allow(dead_code)]
 fn resolve_calls_lsp(
     graph: &mut Graph,
     parse_cache: &std::collections::HashMap<String, (String, Option<tree_sitter::Tree>)>,
