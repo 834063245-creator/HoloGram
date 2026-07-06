@@ -248,6 +248,20 @@ fn main() {
             os_sandbox::init();
             // v4 Phase 4: server for Unity events
             commands::tools::start_unity_event_server(app.handle().clone());
+            // Memory Bundle: spawn if exe found next to hologram
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    let mb = exe_dir.join("memory-bundle.exe");
+                    if mb.exists() {
+                        std::process::Command::new(&mb)
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()
+                            .ok();
+                    }
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
