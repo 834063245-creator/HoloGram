@@ -108,7 +108,6 @@ impl ToolRegistry {
             "rename_symbol" => handler_rename(args),
             "engine_status" => handler_status(args),
             "check_boundaries" => handler_policy_check(args),
-            "inspect_symbol" => handler_node(args),
             "find_unused" => handler_unused(args),
             "trace_dataflow" => handler_dataflow(args),
             "resolve_call" => handler_resolve_call(args),
@@ -354,50 +353,7 @@ fn handler_path(args: &Value) -> Value {
     })
 }
 
-fn handler_history(args: &Value) -> Value {
-    let node_id = get_str(args, &["node_id", "nodeId"]);
-    if node_id.is_empty() {
-        return json!({"error": "node_id is required"});
-    }
-    let decision_history = engine::engine_query_timeline(20).unwrap_or_default();
-    match engine::engine_read(|idx| {
-        let resolved = match resolve_in_index(idx, &node_id) {
-            Some(rid) => rid,
-            None => return json!({"error": format!("Node {} not found", node_id)}),
-        };
-        let node = idx.get_node(&resolved).unwrap().clone();
-        let dep_count = idx.incoming(&resolved, None).len();
-        let out_count = idx.outgoing(&resolved, None).len();
-        json!({
-            "node": node_to_value(&node),
-            "decision_history": decision_history,
-            "dependency_count": dep_count,
-            "dependent_count": out_count,
-        })
-    }) {
-        Ok(value) => {
-            if value.get("error").is_none() {
-                return value;
-            }
-        }
-        Err(_) => {}
-    }
-    with_graph(|g| {
-        let resolved = match resolve_in_graph(g, &node_id) {
-            Some(rid) => rid,
-            None => return json!({"error": format!("Node {} not found", node_id)}),
-        };
-        let node = g.get_node(&resolved).unwrap();
-        let incoming = g.incoming_edges(&resolved);
-        let outgoing = g.outgoing_edges(&resolved);
-        json!({
-            "node": node_to_value(node),
-            "decision_history": decision_history,
-            "dependency_count": incoming.len(),
-            "dependent_count": outgoing.len(),
-        })
-    })
-}
+// ponytail: handler_history deleted — symbol_history now routes to handler_node (richer output)
 
 fn handler_community(args: &Value) -> Value {
     let node_id = get_str(args, &["node_id", "nodeId"]);
