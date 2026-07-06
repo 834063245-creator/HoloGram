@@ -69,7 +69,7 @@ describe('GraphContext', () => {
     const summary = ctx.getImpactSummary('D:/repo/src/config.ts');
     expect(summary).toContain('parseConfig');
     expect(summary).toContain('2 个符号');
-    expect(summary).toContain('hologram_explore');
+    expect(summary).toContain('hologram_impact');
   });
 
   it('getImpactSummary 不存在文件返回 null', () => {

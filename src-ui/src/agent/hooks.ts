@@ -550,7 +550,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
     shouldCheck(toolName: string): boolean {
       return ['edit_file', 'write_file', 'write_file_content',
-              'delete_file_or_dir', 'rename_file_or_dir', 'move_file',
+              'delete_file', 'delete_file_or_dir', 'rename_file', 'rename_file_or_dir', 'move_file',
               'git_discard', 'git_checkout', 'git_commit'].includes(toolName);
     },
 
