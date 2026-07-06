@@ -259,8 +259,8 @@ describe('GraphPreflightHook.shouldCheck', () => {
   const hook = createGraphPreflightHook(makeCtx());
 
   const shouldTrigger = [
-    'edit_file', 'write_file', 'write_file_content',
-    'delete_file_or_dir', 'rename_file_or_dir', 'move_file',
+    'edit_file', 'write_file',
+    'delete_file', 'rename_file', 'move_file',
     'git_discard', 'git_checkout', 'git_commit',
   ];
 

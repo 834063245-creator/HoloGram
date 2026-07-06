@@ -219,6 +219,28 @@ export function buildGraphSnapshot(graphData: any): string {
   return parts.join(' | ');
 }
 
+// ── 工具元数据常量 ──
+// ponytail: 新增/改名工具时，改这里就行。测试会验证这些名字在 ToolRegistry 里真实存在。
+
+/** 触发 post-tool 图上下文注入的工具名
+ *  ponytail: 'read_file' 是 alias→read_file_content，模型会吐出这个名字，必须保留 */
+export const GRAPH_ENRICH_TOOLS = [
+  'read_file_content', 'read_file',
+  'search_content', 'glob', 'list_directory',
+  'hologram_dataflow', 'hologram_search', 'hologram_node', 'git_diff', 'run_shell',
+  'hologram_resolve_call', 'hologram_resolve_type',
+  'hologram_find_implementations', 'hologram_find_references',
+] as const;
+
+/** 触发 preflight 写前影响分析的工具名
+ *  ponytail: 写操作可能注册为别名，保留原始名 */
+export const GRAPH_PREFLIGHT_TOOLS = [
+  'edit_file', 'write_file',
+  'delete_file', 'rename_file', 'move_file',
+  'git_discard', 'git_checkout', 'git_commit',
+] as const;
+
+// ═══════════════════════════════════════════════════════════
 // ── GraphContextHook（post-tool，结果顶部注入）──
 
 const MAX_ENRICH_BYTES = 800;
@@ -230,10 +252,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 
     shouldEnrich(toolName: string): boolean {
       // edit_file / write_file 由 preflight hook 处理，此处不重复
-      return ['read_file_content', 'read_file', 'search_content', 'glob', 'list_directory',
-               'hologram_dataflow', 'hologram_search', 'hologram_node', 'git_diff', 'run_shell',
-               'hologram_resolve_call', 'hologram_resolve_type',
-               'hologram_find_implementations', 'hologram_find_references'].includes(toolName);
+      return (GRAPH_ENRICH_TOOLS as readonly string[]).includes(toolName);
     },
 
     async enrich(toolName: string, args: Record<string, unknown>, result: string): Promise<string> {
@@ -549,9 +568,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
     name: 'graph-preflight',
 
     shouldCheck(toolName: string): boolean {
-      return ['edit_file', 'write_file', 'write_file_content',
-              'delete_file', 'delete_file_or_dir', 'rename_file', 'rename_file_or_dir', 'move_file',
-              'git_discard', 'git_checkout', 'git_commit'].includes(toolName);
+      return (GRAPH_PREFLIGHT_TOOLS as readonly string[]).includes(toolName);
     },
 
     check(toolName: string, args: Record<string, unknown>): string | null {
