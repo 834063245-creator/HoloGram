@@ -10,7 +10,7 @@
 import { execSync } from 'child_process';
 import * as readline from 'readline';
 import { Agent } from './src/agent/agent';
-import { ToolRegistry, createHologramTools } from './src/agent/tool';
+import { ToolRegistry, createHologramTestTools } from './src/agent/tool';
 import { createOpenAIProvider } from './src/provider/openai';
 import type { EventSink, AgentEvent } from './src/agent/agent';
 import { EventKind } from './src/agent/agent';
@@ -185,7 +185,7 @@ const provider = createOpenAIProvider({
 });
 
 const registry = new ToolRegistry();
-for (const tool of createHologramTools(pythonExec)) {
+for (const tool of createHologramTestTools(pythonExec)) {
   registry.register(tool);
 }
 

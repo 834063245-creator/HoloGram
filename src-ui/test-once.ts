@@ -5,7 +5,7 @@
 import { execSync } from 'child_process';
 import { Agent, EventKind } from './src/agent/agent';
 import type { AgentEvent } from './src/agent/agent';
-import { ToolRegistry, createHologramTools } from './src/agent/tool';
+import { ToolRegistry, createHologramTestTools } from './src/agent/tool';
 import { createOpenAIProvider } from './src/provider/openai';
 
 const API_KEY = process.env.DEEPSEEK_API_KEY || '';
@@ -147,7 +147,7 @@ async function main() {
   });
 
   const registry = new ToolRegistry();
-  for (const tool of createHologramTools(pythonExec)) {
+  for (const tool of createHologramTestTools(pythonExec)) {
     registry.register(tool);
   }
 

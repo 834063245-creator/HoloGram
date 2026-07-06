@@ -109,536 +109,62 @@ export async function agentInvoke<T = string>(name: string, args: Record<string,
   return invoke<T>(name, { ...args, isAgent: true });
 }
 
-export function createHologramTools(exec: ToolExecutor): Tool[] {
-  return [
-    // ── 聚合查询（首选入口）──
-    {
-      name: () => 'hologram_explore',
-      description: () =>
-        '【默认首选】统一聚合查询：一次返回 Flow（调用路径）+ Blast Radius（波及范围）+ Relationships（关系图）+ Source Code（源码）+ Architecture Alerts（架构告警）。支持自然语言输入——直接写 "DataRequest 怎么 validate task" 即可，引擎自动切词消歧。不确定用什么工具时先调这个。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: '自然语言查询，引擎自动切词提取符号名。例如 "DataRequest validate task" 或 "auth模块的依赖链"',
-          },
-          symbols: {
-            type: 'array',
-            items: { type: 'string' },
-            description: '显式指定符号名列表（与 query 二选一，query 优先）',
-          },
-          includeSource: {
-            type: 'boolean',
-            description: '是否返回源码片段（默认 true）',
-            default: true,
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_explore', args),
-    },
-    // ── 基础图查询 ──
-    {
-      name: () => 'hologram_analyze',
-      description: () =>
-        'Run a full graph analysis on a code directory. Returns the complete dependency graph as structured JSON (nodes + edges). Zero-config, language auto-detected. Use this first to get the lay of the land.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Directory path to analyze (defaults to current working directory)',
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_analyze', args),
-    },
-    {
-      name: () => 'hologram_neighbors',
-      description: () =>
-        'Get the neighborhood of a node in the dependency graph. Returns the node, its direct dependencies, and dependents — the 1-hop subgraph.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          nodeId: { type: 'string', description: 'The node identifier (function/class/module name)' },
-          depth: { type: 'integer', description: 'Neighbor depth (default: 1)', default: 1 },
-        },
-        required: ['nodeId'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_neighbors', args),
-    },
-    {
-      name: () => 'hologram_impact',
-      description: () =>
-        'Map the blast radius of a change. Starting from a node, trace all downstream dependents recursively. Returns the complete impact tree.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          nodeId: { type: 'string', description: 'The node to analyze impact for' },
-          maxDepth: { type: 'integer', description: 'Maximum depth to trace (default: unlimited)', default: 0 },
-        },
-        required: ['nodeId'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_impact', args),
-    },
-    {
-      name: () => 'hologram_path',
-      description: () =>
-        'Find the shortest dependency path between two nodes. Shows how A depends on B through the chain of intermediate nodes.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          from: { type: 'string', description: 'Source node identifier' },
-          to: { type: 'string', description: 'Target node identifier' },
-        },
-        required: ['from', 'to'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_path', args),
-    },
-    {
-      name: () => 'hologram_fragile',
-      description: () =>
-        'Rank modules by coupling depth (L1 same-module through L4 cross-boundary), fan-in count, and cycle participation. Returns a ranked list. High rank means high interconnection — well-designed hubs (auth, config, main entry points) are expected to rank high by design.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          limit: { type: 'integer', description: 'Number of top fragile modules to return (default: 10)', default: 10 },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_fragile', args),
-    },
-    {
-      name: () => 'hologram_cycle',
-      description: () =>
-        'Detect data-flow cycles and strong coupling loops in the dependency graph. Returns all cycles with their coupling depth classification.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          mode: {
-            type: 'string',
-            enum: ['all', 'data', 'llm'],
-            description: 'Cycle filter: all=all cycles, data=data-persistent cycles, llm=LLM-involved cycles (default: all)',
-            default: 'all',
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_cycle', args),
-    },
-    {
-      name: () => 'hologram_coupling_report',
-      description: () =>
-        'Get a detailed coupling report for a specific module. Returns coupling depth (L1-L4), fan-in/fan-out counts, cycle participation, and fragility score.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          module: { type: 'string', description: 'Module name to analyze' },
-        },
-        required: ['module'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_coupling_report', args),
-    },
-    {
-      name: () => 'hologram_blindspots',
-      description: () =>
-        'Get all detected architecture boundaries: L4 encapsulation violations, unlocked concurrency, and circular dependencies. Returns each boundary with type and severity.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          filter: {
-            type: 'string',
-            enum: ['all', 'L4', 'thread', 'cycle'],
-            description: 'Boundary type filter (default: all)',
-            default: 'all',
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_blindspots', args),
-    },
-    {
-      name: () => 'hologram_thread_conflicts',
-      description: () =>
-        'Detect potential thread/async conflicts — shared-memory writes without synchronization, concurrent data structure access, race condition patterns. Omit node_id for global matrix.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          nodeId: {
-            type: 'string',
-            description: 'Optional node ID — if omitted, returns global conflict matrix',
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_thread_conflicts', args),
-    },
-    {
-      name: () => 'hologram_timeline',
-      description: () =>
-        'Query the causal audit timeline (SQLite). Returns a chronological record of changes with their affected nodes and impact estimates. V2 feature.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          since: {
-            type: 'string',
-            description: 'ISO timestamp filter (e.g. "2025-06-01T00:00:00Z")',
-          },
-          limit: { type: 'integer', description: 'Max entries (default: 50)', default: 50 },
-          module: { type: 'string', description: 'Filter by module name' },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_timeline', args),
-    },
-    {
-      name: () => 'hologram_graph_diff',
-      description: () =>
-        'Diff the current graph against a baseline JSON snapshot. Returns added/removed nodes and edges. First call creates the baseline; subsequent calls compare against it. NOT a git diff — use git_diff for code changes.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          beforePath: {
-            type: 'string',
-            description: 'Path to the baseline graph JSON file',
-          },
-        },
-        required: ['beforePath'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_graph_diff', args),
-    },
-    {
-      name: () => 'hologram_clusters',
-      description: () =>
-        'Report on cluster/community structure in the codebase. Uses Leiden algorithm. Shows which modules naturally group together. For a single node\'s cluster membership use hologram_community.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          minSize: {
-            type: 'integer',
-            description: 'Minimum cluster size to report (default: 3)',
-            default: 3,
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_clusters', args),
-    },
-    {
-      name: () => 'hologram_graph_summary',
-      description: () =>
-        'Get a high-level summary of the current dependency graph: total nodes/edges, node type distribution, edge type distribution, top-level modules, and graph density.',
-      parameters: () => ({
-        type: 'object',
-        properties: {},
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_graph_summary', args),
-    },
-    {
-      name: () => 'hologram_run_check',
-      description: () =>
-        'Run full constraint validation (V3) on the current project. Re-analyzes the codebase, checks against constraints, and returns results — including any violations found AND confirmation of rules that pass. Use when the user asks for a thorough project audit ("全面检查" or "跑一遍约束"). Do NOT run this for casual "check" questions; use lighter tools first.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Project root directory path (use the current project path)',
-          },
-        },
-        required: ['path'],
-      }),
-      readOnly: () => false,
-      execute: (args) => exec('hologram_run_check', args),
-    },
-    {
-      name: () => 'hologram_run_preflight',
-      description: () =>
-        'Pre-flight check (V3): analyze what would happen if the given files change. Runs impact BFS, checks coupling depth, community cross-edges, and cycle detection. Returns risk level (low/medium/high/critical) and warnings. Use BEFORE making changes — "先看看改这里会怎样" or "这个改动安全吗？"',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Project root directory path (use the current project path)',
-          },
-          files: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'List of file paths that would be changed',
-          },
-        },
-        required: ['path'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_run_preflight', args),
-    },
-    {
-      name: () => 'hologram_run_health',
-      description: () =>
-        'Project coupling overview (V3): aggregates timeline change history and coupling depth snapshot to compute a coupling density score (0-100), trends, top changed files, and most interconnected modules. Use when the user asks "项目最近怎么样？" or "最近的趋势怎么样？". Note: the score reflects coupling density, not code quality — different project stages have different normal ranges.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Project root directory path (use the current project path)',
-          },
-          days: {
-            type: 'integer',
-            description: 'Number of days to look back for trends (default 30)',
-          },
-        },
-        required: ['path'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_run_health', args),
-    },
-    // ponytail: hologram_history removed — aliased to hologram_node in workspace.ts
-    {
-      name: () => 'hologram_community',
-      description: () =>
-        'Get community/cluster membership for a specific node. Returns the galaxy it belongs to and its sibling nodes (other nodes in the same community). Use when asked "which group does this module belong to?" or "what modules are closely related to this one?"',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          nodeId: { type: 'string', description: 'The node ID or name to query' },
-        },
-        required: ['nodeId'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_community', args),
-    },
-    {
-      name: () => 'hologram_delayed',
-      description: () =>
-        'List all temporal edges in the graph — async calls, triggers, scheduled tasks. Returns source, target, and type for each. Use when asked about async dependencies or temporal coupling.',
+// ═══════════════════════════════════════════════════════
+// Hologram test tools — 数据驱动，仅供 test-once / test-agent
+// ponytail: 生产路径从 MCP tools/list 动态加载（workspace.ts → mcpSchemaToTool）。
+// 此函数存在是因为 CLI 测试脚本没有 Tauri invoke，无法调 hologram_tools_list。
+// 增删引擎工具时：只改 HOLOG_TOOLS 数组，测试自动跟随。
+// ═══════════════════════════════════════════════════════
 
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          filter: {
-            type: 'string',
-            enum: ['all', 'triggers', 'awaits', 'sequences'],
-            description: '边类型过滤（默认 all）',
-            default: 'all',
-          },
-          limit: {
-            type: 'integer',
-            description: '最大返回条数（默认 100）',
-            default: 100,
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_delayed', args),
-    },
-    {
-      name: () => 'hologram_search',
-      description: () =>
-        'Fuzzy search for nodes by name or ID. Returns matching symbols with their IDs, types, and locations. Use this as the FIRST step when looking for a function/class/module but don\'t know its exact name or ID. Once you have the node ID, use hologram_neighbors for its dependencies.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Partial name or ID to search for (e.g. "auth", "parse", "Config")',
-          },
-          limit: {
-            type: 'integer',
-            description: 'Maximum results to return (default: 20)',
-            default: 20,
-          },
-        },
-        required: ['query'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_search', args),
-    },
-    {
-      name: () => 'hologram_rename',
-      description: () =>
-        'Rename a symbol in the dependency graph (in-memory). Finds all matching nodes by name and renames them. Always run with dry_run=true first to preview which nodes will be affected.',
+interface HologToolDef { name: string; desc: string; params?: Record<string, unknown>; required?: string[]; write?: boolean }
 
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          oldName: { type: 'string', description: 'Current name of the symbol to rename' },
-          newName: { type: 'string', description: 'New name for the symbol' },
-          dryRun: { type: 'boolean', description: 'If true, preview changes without modifying files (default: true)', default: true },
-          nodeId: { type: 'string', description: 'Optional node ID for disambiguation when multiple symbols share the same name' },
-        },
-        required: ['oldName', 'newName'],
-      }),
-      // TODO: 支持动态 readOnly (dry_run=true 时只读); 当前接口签名 readOnly(): boolean 不支持参数
-      readOnly: () => false,
-      execute: (args) => exec('hologram_rename', args),
-    },
-    {
-      name: () => 'hologram_status',
-      description: () =>
-        'Get engine status and memory stats. Returns loading phase, node/edge counts, store type (MemoryIndex or legacy Graph), and elapsed load time. Use when Agent needs to check if the graph is ready or diagnose why tools are returning empty results.',
-      parameters: () => ({
-        type: 'object',
-        properties: {},
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_status', args),
-    },
-    {
-      name: () => 'hologram_policy_check',
-      description: () =>
-        '检查项目架构边界规则——自定义 source/target 文件匹配模式 + 边类型，扫描依赖图中所有越界依赖。规则用 glob（modules/** 匹配所有模块文件）或正则表达式。拿来做模块隔离验证："模块A有没有偷偷import模块B的内部文件""有没有模块直接调了框架内部API""模块SQL有没有操作别人的表"。改架构前跑一次看当前违规，改完再跑确认没引入新违规。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          rules: {
-            type: 'array',
-            description: '规则对象数组。每条规则: {name: "规则名", source: "源文件pattern", target: "目标文件pattern", edge_kinds?: ["imports"], message?: "违规说明"}。source/target 支持 glob（modules/*/backend/**）或正则。edge_kinds 默认 ["imports"]，可选: imports, calls, inherits, defines, reads, writes, shares, triggers, awaits, sequences。',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string', description: '规则名称（用于报告中标注）' },
-                source: { type: 'string', description: '源文件匹配模式（glob 如 modules/foo/** 或正则）' },
-                target: { type: 'string', description: '目标文件匹配模式（命中即违规）' },
-                edge_kinds: { type: 'array', items: { type: 'string' }, description: '要检查的边类型，默认 ["imports"]' },
-                message: { type: 'string', description: '违规时显示的消息' },
-              },
-              required: ['name', 'source', 'target'],
-            },
-          },
-          source: { type: 'string', description: '快捷模式：单条规则的 source pattern（与 target 配合，不需要传 rules 数组）' },
-          target: { type: 'string', description: '快捷模式：单条规则的 target pattern' },
-          edge_kinds: { type: 'array', items: { type: 'string' }, description: '快捷模式：边类型过滤，默认 ["imports"]' },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_policy_check', args),
-    },
-    // ── V4: node deep-dive (supersedes hologram_history) ──
-    {
-            name: () => 'hologram_node',
-      description: () =>
-        'Complete information about a single node: identity (name, kind, degree), community membership, and ALL incoming/outgoing edges grouped by kind (imports, calls, inherits, etc.). Use after hologram_search to deep-dive a specific symbol. Richer than hologram_history which only returns node metadata.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          nodeId: {
-            type: 'string',
-            description: 'The node ID or name to query',
-          },
-        },
-        required: ['nodeId'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_node', args),
-    },
-    // ── V4: dead code detection ──
-    {
-      name: () => 'hologram_unused',
-      description: () =>
-        'Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending (most impactful first). Covers function, class, and file nodes by default. Use to find dead code candidates before deleting.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          limit: {
-            type: 'integer',
-            description: 'Max results (default: 20, max: 200)',
-            default: 20,
-          },
-          kindFilter: {
-            type: 'string',
-            description: 'Comma-separated node kinds (default: "function,class,file")',
-            default: 'function,class,file',
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_unused', args),
-    },
-    // ── Dataflow engine (per-file reads/writes/shared state) ──
-    {
-      name: () => 'hologram_dataflow',
-      description: () =>
-        'Per-function variable reads/writes, cross-function shared state, async triggers, and call sequences. Run on specific files to answer "where is X written?", "who reads Y?", "which functions share Z?". Returns per-file scopes (name/reads/writes/triggers/awaits_callbacks/sequence_calls) + shared state (var/readers/writers). Use to trace data movement within a file.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          files: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'File paths to analyze, e.g. ["src/auth.js", "src/db.js"]',
-          },
-        },
-        required: ['files'],
-      }),
-      readOnly: () => true,
-      execute: (args) => exec('hologram_dataflow', args),
-    },
-    // ── dataflow_save — persist Agent-produced trace to .hologram/dataflow/ ──
-    {
-      name: () => 'dataflow_save',
-      description: () =>
-        '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。content 是你写的结构化追踪报告（markdown），会直接渲染给用户。query 是用户原始问题，用于索引。一次追踪调一次 save。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: '用户原始查询，用于面板列表展示和后续检索',
-          },
-          content: {
-            type: 'string',
-            description: '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。',
-          },
-          exploreResult: {
-            type: 'string',
-            description: 'hologram_explore 返回的完整 JSON 字符串（可选，引擎原始数据）',
-          },
-          dataflowResult: {
-            type: 'string',
-            description: 'hologram_dataflow 返回的完整 JSON 字符串（可选，引擎原始数据）',
-          },
-        },
-        required: ['query', 'content'],
-      }),
-      readOnly: () => false,
-      execute: async (args) => {
-        const result = await agentInvoke('dataflow_save', args);
-        window.dispatchEvent(new CustomEvent('dataflow:saved'));
-        return result;
-      },
-    },
-    // ── dataflow_query — load saved traces ──
-    {
-      name: () => 'dataflow_query',
-      description: () =>
-        '查询已保存的数据流追踪结果。traceId 为空时列出所有已存追踪的摘要（traceId/query/createdAt）。传 traceId 加载完整追踪内容（含 Agent 写的 content 和引擎原始数据）。用于回顾之前的分析结论、对比变更前后的数据流。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          traceId: {
-            type: 'string',
-            description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。',
-          },
-          list: {
-            type: 'boolean',
-            description: '传 true 返回轻量摘要列表（不传 traceId 时默认开启）',
-          },
-        },
-      }),
-      readOnly: () => true,
-      execute: (args) => agentInvoke('dataflow_query', args),
-    },
-  ];
+const pp = (props: Record<string, unknown>) => ({ type: 'object', properties: props });
+
+const HOLOG_TOOLS: HologToolDef[] = [
+  { name: 'hologram_explore', desc: '【首选】统一聚合查询：Flow + Blast Radius + Relationships + Source + Alerts。支持自然语言，不确定用什么工具时先调这个。',
+    params: pp({ query: { type:'string', description:'自然语言查询（如 "DataRequest validate task"）' }, symbols: { type:'array', items:{ type:'string' }, description:'显式符号名列表（与 query 二选一）' }, includeSource: { type:'boolean', description:'是否返回源码（默认 true）' } }) },
+  { name: 'hologram_analyze', desc: '重新分析项目目录，生成完整依赖图。', params: pp({ path: { type:'string', description:'项目根目录' } }), required: ['path'], write: true },
+  { name: 'hologram_neighbors', desc: '获取节点的直接邻居（1-hop 子图）——谁依赖它、它依赖谁。', params: pp({ nodeId: { type:'string', description:'节点 ID 或名称' }, depth: { type:'integer', description:'深度（默认 1）' } }), required: ['nodeId'] },
+  { name: 'hologram_impact', desc: '变更波及分析：从节点出发 BFS 追踪所有下游依赖者，返回完整影响树。改代码前必调。', params: pp({ nodeId: { type:'string', description:'源节点 ID' }, maxDepth: { type:'integer', description:'最大深度（0=不限制）' } }), required: ['nodeId'] },
+  { name: 'hologram_path', desc: '查找两个节点之间的所有依赖路径，逐跳展示边类型。', params: pp({ from: { type:'string', description:'源节点 ID' }, to: { type:'string', description:'目标节点 ID' } }), required: ['from', 'to'] },
+  { name: 'hologram_history', desc: '获取节点的决策历史——哪些过去的决策涉及此节点。在 workspace.ts 中 alias 到 hologram_node。', params: pp({ nodeId: { type:'string', description:'节点 ID' } }), required: ['nodeId'] },
+  { name: 'hologram_community', desc: '获取节点的社区归属——它属于哪个社区、父社区、兄弟节点。用 "这个模块属于哪个组？" 时调此工具。', params: pp({ nodeId: { type:'string', description:'节点 ID 或名称' } }), required: ['nodeId'] },
+  { name: 'hologram_delayed', desc: '列出所有时序边——异步调用、触发器、计划任务。用于查异步依赖和时序耦合。', params: pp({ filter: { type:'string', enum:['all','triggers','awaits','sequences'], description:'边类型过滤（默认 all）' }, limit: { type:'integer', description:'最大返回条数（默认 100）' } }) },
+  { name: 'hologram_fragile', desc: 'L4 脆弱模块排行榜：按封装违规密度排序，分数越高 = 越多的时序耦合和隐藏依赖。', params: pp({ limit: { type:'integer', description:'返回前 N 个脆弱模块（默认 5）' } }) },
+  { name: 'hologram_cycle', desc: '检测依赖图中的数据流循环。filter: all（全部）/ data（持久数据依赖）/ llm（LLM 涉及）。', params: pp({ mode: { type:'string', enum:['all','data','llm'], description:'过滤模式（默认 all）' } }) },
+  { name: 'hologram_thread_conflicts', desc: '线程 × 资源冲突矩阵——检测多写者共享变量和并发访问模式。', params: pp({ nodeId: { type:'string', description:'可选节点 ID，省略返回全局矩阵' } }) },
+  { name: 'hologram_coupling_report', desc: '单模块耦合深度分布（L1-L4）：L1=导入, L2=调用/继承, L3=数据共享, L4=时序/异步。', params: pp({ module: { type:'string', description:'模块文件名或路径' } }), required: ['module'] },
+  { name: 'hologram_timeline', desc: '查询因果审计时间线——分析运行、提交、违规等事件的按时间排序日志。', params: pp({ limit: { type:'integer', description:'最大返回条数（默认 100）' }, since: { type:'string', description:'ISO 时间戳过滤（可选）' } }) },
+  { name: 'hologram_blindspots', desc: '架构盲点雷达：L4 封装违规 + 无锁并发 + LLM 反馈循环。filter: all / L4 / thread / cycle。', params: pp({ filter: { type:'string', enum:['all','L4','thread','cycle'], description:'边界类型过滤（默认 all）' } }) },
+  { name: 'hologram_search', desc: '模糊搜索节点名或 ID（FTS5 全文搜索）。找函数/类/模块但不知道确切名字时的第一步。', params: pp({ query: { type:'string', description:'部分名称或 ID' }, limit: { type:'integer', description:'最大结果数（默认 20）' } }), required: ['query'] },
+  { name: 'hologram_explore', desc: '同 hologram_explore。', params: pp({}) }, // duplicate entry — kept for backward compat with old test scripts
+  { name: 'hologram_graph_summary', desc: '依赖图高层概览：节点/边数、语言分布、密度指标、顶层架构一览。', params: pp({}) },
+  { name: 'hologram_clusters', desc: '社区/聚类结构报告——按规模排序，展示自然形成的模块群。查单个节点的社区归属用 hologram_community。', params: pp({ minSize: { type:'integer', description:'最小社区规模（默认 3）' }, maxNodes: { type:'integer', description:'每个社区最大展示节点数（默认 20）' } }) },
+  { name: 'hologram_graph_diff', desc: '对比当前依赖图与基线快照——展示新增/删除/修改的节点和边。', params: pp({ beforePath: { type:'string', description:'基线图 JSON 文件路径' } }), required: ['beforePath'] },
+  { name: 'hologram_run_preflight', desc: '改前预检（V3）：输入要改的文件列表，评估波及范围、风险等级、共享变量影响、时序边信号。改代码前先跑——"这个改动安全吗？"', params: pp({ path: { type:'array', items:{ type:'string' }, description:'要改的文件路径列表' } }), required: ['path'] },
+  { name: 'hologram_run_check', desc: '完整约束校验（V3）：重新分析 + 基线对比 + 所有结构约束检查。用户说"全面检查"或"跑一遍约束"时用。', params: pp({ path: { type:'string', description:'项目根目录' } }), required: ['path'], write: true },
+  { name: 'hologram_run_health', desc: '项目健康快照：密度分数（0-100）+ 趋势 + 改动最多文件 + 最互联模块。"项目最近怎么样？"或"最近的趋势怎么样？"时用。', params: pp({ path: { type:'string', description:'项目根目录' }, days: { type:'integer', description:'回溯天数（默认 30）' } }), required: ['path'] },
+  { name: 'hologram_rename', desc: '安全重命名依赖图中的符号。先用 dryRun=true 预览，确认后再 dryRun=false 执行。', params: pp({ oldName: { type:'string', description:'当前符号名' }, newName: { type:'string', description:'新符号名' }, dryRun: { type:'boolean', description:'仅预览不修改（默认 true）' }, nodeId: { type:'string', description:'有同名歧义时指定节点 ID' } }), required: ['oldName','newName'], write: true },
+  { name: 'hologram_status', desc: '引擎状态和内存统计——加载阶段、节点/边数、存储类型、启动耗时。Agent 确认图是否就绪时用。', params: pp({}) },
+  { name: 'hologram_policy_check', desc: '架构边界规则检查——自定义 source/target 文件匹配 + 边类型，扫描越界依赖。模块隔离验证："A 有没有偷 import B 的内部文件？"', params: pp({ rules: { type:'array', description:'规则对象数组 [{name, source, target, edge_kinds?, message?}]。source/target 支持 glob 或正则。edge_kinds 默认 ["imports"]。' }, source: { type:'string', description:'快捷模式：单条规则的 source pattern' }, target: { type:'string', description:'快捷模式：单条规则的 target pattern' }, edge_kinds: { type:'array', items:{ type:'string' }, description:'边类型过滤，默认 ["imports"]' } }) },
+  { name: 'hologram_node', desc: '单节点完整信息——身份（name/kind/degree）+ 社区归属 + 全部出入边按类型分组。hologram_search 命中后深挖具体符号。', params: pp({ nodeId: { type:'string', description:'节点 ID 或名称' } }), required: ['nodeId'] },
+  { name: 'hologram_unused', desc: '潜在死代码探测——零入度节点（无人引用的函数/类/文件），按出度降序排列。删代码前先跑。', params: pp({ limit: { type:'integer', description:'最大结果数（默认 20）' }, kindFilter: { type:'string', description:'逗号分隔的节点类型（默认 "function,class,file"）' } }) },
+  { name: 'hologram_dataflow', desc: '逐函数变量读写 + 跨函数共享状态 + 异步触发 + 调用序列。"X 在哪被写？""谁读了 Y？""哪些函数共享 Z？"', params: pp({ files: { type:'array', items:{ type:'string' }, description:'要分析的文件路径列表' } }), required: ['files'] },
+  // ── LSP 引擎（4 个）──
+  { name: 'hologram_resolve_call', desc: 'LSP 调用解析：给定调用表达式，返回所有可能的目标定义（多态解析）。' },
+  { name: 'hologram_resolve_type', desc: 'LSP 类型解析：推断表达式类型，返回类型名和定义模块。' },
+  { name: 'hologram_find_implementations', desc: 'LSP 查找接口/抽象类的所有实现，返回完整继承树。' },
+  { name: 'hologram_find_references', desc: 'LSP 查找符号的所有引用位置，返回文件列表和引用计数。' },
+];
+
+export function createHologramTestTools(exec: ToolExecutor): Tool[] {
+  return HOLOG_TOOLS.map(d => ({
+    name: () => d.name,
+    description: () => d.desc,
+    parameters: () => d.params || { type: 'object', properties: {} },
+    readOnly: () => !d.write,
+    execute: (args: Record<string, unknown>) => exec(d.name, args),
+  }));
 }
 
 // ═══════════════════════════════════════════════════════
