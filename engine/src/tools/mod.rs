@@ -111,6 +111,7 @@ impl ToolRegistry {
             "hologram_node" => handler_node(args),
             "hologram_unused" => handler_unused(args),
             "hologram_dataflow" => handler_dataflow(args),
+            "hologram_resolve_call" => handler_resolve_call(args),
             _ => json!({"error": format!("Tool not found: {}", name)}),
         }
     }
@@ -1354,6 +1355,120 @@ fn handler_unused(args: &Value) -> Value {
     })
 }
 
+/// On-demand type-aware call resolution. Replaces the old eager LSP pass
+/// in the pipeline. Agent calls this when it needs to know the *actual*
+/// target of a call expressed as a method/attribute chain.
+fn handler_resolve_call(args: &Value) -> Value {
+    let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
+    let func_name = args.get("function").and_then(|v| v.as_str()).unwrap_or("");
+    if file_path.is_empty() || func_name.is_empty() {
+        return json!({"error": "file and function are required"});
+    }
+    let root = project_root();
+    let abs_path = if Path::new(file_path).is_absolute() {
+        PathBuf::from(file_path)
+    } else {
+        root.join(file_path)
+    };
+    let path_str = abs_path.to_string_lossy().replace('\\', "/");
+    let ext = path_str.rsplit('.').next().unwrap_or("").to_lowercase();
+
+    // Read source
+    let source = match std::fs::read_to_string(&abs_path) {
+        Ok(s) => s,
+        Err(e) => return json!({"error": format!("cannot read file: {}", e)}),
+    };
+
+    // Parse — re-parse via engine helper to avoid tree_sitter name ambiguity
+    // with crate::adapter::tree_sitter module
+    let Some(tree) = engine::reparse_source_lsp(&source, &ext) else {
+        return json!({"error": format!("parse failed or unsupported extension: {}", ext)});
+    };
+
+    // Build module QN
+    let module_qn = path_str.trim_end_matches(&format!(".{}", ext)).replace(['/', '\\'], ".");
+
+    // Registry from current in-memory graph
+    let registry = match engine::engine_read_graph(|g| {
+        crate::adapter::type_registry::TypeRegistry::from_graph(g)
+    }) {
+        Ok(r) => r,
+        Err(e) => return json!({"error": format!("cannot access graph: {}", e)}),
+    };
+
+    // Dispatch to language adapter
+    use crate::adapter::*;
+    let calls: Vec<Value> = match ext.as_str() {
+        "py" | "pyi" => python_lsp::run_py_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "go" => go_lsp::run_go_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "java" => java_lsp::run_java_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "cs" => cs_lsp::run_cs_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
+            let (calls, _perf) = ts_lsp::run_ts_lsp(&source, &tree, &module_qn, &registry);
+            calls.into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect()
+        }
+        "c" | "h" | "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" =>
+            c_lsp::run_c_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry)
+            .into_iter().map(|rc| json!({
+                "caller": rc.caller_qn, "callee": rc.callee_qn,
+                "strategy": rc.strategy, "confidence": rc.confidence,
+            })).collect(),
+        _ => return json!({"error": format!("LSP not available for .{}", ext)}),
+    };
+
+    // Filter to the requested function if specified
+    let filtered: Vec<&Value> = if func_name.is_empty() {
+        calls.iter().collect()
+    } else {
+        calls.iter().filter(|c| {
+            c.get("caller").and_then(|v| v.as_str())
+                .map(|s| s.contains(func_name))
+                .unwrap_or(false)
+        }).collect()
+    };
+
+    json!({
+        "file": path_str,
+        "function": func_name,
+        "resolved_calls": filtered,
+        "total": filtered.len(),
+    })
+}
+
 fn handler_dataflow(args: &Value) -> Value {
     let files: Vec<String> = args
         .get("files")
@@ -1646,6 +1761,18 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "dataflow",
         },
+        // LSP call resolution (on-demand, replaces old eager pipeline pass)
+        ToolSchema {
+            name: "hologram_resolve_call",
+            description: "Type-aware call resolution for a single file. Resolves method/attribute calls to their concrete targets using per-language LSP adapters. Use this when the graph shows a short callee name and you need the fully-qualified target. Accepts 'file' (path) and optional 'function' (filter to calls from a specific function).",
+            params: &[
+                p!("file", "string", "File path, e.g. \"src/views.py\""),
+                p!("function", "string", "Optional: filter to calls from a specific function, e.g. \"login\""),
+            ],
+            required: &["file"],
+            read_only: true,
+            category: "lsp",
+        },
     ]
 }
 
@@ -1660,14 +1787,14 @@ mod tests {
     #[test]
     fn test_tool_count() {
         let schemas = all_schemas();
-        assert_eq!(schemas.len(), 27, "must have exactly 27 tools");
+        assert_eq!(schemas.len(), 28, "must have exactly 28 tools");
     }
 
     #[test]
     fn test_mcp_tools_list_format() {
         let registry = ToolRegistry::global();
         let tools = registry.tools_list();
-        assert_eq!(tools.len(), 27);
+        assert_eq!(tools.len(), 28);
         for tool in &tools {
             assert!(tool.get("name").and_then(|v| v.as_str()).is_some(), "every tool must have a name");
             assert!(tool.get("description").and_then(|v| v.as_str()).is_some(), "every tool must have a description");

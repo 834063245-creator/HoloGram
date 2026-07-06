@@ -484,49 +484,9 @@ impl Engine {
         set_progress("解析完成", result.files_parsed, result.files_discovered,
             &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
-        // 1.5. Type-aware LSP call resolution
-        set_progress("类型感知解析", 0, 0, "");
-        let project_root_buf = project_root.to_path_buf();
-        let mut graph_for_lsp = std::mem::take(&mut result.graph);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let builder = std::thread::Builder::new().stack_size(16 * 1024 * 1024);
-        let handle = builder.spawn(move || {
-            let r = resolve_calls_lsp(&mut graph_for_lsp, &parse_cache, &discovered_files, &project_root_buf);
-            let _ = tx.send((graph_for_lsp, parse_cache, discovered_files, r));
-        });
-        // ponytail: 30s timeout on LSP — prevents permanent hang if the LSP
-        // thread stack-overflows (Windows swallows SIGSEGV on alt-stack threads
-        // too). Fall back to skipping LSP pass rather than blocking forever.
-        let lsp_resolved = match handle {
-            Ok(_h) => {
-                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-                    Ok((g, pc, df, r)) => {
-                        result.graph = g;
-                        result.parse_cache = pc;
-                        result.discovered_files = df;
-                        r
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        warn!("[engine] LSP thread timed out after 30s — skipping LSP pass");
-                        0
-                    }
-                    Err(_) => {
-                        warn!("[engine] LSP thread disconnected — skipping LSP pass");
-                        0
-                    }
-                }
-            }
-            Err(_) => {
-                warn!("[engine] LSP thread spawn failed — skipping LSP pass");
-                0
-            }
-        };
-        info!(edges = lsp_resolved, "[engine] LSP type-resolved call edges");
-        eprintln!("[engine] stage: LSP done in {:.1}s ({} resolved)",
-            stage_start.elapsed().as_secs_f64(), lsp_resolved);
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
+        // 1.5. LSP call resolution → moved to on-demand MCP tool
+        // (hologram_resolve_call). The graph stores coarse CALLS edges;
+        // type-aware disambiguation happens lazily when the Agent asks.
 
         // 2. Cross-file resolution
         set_progress("跨文件解析", 0, 0, "");
@@ -1262,6 +1222,10 @@ thread_local! {
 }
 
 /// Re-parse source to a tree-sitter Tree. Returns None if language not supported or parse fails.
+/// Public for on-demand LSP tool usage; internal alias reparse_for_lsp for legacy code.
+pub fn reparse_source_lsp(source: &str, ext: &str) -> Option<tree_sitter::Tree> {
+    reparse_for_lsp(source, ext)
+}
 fn reparse_for_lsp(source: &str, ext: &str) -> Option<tree_sitter::Tree> {
     TL_LSP_PARSER.with(|cell| {
         let mut borrow = cell.borrow_mut();
