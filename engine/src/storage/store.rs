@@ -24,7 +24,7 @@ pub struct GraphStore {
     /// Project root this store was opened for. Used to detect workspace switches
     /// so we can reopen the SQLite at the correct path instead of cross-contaminating.
     project_root: PathBuf,
-    /// Loading progress (for hologram_status). Updated during startup load.
+    /// Loading progress (for engine_status). Updated during startup load.
     loading: RwLock<LoadProgress>,
     /// Timestamp when loading started (ms since epoch, for elapsed_ms calc).
     load_start_ms: AtomicU64,
@@ -146,7 +146,7 @@ impl GraphStore {
         *old = new_idx;
     }
 
-    /// Get current loading progress (for hologram_status).
+    /// Get current loading progress (for engine_status).
     pub fn load_progress(&self) -> LoadProgress {
         let p = self.loading.read().clone();
         let start = self.load_start_ms.load(Ordering::Relaxed);

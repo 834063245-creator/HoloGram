@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn test_find_grammar_dir_env() {
         // Use a path that definitely doesn't exist on any platform
-        let fake = if cfg!(windows) { "Z:\\hologram_nonexistent_12345" } else { "/nonexistent/hologram_12345" };
+        let fake = if cfg!(windows) { "Z:\\nonexistent_tool_12345" } else { "/nonexistent/hologram_12345" };
         std::env::set_var("HOLOGRAM_GRAMMAR_DIR", fake);
         let dir = find_grammar_dir();
         // Should fall back because the env path doesn't exist — current_exe dir or ./grammars/

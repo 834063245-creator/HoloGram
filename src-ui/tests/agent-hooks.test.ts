@@ -69,7 +69,7 @@ describe('GraphContext', () => {
     const summary = ctx.getImpactSummary('D:/repo/src/config.ts');
     expect(summary).toContain('parseConfig');
     expect(summary).toContain('2 个符号');
-    expect(summary).toContain('hologram_impact');
+    expect(summary).toContain('trace_impact');
   });
 
   it('getImpactSummary 不存在文件返回 null', () => {
@@ -95,12 +95,12 @@ describe('GraphContextHook.shouldEnrich', () => {
 
   const shouldTrigger = [
     'read_file_content', 'read_file', 'search_content',
-    'glob', 'list_directory', 'hologram_dataflow',
-    'hologram_search', 'hologram_node', 'git_diff', 'run_shell',
+    'glob', 'list_directory', 'trace_dataflow',
+    'search_symbols', 'inspect_symbol', 'git_diff', 'run_shell',
   ];
 
   const shouldNotTrigger = [
-    'edit_file', 'write_file', 'hologram_explore', 'git_status',
+    'edit_file', 'write_file', 'explore_deps', 'git_status',
     'agent_spawn', 'ask_user', 'web_search',
   ];
 
@@ -139,7 +139,7 @@ describe('GraphContextHook.enrich', () => {
     const out = await hook.enrich('read_file',
       { filePath: 'D:/repo/src/config.ts' },
       'some content');
-    expect(out).toContain('hologram_dataflow 追踪');
+    expect(out).toContain('trace_dataflow 追踪');
   });
 
   it('search_content 注入匹配文件符号', async () => {
@@ -175,34 +175,34 @@ describe('GraphContextHook.enrich', () => {
     expect(injectedBlock).not.toContain('readme.txt');
   });
 
-  it('hologram_dataflow 注入共享变量', async () => {
-    const out = await hook.enrich('hologram_dataflow', { files: ['src/state.ts'] },
+  it('trace_dataflow 注入共享变量', async () => {
+    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] },
       JSON.stringify({ shared_state: [{ var: 'store', readers: 6, writers: 1 }] }));
     expect(out).toContain('共享变量');
     expect(out).toContain('store');
-    expect(out).toContain('hologram_impact');
+    expect(out).toContain('trace_impact');
   });
 
-  it('hologram_dataflow 无共享变量时不注入', async () => {
-    const out = await hook.enrich('hologram_dataflow', { files: ['src/state.ts'] },
+  it('trace_dataflow 无共享变量时不注入', async () => {
+    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] },
       JSON.stringify({ shared_state: [] }));
     expect(out).not.toContain('📊 [图上下文]');
   });
 
-  it('hologram_search 注入命中节点', async () => {
-    const out = await hook.enrich('hologram_search', { query: 'config' },
+  it('search_symbols 注入命中节点', async () => {
+    const out = await hook.enrich('search_symbols', { query: 'config' },
       JSON.stringify({ results: [{ name: 'parseConfig' }, { name: 'applyConfig' }] }));
     expect(out).toContain('命中 2 个节点');
     expect(out).toContain('parseConfig');
-    expect(out).toContain('hologram_neighbors');
+    expect(out).toContain('get_neighbors');
   });
 
-  it('hologram_node 注入社区归属', async () => {
-    const out = await hook.enrich('hologram_node', { nodeId: 'parseConfig' },
+  it('inspect_symbol 注入社区归属', async () => {
+    const out = await hook.enrich('inspect_symbol', { nodeId: 'parseConfig' },
       JSON.stringify({ community: 'core-utils' }));
     expect(out).toContain('社区归属');
     expect(out).toContain('core-utils');
-    expect(out).toContain('hologram_community');
+    expect(out).toContain('get_community');
   });
 
   it('git_diff 注入变更文件符号', async () => {
@@ -215,13 +215,13 @@ describe('GraphContextHook.enrich', () => {
   it('run_shell 测试命令注入提示', async () => {
     const out = await hook.enrich('run_shell', { command: 'npm test -- --coverage' }, 'PASS');
     expect(out).toContain('🧪');
-    expect(out).toContain('hologram_run_check');
+    expect(out).toContain('validate_project');
   });
 
   it('run_shell 构建命令注入提示', async () => {
     const out = await hook.enrich('run_shell', { command: 'npm install' }, 'added 42 packages');
     expect(out).toContain('🔧');
-    expect(out).toContain('hologram_run_check');
+    expect(out).toContain('validate_project');
   });
 
   it('run_shell 非测试/构建命令不注入', async () => {
@@ -264,7 +264,7 @@ describe('GraphPreflightHook.shouldCheck', () => {
     'git_discard', 'git_checkout', 'git_commit',
   ];
 
-  const shouldNotTrigger = ['read_file', 'hologram_explore', 'search_content'];
+  const shouldNotTrigger = ['read_file', 'explore_deps', 'search_content'];
 
   for (const name of shouldTrigger) {
     it(`✅ ${name} 触发预检`, () => {
@@ -324,7 +324,7 @@ describe('GraphPreflightHook.check', () => {
     expect(warn).not.toBeNull();
     expect(warn!).toContain('创建提交');
     expect(warn!).toContain('git_diff');
-    expect(warn!).toContain('hologram_impact');
+    expect(warn!).toContain('trace_impact');
   });
 });
 

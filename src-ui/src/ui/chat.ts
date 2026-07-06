@@ -498,8 +498,27 @@ export class ChatPanel {
   }
 
   /** Categorize a tool name for visual grouping. */
+  // ponytail: graph tools renamed (no hologram_ prefix), matched by known set + memory tools keep prefix
+  private static _holoTools?: Set<string>;
+  private static isHoloTool(name: string): boolean {
+    if (name.startsWith('hologram_')) return true; // memory / legacy tools
+    if (!ChatPanel._holoTools) {
+      ChatPanel._holoTools = new Set([
+        'explore_deps', 'search_symbols', 'get_neighbors', 'trace_impact',
+        'find_dep_path', 'inspect_symbol', 'symbol_history', 'get_community',
+        'cluster_report', 'async_edges', 'fragile_modules', 'detect_cycles',
+        'thread_conflicts', 'coupling_report', 'project_timeline', 'arch_blindspots',
+        'graph_summary', 'graph_diff', 'analyze_project', 'preflight_check',
+        'validate_project', 'project_health', 'rename_symbol', 'engine_status',
+        'check_boundaries', 'find_unused', 'trace_dataflow',
+        'resolve_call', 'infer_type', 'find_implementations', 'find_references',
+        'dataflow_save', 'dataflow_query',
+      ]);
+    }
+    return ChatPanel._holoTools.has(name);
+  }
   private static toolCategory(name: string): 'read' | 'write' | 'exec' | 'holo' {
-    if (name.startsWith('hologram_')) return 'holo';
+    if (ChatPanel.isHoloTool(name)) return 'holo';
     if (/^(read|search|grep|glob|list|view|show|get|find|cat|head|tail)/i.test(name)) return 'read';
     if (/^(write|edit|create|delete|remove|mv|cp|rename|save)/i.test(name)) return 'write';
     if (/^(run|exec|bash|shell|cmd|build|test|cargo|npm|git|python|node|web_|ask_|agent_)/i.test(name)) return 'exec';
@@ -4415,8 +4434,8 @@ function formatToolResult(toolName: string, text: string, truncated: boolean, ar
   let body = text;
   if (truncated) body += '\n…[截断]…';
 
-  // ── hologram_dataflow — inline flow card ──
-  if (toolName === 'hologram_dataflow') {
+  // ── trace_dataflow — inline flow card ──
+  if (toolName === 'trace_dataflow') {
     const card = formatDataflowCard(text);
     if (card) return card;
   }

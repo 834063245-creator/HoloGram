@@ -230,8 +230,8 @@ const MOCK_DIFF = {
 
 // ── Agent tool mock responses ──
 const MOCK_TOOL_RESPONSES: Record<string, any> = {
-  hologram_analyze: JSON.stringify({ nodes: MOCK_NODES.length, edges: MOCK_EDGES.length, communities: MOCK_COMMUNITIES.length }),
-  hologram_explore: JSON.stringify({
+  analyze_project: JSON.stringify({ nodes: MOCK_NODES.length, edges: MOCK_EDGES.length, communities: MOCK_COMMUNITIES.length }),
+  explore_deps: JSON.stringify({
     query: 'explore result',
     flow: { path: ['router', 'middleware', 'auth', 'database'], depth: 4 },
     blast_radius: { affected_nodes: 7, files: ['middleware.ts', 'auth.ts', 'cache.ts'], risk: 'medium' },
@@ -239,20 +239,20 @@ const MOCK_TOOL_RESPONSES: Record<string, any> = {
     source_code: '// See read_file_content for full source',
     architecture_alerts: [{ severity: 'info', message: 'Standard module pattern — no anomalies detected' }],
   }),
-  hologram_neighbors: JSON.stringify({ node: "router", depth: 1, neighbors: ["request", "response", "route_parser", "server"], edge_count: 3 }),
-  hologram_impact: JSON.stringify({ source: "router", max_depth: 3, reachable_count: 12, tree: { "router": ["request", "response"], "request": [], "response": ["serializer"] } }),
-  hologram_path: JSON.stringify({ path: ["router", "response", "serializer"], length: 3 }),
-  hologram_fragile: JSON.stringify([{ node: "database", fragility: 0.92, fan_in: 12, l4_count: 2 }, { node: "cache_store", fragility: 0.87, fan_in: 8, l4_count: 1 }, { node: "scheduler", fragility: 0.81, fan_in: 5, l4_count: 1 }]),
-  hologram_cycle: JSON.stringify({ cycles: [{ nodes: ["cache_store", "redis_adapter", "serializer", "cache_store"], depth: 3 }], total: 1 }),
-  hologram_coupling_report: JSON.stringify({ module: "router", l1: 12, l2: 5, l3: 2, l4: 0, fragility: 0.45, fan_in: 4, fan_out: 3 }),
-  hologram_blindspots: JSON.stringify([{ pattern: "dynamic import", confidence: 0.75, location: "nebula/core/plugins.ts:35" }]),
-  hologram_thread_conflicts: JSON.stringify([{ location: "nebula/temporal/worker.ts:45", severity: "high", description: "共享状态无锁写入" }]),
-  hologram_timeline: JSON.stringify(MOCK_TIMELINE),
-  hologram_community_report: JSON.stringify(MOCK_COMMUNITIES),
-  hologram_graph_summary: JSON.stringify({ total_nodes: MOCK_NODES.length, total_edges: MOCK_EDGES.length, node_types: { class: 22, function: 8, database: 1, cache: 1, queue: 1, temporal: 1, thread: 2, trigger: 1, timer: 1, medium: 3, interface: 2 }, density: 0.042, communities: MOCK_COMMUNITIES.length }),
-  hologram_run_check: JSON.stringify(buildMockCheck(false)),
-  hologram_run_preflight: JSON.stringify({ risk: "medium", warnings: ["波及 7 个节点"], recommendations: ["建议拆分 middleware.ts"] }),
-  hologram_run_health: JSON.stringify({ score: 72, trend: "declining", top_changed: ["middleware.ts", "cache.ts"], issues: ["L4 封装穿透增加"] }),
+  get_neighbors: JSON.stringify({ node: "router", depth: 1, neighbors: ["request", "response", "route_parser", "server"], edge_count: 3 }),
+  trace_impact: JSON.stringify({ source: "router", max_depth: 3, reachable_count: 12, tree: { "router": ["request", "response"], "request": [], "response": ["serializer"] } }),
+  find_dep_path: JSON.stringify({ path: ["router", "response", "serializer"], length: 3 }),
+  fragile_modules: JSON.stringify([{ node: "database", fragility: 0.92, fan_in: 12, l4_count: 2 }, { node: "cache_store", fragility: 0.87, fan_in: 8, l4_count: 1 }, { node: "scheduler", fragility: 0.81, fan_in: 5, l4_count: 1 }]),
+  detect_cycles: JSON.stringify({ cycles: [{ nodes: ["cache_store", "redis_adapter", "serializer", "cache_store"], depth: 3 }], total: 1 }),
+  coupling_report: JSON.stringify({ module: "router", l1: 12, l2: 5, l3: 2, l4: 0, fragility: 0.45, fan_in: 4, fan_out: 3 }),
+  arch_blindspots: JSON.stringify([{ pattern: "dynamic import", confidence: 0.75, location: "nebula/core/plugins.ts:35" }]),
+  thread_conflicts: JSON.stringify([{ location: "nebula/temporal/worker.ts:45", severity: "high", description: "共享状态无锁写入" }]),
+  project_timeline: JSON.stringify(MOCK_TIMELINE),
+  cluster_report: JSON.stringify(MOCK_COMMUNITIES),
+  graph_summary: JSON.stringify({ total_nodes: MOCK_NODES.length, total_edges: MOCK_EDGES.length, node_types: { class: 22, function: 8, database: 1, cache: 1, queue: 1, temporal: 1, thread: 2, trigger: 1, timer: 1, medium: 3, interface: 2 }, density: 0.042, communities: MOCK_COMMUNITIES.length }),
+  validate_project: JSON.stringify(buildMockCheck(false)),
+  preflight_check: JSON.stringify({ risk: "medium", warnings: ["波及 7 个节点"], recommendations: ["建议拆分 middleware.ts"] }),
+  project_health: JSON.stringify({ score: 72, trend: "declining", top_changed: ["middleware.ts", "cache.ts"], issues: ["L4 封装穿透增加"] }),
   read_file_content: `// nebula/core/middleware.ts (mock)
 import { Request } from './request';
 import { Response } from './response';
@@ -447,7 +447,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
   }
 
   // Check
-  if (cmd === 'hologram_run_check') {
+  if (cmd === 'validate_project') {
     return JSON.stringify(buildMockCheck(false));
   }
 

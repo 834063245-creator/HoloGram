@@ -5,7 +5,7 @@
 //
 // 两层架构：
 //   1. PreflightHook（pre-tool）：edit_file / write_file 之前 → ⚠️ 警告注入结果顶部
-//   2. GraphContextHook（post-tool）：read_file / search_content / glob / list_directory / hologram_dataflow / hologram_search / hologram_node / git_diff / run_shell 之后 → 📊 符号概览注入结果顶部
+//   2. GraphContextHook（post-tool）：read_file / search_content / glob / list_directory / trace_dataflow / search_symbols / inspect_symbol / git_diff / run_shell 之后 → 📊 符号概览注入结果顶部
 //
 // 设计约束：
 //   - 注入内容 < 800 字符，避免膨胀 token
@@ -227,9 +227,9 @@ export function buildGraphSnapshot(graphData: any): string {
 export const GRAPH_ENRICH_TOOLS = [
   'read_file_content', 'read_file',
   'search_content', 'glob', 'list_directory',
-  'hologram_dataflow', 'hologram_search', 'hologram_node', 'git_diff', 'run_shell',
-  'hologram_resolve_call', 'hologram_resolve_type',
-  'hologram_find_implementations', 'hologram_find_references',
+  'trace_dataflow', 'search_symbols', 'inspect_symbol', 'git_diff', 'run_shell',
+  'resolve_call', 'infer_type',
+  'find_implementations', 'find_references',
 ] as const;
 
 /** 触发 preflight 写前影响分析的工具名
@@ -272,7 +272,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             const nodes = ctx.getNodesInFile(fp);
             const hasFuncs = nodes.some(n => n.kind === 'function' || n.kind === 'method');
             if (hasFuncs && snippet) {
-              snippet += ' 共享变量/异步链 → hologram_dataflow 追踪。';
+              snippet += ' 共享变量/异步链 → trace_dataflow 追踪。';
             }
           }
           break;
@@ -292,26 +292,26 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
           break;
         }
-        case 'hologram_dataflow': {
+        case 'trace_dataflow': {
           const vars = extractSharedVarsFromDataflow(result);
           if (vars.length > 0) {
-            snippet = `共享变量: ${vars.map(v => `\`${v}\``).join(', ')}。→ 用 hologram_impact 追踪下游影响`;
+            snippet = `共享变量: ${vars.map(v => `\`${v}\``).join(', ')}。→ 用 trace_impact 追踪下游影响`;
           }
           break;
         }
-        case 'hologram_search': {
+        case 'search_symbols': {
           const nodes = extractNodesFromSearchResult(result);
           if (nodes.length > 0) {
             const names = nodes.map(n => `\`${n.name}\``).join(', ');
-            snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 hologram_neighbors 查看依赖`;
+            snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 get_neighbors 查看依赖`;
           }
           break;
         }
-        case 'hologram_node': {
+        case 'inspect_symbol': {
           try {
             const parsed = JSON.parse(result);
             if (parsed.community) {
-              snippet = `社区归属: ${parsed.community}。→ 调 hologram_community 查看同社区节点`;
+              snippet = `社区归属: ${parsed.community}。→ 调 get_community 查看同社区节点`;
             }
           } catch {}
           break;
@@ -324,14 +324,14 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
         case 'run_shell': {
           const cmd = String(args['command'] || '');
           if (/pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd)) {
-            snippet = '🧪 测试完成后建议: 1) hologram_run_check 查看简报 2) hologram_impact 检查变更波及范围';
+            snippet = '🧪 测试完成后建议: 1) validate_project 查看简报 2) trace_impact 检查变更波及范围';
           } else if (/npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd)) {
-            snippet = '🔧 构建/安装完成后建议: 跑相关测试确认无回归，必要时调 hologram_run_check 查看项目健康 snapshot';
+            snippet = '🔧 构建/安装完成后建议: 跑相关测试确认无回归，必要时调 validate_project 查看项目健康 snapshot';
           }
           break;
         }
         // ── LSP tools: inject graph context from resolution results ──
-        case 'hologram_resolve_call': {
+        case 'resolve_call': {
           try {
             const parsed = JSON.parse(result);
             if (parsed.resolved && Array.isArray(parsed.resolved) && parsed.resolved.length > 0) {
@@ -341,34 +341,34 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               // Check graph for callee impact
               const fp = String(args['file_path'] || '');
               if (fp && parsed.resolved[0].callee_qn) {
-                snippet += ` → 调 hologram_impact "${parsed.resolved[0].callee_qn}" 看下游`;
+                snippet += ` → 调 trace_impact "${parsed.resolved[0].callee_qn}" 看下游`;
               }
             }
           } catch {}
           break;
         }
-        case 'hologram_resolve_type': {
+        case 'infer_type': {
           try {
             const parsed = JSON.parse(result);
             if (parsed.type_name) {
-              snippet = `类型: \`${parsed.type_name}\`${parsed.def_module ? ` (${parsed.def_module})` : ''}。→ 调 hologram_search 找同类型相关的符号`;
+              snippet = `类型: \`${parsed.type_name}\`${parsed.def_module ? ` (${parsed.def_module})` : ''}。→ 调 search_symbols 找同类型相关的符号`;
             }
           } catch {}
           break;
         }
-        case 'hologram_find_implementations': {
+        case 'find_implementations': {
           try {
             const parsed = JSON.parse(result);
             const impls = parsed.implementations;
             if (impls && Array.isArray(impls) && impls.length > 0) {
               const count = impls.length;
               const names = impls.slice(0, 3).map((i: any) => `\`${i.name || i.qualified_name || '?'}\``).join(', ');
-              snippet = `找到 ${count} 个实现: ${names}${count > 3 ? '…' : ''}。→ 调 hologram_neighbors 查看完整继承树`;
+              snippet = `找到 ${count} 个实现: ${names}${count > 3 ? '…' : ''}。→ 调 get_neighbors 查看完整继承树`;
             }
           } catch {}
           break;
         }
-        case 'hologram_find_references': {
+        case 'find_references': {
           try {
             const parsed = JSON.parse(result);
             const refs = parsed.references;
@@ -382,7 +382,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               }
               snippet = `找到 ${count} 个引用，分布在 ${refFiles.size} 个文件中。`;
               if (refFiles.size >= 3) {
-                snippet += ` 跨文件影响面大 → 调 hologram_impact 评估变更风险`;
+                snippet += ` 跨文件影响面大 → 调 trace_impact 评估变更风险`;
               }
             }
           } catch {}
@@ -514,7 +514,7 @@ export function createGraphContext(
       summary += ` | 依赖上游: ${upstream.map(n => `\`${n.name}\`(${n.fanOut})`).join(', ')}。`;
     }
     if (downstream.length > 0) {
-      summary += ` → 改 \`${downstream[0].name}\` 前调 hologram_impact`;
+      summary += ` → 改 \`${downstream[0].name}\` 前调 trace_impact`;
     }
     return summary;
   }
@@ -544,7 +544,7 @@ export function createGraphContext(
     if (files.length >= 2) {
       summary += ` ${files.length} 个文件, 扇入合计 ${totalFanIn}, 扇出合计 ${totalFanOut}。`;
       if (totalFanIn >= 10 || totalFanOut >= 10) {
-        summary += ` → 跨文件耦合较高, 调 hologram_explore 追踪文件间依赖`;
+        summary += ` → 跨文件耦合较高, 调 explore_deps 追踪文件间依赖`;
       }
     }
     return summary;
@@ -559,7 +559,7 @@ export function createGraphContext(
 //   1. 该文件有多少符号被外部依赖
 //   2. 被依赖最多的 top 5 符号
 //   3. 风险等级（LOW / MEDIUM / HIGH）
-//   4. 引导 Agent 调 hologram_impact 深挖（MEDIUM+ 时）
+//   4. 引导 Agent 调 trace_impact 深挖（MEDIUM+ 时）
 //
 // 耗时 < 0.1ms，数据全在内存，不额外调 MCP。
 
@@ -587,7 +587,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
         return [
           `⚠️ [提交] 即将创建提交。`,
           `│  → 先用 git_diff --staged 确认暂存区变更。`,
-          `│  → 若涉及核心模块，建议调 hologram_impact 检查波及范围后再推送。`,
+          `│  → 若涉及核心模块，建议调 trace_impact 检查波及范围后再推送。`,
         ].join('\n');
       }
 
@@ -642,7 +642,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
       if (riskLevel.trim() !== 'LOW') {
         const topName = topSymbols[0].name;
-        lines.push(`│  → ${verb}前建议调 hologram_impact "${topName}" 查看完整波及范围`);
+        lines.push(`│  → ${verb}前建议调 trace_impact "${topName}" 查看完整波及范围`);
       }
 
       return lines.join('\n');

@@ -18,7 +18,7 @@ use crate::graph::{EdgeKind, Node};
 use crate::storage::sqlite::SqliteDb;
 use crate::storage::string_arena::StringArena;
 
-/// Progress info for hologram_status MCP tool.
+/// Progress info for engine_status MCP tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct LoadProgress {
     pub phase: String,
@@ -374,7 +374,7 @@ impl MemoryIndex {
 
     /// Recompute in_degree/out_degree for each node from the deduped bucket lengths.
     /// Node degrees loaded from SQLite can be stale (old analysis wrote wrong values);
-    /// rederive from actual adjacency so hologram_unused (in_degree==0) is correct.
+    /// rederive from actual adjacency so find_unused (in_degree==0) is correct.
     /// ponytail: post-dedup count = unique (src,kind,depth) edges; differs from
     /// add_edge's per-edge count when duplicates exist, but for ==0 + ranking it's
     /// the honest number. to_sqlite dumps these back so subsequent cold starts are correct.
@@ -1244,7 +1244,7 @@ mod tests {
 
     /// Regression: MemoryIndex loaders (from_existing_graph/from_sqlite/_degraded)
     /// used to trust the in_degree/out_degree baked into each Node (stale in SQLite),
-    /// so hologram_unused (in_degree==0) returned wrong results. recompute_degrees
+    /// so find_unused (in_degree==0) returned wrong results. recompute_degrees
     /// must rederive from actual adjacency, overwriting stale stored values.
     #[test]
     fn from_existing_graph_recomputes_degrees_from_adjacency() {

@@ -1252,11 +1252,11 @@ function truncationHint(toolName: string): string {
       return '缩小 path 到具体子目录。';
     case 'git_diff':
       return '用 file 参数指定单个文件，或 staged 只看暂存区变更。';
-    case 'hologram_analyze':
-      return 'analyze 输出大是正常的。用 hologram_graph_summary 看概览，再按需查具体节点。';
+    case 'analyze_project':
+      return 'analyze 输出大是正常的。用 graph_summary 看概览，再按需查具体节点。';
     case 'git_log':
       return '用 count 参数减少返回的提交数量。';
-    case 'hologram_timeline':
+    case 'project_timeline':
       return '用 limit 参数缩小结果数，或用 module 参数过滤特定模块。';
     default:
       return '用更窄的参数重新调用，或换用更精确的工具获取子集。';

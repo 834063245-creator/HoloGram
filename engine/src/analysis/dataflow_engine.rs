@@ -620,7 +620,7 @@ pub struct DataflowFileResult {
 ///
 /// # Agent workflow pattern
 /// ```text
-/// 1. hologram_search("db") → find candidate files
+/// 1. search_symbols("db") → find candidate files
 /// 2. query_dataflow_files(&[path1, path2, path3]) → dataflow results
 /// 3. For each shared variable found, cross-reference with graph structure
 /// ```

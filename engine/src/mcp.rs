@@ -55,65 +55,65 @@ pub fn parse_serve_args() -> Option<Option<String>> {
 fn tool_definitions() -> Vec<Value> {
     vec![
         // ── V1 tools (7) ──
-        tool_def("hologram_neighbors", "Get first-order neighbors of a node, grouped by edge type (structural/data/temporal).",
+        tool_def("get_neighbors", "Get first-order neighbors of a node, grouped by edge type (structural/data/temporal).",
             &[("nodeId", "string", "The node ID")], &["nodeId"]),
-        tool_def("hologram_impact", "BFS impact analysis from a node. Returns layered results with distance, edge types, and temporal delay info.",
+        tool_def("trace_impact", "BFS impact analysis from a node. Returns layered results with distance, edge types, and temporal delay info.",
             &[("nodeId", "string", "The source node ID"), ("depth", "integer", "BFS max depth (default 3)")], &["nodeId"]),
-        tool_def("hologram_path", "Find all paths between two nodes. Each path includes hop count and edge types.",
+        tool_def("find_dep_path", "Find all paths between two nodes. Each path includes hop count and edge types.",
             &[("from", "string", "Source node ID"), ("to", "string", "Target node ID"), ("depth", "integer", "BFS search depth limit (default 20)")], &["from", "to"]),
-        tool_def("hologram_history", "Get decision history for a node — what decisions involved this node.",
+        tool_def("symbol_history", "Get decision history for a node — what decisions involved this node.",
             &[("nodeId", "string", "The node ID")], &["nodeId"]),
-        tool_def("hologram_community", "Get community information for a node — its community, parent, and sibling nodes.",
+        tool_def("get_community", "Get community information for a node — its community, parent, and sibling nodes.",
             &[("nodeId", "string", "The node ID")], &["nodeId"]),
-        tool_def("hologram_delayed", "Get all nodes connected via temporal edges with non-null delays.",
+        tool_def("async_edges", "Get all nodes connected via temporal edges with non-null delays.",
             &[], &[]),
-        // ponytail: hologram_changes removed — merged into hologram_timeline (timeline with limit=1 covers it)
+        // ponytail: hologram_changes removed — merged into project_timeline (timeline with limit=1 covers it)
 
         // ── V2 analysis (5) ──
-        tool_def("hologram_fragile", "Get top N most fragile modules ranked by L4 encapsulation violation density.",
+        tool_def("fragile_modules", "Get top N most fragile modules ranked by L4 encapsulation violation density.",
             &[("limit", "integer", "Number of top fragile modules to return (default 5)")], &[]),
-        tool_def("hologram_cycle", "Get all detected data flow cycles. Filter by mode: all, data, llm.",
+        tool_def("detect_cycles", "Get all detected data flow cycles. Filter by mode: all, data, llm.",
             &[("mode", "string", "Filter: all, data, or llm (default all)")], &[]),
-        tool_def("hologram_thread_conflicts", "Get thread × resource conflict matrix.",
+        tool_def("thread_conflicts", "Get thread × resource conflict matrix.",
             &[("nodeId", "string", "Optional node ID — if omitted, returns global matrix")], &[]),
-        tool_def("hologram_coupling_report", "Get complete coupling depth distribution (L1-L4 stats).",
+        tool_def("coupling_report", "Get complete coupling depth distribution (L1-L4 stats).",
             &[("module", "string", "Module file name or path")], &["module"]),
-        tool_def("hologram_timeline", "Query the causal audit timeline.",
+        tool_def("project_timeline", "Query the causal audit timeline.",
             &[("limit", "integer", "Max events to return (default 100)"), ("since", "string", "ISO timestamp filter (optional)")], &[]),
 
         // ── V2 boundary (1) ──
-        tool_def("hologram_blindspots", "Get all detected boundaries (L4 violations, unlocked concurrency, LLM feedback loops).",
+        tool_def("arch_blindspots", "Get all detected boundaries (L4 violations, unlocked concurrency, LLM feedback loops).",
             &[("filter", "string", "Boundary type filter: all, L4, thread, cycle (default all)")], &[]),
 
         // ── V3 preflight (1) ──
-        tool_def("hologram_run_preflight", "Pre-flight check: analyze what would happen if the given files change.",
+        tool_def("preflight_check", "Pre-flight check: analyze what would happen if the given files change.",
             &[("path", "array", "List of file paths that would be changed")], &["path"]),
 
         // ── V3+ parity (5) ──
-        tool_def("hologram_search", "Fuzzy search for nodes by name or ID.",
+        tool_def("search_symbols", "Fuzzy search for nodes by name or ID.",
             &[("query", "string", "Partial name or ID to search for"), ("limit", "integer", "Max results (default 20)")], &["query"]),
-        tool_def("hologram_explore", "Unified query: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts. Accepts natural language query or symbol names, returns everything in one response.",
+        tool_def("explore_deps", "Unified query: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts. Accepts natural language query or symbol names, returns everything in one response.",
             &[("query", "string", "Natural language query (e.g. 'DataRequest validate task'). Auto-extracts symbol names."), ("symbols", "array", "List of symbol names (alternative to query)"), ("includeSource", "boolean", "Include source code sections (default true)")], &[]),
-        tool_def("hologram_graph_summary", "Get a high-level summary of the current dependency graph.",
+        tool_def("graph_summary", "Get a high-level summary of the current dependency graph.",
             &[], &[]),
-        tool_def("hologram_clusters", "Report on cluster/community structure in the codebase.",
+        tool_def("cluster_report", "Report on cluster/community structure in the codebase.",
             &[("min_size", "integer", "Minimum community size to report (default 3)"),
               ("max_nodes", "integer", "Max node IDs per community in output (default 20, max 200)")], &[]),
-        tool_def("hologram_graph_diff", "Diff the current graph against a baseline snapshot.",
+        tool_def("graph_diff", "Diff the current graph against a baseline snapshot.",
             &[("beforePath", "string", "Path to the baseline graph JSON file")], &["beforePath"]),
-        tool_def("hologram_analyze", "Re-analyze a project directory and reload the graph.",
+        tool_def("analyze_project", "Re-analyze a project directory and reload the graph.",
             &[("path", "string", "Project root directory path")], &["path"]),
 
         // ── V3 check + health (2) ──
-        tool_def("hologram_run_check", "Run full constraint validation (V3) on the current project.",
+        tool_def("validate_project", "Run full constraint validation (V3) on the current project.",
             &[("path", "string", "Project root directory path")], &["path"]),
-        tool_def("hologram_run_health", "Get current project health snapshot (trend requires historical data).",
+        tool_def("project_health", "Get current project health snapshot (trend requires historical data).",
             &[("path", "string", "Project root directory path"), ("days", "integer", "Days to look back (default 30)")], &["path"]),
-        tool_def("hologram_rename", "Safely rename a symbol across all files with atomic rollback.",
+        tool_def("rename_symbol", "Safely rename a symbol across all files with atomic rollback.",
             &[("oldName", "string", "Current name"), ("newName", "string", "New name"), ("dryRun", "boolean", "Preview only (default false)"), ("nodeId", "string", "Optional specific node ID")], &["oldName", "newName"]),
-        tool_def("hologram_status", "Get engine loading status and memory stats.",
+        tool_def("engine_status", "Get engine loading status and memory stats.",
             &[], &[]),
-        tool_def("hologram_policy_check", "Check project boundary rules against the dependency graph. Define rules with source/target file patterns (glob or regex) and edge kinds; returns violations where source files have forbidden edges to target files. Use this to enforce architectural boundaries (e.g. 'modules cannot import each other directly').",
+        tool_def("check_boundaries", "Check project boundary rules against the dependency graph. Define rules with source/target file patterns (glob or regex) and edge kinds; returns violations where source files have forbidden edges to target files. Use this to enforce architectural boundaries (e.g. 'modules cannot import each other directly').",
             &[
                 ("rules", "array", "JSON array of rule objects. Each rule: {name, source, target, edge_kinds?, message?}. source/target are glob or regex patterns. edge_kinds defaults to [\"imports\"]. Valid kinds: imports, calls, inherits, defines, reads, writes, shares, triggers, awaits, sequences."),
                 ("source", "string", "Shortcut: single source file pattern (instead of full rules array)"),
@@ -123,11 +123,11 @@ fn tool_definitions() -> Vec<Value> {
             &[]),
 
         // ── V4 node deep-dive (1) ──
-        tool_def("hologram_node", "Complete information about a single node — identity, degree, community, and all incoming/outgoing edges grouped by kind. Use after hologram_search to dive into a specific symbol, or when you need the full picture of a known node in one call instead of hologram_neighbors + hologram_community.",
+        tool_def("inspect_symbol", "Complete information about a single node — identity, degree, community, and all incoming/outgoing edges grouped by kind. Use after search_symbols to dive into a specific symbol, or when you need the full picture of a known node in one call instead of get_neighbors + get_community.",
             &[("nodeId", "string", "The node ID")], &["nodeId"]),
 
         // ── V4 dead code detection (1) ──
-        tool_def("hologram_unused", "Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending so the most impactful candidates appear first. Defaults to functions and classes; use kind_filter to expand scope.",
+        tool_def("find_unused", "Find potentially unused symbols — nodes with zero incoming references (in_degree=0). Sorted by out_degree descending so the most impactful candidates appear first. Defaults to functions and classes; use kind_filter to expand scope.",
             &[
                 ("limit", "integer", "Max results (default 20, max 200)"),
                 ("kind_filter", "string", "Node kinds to include, comma-separated. Default: \"function,class\". Options: symbol, function, class, module, interface, medium, temporal."),
@@ -135,7 +135,7 @@ fn tool_definitions() -> Vec<Value> {
             &[]),
 
         // ── Dataflow tracing (1) ──
-        tool_def("hologram_dataflow", "Per-function variable reads/writes, cross-function shared state, async triggers, and call sequences. Run on specific files to answer \"where is X written?\", \"who reads Y?\", \"which functions share Z?\".",
+        tool_def("trace_dataflow", "Per-function variable reads/writes, cross-function shared state, async triggers, and call sequences. Run on specific files to answer \"where is X written?\", \"who reads Y?\", \"which functions share Z?\".",
             &[
                 ("files", "array", "File paths, e.g. [\"src/auth.js\", \"src/db.js\"]"),
             ],
@@ -434,17 +434,17 @@ mod tests {
         assert_eq!(tools.len(), 31, "31 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-        assert!(names.contains(&"hologram_neighbors"));
-        assert!(names.contains(&"hologram_analyze"));
-        assert!(names.contains(&"hologram_run_preflight"));
-        assert!(names.contains(&"hologram_rename"));
-        assert!(names.contains(&"hologram_dataflow"));
+        assert!(names.contains(&"get_neighbors"));
+        assert!(names.contains(&"analyze_project"));
+        assert!(names.contains(&"preflight_check"));
+        assert!(names.contains(&"rename_symbol"));
+        assert!(names.contains(&"trace_dataflow"));
     }
 
     #[test]
     fn test_tool_call_unknown_tool() {
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_nonexistent", json!({}), 2)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("nonexistent_tool", json!({}), 2)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -456,7 +456,7 @@ mod tests {
     fn test_neighbors_missing_node_id() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_neighbors", json!({}), 3)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("get_neighbors", json!({}), 3)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -466,7 +466,7 @@ mod tests {
     fn test_neighbors_node_not_found() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_neighbors",
+        let req = serde_json::to_string(&make_tool_call("get_neighbors",
             json!({"node_id": "nonexistent"}), 4)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -478,7 +478,7 @@ mod tests {
     fn test_neighbors_returns_data() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_neighbors",
+        let req = serde_json::to_string(&make_tool_call("get_neighbors",
             json!({"node_id": "a"}), 5)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -493,7 +493,7 @@ mod tests {
         let _g = MUTEX.lock().unwrap();
         let srv = server();
         clear_graph();
-        let req = serde_json::to_string(&make_tool_call("hologram_neighbors",
+        let req = serde_json::to_string(&make_tool_call("get_neighbors",
             json!({"node_id": "a"}), 6)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -506,7 +506,7 @@ mod tests {
     fn test_impact_missing_node_id() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_impact", json!({}), 7)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("trace_impact", json!({}), 7)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -516,7 +516,7 @@ mod tests {
     fn test_impact_with_default_depth() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_impact",
+        let req = serde_json::to_string(&make_tool_call("trace_impact",
             json!({"node_id": "a"}), 8)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -532,7 +532,7 @@ mod tests {
     fn test_path_missing_params() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_path", json!({}), 9)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("find_dep_path", json!({}), 9)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -542,7 +542,7 @@ mod tests {
     fn test_path_found() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_path",
+        let req = serde_json::to_string(&make_tool_call("find_dep_path",
             json!({"from_id": "a", "to_id": "b"}), 10)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -557,7 +557,7 @@ mod tests {
     fn test_history_returns_data() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_history",
+        let req = serde_json::to_string(&make_tool_call("symbol_history",
             json!({"node_id": "a"}), 11)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -574,7 +574,7 @@ mod tests {
     fn test_community_returns_data() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_community",
+        let req = serde_json::to_string(&make_tool_call("get_community",
             json!({"node_id": "a"}), 12)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -590,7 +590,7 @@ mod tests {
     fn test_delayed_empty() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_delayed", json!({}), 13)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("async_edges", json!({}), 13)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
@@ -605,7 +605,7 @@ mod tests {
     fn test_fragile_returns_top_n() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_fragile",
+        let req = serde_json::to_string(&make_tool_call("fragile_modules",
             json!({"limit": 2}), 14)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -621,7 +621,7 @@ mod tests {
     fn test_cycle_default_mode() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_cycle", json!({}), 15)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("detect_cycles", json!({}), 15)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
@@ -635,7 +635,7 @@ mod tests {
     fn test_thread_conflicts() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_thread_conflicts",
+        let req = serde_json::to_string(&make_tool_call("thread_conflicts",
             json!({}), 16)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -650,7 +650,7 @@ mod tests {
     fn test_coupling_report_missing_module() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_coupling_report",
+        let req = serde_json::to_string(&make_tool_call("coupling_report",
             json!({}), 17)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -661,7 +661,7 @@ mod tests {
     fn test_coupling_report_with_module() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_coupling_report",
+        let req = serde_json::to_string(&make_tool_call("coupling_report",
             json!({"module_name": "a"}), 18)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn test_timeline() {
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_timeline",
+        let req = serde_json::to_string(&make_tool_call("project_timeline",
             json!({"limit": 10}), 19)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -688,7 +688,7 @@ mod tests {
     fn test_blindspots() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_blindspots",
+        let req = serde_json::to_string(&make_tool_call("arch_blindspots",
             json!({"filter": "all"}), 20)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -717,7 +717,7 @@ mod tests {
         });
 
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_blindspots",
+        let req = serde_json::to_string(&make_tool_call("arch_blindspots",
             json!({"filter": "all"}), 21)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -743,7 +743,7 @@ mod tests {
     fn test_preflight_missing_files() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_run_preflight", json!({}), 21)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("preflight_check", json!({}), 21)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -753,7 +753,7 @@ mod tests {
     fn test_preflight_with_files() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_run_preflight",
+        let req = serde_json::to_string(&make_tool_call("preflight_check",
             json!({"files": ["src/a.rs"]}), 22)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -768,7 +768,7 @@ mod tests {
     fn test_search_missing_query() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_search", json!({}), 23)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("search_symbols", json!({}), 23)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -778,7 +778,7 @@ mod tests {
     fn test_search_finds_nodes() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_search",
+        let req = serde_json::to_string(&make_tool_call("search_symbols",
             json!({"query": "mod"}), 24)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -793,7 +793,7 @@ mod tests {
     fn test_graph_summary() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_graph_summary", json!({}), 25)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("graph_summary", json!({}), 25)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
@@ -808,7 +808,7 @@ mod tests {
     fn test_community_report() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_clusters",
+        let req = serde_json::to_string(&make_tool_call("cluster_report",
             json!({"min_size": 1}), 26)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -823,7 +823,7 @@ mod tests {
     fn test_diff_missing_before_path() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_graph_diff", json!({}), 27)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("graph_diff", json!({}), 27)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -835,7 +835,7 @@ mod tests {
     fn test_run_health_missing_path() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_run_health", json!({}), 28)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("project_health", json!({}), 28)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -847,7 +847,7 @@ mod tests {
     fn test_rename_missing_names() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_rename", json!({}), 29)).unwrap();
+        let req = serde_json::to_string(&make_tool_call("rename_symbol", json!({}), 29)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32603);
@@ -857,7 +857,7 @@ mod tests {
     fn test_rename_dry_run() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_rename",
+        let req = serde_json::to_string(&make_tool_call("rename_symbol",
             json!({"oldName": "mod_a", "newName": "module_a", "dryRun": true}), 30)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -873,7 +873,7 @@ mod tests {
     fn test_explore_missing_symbols() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+        let req = serde_json::to_string(&make_tool_call("explore_deps",
             json!({}), 31)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -884,7 +884,7 @@ mod tests {
     fn test_explore_with_query() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+        let req = serde_json::to_string(&make_tool_call("explore_deps",
             json!({"query": "mod_a mod_b"}), 35)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -899,7 +899,7 @@ mod tests {
     fn test_explore_with_symbols() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+        let req = serde_json::to_string(&make_tool_call("explore_deps",
             json!({"symbols": ["mod_a", "mod_b"]}), 32)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -929,7 +929,7 @@ mod tests {
     fn test_explore_single_symbol() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+        let req = serde_json::to_string(&make_tool_call("explore_deps",
             json!({"symbols": ["mod_a"]}), 33)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
@@ -947,7 +947,7 @@ mod tests {
     fn test_explore_no_source() {
         let _g = load_test_graph();
         let srv = server();
-        let req = serde_json::to_string(&make_tool_call("hologram_explore",
+        let req = serde_json::to_string(&make_tool_call("explore_deps",
             json!({"symbols": ["mod_a", "mod_b"], "includeSource": false}), 34)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
