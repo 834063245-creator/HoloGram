@@ -150,6 +150,53 @@ impl LspProcess {
         parse_definition_results(&result)
     }
 
+    fn implementation(
+        &mut self,
+        uri: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<LspLocation>, String> {
+        let params = json!({
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": column},
+        });
+        let resp = self.send_request("textDocument/implementation", params)?;
+        let result = resp.get("result").cloned().unwrap_or(Value::Null);
+        parse_definition_results(&result)
+    }
+
+    fn hover(
+        &mut self,
+        uri: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<String, String> {
+        let params = json!({
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": column},
+        });
+        let resp = self.send_request("textDocument/hover", params)?;
+        let result = resp.get("result").cloned().unwrap_or(Value::Null);
+        if result.is_null() {
+            return Ok(String::new());
+        }
+        // Hover result: { contents: MarkupContent | MarkedString | MarkedString[] }
+        let contents = result.get("contents").cloned().unwrap_or(Value::Null);
+        match contents {
+            Value::String(s) => Ok(s),
+            Value::Object(ref m) => m.get("value").and_then(|v| v.as_str()).map(|s| s.to_string()).ok_or("no hover value".into()),
+            Value::Array(ref arr) => {
+                // MarkedString[] — take the first language-tagged one
+                for item in arr {
+                    if let Some(s) = item.as_str() { return Ok(s.to_string()); }
+                    if let Some(v) = item.get("value").and_then(|v| v.as_str()) { return Ok(v.to_string()); }
+                }
+                Ok(String::new())
+            }
+            _ => Ok(String::new()),
+        }
+    }
+
     fn references(
         &mut self,
         uri: &str,
@@ -466,6 +513,74 @@ impl LspManager {
 
         let _ = process.open_file(&uri, source, lang_id);
         process.references(&uri, line, column)
+    }
+
+    /// Resolve the type at (file, line, column) via hover.
+    pub fn resolve_type(
+        file_path: &str,
+        source: &str,
+        line: u32,
+        column: u32,
+        ext: &str,
+    ) -> Result<String, String> {
+        let (uri, lang_id) = Self::prepare(file_path, ext)?;
+        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
+        let process = guard.as_mut().ok_or("server not running")?;
+        let _ = process.open_file(&uri, source, &lang_id);
+        process.hover(&uri, line, column)
+    }
+
+    /// Find all implementations of the interface/trait at (file, line, column).
+    pub fn find_implementations(
+        file_path: &str,
+        source: &str,
+        line: u32,
+        column: u32,
+        ext: &str,
+    ) -> Result<Vec<LspLocation>, String> {
+        let (uri, lang_id) = Self::prepare(file_path, ext)?;
+        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
+        let process = guard.as_mut().ok_or("server not running")?;
+        let _ = process.open_file(&uri, source, &lang_id);
+        process.implementation(&uri, line, column)
+    }
+
+    /// Find all references to the symbol at (file, line, column).
+    pub fn find_references(
+        file_path: &str,
+        source: &str,
+        line: u32,
+        column: u32,
+        ext: &str,
+    ) -> Result<Vec<LspLocation>, String> {
+        let (uri, lang_id) = Self::prepare(file_path, ext)?;
+        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
+        let process = guard.as_mut().ok_or("server not running")?;
+        let _ = process.open_file(&uri, source, &lang_id);
+        process.references(&uri, line, column)
+    }
+
+    /// Helper: resolve uri + lang_id from file path and ext.
+    fn prepare(file_path: &str, ext: &str) -> Result<(String, String), String> {
+        let abs_path = if PathBuf::from(file_path).is_absolute() {
+            file_path.to_string()
+        } else {
+            let mgr = Self::global();
+            let root = mgr.project_root.read().unwrap();
+            let root = root.as_ref().ok_or("no project root")?;
+            format!("{}/{}", root, file_path)
+        };
+        let uri = format!("file:///{}", abs_path.replace('\\', "/"));
+        let lang_id = SERVER_CONFIGS
+            .iter()
+            .find(|c| c.extensions.contains(&ext))
+            .map(|c| c.language_id)
+            .unwrap_or(ext)
+            .to_string();
+        Ok((uri, lang_id))
     }
 
     /// Check if LSP is available for a given file extension.
