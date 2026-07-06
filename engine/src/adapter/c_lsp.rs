@@ -28,7 +28,7 @@ impl<'a> CLspContext<'a> {
             resolved_calls: Vec::new(), eval_cache: HashMap::new() }
     }
 
-    /// Register a `using namespace X;` directive in the current scope.
+    #[allow(dead_code)] // registered for future namespace-aware walk integration
     pub fn add_using_namespace(&mut self, ns: &str) {
         self.using_namespaces.push(ns.to_string());
     }

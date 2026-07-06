@@ -1567,13 +1567,11 @@ fn handler_find_implementations(args: &Value) -> Value {
         _ => {}
     }
 
-    // Fallback: use registry to find types whose bases include the target
-    let module_qn = path_str.trim_end_matches(&format!(".{}", ext)).replace(['/', '\\'], ".");
+    // Fallback: use registry to find types
     match engine::engine_read_graph(|g| {
         crate::adapter::type_registry::TypeRegistry::from_graph(g)
     }) {
         Ok(registry) => {
-            let target_qn = format!("{}.__target__", module_qn);
             // ponytail: without a specific position, return all non-interface types
             let impls: Vec<Value> = registry.types_by_qn.iter()
                 .filter(|(_, rt)| !rt.is_interface && rt.alias_of.is_none())
@@ -1601,7 +1599,7 @@ fn handler_find_references(args: &Value) -> Value {
     };
     let line = get_usize(args, "line", 0) as u32;
     let column = get_usize(args, "column", 0) as u32;
-    let include_decl = args.get("includeDeclaration").and_then(|v| v.as_bool()).unwrap_or(false);
+    let _include_decl = args.get("includeDeclaration").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // Try native LSP
     match crate::lsp_manager::LspManager::find_references(&path_str, &source, line, column, &ext) {
@@ -1622,12 +1620,8 @@ fn handler_find_references(args: &Value) -> Value {
 
     // Fallback: use graph to find incoming references
     match engine::engine_read_graph(|g| {
-        let node_ids: Vec<String> = g.nodes.keys().cloned().collect();
+        let _node_ids: Vec<String> = g.nodes.keys().cloned().collect();
         let refs: Vec<Value> = g.edges.iter()
-            .filter(|(_, e)| {
-                let target_short = e.target.rsplit('.').next().unwrap_or(&e.target);
-                !include_decl || true // ponytail: graph edges already show references
-            })
             .take(100)
             .map(|(_, e)| json!({
                 "source": e.source,
