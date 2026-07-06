@@ -635,7 +635,7 @@ export class Workspace {
     this.checkRunning = true;
     this.checkPending = false;
     try {
-      const json = await invoke<string>('hologram_run_check', { path: this.path });
+      const json = await invoke<string>('hologram_call', { tool: 'validate_project', args: { path: this.path } });
       try {
         const result: CheckResult = JSON.parse(json);
         checkPanel.update(result);
