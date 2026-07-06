@@ -151,6 +151,74 @@ export function buildFileNodeIndex(graphData: any): {
   return { fileIndex, fanIn, fanOut };
 }
 
+// ── buildGraphSnapshot —— 从 graphData 计算架构快照，注入 system prompt ──
+
+export function buildGraphSnapshot(graphData: any): string {
+  const nodes: any[] = Array.isArray(graphData.nodes)
+    ? graphData.nodes
+    : Object.values(graphData.nodes || {});
+  const edges: any[] = Array.isArray(graphData.edges)
+    ? graphData.edges
+    : Object.values(graphData.edges || {});
+
+  // Community distribution
+  const communityMap = new Map<number, number>();
+  for (const n of nodes) {
+    const cid = n.community_id ?? n.communityId;
+    if (cid != null) communityMap.set(cid, (communityMap.get(cid) || 0) + 1);
+  }
+
+  // Edge type breakdown
+  const edgeTypes = new Map<string, number>();
+  for (const e of edges) {
+    const k = (e.kind || e.edge_type || '?');
+    edgeTypes.set(k, (edgeTypes.get(k) || 0) + 1);
+  }
+
+  // Top fan-in nodes
+  const fanIn = new Map<string, number>();
+  for (const e of edges) {
+    if (e.target) fanIn.set(e.target, (fanIn.get(e.target) || 0) + 1);
+  }
+  const topFanIn = nodes
+    .map(n => ({ name: n.name || n.id, fanIn: fanIn.get(n.id) || 0 }))
+    .filter(n => n.fanIn > 0)
+    .sort((a, b) => b.fanIn - a.fanIn)
+    .slice(0, 5);
+
+  // Inherits edges — count distinct
+  const inheritsEdges = edges.filter(e => (e.kind || e.edge_type) === 'inherits');
+  const classCount = nodes.filter(n => (n.kind || '').toLowerCase() === 'class').length;
+
+  const parts: string[] = [];
+  parts.push(`${nodes.length} 节点 / ${edges.length} 边`);
+
+  // Communities
+  if (communityMap.size > 0) {
+    const sizes = [...communityMap.values()].sort((a, b) => b - a).slice(0, 5);
+    parts.push(`${communityMap.size} 个社区（规模: ${sizes.join('/')}）`);
+  }
+
+  // Edge types
+  const typeParts: string[] = [];
+  for (const [k, v] of [...edgeTypes.entries()].sort((a, b) => b[1] - a[1])) {
+    typeParts.push(`${k}:${v}`);
+  }
+  parts.push(`边: ${typeParts.join(', ')}`);
+
+  // Class hierarchy
+  if (classCount > 0) {
+    parts.push(`${classCount} 个类/接口, ${inheritsEdges.length} 条继承边`);
+  }
+
+  // Hotspots
+  if (topFanIn.length > 0) {
+    parts.push(`枢纽: ${topFanIn.map(n => `\`${n.name}\`(${n.fanIn})`).join(', ')}`);
+  }
+
+  return parts.join(' | ');
+}
+
 // ── GraphContextHook（post-tool，结果顶部注入）──
 
 const MAX_ENRICH_BYTES = 800;
@@ -163,7 +231,9 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
     shouldEnrich(toolName: string): boolean {
       // edit_file / write_file 由 preflight hook 处理，此处不重复
       return ['read_file_content', 'read_file', 'search_content', 'glob', 'list_directory',
-               'hologram_dataflow', 'hologram_search', 'hologram_node', 'git_diff', 'run_shell'].includes(toolName);
+               'hologram_dataflow', 'hologram_search', 'hologram_node', 'git_diff', 'run_shell',
+               'hologram_resolve_call', 'hologram_resolve_type',
+               'hologram_find_implementations', 'hologram_find_references'].includes(toolName);
     },
 
     async enrich(toolName: string, args: Record<string, unknown>, result: string): Promise<string> {
@@ -239,6 +309,64 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           } else if (/npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd)) {
             snippet = '🔧 构建/安装完成后建议: 跑相关测试确认无回归，必要时调 hologram_run_check 查看项目健康 snapshot';
           }
+          break;
+        }
+        // ── LSP tools: inject graph context from resolution results ──
+        case 'hologram_resolve_call': {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.resolved && Array.isArray(parsed.resolved) && parsed.resolved.length > 0) {
+              const top = parsed.resolved.slice(0, 3);
+              const names = top.map((r: any) => `\`${r.callee_qn}\``).join(', ');
+              snippet = `解析到 ${parsed.resolved.length} 个调用目标: ${names}${parsed.resolved.length > 3 ? '…' : ''}。`;
+              // Check graph for callee impact
+              const fp = String(args['file_path'] || '');
+              if (fp && parsed.resolved[0].callee_qn) {
+                snippet += ` → 调 hologram_impact "${parsed.resolved[0].callee_qn}" 看下游`;
+              }
+            }
+          } catch {}
+          break;
+        }
+        case 'hologram_resolve_type': {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.type_name) {
+              snippet = `类型: \`${parsed.type_name}\`${parsed.def_module ? ` (${parsed.def_module})` : ''}。→ 调 hologram_search 找同类型相关的符号`;
+            }
+          } catch {}
+          break;
+        }
+        case 'hologram_find_implementations': {
+          try {
+            const parsed = JSON.parse(result);
+            const impls = parsed.implementations;
+            if (impls && Array.isArray(impls) && impls.length > 0) {
+              const count = impls.length;
+              const names = impls.slice(0, 3).map((i: any) => `\`${i.name || i.qualified_name || '?'}\``).join(', ');
+              snippet = `找到 ${count} 个实现: ${names}${count > 3 ? '…' : ''}。→ 调 hologram_neighbors 查看完整继承树`;
+            }
+          } catch {}
+          break;
+        }
+        case 'hologram_find_references': {
+          try {
+            const parsed = JSON.parse(result);
+            const refs = parsed.references;
+            if (refs && Array.isArray(refs) && refs.length > 0) {
+              const count = refs.length;
+              // Extract unique files from references
+              const refFiles = new Set<string>();
+              for (const r of refs) {
+                if (r.file) refFiles.add(r.file);
+                if (refFiles.size >= 5) break;
+              }
+              snippet = `找到 ${count} 个引用，分布在 ${refFiles.size} 个文件中。`;
+              if (refFiles.size >= 3) {
+                snippet += ` 跨文件影响面大 → 调 hologram_impact 评估变更风险`;
+              }
+            }
+          } catch {}
           break;
         }
       }
@@ -348,34 +476,59 @@ export function createGraphContext(
     const nodes = getNodesInFile(filePath);
     if (nodes.length === 0) return null;
 
-    // Top symbols by fan-in (most depended-on)
-    const sorted = [...nodes].sort((a, b) => b.fanIn - a.fanIn).slice(0, 5);
-    const parts = sorted.map(n =>
-      `\`${n.name}\`(${n.kind || 'symbol'}) — ${n.fanIn} downstream`
-    );
+    // Downstream: who depends on this file's symbols
+    const downstream = [...nodes]
+      .filter(n => n.fanIn > 0)
+      .sort((a, b) => b.fanIn - a.fanIn)
+      .slice(0, 5);
+    // Upstream: what this file's symbols depend on
+    const upstream = [...nodes]
+      .filter(n => n.fanOut > 0)
+      .sort((a, b) => b.fanOut - a.fanOut)
+      .slice(0, 3);
 
-    let summary = `此文件 ${nodes.length} 个符号。${
-      sorted.length > 0 ? `被依赖最多：${parts.join(', ')}。` : ''
-    }`;
-    if (sorted.length > 0) {
-      summary += ` → 要看 \`${sorted[0].name}\` 的依赖链，调 hologram_explore "${sorted[0].name}"`;
+    let summary = `此文件 ${nodes.length} 个符号。`;
+    if (downstream.length > 0) {
+      summary += ` 下游依赖: ${downstream.map(n => `\`${n.name}\`(${n.fanIn})`).join(', ')}。`;
+    }
+    if (upstream.length > 0) {
+      summary += ` | 依赖上游: ${upstream.map(n => `\`${n.name}\`(${n.fanOut})`).join(', ')}。`;
+    }
+    if (downstream.length > 0) {
+      summary += ` → 改 \`${downstream[0].name}\` 前调 hologram_impact`;
     }
     return summary;
   }
 
   function getSearchContext(files: string[]): string | null {
     const parts: string[] = [];
+    let totalFanIn = 0;
+    let totalFanOut = 0;
     for (const fp of files) {
       const nodes = getNodesInFile(fp);
       if (nodes.length > 0) {
+        const fi = nodes.reduce((s, n) => s + n.fanIn, 0);
+        const fo = nodes.reduce((s, n) => s + n.fanOut, 0);
+        totalFanIn += fi;
+        totalFanOut += fo;
+        const fileName = fp.replace(/\\/g, '/').split('/').pop() || fp;
+        const deps: string[] = [];
+        if (fi > 0) deps.push(`${fi}↓`);
+        if (fo > 0) deps.push(`${fo}↑`);
         const top3 = nodes.sort((a, b) => b.fanIn - a.fanIn).slice(0, 3);
         const names = top3.map(n => `\`${n.name}\``).join(', ');
-        const fileName = fp.replace(/\\/g, '/').split('/').pop() || fp;
-        parts.push(`${fileName}: ${names}`);
+        parts.push(`${fileName}: ${nodes.length}符号${deps.length > 0 ? ` [${deps.join(' ')}]` : ''} — ${names}`);
       }
     }
     if (parts.length === 0) return null;
-    return `匹配文件中的关键符号 — ${parts.join(' | ')}。`;
+    let summary = `匹配文件 — ${parts.join(' | ')}。`;
+    if (files.length >= 2) {
+      summary += ` ${files.length} 个文件, 扇入合计 ${totalFanIn}, 扇出合计 ${totalFanOut}。`;
+      if (totalFanIn >= 10 || totalFanOut >= 10) {
+        summary += ` → 跨文件耦合较高, 调 hologram_explore 追踪文件间依赖`;
+      }
+    }
+    return summary;
   }
 
   return { getNodesInFile, getImpactSummary, getSearchContext };
