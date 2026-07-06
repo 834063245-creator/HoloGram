@@ -5,12 +5,16 @@
 // Instead of waiting for the entire stream to finish before executing tools,
 // this starts execution immediately when a tool_use block is complete.
 //
+// Hooks (GraphContextHook / PreflightHook) are run here — preflight before
+// execution, post-tool enrichment after — so they aren't bypassed by streaming.
+//
 // CC ref: StreamingToolExecutor, query.ts:1366-1408
 
 import type { ToolCall } from '../provider/types';
 import { ToolRegistry } from './tool';
 import type { Tool } from './tool';
 import { EventKind, type AgentEvent } from './agent-types';
+import type { HookRegistry, PreflightHookRegistry } from './hooks';
 
 export interface ExecutorToolCall {
   call: ToolCall;
@@ -24,11 +28,31 @@ interface PendingResult {
   truncated: boolean;
 }
 
+const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
+
+function truncateToolOutput(s: string, toolName?: string): { body: string; truncMsg?: string } {
+  if (s.length <= MAX_TOOL_OUTPUT_BYTES) return { body: s };
+  const keep = Math.floor(MAX_TOOL_OUTPUT_BYTES / 2);
+  const head = snapToRune(s, 0, keep);
+  const tail = snapToRune(s, s.length - keep, s.length);
+  const omitted = s.length - head.length - tail.length;
+  return {
+    body: `${head}\n\n…[截断 ${omitted} / ${s.length} 字节]…\n💡 用更精确的参数重新调用此工具\n\n${tail}`,
+    truncMsg: `tool output truncated: ${omitted} of ${s.length} bytes elided (${toolName || 'unknown'})`,
+  };
+}
+
+function snapToRune(s: string, lo: number, hi: number): string {
+  while (lo > 0 && (s.charCodeAt(lo) & 0xc0) === 0x80) lo--;
+  while (hi < s.length && (s.charCodeAt(hi) & 0xc0) === 0x80) hi++;
+  return s.slice(lo, hi);
+}
+
 /**
  * StreamingToolExecutor — manages concurrent tool execution during stream.
  *
  * Usage in the agent loop:
- *   const executor = new StreamingToolExecutor(tools, emitEvent);
+ *   const executor = new StreamingToolExecutor(tools, emitEvent, hooks, preflightHooks);
  *   for await (const chunk of stream) {
  *     if chunk is ToolCall → executor.addTool(chunk.tool_call);
  *     // poll completed results each iteration
@@ -44,13 +68,22 @@ interface PendingResult {
 export class StreamingToolExecutor {
   private tools: ToolRegistry;
   private emit: (ev: AgentEvent) => void;
+  private hooks: HookRegistry | null;
+  private preflightHooks: PreflightHookRegistry | null;
   private pending = new Map<string, Promise<PendingResult>>();
   private completed: PendingResult[] = [];
   private toolIndex = 0;
 
-  constructor(tools: ToolRegistry, emitEvent: (ev: AgentEvent) => void) {
+  constructor(
+    tools: ToolRegistry,
+    emitEvent: (ev: AgentEvent) => void,
+    hooks?: HookRegistry | null,
+    preflightHooks?: PreflightHookRegistry | null,
+  ) {
     this.tools = tools;
     this.emit = emitEvent;
+    this.hooks = hooks ?? null;
+    this.preflightHooks = preflightHooks ?? null;
   }
 
   /** Add a tool call from the stream. Execution starts immediately. */
@@ -130,7 +163,7 @@ export class StreamingToolExecutor {
     return this.pending.size > 0;
   }
 
-  /** Execute a single tool and emit progress/result events. */
+  /** Execute a single tool — with preflight + post-tool hooks applied. */
   private async executeTool(call: ToolCall, tool: Tool, idx: number): Promise<PendingResult> {
     let args: Record<string, unknown>;
     try {
@@ -144,6 +177,16 @@ export class StreamingToolExecutor {
       };
       this.emitResult(call, tool, result);
       return result;
+    }
+
+    // ── Preflight hook: warn before destructive writes ──
+    let preflightWarning: string | null = null;
+    if (this.preflightHooks) {
+      try {
+        preflightWarning = this.preflightHooks.check(call.name, args);
+      } catch (e: any) {
+        // Silent degrade — don't block execution
+      }
     }
 
     try {
@@ -163,10 +206,26 @@ export class StreamingToolExecutor {
         });
       });
 
+      // ── Post-tool hook: enrich result with graph context ──
+      if (this.hooks) {
+        try {
+          output = await this.hooks.apply(call.name, args, output);
+        } catch (e: any) {
+          // Silent degrade — don't break the result
+        }
+      }
+
+      // Prepend preflight warning at top of result
+      if (preflightWarning) {
+        output = preflightWarning + '\n\n' + '─'.repeat(40) + '\n\n' + output;
+      }
+
+      // Truncate if too large
+      const { body, truncMsg } = truncateToolOutput(output, call.name);
       const result: PendingResult = {
         call,
-        output,
-        truncated: false,
+        output: body,
+        truncated: !!truncMsg,
       };
       this.emitResult(call, tool, result);
       return result;

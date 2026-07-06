@@ -324,8 +324,8 @@ export class Agent {
         toolName: 'thinking',
       });
 
-      // ---- Stream (with streaming tool executor) ----
-      const executor = new StreamingToolExecutor(this.tools, this.sink);
+      // ---- Stream (with streaming tool executor + hooks) ----
+      const executor = new StreamingToolExecutor(this.tools, this.sink, this.hooks, this.preflightHooks);
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
         log.error('agent', 'stream error', { error: String(err.message || err) });

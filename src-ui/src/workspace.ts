@@ -606,6 +606,9 @@ export class Workspace {
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));
           newAgent.setHooks(hooks);
+          const preflightHooks = new PreflightHookRegistry();
+          preflightHooks.register(createGraphPreflightHook(hookCtx));
+          newAgent.setPreflightHooks(preflightHooks);
         }
         // Sub-agent tool — same as _setupAgentInner
         {
