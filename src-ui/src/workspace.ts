@@ -22,7 +22,7 @@ import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type 
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
-import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook } from './agent/hooks';
+import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import type { Tool } from './agent/tool';
@@ -475,7 +475,8 @@ export class Workspace {
     for (const tool of createTaskTools(this.taskManager)) { registry.register(tool); }
 
     const pricing = defaultPricing(active.kind, active.model);
-    const systemPrompt = buildSystemPrompt(this, memorySection);
+    const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
+    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap);
     const agentOpts = settings.agent || {};
 
     const mode = CHAT_MODES.find(m => m.id === agentOpts.chatMode) || CHAT_MODES[0];
@@ -594,7 +595,8 @@ export class Workspace {
         if (mm) {
           try { memSection = await mm.loadPromptSection(graphNodes); } catch { /* ignore */ }
         }
-        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection), {
+        const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
+        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature, maxSteps: s.agent?.maxSteps,
           contextWindow: s.agent?.contextWindow,
@@ -718,7 +720,7 @@ function extractGraphNodeNames(graphData: unknown): string[] | undefined {
   return undefined;
 }
 
-export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
+export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapshot = ''): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
@@ -755,8 +757,8 @@ export function buildSystemPrompt(ws: Workspace, memorySection = ''): string {
 ## 身份
 - 代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断
 - 你能直接调用 ${ws.path || '项目'} 的依赖图数据（${nodes} 节点、${edges} 条边）
-- 你看到的图已被分析引擎预处理——节点代表函数/类/模块/文件，边代表调用/继承/导入/时序关系
-
+- 你看到的图已被分析引擎预处理，节点代表函数/类/模块/文件，边代表调用/继承/导入/时序关系
+${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` : ''}
 ## 核心规则
 1. **诚实**：工具返回空结果就说"未找到"。数据正常就说"无异常"。不要编造节点名或关系，也不要为了显得"有发现"而夸大正常数据。
 2. **精确**：引用节点名时用图表中的准确名称。不确定就用工具查。
