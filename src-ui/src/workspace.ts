@@ -465,6 +465,8 @@ export class Workspace {
     registry.alias('read_file', 'read_file_content');
     // ponytail: hologram_history is now an alias of hologram_node (V4 richer result)
     registry.alias('hologram_history', 'hologram_node');
+    // ponytail: community_report → clusters (same handler, different granularity label)
+    registry.alias('hologram_community_report', 'hologram_clusters');
 
     // Memory tools
     if (this.memoryManager) {
@@ -586,6 +588,7 @@ export class Workspace {
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
         r.alias('hologram_history', 'hologram_node');
+        r.alias('hologram_community_report', 'hologram_clusters');
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
         }
