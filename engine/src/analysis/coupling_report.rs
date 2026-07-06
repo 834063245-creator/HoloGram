@@ -84,7 +84,7 @@ pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json
 }
 
 /// Count edges with coupling_depth >= 4 — single O(E) pass, no allocations.
-/// Used by hologram_blindspots as a cheap alternative to full coupling_report.
+/// Used by arch_blindspots as a cheap alternative to full coupling_report.
 pub fn count_l4_from_index(idx: &MemoryIndex) -> usize {
     idx.edges_iter()
         .into_iter()

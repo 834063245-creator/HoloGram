@@ -84,37 +84,37 @@ impl ToolRegistry {
 
     pub fn dispatch(name: &str, args: &Value) -> Value {
         match name {
-            "hologram_neighbors" => handler_neighbors(args),
-            "hologram_impact" => handler_impact(args),
-            "hologram_path" => handler_path(args),
-            "hologram_history" => handler_history(args),
-            "hologram_community" => handler_community(args),
-            "hologram_delayed" => handler_delayed(args),
-            "hologram_fragile" => handler_fragile(args),
-            "hologram_cycle" => handler_cycle(args),
-            "hologram_thread_conflicts" => handler_thread_conflicts(args),
-            "hologram_coupling_report" => handler_coupling_report(args),
-            "hologram_timeline" => handler_timeline(args),
-            "hologram_blindspots" => handler_blindspots(args),
-            "hologram_run_preflight" | "hologram_preflight" => handler_preflight(args),
-            "hologram_search" => handler_search(args),
-            "hologram_explore" => handler_explore(args),
-            "hologram_graph_summary" => handler_graph_summary(args),
-            "hologram_clusters" | "hologram_community_report" => handler_clusters(args),
-            "hologram_graph_diff" | "hologram_diff" => handler_diff(args),
-            "hologram_analyze" => handler_analyze(args),
-            "hologram_run_check" => handler_run_check(args),
-            "hologram_run_health" => handler_run_health(args),
-            "hologram_rename" => handler_rename(args),
-            "hologram_status" => handler_status(args),
-            "hologram_policy_check" => handler_policy_check(args),
-            "hologram_node" => handler_node(args),
-            "hologram_unused" => handler_unused(args),
-            "hologram_dataflow" => handler_dataflow(args),
-            "hologram_resolve_call" => handler_resolve_call(args),
-            "hologram_resolve_type" => handler_resolve_type(args),
-            "hologram_find_implementations" => handler_find_implementations(args),
-            "hologram_find_references" => handler_find_references(args),
+            "get_neighbors" => handler_neighbors(args),
+            "trace_impact" => handler_impact(args),
+            "find_dep_path" => handler_path(args),
+            "inspect_symbol" | "symbol_history" => handler_node(args),
+            "get_community" => handler_community(args),
+            "async_edges" => handler_delayed(args),
+            "fragile_modules" => handler_fragile(args),
+            "detect_cycles" => handler_cycle(args),
+            "thread_conflicts" => handler_thread_conflicts(args),
+            "coupling_report" => handler_coupling_report(args),
+            "project_timeline" => handler_timeline(args),
+            "arch_blindspots" => handler_blindspots(args),
+            "preflight_check" => handler_preflight(args),
+            "search_symbols" => handler_search(args),
+            "explore_deps" => handler_explore(args),
+            "graph_summary" => handler_graph_summary(args),
+            "cluster_report" => handler_clusters(args),
+            "graph_diff" => handler_diff(args),
+            "analyze_project" => handler_analyze(args),
+            "validate_project" => handler_run_check(args),
+            "project_health" => handler_run_health(args),
+            "rename_symbol" => handler_rename(args),
+            "engine_status" => handler_status(args),
+            "check_boundaries" => handler_policy_check(args),
+            "inspect_symbol" => handler_node(args),
+            "find_unused" => handler_unused(args),
+            "trace_dataflow" => handler_dataflow(args),
+            "resolve_call" => handler_resolve_call(args),
+            "infer_type" => handler_resolve_type(args),
+            "find_implementations" => handler_find_implementations(args),
+            "find_references" => handler_find_references(args),
             _ => json!({"error": format!("Tool not found: {}", name)}),
         }
     }
@@ -1068,7 +1068,7 @@ fn handler_analyze(args: &Value) -> Value {
     if engine::engine_state().is_analyzing() {
         return json!({
             "status": "already_running",
-            "message": "Analysis already in progress. Call hologram_status to track progress.",
+            "message": "Analysis already in progress. Call engine_status to track progress.",
         });
     }
     let root_clone = root.clone();
@@ -1088,7 +1088,7 @@ fn handler_analyze(args: &Value) -> Value {
         .ok();
     json!({
         "status": "started",
-        "message": "Analysis running in background. Call hologram_status to track progress.",
+        "message": "Analysis running in background. Call engine_status to track progress.",
     })
 }
 
@@ -1721,17 +1721,34 @@ macro_rules! p {
 
 fn all_schemas() -> &'static [ToolSchema] {
     &[
-        // ── V1 — graph queries ──
+        // ── Entry points ──
         ToolSchema {
-            name: "hologram_neighbors",
-            description: "Get the direct neighborhood of a node — who depends on it and who it depends on (1-hop subgraph). Use after hologram_search when you've found a symbol and want to see its immediate coupling. \"这个模块被谁依赖？\" → call this.",
+            name: "explore_deps",
+            description: "【DEFAULT FIRST CHOICE】NL-powered dependency exploration — one call returns: dependency flow path + blast radius + relationships + source code + architecture alerts. Just type a natural-language question like \"DataRequest validate task\" or \"auth模块的依赖链\". When unsure which tool to use, START HERE — it auto-disambiguates.",
+            params: &[p!("query", "string", "Natural language query (e.g. 'DataRequest validate task'). Auto-extracts symbol names."), p!("symbols", "array", "List of symbol names (alternative to query)"), p!("includeSource", "boolean", "Include source code sections (default true)")],
+            required: &[],
+            read_only: true,
+            category: "graph",
+        },
+        ToolSchema {
+            name: "search_symbols",
+            description: "Find symbols by name. Fuzzy search — type a partial name, get back matching nodes with IDs, types, locations. Your FIRST step when you know the function/class name but not its node ID. \"找一下 auth 相关的模块\" → this. After finding the ID, follow up with get_neighbors or inspect_symbol.",
+            params: &[p!("query", "string", "Partial name or ID to search for"), p!("limit", "integer", "Max results (default 20)")],
+            required: &["query"],
+            read_only: true,
+            category: "graph",
+        },
+        // ── Graph navigation ──
+        ToolSchema {
+            name: "get_neighbors",
+            description: "Get the direct neighborhood of a node — who depends on it and who it depends on (1-hop subgraph). Use after search_symbols when you've found a symbol and want to see its immediate coupling. \"这个模块被谁依赖？\" → call this.",
             params: &[p!("nodeId", "string", "The node ID")],
             required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
-            name: "hologram_impact",
+            name: "trace_impact",
             description: "Map the blast radius of a change. BFS from a node through all downstream dependents — returns the complete impact tree layered by distance. Use BEFORE editing any high-fan-in symbol. \"改这个会炸多少地方？\" → call this first.",
             params: &[p!("nodeId", "string", "The source node ID"), p!("depth", "integer", "BFS max depth (default 3)")],
             required: &["nodeId"],
@@ -1739,7 +1756,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "graph",
         },
         ToolSchema {
-            name: "hologram_path",
+            name: "find_dep_path",
             description: "Find the dependency chain between two nodes — shows every route from A to B with hop count and edge types. Use when you need to understand HOW two modules are connected. \"A 是怎么依赖到 B 的？\"",
             params: &[p!("from", "string", "Source node ID"), p!("to", "string", "Target node ID"), p!("depth", "integer", "BFS search depth limit (default 20)")],
             required: &["from", "to"],
@@ -1747,32 +1764,41 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "graph",
         },
         ToolSchema {
-            name: "hologram_history",
-            description: "Get decision history for a node — which past commits/analyses touched this symbol, dependency/dependent counts, and timeline events. Use when you need context on why a module looks the way it does. Aliased to hologram_node in newer builds.",
+            name: "inspect_symbol",
+            description: "Everything about one symbol in a single call: identity (name/kind/degree), community membership, ALL incoming/outgoing edges grouped by kind (imports, calls, inherits, etc.). Use after search_symbols when you need the full picture of a specific symbol. Supersedes symbol_history.",
             params: &[p!("nodeId", "string", "The node ID")],
             required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
-            name: "hologram_community",
-            description: "Which group does this module belong to? Returns the node's community (Leiden clustering), parent community, and sibling nodes. Use when asked \"this module is in which group?\" or to find closely-related modules. For global community structure, use hologram_clusters.",
+            name: "symbol_history",
+            description: "Get decision history for a node — which past commits/analyses touched this symbol, dependency/dependent counts, and timeline events. Use when you need context on why a module looks the way it does. For richer data use inspect_symbol instead.",
+            params: &[p!("nodeId", "string", "The node ID")],
+            required: &["nodeId"],
+            read_only: true,
+            category: "graph",
+        },
+        // ── Community ──
+        ToolSchema {
+            name: "get_community",
+            description: "Which group does this module belong to? Returns the node's community (Leiden clustering), parent community, and sibling nodes. Use when asked \"this module is in which group?\" or to find closely-related modules. For global community structure, use cluster_report.",
             params: &[p!("nodeId", "string", "The node ID")],
             required: &["nodeId"],
             read_only: true,
             category: "graph",
         },
         ToolSchema {
-            name: "hologram_delayed",
-            description: "List all async/temporal edges — triggers, awaits/callbacks, scheduled tasks, sequenced calls. Use when investigating async coupling, race conditions, or temporal dependency chains. \"有哪些异步依赖？\" → this.",
-            params: &[],
+            name: "cluster_report",
+            description: "Global community/cluster map — which modules naturally group together (Leiden algorithm). Sorted by size with member lists. Use for high-level architecture understanding. For a single node's community, use get_community instead.",
+            params: &[p!("min_size", "integer", "Minimum community size to report (default 3)"), p!("max_nodes", "integer", "Max node IDs per community in output (default 20, max 200)")],
             required: &[],
             read_only: true,
-            category: "temporal",
+            category: "graph",
         },
-        // ── V2 — analysis ──
+        // ── Analysis ──
         ToolSchema {
-            name: "hologram_fragile",
+            name: "fragile_modules",
             description: "Top N most coupled modules ranked by L4 encapsulation violation density. High score = lots of hidden temporal/async coupling. Use to find refactoring priorities or assess codebase health. Not a bug list — well-designed hubs (auth, config) rank high by design.",
             params: &[p!("limit", "integer", "Number of top fragile modules to return (default 5)")],
             required: &[],
@@ -1780,7 +1806,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "analysis",
         },
         ToolSchema {
-            name: "hologram_cycle",
+            name: "detect_cycles",
             description: "Find all circular dependencies in the graph. Filter by mode: all cycles, data-only (persistent data loops), or llm (AI/LLM feedback loops). \"有没有循环依赖？\" → call this. Use before large refactors to understand what can't be untangled easily.",
             params: &[p!("mode", "string", "Filter: all, data, or llm (default all)")],
             required: &[],
@@ -1788,7 +1814,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "analysis",
         },
         ToolSchema {
-            name: "hologram_thread_conflicts",
+            name: "thread_conflicts",
             description: "Thread × resource conflict matrix. Detects shared variables with multiple writers (concurrency risk), concurrent data structure access patterns. Omit nodeId for the global conflict map. \"哪些地方有并发问题？\" → this.",
             params: &[p!("nodeId", "string", "Optional node ID — if omitted, returns global conflict matrix")],
             required: &[],
@@ -1796,7 +1822,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "analysis",
         },
         ToolSchema {
-            name: "hologram_coupling_report",
+            name: "coupling_report",
             description: "Deep-dive coupling profile for one module: L1 (imports) through L4 (temporal/async) breakdown, fan-in/out, cycle participation. Use when asked to analyze a specific file's dependency health. \"auth 模块耦合有多深？\" → this.",
             params: &[p!("module", "string", "Module file name or path")],
             required: &["module"],
@@ -1804,66 +1830,49 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "analysis",
         },
         ToolSchema {
-            name: "hologram_timeline",
-            description: "Chronological project audit log — analysis runs, commits, violations, constraint checks in order. Use for project retrospectives or trend analysis. \"最近项目发生了什么变化？\" → this. Limit for recent, since for date range.",
-            params: &[p!("limit", "integer", "Max events to return (default 100)"), p!("since", "string", "ISO timestamp filter (optional)")],
-            required: &[],
-            read_only: true,
-            category: "analysis",
-        },
-        // ── V2 — boundary radar ──
-        ToolSchema {
-            name: "hologram_blindspots",
+            name: "arch_blindspots",
             description: "Architecture blind-spot radar. Detects L4 encapsulation violations, unlocked concurrency, LLM feedback loops. Filter by type (all/L4/thread/cycle). Like a linter for architecture boundaries — catches what code review misses. \"项目有什么隐藏的架构问题？\" → this.",
             params: &[p!("filter", "string", "Boundary type filter: all, L4, thread, cycle (default all)")],
             required: &[],
             read_only: true,
             category: "analysis",
         },
-        // ── V3 — preflight ──
         ToolSchema {
-            name: "hologram_run_preflight",
-            description: "Change-impact rehearsal. Before you commit, feed it the files you're about to change — returns estimated blast radius, risk level (low/medium/high/critical), shared variable impacts, and temporal edge signals. \"先看看改这里会怎样？这个改动安全吗？\" → ALWAYS call this before editing high-fan-in files.",
-            params: &[p!("path", "array", "List of file paths that would be changed")],
-            required: &["path"],
-            read_only: true,
-            category: "preflight",
-        },
-        // ── V3+ — query & explore ──
-        ToolSchema {
-            name: "hologram_search",
-            description: "Find symbols by name. Fuzzy search — type a partial name, get back matching nodes with IDs, types, locations. Your FIRST step when you know the function/class name but not its node ID. \"找一下 auth 相关的模块\" → this. After finding the ID, follow up with hologram_neighbors or hologram_node.",
-            params: &[p!("query", "string", "Partial name or ID to search for"), p!("limit", "integer", "Max results (default 20)")],
-            required: &["query"],
-            read_only: true,
-            category: "graph",
-        },
-        ToolSchema {
-            name: "hologram_explore",
-            description: "【DEFAULT FIRST CHOICE】Unified NL query — one call returns: dependency flow path + blast radius + relationships + source code + architecture alerts. Just type a natural-language question like \"DataRequest validate task\" or \"auth模块的依赖链\". When unsure which tool to use, START HERE — it auto-disambiguates.",
-            params: &[p!("query", "string", "Natural language query (e.g. 'DataRequest validate task'). Auto-extracts symbol names."), p!("symbols", "array", "List of symbol names (alternative to query)"), p!("includeSource", "boolean", "Include source code sections (default true)")],
-            required: &[],
-            read_only: true,
-            category: "graph",
-        },
-        ToolSchema {
-            name: "hologram_graph_summary",
+            name: "graph_summary",
             description: "High-level project overview: total nodes/edges, language breakdown, density, top-level modules. Use at the start of a session to understand the codebase landscape. \"这个项目有多大？什么结构？\" → start here, then drill in with specific tools.",
             params: &[],
             required: &[],
             read_only: true,
             category: "graph",
         },
+        // ── Temporal ──
         ToolSchema {
-            name: "hologram_clusters",
-            description: "Global community/cluster map — which modules naturally group together (Leiden algorithm). Sorted by size with member lists. Use for high-level architecture understanding. For a single node's community, use hologram_community instead.",
-            params: &[p!("min_size", "integer", "Minimum community size to report (default 3)"), p!("max_nodes", "integer", "Max node IDs per community in output (default 20, max 200)")],
+            name: "async_edges",
+            description: "List all async/temporal edges — triggers, awaits/callbacks, scheduled tasks, sequenced calls. Use when investigating async coupling, race conditions, or temporal dependency chains. \"有哪些异步依赖？\" → this.",
+            params: &[],
             required: &[],
             read_only: true,
-            category: "graph",
+            category: "temporal",
         },
         ToolSchema {
-            name: "hologram_graph_diff",
+            name: "project_timeline",
+            description: "Chronological project audit log — analysis runs, commits, violations, constraint checks in order. Use for project retrospectives or trend analysis. \"最近项目发生了什么变化？\" → this. Limit for recent, since for date range.",
+            params: &[p!("limit", "integer", "Max events to return (default 100)"), p!("since", "string", "ISO timestamp filter (optional)")],
+            required: &[],
+            read_only: true,
+            category: "analysis",
+        },
+        // ── Operations ──
+        ToolSchema {
+            name: "analyze_project",
+            description: "Full pipeline re-analysis of a project directory. Parses, runs LSP, cross-file resolution, coupling depth, community detection — then reloads the graph. Use when the graph is stale or you've made many changes. SLOW — runs in background; check engine_status for progress.",
+            params: &[p!("path", "string", "Project root directory path")],
+            required: &["path"],
+            read_only: false,
+            category: "operations",
+        },
+        ToolSchema {
+            name: "graph_diff",
             description: "Compare current dependency graph against a baseline JSON snapshot. Shows added/removed/modified nodes and edge count changes. Use to understand what changed since last analysis. NOT a git diff — use git_diff for file-level code changes.",
             params: &[p!("beforePath", "string", "Path to the baseline graph JSON file")],
             required: &["beforePath"],
@@ -1871,24 +1880,23 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "operations",
         },
         ToolSchema {
-            name: "hologram_analyze",
-            description: "Full pipeline re-analysis of a project directory. Parses, runs LSP, cross-file resolution, coupling depth, community detection — then reloads the graph. Use when the graph is stale or you've made many changes. SLOW — runs in background; check hologram_status for progress.",
-            params: &[p!("path", "string", "Project root directory path")],
+            name: "preflight_check",
+            description: "Change-impact rehearsal. Before you commit, feed it the files you're about to change — returns estimated blast radius, risk level (low/medium/high/critical), shared variable impacts, and temporal edge signals. \"先看看改这里会怎样？这个改动安全吗？\" → ALWAYS call this before editing high-fan-in files.",
+            params: &[p!("path", "array", "List of file paths that would be changed")],
             required: &["path"],
-            read_only: false,
-            category: "operations",
+            read_only: true,
+            category: "preflight",
         },
-        // ── V3 — check + health ──
         ToolSchema {
-            name: "hologram_run_check",
-            description: "Full constraint validation — re-analyzes, diffs against baseline, runs all structural checks. Returns violations found AND confirmation of passing rules. Use when user asks for a thorough audit: \"全面检查\" \"跑一遍约束\" \"有没有违规？\". For lighter checks, use hologram_blindspots first.",
+            name: "validate_project",
+            description: "Full constraint validation — re-analyzes, diffs against baseline, runs all structural checks. Returns violations found AND confirmation of passing rules. Use when user asks for a thorough audit: \"全面检查\" \"跑一遍约束\" \"有没有违规？\". For lighter checks, use arch_blindspots first.",
             params: &[p!("path", "string", "Project root directory path")],
             required: &["path"],
             read_only: true,
             category: "operations",
         },
         ToolSchema {
-            name: "hologram_run_health",
+            name: "project_health",
             description: "Project health snapshot: coupling density score (0-100), recent trends, top-changed files, most-interconnected modules. \"项目最近怎么样？\" \"最近的趋势怎么样？\" → this. Score reflects coupling density, not code quality — different project stages have different normal ranges.",
             params: &[p!("path", "string", "Project root directory path"), p!("days", "integer", "Days to look back (default 30)")],
             required: &["path"],
@@ -1896,7 +1904,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "operations",
         },
         ToolSchema {
-            name: "hologram_rename",
+            name: "rename_symbol",
             description: "Safe symbol rename across the dependency graph. ALWAYS run with dryRun=true first to preview affected nodes, then dryRun=false to apply. Persists to storage. \"把这个函数名改掉\" → dry run → review → execute.",
             params: &[p!("oldName", "string", "Current symbol name"), p!("newName", "string", "New symbol name"), p!("dryRun", "boolean", "Preview only — no changes applied (default false)"), p!("nodeId", "string", "Optional specific node ID to rename")],
             required: &["oldName", "newName"],
@@ -1904,7 +1912,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "operations",
         },
         ToolSchema {
-            name: "hologram_status",
+            name: "engine_status",
             description: "Engine status and memory stats: loading phase, node/edge counts, storage type, uptime. Use when tools return empty results or Agent needs to confirm the graph is ready. \"引擎就绪了吗？\" → this.",
             params: &[],
             required: &[],
@@ -1912,7 +1920,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "operations",
         },
         ToolSchema {
-            name: "hologram_policy_check",
+            name: "check_boundaries",
             description: "Architecture boundary enforcer. Define rules with source/target file patterns (glob or regex) + edge kinds, then scan for violations. \"模块A有没有偷import模块B的内部文件？\" \"数据库模块有没有直接调前端代码？\" → define a rule, run this. Check before and after refactors to confirm no new violations.",
             params: &[
                 p!("rules", "array", "JSON array of rule objects. Each rule: {name, source, target, edge_kinds?, message?}. source/target are glob or regex patterns. edge_kinds defaults to [\"imports\"]. Valid kinds: imports, calls, inherits, defines, reads, writes, shares, triggers, awaits, sequences."),
@@ -1924,18 +1932,9 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "analysis",
         },
-        // ── V4 — node deep-dive ──
+        // ── Dead code detection ──
         ToolSchema {
-            name: "hologram_node",
-            description: "Everything about one symbol in a single call: identity (name/kind/degree), community membership, ALL incoming/outgoing edges grouped by kind (imports, calls, inherits, etc.). Use after hologram_search when you need the full picture of a specific symbol. Supersedes hologram_history.",
-            params: &[p!("nodeId", "string", "The node ID")],
-            required: &["nodeId"],
-            read_only: true,
-            category: "graph",
-        },
-        // ── V4 — dead code detection ──
-        ToolSchema {
-            name: "hologram_unused",
+            name: "find_unused",
             description: "Find dead code candidates — symbols with zero incoming references (nobody depends on them). Sorted by outgoing references descending (most impactful first). \"有没有没用到的代码？\" → this. Always review results before deleting — some low-fan-in symbols are intentional (entry points, tests).",
             params: &[
                 p!("limit", "integer", "Max results (default 20, max 200)"),
@@ -1947,17 +1946,17 @@ fn all_schemas() -> &'static [ToolSchema] {
         },
         // ── Dataflow tracing ──
         ToolSchema {
-            name: "hologram_dataflow",
-            description: "Per-function variable reads/writes, cross-function shared state, async triggers, call sequences. Answers: \"where is X written?\" \"who reads Y?\" \"which functions share Z?\". Pass the file paths you're investigating — returns scoped data movement analysis. Follow up with hologram_impact on shared variables to trace downstream effects.",
+            name: "trace_dataflow",
+            description: "Per-function variable reads/writes, cross-function shared state, async triggers, call sequences. Answers: \"where is X written?\" \"who reads Y?\" \"which functions share Z?\". Pass the file paths you're investigating — returns scoped data movement analysis. Follow up with trace_impact on shared variables to trace downstream effects.",
             params: &[p!("files", "array", "File paths, e.g. [\"src/auth.js\", \"src/db.js\"]")],
             required: &["files"],
             read_only: true,
             category: "dataflow",
         },
-        // ── LSP call resolution ──
+        // ── LSP ──
         ToolSchema {
-            name: "hologram_resolve_call",
-            description: "Resolve a function/method call to its concrete definition(s). Uses native LSP (rust-analyzer/gopls/pyright) for polymorphic dispatch, struct methods, inheritance. When the graph shows `do_thing()` and you need to know WHICH `do_thing` — this resolves it. ",
+            name: "resolve_call",
+            description: "Resolve a function/method call to its concrete definition(s). Uses native LSP (rust-analyzer/gopls/pyright) for polymorphic dispatch, struct methods, inheritance. When the graph shows `do_thing()` and you need to know WHICH `do_thing` — this resolves it.",
             params: &[
                 p!("file", "string", "File path, e.g. \"src/views.py\""),
                 p!("function", "string", "Optional: filter to calls from a specific function, e.g. \"login\""),
@@ -1969,7 +1968,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "lsp",
         },
         ToolSchema {
-            name: "hologram_resolve_type",
+            name: "infer_type",
             description: "What type is this expression? Uses native LSP hover for precise type info — struct fields, return types, variable types. \"这个变量是什么类型？\" → this at the position. Fallback to call-target-based inference when LSP isn't available.",
             params: &[
                 p!("file", "string", "File path, e.g. \"src/views.py\""),
@@ -1981,7 +1980,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "lsp",
         },
         ToolSchema {
-            name: "hologram_find_implementations",
+            name: "find_implementations",
             description: "Find all implementations of an interface/trait/abstract class. Uses native LSP textDocument/implementation. \"这个接口有哪些实现？\" \"谁实现了这个 trait？\" → click on the definition, call this. Returns the full implementation tree.",
             params: &[
                 p!("file", "string", "File path, e.g. \"src/interface.go\""),
@@ -1993,8 +1992,8 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "lsp",
         },
         ToolSchema {
-            name: "hologram_find_references",
-            description: "Find every place that references this symbol — across the entire codebase. Uses native LSP textDocument/references. \"谁在用这个函数？\" \"这个类在哪被引用了？\" → this. Set includeDeclaration=true to include the definition itself. High reference count → call hologram_impact before changing.",
+            name: "find_references",
+            description: "Find every place that references this symbol — across the entire codebase. Uses native LSP textDocument/references. \"谁在用这个函数？\" \"这个类在哪被引用了？\" → this. Set includeDeclaration=true to include the definition itself. High reference count → call trace_impact before changing.",
             params: &[
                 p!("file", "string", "File path"),
                 p!("line", "number", "0-based line number"),
@@ -2036,7 +2035,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_unknown_tool() {
-        let result = ToolRegistry::dispatch("hologram_nonexistent", &json!({}));
+        let result = ToolRegistry::dispatch("nonexistent_tool", &json!({}));
         assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("not found"));
     }
 
@@ -2063,21 +2062,21 @@ mod tests {
     #[test]
     fn test_schema_get() {
         let registry = ToolRegistry::global();
-        let schema = registry.get_schema("hologram_neighbors");
+        let schema = registry.get_schema("get_neighbors");
         assert!(schema.is_some());
-        assert_eq!(schema.unwrap().name, "hologram_neighbors");
-        assert!(registry.get_schema("hologram_nonexistent").is_none());
+        assert_eq!(schema.unwrap().name, "get_neighbors");
+        assert!(registry.get_schema("nonexistent_tool").is_none());
     }
 
     #[test]
     fn test_missing_required_params_error() {
-        let result = ToolRegistry::dispatch("hologram_neighbors", &json!({}));
+        let result = ToolRegistry::dispatch("get_neighbors", &json!({}));
         assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("node_id"));
-        let result = ToolRegistry::dispatch("hologram_path", &json!({}));
+        let result = ToolRegistry::dispatch("find_dep_path", &json!({}));
         assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("from_id"));
-        let result = ToolRegistry::dispatch("hologram_coupling_report", &json!({}));
+        let result = ToolRegistry::dispatch("coupling_report", &json!({}));
         assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("module_name"));
-        let result = ToolRegistry::dispatch("hologram_search", &json!({}));
+        let result = ToolRegistry::dispatch("search_symbols", &json!({}));
         assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("query"));
     }
 
@@ -2100,10 +2099,10 @@ mod tests {
     fn test_read_only_consistency() {
         let schemas = all_schemas();
         let read_only_tools: Vec<&str> = schemas.iter().filter(|s| s.read_only).map(|s| s.name).collect();
-        assert!(!read_only_tools.contains(&"hologram_analyze"), "analyze mutates state");
-        assert!(!read_only_tools.contains(&"hologram_rename"), "rename mutates state");
-        assert!(read_only_tools.contains(&"hologram_neighbors"));
-        assert!(read_only_tools.contains(&"hologram_search"));
-        assert!(read_only_tools.contains(&"hologram_status"));
+        assert!(!read_only_tools.contains(&"analyze_project"), "analyze mutates state");
+        assert!(!read_only_tools.contains(&"rename_symbol"), "rename mutates state");
+        assert!(read_only_tools.contains(&"get_neighbors"));
+        assert!(read_only_tools.contains(&"search_symbols"));
+        assert!(read_only_tools.contains(&"engine_status"));
     }
 }

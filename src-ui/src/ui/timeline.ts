@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Timeline Panel — 决策时间轴
-// 消费 hologram_timeline 命令的输出，渲染事件时间线
+// 消费 project_timeline 命令的输出，渲染事件时间线
 
 import { invoke } from '../bridge';
 import { bus } from './events';
@@ -145,7 +145,7 @@ export class TimelinePanel {
     try {
       // 8-second timeout — prevent perpetual loading if backend hangs
       const json = await Promise.race([
-        invoke<string>('hologram_timeline', {
+        invoke<string>('project_timeline', {
           path: this.path,
           limit: 60,
         }),

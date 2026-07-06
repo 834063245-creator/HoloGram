@@ -524,14 +524,14 @@ export class DataflowPanel {
     this.right.innerHTML = `<div class="df-loading">探索中…</div>`;
 
     try {
-      let raw = await invoke<string>('hologram_explore', { query, symbols: [], includeSource: true });
+      let raw = await invoke<string>('explore_deps', { query, symbols: [], includeSource: true });
       let explore = JSON.parse(raw);
 
       if ((explore.meta?.totalSymbolsFound || 0) === 0 && this.onParseQuery) {
         try {
           const symbols = await this.onParseQuery(query);
           if (symbols.length > 0) {
-            raw = await invoke<string>('hologram_explore', { query, symbols, includeSource: true });
+            raw = await invoke<string>('explore_deps', { query, symbols, includeSource: true });
             explore = JSON.parse(raw);
           }
         } catch { /* Agent unavailable */ }
@@ -546,7 +546,7 @@ export class DataflowPanel {
       const files = Array.from(fileSet);
       if (files.length > 0) {
         try {
-          const dfRaw = await invoke<string>('hologram_dataflow', { files });
+          const dfRaw = await invoke<string>('trace_dataflow', { files });
           dfResult = JSON.parse(dfRaw);
         } catch { /* optional */ }
       }

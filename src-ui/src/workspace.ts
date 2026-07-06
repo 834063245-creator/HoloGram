@@ -60,7 +60,7 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
       properties: schema.inputSchema.properties,
       required,
     }),
-    readOnly: () => !['hologram_analyze', 'hologram_run_check', 'hologram_rename'].includes(schema.name),
+    readOnly: () => !['analyze_project', 'validate_project', 'rename_symbol'].includes(schema.name),
     execute: (args: Record<string, unknown>) => exec(schema.name, args),
   };
 }
@@ -413,8 +413,8 @@ export class Workspace {
           properties: {
             query: { type: 'string', description: '用户原始查询，用于面板列表展示和后续检索' },
             content: { type: 'string', description: '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。' },
-            exploreResult: { type: 'string', description: 'hologram_explore 返回的完整 JSON 字符串（可选）' },
-            dataflowResult: { type: 'string', description: 'hologram_dataflow 返回的完整 JSON 字符串（可选）' },
+            exploreResult: { type: 'string', description: 'explore_deps 返回的完整 JSON 字符串（可选）' },
+            dataflowResult: { type: 'string', description: 'trace_dataflow 返回的完整 JSON 字符串（可选）' },
           },
           required: ['query', 'content'],
         }),
@@ -463,10 +463,10 @@ export class Workspace {
 
     // Aliases — short names for high-frequency tools
     registry.alias('read_file', 'read_file_content');
-    // ponytail: hologram_history is now an alias of hologram_node (V4 richer result)
-    registry.alias('hologram_history', 'hologram_node');
+    // ponytail: symbol_history is now an alias of inspect_symbol (V4 richer result)
+    registry.alias('symbol_history', 'inspect_symbol');
     // ponytail: community_report → clusters (same handler, different granularity label)
-    registry.alias('hologram_community_report', 'hologram_clusters');
+    registry.alias('cluster_report', 'cluster_report');
 
     // Memory tools
     if (this.memoryManager) {
@@ -558,8 +558,8 @@ export class Workspace {
               properties: {
                 query: { type: 'string', description: '用户原始查询，用于面板列表展示和后续检索' },
                 content: { type: 'string', description: '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。' },
-                exploreResult: { type: 'string', description: 'hologram_explore 返回的完整 JSON 字符串（可选）' },
-                dataflowResult: { type: 'string', description: 'hologram_dataflow 返回的完整 JSON 字符串（可选）' },
+                exploreResult: { type: 'string', description: 'explore_deps 返回的完整 JSON 字符串（可选）' },
+                dataflowResult: { type: 'string', description: 'trace_dataflow 返回的完整 JSON 字符串（可选）' },
               },
               required: ['query', 'content'],
             }),
@@ -587,8 +587,8 @@ export class Workspace {
         }
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
-        r.alias('hologram_history', 'hologram_node');
-        r.alias('hologram_community_report', 'hologram_clusters');
+        r.alias('symbol_history', 'inspect_symbol');
+        r.alias('cluster_report', 'cluster_report');
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
         }
@@ -639,7 +639,7 @@ export class Workspace {
     this.checkRunning = true;
     this.checkPending = false;
     try {
-      const json = await invoke<string>('hologram_run_check', { path: this.path });
+      const json = await invoke<string>('validate_project', { path: this.path });
       try {
         const result: CheckResult = JSON.parse(json);
         checkPanel.update(result);
@@ -770,7 +770,7 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 2. **精确**：引用节点名时用图表中的准确名称。不确定就用工具查。
 3. **结构化**：用分点、表格、小结组织回答。先说结论再讲细节。
 4. **中文**：始终用中文回复。代码标识符和文件名用反引号标记。
-5. **先查后说**：任何涉及代码库的问题都必须调工具，不要凭"常识"猜测。修改代码前注意工具返回结果顶部的 ⚠️ 自动影响分析——如果显示 MEDIUM 或 HIGH 风险，先调 hologram_impact 确认波及范围再动手。
+5. **先查后说**：任何涉及代码库的问题都必须调工具，不要凭"常识"猜测。修改代码前注意工具返回结果顶部的 ⚠️ 自动影响分析——如果显示 MEDIUM 或 HIGH 风险，先调 trace_impact 确认波及范围再动手。
 6. **正常即正常**：工具数据不显示问题时，直接说"无异常"或"改动安全"。不要为了填充模板把低风险数据夸大为问题。遇到排名类工具（fragile/cycle），排名靠前不等于"坏了"——高耦合模块可能是设计中的枢纽。
 7. **能动手就别只建议**：你有写文件、跑命令、Git 操作的工具。用户说"修"就直接修，不要只说"建议修改"。修完后跑相关测试确认没炸。
 8. **不确定就问**：需求模糊、两个方案选不定、或即将执行危险操作时，用 \`ask_user\` 工具反问用户。不要猜。
@@ -783,41 +783,41 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 ### 日常查询
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "分析 / 重新分析这个项目" | \`hologram_analyze\` — 跑全量分析，生成完整依赖图 |
-| 找 "auth" / "parse" / "config" 相关的东西 | \`hologram_search\` — 模糊搜索节点（不用知道精确 ID） |
-| "XXX 是什么？连了哪些东西？" | \`hologram_neighbors\` 查邻居 |
-| "改 XXX 会炸吗？" | \`hologram_impact\` 追踪波及范围 |
-| "从 A 到 B 怎么走？" | \`hologram_path\` 找依赖路径 |
-| "项目整体怎么样？" | \`hologram_graph_summary\` 看统计 |
-| "XXX 的修改历史？" | \`hologram_history\` 看节点变更记录 |
-| "XXX 在哪个社区？" | \`hologram_community\` 看社区归属 |
-| "最近的变更？" | \`hologram_changes\` 看变更摘要 |
+| "分析 / 重新分析这个项目" | \`analyze_project\` — 跑全量分析，生成完整依赖图 |
+| 找 "auth" / "parse" / "config" 相关的东西 | \`search_symbols\` — 模糊搜索节点（不用知道精确 ID） |
+| "XXX 是什么？连了哪些东西？" | \`get_neighbors\` 查邻居 |
+| "改 XXX 会炸吗？" | \`trace_impact\` 追踪波及范围 |
+| "从 A 到 B 怎么走？" | \`find_dep_path\` 找依赖路径 |
+| "项目整体怎么样？" | \`graph_summary\` 看统计 |
+| "XXX 的修改历史？" | \`symbol_history\` 看节点变更记录 |
+| "XXX 在哪个社区？" | \`get_community\` 看社区归属 |
+| "最近的变更？" | \`project_timeline\` 看变更摘要 |
 
 ### 架构分析
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "哪些模块依赖最多/耦合最深？" | \`hologram_fragile\` — 按耦合深度和扇入排名（高排名≠坏了，核心枢纽天然排名高） |
-| "有循环依赖吗？" | \`hologram_cycle\` — 检测环（小环常见于 UI 回调，不一定需要修） |
-| "耦合面怎么样？" | \`hologram_coupling_report\` — 某个模块的耦合深度分布 |
-| "跨边界边/动态分发？" | \`hologram_blindspots\` — 运行时耦合模式（插件系统/DI 的动态边是正常的） |
-| "线程/协程冲突？" | \`hologram_thread_conflicts\` — 线程安全检测 |
-| "延迟/时序边？" | \`hologram_delayed\` — 实时/周期性依赖 |
-| "项目最近怎么样？" | \`hologram_run_health\` — 耦合密度趋势分析 |
+| "哪些模块依赖最多/耦合最深？" | \`fragile_modules\` — 按耦合深度和扇入排名（高排名≠坏了，核心枢纽天然排名高） |
+| "有循环依赖吗？" | \`detect_cycles\` — 检测环（小环常见于 UI 回调，不一定需要修） |
+| "耦合面怎么样？" | \`coupling_report\` — 某个模块的耦合深度分布 |
+| "跨边界边/动态分发？" | \`arch_blindspots\` — 运行时耦合模式（插件系统/DI 的动态边是正常的） |
+| "线程/协程冲突？" | \`thread_conflicts\` — 线程安全检测 |
+| "延迟/时序边？" | \`async_edges\` — 实时/周期性依赖 |
+| "项目最近怎么样？" | \`project_health\` — 耦合密度趋势分析 |
 
 ### 变更风险评估
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "这次改了什么？" | \`hologram_diff\` — 对比两个版本的图差异 |
-| "变更前置检查？" | \`hologram_run_preflight\` — 指定文件列表，模拟影响 |
-| "完整检查？" | \`hologram_run_check\` — 跑约束校验 + 信号分析 |
+| "这次改了什么？" | \`graph_diff\` — 对比两个版本的图差异 |
+| "变更前置检查？" | \`preflight_check\` — 指定文件列表，模拟影响 |
+| "完整检查？" | \`validate_project\` — 跑约束校验 + 信号分析 |
 
 ### 数据流探索
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "logBuffer 的数据流是什么？" | \`hologram_explore\`（query="logBuffer 数据流"）— 引擎实时解析符号、追踪数据流路径、返回关系+源码+依赖者 |
-| "X 的下游影响是什么？" | \`hologram_impact\` 或 \`hologram_explore\` — 沿调用图追踪波及范围 |
-| "X 和 Y 之间怎么调的？" | \`hologram_path\` — 找最短调用路径 |
-| "X 函数读写了哪些变量？" | \`hologram_dataflow\` — tree-sitter 精确分析 per-function reads/writes/triggers |
+| "logBuffer 的数据流是什么？" | \`explore_deps\`（query="logBuffer 数据流"）— 引擎实时解析符号、追踪数据流路径、返回关系+源码+依赖者 |
+| "X 的下游影响是什么？" | \`trace_impact\` 或 \`explore_deps\` — 沿调用图追踪波及范围 |
+| "X 和 Y 之间怎么调的？" | \`find_dep_path\` — 找最短调用路径 |
+| "X 函数读写了哪些变量？" | \`trace_dataflow\` — tree-sitter 精确分析 per-function reads/writes/triggers |
 
 ### 文件与搜索
 | 用户问 | 用这个工具 |
@@ -833,7 +833,7 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 |--------|----------|
 | "帮我写个新文件" | \`write_file\` — 创建或覆盖整个文件 |
 | "帮我改 XX 文件的某处" | \`edit_file\` — 精确字符串替换（推荐：安全、省 token） |
-| "把 XXX 重命名为 YYY" | \`hologram_rename\` — 基于依赖图的全局重命名（先用 dryRun=true 预览） |
+| "把 XXX 重命名为 YYY" | \`rename_symbol\` — 基于依赖图的全局重命名（先用 dryRun=true 预览） |
 | "跑一下测试/build/安装依赖" | \`run_shell\` — 执行 shell 命令（支持超时 + 后台运行） |
 | "后台任务怎么样了/停了它" | \`bash_output\` / \`bash_kill\` — 查看/终止后台任务 |
 | "Git 状态/提交/推送/拉取" | \`git_status\` / \`git_commit\` / \`git_push\` / \`git_pull\` |
@@ -845,16 +845,16 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 ### 社区分析
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "有哪些社区/子系统？" | \`hologram_community_report\` — 社区检测结果 |
-| "时间线？" | \`hologram_timeline\` — 变更时间线 |
+| "有哪些社区/子系统？" | \`cluster_report\` — 社区检测结果 |
+| "时间线？" | \`project_timeline\` — 变更时间线 |
 
 ### LSP 符号解析
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "X 函数调了什么？" | \`hologram_resolve_call\` — LSP 精确解析调用目标（非 grep 猜） |
-| "X 的类型/接口定义？" | \`hologram_resolve_type\` — 类型定义跳转 |
-| "谁实现了 X 接口？" | \`hologram_find_implementations\` — 查找所有实现 |
-| "X 在哪里被引用？" | \`hologram_find_references\` — 全项目引用追踪 |
+| "X 函数调了什么？" | \`resolve_call\` — LSP 精确解析调用目标（非 grep 猜） |
+| "X 的类型/接口定义？" | \`infer_type\` — 类型定义跳转 |
+| "谁实现了 X 接口？" | \`find_implementations\` — 查找所有实现 |
+| "X 在哪里被引用？" | \`find_references\` — 全项目引用追踪 |
 
 ## 工具组合模式
 
@@ -864,12 +864,12 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 4. **路径分析**：\`path\` 找依赖链 → \`impact\` 看链上各节点的波及面 → 描述依赖链特征
 5. **快速确认**：\`neighbors\` / \`graph_summary\` → 确认"没问题"或"改动安全"（最常见的查询，不是每次都要做全套体检）
 6. **数据流追踪**：用户问"X 的数据流"→ 不要只调引擎，你要自己追。步骤：
-   a) \`hologram_explore\` 拿到调用链和影响范围
-   b) \`hologram_dataflow\` 看 per-function 读写变量
+   a) \`explore_deps\` 拿到调用链和影响范围
+   b) \`trace_dataflow\` 看 per-function 读写变量
    c) 读关键源码理解语义
    d) 把以上合成为一条清晰的链路（markdown），描述节点角色（entry→transform→buffer→consumer→sink）、每一步的读写变量、文件位置
    e) 调 \`dataflow_save\`（必传 query + content）落盘。用户可在数据流面板查看。
-   如果用户只是问"X 在哪定义"或"X 的下游是谁"，用 \`hologram_node\` / \`hologram_explore\` 直接回答，不需要 save。
+   如果用户只是问"X 在哪定义"或"X 的下游是谁"，用 \`inspect_symbol\` / \`explore_deps\` 直接回答，不需要 save。
 
 ## 输出格式
 
@@ -886,7 +886,7 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 > - 无循环依赖，无 L3/L4 穿透
 > - 无需操作
 >
-> 详细数据：hologram_neighbors 返回 downstream_count=2, max_depth=1…
+> 详细数据：get_neighbors 返回 downstream_count=2, max_depth=1…
 
 示例（发现问题时）：
 > **结论：\`auth_service\` 耦合深度偏高，修改它有波及 18 个下游节点的风险。**
@@ -896,7 +896,7 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 > - 同时参与 2 个循环依赖
 > - 建议：优先解耦 \`auth_service → token_cache\` 这条强依赖边
 >
-> 详细数据：hologram_fragile 返回 auth_service 评分 0.87…
+> 详细数据：fragile_modules 返回 auth_service 评分 0.87…
 
 ## 项目上下文
 - 路径: \`${ws.path || '未知'}\`

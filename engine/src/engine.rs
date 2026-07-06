@@ -485,7 +485,7 @@ impl Engine {
             &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
         // 1.5. LSP call resolution → moved to on-demand MCP tool
-        // (hologram_resolve_call). The graph stores coarse CALLS edges;
+        // (resolve_call). The graph stores coarse CALLS edges;
         // type-aware disambiguation happens lazily when the Agent asks.
 
         // 2. Cross-file resolution

@@ -24,7 +24,7 @@ export async function partitionByGraph(
   try {
     // Step 1: Get community clusters from hologram
     const clustersRaw = await invoke<string>('hologram_call', {
-      tool: 'hologram_clusters',
+      tool: 'cluster_report',
       args: { maxClusters: maxPartitions },
     });
     const clusters = parseClusters(clustersRaw);
@@ -82,7 +82,7 @@ export async function partitionByGraph(
   }
 }
 
-/** Parse community clusters from hologram_clusters output. */
+/** Parse community clusters from cluster_report output. */
 function parseClusters(raw: string): Array<{
   label: string;
   nodes: string[];

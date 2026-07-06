@@ -25,17 +25,17 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
 
   // hologram tools (same set as hologram_tools_list returns)
   const holoNames = [
-    'hologram_explore', 'hologram_analyze', 'hologram_neighbors',
-    'hologram_impact', 'hologram_path', 'hologram_fragile', 'hologram_cycle',
-    'hologram_coupling_report', 'hologram_blindspots',
-    'hologram_thread_conflicts', 'hologram_timeline', 'hologram_graph_diff',
-    'hologram_clusters', 'hologram_graph_summary', 'hologram_run_check',
-    'hologram_run_preflight', 'hologram_run_health', 'hologram_community',
-    'hologram_delayed', 'hologram_search', 'hologram_node',
-    'hologram_unused', 'hologram_dataflow',
-    'hologram_resolve_call', 'hologram_resolve_type',
-    'hologram_find_implementations', 'hologram_find_references',
-    'hologram_rename', 'hologram_status', 'hologram_policy_check',
+    'explore_deps', 'analyze_project', 'get_neighbors',
+    'trace_impact', 'find_dep_path', 'fragile_modules', 'detect_cycles',
+    'coupling_report', 'arch_blindspots',
+    'thread_conflicts', 'project_timeline', 'graph_diff',
+    'cluster_report', 'graph_summary', 'validate_project',
+    'preflight_check', 'project_health', 'get_community',
+    'async_edges', 'search_symbols', 'inspect_symbol',
+    'find_unused', 'trace_dataflow',
+    'resolve_call', 'infer_type',
+    'find_implementations', 'find_references',
+    'rename_symbol', 'engine_status', 'check_boundaries',
   ];
   for (const name of holoNames) {
     registry.register({
@@ -93,13 +93,13 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
 
   // aliases (same as workspace.ts)
   registry.alias('read_file', 'read_file_content');
-  registry.alias('hologram_history', 'hologram_node');
+  registry.alias('symbol_history', 'inspect_symbol');
 
   const allNames = new Set<string>();
   for (const t of registry.all()) { allNames.add(t.name()); }
   // aliases are also valid tool names the model might use
   allNames.add('read_file');
-  allNames.add('hologram_history');
+  allNames.add('symbol_history');
 
   return { registry, allNames };
 }
@@ -205,7 +205,7 @@ describe('P4: invoke pathway — 每个工具名都有对应 Tauri command', () 
     // ── workspace ──
     'workspace_activate', 'workspace_deactivate',
     'workspace_start_watcher',
-    'analyze_and_load', 'hologram_run_check',
+    'analyze_and_load', 'validate_project',
     // ── memory ──
     'read_memory_batch',
     // ── dataflow ──
@@ -260,7 +260,7 @@ describe('P5: alias pathway — 每个别名指向已注册工具', () => {
   // Aliases must match workspace.ts: registry.alias(X, Y)
   const ALIASES: Record<string, string> = {
     'read_file': 'read_file_content',
-    'hologram_history': 'hologram_node',
+    'symbol_history': 'inspect_symbol',
   };
 
   for (const [alias, target] of Object.entries(ALIASES)) {
@@ -327,12 +327,12 @@ describe('P1: MCP 通路 — frontend dispatch names match engine', () => {
   // 引擎通过 hologram_tools_list 返回 schema，其中 name 字段决定工具名
   //
   // 关键约束：hologram_tools_list 返回的 name == GRAPH_ENRICH_TOOLS 中的名字
-  // （hologram_dataflow, hologram_search, hologram_node, hologram_resolve_call, ...）
+  // （trace_dataflow, search_symbols, inspect_symbol, resolve_call, ...）
 
   const engineToolsInEnrichList = [
-    'hologram_dataflow', 'hologram_search', 'hologram_node',
-    'hologram_resolve_call', 'hologram_resolve_type',
-    'hologram_find_implementations', 'hologram_find_references',
+    'trace_dataflow', 'search_symbols', 'inspect_symbol',
+    'resolve_call', 'infer_type',
+    'find_implementations', 'find_references',
   ];
 
   it('引擎返回的 hologram_* 工具名在 GRAPH_ENRICH_TOOLS 中', () => {
@@ -342,7 +342,7 @@ describe('P1: MCP 通路 — frontend dispatch names match engine', () => {
   });
 
   it('hologram_call 作为所有 hologram_* 工具的统一分发入口存在', () => {
-    // 前端: invoke('hologram_call', {tool: 'hologram_neighbors', args: {...}})
+    // 前端: invoke('hologram_call', {tool: 'get_neighbors', args: {...}})
     // 引擎: 根据 tool 参数路由到对应实现
     // 如果 hologram_call 挂了，所有 hologram_* 工具全挂
     const { registry } = buildFullRegistry();

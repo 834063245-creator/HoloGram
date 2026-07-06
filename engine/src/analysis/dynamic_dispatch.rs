@@ -9,7 +9,7 @@
 //! - Express middleware: app.use(mw), router.use(mw)
 //!
 //! These produce synthesized edges (provenance: "synthesized") that feed into
-//! hologram_explore's synthesizedHops output.
+//! explore_deps's synthesizedHops output.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

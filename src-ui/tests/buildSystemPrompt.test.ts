@@ -95,8 +95,8 @@ describe('buildSystemPrompt', () => {
       path: 'D:\\proj',
     } as any;
     const prompt = buildSystemPrompt(ws);
-    expect(prompt).toContain('hologram_analyze');
-    expect(prompt).toContain('hologram_fragile');
-    expect(prompt).toContain('hologram_cycle');
+    expect(prompt).toContain('analyze_project');
+    expect(prompt).toContain('fragile_modules');
+    expect(prompt).toContain('detect_cycles');
   });
 });

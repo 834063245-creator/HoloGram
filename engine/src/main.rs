@@ -109,14 +109,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!(project_root = %project_root, "engine starting in MCP serve mode (with project)");
 
                 // Initialize the storage engine (GraphStore + SQLite) lazily.
-                // Actual analysis is deferred to the first hologram_analyze MCP call.
+                // Actual analysis is deferred to the first analyze_project MCP call.
                 // Watcher is also deferred — Windows notify can emit spurious events
                 // during startup, triggering re-analysis loops (622MB, 195 CPU seen).
                 if let Err(e) = hologram_engine::engine::engine_init(&root) {
                     warn!("[main] Engine init failed (non-fatal): {}", e);
                 }
 
-                info!("engine MCP serve ready — analysis + watcher deferred to first hologram_analyze");
+                info!("engine MCP serve ready — analysis + watcher deferred to first analyze_project");
 
                 // Send ready signal for Tauri McpManager — it expects {"method":"ready"}
                 // before sending initialize + tools/list. Without this, read_ready() times out.
@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             None => {
                 // Serve without --project-root: lazy startup
-                // First hologram_analyze call loads the graph.
+                // First analyze_project call loads the graph.
                 info!("engine starting in MCP serve mode (lazy — no project)");
                 let server = McpServer::new(std::path::Path::new("."));
                 server.run_stdio();
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_handle_analyze_nonexistent_path() {
-        let fake = std::env::temp_dir().join("__hologram_nonexistent_dir__");
+        let fake = std::env::temp_dir().join("__nonexistent_tool_dir__");
         // Ensure it doesn't exist
         let _ = std::fs::remove_dir_all(&fake);
         let resp = handle_analyze(fake.to_str().unwrap());

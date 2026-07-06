@@ -41,7 +41,7 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor) {
       required,
     }),
     readOnly: () =>
-      !['hologram_analyze', 'hologram_run_check', 'hologram_rename'].includes(schema.name),
+      !['analyze_project', 'validate_project', 'rename_symbol'].includes(schema.name),
     execute: (args: Record<string, unknown>) => exec(schema.name, args),
   };
 }
@@ -49,7 +49,7 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor) {
 // Sample engine response (matches ToolRegistry::tools_list() output)
 const SAMPLE_TOOLS_LIST = JSON.stringify([
   {
-    name: 'hologram_neighbors',
+    name: 'get_neighbors',
     description: 'Get first-order neighbors of a node.',
     inputSchema: {
       type: 'object',
@@ -58,7 +58,7 @@ const SAMPLE_TOOLS_LIST = JSON.stringify([
     },
   },
   {
-    name: 'hologram_search',
+    name: 'search_symbols',
     description: 'Fuzzy search for nodes by name or ID.',
     inputSchema: {
       type: 'object',
@@ -70,12 +70,12 @@ const SAMPLE_TOOLS_LIST = JSON.stringify([
     },
   },
   {
-    name: 'hologram_status',
+    name: 'engine_status',
     description: 'Get engine loading status and memory stats.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
-    name: 'hologram_analyze',
+    name: 'analyze_project',
     description: 'Re-analyze a project directory.',
     inputSchema: {
       type: 'object',
@@ -92,7 +92,7 @@ describe('hologram dispatch integration', () => {
 
     const schemas = await loadHologramSchemas();
     expect(schemas).toHaveLength(4);
-    expect(schemas[0].name).toBe('hologram_neighbors');
+    expect(schemas[0].name).toBe('get_neighbors');
     expect(schemas[0].inputSchema.required).toEqual(['node_id']);
   });
 
@@ -105,7 +105,7 @@ describe('hologram dispatch integration', () => {
     const tools = schemas.map(s => mcpSchemaToTool(s, exec));
 
     // neighbors
-    expect(tools[0].name()).toBe('hologram_neighbors');
+    expect(tools[0].name()).toBe('get_neighbors');
     expect(tools[0].readOnly()).toBe(true);
     expect(tools[0].parameters().required).toEqual(['node_id']);
 
@@ -128,10 +128,10 @@ describe('hologram dispatch integration', () => {
       return result;
     };
 
-    const result = await holoExec('hologram_neighbors', { node_id: 'a' });
+    const result = await holoExec('get_neighbors', { node_id: 'a' });
     expect(result).toBe('{"node":{"name":"mod_a"}}');
     expect(mockInvoke).toHaveBeenCalledWith('hologram_call', {
-      tool: 'hologram_neighbors',
+      tool: 'get_neighbors',
       args: { node_id: 'a' },
     });
   });
@@ -149,7 +149,7 @@ describe('hologram dispatch integration', () => {
 
     await tool.execute({ node_id: 'test_node' });
     expect(calls).toHaveLength(1);
-    expect(calls[0].name).toBe('hologram_neighbors');
+    expect(calls[0].name).toBe('get_neighbors');
     expect(calls[0].args).toEqual({ node_id: 'test_node' });
   });
 });

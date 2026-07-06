@@ -80,40 +80,40 @@ export class AgentVisualizer {
 
       // ── Visual effects ──
       switch (data.toolName) {
-        case 'hologram_path':
+        case 'find_dep_path':
           this._handlePath(data.args);
           break;
-        case 'hologram_impact':
+        case 'trace_impact':
           this._handleImpact(data.args);
           break;
-        case 'hologram_neighbors':
+        case 'get_neighbors':
           this._handleNeighbors(data.args);
           break;
-        case 'hologram_coupling_report':
+        case 'coupling_report':
           this._handleCouplingReport(data.args);
           break;
-        case 'hologram_fragile':
+        case 'fragile_modules':
           this._handleFragile(data.output);
           break;
-        case 'hologram_cycle':
+        case 'detect_cycles':
           this._handleCycle(data.output);
           break;
         case 'hologram_diff':
           this._handleDiff(data.output);
           break;
-        case 'hologram_blindspots':
+        case 'arch_blindspots':
           this._handleBlindspots(data.output);
           break;
-        case 'hologram_run_check':
+        case 'validate_project':
           this._handleRunCheck(data.output);
           break;
-        case 'hologram_history':
+        case 'symbol_history':
           this._handleHistory(data.args);
           break;
-        case 'hologram_community':
+        case 'get_community':
           this._handleCommunity(data.output);
           break;
-        case 'hologram_delayed':
+        case 'async_edges':
           this._handleDelayed(data.output);
           break;
         case 'hologram_changes':
@@ -151,16 +151,16 @@ export class AgentVisualizer {
       if (v) names.push(v);
     };
     switch (toolName) {
-      case 'hologram_path':
+      case 'find_dep_path':
         n('from'); n('to');
         break;
-      case 'hologram_impact':
-      case 'hologram_neighbors':
-      case 'hologram_history':
-      case 'hologram_node':
+      case 'trace_impact':
+      case 'get_neighbors':
+      case 'symbol_history':
+      case 'inspect_symbol':
         n('node_id'); n('nodeId');
         break;
-      case 'hologram_coupling_report':
+      case 'coupling_report':
         n('module');
         break;
     }
@@ -299,7 +299,7 @@ export class AgentVisualizer {
 // ═══════════════════════════════════════════════════════
 
 /**
- * Parse hologram_fragile tabular output.
+ * Parse fragile_modules tabular output.
  * Format:
  *   Top N Most Fragile Modules:
  *     Module                    L4   L3   L2   L1   Score
@@ -325,7 +325,7 @@ function parseFragileOutput(text: string): string[] {
 }
 
 /**
- * Parse hologram_cycle output.
+ * Parse detect_cycles output.
  * Format:
  *   [category] 环长 N 跳: A → B → C
  */
