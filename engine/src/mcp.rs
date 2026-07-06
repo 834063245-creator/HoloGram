@@ -6,7 +6,7 @@
 //
 // Protocol: reads one JSON-RPC request per line from stdin,
 // writes one JSON-RPC response per line to stdout.
-// Supports tools/list and tools/call with all 27 hologram_* tools (via ToolRegistry).
+// Supports tools/list and tools/call with all 28 hologram_* tools (via ToolRegistry).
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -301,7 +301,7 @@ impl McpServer {
     // ── tools/list ──
 
     fn handle_tools_list(&self, id: &Value) -> Value {
-        McpServer::success_response(id, json!({ "tools": tool_definitions() }))
+        McpServer::success_response(id, json!({ "tools": crate::tools::ToolRegistry::global().tools_list() }))
     }
 
     // ── tools/call dispatch ──
@@ -429,7 +429,7 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 27, "27 tools defined");
+        assert_eq!(tools.len(), 28, "28 tools defined");
         // Check key tools exist
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"hologram_neighbors"));
