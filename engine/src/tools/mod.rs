@@ -15,7 +15,7 @@ use crate::engine;
 use crate::engine::GRAMMAR_LOADER;
 use crate::graph::{query, Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::pipeline::discovery::discover_files;
-use crate::routing::preflight::run_full_check;
+use crate::routing::preflight::{load_baseline, run_full_check, save_baseline};
 use crate::storage::MemoryIndex;
 
 // ═══════════════════════════════════════════════════════════════
@@ -1057,29 +1057,39 @@ fn handler_run_check(args: &Value) -> Value {
     if !root.exists() {
         return json!({"error": format!("Path not found: {}", path)});
     }
-    let before = engine::engine_read_graph(|g| g.clone()).ok();
-    match engine::engine_init(&root) {
-        Ok(_) => {}
-        Err(e) => return json!({"error": format!("Engine init failed: {}", e)}),
-    }
-    let analyze_result = match engine::engine_analyze(&root) {
-        Ok(r) => r,
-        Err(e) => return json!({"error": e}),
+    // Load baseline snapshot (saved from last check) for before/after diff
+    let before = load_baseline(&root);
+    // Prefer in-memory cached graph; only re-analyze when truly empty
+    let after = match engine::engine_read_graph(|g| g.clone()) {
+        Ok(g) if g.node_count() > 0 || g.edge_count() > 0 => g,
+        _ => {
+            match engine::engine_init(&root) {
+                Ok(_) => {}
+                Err(e) => return json!({"error": format!("Engine init failed: {}", e)}),
+            }
+            match engine::engine_analyze(&root) {
+                Ok(r) => r.graph,
+                Err(e) => return json!({"error": e}),
+            }
+        }
     };
-    let after = analyze_result.graph.clone();
-    let before_graph = before.unwrap_or_else(|| after.clone());
     let changed_files: Vec<String> = vec![];
-    let check_result = run_full_check(&before_graph, &after, &changed_files, path);
+    let check_result = run_full_check(&before, &after, &changed_files, path);
+    // Advance baseline so next check diffs against this snapshot
+    save_baseline(&root, &after);
+    // Record to timeline (skip quiet polls — only meaningful checks)
     let passed = check_result["passed"].as_bool().unwrap_or(true);
     let violation_count = check_result["violation_count"].as_u64().unwrap_or(0);
-    let event_type = if passed { "commit_clean" } else { "commit_violation" };
-    let summary = if passed {
-        format!("Check passed ({} violations)", violation_count)
-    } else {
-        format!("Check failed: {} violations", violation_count)
-    };
-    let props = json!({"passed": check_result["passed"], "violation_count": check_result["violation_count"]});
-    let _ = engine::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props);
+    if violation_count > 0 || !changed_files.is_empty() {
+        let event_type = if passed { "commit_clean" } else { "commit_violation" };
+        let summary = if passed {
+            format!("Check passed ({} violations)", violation_count)
+        } else {
+            format!("Check failed: {} violations", violation_count)
+        };
+        let props = json!({"passed": check_result["passed"], "violation_count": check_result["violation_count"]});
+        let _ = engine::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props);
+    }
     json!(check_result)
 }
 

@@ -145,9 +145,9 @@ export class TimelinePanel {
     try {
       // 8-second timeout — prevent perpetual loading if backend hangs
       const json = await Promise.race([
-        invoke<string>('hologram_timeline', {
-          path: this.path,
-          limit: 60,
+        invoke<string>('hologram_call', {
+          tool: 'project_timeline',
+          args: { limit: 60 },
         }),
         new Promise<string>((_, reject) =>
           setTimeout(() => reject(new Error('Timeline query timed out after 8s')), 8000)
