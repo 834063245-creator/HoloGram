@@ -1355,14 +1355,15 @@ fn handler_unused(args: &Value) -> Value {
     })
 }
 
-/// On-demand type-aware call resolution. Replaces the old eager LSP pass
-/// in the pipeline. Agent calls this when it needs to know the *actual*
-/// target of a call expressed as a method/attribute chain.
+/// On-demand type-aware call resolution. Tries real LSP server first,
+/// falls back to handwritten adapters transparently.
 fn handler_resolve_call(args: &Value) -> Value {
     let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let func_name = args.get("function").and_then(|v| v.as_str()).unwrap_or("");
-    if file_path.is_empty() || func_name.is_empty() {
-        return json!({"error": "file and function are required"});
+    let line = args.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let column = args.get("column").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    if file_path.is_empty() {
+        return json!({"error": "file is required"});
     }
     let root = project_root();
     let abs_path = if Path::new(file_path).is_absolute() {
@@ -1379,16 +1380,43 @@ fn handler_resolve_call(args: &Value) -> Value {
         Err(e) => return json!({"error": format!("cannot read file: {}", e)}),
     };
 
-    // Parse — re-parse via engine helper to avoid tree_sitter name ambiguity
-    // with crate::adapter::tree_sitter module
+    // ── Path 1: Real LSP server (if pool is warm) ──
+    let lsp_result = if line > 0 || column > 0 {
+        crate::lsp_manager::LspManager::resolve_definition(
+            &path_str, &source, line, column, &ext,
+        )
+        .ok()
+        .map(|locs| {
+            locs.iter()
+                .map(|loc| json!({
+                    "file": crate::lsp_manager::uri_to_path(&loc.uri),
+                    "line": loc.range_start_line,
+                    "column": loc.range_start_char,
+                    "backend": "native_lsp",
+                }))
+                .collect::<Vec<_>>()
+        })
+    } else {
+        None
+    };
+
+    if let Some(ref locs) = lsp_result {
+        if !locs.is_empty() {
+            return json!({
+                "file": path_str,
+                "function": func_name,
+                "backend": "native_lsp",
+                "definitions": locs,
+                "note": "resolved via real LSP server",
+            });
+        }
+    }
+
+    // ── Path 2: Handwritten adapter (always available) ──
     let Some(tree) = engine::reparse_source_lsp(&source, &ext) else {
         return json!({"error": format!("parse failed or unsupported extension: {}", ext)});
     };
-
-    // Build module QN
     let module_qn = path_str.trim_end_matches(&format!(".{}", ext)).replace(['/', '\\'], ".");
-
-    // Registry from current in-memory graph
     let registry = match engine::engine_read_graph(|g| {
         crate::adapter::type_registry::TypeRegistry::from_graph(g)
     }) {
@@ -1396,74 +1424,51 @@ fn handler_resolve_call(args: &Value) -> Value {
         Err(e) => return json!({"error": format!("cannot access graph: {}", e)}),
     };
 
-    // Dispatch to language adapter
     use crate::adapter::*;
-    let calls: Vec<Value> = match ext.as_str() {
-        "py" | "pyi" => python_lsp::run_py_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        "go" => go_lsp::run_go_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        "java" => java_lsp::run_java_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        "cs" => cs_lsp::run_cs_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
+    use crate::adapter::ResolvedCall;
+    let raw_calls: Vec<ResolvedCall> = match ext.as_str() {
+        "py" | "pyi" => python_lsp::run_py_lsp(&source, &tree, &module_qn, &registry),
+        "go" => go_lsp::run_go_lsp(&source, &tree, &module_qn, &registry),
+        "java" => java_lsp::run_java_lsp(&source, &tree, &module_qn, &registry),
+        "cs" => cs_lsp::run_cs_lsp(&source, &tree, &module_qn, &registry),
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
-            let (calls, _perf) = ts_lsp::run_ts_lsp(&source, &tree, &module_qn, &registry);
-            calls.into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect()
+            ts_lsp::run_ts_lsp(&source, &tree, &module_qn, &registry).0
         }
         "c" | "h" | "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" =>
-            c_lsp::run_c_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry)
-            .into_iter().map(|rc| json!({
-                "caller": rc.caller_qn, "callee": rc.callee_qn,
-                "strategy": rc.strategy, "confidence": rc.confidence,
-            })).collect(),
-        _ => return json!({"error": format!("LSP not available for .{}", ext)}),
+            c_lsp::run_c_lsp(&source, &tree, &module_qn, &registry),
+        "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry),
+        "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry),
+        "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry),
+        _ => return json!({"error": format!("unsupported extension: .{}", ext)}),
     };
 
-    // Filter to the requested function if specified
+    let call_values: Vec<Value> = raw_calls
+        .into_iter()
+        .map(|rc| json!({
+            "caller": rc.caller_qn, "callee": rc.callee_qn,
+            "strategy": rc.strategy, "confidence": rc.confidence,
+        }))
+        .collect();
+
     let filtered: Vec<&Value> = if func_name.is_empty() {
-        calls.iter().collect()
+        call_values.iter().collect()
     } else {
-        calls.iter().filter(|c| {
-            c.get("caller").and_then(|v| v.as_str())
-                .map(|s| s.contains(func_name))
-                .unwrap_or(false)
-        }).collect()
+        call_values
+            .iter()
+            .filter(|c| {
+                c.get("caller")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.contains(func_name))
+                    .unwrap_or(false)
+            })
+            .collect()
     };
 
     json!({
         "file": path_str,
         "function": func_name,
+        "backend": if lsp_result.is_some() { "hybrid" } else { "handwritten" },
+        "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
         "resolved_calls": filtered,
         "total": filtered.len(),
     })
@@ -1764,10 +1769,12 @@ fn all_schemas() -> &'static [ToolSchema] {
         // LSP call resolution (on-demand, replaces old eager pipeline pass)
         ToolSchema {
             name: "hologram_resolve_call",
-            description: "Type-aware call resolution for a single file. Resolves method/attribute calls to their concrete targets using per-language LSP adapters. Use this when the graph shows a short callee name and you need the fully-qualified target. Accepts 'file' (path) and optional 'function' (filter to calls from a specific function).",
+            description: "Type-aware call resolution for a single file. Tries native LSP server first (rust-analyzer/gopls/pyright/...), falls back to fast handwritten adapters. Resolves method/attribute calls to their concrete targets. Use when the graph shows a short callee name and you need the fully-qualified target.",
             params: &[
                 p!("file", "string", "File path, e.g. \"src/views.py\""),
                 p!("function", "string", "Optional: filter to calls from a specific function, e.g. \"login\""),
+                p!("line", "number", "Optional: 0-based line number for native LSP resolution"),
+                p!("column", "number", "Optional: 0-based column for native LSP resolution"),
             ],
             required: &["file"],
             read_only: true,

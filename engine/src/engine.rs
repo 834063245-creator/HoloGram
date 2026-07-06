@@ -616,6 +616,15 @@ impl Engine {
             detail: String::new(),
         });
 
+        // Warm LSP server pool in background — fire-and-forget,
+        // doesn't block pipeline completion. Failed servers are
+        // silently skipped; handwritten adapters serve as fallback.
+        let proj_root = project_root.to_path_buf();
+        std::thread::spawn(move || {
+            let root_str = proj_root.to_string_lossy().to_string();
+            crate::lsp_manager::LspManager::warm(&root_str);
+        });
+
         // Set state back to Ready
         *self.state.write() = EngineState::Ready {
             node_count,

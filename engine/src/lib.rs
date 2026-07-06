@@ -31,3 +31,4 @@ pub mod mcp;
 pub mod logging;
 pub mod path_utils;
 pub mod stress;
+pub mod lsp_manager;
