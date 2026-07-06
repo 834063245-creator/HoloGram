@@ -104,11 +104,11 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
   return { registry, allNames };
 }
 
-// ═══════════════════════════════════════════════════════════
-// P3: Hook 常量 ↔ ToolRegistry 交叉验证
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// P3: Hook 常量 ↔ ToolRegistry 双向交叉验证
+// ═══════════════════════════════════════════════════════════════
 
-describe('P3: hook enrichment — 所有常量名在 Registry 中真实存在', () => {
+describe('P3 forward: 常量名全部在 Registry 中', () => {
   const { allNames } = buildFullRegistry();
 
   it('GRAPH_ENRICH_TOOLS 全部存在', () => {
@@ -119,6 +119,66 @@ describe('P3: hook enrichment — 所有常量名在 Registry 中真实存在', 
   it('GRAPH_PREFLIGHT_TOOLS 全部存在', () => {
     const missing = (GRAPH_PREFLIGHT_TOOLS as readonly string[]).filter(n => !allNames.has(n));
     expect(missing).toEqual([]);
+  });
+});
+
+describe('P3 reverse: 新加 coding 工具没加 hook 常量 → 炸', () => {
+  const codingNames = new Set(createCodingTools(async () => '').map(t => t.name()));
+  const enrichSet = new Set(GRAPH_ENRICH_TOOLS);
+  const preflightSet = new Set(GRAPH_PREFLIGHT_TOOLS);
+
+  // 明确不需要 enrichment/preflight 的工具
+  const EXEMPT = new Set([
+    'ask_user',           // 交互工具，无文件内容
+    'write_file',         // 已有 preflight
+    'edit_file',          // 已有 preflight
+    'delete_file',        // 已有 preflight
+    'rename_file',        // 已有 preflight
+    'move_file',          // 已有 preflight
+    'create_directory',   // 目录操作，无符号
+    'read_constraints',   // 配置文件
+    'bash_output',        // 后台输出查询
+    'bash_kill',          // 后台管理
+    'web_search',         // 网络搜索
+    'web_fetch',          // 网页抓取
+    'git_status',         // 状态查询
+    'git_log',            // 日志查询
+    'git_push',           // 推送
+    'git_pull',           // 拉取
+    'git_init',           // 初始化
+    'git_create_branch',  // 分支创建
+    'git_stash_push',     // 暂存
+    'git_stash_pop',      // 暂存恢复
+    'agent_isolation_create',   // 隔离管理
+    'agent_isolation_diff',     // 隔离管理
+    'agent_isolation_merge',    // 隔离管理
+    'agent_isolation_discard',  // 隔离管理
+    'agent_isolation_status',   // 隔离管理
+    'git_stage',          // 暂存（git_commit 的 preflight 已覆盖风险）
+  ]);
+
+  it('未归类工具 = 漏加 hook 常量', () => {
+    const untracked: string[] = [];
+    for (const name of codingNames) {
+      if (enrichSet.has(name)) continue;
+      if (preflightSet.has(name)) continue;
+      if (EXEMPT.has(name)) continue;
+      untracked.push(name);
+    }
+    if (untracked.length > 0) {
+      const lines = untracked.map(n => {
+        // 根据工具类型给建议
+        if (['read_file_content', 'search_content', 'glob', 'list_directory',
+          'git_diff', 'run_shell'].includes(n)) return `  "${n}" → 加到 GRAPH_ENRICH_TOOLS（读工具应该 enrichment）`;
+        if (['edit_file', 'write_file', 'delete_file', 'rename_file', 'move_file',
+          'git_discard', 'git_checkout', 'git_commit'].includes(n)) return `  "${n}" → 加到 GRAPH_PREFLIGHT_TOOLS（写工具应该 preflight）`;
+        return `  "${n}" → 加对应常量，或加 EXEMPT 并注释理由`;
+      });
+      expect.fail(
+        `以下工具不在 hook 常量也不在豁免名单：\n${lines.join('\n')}\n` +
+        '→ 加 hook → 改 hooks.ts。不加 hook → 在本测试 EXEMPT 注明原因。'
+      );
+    }
   });
 });
 
