@@ -297,8 +297,43 @@ fn emit_java_method(ctx: &mut JavaLspContext, obj_type: &Type, mname: &str) {
         _ => return,
     };
     if let Some(f) = ctx.registry.lookup_method(&qn, mname) {
-        ctx.emit(&f.qualified_name, "java_method", 0.90);
+        // Interface sole-implementer: if receiver is an interface and exactly
+        // one concrete type implements it + declares the method, rank higher.
+        let (strategy, conf) = java_interface_strategy(ctx.registry, &qn, mname);
+        ctx.emit(&f.qualified_name, strategy, conf);
+    } else {
+        // Even if the method isn't found directly, try sole implementer
+        // on the interface itself (for methods declared on the interface).
+        let (sole, _count) = java_find_sole_impl(ctx.registry, &qn, mname);
+        if let Some(sqn) = sole {
+            ctx.emit(&sqn, "lsp_interface_resolve", 0.92);
+        }
     }
+}
+
+/// Find sole concrete implementer of interface `iface_qn` that declares
+/// `method_name`. Returns (impl_method_qn, count) — count capped at 2.
+fn java_find_sole_impl(registry: &TypeRegistry, iface_qn: &str, mname: &str) -> (Option<String>, usize) {
+    let mut first: Option<String> = None;
+    let mut count: usize = 0;
+    for (qn, cand) in &registry.types_by_qn {
+        if cand.is_interface || cand.alias_of.is_some() { continue; }
+        if count >= 2 { break; }
+        if !cand.bases.iter().any(|b| b == iface_qn) { continue; }
+        if cand.methods.contains_key(mname) {
+            let sqn = format!("{}.{}", qn, mname);
+            if first.is_none() { first = Some(sqn); }
+            count += 1;
+        }
+    }
+    (first, count)
+}
+
+fn java_interface_strategy(registry: &TypeRegistry, receiver_qn: &str, mname: &str) -> (&'static str, f32) {
+    let Some(rt) = registry.lookup_type(receiver_qn) else { return ("java_method", 0.90); };
+    if !rt.is_interface { return ("java_method", 0.90); }
+    let (_sole, count) = java_find_sole_impl(registry, receiver_qn, mname);
+    if count == 1 { ("lsp_interface_resolve", 0.95) } else { ("java_method", 0.90) }
 }
 
 pub fn process_java_method(ctx: &mut JavaLspContext, method_node: Node) {

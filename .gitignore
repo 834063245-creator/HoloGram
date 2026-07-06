@@ -73,6 +73,11 @@ test_debug.py
 debug-*.log
 prototype.html
 prototype-permission.html
+prototype/
+
+# Demo / prototype files
+*demo*.html
+*prototype*.html
 gen_files_graph.py
 preflight/
 

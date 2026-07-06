@@ -13,13 +13,17 @@ pub struct PhpLspContext<'a> {
     pub module_qn: String, pub namespace: String, pub use_map: HashMap<String, String>,
     pub enclosing_func_qn: Option<String>, pub enclosing_class_qn: Option<String>,
     pub resolved_calls: Vec<ResolvedCall>,
+    pub walk_depth: u32,
 }
+
+const MAX_WALK_DEPTH: u32 = 64;
 
 impl<'a> PhpLspContext<'a> {
     pub fn new(source: &'a str, registry: &'a TypeRegistry, module_qn: &str) -> Self {
         Self { source, registry, current_scope: Scope::new_root(), module_qn: module_qn.to_string(),
             namespace: String::new(), use_map: HashMap::new(),
-            enclosing_func_qn: None, enclosing_class_qn: None, resolved_calls: Vec::new() }
+            enclosing_func_qn: None, enclosing_class_qn: None, resolved_calls: Vec::new(),
+            walk_depth: 0 }
     }
     fn node_text(&self, n: Node) -> Option<&str> { n.utf8_text(self.source.as_bytes()).ok() }
     fn emit(&mut self, callee_qn: &str, strategy: &str, confidence: f32) {
@@ -137,7 +141,7 @@ pub fn process_php_statement(ctx: &mut PhpLspContext, node: Node) {
     }
 }
 
-pub fn resolve_php_calls(ctx: &mut PhpLspContext, node: Node) {
+fn resolve_php_calls_inner(ctx: &mut PhpLspContext, node: Node) {
     if node.kind().is_empty() { return; }
     let k = node.kind();
     process_php_statement(ctx, node);
@@ -159,7 +163,14 @@ pub fn resolve_php_calls(ctx: &mut PhpLspContext, node: Node) {
     }
     if k == "class_declaration" || k == "method_declaration" || k == "function_definition" || k == "arrow_function" || k == "anonymous_function_creation_expression" { return; }
     let nc = node.named_child_count();
-    for i in 0..nc { resolve_php_calls(ctx, node.named_child(i).unwrap_or(node)); }
+    for i in 0..nc { resolve_php_calls_inner(ctx, node.named_child(i).unwrap_or(node)); }
+}
+
+pub fn resolve_php_calls(ctx: &mut PhpLspContext, node: Node) {
+    if ctx.walk_depth >= MAX_WALK_DEPTH { return; }
+    ctx.walk_depth += 1;
+    resolve_php_calls_inner(ctx, node);
+    ctx.walk_depth -= 1;
 }
 
 pub fn emit_php_call(ctx: &mut PhpLspContext, call_node: Node) {

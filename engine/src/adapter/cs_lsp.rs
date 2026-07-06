@@ -264,7 +264,16 @@ pub fn emit_cs_call(ctx: &mut CSLspContext, call_node: Node) {
 
             match &obj_type {
                 Type::Named { qn } | Type::Template { name: qn, .. } => {
-                    if let Some(rf) = ctx.registry.lookup_method(qn, mname) { ctx.emit(&rf.qualified_name, "cs_method", 0.90); }
+                    if let Some(rf) = ctx.registry.lookup_method(qn, mname) {
+                        // Distinguish own vs inherited method
+                        let own = rf.receiver_type.as_deref() == Some(qn.as_str());
+                        let (strategy, conf) = if own {
+                            ("cs_self_method", 0.95)
+                        } else {
+                            ("cs_inherited_method", 0.92)
+                        };
+                        ctx.emit(&rf.qualified_name, strategy, conf);
+                    }
                 }
                 Type::Builtin { name } if name != "null" => {
                     let qn = format!("System.{}", name);

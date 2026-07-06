@@ -12,6 +12,8 @@ use crate::adapter::ResolvedCall;
 pub struct CLspContext<'a> {
     pub source: &'a str, pub registry: &'a TypeRegistry, pub current_scope: Scope,
     pub module_qn: String,
+    /// Active C++ `using namespace` directives (e.g. "std", "myapp.utils").
+    pub using_namespaces: Vec<String>,
 
     pub enclosing_func_qn: Option<String>, pub enclosing_class_qn: Option<String>,
     pub resolved_calls: Vec<ResolvedCall>,
@@ -21,8 +23,14 @@ pub struct CLspContext<'a> {
 impl<'a> CLspContext<'a> {
     pub fn new(source: &'a str, registry: &'a TypeRegistry, module_qn: &str) -> Self {
         Self { source, registry, current_scope: Scope::new_root(), module_qn: module_qn.to_string(),
+            using_namespaces: Vec::new(),
             enclosing_func_qn: None, enclosing_class_qn: None,
             resolved_calls: Vec::new(), eval_cache: HashMap::new() }
+    }
+
+    /// Register a `using namespace X;` directive in the current scope.
+    pub fn add_using_namespace(&mut self, ns: &str) {
+        self.using_namespaces.push(ns.to_string());
     }
     fn node_text(&self, n: Node) -> Option<&str> { n.utf8_text(self.source.as_bytes()).ok() }
     fn emit(&mut self, callee_qn: &str, strategy: &str, confidence: f32) {
@@ -208,7 +216,35 @@ pub fn emit_c_call(ctx: &mut CLspContext, call_node: Node) {
     match fn_node.kind() {
         "identifier" => {
             let fname = ctx.node_text(fn_node).unwrap_or("").to_string();
-            if let Some(f) = ctx.registry.lookup_symbol(&ctx.module_qn, &fname) { ctx.emit(&f.qualified_name, "c_direct", 0.95); return; }
+            // 1. Module-local lookup
+            if let Some(f) = ctx.registry.lookup_symbol(&ctx.module_qn, &fname) {
+                ctx.emit(&f.qualified_name, "c_direct", 0.95);
+                return;
+            }
+            // 2. Namespace-scoped retry: try module_qn.namespace.fname for each
+            // active `using namespace` directive. A function declared in namespace
+            // `ns` is registered as `<module>.ns.func`, but a call site in the
+            // same module just writes `func()`. The namespace prefix bridges them.
+            for ns in &ctx.using_namespaces {
+                let prefixed = format!("{}.{}.{}", ctx.module_qn, ns, fname);
+                if let Some(f) = ctx.registry.lookup_func(&prefixed) {
+                    ctx.emit(&f.qualified_name, "c_namespace_resolve", 0.92);
+                    return;
+                }
+            }
+            // 3. Short-name type fallback: try matching last segment across registry
+            // ponytail: O(n) scan over type registry, small N in practice
+            for (qn, _rt) in &ctx.registry.types_by_qn {
+                if let Some(dot) = qn.rfind('.') {
+                    if &qn[dot + 1..] == fname {
+                        let func_qn = format!("{}.{}", qn, fname);
+                        if ctx.registry.lookup_func(&func_qn).is_some() {
+                            ctx.emit(&func_qn, "c_shortname_resolve", 0.88);
+                            return;
+                        }
+                    }
+                }
+            }
         }
         "field_expression" | "member_expression" => {
             let obj = fn_node.child_by_field_name("object").or_else(|| fn_node.child_by_field_name("argument"));

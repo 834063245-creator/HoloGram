@@ -40,6 +40,8 @@ pub struct RegisteredType {
     pub is_interface: bool,
     /// Alias target QN (for `type Foo = Bar`)
     pub alias_of: Option<String>,
+    /// True for Kotlin object/companion object (static-like members).
+    pub is_object: bool,
 }
 
 /// Cross-file type/function registry.
@@ -94,6 +96,7 @@ impl TypeRegistry {
                     bases: Vec::new(),
                     is_interface: false,
                     alias_of: None,
+                    is_object: false,
                 };
                 // Bases are extracted from Inherits edges during analysis.
                 // We'll populate them in pass 2 after edges are processed.
@@ -227,6 +230,7 @@ impl TypeRegistry {
             bases: Vec::new(),
             is_interface: false,
             alias_of: None,
+            is_object: false,
         };
         for &method_name in methods {
             let method_qn = format!("builtins.{}.{}", name, method_name);
@@ -443,6 +447,7 @@ mod tests {
             bases: Vec::new(),
             is_interface: false,
             alias_of: None,
+            is_object: false,
         };
         base.methods.insert("do_stuff".into(), "builtins.Base.do_stuff".into());
         reg.add_type(base);
@@ -461,6 +466,7 @@ mod tests {
             bases: vec!["builtins.Base".into()],
             is_interface: false,
             alias_of: None,
+            is_object: false,
         };
         child.methods.insert("do_stuff".into(), "builtins.Base.do_stuff".into());
         reg.add_type(child);
@@ -501,6 +507,7 @@ mod tests {
             bases: vec!["pkg.B".into()],
             is_interface: false,
             alias_of: None,
+            is_object: false,
         };
         let b = RegisteredType {
             qualified_name: "pkg.B".into(),
@@ -510,6 +517,7 @@ mod tests {
             bases: vec!["pkg.A".into()],
             is_interface: false,
             alias_of: None,
+            is_object: false,
         };
         reg.add_type(a);
         reg.add_type(b);
