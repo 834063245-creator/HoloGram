@@ -463,10 +463,7 @@ export class Workspace {
 
     // Aliases — short names for high-frequency tools
     registry.alias('read_file', 'read_file_content');
-    // ponytail: symbol_history is now an alias of inspect_symbol (V4 richer result)
-    registry.alias('symbol_history', 'inspect_symbol');
-    // ponytail: community_report → clusters (same handler, different granularity label)
-    registry.alias('cluster_report', 'cluster_report');
+    // ponytail: symbol_history / cluster_report now first-class in all_schemas() — no aliases needed
 
     // Memory tools
     if (this.memoryManager) {
@@ -587,8 +584,7 @@ export class Workspace {
         }
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
-        r.alias('symbol_history', 'inspect_symbol');
-        r.alias('cluster_report', 'cluster_report');
+        // ponytail: symbol_history / cluster_report now first-class — no aliases needed
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
         }
@@ -639,7 +635,7 @@ export class Workspace {
     this.checkRunning = true;
     this.checkPending = false;
     try {
-      const json = await invoke<string>('validate_project', { path: this.path });
+      const json = await invoke<string>('hologram_run_check', { path: this.path });
       try {
         const result: CheckResult = JSON.parse(json);
         checkPanel.update(result);
