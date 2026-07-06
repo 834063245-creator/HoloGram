@@ -379,6 +379,12 @@ export class Workspace {
     this.memoryManager = new MemoryManager(this.path, globalDir);
     const graphNodes = extractGraphNodeNames(this.graphData);
     try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
+    // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条
+    if (memorySection.trim()) {
+      const memLines = memorySection.split('\n').filter(l => l.startsWith('- ')).length;
+      const globalCount = this.memoryManager?.scopes?.().includes('global') ? ' (含全局)' : '';
+      this.onStatusChange?.(`[记忆] 已注入 ${memLines} 条${globalCount}`);
+    }
 
     const prov: Provider =
       active.kind === 'anthropic'
