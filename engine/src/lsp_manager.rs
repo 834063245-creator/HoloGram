@@ -43,27 +43,44 @@ impl LspProcess {
         });
         let body = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin
-            .write_all(header.as_bytes())
-            .map_err(|e| format!("write header: {}", e))?;
-        self.stdin
-            .write_all(body.as_bytes())
-            .map_err(|e| format!("write body: {}", e))?;
-        self.stdin
-            .flush()
-            .map_err(|e| format!("flush: {}", e))?;
+        self.stdin.write_all(header.as_bytes()).map_err(|e| format!("write: {}", e))?;
+        self.stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
+        self.stdin.flush().map_err(|e| format!("flush: {}", e))?;
 
-        // Read response — Content-Length header then JSON body
+        // Read responses, skipping server-to-client notifications until
+        // we get the matching id. LSP servers send diagnostics/log messages
+        // asynchronously between request/response cycles.
+        loop {
+            let (resp_id, response) = self.read_one_message()?;
+            if resp_id == Some(id) {
+                if let Some(err) = response.get("error") {
+                    return Err(format!("LSP error: {}", err));
+                }
+                return Ok(response);
+            }
+            // else: server notification (no id) or stale response → skip
+        }
+    }
+
+    /// Send a notification (no id, no response expected).
+    fn send_notification(&mut self, method: &str, params: Value) -> Result<(), String> {
+        let notif = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        let body = serde_json::to_string(&notif).map_err(|e| e.to_string())?;
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        self.stdin.write_all(header.as_bytes()).map_err(|e| format!("write: {}", e))?;
+        self.stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
+        self.stdin.flush().map_err(|e| format!("flush: {}", e))?;
+        Ok(())
+    }
+
+    /// Read a single JSON-RPC message and return its (id, body).
+    fn read_one_message(&mut self) -> Result<(Option<u64>, Value), String> {
         let mut content_length: Option<usize> = None;
         loop {
             let mut line = String::new();
-            self.reader
-                .read_line(&mut line)
-                .map_err(|e| format!("read header: {}", e))?;
+            self.reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
             let trimmed = line.trim();
-            if trimmed.is_empty() {
-                break;
-            }
+            if trimmed.is_empty() { break; }
             if let Some(len_str) = trimmed.strip_prefix("Content-Length: ") {
                 content_length = len_str.trim().parse().ok();
             }
@@ -71,62 +88,51 @@ impl LspProcess {
         let len = content_length.ok_or("missing Content-Length")?;
         let mut body_buf = vec![0u8; len];
         use std::io::Read;
-        self.reader
-            .get_mut()
-            .read_exact(&mut body_buf)
-            .map_err(|e| format!("read body: {}", e))?;
-        let response: Value =
-            serde_json::from_slice(&body_buf).map_err(|e| format!("parse response: {}", e))?;
-
-        if let Some(err) = response.get("error") {
-            return Err(format!("LSP error: {}", err));
-        }
-        Ok(response)
+        self.reader.get_mut().read_exact(&mut body_buf).map_err(|e| format!("read body: {}", e))?;
+        let msg: Value = serde_json::from_slice(&body_buf).map_err(|e| format!("parse: {}", e))?;
+        let id = msg.get("id").and_then(|v| v.as_u64());
+        Ok((id, msg))
     }
 
     fn initialize(&mut self, root: &str) -> Result<(), String> {
         let params = json!({
             "processId": std::process::id(),
             "rootUri": format!("file:///{}", root.replace('\\', "/")),
+            "workspaceFolders": [{
+                "uri": format!("file:///{}", root.replace('\\', "/")),
+                "name": "project"
+            }],
             "capabilities": {
                 "textDocument": {
-                    "definition": { "dynamicRegistration": true },
-                    "references": { "dynamicRegistration": true },
-                    "hover": { "dynamicRegistration": true },
-                }
+                    "definition": { "linkSupport": true },
+                    "references": {},
+                    "hover": {},
+                },
             },
         });
         let resp = self.send_request("initialize", params)?;
         let _capabilities = resp.get("result").ok_or("no capabilities")?;
 
-        // Send initialized notification
-        let notif = json!({"jsonrpc": "2.0", "method": "initialized", "params": {}});
-        let body = serde_json::to_string(&notif).map_err(|e| e.to_string())?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin
-            .write_all(header.as_bytes())
-            .map_err(|e| format!("init write: {}", e))?;
-        self.stdin
-            .write_all(body.as_bytes())
-            .map_err(|e| format!("init body: {}", e))?;
-        self.stdin.flush().map_err(|e| format!("init flush: {}", e))?;
+        // initialized is a notification, not a request
+        self.send_notification("initialized", json!({}))?;
+
+        // Drain any post-init diagnostics/log notifications
+        // ponytail: 100ms should be enough for startup messages
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         Ok(())
     }
 
     fn open_file(&mut self, uri: &str, text: &str, language: &str) -> Result<(), String> {
-        let params = json!({
+        // didOpen is a notification — no id, no response expected
+        self.send_notification("textDocument/didOpen", json!({
             "textDocument": {
                 "uri": uri,
                 "languageId": language,
                 "version": 1,
                 "text": text,
             }
-        });
-        self.send_request("textDocument/didOpen", params)
-            .map(|_| ())
-            // didOpen is a notification, some servers still reply
-            .or_else(|_| Ok(()))
+        }))
     }
 
     fn definition(
@@ -140,8 +146,8 @@ impl LspProcess {
             "position": {"line": line, "character": column},
         });
         let resp = self.send_request("textDocument/definition", params)?;
-        let results = resp.get("result").cloned().unwrap_or(Value::Null);
-        parse_location_results(&results)
+        let result = resp.get("result").cloned().unwrap_or(Value::Null);
+        parse_definition_results(&result)
     }
 
     fn references(
@@ -156,8 +162,8 @@ impl LspProcess {
             "context": {"includeDeclaration": false},
         });
         let resp = self.send_request("textDocument/references", params)?;
-        let results = resp.get("result").cloned().unwrap_or(Value::Null);
-        parse_location_results(&results)
+        let result = resp.get("result").cloned().unwrap_or(Value::Null);
+        parse_definition_results(&result)
     }
 }
 
@@ -190,46 +196,51 @@ pub fn uri_to_path(uri: &str) -> String {
         .replace('/', if cfg!(windows) { "\\" } else { "/" })
 }
 
-fn parse_location_results(value: &Value) -> Result<Vec<LspLocation>, String> {
+fn parse_definition_results(value: &Value) -> Result<Vec<LspLocation>, String> {
     if value.is_null() {
         return Ok(vec![]);
     }
-    // Single location
-    if value.is_object() && value.get("uri").is_some() {
+    // LocationLink[] — has targetUri + targetRange
+    if let Some(arr) = value.as_array() {
+        if let Some(first) = arr.first() {
+            if first.get("targetUri").is_some() {
+                return arr.iter().map(parse_location_link).collect();
+            }
+        }
+        return arr.iter().map(parse_one_location).collect();
+    }
+    // Single Location
+    if value.get("uri").is_some() {
         return Ok(vec![parse_one_location(value)?]);
     }
-    // Array of locations
-    if let Some(arr) = value.as_array() {
-        return arr.iter().map(parse_one_location).collect();
+    // Single LocationLink
+    if value.get("targetUri").is_some() {
+        return Ok(vec![parse_location_link(value)?]);
     }
     Ok(vec![])
 }
 
+fn parse_location_link(v: &Value) -> Result<LspLocation, String> {
+    let uri = v.get("targetUri").and_then(|u| u.as_str()).ok_or("missing targetUri")?.to_string();
+    let range = v.get("targetSelectionRange").or(v.get("targetRange")).ok_or("missing range")?;
+    parse_range(uri, range)
+}
+
 fn parse_one_location(v: &Value) -> Result<LspLocation, String> {
-    let uri = v
-        .get("uri")
-        .and_then(|u| u.as_str())
-        .ok_or("missing uri")?
-        .to_string();
+    let uri = v.get("uri").and_then(|u| u.as_str()).ok_or("missing uri")?.to_string();
     let range = v.get("range").ok_or("missing range")?;
+    parse_range(uri, range)
+}
+
+fn parse_range(uri: String, range: &Value) -> Result<LspLocation, String> {
     let start = range.get("start").ok_or("missing start")?;
+    let end = range.get("end").unwrap_or(start);
     Ok(LspLocation {
         uri,
         range_start_line: start.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
-        range_start_char: start
-            .get("character")
-            .and_then(|c| c.as_u64())
-            .unwrap_or(0) as u32,
-        range_end_line: range
-            .get("end")
-            .and_then(|e| e.get("line"))
-            .and_then(|l| l.as_u64())
-            .unwrap_or(0) as u32,
-        range_end_char: range
-            .get("end")
-            .and_then(|e| e.get("character"))
-            .and_then(|c| c.as_u64())
-            .unwrap_or(0) as u32,
+        range_start_char: start.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
+        range_end_line: end.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
+        range_end_char: end.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
     })
 }
 
@@ -492,7 +503,7 @@ mod tests {
                 "end": {"line": 10, "character": 9}
             }
         });
-        let locs = parse_location_results(&json).unwrap();
+        let locs = parse_definition_results(&json).unwrap();
         assert_eq!(locs.len(), 1);
         assert_eq!(locs[0].uri, "file:///src/main.rs");
         assert_eq!(locs[0].range_start_line, 10);
@@ -500,7 +511,7 @@ mod tests {
 
     #[test]
     fn test_parse_null_result() {
-        let locs = parse_location_results(&Value::Null).unwrap();
+        let locs = parse_definition_results(&Value::Null).unwrap();
         assert!(locs.is_empty());
     }
 
