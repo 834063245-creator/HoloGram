@@ -133,9 +133,9 @@ HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统�
 
 每条边附加 `coupling_depth`（L1-L4）、`cross_file`、`direction`、`lsp_resolved`。
 
-### 27 个 MCP 工具
+### 31 个 MCP 工具
 
-引擎通过 JSON-RPC 2.0 over stdio 暴露 27 个工具。所有工具走图数据库查询，不读源文件。别名 `hologram_preflight` / `hologram_community_report` / `hologram_diff` 也可用。
+引擎通过 JSON-RPC 2.0 over stdio 暴露 31 个工具（含 4 个 LSP 按需工具）。所有结构图工具走图数据库查询，不读源文件。别名 `hologram_preflight` / `hologram_community_report` / `hologram_diff` 也可用。
 
 #### 聚合类
 
@@ -172,7 +172,17 @@ HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统�
 | **community** | `node_id` 节点 ID（必填） | 节点社区归属（社区 ID、标签、成员数、兄弟节点列表）。 |
 | **clusters** | `min_size` 最小社区规模（默认 3）<br/>`max_nodes` 输出截断（默认 20，最大 200） | 代码库社区/集群结构报告，社区标签按最常见文件词干自动派生。 |
 
-#### 深潜类
+#### LSP 按需查询
+
+> 对接原生 LSP 服务器。没有对应语言环境时自动降级，不报错。<br/>
+> 使用前需安装对应 LSP（见下方 [LSP 环境搭建](#lsp-环境搭建)）。装完重启 HoloGram。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| **resolve_call** | `file_path`（必填）<br/>`line` / `column` 可选 | 调用目标解析——`a.foo()` → 具体的 `Animal.foo()`。原生 LSP 优先，手写 fallback。 |
+| **resolve_type** | `file_path`（必填）<br/>`line` / `column`（必填） | 符号类型解析。原生 LSP hover 优先。 |
+| **find_implementations** | `file_path`（必填）<br/>`line` / `column`（必填） | 接口/trait 的所有实现。原生 LSP `textDocument/implementation`。 |
+| **find_references** | `file_path`（必填）<br/>`line` / `column`（必填）<br/>`includeDeclaration` 可选 | 符号的所有引用位置。原生 LSP `textDocument/references`，fallback 到图边 |
 
 | 工具 | 参数 | 说明 |
 |------|------|------|
@@ -205,7 +215,7 @@ Agent 的工具集由两部分组成：MCP 引擎提供的 27 个图查询工具
 
 | 来源 | 数量 | 类别 | 工具 |
 |---|---|---|---|
-| **MCP 引擎** | **27** | 图查询 / 风险 / 社区 / 深潜 / 时间线 / 工程 | `hologram_explore` `hologram_neighbors` `hologram_impact` `hologram_path` `hologram_search` `hologram_fragile` `hologram_cycle` `hologram_thread_conflicts` `hologram_coupling_report` `hologram_blindspots` `hologram_run_preflight` `hologram_policy_check` `hologram_community` `hologram_clusters` `hologram_node` `hologram_unused` `hologram_dataflow` `hologram_history` `hologram_delayed` `hologram_timeline` `hologram_graph_diff` `hologram_analyze` `hologram_run_check` `hologram_run_health` `hologram_rename` `hologram_status` `hologram_graph_summary` |
+| **MCP 引擎** | **31** | 图查询 / 风险 / 社区 / 深潜 / LSP / 时间线 / 工程 | `hologram_explore` `hologram_neighbors` `hologram_impact` `hologram_path` `hologram_search` `hologram_fragile` `hologram_cycle` `hologram_thread_conflicts` `hologram_coupling_report` `hologram_blindspots` `hologram_run_preflight` `hologram_policy_check` `hologram_community` `hologram_clusters` `hologram_node` `hologram_unused` `hologram_dataflow` `hologram_resolve_call` `hologram_resolve_type` `hologram_find_implementations` `hologram_find_references` `hologram_history` `hologram_delayed` `hologram_timeline` `hologram_graph_diff` `hologram_analyze` `hologram_run_check` `hologram_run_health` `hologram_rename` `hologram_status` `hologram_graph_summary` |
 | **Agent 内置** | **51** | | |
 |  | 9 | 文件操作 | `read_file` `write_file` `edit_file` `list_directory` `create_directory` `delete_file` `move_file` `rename_file` `read_constraints` |
 |  | 13 | Git | `git_status` `git_diff` `git_log` `git_stage` `git_commit` `git_push` `git_pull` `git_init` `git_checkout` `git_create_branch` `git_discard` `git_stash_push` `git_stash_pop` |
@@ -228,7 +238,7 @@ Agent 的工具集由两部分组成：MCP 引擎提供的 27 个图查询工具
 |------|------|
 | 1. 文件发现 | 四级过滤 — 硬编码黑名单（30 目录名）+ `.gitignore` 解析 + 扩展名匹配 + 1 MB 上限。skip vendored/generated/三方库 |
 | 2. 并行解析 + 合并 | 200 文件/批，rayon 并行 parse，串行 merge。全局节点去重（`loc_index`）+ 全局边去重（`edge_index`，二级快慢路径，625× 削减）。CST 逐批后台释放，不阻塞主线 |
-| 3. LSP 类型感知调用解析 | 8 门语言 LSP 类型级调用解析，30s 超时熔断。跨文件类型级调用边补充 |
+| 3. 类型感知调用解析 | 8 门语言手写 tree-sitter 类型级调用解析（独立于 LSP 工具），30s 超时熔断。跨文件类型级调用边补充 |
 | 4. 跨文件解析 | import → 调用链连接，跨文件符号引用关系 |
 | 5. 耦合分析 | 所有边赋值 L1-L4 耦合深度 |
 | 6. 框架路由 | 8 种框架 URL→handler 映射注入（Django / Express / FastAPI / Flask / Rails / Spring / Gin / NestJS） |
@@ -261,20 +271,54 @@ Agent 的工具集由两部分组成：MCP 引擎提供的 27 个图查询工具
 | **Gin** | `r.GET()` / `r.POST()` / `r.Group()` |
 | **NestJS** | `@Controller('prefix')` + `@Get()` |
 
-### LSP 后端
+### LSP 工具（按需调用）
 
-8 门语言 LSP 类型级调用解析（独立于框架路由）：
+4 个 MCP 工具对接原生 LSP 服务器，提供精确的类型级查询（不是手写解析器）。Agent 或外部客户端按需调用，不预计算。
 
-| 语言 | LSP 后端 |
-|------|----------|
-| Python | Pyright / Pylance |
-| TypeScript / JavaScript | TypeScript 语言服务 |
-| Go | Gopls |
-| Java | JDTLS |
-| C# | OmniSharp / Dev Kit |
-| C / C++ | Clangd |
-| PHP | Intelephense |
-| Kotlin | Kotlin 语言服务 |
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| **resolve_call** | `file_path`（必填）<br/>`line` / `column` 可选 | 解析文件中的调用目标——`a.foo()` → 具体的 `Animal.foo()`。先调原生 LSP 查定义，找不到了走手写 fallback。 |
+| **resolve_type** | `file_path`（必填）<br/>`line` / `column`（必填） | 解析指定位置符号的类型。优先用原生 LSP hover 信息。 |
+| **find_implementations** | `file_path`（必填）<br/>`line` / `column`（必填） | 查找接口/trait 的所有实现。走原生 LSP `textDocument/implementation`。 |
+| **find_references** | `file_path`（必填）<br/>`line` / `column`（必填）<br/>`includeDeclaration` 可选 | 查找符号的所有引用位置。走原生 LSP `textDocument/references`，fallback 到图边搜索。 |
+
+> **LSP 工具是可选的。** 没有 LSP 时，HoloGram 自动降级到手写 fallback（8 种语言 4,000+ 行 tree-sitter 类型推导）。结果是"能用的粗略答案"，装了 LSP 升级为"精确答案"。
+
+### LSP 环境搭建
+
+HoloGram **不捆绑 LSP 服务器**——它们太大（pyright 100MB+、jdtls 200MB+），且开发者通常已有。首次调用某个语言的 LSP 工具时，引擎自动探测 PATH，找到了就启动常驻，找不到就降级。
+
+> **安装完语言环境后重启 HoloGram 即可生效**——启动时重新扫描 PATH。
+
+| 语言 | 扩展名 | LSP 服务器 | 安装方式 |
+|------|--------|-----------|---------|
+| **Python** | `.py` `.pyi` | pyright | `npm i -g pyright` 或 `pip install pyright` |
+| **TypeScript / JS** | `.ts` `.tsx` `.js` `.jsx` `.mjs` `.cjs` `.mts` `.cts` | typescript-language-server | `npm i -g typescript-language-server typescript` |
+| **Rust** | `.rs` | rust-analyzer | `rustup component add rust-analyzer` 或系统包管理器 |
+| **Go** | `.go` | gopls | `go install golang.org/x/tools/gopls@latest` |
+| **Java** | `.java` | jdtls | [Eclipse JDT LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) — 推荐通过 nvim-jdtls 或 Mason 安装 |
+| **C / C++** | `.c` `.h` `.cpp` `.hpp` `.cc` `.hh` `.cxx` `.hxx` | clangd | 通常随 LLVM 安装，或 `apt install clangd` / `brew install llvm` |
+| **C#** | `.cs` | omnisharp | `dotnet tool install --global omnisharp` 或通过 VS Code C# 扩展自带 |
+| **Ruby** | `.rb` | solargraph | `gem install solargraph` |
+| **Lua** | `.lua` | lua-language-server | [GitHub Release](https://github.com/LuaLS/lua-language-server/releases) 或 `npm i -g lua-language-server` |
+| **PHP** | `.php` | intelephense | `npm i -g intelephense` |
+| **Swift** | `.swift` | sourcekit-lsp | Xcode 自带 |
+| **Dart** | `.dart` | dart | Flutter/Dart SDK 自带 |
+| **Haskell** | `.hs` | haskell-language-server | `ghcup install hls` |
+| **Elixir** | `.ex` `.exs` | elixir-ls | [GitHub Release](https://github.com/elixir-lsp/elixir-ls/releases) |
+| **Erlang** | `.erl` `.hrl` | erlang_ls | [GitHub Release](https://github.com/erlang-ls/erlang_ls/releases) |
+| **Zig** | `.zig` | zls | `zig build` 或 [GitHub Release](https://github.com/zigtools/zls/releases) |
+| **Bash / Shell** | `.sh` `.bash` | bash-language-server | `npm i -g bash-language-server` |
+| **HTML** | `.html` | vscode-html-language-server | `npm i -g vscode-langservers-extracted` |
+| **CSS / SCSS / Less** | `.css` `.scss` `.less` | vscode-css-language-server | 同上 |
+| **YAML** | `.yaml` `.yml` | yaml-language-server | `npm i -g yaml-language-server` |
+| **Scala** | `.scala` | metals | [Scala Metals](https://scalameta.org/metals/) — 推荐通过 coursier 安装 |
+| **R** | `.r` `.R` | languageserver | `install.packages("languageserver")` |
+| **Nix** | `.nix` | nil | [GitHub Release](https://github.com/oxalica/nil/releases) 或 `nix profile install nixpkgs#nil` |
+| **OCaml** | `.ml` `.mli` | ocamllsp | `opam install ocaml-lsp-server` |
+| **Kotlin** | `.kt` `.kts` | kotlin-language-server | [GitHub Release](https://github.com/fwcd/kotlin-language-server/releases) |
+
+> **不想装？完全没问题。** 没有 LSP 时工具自动降级，不会报错。
 
 ### 存储引擎
 
@@ -497,7 +541,7 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 │  │ Monaco 编辑器 · 代码翻译器               │      │ OS 沙箱 (JobObject +   │ │
 │  │ 数据流面板 · 热点面板 · 时间轴            │      │   AppContainer)       │ │
 │  │ WebGPU 计算着色 · 布局 Worker             │      │ Agent 隔离 (git       │ │
-│  │ 设置面板 · LSP 客户端 · 透镜模式          │      │   worktree sandbox)   │ │
+│  │ 设置面板 · LSP 客户端(编辑器补全) · 透镜    │      │   worktree sandbox)   │ │
 │  │ Agent 循环 (子Agent · 记忆 · 任务 ·       │      │ PTY 终端 · 凭证       │ │
 │  │   权限弹窗 · 并行执行 · 上下文压缩)        │      │   (DPAPI 加密)       │ │
 │  └───────────────────────────────────────────┘      │ 工作区管理 · LSP ·    │ │
@@ -510,7 +554,7 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
             │ Rust 引擎 (engine/)                                             │
             │ 合并管线 v3/v4 · 全局边去重 (625×) · 27 MCP 工具               │
             │ MemoryIndex + SQLite FTS5 · 增量更新 · StringArena 字符串池    │
-            │ 数据流引擎 (.scm query · 17 语言) · 8 框架路由 · 8 LSP 后端    │
+            │ 数据流引擎 (.scm query · 17 语言) · 8 框架路由 · LSP (26 语言 · 按需)  │
             │ 动态调度合成 · 社区发现 (Leiden) · 四级过滤 · 363 tests       │
             └────────────────────────────────────────────────────────────────┘
 ```
