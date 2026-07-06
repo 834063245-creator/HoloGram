@@ -377,6 +377,7 @@ export class Workspace {
     let globalDir: string | undefined;
     try { globalDir = await invoke<string>('get_global_memory_dir'); } catch { /* ignore */ }
     this.memoryManager = new MemoryManager(this.path, globalDir);
+    this.memoryManager.initAura().catch(() => {}); // fire-and-forget, best-effort
     const graphNodes = extractGraphNodeNames(this.graphData);
     try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
     // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条

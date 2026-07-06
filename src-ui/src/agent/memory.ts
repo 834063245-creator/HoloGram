@@ -16,6 +16,8 @@
 import { invoke } from '../bridge';
 import type { Tool } from './tool';
 import { bus } from '../ui/events';
+import { auraInit, auraRecall, auraStore, auraCount, auraRecallText } from './aura-memory';
+import type { AuraRecord } from './aura-memory';
 
 // ── Fact-save authorization (self-consuming sentinel) ──
 // /remember command sets this; the next hologram_memory_save consumes it.
@@ -58,12 +60,49 @@ export interface MemoryFile {
 export class MemoryManager {
   private _projectDirReady = false;
   private _globalDirReady = false;
+  private _auraReady = false;
   private globalDirPath: string | null = null;
 
   /** @param projectPath 项目根目录
    *  @param globalPath  全局记忆目录（可选），不传则不启用全局记忆 */
   constructor(private projectPath: string, globalPath?: string) {
     this.globalDirPath = globalPath || null;
+  }
+
+  /** Whether AuraSDK semantic recall has been initialized. */
+  get auraReady(): boolean { return this._auraReady; }
+
+  /** Initialize AuraSDK semantic retrieval engine.
+   *  Creates or opens the brain at .hologram/aura-brain/ in the project root.
+   *  Safe to call multiple times — subsequent calls are no-ops. */
+  async initAura(): Promise<void> {
+    if (this._auraReady) return;
+    try {
+      const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
+      const result = await auraInit(brainPath);
+      this._auraReady = true;
+      console.log(`[aura] initialized — ${result.record_count} records at ${result.path}`);
+    } catch (e) {
+      console.warn('[aura] init failed (semantic recall disabled):', e);
+    }
+  }
+
+  /** Run AuraSDK semantic recall against a natural-language query.
+   *  Returns scored records. Gracefully falls back to empty array if Aura is down. */
+  async auraSemanticRecall(query: string, topK: number = 20): Promise<AuraRecord[]> {
+    if (!this._auraReady) return [];
+    try {
+      return await auraRecall(query, topK);
+    } catch (e) {
+      console.warn('[aura] recall failed:', e);
+      return [];
+    }
+  }
+
+  /** Get Aura record count. */
+  async auraRecordCount(): Promise<number> {
+    if (!this._auraReady) return 0;
+    try { return await auraCount(); } catch { return 0; }
   }
 
   private get projectDir(): string {
@@ -353,6 +392,14 @@ export class MemoryManager {
 
     const title = description.length > 40 ? description.slice(0, 39) + '…' : description;
     await this.upsertIndex(title, name + '.md', description, scope);
+
+    // Dual-write to AuraSDK for semantic retrieval
+    if (this._auraReady) {
+      const tagList = [type, confidence, scope];
+      auraStore(`${description}\n\n${content}`, 0, tagList, scope).catch((e: unknown) => {
+        console.warn('[aura] dual-write failed:', e);
+      });
+    }
 
     this._promptSectionCache = null;
   }
