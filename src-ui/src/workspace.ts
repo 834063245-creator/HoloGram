@@ -845,6 +845,14 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 | "有哪些社区/子系统？" | \`hologram_community_report\` — 社区检测结果 |
 | "时间线？" | \`hologram_timeline\` — 变更时间线 |
 
+### LSP 符号解析
+| 用户问 | 用这个工具 |
+|--------|----------|
+| "X 函数调了什么？" | \`hologram_resolve_call\` — LSP 精确解析调用目标（非 grep 猜） |
+| "X 的类型/接口定义？" | \`hologram_resolve_type\` — 类型定义跳转 |
+| "谁实现了 X 接口？" | \`hologram_find_implementations\` — 查找所有实现 |
+| "X 在哪里被引用？" | \`hologram_find_references\` — 全项目引用追踪 |
+
 ## 工具组合模式
 
 1. **全面体检**：\`graph_summary\` → \`fragile\` → \`cycle\` → \`blindspots\` → 汇总发现（正常就说正常，不要无问题硬找问题）
