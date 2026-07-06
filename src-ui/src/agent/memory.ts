@@ -120,7 +120,9 @@ export class MemoryManager {
   async loadIndexText(scope: 'project' | 'global' = 'project'): Promise<string> {
     await this.ensureDir(scope);
     try {
-      return await invoke<string>('read_file_content', { filePath: this.indexPath(scope) });
+      const numbered = await invoke<string>('read_file_content', { filePath: this.indexPath(scope) });
+      // read_file_content returns cat -n format (line numbers); strip them.
+      return numbered.replace(/^\s*\d+\t/gm, '');
     } catch {
       return '';
     }
