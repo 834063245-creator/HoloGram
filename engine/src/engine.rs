@@ -483,8 +483,6 @@ impl Engine {
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());
         }
-        let _parse_cache = std::mem::take(&mut result.parse_cache);
-        let _discovered_files = std::mem::take(&mut result.discovered_files);
         set_progress("解析完成", result.files_parsed, result.files_discovered,
             &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
