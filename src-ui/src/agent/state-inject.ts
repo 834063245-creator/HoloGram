@@ -110,6 +110,31 @@ export function getCheckStatusCached(): CheckStatusSummary | null {
   return checkCache;
 }
 
+// ── Build/test result cache ──
+
+interface BuildResult {
+  command: string;       // "cargo build" or "npm test"
+  outcome: 'pass' | 'fail';
+  summary: string;       // "3 errors" or "12 passed"
+  ts: number;
+}
+
+let buildResultCache: BuildResult | null = null;
+
+/** Called by run_shell hook when a test/build command finishes. */
+export function cacheBuildResult(result: BuildResult): void {
+  buildResultCache = result;
+}
+
+/** Format cached build/test result for turn-start. Consumed on read. */
+export function formatBuildResult(): string | null {
+  const r = buildResultCache;
+  if (!r) return null;
+  buildResultCache = null; // consume — only inject once
+  const icon = r.outcome === 'pass' ? '✅' : '❌';
+  return `[构建] ${icon} ${r.command}: ${r.summary}`;
+}
+
 // ── Timeline cache ──
 
 interface TimelineEvent {
@@ -219,6 +244,8 @@ export function buildTurnStartBlock(): string {
   if (check) lines.push(check);
   const timeline = formatTimeline();
   if (timeline) lines.push(timeline);
+  const build = formatBuildResult();
+  if (build) lines.push(build);
   return lines.length > 0 ? lines.join('\n') : '';
 }
 
