@@ -517,7 +517,6 @@ export class Workspace {
 
     const mode = CHAT_MODES.find(m => m.id === agentOpts.chatMode) || CHAT_MODES[0];
     const temperature = mode.temperature;
-    const maxSteps = mode.maxSteps;
     const contextWindow = agentOpts.contextWindow ?? 0;
 
     // ponytail: permission rules evaluated in Rust, dialog rendered inline in chat panel
@@ -542,7 +541,7 @@ export class Workspace {
           }
         })().catch(() => {});
       },
-      pricing, temperature, maxSteps, contextWindow,
+      pricing, temperature, contextWindow,
       maxTokens: active.maxTokens ?? 0,
     }, chatPanel.sink);
 
@@ -663,7 +662,7 @@ export class Workspace {
         const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
         const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
           pricing: defaultPricing(act.kind, act.model),
-          temperature: s.agent?.temperature, maxSteps: s.agent?.maxSteps,
+          temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,
           maxTokens: act.maxTokens ?? 0,
         }, chatPanel.sink);

@@ -253,13 +253,8 @@ export class SettingsPanel {
             <label class="sp-label sp-checkbox-label">
               <input type="checkbox" data-field="disableThinking" ${thinkingEnabled ? 'checked' : ''}>
               深度思考 (DeepSeek Think 模式)
-            </label>
+                                    </label>
             <div class="sp-hint-sub">启用后模型先思考再回答。仅 DeepSeek v4/v3 有效，关掉直接输出。</div>
-          </div>
-          <div class="sp-field">
-            <label class="sp-label">最大工具轮次 <span class="sp-hint-sub">安全上限（0=不限制）</span></label>
-            <input type="number" class="sp-input sp-input-num" data-field="maxSteps"
-                   value="${agent.maxSteps || 100}" min="0" max="200">
           </div>
           <div class="sp-field">
             <label class="sp-label">上下文窗口（0=不限制）</label>
@@ -574,11 +569,9 @@ export class SettingsPanel {
 
     // Read Agent form values
     const tempEl = this.panel.querySelector('[data-field="temperature"]') as HTMLInputElement;
-    const stepsEl = this.panel.querySelector('[data-field="maxSteps"]') as HTMLInputElement;
     const ctxWinEl = this.panel.querySelector('[data-field="contextWindow"]') as HTMLInputElement;
 
     if (tempEl) s.agent.temperature = parseFloat(tempEl.value) || 0.7;
-    if (stepsEl) s.agent.maxSteps = parseInt(stepsEl.value) || 100;
     if (ctxWinEl) s.agent.contextWindow = parseInt(ctxWinEl.value) || 0;
     const thinkChk = this.panel.querySelector('[data-field="disableThinking"]') as HTMLInputElement;
     if (thinkChk) s.agent.disableThinking = !thinkChk.checked;
