@@ -7,16 +7,19 @@
 //! ========================================
 //! Blind spots covered (README §已知局限)
 //! ========================================
-//! 1. DI / Reflection (Phase 1):
-//!    - Python: `getattr(obj, 'attr')` / `setattr(obj, 'attr', val)`
-//!    - Java: `@Autowired` / `@Inject` / `@Resource`
-//!    - TypeScript: `@Injectable()` / `@Inject()`
+//! 1. DI / Reflection (Phase 2 — 10 languages):
+//!    - Python: `getattr`/`setattr` · Java: `@Autowired`/`@Inject`
+//!    - TypeScript: `@Injectable`/`@Inject` · C#: `Assembly.Load`/`Type.GetType`
+//!    - Ruby: `send`/`method_missing` · PHP: `ReflectionClass`/`call_user_func`
+//!    - Go: `reflect.ValueOf` · Kotlin: `@Inject`/`Koin`
 //! 2. Dynamic import:
-//!    - JS/TS: `import(variable)` / `require(expr)`
-//!    - Python: `__import__(name)` / `importlib.import_module(name)`
+//!    - JS/TS, Python, C# (Assembly.Load), Ruby (autoload/require), PHP (require_once)
 //! 3. Eval / dynamic code (marked as unresolvable):
-//!    - JS/TS: `eval(code)` / `new Function(body)`
-//!    - Python: `eval(code)` / `exec(code)` / `compile(src, ...)`
+//!    - JS/TS, Python, C# (CodeDom), Ruby (eval/instance_eval), PHP (eval/create_function), Rust (proc_macro)
+//! 4. Cross-language call boundaries:
+//!    - Subprocess: Py/JS/Java/Go/C#/Ruby/PHP/Kotlin
+//!    - HTTP client: Py/JS/Go/C#/Ruby/PHP
+//!    - FFI: Python (ctypes)
 //!
 //! Synthesized edges use coupling_depth=3 (L3 — hidden coupling) or
 //! coupling_depth=4 (L4 — unresolvable). All edge IDs use the `di_`
@@ -47,11 +50,10 @@ pub fn detect_di_reflection(
     for p in discovered_files {
         let s = p.to_string_lossy();
         let lower = s.to_lowercase();
-        if lower.ends_with(".py")
-            || lower.ends_with(".js")
-            || lower.ends_with(".ts")
-            || lower.ends_with(".tsx")
-            || lower.ends_with(".java")
+        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts")
+            || lower.ends_with(".tsx") || lower.ends_with(".java") || lower.ends_with(".cs")
+            || lower.ends_with(".rb") || lower.ends_with(".php") || lower.ends_with(".go")
+            || lower.ends_with(".kt")
         {
             files.insert(s.replace('\\', "/"));
         }
@@ -59,36 +61,30 @@ pub fn detect_di_reflection(
 
     for file in &files {
         let lower = file.to_lowercase();
-        let abs_key = if file.contains(':') {
-            file.clone()
-        } else {
-            project_root
-                .join(file)
-                .to_string_lossy()
-                .replace('\\', "/")
-        };
+        let abs_key = if file.contains(':') { file.clone() }
+            else { project_root.join(file).to_string_lossy().replace('\\', "/") };
 
-        // Try parse cache first
         if let Some((source, _tree_opt)) = parse_cache.get(&abs_key) {
             let source = source.clone();
-            if lower.ends_with(".py") {
-                added += detect_python_reflection(graph, file, &source);
-            } else if lower.ends_with(".java") {
-                added += detect_java_di(graph, file, &source);
-            } else {
-                added += detect_ts_di(graph, file, &source);
-            }
+            if lower.ends_with(".py") { added += detect_python_reflection(graph, file, &source); }
+            else if lower.ends_with(".java") { added += detect_java_di(graph, file, &source); }
+            else if lower.ends_with(".cs") { added += detect_cs_di(graph, file, &source); }
+            else if lower.ends_with(".rb") { added += detect_ruby_di(graph, file, &source); }
+            else if lower.ends_with(".php") { added += detect_php_di(graph, file, &source); }
+            else if lower.ends_with(".go") { added += detect_go_di(graph, file, &source); }
+            else if lower.ends_with(".kt") { added += detect_kotlin_di(graph, file, &source); }
+            else { added += detect_ts_di(graph, file, &source); }
         } else {
-            // Fallback: read from disk
             let full_path = project_root.join(file);
             if let Ok(source) = std::fs::read_to_string(&full_path) {
-                if lower.ends_with(".py") {
-                    added += detect_python_reflection(graph, file, &source);
-                } else if lower.ends_with(".java") {
-                    added += detect_java_di(graph, file, &source);
-                } else {
-                    added += detect_ts_di(graph, file, &source);
-                }
+                if lower.ends_with(".py") { added += detect_python_reflection(graph, file, &source); }
+                else if lower.ends_with(".java") { added += detect_java_di(graph, file, &source); }
+                else if lower.ends_with(".cs") { added += detect_cs_di(graph, file, &source); }
+                else if lower.ends_with(".rb") { added += detect_ruby_di(graph, file, &source); }
+                else if lower.ends_with(".php") { added += detect_php_di(graph, file, &source); }
+                else if lower.ends_with(".go") { added += detect_go_di(graph, file, &source); }
+                else if lower.ends_with(".kt") { added += detect_kotlin_di(graph, file, &source); }
+                else { added += detect_ts_di(graph, file, &source); }
             }
         }
     }
@@ -698,7 +694,9 @@ pub fn detect_dynamic_imports(
     for p in discovered_files {
         let s = p.to_string_lossy();
         let lower = s.to_lowercase();
-        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs") {
+        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs")
+            || lower.ends_with(".cs") || lower.ends_with(".rb") || lower.ends_with(".php")
+        {
             files.insert(s.replace('\\', "/"));
         }
     }
@@ -726,6 +724,12 @@ pub fn detect_dynamic_imports(
 
         if lower.ends_with(".py") {
             added += detect_python_dynamic_import(graph, file, source_ref);
+        } else if lower.ends_with(".cs") {
+            added += detect_cs_dynamic_import(graph, file, source_ref);
+        } else if lower.ends_with(".rb") {
+            added += detect_ruby_dynamic_import(graph, file, source_ref);
+        } else if lower.ends_with(".php") {
+            added += detect_php_dynamic_import(graph, file, source_ref);
         } else {
             added += detect_js_ts_dynamic_import(graph, file, source_ref);
         }
@@ -905,7 +909,9 @@ pub fn detect_eval(
     for p in discovered_files {
         let s = p.to_string_lossy();
         let lower = s.to_lowercase();
-        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs") {
+        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs")
+            || lower.ends_with(".cs") || lower.ends_with(".rb") || lower.ends_with(".php") || lower.ends_with(".rs")
+        {
             files.insert(s.replace('\\', "/"));
         }
     }
@@ -933,6 +939,14 @@ pub fn detect_eval(
 
         if lower.ends_with(".py") {
             added += detect_python_eval(graph, file, source_ref);
+        } else if lower.ends_with(".cs") {
+            added += detect_cs_eval(graph, file, source_ref);
+        } else if lower.ends_with(".rb") {
+            added += detect_ruby_eval(graph, file, source_ref);
+        } else if lower.ends_with(".php") {
+            added += detect_php_eval(graph, file, source_ref);
+        } else if lower.ends_with(".rs") {
+            added += detect_rust_eval(graph, file, source_ref);
         } else {
             added += detect_js_ts_eval(graph, file, source_ref);
         }
@@ -1066,6 +1080,373 @@ fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
     added
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// C# / .NET: reflection, eval, cross-lang, dynamic import
+// ═══════════════════════════════════════════════════════════════
+
+fn detect_cs_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+    // C# DI patterns are primarily [FromServices] / constructor injection.
+    // Static tree-sitter resolution is limited; we do a line-based scan
+    // for Assembly.Load / Type.GetType / Activator.CreateInstance.
+    let mut added = 0usize;
+    for (line_idx, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("Assembly.Load") || t.contains("Type.GetType")
+            || t.contains("Activator.CreateInstance")
+        {
+            let fname = format!("<fn@{}:{}>", file, line_idx + 1);
+            let marker = format!("<reflection:C#:{}>", t.chars().take(40).collect::<String>());
+            let sid = find_or_create_di_node(graph, &fname, file, line_idx + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, line_idx + 1);
+            let eid = format!("di_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_cs_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("Assembly.LoadFile") || t.contains("Assembly.LoadFrom")
+            || (t.contains("Assembly.Load(") && !t.contains("Assembly.Load(\""))
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = "<dynamic-import:C#:Assembly>".to_string();
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_csdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_cs_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("CSharpCodeProvider") || t.contains("CodeDomProvider")
+            || t.contains("Microsoft.CodeAnalysis.CSharp.Scripting")
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = "<eval:C#:CodeDom>".to_string();
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_csev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("Process.Start") {
+            let m = "<cross-lang:subprocess:Process.Start>".to_string();
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_xlang_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+        if t.contains("HttpClient") || t.contains("GetAsync") || t.contains("PostAsync") {
+            let m = format!("<cross-lang:http:{}>", t.chars().take(40).collect::<String>());
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_xlang_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Ruby: send, method_missing, eval, autoload, system
+// ═══════════════════════════════════════════════════════════════
+
+fn detect_ruby_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains(".send(") || t.contains(".public_send(")
+            || t.contains("method_missing") || t.contains("define_method")
+            || t.contains("respond_to?")
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = format!("<reflection:Ruby:{}>", t.chars().take(40).collect::<String>());
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_rb_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_ruby_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if (t.contains("autoload ") || t.contains("require ") || t.contains("load "))
+            && (t.contains('$') || t.contains("var"))
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = "<dynamic-import:Ruby>".to_string();
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_rbdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_ruby_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        let marker = if t.contains("eval(") || t.contains("instance_eval") || t.contains("class_eval") {
+            Some(format!("<eval:Ruby:{}>", t.chars().take(30).collect::<String>()))
+        } else { None };
+        if let Some(m) = marker {
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_rbev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_ruby_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        let marker = if t.contains("Open3.") || t.contains("system(") || t.contains("`") || t.contains("spawn(") || t.contains("Process.spawn") {
+            Some("<cross-lang:subprocess:Ruby>".to_string())
+        } else if t.contains("Net::HTTP") || t.contains("Faraday") || t.contains("RestClient") || t.contains("HTTParty") {
+            Some(format!("<cross-lang:http:{}>", t.chars().take(40).collect::<String>()))
+        } else { None };
+        if let Some(m) = marker {
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_xlang_rb_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHP: ReflectionClass, eval, require_once(expr), exec
+// ═══════════════════════════════════════════════════════════════
+
+fn detect_php_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("ReflectionClass") || t.contains("ReflectionMethod")
+            || t.contains("new $class") || t.contains("->$method")
+            || t.contains("call_user_func")
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = format!("<reflection:PHP:{}>", t.chars().take(40).collect::<String>());
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_php_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_php_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if (t.contains("require_once") || t.contains("require ") || t.contains("include_once") || t.contains("include "))
+            && (t.contains('$') || t.contains("__DIR__"))
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = "<dynamic-import:PHP>".to_string();
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_phpdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_php_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("eval(") || t.contains("create_function") || t.contains("assert(") {
+            let m = format!("<eval:PHP:{}>", t.chars().take(30).collect::<String>());
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_phpev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_php_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        let marker = if t.contains("exec(") || t.contains("shell_exec") || t.contains("system(") || t.contains("passthru") || t.contains("popen(") || t.contains("proc_open") {
+            Some("<cross-lang:subprocess:PHP>".to_string())
+        } else if t.contains("curl_exec") || t.contains("file_get_contents") || t.contains("GuzzleHttp") || t.contains("HttpClient") {
+            Some("<cross-lang:http:PHP>".to_string())
+        } else { None };
+        if let Some(m) = marker {
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_xlang_php_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Go: reflect
+// ═══════════════════════════════════════════════════════════════
+
+fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("reflect.ValueOf") || t.contains("reflect.TypeOf")
+            || t.contains("reflect.New")
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = format!("<reflection:Go:{}>", t.chars().take(40).collect::<String>());
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_go_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Kotlin: @Inject, Koin, ProcessBuilder
+// ═══════════════════════════════════════════════════════════════
+
+fn detect_kotlin_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("@Inject") || t.contains("by inject()") || t.contains("Koin")
+            || t.contains("dagger") || t.contains("koin")
+        {
+            let fname = format!("<fn@{}:{}>", file, li + 1);
+            let marker = format!("<DI:Kotlin:{}>", t.chars().take(40).collect::<String>());
+            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
+            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let eid = format!("di_kt_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+fn detect_kotlin_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("ProcessBuilder") || t.contains("Runtime.getRuntime().exec") {
+            let m = "<cross-lang:subprocess:Kotlin>".to_string();
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_xlang_kt_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Rust: dynamic-code eval (proc macros)
+// ═══════════════════════════════════════════════════════════════
+
+fn detect_rust_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("proc_macro") || t.contains("include_str!")
+            || t.contains("include_bytes!")
+        {
+            let m = format!("<eval:Rust:{}>", t.chars().take(30).collect::<String>());
+            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let eid = format!("di_rsev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
+            if graph.get_edge(&eid).is_none() {
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Shared utilities
 // ═══════════════════════════════════════════════════════════════
@@ -1122,7 +1503,7 @@ pub fn detect_cross_lang_calls(
         if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts")
             || lower.ends_with(".tsx") || lower.ends_with(".mjs") || lower.ends_with(".java")
             || lower.ends_with(".go") || lower.ends_with(".rs") || lower.ends_with(".rb")
-            || lower.ends_with(".cs")
+            || lower.ends_with(".cs") || lower.ends_with(".kt") || lower.ends_with(".php")
         {
             files.insert(s.replace('\\', "/"));
         }
@@ -1157,6 +1538,14 @@ pub fn detect_cross_lang_calls(
             added += detect_java_cross_lang(graph, file, source_ref);
         } else if lower.ends_with(".go") {
             added += detect_go_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".rb") {
+            added += detect_ruby_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".cs") {
+            added += detect_cs_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".kt") {
+            added += detect_kotlin_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".php") {
+            added += detect_php_cross_lang(graph, file, source_ref);
         }
     }
 

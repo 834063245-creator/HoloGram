@@ -5,8 +5,9 @@
 //! into HoloGram's Rust engine. Detects web framework routes and creates
 //! route nodes in the dependency graph, linking URLs to their handlers.
 //!
-//! Supports 12 frameworks: Django, Express, FastAPI, Flask, Rails, Spring,
-//! Gin, NestJS, Koa, Laravel, Phoenix, Actix
+//! Supports 18 frameworks: Django, Express, FastAPI, Flask, Rails, Spring,
+//! Gin, NestJS, Koa, Laravel, Phoenix, Actix, ASP.NET Core, Sinatra, Fiber,
+//! Fastify, Slim, Rocket
 
 use crate::engine::GRAMMAR_LOADER;
 use std::collections::{HashMap, HashSet};
@@ -43,6 +44,9 @@ pub fn detect_framework_routes(
                 || is_gin_candidate(&rel_str) || is_nestjs_candidate(&rel_str)
                 || is_koa_candidate(&rel_str) || is_laravel_candidate(&rel_str)
                 || is_phoenix_candidate(&rel_str) || is_actix_candidate(&rel_str)
+                || is_aspnet_candidate(&rel_str) || is_sinatra_candidate(&rel_str)
+                || is_fiber_candidate(&rel_str) || is_fastify_candidate(&rel_str)
+                || is_slim_candidate(&rel_str) || is_rocket_candidate(&rel_str)
             {
                 files.insert(p.to_string_lossy().replace('\\', "/"));
             }
@@ -131,6 +135,48 @@ pub fn detect_framework_routes(
                 || source_ref.contains("#[web::get") || source_ref.contains("#[web::post")
             {
                 let routes = detect_actix_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_aspnet_candidate(file) {
+            if source_ref.contains("[HttpGet") || source_ref.contains("[HttpPost")
+                || source_ref.contains("[HttpPut") || source_ref.contains("[HttpDelete")
+            {
+                let routes = detect_aspnet_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_sinatra_candidate(file) {
+            if source_ref.contains("get '") || source_ref.contains("get \"")
+                || source_ref.contains("post '") || source_ref.contains("post \"")
+            {
+                let routes = detect_sinatra_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_fiber_candidate(file) {
+            if source_ref.contains(".Get(") || source_ref.contains(".Post(")
+                || source_ref.contains(".Put(") || source_ref.contains(".Delete(")
+            {
+                let routes = detect_fiber_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_fastify_candidate(file) {
+            if source_ref.contains(".get(") || source_ref.contains(".post(")
+                || source_ref.contains(".put(") || source_ref.contains(".delete(")
+            {
+                let routes = detect_fastify_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_slim_candidate(file) {
+            if source_ref.contains("$app->get") || source_ref.contains("$app->post")
+                || source_ref.contains("$app->put") || source_ref.contains("$app->delete")
+            {
+                let routes = detect_slim_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_rocket_candidate(file) {
+            if source_ref.contains("#[get(") || source_ref.contains("#[post(")
+                || source_ref.contains("#[put(") || source_ref.contains("#[delete(")
+            {
+                let routes = detect_rocket_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
             }
         }
@@ -1518,6 +1564,255 @@ fn detect_actix_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
         }
         let children: Vec<_> = node.children(&mut cursor).collect();
         for child in children.into_iter().rev() { stack.push(child); }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ASP.NET Core — C#: [HttpGet("/path")]
+// ═══════════════════════════════════════════════════════════════
+
+fn is_aspnet_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".cs") && (lower.contains("controller") || lower.contains("api"))
+}
+
+fn detect_aspnet_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let http_attrs: HashSet<&str> = ["HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch", "Route"]
+        .iter().cloned().collect();
+    let mut pending: Option<(String, String)> = None;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.starts_with('[') && t.contains('(') {
+            let inner = t.trim_matches(|c| c == '[' || c == ']');
+            if let Some(p) = inner.find('(') {
+                let attr = inner[..p].trim();
+                if http_attrs.contains(attr) {
+                    let path = inner[p..].trim_matches(|c| c == '(' || c == ')' || c == '"' || c == '\'');
+                    let method = if attr == "Route" { "ALL" } else {
+                        &attr.trim_start_matches("Http").to_uppercase()
+                    };
+                    pending = Some((if method == "ALL" { "ALL".into() } else { method.to_string() }, path.to_string()));
+                }
+            }
+        }
+        if t.contains("IActionResult") || t.contains("ActionResult") {
+            if let Some((m, p)) = pending.take() {
+                let handler = t.split_whitespace().nth(1).unwrap_or("<handler>").to_string();
+                if !handler.is_empty() {
+                    result.push((m, format!("/{}", p.trim_matches('/')), handler, file.to_string(), li + 1));
+                }
+            }
+        }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Sinatra — Ruby: get '/path' do ... end
+// ═══════════════════════════════════════════════════════════════
+
+fn is_sinatra_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".rb")
+}
+
+fn detect_sinatra_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let verbs: HashSet<&str> = ["get", "post", "put", "delete", "patch", "head", "options"]
+        .iter().cloned().collect();
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        for verb in &verbs {
+            // Pattern: `get '/path'` or `get "/path"`
+            if t.starts_with(&format!("{} ", verb)) {
+                let rest = &t[verb.len()..].trim();
+                let delim = rest.chars().next().unwrap_or(' ');
+                if delim == '\'' || delim == '"' {
+                    let path = rest[1..].split(delim).next().unwrap_or("").to_string();
+                    if !path.is_empty() {
+                        let handler = format!("<sinatra@{}>", li + 1);
+                        result.push((verb.to_uppercase(), format!("/{}", path.trim_matches('/')), handler, file.to_string(), li + 1));
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Fiber — Go: app.Get("/path", handler)
+// ═══════════════════════════════════════════════════════════════
+
+fn is_fiber_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".go")
+}
+
+fn detect_fiber_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let methods: HashSet<&str> = ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options", "All"]
+        .iter().cloned().collect();
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("go").expect("go grammar")).is_err() { return result; }
+    let tree = match parser.parse(source, None) { Some(t) => t, None => return result };
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                if func.kind() == "selector_expression" {
+                    let method = func.children(&mut func.walk())
+                        .filter(|c| c.kind() == "field_identifier")
+                        .last().map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    if methods.contains(method.as_str()) {
+                        if let Some(args) = node.child_by_field_name("arguments") {
+                            let mut ac = args.walk();
+                            let acs: Vec<_> = args.children(&mut ac).collect();
+                            let path = acs.iter().filter(|c| c.kind() == "interpreted_string_literal" || c.kind() == "raw_string_literal")
+                                .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").trim_matches('"').to_string()).next().unwrap_or_default();
+                            let handler = acs.iter().filter(|c| c.kind() == "identifier")
+                                .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string()).next().unwrap_or_default();
+                            if !path.is_empty() && !handler.is_empty() {
+                                result.push((method.to_uppercase(), format!("/{}", path.trim_matches('/')), handler, file.to_string(), node.start_position().row + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let cs: Vec<_> = node.children(&mut cursor).collect();
+        for c in cs.into_iter().rev() { stack.push(c); }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Fastify — JS/TS: fastify.get('/path', handler)
+// ═══════════════════════════════════════════════════════════════
+
+fn is_fastify_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    if !lower.ends_with(".js") && !lower.ends_with(".ts") && !lower.ends_with(".mjs") { return false; }
+    lower.contains("fastify") || lower.contains("route") || lower.contains("plugin")
+}
+
+fn detect_fastify_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let is_ts = file.ends_with(".ts");
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&lang).is_err() { return result; }
+    let tree = match parser.parse(source, None) { Some(t) => t, None => return result };
+    let methods: HashSet<&str> = ["get", "post", "put", "delete", "patch", "head", "options", "all"]
+        .iter().cloned().collect();
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                if func.kind() == "member_expression" {
+                    let method = func.children(&mut func.walk())
+                        .filter(|c| c.kind() == "property_identifier")
+                        .last().map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    if methods.contains(&method.to_lowercase().as_str()) {
+                        if let Some(args) = node.child_by_field_name("arguments") {
+                            let mut ac = args.walk();
+                            let acs: Vec<_> = args.children(&mut ac).collect();
+                            let path = acs.iter().filter(|c| c.kind() == "string" || c.kind() == "template_string")
+                                .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").trim_matches(&['\'', '"', '`'][..]).to_string()).next().unwrap_or_default();
+                            let handler = acs.iter().filter(|c| c.kind() == "identifier")
+                                .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string()).next().unwrap_or_default();
+                            if !path.is_empty() && !handler.is_empty() {
+                                result.push((method.to_uppercase(), format!("/{}", path.trim_matches('/')), handler, file.to_string(), node.start_position().row + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let cs: Vec<_> = node.children(&mut cursor).collect();
+        for c in cs.into_iter().rev() { stack.push(c); }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Slim — PHP: $app->get('/path', handler)
+// ═══════════════════════════════════════════════════════════════
+
+fn is_slim_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".php") && (lower.contains("route") || lower.contains("app"))
+}
+
+fn detect_slim_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let methods: HashSet<&str> = ["get", "post", "put", "delete", "patch", "options", "any"]
+        .iter().cloned().collect();
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if !t.starts_with("$app->") && !t.starts_with("$this->") { continue; }
+        for m in &methods {
+            let pat = format!("->{}(", m);
+            if let Some(pos) = t.find(&pat) {
+                let rest = &t[pos + pat.len()..];
+                let path = if rest.starts_with('\'') || rest.starts_with('"') {
+                    let d = rest.chars().next().unwrap();
+                    rest[1..].split(d).next().unwrap_or("").to_string()
+                } else { continue };
+                if !path.is_empty() {
+                    let handler = format!("<slim@{}>", li + 1);
+                    result.push((m.to_uppercase(), format!("/{}", path.trim_matches('/')), handler, file.to_string(), li + 1));
+                }
+            }
+        }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Rocket — Rust: #[get("/path")] fn handler()
+// ═══════════════════════════════════════════════════════════════
+
+fn is_rocket_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".rs")
+}
+
+fn detect_rocket_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let route_attrs: HashSet<&str> = ["get", "post", "put", "delete", "patch", "head", "options"]
+        .iter().cloned().collect();
+    let mut pending: Option<(String, String)> = None;
+    for (li, line) in source.lines().enumerate() {
+        let t = line.trim();
+        if t.starts_with("#[") && t.contains('(') {
+            let inner = t.trim_start_matches("#[").trim_end_matches(']');
+            if let Some(p) = inner.find('(') {
+                let attr = inner[..p].trim();
+                if route_attrs.contains(attr) {
+                    let path = inner[p..].trim_matches(|c| c == '(' || c == ')' || c == '"' || c == '\'');
+                    pending = Some((attr.to_uppercase(), path.to_string()));
+                }
+            }
+        }
+        if t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("async fn ") {
+            if let Some((m, p)) = pending.take() {
+                let handler = t.trim_start_matches("pub ").trim_start_matches("async ").trim_start_matches("fn ")
+                    .split(|c: char| c == '(' || c == '<' || c == ' ').next().unwrap_or("<handler>").to_string();
+                if !handler.is_empty() {
+                    result.push((m, format!("/{}", p.trim_matches('/')), handler, file.to_string(), li + 1));
+                }
+            }
+        }
     }
     result
 }
