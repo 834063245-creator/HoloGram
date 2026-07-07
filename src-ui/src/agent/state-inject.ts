@@ -110,6 +110,137 @@ export function getCheckStatusCached(): CheckStatusSummary | null {
   return checkCache;
 }
 
+// ── Graph metadata cache (community, dead code) ──
+
+const fileCommunityCache = new Map<string, string>(); // filePath → "auth (12 files)"
+const deadNodeCache = new Set<string>(); // node names with no references
+const fragileFileCache = new Map<string, number>(); // filePath → fragility score (0-100)
+
+let _graphMetaLoaded = false;
+
+/** One-time refresh: query cluster_report + find_unused, cache results. */
+export async function refreshGraphMeta(projectPath: string): Promise<void> {
+  if (_graphMetaLoaded) return;
+  try {
+    const [clusterJson, unusedJson, fragileJson] = await Promise.all([
+      invoke<string>('hologram_call', { tool: 'cluster_report', args: { path: projectPath } }),
+      invoke<string>('hologram_call', { tool: 'find_unused', args: { path: projectPath } }),
+      invoke<string>('hologram_call', { tool: 'fragile_modules', args: { path: projectPath } }),
+    ]);
+    // Parse communities: map node names → "label (N files)"
+    const cluster = JSON.parse(clusterJson);
+    const communities = cluster.communities || [];
+    for (const c of communities) {
+      const label = `${c.label || `社区${c.id}`} (${c.node_count || c.nodes?.length || 0})`;
+      for (const n of (c.nodes || [])) {
+        const name = typeof n === 'string' ? n : n.name || n.id || '';
+        if (name) fileCommunityCache.set(name, label);
+      }
+    }
+    // Parse dead code: collect node names
+    const unused = JSON.parse(unusedJson);
+    const dead = unused.nodes || unused.unused || [];
+    for (const n of dead) {
+      const name = typeof n === 'string' ? n : n.name || n.id || '';
+      if (name) deadNodeCache.add(name);
+    }
+    // Parse fragility: map file → score
+    const fragile = JSON.parse(fragileJson);
+    const modules = fragile.modules || fragile.fragile_modules || [];
+    for (const m of modules) {
+      const f = m.file || m.file_path || '';
+      const score = m.score || m.fragility_score || m.fan_in || 0;
+      if (f && score > 30) fragileFileCache.set(f, score); // only cache notable scores
+    }
+    _graphMetaLoaded = true;
+  } catch { /* silent */ }
+}
+
+/** Look up community label for a file — checks file name against known symbols. */
+function getCommunityForFile(filePath: string): string | null {
+  const fname = filePath.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+  for (const [nodeName, label] of fileCommunityCache) {
+    if (nodeName.includes(fname) || fname.includes(nodeName)) {
+      return label;
+    }
+  }
+  return null;
+}
+
+/** Check if a symbol name appears in the dead-code list. */
+function isDeadNode(name: string): boolean {
+  return deadNodeCache.has(name);
+}
+
+/** Format graph metadata for pre-read injection. */
+export function formatGraphMeta(filePath: string): string | null {
+  const parts: string[] = [];
+  const community = getCommunityForFile(filePath);
+  if (community) parts.push(`社区: ${community}`);
+  const fname = filePath.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+  if (isDeadNode(fname)) parts.push('⚠️ 此文件包含无引用符号');
+  // Check fragility — match by file path suffix
+  for (const [f, score] of fragileFileCache) {
+    if (filePath.replace(/\\/g, '/').endsWith(f.replace(/\\/g, '/')) || f.replace(/\\/g, '/').endsWith(filePath.replace(/\\/g, '/'))) {
+      parts.push(`脆弱度: ${score}/100`);
+      break;
+    }
+  }
+  return parts.length > 0 ? `[图谱] ${parts.join(' | ')}` : null;
+}
+
+// ── Timeline cache ──
+
+interface TimelineEvent {
+  event_type: string;
+  file?: string;
+  summary?: string;
+  timestamp: string;
+}
+
+let timelineCache: TimelineEvent[] = [];
+let timelineCacheTs = 0;
+const TIMELINE_CACHE_MS = 10000;
+
+/** Fire-and-forget refresh. */
+export async function refreshTimeline(projectPath: string): Promise<void> {
+  const now = Date.now();
+  if (timelineCache.length > 0 && (now - timelineCacheTs) < TIMELINE_CACHE_MS) return;
+  try {
+    const json = await invoke<string>('hologram_call', { tool: 'project_timeline', args: { path: projectPath, limit: 8 } });
+    const raw = JSON.parse(json);
+    timelineCache = (raw.events || []).slice(0, 8);
+    timelineCacheTs = now;
+  } catch { /* silent */ }
+}
+
+/** Format recent timeline events for turn-start. Only show user-facing events. */
+export function formatTimeline(): string | null {
+  if (timelineCache.length === 0) return null;
+  const recent = timelineCache.slice(0, 5);
+  const labels = recent.map(e => {
+    const fname = e.file ? e.file.replace(/\\/g, '/').split('/').pop() : '';
+    const label = eventLabel(e.event_type);
+    return fname ? `${label} ${fname}` : label;
+  });
+  return `[时间轴] ${labels.join(' → ')}`;
+}
+
+function eventLabel(type: string): string {
+  switch (type) {
+    case 'agent_write': return '写入';
+    case 'agent_edit': return '编辑';
+    case 'agent_delete': return '删除';
+    case 'agent_rename': return '重命名';
+    case 'agent_move': return '移动';
+    case 'commit_clean': return '✅';
+    case 'commit_violation': return '⚠️';
+    case 'file_changed': return '外部变更';
+    case 'incremental_update': return '图更新';
+    default: return type;
+  }
+}
+
 // ── Formatters — build injectable strings from cached data ──
 
 /** Format git status for turn-start injection. */
@@ -172,6 +303,8 @@ export function buildTurnStartBlock(): string {
   if (git) lines.push(git);
   const check = formatCheckStatus();
   if (check) lines.push(check);
+  const timeline = formatTimeline();
+  if (timeline) lines.push(timeline);
   return lines.length > 0 ? lines.join('\n') : '';
 }
 
@@ -182,6 +315,8 @@ export function buildPreReadBlock(filePath: string): string {
   if (diag) lines.push(diag);
   const blame = formatBlame(filePath);
   if (blame) lines.push(blame);
+  const meta = formatGraphMeta(filePath);
+  if (meta) lines.push(meta);
   return lines.join('\n');
 }
 
