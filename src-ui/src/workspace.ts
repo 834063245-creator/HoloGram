@@ -24,7 +24,7 @@ import { memoryBundleHealth, memoryBundleRecall, memoryBundleAnalyze, memoryBund
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePostEditHook, createStatePreflightHook } from './agent/hooks';
-import { refreshGitStatus, buildTurnStartBlock } from './agent/state-inject';
+import { refreshGitStatus, refreshTimeline, refreshGraphMeta, buildTurnStartBlock } from './agent/state-inject';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import type { Tool } from './agent/tool';
@@ -536,6 +536,7 @@ export class Workspace {
         // Refresh state caches for next turn + inject system-reminder
         (async () => {
           await refreshGitStatus(this.path);
+          await refreshTimeline(this.path);
           const block = buildTurnStartBlock();
           if (block && this.agent) {
             this.agent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`);
@@ -577,8 +578,10 @@ export class Workspace {
       this.agent.setPreflightHooks(preflightHooks);
     }
 
-    // Cold-start: prime state caches (git status, etc.)
+    // Cold-start: prime state caches (git status, timeline, graph metadata, etc.)
     refreshGitStatus(this.path).catch(() => {});
+    refreshTimeline(this.path).catch(() => {});
+    refreshGraphMeta(this.path).catch(() => {});
 
     this.onStatusChange?.('[Agent] ✅ 已就绪');
     chatPanel.setAgent(this.agent);
