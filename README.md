@@ -17,19 +17,7 @@
 
 <br/>
 
-<table align="center" style="border-collapse: collapse; border: none;">
-<tr>
-<td align="center" valign="middle" style="padding: 18px 40px; background: #000000; color: #ffffff; border: none;">
-  <h1 style="margin:0;font-size:28px;font-weight:900;color:#ffffff;">▍MCP 服务 · 不是桌面应用</h1>
-  <p style="margin:6px 0 0 0;font-size:15px;color:#cccccc;">单文件引擎 &nbsp;·&nbsp; 零依赖 &nbsp;·&nbsp; 配进 Claude Code / Cursor 直接用 &nbsp;·&nbsp; 省 token = 省钱<br/>桌面端只是可选的可视化壳，<strong style="color:#ffffff;">不开桌面应用完全不影响使用</strong></p>
-	  <p style="margin:10px 0 0 0;font-size:16px;"><a href="#install" style="color:#ffcc00;font-weight:bold;">👇 点这里直接跳到"一句话安装"</a><span style="color:#ffcc00;">，复制粘贴发给 Agent，自动装好。</span></p>
-</td>
-</tr>
-</table>
-
-<br/>
-
-> **代码依赖可视化与影响分析。** 26 门语言统一 IR，全库依赖一张图。四级过滤自动排除三方/生成代码，改前查波及范围，改后验架构边界。MCP 模式下，原本要读 N 个源文件才能理清的依赖链，一次工具调用几十行 JSON 返回——**省 token，就是省钱。**
+> **代码依赖可视化与影响分析。** 26 门语言统一建模，全库依赖一张图。四级过滤自动排除三方/生成代码，改前查波及范围，改后验架构边界。一次工具调用几十行 JSON，Agent 不用逐层翻源文件——**省 token，就是省钱。**
 
 ---
 
@@ -39,7 +27,7 @@
 |---|---|
 | **改前查影响** | 改一个文件 → 立刻看到会波及哪些文件、哪些模块。不用搜、不用一层层翻代码。内置 Agent 的 preflight hook 在 `edit_file` / `write_file` 执行前**自动注入 ⚠️ 影响分析**——Agent 不用主动调工具，信息直接出现在结果顶部。 |
 | **自动抓越界** | 模块之间乱 import？自动标红。你定规则，它替你盯着。 |
-| **给 Agent 省 token** | Claude Code / Cursor 里直接用。Agent 不用读源文件猜依赖，一次调用拿答案，省 **70%-95%** token。 |
+| **给 Agent 省 token** | Claude Code / Cursor 里直接用。Agent 不用读源文件猜依赖，一次调用拿答案，典型场景省 ~70% token。 |
 | **3D 代码地图** | 代码库变星图，谁依赖谁、谁在调用谁，一眼看穿。5000 个文件不卡。 |
 | **保存即刷新** | 代码改了保存 → 图自动更新。缓存过期检测——源文件更新时自动重分析。 |
 | **26+3 门语言，零配置** | Python · TS/JS · Go · Rust · Java · C/C++ · Ruby · Lua · C# · Swift · Dart · Scala · Haskell · HTML · CSS · PHP · OCaml · R · Nix · Bash · YAML · Zig · Elixir · Erlang · Kotlin · TOML · Markdown。打开项目直接出图。 |
@@ -48,9 +36,9 @@
 
 ## 为什么不同
 
-| **🌍 跨语言统一 IR** | **🤖 图为 Agent 而生** | **🔬 自举验证** |
+| **🌍 跨语言统一建模** | **🤖 图为 Agent 而生** | **🔬 自举验证** |
 |---|---|---|
-| 26 门语言全部映射到同一张图——不是分别解析再拼接，而是一个统一中间表示。TypeScript 调 Python、Rust 调 Go，跨语言依赖链照样追踪。引擎内置 tree-sitter 适配器，每种语言的 import / call / 符号定义统一建模。 | 不是"把源文件丢给 LLM 让它自己看"。全库依赖提前算好，存进 MemoryIndex（邻接表 + 倒排索引）+ SQLite FTS5。Agent 调工具拿的是**结构化依赖数据**，不是源文件。一次调用几十行 JSON = 原本要读十几个文件才能拼出的依赖全景。 | HoloGram 用自己的引擎分析自己的代码库。项目根目录下的依赖图随时可查——既是质量保障，也是活样本。363 个 Rust 测试 + 37 个前端测试，每次提交前引擎自检。 |
+| 26 门语言全部解析进同一套节点/边 schema——一个统一中间表示。每种语言的 import / call / 符号定义统一建模，跨文件依赖自动标注 `cross_file`。 | 不是"把源文件丢给 LLM 让它自己看"。全库依赖提前算好，存进 MemoryIndex（邻接表 + 倒排索引）+ SQLite FTS5。Agent 调工具拿的是**结构化依赖数据**，不是源文件。一次调用几十行 JSON = 原本要读十几个文件才能拼出的依赖全景。 | HoloGram 用自己的引擎分析自己的代码库。项目根目录下的依赖图随时可查——既是质量保障，也是活样本。363 个 Rust 测试 + 37 个前端测试，每次提交前引擎自检。 |
 
 ---
 
@@ -369,11 +357,11 @@ Agent 没有全局依赖图，只能像人一样一层层读源码推依赖链�
 | 1 | 调 `explore_deps("validate_token auth")` → 引擎 BFS 遍历全库依赖图 + NL 搜索，返回：正向（它依赖谁）+ 反向（谁依赖它）传递闭包、波及模块清单、跨模块能力调用、风险等级 | 约 500 token（入参） |
 | 2 | 引擎返回结构化 JSON：4 个直接调用者 + 1 个间接调用者 + 2 个被依赖文件 + 0 条越界违规 + 风险等级 LOW | 约 1,200 token（结果） |
 | — | Agent 直接输出结论，不需要推理依赖链 | 0 token |
-| — | `scheduler/tasks.py` 的间接调用 → 图里有 `capability_call` 边，**没有漏** | **零漏报** |
+| — | `scheduler/tasks.py` 的间接调用 → 图里有 `capability_call` 边，静态可达路径全覆盖 | **零静态漏报** |
 
 > **单次查询消耗：约 1,700 token。**
 >
-> 省 **4,100 token / 次**（<strong style="color:#ff3333;font-size:18px;">70%</strong>），且不会漏。
+> 省 **~4,100 token / 次**（~70%）。静态可达路径不会漏；动态盲区（反射、字符串路由、动态 import）见下方已知局限。
 
 ---
 
@@ -381,16 +369,16 @@ Agent 没有全局依赖图，只能像人一样一层层读源码推依赖链�
 
 | | 不用 HoloGram | 用 HoloGram | 省 |
 |---|---|---|---|
-| **单次依赖查询** | ~5,800 token | ~1,700 token | **4,100 token（<strong style="color:#ff3333;font-size:18px;">70%</strong>）** |
+| **单次依赖查询** | ~5,800 token | ~1,700 token | **~4,100 token (~70%)** |
 | **一次编码会话（5 次查询）** | ~29,000 token | ~8,500 token | **~20,000 token** |
 | **重度用户月均（30 次会话）** | ~870,000 token | ~255,000 token | **~600,000 token** |
 | **十人团队月均** | ~8,700,000 token | ~2,550,000 token | **~6,000,000 token** |
 
 按 Claude 均价 $20/MTok 估算：**单人月省 ~$12，十人团队月省 ~$120。**
 
-> 上面是保守场景。实际使用中，依赖链更深（10-20 层常见）、调用者更多（几十个不稀奇）、模块边界合规要扫全库（Agent 传统做法根本不可行）——**省 80% 是常态。**
+> 上面是保守场景。实际使用中，依赖链更深（10-20 层常见）、调用者更多（几十个不稀奇）、模块边界合规要扫全库。
 >
-> **Token 省的是小头。大头是：弱模型推依赖不可靠，漏一个修一天。HoloGram 给的是确定答案。**
+> **Token 省的是小头。大头是：弱模型推依赖容易漏，HoloGram 给的图是确定性静态分析——比靠读源文件猜依赖可靠得多。**
 
 ---
 
@@ -446,14 +434,32 @@ Agent 没有全局依赖图，只能像人一样一层层读源码推依赖链�
 
 ---
 
+## ⚠️ 已知局限
+
+静态分析不是万能。以下是 tree-sitter 方案的天花板——这些不是 bug，是物理上限。诚实列出，每一项都是接下来要攻克的：
+
+| 盲区 | 说明 | 状态 |
+|------|------|------|
+| **字符串路由** | Express `app.get('/foo')`、Django `path('foo/')` 等路由字符串 → handler 的映射 | ⚠️ 8 种框架已覆盖（Django/Express/FastAPI/Flask/Rails/Spring/Gin/NestJS），其余待补充 |
+| **动态 import / require** | `import(variable)`、`require(expr)` → 无法静态解析 | ⚠️ 规划中 |
+| **反射 / 依赖注入** | Python `getattr()`、Spring `@Autowired`、TS 装饰器注入 → 目标符号在编译期不可知 | ⚠️ 规划中 |
+| **跨语言调用边** | TS 通过 HTTP/子进程/FFI 调用 Python → 需要知道运行时桥接方式 | ⚠️ 规划中：FFI/子进程检测层 |
+| **`eval` / 动态代码生成** | 任何语言在运行时拼接并执行代码 → 静态分析永远不可达 | ❌ 超出静态分析能力范围 |
+
+> **诚实比完美更重要。** 上面的每一项都是真实的技术挑战，不是借口。知道自己在哪不行，才能真的往前走。
+
+---
+
 ## 怎么用
 
 <a id="install"></a>
 ### 🧩 MCP 模式（推荐，零界面）
 
-**不需要桌面应用。** 引擎是单文件二进制，26 种语法静态链接 + 3 种动态加载，零依赖。配进 Claude Code / Cursor 直接用。具体省多少 token 见上方 <a href="#token-save">💸 Token 节省实测</a>。
+**不需要桌面应用。** 引擎是单文件二进制，26 种语法静态链接 + 3 种动态加载，零依赖。配进 Claude Code / Cursor 直接用。
 
-<h3 style="font-size:22px;font-weight:900;">🤙 一句话安装：复制下面这段话，发给 Claude Code / Cursor，Agent 自己搞定——</h3>
+### 🤙 一句话安装
+
+复制下面这段话，发给 Claude Code / Cursor，Agent 自己搞定：
 
 ```
 请帮我安装 HoloGram MCP 服务。步骤：
