@@ -20,7 +20,7 @@ import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
-import { memoryBundleHealth, memoryBundleRecall, memoryBundleAnalyze, memoryBundleIngest } from './agent/memory-bundle-client';
+import { memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePreflightHook } from './agent/hooks';
@@ -383,45 +383,29 @@ export class Workspace {
     const graphNodes = extractGraphNodeNames(this.graphData);
     try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
 
-    // ── Memory Bundle: semantic recall + feature extraction ──
+    // ── AuraSDK semantic recall ──
     let memoryBundleSection = '';
     try {
-      const bundleOnline = await memoryBundleHealth();
-      if (bundleOnline) {
-        // Get project name from path for a contextual recall query
+      if (this.memoryManager?.auraReady) {
         const projectName = this.path.split(/[/\\]/).pop() || 'project';
-        const recallQuery = `项目 ${projectName} 的相关记忆、架构决策、最近工作`;
-        const [recallResult, analyzeResult] = await Promise.all([
-          memoryBundleRecall(recallQuery, 10, true),
-          memoryBundleAnalyze(projectName, 'holo', ''),
-        ]);
-        const parts: string[] = [];
-        // Observable: log recall hit count
-        const factCount = recallResult?.facts?.length || 0;
-        const hasText = recallResult?.facts_text?.trim();
-        if (factCount > 0 || hasText) {
-          this.onStatusChange?.(`[记忆场] 召回 ${factCount} 条${hasText ? ' (含全文)' : ''}`);
-        }
-        if (recallResult?.facts_text?.trim()) {
-          parts.push(`### 语义记忆\n${recallResult.facts_text}`);
-        }
-        if (analyzeResult?.emotion) {
-          parts.push(`用户当前情绪: ${analyzeResult.emotion.category} (v=${analyzeResult.emotion.valence.toFixed(2)}, a=${analyzeResult.emotion.arousal.toFixed(2)})`);
-        }
-        if (analyzeResult?.tags?.length) {
-          parts.push(`相关标签: ${analyzeResult.tags.join(', ')}`);
-        }
-        memoryBundleSection = parts.join('\n');
-        if (memoryBundleSection) {
-          this.onStatusChange?.(`[记忆场] 已连接`);
+        const records = await this.memoryManager.auraSemanticRecall(
+          `项目 ${projectName} 的相关记忆、架构决策、最近工作`,
+          10,
+        );
+        if (records.length > 0) {
+          this.onStatusChange?.(`[记忆场] 召回 ${records.length} 条`);
+          const lines = records.map(r =>
+            `- [${r.tags?.join(',') || 'ref'}] ${r.content.slice(0, 200)}`
+          );
+          memoryBundleSection = `### 语义记忆\n${lines.join('\n')}`;
         } else {
-          this.onStatusChange?.(`[记忆场] 在线但无数据 — AuraSDK 可能冷启动`);
+          this.onStatusChange?.(`[记忆场] 在线但无数据 — 存一条记忆后生效`);
         }
       } else {
-        this.onStatusChange?.(`[记忆场] ❌ 健康检查失败`);
+        this.onStatusChange?.(`[记忆场] ❌ AuraSDK 未初始化`);
       }
     } catch (e) {
-      console.warn('[setupAgent] memory bundle unavailable:', e);
+      console.warn('[setupAgent] AuraSDK recall failed:', e);
       this.onStatusChange?.(`[记忆场] ❌ 异常: ${String(e).slice(0, 40)}`);
     }
     // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条
