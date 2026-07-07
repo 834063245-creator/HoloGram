@@ -5,7 +5,8 @@
 //! into HoloGram's Rust engine. Detects web framework routes and creates
 //! route nodes in the dependency graph, linking URLs to their handlers.
 //!
-//! Currently supports: Django, Express, FastAPI, Flask, Rails, Spring, Gin, NestJS
+//! Supports 12 frameworks: Django, Express, FastAPI, Flask, Rails, Spring,
+//! Gin, NestJS, Koa, Laravel, Phoenix, Actix
 
 use crate::engine::GRAMMAR_LOADER;
 use std::collections::{HashMap, HashSet};
@@ -40,6 +41,8 @@ pub fn detect_framework_routes(
                 || is_fastapi_candidate(&rel_str) || is_flask_candidate(&rel_str)
                 || is_rails_file(&rel_str) || is_spring_candidate(&rel_str)
                 || is_gin_candidate(&rel_str) || is_nestjs_candidate(&rel_str)
+                || is_koa_candidate(&rel_str) || is_laravel_candidate(&rel_str)
+                || is_phoenix_candidate(&rel_str) || is_actix_candidate(&rel_str)
             {
                 files.insert(p.to_string_lossy().replace('\\', "/"));
             }
@@ -105,6 +108,29 @@ pub fn detect_framework_routes(
                 || source_ref.contains("@Post")
             {
                 let routes = detect_nestjs_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_koa_candidate(file) {
+            if source_ref.contains(".get(") || source_ref.contains(".post(")
+                || source_ref.contains(".use(")
+            {
+                let routes = detect_koa_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_laravel_candidate(file) {
+            if source_ref.contains("Route::") {
+                let routes = detect_laravel_routes(file, source_ref);
+                added += inject_routes(graph, &routes);
+            }
+        } else if is_phoenix_candidate(file) {
+            let routes = detect_phoenix_routes(file, source_ref);
+            added += inject_routes(graph, &routes);
+        } else if is_actix_candidate(file) {
+            if source_ref.contains("#[get") || source_ref.contains("#[post")
+                || source_ref.contains("#[put") || source_ref.contains("#[delete")
+                || source_ref.contains("#[web::get") || source_ref.contains("#[web::post")
+            {
+                let routes = detect_actix_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
             }
         }
@@ -1223,6 +1249,280 @@ fn extract_nestjs_method_decorator(decorator: &tree_sitter::Node, source: &str) 
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Koa — JS/TS: router.get('/path', handler)
+// ═══════════════════════════════════════════════════════════════
+
+fn is_koa_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    if !lower.ends_with(".js") && !lower.ends_with(".ts") && !lower.ends_with(".mjs") {
+        return false;
+    }
+    lower.contains("route") || lower.contains("router") || lower.contains("app")
+        || lower.contains("koa") || lower.contains("middleware")
+}
+
+fn detect_koa_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&lang).is_err() { return result; }
+    let tree = match parser.parse(source, None) { Some(t) => t, None => return result };
+
+    let methods: HashSet<&str> = ["get", "post", "put", "delete", "patch", "head", "options", "all"]
+        .iter().cloned().collect();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                if func.kind() == "member_expression" {
+                    let method = func.children(&mut func.walk())
+                        .filter(|c| c.kind() == "property_identifier")
+                        .last()
+                        .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    let method_lower = method.to_lowercase();
+                    if methods.contains(method_lower.as_str()) || method_lower == "use" {
+                        if let Some(args) = node.child_by_field_name("arguments") {
+                            let line = node.start_position().row + 1;
+                            let mut ac = args.walk();
+                            let arg_children: Vec<_> = args.children(&mut ac).collect();
+                            let mut route_str = String::new();
+                            let mut handler = String::new();
+                            for ac_node in &arg_children {
+                                match ac_node.kind() {
+                                    "string" | "template_string" if route_str.is_empty() => {
+                                        route_str = ac_node.utf8_text(source.as_bytes()).unwrap_or("")
+                                            .trim_matches(&['\'', '"', '`'][..]).to_string();
+                                    }
+                                    "identifier" if !route_str.is_empty() => {
+                                        handler = ac_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                                        break;
+                                    }
+                                    "arrow_function" | "function_expression" | "function" if !route_str.is_empty() => {
+                                        handler = format!("<handler@{}>", ac_node.start_position().row + 1);
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if !route_str.is_empty() && !handler.is_empty() {
+                                let method_upper = if method_lower == "use" { "USE" } else { &method_lower };
+                                result.push((method_upper.to_uppercase(), route_str, handler, file.to_string(), line));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Laravel — PHP: Route::get('/path', [Controller::class, 'method'])
+// ═══════════════════════════════════════════════════════════════
+
+fn is_laravel_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".php") && (lower.contains("route") || lower.contains("web") || lower.contains("api"))
+}
+
+fn detect_laravel_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let http_methods: HashSet<&str> = ["get", "post", "put", "delete", "patch", "any", "match"]
+        .iter().cloned().collect();
+
+    // String-based scan — PHP tree-sitter has complex call expression nodes
+    // so we use line-by-line regex-like matching
+    for (line_idx, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("Route::") { continue; }
+        // Route::get('/path', [Controller::class, 'method'])  or  Route::get('/path', 'Controller@method')
+        if let Some(rest) = trimmed.strip_prefix("Route::") {
+            let paren_pos = rest.find('(');
+            let method_part = paren_pos.map(|p| &rest[..p]).unwrap_or(rest);
+            let method_lower = method_part.trim().to_lowercase();
+            if !http_methods.contains(method_lower.as_str()) { continue; }
+
+            // Extract path (first string argument between two single quotes)
+            let path = extract_php_first_string(rest);
+
+            // Extract handler: [X::class, 'method'] or 'X@method'
+            let handler = if let Some(at_idx) = rest.rfind('@') {
+                // 'X@method' style
+                rest[at_idx+1..].split('\'').next().unwrap_or("").to_string()
+            } else if rest.contains("::class") {
+                // [X::class, 'method'] style — find last quoted string
+                extract_php_last_string(rest)
+            } else { continue };
+
+            if !path.is_empty() && !handler.is_empty() {
+                result.push((method_lower.to_uppercase(), format!("/{}", path.trim_matches('/')), handler, file.to_string(), line_idx + 1));
+            }
+        }
+    }
+    result
+}
+
+fn extract_php_first_string(s: &str) -> String {
+    match s.find('\'') {
+        Some(start) => match s[start+1..].find('\'') {
+            Some(end) => s[start+1..start+1+end].to_string(),
+            None => String::new(),
+        },
+        None => String::new(),
+    }
+}
+
+fn extract_php_last_string(s: &str) -> String {
+    match s.rfind('\'') {
+        Some(start) => match s[..start].rfind('\'') {
+            Some(end) => s[end+1..start].to_string(),
+            None => String::new(),
+        },
+        None => String::new(),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Phoenix — Elixir: get '/path', Controller, :action
+// ═══════════════════════════════════════════════════════════════
+
+fn is_phoenix_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".ex") && (lower.contains("router") || lower.contains("route"))
+}
+
+fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+
+    let http_verbs: HashSet<&str> = ["get", "post", "put", "delete", "patch", "head", "options"]
+        .iter().cloned().collect();
+
+    // Phoenix uses macros: `get "/path", Controller, :action`
+    // Also works as keyword: `get("/path", Controller, :action)`
+    // Line-based fallback — Elixir tree-sitter quirk with macro calls
+    for (line_idx, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("defmodule") || trimmed.starts_with("use ") || trimmed.starts_with("pipeline") || trimmed.starts_with("plug ") || trimmed.starts_with("scope ") || trimmed.starts_with("end") { continue; }
+
+        // Pattern: `verb "/path", Controller, :action` or `verb("/path", Controller, :action)`
+        let first_space = trimmed.find(' ');
+        let first_paren = trimmed.find('(');
+        let verb_end = match (first_space, first_paren) {
+            (Some(s), Some(p)) => s.min(p),
+            (Some(s), None) => s,
+            (None, Some(p)) => p,
+            (None, None) => continue,
+        };
+        let verb = trimmed[..verb_end].trim().to_lowercase();
+        if !http_verbs.contains(verb.as_str()) { continue; }
+
+        let rest = &trimmed[verb_end..].trim();
+        // Extract path (first string)
+        let path_start = rest.find('"').or_else(|| rest.find('\''));
+        let path = match path_start {
+            Some(s) => {
+                let delim = rest.as_bytes()[s];
+                match rest[s+1..].find(delim as char) {
+                    Some(e) => rest[s+1..s+1+e].to_string(),
+                    None => continue,
+                }
+            }
+            None => continue,
+        };
+
+        // Extract handler: the atom after the path (starts with :)
+        let handler = if let Some(atom_pos) = rest.rfind(':') {
+            rest[atom_pos..].split(|c: char| c == ',' || c == ' ' || c == ')')
+                .next().unwrap_or("").trim_matches(':').to_string()
+        } else { continue };
+
+        if !path.is_empty() && !handler.is_empty() {
+            result.push((verb.to_uppercase(), format!("/{}", path.trim_matches('/')), handler, file.to_string(), line_idx + 1));
+        }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Actix — Rust: #[get("/path")] async fn handler()
+// ═══════════════════════════════════════════════════════════════
+
+fn is_actix_candidate(file: &str) -> bool {
+    let lower = file.to_lowercase();
+    lower.ends_with(".rs")
+}
+
+fn detect_actix_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
+    let mut result = Vec::new();
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("rs").expect("rust grammar")).is_err() {
+        return result;
+    }
+    let tree = match parser.parse(source, None) { Some(t) => t, None => return result };
+
+    let route_attrs: HashSet<&str> = [
+        "get", "post", "put", "delete", "patch", "head", "options",
+        "web::get", "web::post", "web::put", "web::delete",
+        "route", "web::route",
+    ].iter().cloned().collect();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    // Collect #[xxx("/path")] → next fn
+    let mut pending_route: Option<(String, String)> = None; // (method, path)
+
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "attribute_item" => {
+                // #[get("/path")] or #[web::get("/path")]
+                let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+                let inner = text.trim_start_matches("#[").trim_end_matches(']').trim();
+                // Split at '(' to get attr_name and args
+                if let Some(paren) = inner.find('(') {
+                    let attr_name = inner[..paren].trim().to_lowercase();
+                    let args = &inner[paren..];
+                    if route_attrs.contains(attr_name.as_str()) {
+                        let path = args.trim_matches(|c| c == '(' || c == ')' || c == '"' || c == '\'').to_string();
+                        let method = if attr_name.starts_with("web::") {
+                            attr_name.strip_prefix("web::").unwrap_or(&attr_name).to_uppercase()
+                        } else {
+                            attr_name.to_uppercase()
+                        };
+                        pending_route = Some((method, path));
+                    }
+                }
+            }
+            "function_item" => {
+                if let Some((method, path)) = pending_route.take() {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let handler = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        let line = node.start_position().row + 1;
+                        result.push((method, format!("/{}", path.trim_matches('/')), handler, file.to_string(), line));
+                    }
+                }
+            }
+            _ => {}
+        }
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Route injection into graph
 // ═══════════════════════════════════════════════════════════════
 
@@ -1717,6 +2017,134 @@ export class OrdersController {
         assert!(is_nestjs_candidate("users.controller.ts"));
         assert!(is_nestjs_candidate("app.module.tsx"));
         assert!(!is_nestjs_candidate("main.py"));
+    }
+
+    // ── Koa tests ──
+
+    #[test]
+    fn test_detect_koa_get() {
+        let source = r#"
+const Koa = require('koa');
+const Router = require('koa-router');
+const router = new Router();
+
+router.get('/api/users', async (ctx) => {
+    ctx.body = { users: [] };
+});
+"#;
+        let routes = detect_koa_routes("routes.js", source);
+        assert!(!routes.is_empty(), "Should detect koa-router .get()");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+    }
+
+    #[test]
+    fn test_detect_koa_post() {
+        let source = r#"router.post('/api/orders', createOrder);"#;
+        let routes = detect_koa_routes("router.js", source);
+        assert!(!routes.is_empty(), "Should detect koa-router .post()");
+        assert_eq!(routes[0].0, "POST");
+    }
+
+    #[test]
+    fn test_is_koa_candidate() {
+        assert!(is_koa_candidate("routes.js"));
+        assert!(is_koa_candidate("koa-app.ts"));
+        assert!(is_koa_candidate("middleware/index.js"));
+        assert!(!is_koa_candidate("main.py"));
+    }
+
+    // ── Laravel tests ──
+
+    #[test]
+    fn test_detect_laravel_route() {
+        let source = r#"<?php
+use Illuminate\Support\Facades\Route;
+
+Route::get('/users', [UserController::class, 'index']);
+Route::post('/users', [UserController::class, 'store']);
+"#;
+        let routes = detect_laravel_routes("web.php", source);
+        assert_eq!(routes.len(), 2, "Should detect 2 Laravel routes");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[1].0, "POST");
+    }
+
+    #[test]
+    fn test_is_laravel_candidate() {
+        assert!(is_laravel_candidate("routes/web.php"));
+        assert!(is_laravel_candidate("api.php"));
+        assert!(!is_laravel_candidate("UserController.php"));
+    }
+
+    // ── Phoenix tests ──
+
+    #[test]
+    fn test_detect_phoenix_get() {
+        let source = r#"
+defmodule MyApp.Router do
+  use Phoenix.Router
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+  scope "/api" do
+    get "/users", UserController, :index
+    post "/users", UserController, :create
+  end
+end
+"#;
+        let routes = detect_phoenix_routes("router.ex", source);
+        assert!(routes.len() >= 2, "Should detect Phoenix routes, got {}", routes.len());
+    }
+
+    #[test]
+    fn test_is_phoenix_candidate() {
+        assert!(is_phoenix_candidate("router.ex"));
+        assert!(is_phoenix_candidate("routes.ex"));
+        assert!(!is_phoenix_candidate("user_controller.ex"));
+    }
+
+    // ── Actix tests ──
+
+    #[test]
+    fn test_detect_actix_get() {
+        let source = r#"
+use actix_web::{get, web, HttpResponse};
+
+#[get("/users")]
+async fn list_users() -> HttpResponse {
+    HttpResponse::Ok().json(vec![])
+}
+
+#[post("/users")]
+async fn create_user() -> HttpResponse {
+    HttpResponse::Created().finish()
+}
+"#;
+        let routes = detect_actix_routes("handlers.rs", source);
+        assert_eq!(routes.len(), 2, "Should detect 2 Actix routes, got {}", routes.len());
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[1].0, "POST");
+    }
+
+    #[test]
+    fn test_detect_actix_web_prefix() {
+        let source = r#"
+#[web::get("/health")]
+async fn health() -> &'static str {
+    "ok"
+}
+"#;
+        let routes = detect_actix_routes("health.rs", source);
+        assert!(!routes.is_empty(), "Should detect #[web::get]");
+        assert_eq!(routes[0].1, "/health");
+    }
+
+    #[test]
+    fn test_is_actix_candidate() {
+        assert!(is_actix_candidate("main.rs"));
+        assert!(is_actix_candidate("handlers.rs"));
+        assert!(!is_actix_candidate("main.py"));
     }
 
 }
