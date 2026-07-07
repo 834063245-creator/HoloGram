@@ -440,11 +440,11 @@ Agent 没有全局依赖图，只能像人一样一层层读源码推依赖链�
 
 | 盲区 | 说明 | 状态 |
 |------|------|------|
-| **字符串路由** | Express `app.get('/foo')`、Django `path('foo/')` 等路由字符串 → handler 的映射 | ✅ 12 种框架已覆盖（Django/Express/FastAPI/Flask/Rails/Spring/Gin/NestJS/Koa/Laravel/Phoenix/Actix） |
-| **动态 import / require** | `import(variable)`、`require(expr)` → 动态导入站点已标记为 `<dynamic-import>` | ✅ 完成 — `di_reflection.rs` |
-| **反射 / 依赖注入** | Python `getattr()`、Spring `@Autowired`、TS 装饰器注入 → 字符串属性名已解析，变量属性名已标记 | ✅ Phase 1 完成 — `di_reflection.rs`（Python/Java/TS） |
-| **跨语言调用边** | TS 通过 HTTP/子进程/FFI 调用 Python → 运行时桥接点已标记为 `<cross-lang:subprocess/http/ffi>` | ✅ 完成 — `di_reflection.rs`（Py/JS/Java/Go） |
-| **`eval` / 动态代码生成** | 任何语言在运行时拼接并执行代码 → 站点已标记为 `<eval>` / `<exec>`，诚实标注不可达 | ✅ 完成 — `di_reflection.rs` |
+| **字符串路由** | Express/Django 等路由字符串 → handler 的映射 | ✅ 18 种框架已覆盖 |
+| **动态 import / require** | `import(variable)`/`require(expr)` → 动态导入站点已标记 | ✅ 完成 — Py/JS/TS/C#/Ruby/PHP |
+| **反射 / 依赖注入** | getattr/@Autowired/@Injectable 等 → 字符串/变量属性已解析或标记 | ✅ Phase 2 — 10 语言（Py/Java/TS/C#/Ruby/PHP/Go/Kotlin） |
+| **跨语言调用边** | 子进程/FFI/HTTP client → 运行时桥接点已标记 | ✅ 完成 — 8 语言（Py/JS/Java/Go/C#/Ruby/PHP/Kotlin） |
+| **`eval` / 动态代码生成** | eval/exec/new Function → 已诚实标记为不可达 | ✅ 完成 — 6 语言（Py/JS/C#/Ruby/PHP/Rust） |
 
 > **从 ⚠️ 到 ✅。** 上面的五项盲区已全部完成。静态分析有天花板——我们选择诚实面对，一项一项解决。动态 import、eval、反射、跨语言调用、字符串路由，都通过合成边和标记节点给出了诚实的答案。
 
