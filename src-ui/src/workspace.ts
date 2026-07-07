@@ -20,6 +20,7 @@ import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
+import { auraShutdown } from './agent/aura-memory';
 import { memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
@@ -329,6 +330,7 @@ export class Workspace {
 
     // Clear agent & memory
     this.agent = null;
+    try { await auraShutdown(); } catch { /* ignore */ }
     this.memoryManager = null;
 
     // Clear timers
