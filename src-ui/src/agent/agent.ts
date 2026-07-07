@@ -1144,7 +1144,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       this.prov,
       subTools,
       subSystem,
-      { maxSteps: 100, temperature: 0.3 },
+      { maxSteps: 0, temperature: 0.3 },
       (ev) => {
         if (ev.kind === EventKind.Text && ev.text && onProgress) {
           onProgress(ev.text);
