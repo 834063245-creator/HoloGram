@@ -16,7 +16,7 @@
 import { invoke } from '../bridge';
 import type { Tool } from './tool';
 import { bus } from '../ui/events';
-import { auraInit, auraRecall, auraStore, auraCount, auraRecallText } from './aura-memory';
+import { auraInit, auraRecall, auraStore, auraCount, auraRecallText, auraShutdown } from './aura-memory';
 import type { AuraRecord } from './aura-memory';
 
 // ── Fact-save authorization (self-consuming sentinel) ──
@@ -61,6 +61,7 @@ export class MemoryManager {
   private _projectDirReady = false;
   private _globalDirReady = false;
   private _auraReady = false;
+  private _auraInitPromise: Promise<void> | null = null;
   private globalDirPath: string | null = null;
 
   /** @param projectPath 项目根目录
@@ -77,14 +78,22 @@ export class MemoryManager {
    *  Safe to call multiple times — subsequent calls are no-ops. */
   async initAura(): Promise<void> {
     if (this._auraReady) return;
-    try {
-      const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
-      const result = await auraInit(brainPath);
-      this._auraReady = true;
-      console.log(`[aura] initialized — ${result.record_count} records at ${result.path}`);
-    } catch (e) {
-      console.warn('[aura] init failed (semantic recall disabled):', e);
-    }
+    if (this._auraInitPromise) return this._auraInitPromise;
+    this._auraInitPromise = (async () => {
+      try {
+        // ponytail: native Aura is a global singleton — shut down old brain before init'ing new one (workspace switch)
+        try { await auraShutdown(); } catch { /* not initialized yet, ok */ }
+        const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
+        const result = await auraInit(brainPath);
+        this._auraReady = true;
+        console.log(`[aura] initialized — ${result.record_count} records at ${result.path}`);
+      } catch (e) {
+        console.warn('[aura] init failed (semantic recall disabled):', e);
+      } finally {
+        this._auraInitPromise = null;
+      }
+    })();
+    return this._auraInitPromise;
   }
 
   /** Run AuraSDK semantic recall against a natural-language query.

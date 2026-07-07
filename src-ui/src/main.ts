@@ -124,7 +124,10 @@ function toggleStatusLog(): void {
   panel.onclick = (e) => e.stopPropagation();
   document.body.appendChild(panel);
   // Click outside to dismiss
-  setTimeout(() => document.addEventListener('click', () => { panel?.remove(); document.removeEventListener('click', arguments.callee as any); }), 0);
+  setTimeout(() => {
+    const dismiss = () => { panel?.remove(); document.removeEventListener('click', dismiss); };
+    document.addEventListener('click', dismiss);
+  }, 0);
 }
 
 function escapeHtml(s: string): string {
