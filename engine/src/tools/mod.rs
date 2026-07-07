@@ -1073,7 +1073,10 @@ fn handler_run_check(args: &Value) -> Value {
             }
         }
     };
-    let changed_files: Vec<String> = vec![];
+    let changed_files: Vec<String> = args.get("changed_files")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
     let check_result = run_full_check(&before, &after, &changed_files, path);
     // Advance baseline so next check diffs against this snapshot
     save_baseline(&root, &after);

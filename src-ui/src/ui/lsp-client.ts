@@ -19,6 +19,37 @@ let hoverProviders: IDisposable[] = [];
 let definitionProviders: IDisposable[] = [];
 let referenceProviders: IDisposable[] = [];
 
+// ── Diagnostics cache — populated by LSP push, queried by agent state hooks ──
+
+export interface LspDiagnostic {
+  severity: 'error' | 'warning' | 'info' | 'hint';
+  message: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  source?: string;
+  code?: string | number;
+}
+
+const diagnosticsCache = new Map<string, LspDiagnostic[]>();
+
+/** Get cached LSP diagnostics for a file (URI or file path). */
+export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
+  // Try exact match first, then normalize
+  if (diagnosticsCache.has(fileUriOrPath)) {
+    return diagnosticsCache.get(fileUriOrPath)!;
+  }
+  const normalized = fileUriOrPath.replace(/\\/g, '/');
+  for (const [key, val] of diagnosticsCache) {
+    const keyNorm = key.replace(/\\/g, '/');
+    if (keyNorm === normalized || keyNorm.endsWith('/' + normalized.split('/').pop()!)) {
+      return val;
+    }
+  }
+  return [];
+}
+
 // ── LSP → Monaco CompletionItemKind mapping ──
 // LSP enum values differ from Monaco/VS Code numbering.
 const LSP_TO_MONACO_KIND: Record<number, number> = {
@@ -344,6 +375,18 @@ export function listenForDiagnostics(
       endLineNumber: (d.range.end.line || 0) + 1,
       endColumn: (d.range.end.character || 0) + 1,
     }));
+
+    // Populate diagnostics cache for agent state hooks (fire-and-forget)
+    diagnosticsCache.set(params.uri, params.diagnostics.map((d: any) => ({
+      severity: (d.severity === 1 ? 'error' : d.severity === 2 ? 'warning' : d.severity === 3 ? 'info' : 'hint') as LspDiagnostic['severity'],
+      message: d.message,
+      startLine: d.range.start.line || 0,
+      startColumn: d.range.start.character || 0,
+      endLine: d.range.end.line || 0,
+      endColumn: d.range.end.character || 0,
+      source: d.source,
+      code: d.code,
+    })));
 
     const uri = monaco.Uri.parse(params.uri);
     const model = monaco.editor.getModel(uri);

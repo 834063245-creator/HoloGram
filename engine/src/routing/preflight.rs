@@ -15,6 +15,11 @@ pub fn baseline_path(project_root: &Path) -> PathBuf {
     project_root.join(".hologram").join("baseline.json")
 }
 
+/// Path to the violation-id snapshot — IDs from the last non-quiet check.
+fn baseline_violations_path(project_root: &Path) -> PathBuf {
+    project_root.join(".hologram").join("baseline_violations.json")
+}
+
 pub fn load_baseline(project_root: &Path) -> Graph {
     let path = baseline_path(project_root);
     if path.exists() {
@@ -25,6 +30,33 @@ pub fn load_baseline(project_root: &Path) -> Graph {
     } else {
         Graph::default()
     }
+}
+
+fn load_previous_violation_ids(project_root: &Path) -> Vec<String> {
+    let path = baseline_violations_path(project_root);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
+fn save_violation_ids(project_root: &Path, ids: &[String]) {
+    let dir = project_root.join(".hologram");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string_pretty(ids) {
+        let _ = std::fs::write(baseline_violations_path(project_root), json);
+    }
+}
+
+/// Extract violation IDs from a slice of violation Value objects.
+fn extract_violation_ids(violations: &[Value]) -> Vec<String> {
+    violations.iter()
+        .filter_map(|v| v["signal"]["violation_id"].as_str().map(String::from))
+        .collect()
 }
 
 pub fn save_baseline(project_root: &Path, graph: &Graph) {
@@ -53,6 +85,9 @@ pub fn check_timeline_props(result: &Value) -> Value {
         "new_thread_conflicts": result["new_thread_conflicts"],
         "api_signature_changes": result["api_signature_changes"],
         "violation_count": result["violation_count"],
+        "new_violations": result["new_violations"],
+        "resolved_violations": result["resolved_violations"],
+        "persistent_violations": result["persistent_violations"],
     })
 }
 
@@ -77,6 +112,9 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
         "cycles_detected": 0u32,
         "signals_count": 0u32,
         "violation_count": 0u32,
+        "new_violations": 0u32,
+        "resolved_violations": 0u32,
+        "persistent_violations": 0u32,
         "quiet": !baseline_seed,
         "baseline_seed": baseline_seed,
     })
@@ -150,6 +188,18 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let constraint_result = check_constraints(&signals, &config);
     let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();
     let summary = generate_summary(changed_files, &violations, l4_count, cycle_count);
+
+    // ── Violation diff: compare current IDs with previous check snapshot ──
+    let current_ids: Vec<String> = extract_violation_ids(&violations);
+    let previous_ids: HashSet<String> = load_previous_violation_ids(&PathBuf::from(_project_root))
+        .into_iter().collect();
+    let current_set: HashSet<String> = current_ids.iter().cloned().collect();
+    let new_count      = current_set.difference(&previous_ids).count() as u32;
+    let resolved_count = previous_ids.difference(&current_set).count() as u32;
+    let persistent_count = current_set.intersection(&previous_ids).count() as u32;
+    // Save current IDs so the next check can compute a diff against this run.
+    let project_path = PathBuf::from(_project_root);
+    save_violation_ids(&project_path, &current_ids);
 
     // ── blast_radius: BFS from all nodes whose file is in changed_files ──
     let blast_radius = if changed_files.is_empty() {
@@ -251,6 +301,9 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         "cycles_detected": cycle_count as u32,
         "signals_count": signals.len() as u32,
         "violation_count": violations.len() as u32,
+        "new_violations": new_count,
+        "resolved_violations": resolved_count,
+        "persistent_violations": persistent_count,
     })
 }
 

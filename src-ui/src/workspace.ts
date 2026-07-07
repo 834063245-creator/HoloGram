@@ -23,7 +23,8 @@ import { MemoryManager, createMemoryTools } from './agent/memory';
 import { memoryBundleHealth, memoryBundleRecall, memoryBundleAnalyze, memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
-import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot } from './agent/hooks';
+import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePostEditHook, createStatePreflightHook } from './agent/hooks';
+import { refreshGitStatus, buildTurnStartBlock } from './agent/state-inject';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import type { Tool } from './agent/tool';
@@ -532,6 +533,14 @@ export class Workspace {
           messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
           'holo', _sid,
         ).catch(() => {});
+        // Refresh state caches for next turn + inject system-reminder
+        (async () => {
+          await refreshGitStatus(this.path);
+          const block = buildTurnStartBlock();
+          if (block && this.agent) {
+            this.agent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`);
+          }
+        })().catch(() => {});
       },
       pricing, temperature, maxSteps, contextWindow,
       maxTokens: active.maxTokens ?? 0,
@@ -555,13 +564,21 @@ export class Workspace {
       const ctx = createGraphContext(fileIndex, fanIn, fanOut);
       const hooks = new HookRegistry();
       hooks.register(createGraphContextHook(ctx));
+      // State hooks: LSP diagnostics + git blame on read, check feedback on write
+      hooks.register(createStateReadHook(this.path));
+      hooks.register(createStatePostEditHook());
       this.agent.setHooks(hooks);
 
       // Preflight: warn before edit_file / write_file
       const preflightHooks = new PreflightHookRegistry();
       preflightHooks.register(createGraphPreflightHook(ctx));
+      // State preflight: diagnostics before editing a file
+      preflightHooks.register(createStatePreflightHook());
       this.agent.setPreflightHooks(preflightHooks);
     }
+
+    // Cold-start: prime state caches (git status, etc.)
+    refreshGitStatus(this.path).catch(() => {});
 
     this.onStatusChange?.('[Agent] ✅ 已就绪');
     chatPanel.setAgent(this.agent);
@@ -649,9 +666,12 @@ export class Workspace {
         if (hookCtx) {
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));
+          hooks.register(createStateReadHook(ws.path));
+          hooks.register(createStatePostEditHook());
           newAgent.setHooks(hooks);
           const preflightHooks = new PreflightHookRegistry();
           preflightHooks.register(createGraphPreflightHook(hookCtx));
+          preflightHooks.register(createStatePreflightHook());
           newAgent.setPreflightHooks(preflightHooks);
         }
         // Sub-agent tool — same as _setupAgentInner
@@ -680,7 +700,7 @@ export class Workspace {
     this.checkRunning = true;
     this.checkPending = false;
     try {
-      const json = await invoke<string>('hologram_call', { tool: 'validate_project', args: { path: this.path } });
+      const json = await invoke<string>('hologram_run_check', { path: this.path });
       try {
         const result: CheckResult = JSON.parse(json);
         checkPanel.update(result);
