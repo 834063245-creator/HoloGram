@@ -354,7 +354,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               // so the agent knows the command ran — just can't parse the outcome
               const label = cmd.split(' ').slice(0, 2).join(' ');
               const tail = result.slice(-200).replace(/\n/g, ' ');
-              cacheBuildResult({ command: label, outcome: 'pass', summary: `完成 (输出未解析)` });
+              cacheBuildResult({ command: label, outcome: 'pass', summary: `完成 (输出未解析)`, ts: Date.now() });
               snippet = `⚠️ 完成，但无法解析输出格式。尾部: ${tail}`;
             }
           }
@@ -493,14 +493,15 @@ export function createStatePreflightHook(): PreflightHook {
 // ── Build/test output parser ──
 
 /** Parse stdout/stderr from a build or test command into a structured result. */
-function parseBuildOutput(cmd: string, output: string): { command: string; outcome: 'pass' | 'fail'; summary: string } | null {
+function parseBuildOutput(cmd: string, output: string): { command: string; outcome: 'pass' | 'fail'; summary: string; ts: number } | null {
   const label = cmd.split(' ').slice(0, 2).join(' '); // "cargo build", "npm test"
+  const ts = Date.now();
 
   // Cargo build
   if (/cargo\s+build/.test(cmd)) {
     const errors = (output.match(/^error(\[|:)/gm) || []).length;
-    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors` };
-    if (/Finished\s+dev/.test(output) || /Finished\s+release/.test(output)) return { command: label, outcome: 'pass', summary: '编译通过' };
+    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors`, ts };
+    if (/Finished\s+dev/.test(output) || /Finished\s+release/.test(output)) return { command: label, outcome: 'pass', summary: '编译通过', ts };
     return null;
   }
 
@@ -509,39 +510,39 @@ function parseBuildOutput(cmd: string, output: string): { command: string; outco
     const failures = output.match(/failures:/);
     if (failures) {
       const m = output.match(/(\d+)\s+failed/);
-      return { command: label, outcome: 'fail', summary: m ? `${m[1]} failed` : '有失败' };
+      return { command: label, outcome: 'fail', summary: m ? `${m[1]} failed` : '有失败', ts };
     }
     const m = output.match(/test result: ok(?:\.\s+(\d+)\s+passed)?/);
-    if (m) return { command: label, outcome: 'pass', summary: m[1] ? `${m[1]} passed` : '全部通过' };
+    if (m) return { command: label, outcome: 'pass', summary: m[1] ? `${m[1]} passed` : '全部通过', ts };
     return null;
   }
 
   // npm test / jest
   if (/npm\s+(test|run\s+test)|jest|npx\s+jest/.test(cmd)) {
     const failures = output.match(/(\d+)\s+failing/);
-    if (failures) return { command: label, outcome: 'fail', summary: `${failures[1]} failing` };
+    if (failures) return { command: label, outcome: 'fail', summary: `${failures[1]} failing`, ts };
     const m = output.match(/Tests:\s+(\d+)\s+passed/);
-    if (m) return { command: label, outcome: 'pass', summary: `${m[1]} passed` };
+    if (m) return { command: label, outcome: 'pass', summary: `${m[1]} passed`, ts };
     return null;
   }
 
   // pytest
   if (/pytest|python\s+-m\s+pytest/.test(cmd)) {
     const failed = output.match(/(\d+)\s+failed/);
-    if (failed && parseInt(failed[1]) > 0) return { command: label, outcome: 'fail', summary: `${failed[1]} failed` };
+    if (failed && parseInt(failed[1]) > 0) return { command: label, outcome: 'fail', summary: `${failed[1]} failed`, ts };
     const passed = output.match(/(\d+)\s+passed/);
-    if (passed) return { command: label, outcome: 'pass', summary: `${passed[1]} passed` };
+    if (passed) return { command: label, outcome: 'pass', summary: `${passed[1]} passed`, ts };
     return null;
   }
 
   // Generic build (make, cmake, npm install, pip, yarn)
   if (/make|cmake|npm\s+install|pip\s+install|npx|yarn/.test(cmd)) {
     const errors = (output.match(/^error(\[|:)/gm) || []).length + (output.match(/\bERROR\b/g) || []).length;
-    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors` };
+    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors`, ts };
     const warnings = (output.match(/\bwarning\b/gi) || []).length;
-    if (/^(npm |yarn )/.test(cmd) && output.includes('added')) return { command: label, outcome: 'pass', summary: '安装完成' };
-    if (warnings > 0) return { command: label, outcome: 'pass', summary: `完成 (${warnings} warnings)` };
-    return { command: label, outcome: 'pass', summary: '完成' };
+    if (/^(npm |yarn )/.test(cmd) && output.includes('added')) return { command: label, outcome: 'pass', summary: '安装完成', ts };
+    if (warnings > 0) return { command: label, outcome: 'pass', summary: `完成 (${warnings} warnings)`, ts };
+    return { command: label, outcome: 'pass', summary: '完成', ts };
   }
 
   return null;
