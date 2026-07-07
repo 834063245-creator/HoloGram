@@ -231,6 +231,6 @@ mod tests {
         assert_eq!(e1.len(), 0);
         let (n2, e2, _) = adapter.analyze("bad.py", "this is not valid python @@@");
         assert!(n2.len() >= 1);
-        assert!(e2.len() >= 0);
+        let _ = e2; // edges may be empty on parse failure
     }
 }
