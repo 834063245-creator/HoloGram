@@ -1123,7 +1123,7 @@ export function createSubAgentTool(
   return {
     name: () => 'agent_spawn',
     description: () =>
-      'Spawn a sub-agent with full tool access to handle a focused task. When subagent_type is omitted (default), the sub-agent FORKS: it inherits your full conversation context and operates with the fork directive. Use this for parallel/delegated work that needs context of what you\'re doing. Set subagent_type to "fresh" for a clean-slate agent that only sees its task prompt.',
+      'Spawn a sub-agent with full tool access to handle a focused task. Omit subagent_type to fork (inherit parent context — DEFAULT, recommended). Set subagent_type to "fresh" for a clean-slate agent with no parent context. ⚠️ RULES: (1) You MUST verify your work — run cargo check / cargo test / npm run build before stopping. Do not pause or stop on first failure; fix → compile → repeat until zero errors. (2) Every edit_file call must be followed by verification.',
     parameters: () => ({
       type: 'object',
       properties: {
@@ -1137,7 +1137,7 @@ export function createSubAgentTool(
         },
         subagent_type: {
           type: 'string',
-          description: 'Omit to fork (inherit full context — default). Set to "fresh" for a clean-slate sub-agent with no parent context.',
+          description: 'Omit to fork (inherit full context — DEFAULT). Set to "fresh" for a clean-slate sub-agent with no parent context.',
         },
       },
       required: ['description', 'prompt'],
