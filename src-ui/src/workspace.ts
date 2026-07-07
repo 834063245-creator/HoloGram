@@ -396,6 +396,12 @@ export class Workspace {
           memoryBundleAnalyze(projectName, 'holo', ''),
         ]);
         const parts: string[] = [];
+        // Observable: log recall hit count
+        const factCount = recallResult?.facts?.length || 0;
+        const hasText = recallResult?.facts_text?.trim();
+        if (factCount > 0 || hasText) {
+          this.onStatusChange?.(`[记忆场] 召回 ${factCount} 条${hasText ? ' (含全文)' : ''}`);
+        }
         if (recallResult?.facts_text?.trim()) {
           parts.push(`### 语义记忆\n${recallResult.facts_text}`);
         }
@@ -408,9 +414,16 @@ export class Workspace {
         memoryBundleSection = parts.join('\n');
         if (memoryBundleSection) {
           this.onStatusChange?.(`[记忆场] 已连接`);
+        } else {
+          this.onStatusChange?.(`[记忆场] 在线但无数据 — AuraSDK 可能冷启动`);
         }
+      } else {
+        this.onStatusChange?.(`[记忆场] ❌ 健康检查失败`);
       }
-    } catch (e) { console.warn('[setupAgent] memory bundle unavailable:', e); }
+    } catch (e) {
+      console.warn('[setupAgent] memory bundle unavailable:', e);
+      this.onStatusChange?.(`[记忆场] ❌ 异常: ${String(e).slice(0, 40)}`);
+    }
     // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条
     if (memorySection.trim()) {
       const memLines = memorySection.split('\n').filter(l => l.startsWith('- ')).length;
