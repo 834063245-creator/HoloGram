@@ -402,6 +402,88 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// State hooks — inject self-maintaining project facts into tool results.
+// Data sources: LSP diagnostics, Git status/blame, Check/briefing.
+// ═══════════════════════════════════════════════════════════════
+
+import {
+  buildPreReadBlock,
+  formatDiagnostics,
+  formatPostEdit,
+  refreshGitBlame,
+  refreshGitStatus,
+} from './state-inject';
+
+const MAX_STATE_BYTES = 600;
+
+/** Pre-read hook — injects diagnostics + blame when agent reads a file. */
+export function createStateReadHook(projectPath: string): Hook {
+  return {
+    name: 'state-read',
+    shouldEnrich(toolName) {
+      return toolName === 'read_file_content';
+    },
+    async enrich(_toolName, args, result) {
+      const filePath = (args.file_path as string) || '';
+      if (!filePath) return result;
+
+      // Fire-and-forget: refresh blame for next time
+      refreshGitBlame(projectPath, filePath).catch(() => {});
+
+      const block = buildPreReadBlock(filePath);
+      if (!block) return result;
+
+      const full = `📋 [状态] ${block}\n${'─'.repeat(40)}\n\n`;
+      if (result.length + full.length <= MAX_RESULT_BYTES) {
+        return full + result;
+      }
+      return result;
+    },
+  };
+}
+
+/** Post-edit hook — acknowledges check scheduling after agent writes files. */
+export function createStatePostEditHook(): Hook {
+  return {
+    name: 'state-postedit',
+    shouldEnrich(toolName) {
+      return ['write_file_content', 'edit_file', 'delete_file_or_dir', 'rename_file_or_dir', 'move_file'].includes(toolName);
+    },
+    async enrich(toolName, args, result) {
+      const files: string[] = [];
+      const fp = args.file_path as string;
+      if (fp) files.push(fp);
+      const src = args.source as string;
+      if (src) files.push(src);
+      const dst = args.destination as string;
+      if (dst) files.push(dst);
+      // dedupe
+      const unique = [...new Set(files)];
+
+      const msg = formatPostEdit(unique);
+      if (!msg) return result;
+
+      return result + `\n\n📋 ${msg}`;
+    },
+  };
+}
+
+/** Preflight hook — adds diagnostics context before editing a file. */
+export function createStatePreflightHook(): PreflightHook {
+  return {
+    name: 'state-preflight',
+    shouldCheck(toolName) {
+      return ['edit_file', 'write_file_content'].includes(toolName);
+    },
+    check(_toolName, args) {
+      const filePath = (args.file_path as string) || '';
+      if (!filePath) return null;
+      return formatDiagnostics(filePath);
+    },
+  };
+}
+
 // ── Helpers ──
 
 function extractFilesFromSearchResult(result: string): string[] {

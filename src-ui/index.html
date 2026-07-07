@@ -2941,6 +2941,31 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
+    /* ── Diff row ── */
+    .check-diff-row {
+      display: flex; gap: 8px; padding: 6px 16px; flex-shrink: 0;
+      border-bottom: 1px solid rgba(40, 60, 100, 0.12);
+    }
+    .check-diff-badge {
+      font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
+      padding: 2px 8px; border-radius: 3px; font-weight: 600;
+    }
+    .check-diff-new {
+      background: rgba(255, 120, 80, 0.12);
+      color: rgba(255, 140, 100, 0.85);
+      border: 1px solid rgba(255, 120, 80, 0.25);
+    }
+    .check-diff-resolved {
+      background: rgba(80, 210, 140, 0.1);
+      color: rgba(100, 220, 155, 0.85);
+      border: 1px solid rgba(80, 210, 140, 0.2);
+    }
+    .check-diff-persistent {
+      background: rgba(145, 180, 225, 0.08);
+      color: rgba(160, 195, 235, 0.7);
+      border: 1px solid rgba(145, 180, 225, 0.18);
+    }
+
     /* ── Collapsible sections ── */
     .check-fold-section {
       border-bottom: 1px solid rgba(40, 60, 100, 0.1);

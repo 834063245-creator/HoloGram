@@ -8,6 +8,7 @@
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
+import { cacheCheckResult } from '../agent/state-inject';
 
 interface Violation {
   signal?: {
@@ -19,6 +20,7 @@ interface Violation {
     graph_node_ids?: string[];
     old_value?: string;
     new_value?: string;
+    violation_id?: string;
   };
   message?: string;
   level?: number;
@@ -40,6 +42,10 @@ export interface CheckResult {
   new_cycles: number;
   new_thread_conflicts: number;
   api_signature_changes: number;
+  /** Diff since last check — computed engine-side from stable violation IDs */
+  new_violations?: number;
+  resolved_violations?: number;
+  persistent_violations?: number;
 }
 
 const PANEL_ID = 'check-panel';
@@ -64,6 +70,15 @@ export class CheckPanel {
     this.viewingHistory = false;
     this.historyTimestamp = '';
     this.renderResult(result);
+
+    // Feed check result to state injection cache so the agent sees it
+    cacheCheckResult({
+      passed: result.passed,
+      violationCount: (result.l5_violations?.length || 0) + (result.l4_violations?.length || 0) + (result.l3_violations?.length || 0) + (result.l2_violations?.length || 0),
+      newCount: result.new_violations || 0,
+      resolvedCount: result.resolved_violations || 0,
+      persistentCount: result.persistent_violations || 0,
+    });
 
     // Auto-open on failure
     if (!result.passed && !this.openState) {
@@ -237,6 +252,24 @@ export class CheckPanel {
     parts.push(fmtTime(r.timestamp));
     summary.textContent = parts.join(' · ');
     this.content.appendChild(summary);
+
+    // ── Diff row (violation deltas since last check) ──
+    const nv = r.new_violations ?? 0;
+    const rv = r.resolved_violations ?? 0;
+    const pv = r.persistent_violations ?? 0;
+    if (nv > 0 || rv > 0 || pv > 0) {
+      const diffRow = ce('div', 'check-diff-row');
+      const badges: Array<{ text: string; cls: string }> = [];
+      if (nv  > 0) badges.push({ text: `+${nv} 新增`, cls: 'check-diff-new' });
+      if (rv  > 0) badges.push({ text: `-${rv} 已解决`, cls: 'check-diff-resolved' });
+      if (pv  > 0) badges.push({ text: `↻ ${pv} 持续`, cls: 'check-diff-persistent' });
+      for (const b of badges) {
+        const span = ce('span', `check-diff-badge ${b.cls}`);
+        span.textContent = b.text;
+        diffRow.appendChild(span);
+      }
+      this.content.appendChild(diffRow);
+    }
 
     // ── Collapsible sections ──
 

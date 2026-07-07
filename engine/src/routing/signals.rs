@@ -10,6 +10,14 @@ fn count_l4_edges(graph: &Graph) -> usize {
     graph.edges.values().filter(|e| e.coupling_depth >= 4).count()
 }
 
+/// Stable violation identity — deterministic, readable, survives across check runs.
+/// Format: `L{level}_{category}_{discriminator}` with path separators normalised.
+fn vid(level: u32, category: &str, discriminator: &str) -> String {
+    format!("L{}_{}_{}", level, category, discriminator)
+        .replace(['/', '\\'], "_")
+        .replace(' ', "_")
+}
+
 /// Aggregated dataflow signal counts from `query_dataflow_files`.
 pub struct DataflowSignalCounts {
     pub l3_shared_vars: usize,
@@ -41,13 +49,13 @@ impl SignalGenerator {
         // L5 — irreversible (only when user actually changed these files)
         for f in changed_files {
             if self.matcher.is_migration_file(f) {
-                signals.push(json!({"signal":{"description":"Migration file changed — may irreversibly alter data schema. Requires manual review.","file_path":f,"line":0,"level":5,"affected_nodes":[]},"level":5}));
+                signals.push(json!({"signal":{"description":"Migration file changed — may irreversibly alter data schema. Requires manual review.","file_path":f,"line":0,"level":5,"affected_nodes":[],"violation_id":vid(5,"migration",f)},"level":5}));
             }
             if self.matcher.is_serialization_file(f) {
-                signals.push(json!({"signal":{"description":"Serialization format changed — may break data interchange.","file_path":f,"line":0,"level":5,"affected_nodes":[]},"level":5}));
+                signals.push(json!({"signal":{"description":"Serialization format changed — may break data interchange.","file_path":f,"line":0,"level":5,"affected_nodes":[],"violation_id":vid(5,"serialization",f)},"level":5}));
             }
             if self.matcher.is_config_file(f) {
-                signals.push(json!({"signal":{"description":"Configuration file changed — may alter runtime behavior globally.","file_path":f,"line":0,"level":5,"affected_nodes":[]},"level":5}));
+                signals.push(json!({"signal":{"description":"Configuration file changed — may alter runtime behavior globally.","file_path":f,"line":0,"level":5,"affected_nodes":[],"violation_id":vid(5,"config",f)},"level":5}));
             }
         }
 
@@ -55,17 +63,17 @@ impl SignalGenerator {
         if let Some(df) = df_counts {
             let df_l4 = df.l4_triggers + df.l4_awaits + df.l4_sequences;
             if df_l4 > 0 {
-                signals.push(json!({"signal":{"description":format!("{} temporal edge(s) detected by dataflow engine (triggers={}, awaits={}, sequences={}).", df_l4, df.l4_triggers, df.l4_awaits, df.l4_sequences),"file_path":"","line":0,"level":4,"affected_nodes":[]},"level":4}));
+                signals.push(json!({"signal":{"description":format!("{} temporal edge(s) detected by dataflow engine (triggers={}, awaits={}, sequences={}).", df_l4, df.l4_triggers, df.l4_awaits, df.l4_sequences),"file_path":"","line":0,"level":4,"affected_nodes":[],"violation_id":vid(4,"coupling","dataflow")},"level":4}));
             }
         } else if l4_after > l4_before {
             let delta = l4_after - l4_before;
-            signals.push(json!({"signal":{"description":format!("{} new L4 deep coupling edge(s) since last check.", delta),"file_path":"","line":0,"level":4,"affected_nodes":[]},"level":4}));
+            signals.push(json!({"signal":{"description":format!("{} new L4 deep coupling edge(s) since last check.", delta),"file_path":"","line":0,"level":4,"affected_nodes":[],"violation_id":vid(4,"coupling","graph")},"level":4}));
         }
 
         // L3 — shared data (from dataflow engine if available, else graph edges)
         if let Some(df) = df_counts {
             if df.l3_shared_vars > 0 {
-                signals.push(json!({"signal":{"description":format!("{} shared variable(s) detected across function boundaries ({} reads, {} writes).", df.l3_shared_vars, df.l3_reads, df.l3_writes),"file_path":"","line":0,"level":3,"affected_nodes":[]},"level":3}));
+                signals.push(json!({"signal":{"description":format!("{} shared variable(s) detected across function boundaries ({} reads, {} writes).", df.l3_shared_vars, df.l3_reads, df.l3_writes),"file_path":"","line":0,"level":3,"affected_nodes":[],"violation_id":vid(3,"shared_vars","dataflow")},"level":3}));
             }
         } else {
             for edge in after.edges.values() {
@@ -82,7 +90,8 @@ impl SignalGenerator {
                             || f_norm.ends_with(&format!("/{}", loc_norm.rsplit('/').next().unwrap_or(&loc_norm)))
                     });
                     if is_affected {
-                        signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+                        let disc = format!("{}->{}", edge.source, edge.target);
+                        signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()],"violation_id":vid(3,"shared_data",&disc)},"level":3}));
                     }
                 }
             }
@@ -91,7 +100,7 @@ impl SignalGenerator {
         // L2 — new cycles since last baseline
         if cycle_count_after > cycles_before {
             let delta = cycle_count_after - cycles_before;
-            signals.push(json!({"signal":{"description":format!("{} new circular dependency cycle(s) since last check.", delta),"file_path":"","line":0,"level":2,"affected_nodes":[]},"level":2}));
+            signals.push(json!({"signal":{"description":format!("{} new circular dependency cycle(s) since last check.", delta),"file_path":"","line":0,"level":2,"affected_nodes":[],"violation_id":vid(2,"cycles","delta")},"level":2}));
         }
 
         // L1 — documentation/test only (skip for v1)

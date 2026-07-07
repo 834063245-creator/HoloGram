@@ -26,7 +26,21 @@ use engine::tools::ToolRegistry;
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-pub(crate) fn hologram_call(tool: String, args: serde_json::Value) -> Result<String, String> {
+pub(crate) fn hologram_call(tool: String, mut args: serde_json::Value, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+    // Inject changed_files for validate_project so the engine sees real diffs.
+    if tool == "validate_project" {
+        let changed_files: Vec<String> = state.lock().unwrap().as_ref()
+            .and_then(|h| {
+                let mut files = h.changed_files.lock().ok()?;
+                let snapshot = files.clone();
+                files.clear();
+                Some(snapshot)
+            })
+            .unwrap_or_default();
+        if let serde_json::Value::Object(ref mut map) = args {
+            map.insert("changed_files".to_string(), serde_json::json!(changed_files));
+        }
+    }
     Ok(ToolRegistry::dispatch(&tool, &args).to_string())
 }
 
