@@ -32,6 +32,7 @@ use crate::adapter::ts_lsp::run_ts_lsp;
 use crate::adapter::type_registry::TypeRegistry;
 use crate::analysis::coupling::compute_coupling;
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
+use crate::analysis::di_reflection::detect_di_reflection;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
 use crate::graph::resolver::CrossFileResolver;
@@ -546,6 +547,22 @@ impl Engine {
             name: "Dynamic Dispatch".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", syn_edges),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 5.5. DI / Reflection detection
+        set_progress("DI/反射检测", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let di_edges = detect_di_reflection(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        info!(count = di_edges, "[engine] DI/reflection edges synthesized");
+        eprintln!("[engine] stage: di-reflection done in {:.1}s ({} edges)",
+            stage_start.elapsed().as_secs_f64(), di_edges);
+        stage_timings.push(StageTiming {
+            name: "DI / Reflection".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges", di_edges),
         });
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());

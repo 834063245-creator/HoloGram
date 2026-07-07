@@ -442,7 +442,7 @@ Agent 没有全局依赖图，只能像人一样一层层读源码推依赖链�
 |------|------|------|
 | **字符串路由** | Express `app.get('/foo')`、Django `path('foo/')` 等路由字符串 → handler 的映射 | ⚠️ 8 种框架已覆盖（Django/Express/FastAPI/Flask/Rails/Spring/Gin/NestJS），其余待补充 |
 | **动态 import / require** | `import(variable)`、`require(expr)` → 无法静态解析 | ⚠️ 规划中 |
-| **反射 / 依赖注入** | Python `getattr()`、Spring `@Autowired`、TS 装饰器注入 → 目标符号在编译期不可知 | ⚠️ 规划中 |
+| **反射 / 依赖注入** | Python `getattr()`、Spring `@Autowired`、TS 装饰器注入 → 字符串属性名已解析，变量属性名已标记 | ✅ Phase 1 完成 — `di_reflection.rs`（Python/Java/TS） |
 | **跨语言调用边** | TS 通过 HTTP/子进程/FFI 调用 Python → 需要知道运行时桥接方式 | ⚠️ 规划中：FFI/子进程检测层 |
 | **`eval` / 动态代码生成** | 任何语言在运行时拼接并执行代码 → 静态分析永远不可达 | ❌ 超出静态分析能力范围 |
 
