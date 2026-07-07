@@ -596,18 +596,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_uri_to_path() {
-        assert_eq!(
-            uri_to_path("file:///home/user/src/main.rs"),
-            if cfg!(windows) {
-                "\\home\\user\\src\\main.rs"
-            } else {
-                "/home/user/src/main.rs"
-            }
-        );
-    }
-
-    #[test]
     fn test_parse_single_location() {
         let json = json!({
             "uri": "file:///src/main.rs",

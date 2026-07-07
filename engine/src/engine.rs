@@ -2148,6 +2148,34 @@ def order_view():
         assert_eq!(nc2, nc, "node count after save must match");
     }
 
+    /// Verify that all 4 blind-spot synthesis stages produce marker nodes
+    /// when run against a multi-language fixture with reflection/eval/cross-lang patterns.
+    #[test]
+    fn test_blindspot_synthesis_pipeline() {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/pipeline_test");
+        let mut engine = Engine::new();
+        engine.init(&fixture).unwrap();
+        let result = engine.analyze(&fixture).expect("pipeline test failed");
+        let mut has_di = false; let mut has_dyn = false;
+        let mut has_eval = false; let mut has_xlang = false;
+        for t in &result.stage_timings {
+            if t.name == "DI / Reflection" && t.detail.contains("edges") { has_di = true; }
+            if t.name == "Dynamic Import" && t.detail.contains("markers") { has_dyn = true; }
+            if t.name == "Eval Detection" && t.detail.contains("markers") { has_eval = true; }
+            if t.name == "Cross-Lang" && t.detail.contains("markers") { has_xlang = true; }
+        }
+        assert!(has_di && has_dyn && has_eval && has_xlang,
+            "all 4 synthesis stages must be present: DI={has_di} Dyn={has_dyn} Eval={has_eval} XLang={has_xlang}");
+        let names: Vec<String> = engine.read(|idx| {
+            idx.nodes_iter().map(|n| n.name.clone()).collect()
+        }).unwrap();
+        assert!(names.iter().any(|n| n.starts_with("<reflection:")), "DI marker missing");
+        assert!(names.iter().any(|n| n.contains("dynamic-import")), "dyn-import marker missing");
+        assert!(names.iter().any(|n| n.starts_with("<eval")), "eval marker missing");
+        assert!(names.iter().any(|n| n.starts_with("<cross-lang:")), "cross-lang marker missing");
+    }
+
     // ── Cancel token tests ──────────────────────────────────────────────
 
     /// Cancel flag set mid-pipeline → analysis aborts with cancel error.
