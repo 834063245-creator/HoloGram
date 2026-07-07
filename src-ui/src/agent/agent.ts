@@ -1144,7 +1144,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       this.prov,
       subTools,
       subSystem,
-      { maxSteps: mode === 'fork' ? 12 : 8, temperature: 0.3 },
+      { maxSteps: 100, temperature: 0.3 },
       (ev) => {
         if (ev.kind === EventKind.Text && ev.text && onProgress) {
           onProgress(ev.text);
