@@ -441,7 +441,7 @@ function init() {
         let added = synthesize_js_fallback(&mut g, "api.js", source);
         // .then() with arrow function — at minimum should not crash
         // (arrow_function detection may need fine-tuning per tree-sitter version)
-        assert!(added >= 0);
+        let _ = added;
     }
 
     #[test]
