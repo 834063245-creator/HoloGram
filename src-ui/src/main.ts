@@ -86,6 +86,50 @@ function layoutViaWorker(
 const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
 const statusText = document.getElementById('status-text')!;
+
+// ── Status log (ring buffer + expandable panel) ──
+const STATUS_LOG_MAX = 15;
+const statusLog: string[] = [];
+
+function pushStatus(msg: string): void {
+  statusLog.push(msg);
+  if (statusLog.length > STATUS_LOG_MAX) statusLog.shift();
+  statusText.textContent = msg;
+  updateStatusBadge();
+}
+
+function updateStatusBadge(): void {
+  let badge = document.getElementById('status-log-badge') as HTMLElement | null;
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.id = 'status-log-badge';
+    badge.style.cssText = 'margin-left:6px;cursor:pointer;font-size:10px;padding:0 4px;border-radius:3px;background:#333;color:#888';
+    badge.textContent = String(statusLog.length);
+    badge.onclick = toggleStatusLog;
+    statusText.parentElement?.insertBefore(badge, statusText.nextSibling);
+  }
+  badge.textContent = String(statusLog.length);
+}
+
+function toggleStatusLog(): void {
+  let panel = document.getElementById('status-log-panel');
+  if (panel) { panel.remove(); return; }
+
+  panel = document.createElement('div');
+  panel.id = 'status-log-panel';
+  panel.style.cssText = 'position:fixed;bottom:28px;right:8px;width:420px;max-height:300px;overflow-y:auto;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.5)';
+  panel.innerHTML = statusLog.map((m, i) =>
+    `<div style="padding:2px 0;border-bottom:1px solid #222;color:${i === statusLog.length - 1 ? '#ccc' : '#666'}">${escapeHtml(m)}</div>`
+  ).join('');
+  panel.onclick = (e) => e.stopPropagation();
+  document.body.appendChild(panel);
+  // Click outside to dismiss
+  setTimeout(() => document.addEventListener('click', () => { panel?.remove(); document.removeEventListener('click', arguments.callee as any); }), 0);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 const tbPath = document.getElementById('tb-path')!;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
 const btnReanalyze = document.getElementById('btn-reanalyze') as HTMLButtonElement;
@@ -160,7 +204,7 @@ async function switchWorkspace(
 
     // Create new — pass callbacks immediately so progress events during
     // Workspace.open (analyze + render) push visible status updates.
-    const onStatusChange = (msg: string) => { statusText.textContent = msg; };
+    const onStatusChange = (msg: string) => { pushStatus(msg); };
     const onLoadingChange = (loading: boolean) => { setLoading(loading, loading ? folder : undefined); };
     let ws: Workspace;
     try {
@@ -202,7 +246,7 @@ async function switchWorkspace(
 function setLoading(active: boolean, folder?: string): void {
   btnOpen.disabled = active;
   btnOpen.innerHTML = active ? `${iconSvg('dot')} 分析中...` : `${iconSvg('folder-open')} 打开文件夹`;
-  if (active) statusText.textContent = `正在分析 ${folder || ''}...`;
+  if (active) pushStatus(`正在分析 ${folder || ''}...`);
 }
 
 function resetCheckPanelState(): void {
@@ -259,7 +303,7 @@ async function setupPlaceholderAgent(): Promise<void> {
   // previous project leaking into the placeholder's read_file / list_directory calls.
   await invoke('workspace_activate', { path: '' }).catch(() => {});
   const ws = Workspace.placeholder();
-  ws.onStatusChange = (msg) => { statusText.textContent = msg; };
+  ws.onStatusChange = (msg) => { pushStatus(msg); };
   try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
 }
 
