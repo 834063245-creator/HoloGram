@@ -2224,8 +2224,10 @@ export class ChatPanel {
     this.updateFooter();
   }
 
-  /** Send a hidden instruction to the agent (no user bubble shown). For slash commands. */
-  private sendAgentText(text: string): void {
+  /** Send an instruction to the agent, optionally showing a user bubble.
+   *  @param text The instruction sent to the agent
+   *  @param displayLabel If set, shows this as a user bubble (for slash commands) */
+  private sendAgentText(text: string, displayLabel?: string): void {
     if (!this.agent || this.running) return;
     this.setRunning(true);
 
@@ -2236,6 +2238,10 @@ export class ChatPanel {
     if (hint) hint.remove();
 
     this.addTurnSep();
+    if (displayLabel) {
+      this.turnPairs.push({ userText: displayLabel, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
+      this.appendUserBubble(displayLabel);
+    }
     this.scrollBottom();
 
     this.abortCtrl = new AbortController();
@@ -2276,7 +2282,7 @@ export class ChatPanel {
     if (text === '/memory') {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
-      this.sendAgentText('列出所有已保存的记忆（使用 hologram_memory_list）');
+      this.sendAgentText('列出所有已保存的记忆（使用 hologram_memory_list）', '/memory');
       return;
     }
     if (text.startsWith('/remember ')) {
@@ -2294,6 +2300,7 @@ export class ChatPanel {
       import('../agent/memory.js').then(m => m.authorizeFactSave());
       this.sendAgentText(
         `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
+        `/remember ${fact}`,
       );
       return;
     }
@@ -2310,7 +2317,7 @@ export class ChatPanel {
     if (text === '/compact-stats') {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
-      this.sendAgentText('查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）');
+      this.sendAgentText('查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）', '/compact-stats');
       return;
     }
 
@@ -2319,6 +2326,9 @@ export class ChatPanel {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
       if (!this.agent) return;
+      this.addTurnSep();
+      this.appendUserBubble('/compact');
+      this.scrollBottom();
       this.addNotice('正在压缩上下文…', 'info');
       const ctrl = new AbortController();
       this.agent.compactNow(ctrl.signal).then(() => {
