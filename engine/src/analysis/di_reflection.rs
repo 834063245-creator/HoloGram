@@ -1,20 +1,26 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Dependency Injection & Reflection synthesis — fills graph edges that
-//! static analysis misses due to runtime dispatch patterns.
+//! Runtime-hidden dependency synthesis — fills graph edges that static
+//! analysis misses due to runtime dispatch, dynamic code, and reflection.
 //!
-//! Patterns detected (Phase 1):
-//! - Python: `getattr(obj, 'attr')` / `setattr(obj, 'attr', val)` — string-literal
-//!   attribute access resolved; variable attribute names flagged as unresolvable.
-//! - Java: `@Autowired` / `@Inject` / `@Resource` — field, constructor, and setter
-//!   injection wiring.
-//! - TypeScript: `@Injectable()` / `@Inject()` decorators — NestJS/Angular-style
-//!   constructor and property injection.
+//! ========================================
+//! Blind spots covered (README §已知局限)
+//! ========================================
+//! 1. DI / Reflection (Phase 1):
+//!    - Python: `getattr(obj, 'attr')` / `setattr(obj, 'attr', val)`
+//!    - Java: `@Autowired` / `@Inject` / `@Resource`
+//!    - TypeScript: `@Injectable()` / `@Inject()`
+//! 2. Dynamic import:
+//!    - JS/TS: `import(variable)` / `require(expr)`
+//!    - Python: `__import__(name)` / `importlib.import_module(name)`
+//! 3. Eval / dynamic code (marked as unresolvable):
+//!    - JS/TS: `eval(code)` / `new Function(body)`
+//!    - Python: `eval(code)` / `exec(code)` / `compile(src, ...)`
 //!
-//! These produce synthesized edges (provenance: "di_reflection") with
-//! coupling_depth=3 (L3 — data/IO level hidden coupling). Edge IDs use the
-//! `di_` prefix for tooling to filter/identify reflection edges.
+//! Synthesized edges use coupling_depth=3 (L3 — hidden coupling) or
+//! coupling_depth=4 (L4 — unresolvable). All edge IDs use the `di_`
+//! prefix for tooling to filter/identify reflection edges.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -674,6 +680,393 @@ fn extract_ts_param_type_v2(node: &tree_sitter::Node, source: &str) -> String {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Dynamic import detection — `import(variable)` / `require(expr)`
+// ═══════════════════════════════════════════════════════════════
+
+/// Detect dynamic imports — `import(variable)`, `require(expr)`, `__import__(name)`.
+/// Creates `<dynamic-import>` marker nodes: these warn the Agent that the module
+/// graph is incomplete at this call site.
+pub fn detect_dynamic_imports(
+    graph: &mut Graph,
+    project_root: &Path,
+    parse_cache: &ParseCache,
+    discovered_files: &[std::path::PathBuf],
+) -> usize {
+    let mut added = 0usize;
+
+    let mut files: HashSet<String> = HashSet::new();
+    for p in discovered_files {
+        let s = p.to_string_lossy();
+        let lower = s.to_lowercase();
+        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs") {
+            files.insert(s.replace('\\', "/"));
+        }
+    }
+
+    for file in &files {
+        let lower = file.to_lowercase();
+        let abs_key = if file.contains(':') {
+            file.clone()
+        } else {
+            project_root.join(file).to_string_lossy().replace('\\', "/")
+        };
+
+        let source: String;
+        let source_ref: &str;
+        if let Some((cached_src, _)) = parse_cache.get(&abs_key) {
+            source = cached_src.clone();
+            source_ref = &source;
+        } else {
+            let full_path = project_root.join(file);
+            match std::fs::read_to_string(&full_path) {
+                Ok(s) => { source = s; source_ref = &source; }
+                Err(_) => continue,
+            }
+        }
+
+        if lower.ends_with(".py") {
+            added += detect_python_dynamic_import(graph, file, source_ref);
+        } else {
+            added += detect_js_ts_dynamic_import(graph, file, source_ref);
+        }
+    }
+
+    added
+}
+
+fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+        return 0;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
+                // __import__(name) — built-in dynamic import
+                // importlib.import_module(name) / import_module(name) — stdlib dynamic import
+                let is_dyn_import = func_name == "__import__"
+                    || func_name.ends_with(".import_module")
+                    || func_name == "import_module";
+
+                if is_dyn_import {
+                    let line = node.start_position().row + 1;
+                    let enclosing = find_py_enclosing_func(&node, source, file);
+
+                    // Find the module name argument (first string or variable)
+                    let module_arg = if let Some(args) = node.child_by_field_name("arguments") {
+                        let mut ac = args.walk();
+                        let children: Vec<_> = args.children(&mut ac).collect();
+                        children.iter()
+                            .find(|c| c.kind() == "string" || c.kind() == "identifier")
+                            .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("<unknown>").to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string())
+                    } else { "<unknown>".to_string() };
+
+                    let marker = format!("<dynamic-import:{}>", module_arg.trim_matches(&['\'', '"'][..]));
+                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+
+                    let edge_id = format!("di_dynimp_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                    if graph.get_edge(&edge_id).is_none() {
+                        graph.add_edge(Edge {
+                            id: edge_id, source: src_id, target: tgt_id,
+                            kind: EdgeKind::Calls, coupling_depth: 4,
+                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                        });
+                        added += 1;
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&lang).is_err() { return 0; }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
+
+                // import(variable) — the function node is the "import" keyword
+                let is_dyn_import_keyword = func_text == "import";
+
+                // require(expr) where expr is NOT a string literal
+                let is_dyn_require = func_text == "require"
+                    && !is_first_arg_string_literal(&node, source);
+
+                if is_dyn_import_keyword || is_dyn_require {
+                    let line = node.start_position().row + 1;
+                    let enclosing = find_js_enclosing_func(&node, source, file);
+                    let desc = if is_dyn_import_keyword { "import()" } else { "require()" };
+                    let marker = format!("<dynamic-import:{}>", desc);
+
+                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+
+                    let edge_id = format!("di_dynimp_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                    if graph.get_edge(&edge_id).is_none() {
+                        graph.add_edge(Edge {
+                            id: edge_id, source: src_id, target: tgt_id,
+                            kind: EdgeKind::Calls, coupling_depth: 4,
+                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                        });
+                        added += 1;
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+/// Check if a call_expression's first argument is a string literal.
+fn is_first_arg_string_literal(call: &tree_sitter::Node, _source: &str) -> bool {
+    if let Some(args) = call.child_by_field_name("arguments") {
+        let mut ac = args.walk();
+        for arg in args.children(&mut ac) {
+            let kind = arg.kind();
+            if kind == "(" || kind == ")" || kind == "," { continue; }
+            return kind == "string" || kind == "template_string";
+        }
+    }
+    false
+}
+
+fn find_js_enclosing_func(node: &tree_sitter::Node, source: &str, default_file: &str) -> String {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        match p.kind() {
+            "function_declaration" | "function_expression"
+            | "method_definition" | "arrow_function" => {
+                if let Some(name_node) = p.child_by_field_name("name") {
+                    return name_node.utf8_text(source.as_bytes()).unwrap_or(default_file).to_string();
+                }
+                let line = p.start_position().row + 1;
+                return format!("<fn@{}:{}>", default_file, line);
+            }
+            _ => {}
+        }
+        cur = p.parent();
+    }
+    format!("<module:{}>", default_file)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Eval / dynamic code detection
+// ═══════════════════════════════════════════════════════════════
+
+/// Detect `eval()` / `exec()` / `new Function()` — code that is fundamentally
+/// unresolvable by static analysis. Creates `<eval>` / `<exec>` marker nodes.
+pub fn detect_eval(
+    graph: &mut Graph,
+    project_root: &Path,
+    parse_cache: &ParseCache,
+    discovered_files: &[std::path::PathBuf],
+) -> usize {
+    let mut added = 0usize;
+
+    let mut files: HashSet<String> = HashSet::new();
+    for p in discovered_files {
+        let s = p.to_string_lossy();
+        let lower = s.to_lowercase();
+        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs") {
+            files.insert(s.replace('\\', "/"));
+        }
+    }
+
+    for file in &files {
+        let lower = file.to_lowercase();
+        let abs_key = if file.contains(':') {
+            file.clone()
+        } else {
+            project_root.join(file).to_string_lossy().replace('\\', "/")
+        };
+
+        let source: String;
+        let source_ref: &str;
+        if let Some((cached_src, _)) = parse_cache.get(&abs_key) {
+            source = cached_src.clone();
+            source_ref = &source;
+        } else {
+            let full_path = project_root.join(file);
+            match std::fs::read_to_string(&full_path) {
+                Ok(s) => { source = s; source_ref = &source; }
+                Err(_) => continue,
+            }
+        }
+
+        if lower.ends_with(".py") {
+            added += detect_python_eval(graph, file, source_ref);
+        } else {
+            added += detect_js_ts_eval(graph, file, source_ref);
+        }
+    }
+
+    added
+}
+
+fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+        return 0;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let eval_funcs: HashSet<&str> = ["eval", "exec", "compile", "execfile"]
+        .iter().cloned().collect();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
+                if eval_funcs.contains(func_name) {
+                    let line = node.start_position().row + 1;
+                    let enclosing = find_py_enclosing_func(&node, source, file);
+                    let marker = format!("<{}>", func_name);
+
+                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+
+                    let edge_id = format!("di_eval_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                    if graph.get_edge(&edge_id).is_none() {
+                        graph.add_edge(Edge {
+                            id: edge_id, source: src_id, target: tgt_id,
+                            kind: EdgeKind::Calls, coupling_depth: 4,
+                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                        });
+                        added += 1;
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&lang).is_err() { return 0; }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "call_expression" => {
+                if let Some(func) = node.child_by_field_name("function") {
+                    let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
+                    // eval(code) — direct eval
+                    if func_text == "eval" {
+                        let line = node.start_position().row + 1;
+                        let enclosing = find_js_enclosing_func(&node, source, file);
+                        let marker = "<eval>".to_string();
+
+                        let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                        let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                        let edge_id = format!("di_eval_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                        if graph.get_edge(&edge_id).is_none() {
+                            graph.add_edge(Edge {
+                                id: edge_id, source: src_id, target: tgt_id,
+                                kind: EdgeKind::Calls, coupling_depth: 4,
+                                cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                            });
+                            added += 1;
+                        }
+                    }
+                }
+            }
+            "new_expression" => {
+                // new Function(body) — dynamic code generation
+                if let Some(ctor) = node.child_by_field_name("constructor") {
+                    let ctor_text = ctor.utf8_text(source.as_bytes()).unwrap_or("");
+                    if ctor_text == "Function" {
+                        let line = node.start_position().row + 1;
+                        let enclosing = find_js_enclosing_func(&node, source, file);
+                        let marker = "<eval:new-Function>".to_string();
+
+                        let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                        let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                        let edge_id = format!("di_eval_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                        if graph.get_edge(&edge_id).is_none() {
+                            graph.add_edge(Edge {
+                                id: edge_id, source: src_id, target: tgt_id,
+                                kind: EdgeKind::Calls, coupling_depth: 4,
+                                cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                            });
+                            added += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Shared utilities
 // ═══════════════════════════════════════════════════════════════
 
@@ -845,5 +1238,117 @@ export class Worker {
         assert!(a2 >= 1);
         assert!(a3 >= 1);
         assert!(g.node_count() >= 5, "Should have multiple synthesized nodes, got {}", g.node_count());
+    }
+
+    // ── Dynamic import tests ──
+
+    #[test]
+    fn test_detect_js_import_variable() {
+        let mut g = Graph::new();
+        let source = r#"
+async function loadModule(name) {
+    const mod = await import(name);
+}
+"#;
+        let added = detect_js_ts_dynamic_import(&mut g, "loader.js", source);
+        assert!(added >= 1, "Should detect import(variable), got {}", added);
+    }
+
+    #[test]
+    fn test_detect_require_variable() {
+        let mut g = Graph::new();
+        let source = r#"
+function loadPlugin(path) {
+    const plugin = require(path);
+}
+"#;
+        let added = detect_js_ts_dynamic_import(&mut g, "plugins.js", source);
+        assert!(added >= 1, "Should detect require(variable), got {}", added);
+    }
+
+    #[test]
+    fn test_require_string_literal_not_flagged() {
+        let mut g = Graph::new();
+        let source = r#"const fs = require('fs');"#;
+        let added = detect_js_ts_dynamic_import(&mut g, "app.js", source);
+        assert_eq!(added, 0, "require('string') should NOT be flagged — static import");
+    }
+
+    #[test]
+    fn test_detect_py_import_module() {
+        let mut g = Graph::new();
+        let source = r#"
+def load_plugin(name):
+    mod = importlib.import_module(name)
+"#;
+        let added = detect_python_dynamic_import(&mut g, "loader.py", source);
+        assert!(added >= 1, "Should detect importlib.import_module, got {}", added);
+    }
+
+    #[test]
+    fn test_detect_py_dunder_import() {
+        let mut g = Graph::new();
+        let source = r#"
+def dynamic_load(name):
+    return __import__(name)
+"#;
+        let added = detect_python_dynamic_import(&mut g, "dyn.py", source);
+        assert!(added >= 1, "Should detect __import__, got {}", added);
+    }
+
+    // ── Eval tests ──
+
+    #[test]
+    fn test_detect_js_eval() {
+        let mut g = Graph::new();
+        let source = r#"
+function runCode(code) {
+    eval(code);
+}
+"#;
+        let added = detect_js_ts_eval(&mut g, "runner.js", source);
+        assert!(added >= 1, "Should detect eval(), got {}", added);
+    }
+
+    #[test]
+    fn test_detect_js_new_function() {
+        let mut g = Graph::new();
+        let source = r#"
+function makeFn(body) {
+    return new Function(body);
+}
+"#;
+        let added = detect_js_ts_eval(&mut g, "factory.js", source);
+        assert!(added >= 1, "Should detect new Function(), got {}", added);
+    }
+
+    #[test]
+    fn test_detect_py_eval() {
+        let mut g = Graph::new();
+        let source = r#"
+def run(code):
+    eval(code)
+"#;
+        let added = detect_python_eval(&mut g, "run.py", source);
+        assert!(added >= 1, "Should detect eval(), got {}", added);
+    }
+
+    #[test]
+    fn test_detect_py_exec() {
+        let mut g = Graph::new();
+        let source = r#"
+def execute(code):
+    exec(code)
+"#;
+        let added = detect_python_eval(&mut g, "exec.py", source);
+        assert!(added >= 1, "Should detect exec(), got {}", added);
+    }
+
+    #[test]
+    fn test_no_eval_returns_zero() {
+        let mut g = Graph::new();
+        let source = "function add(a, b) { return a + b; }\n";
+        let added = detect_js_ts_eval(&mut g, "math.js", source);
+        assert_eq!(added, 0, "No eval → 0 edges");
     }
 }

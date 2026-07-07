@@ -36,5 +36,7 @@ pub use explore::explore;
 pub use framework_routes::detect_framework_routes;
 pub use dynamic_dispatch::synthesize_dynamic_edges;
 pub use di_reflection::detect_di_reflection;
+pub use di_reflection::detect_dynamic_imports;
+pub use di_reflection::detect_eval;
 pub use dataflow_synthesis::synthesize_dataflow_edges;
 pub use policy_check::policy_check_from_index;
