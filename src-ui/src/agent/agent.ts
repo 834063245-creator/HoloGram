@@ -34,8 +34,6 @@ export { EventKind, type ToolEvent, type AgentEvent, type Pricing, type EventSin
 // ---- Agent Options ----
 
 export interface AgentOptions {
-  /** Max tool-calling rounds (0 = no cap). Default: 10 */
-  maxSteps?: number;
   temperature?: number;
   pricing?: Pricing;
   /** Context window size in tokens. 0 = no compaction. */
@@ -53,7 +51,6 @@ export interface AgentOptions {
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
-const DEFAULT_MAX_STEPS = 100;
 const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
 const STORM_BREAK_THRESHOLD = 3;
 
@@ -95,7 +92,6 @@ export class Agent {
   private prov: Provider;
   private tools: ToolRegistry;
   private session: Message[];
-  private maxSteps: number;
   private temperature: number;
   private pricing: Pricing | undefined;
   private maxTokens: number;
@@ -149,7 +145,6 @@ export class Agent {
     this.tools = tools;
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
-    this.maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
     this.maxTokens = opts.maxTokens ?? 0;
     this.contextWindow = opts.contextWindow ?? 1000000; // 1M tokens default — covers all current models, triggers compaction only when truly needed
     this.compactRatio = opts.compactRatio ?? 0.7;
@@ -316,7 +311,7 @@ export class Agent {
     log.info('agent', 'turn started', { model: this.prov.name() });
     this.sink({ kind: EventKind.TurnStarted });
 
-    for (let step = 0; this.maxSteps <= 0 || step < this.maxSteps; step++) {
+    for (let step = 0; ; step++) {
       // 每轮循环前检查中止信号与会话替换
       if (signal.aborted) throw new Error('aborted');
       if (this.sessionGen !== genAtStart) throw new Error('aborted');
@@ -327,7 +322,6 @@ export class Agent {
 
       bus.emit('agent:progress', {
         step: step + 1,
-        maxSteps: this.maxSteps,
         toolName: 'thinking',
       });
 
@@ -415,10 +409,6 @@ export class Agent {
       // Compact if needed before next turn
       this.maybeCompact(usage);
     }
-
-    throw new Error(
-      `paused after ${this.maxSteps} tool-call rounds — the work so far is saved; send another message to continue`,
-    );
   }
 
   // ---- Private: stream (with retry) ----
@@ -717,7 +707,6 @@ export class Agent {
       bus.emit('agent:tool-started', { toolName: call.name, args });
       bus.emit('agent:progress', {
         step: 0, // tool execution phase — step=0 means "in tool"
-        maxSteps: this.maxSteps,
         toolName: call.name,
       });
       // ponytail: inject _callId for sub-agent tool to emit agent:sub-* events
@@ -1144,7 +1133,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       this.prov,
       subTools,
       subSystem,
-      { maxSteps: 0, temperature: 0.3 },
+      { temperature: 0.3 },
       (ev) => {
         if (ev.kind === EventKind.Text && ev.text && onProgress) {
           onProgress(ev.text);

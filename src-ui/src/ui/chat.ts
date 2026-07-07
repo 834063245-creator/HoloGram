@@ -216,16 +216,12 @@ export class ChatPanel {
     // ── Detect graph interaction to auto-dismiss the panel ──
     this.setupGraphClickHandler();
     // ── Agent progress feedback (item 3) ──
-    bus.on('agent:progress', (data: { step: number; maxSteps: number; toolName: string }) => {
+        bus.on('agent:progress', (data: { step: number; toolName: string }) => {
       if (!this.progressBar || !this.running) return;
       const label = this.progressBar.querySelector('.chat-progress-label');
-      const fill = this.progressBar.querySelector('.chat-progress-fill') as HTMLElement;
       if (label) label.textContent = data.step > 0
-        ? `步骤 ${data.step}/${data.maxSteps}  ·  ${data.toolName}`
+        ? `步骤 ${data.step}  ·  ${data.toolName}`
         : `正在执行 ${data.toolName}`;
-      if (fill && data.maxSteps > 0) {
-        fill.style.width = `${(data.step / data.maxSteps) * 100}%`;
-      }
     });
     // ── Sub-agent events (item 10) ──
     bus.on('agent:sub-spawn', (data: { id: string; description: string; prompt: string; mode: string }) => {
