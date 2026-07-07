@@ -18,6 +18,7 @@ import { bus } from '../ui/events';
 import { log } from './logger';
 import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
 import { SessionStore } from './session-store';
+import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats } from './compaction-model';
 import { StreamingToolExecutor } from './streaming-executor';
 
 // Shared types — also used internally by this file
@@ -133,6 +134,9 @@ export class Agent {
   private sessionStore: SessionStore | null = null;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
 
+  // Compaction cost model tracker
+  private compactionTracker = new CompactionTracker();
+
   constructor(
     prov: Provider,
     tools: ToolRegistry,
@@ -228,6 +232,11 @@ export class Agent {
     return { hit: this.cacheHitTotal, miss: this.cacheMissTotal };
   }
 
+  /** Get compaction cost model stats for the current session. */
+  getCompactionStats(): CompactionSessionStats {
+    return this.compactionTracker.getStats(this.pricing);
+  }
+
   /** Retract one turn: remove user message + following assistant + tool messages
    *  starting at sessionIndex. Notifies UI via SessionChanged event. */
   retractTurnAt(sessionIndex: number): void {
@@ -287,6 +296,7 @@ export class Agent {
     this.stormSig = '';
     this.stormCount = 0;
     this.compactStuck = false;
+    this.compactionTracker.reset();
     this.sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
   }
 
@@ -326,6 +336,7 @@ export class Agent {
       });
 
       // ---- Stream (with streaming tool executor + hooks) ----
+      this.compactionTracker.recordTurn();
       const executor = new StreamingToolExecutor(this.tools, this.sink, this.hooks, this.preflightHooks);
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
@@ -722,6 +733,13 @@ export class Agent {
       });
       log.debug('tool', 'executed', { name: call.name, elapsed_ms: Math.round(performance.now() - toolStart) });
 
+      // ── Compaction model instrumentation ──
+      this.compactionTracker.recordToolCall(call.name, call.arguments || '{}');
+      if (call.name === 'read_file_content' || call.name === 'read_file') {
+        const fp = String(args?.filePath || args?.file_path || '');
+        if (fp) this.compactionTracker.recordFileRead(fp);
+      }
+
       // Prepend preflight warning at the top of result — Agent sees it first
       if (preflightWarning) {
         result = preflightWarning + '\n\n' + '─'.repeat(40) + '\n\n' + result;
@@ -863,6 +881,14 @@ export class Agent {
         ];
         this.session = truncated;
         ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this.compactionTracker.recordCompaction({
+          ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
+          summaryInputTokens: 0, summaryOutputTokens: 0,
+          tailMsgCount: Math.min(tailCount, msgs.length - head),
+          preTokens: this.tokenCountWithEstimation(),
+          postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          outcome: 'stuck',
+        });
         this.sink({ kind: EventKind.Notice, level: 'info', text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
         return 'truncated';
       }
@@ -877,6 +903,14 @@ export class Agent {
         ];
         this.session = truncated;
         ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this.compactionTracker.recordCompaction({
+          ts: Date.now(), regionMsgCount: region.length, regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          summaryInputTokens: 0, summaryOutputTokens: 0,
+          tailMsgCount: msgs.length - Math.max(head, msgs.length - tailCount),
+          preTokens: this.tokenCountWithEstimation(),
+          postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          outcome: 'truncated',
+        });
         this.sink({ kind: EventKind.Notice, level: 'info', text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
         return 'truncated';
       }
@@ -891,6 +925,22 @@ export class Agent {
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
+
+      // ── Compaction model instrumentation ──
+      const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
+      const preChars = msgs.reduce((s, m) => s + (m.content?.length || 0), 0);
+      const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
+      this.compactionTracker.recordCompaction({
+        ts: Date.now(),
+        regionMsgCount: region.length,
+        regionTokensEst: estimateTokens(regionChars),
+        summaryInputTokens: estimateTokens(regionChars), // approximate
+        summaryOutputTokens: estimateTokens(summary.length),
+        tailMsgCount: msgs.length - start,
+        preTokens: estimateTokens(preChars),
+        postTokens: estimateTokens(postChars),
+        outcome: 'summary',
+      });
       this.sink({
         kind: EventKind.Notice,
         level: 'info',
@@ -940,6 +990,12 @@ export class Agent {
     if (start - head < 4) {
       this.compactStuck = true;
       this.compactRunning = false;
+      this.compactionTracker.recordCompaction({
+        ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
+        summaryInputTokens: 0, summaryOutputTokens: 0,
+        tailMsgCount: tailCount, preTokens: estimated, postTokens: estimated,
+        outcome: 'stuck',
+      });
       this.sink({
         kind: EventKind.Notice,
         level: 'warn',
@@ -978,6 +1034,21 @@ export class Agent {
 
       this.compactStuck = false;
       this.compactRunning = false;
+
+      // ── Compaction model instrumentation ──
+      const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
+      const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
+      this.compactionTracker.recordCompaction({
+        ts: Date.now(),
+        regionMsgCount: region.length,
+        regionTokensEst: estimateTokens(regionChars),
+        summaryInputTokens: estimateTokens(regionChars),
+        summaryOutputTokens: estimateTokens(summary.length),
+        tailMsgCount: msgs.length - start,
+        preTokens: estimated,
+        postTokens: estimateTokens(postChars),
+        outcome: 'summary',
+      });
       this.sink({
         kind: EventKind.Notice,
         level: 'info',

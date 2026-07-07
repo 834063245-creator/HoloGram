@@ -213,15 +213,17 @@ describe('GraphContextHook.enrich', () => {
   });
 
   it('run_shell 测试命令注入提示', async () => {
-    const out = await hook.enrich('run_shell', { command: 'npm test -- --coverage' }, 'PASS');
-    expect(out).toContain('🧪');
-    expect(out).toContain('validate_project');
+    const out = await hook.enrich('run_shell', { command: 'npm test -- --coverage' }, 'Tests: 8 passed, 3 failing');
+    expect(out).toContain('📊 [图上下文]');
+    expect(out).toContain('❌');
+    expect(out).toContain('3 failing');
   });
 
   it('run_shell 构建命令注入提示', async () => {
     const out = await hook.enrich('run_shell', { command: 'npm install' }, 'added 42 packages');
-    expect(out).toContain('🔧');
-    expect(out).toContain('validate_project');
+    expect(out).toContain('📊 [图上下文]');
+    expect(out).toContain('✅');
+    expect(out).toContain('安装完成');
   });
 
   it('run_shell 非测试/构建命令不注入', async () => {
