@@ -20,6 +20,7 @@ import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
+import { createCompactionTools, type CompactionConfig } from './agent/compaction-model';
 import { auraShutdown } from './agent/aura-memory';
 import { memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
@@ -507,6 +508,21 @@ export class Workspace {
       for (const tool of createMemoryTools(this.memoryManager)) { registry.register(tool); }
     }
 
+    // Compaction stats tool
+    {
+      const agentRef = this.agent;
+      for (const tool of createCompactionTools(
+        () => agentRef?.getCompactionTracker() ?? null,
+        () => agentRef?.getPricing(),
+        () => agentRef ? {
+          compactRatio: agentRef.getCompactRatio?.() ?? 0.55,
+          recentKeep: agentRef.getRecentKeep?.() ?? 4,
+          contextWindow: agentRef.getContextWindow?.() ?? 1_000_000,
+        } : { compactRatio: 0.55, recentKeep: 4, contextWindow: 1_000_000 },
+        async () => agentRef?.loadCompactionConfig?.() ?? null,
+      )) { registry.register(tool); }
+    }
+
     // Task tracking tools
     for (const tool of createTaskTools(this.taskManager)) { registry.register(tool); }
 
@@ -689,6 +705,16 @@ export class Workspace {
             async (description, prompt, onProgress, mode) =>
               agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress, mode),
           ));
+        }
+        // Compaction stats tool
+        {
+          const agentRef = newAgent;
+          for (const tool of createCompactionTools(
+            () => agentRef.getCompactionTracker(),
+            () => agentRef.getPricing(),
+            () => ({ compactRatio: agentRef.getCompactRatio(), recentKeep: agentRef.getRecentKeep(), contextWindow: agentRef.getContextWindow() }),
+            async () => agentRef.loadCompactionConfig(),
+          )) { r.register(tool); }
         }
         return newAgent;
       });

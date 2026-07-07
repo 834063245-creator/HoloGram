@@ -21,6 +21,7 @@
 // This tracker instruments the agent loop to measure it.
 
 import type { Pricing } from './agent-types';
+import type { Tool } from './tool';
 import { log } from './logger';
 
 // ── Collected metrics ──
@@ -461,4 +462,102 @@ export function formatCompactionReport(stats: CompactionSessionStats, pricing?: 
   }
 
   return lines.join('\n');
+}
+
+// ── Agent tool: hologram_compaction_stats ──
+
+/** Create a read-only tool that lets the agent (and user) inspect compaction health.
+ *  ponytail: no mutation — just formats the tracker's current state. */
+export function createCompactionTools(
+  getTracker: () => CompactionTracker | null,
+  getPricing: () => Pricing | undefined,
+  getCurrentParams: () => { compactRatio: number; recentKeep: number; contextWindow: number },
+  loadConfig: () => Promise<CompactionConfig | null>,
+): Tool[] {
+  return [
+    {
+      name: () => 'hologram_compaction_stats',
+      description: () =>
+        '查看上下文压缩的运行状态和数据。包括：已记录的压缩次数、压缩比、信息丢失估计、自动调优状态、当前参数 vs 推荐参数。' +
+        '用户问"压缩调得怎么样"或"压缩数据够不够"时调用。',
+      parameters: () => ({ type: 'object', properties: {} }),
+      readOnly: () => true,
+      execute: async () => {
+        const tracker = getTracker();
+        const pricing = getPricing();
+        const current = getCurrentParams();
+        const persisted = await loadConfig();
+
+        const stats = tracker?.getStats(pricing);
+        const lines: string[] = [
+          '# 上下文压缩运行状态',
+          '',
+          '## 当前参数',
+          `- contextWindow: ${current.contextWindow.toLocaleString()} tokens`,
+          `- compactRatio: ${(current.compactRatio * 100).toFixed(0)}% (阈值 ${(current.contextWindow * current.compactRatio / 1000).toFixed(0)}K tokens)`,
+          `- recentKeep: ${current.recentKeep} 条`,
+          '',
+        ];
+
+        if (persisted) {
+          lines.push('## 已持久化的调优结果');
+          lines.push(`- compactRatio: ${(persisted.compactRatio * 100).toFixed(0)}%`);
+          lines.push(`- recentKeep: ${persisted.recentKeep} 条`);
+          lines.push(`- 基于 ${persisted.sampleCount} 次压缩样本`);
+          lines.push(`- 调优时间: ${new Date(persisted.tunedAt).toLocaleString()}`);
+          lines.push(`- 依据: ${persisted.reasoning}`);
+          lines.push('');
+        }
+
+        if (!stats) {
+          lines.push('## 数据收集');
+          lines.push('Tracker 未初始化。压缩数据将在压缩触发后自动记录。');
+          return lines.join('\n');
+        }
+
+        lines.push('## 数据收集');
+        lines.push(`- 已记录压缩: ${stats.events.length} 次 (需 ≥5 次才能自动调优)`);
+        lines.push(`- 当前会话轮次: ${stats.totalTurns}`);
+        lines.push(`- 重读文件: ${stats.reReadCount} 次`);
+        lines.push(`- 重复工具调用: ${stats.duplicateToolCalls} 次`);
+        lines.push(`- 估算信息丢失: ${((stats.reReadCount + stats.duplicateToolCalls) * 0.25).toFixed(1)} 轮`);
+        lines.push(`- 压缩总成本: $${stats.totalSummaryCost.toFixed(4)}`);
+
+        if (stats.events.length >= 5) {
+          lines.push('');
+          lines.push('✅ 样本充足，已触发自动调优。');
+        } else if (stats.events.length > 0) {
+          lines.push('');
+          lines.push(`⏳ 还需 ${5 - stats.events.length} 次压缩才能自动调优。`);
+        } else {
+          lines.push('');
+          lines.push('🆕 尚未触发压缩。会话 token 数达到阈值时将自动触发。');
+        }
+
+        if (stats.events.length > 0) {
+          lines.push('');
+          lines.push('## 压缩明细');
+          lines.push('');
+          for (let i = 0; i < stats.events.length; i++) {
+            const e = stats.events[i];
+            const turnsAfter = stats.turnsAfterCompaction[i] || 0;
+            const ratio = e.regionTokensEst > 0
+              ? ((1 - e.postTokens / e.preTokens) * 100).toFixed(1)
+              : '0';
+            lines.push(`### #${i + 1} ${e.outcome === 'summary' ? '✅ 总结' : e.outcome === 'truncated' ? '✂️ 截断' : '⏸️ 卡住'}`);
+            lines.push(`- 压缩 ${e.regionMsgCount} 条消息 → 摘要 ${e.summaryOutputTokens.toLocaleString()} tokens`);
+            lines.push(`- 上下文: ${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens (${ratio}%)`);
+            lines.push(`- 压缩成本: $${((e.summaryInputTokens * (pricing?.input ?? 3) + e.summaryOutputTokens * (pricing?.output ?? 15)) / 1_000_000).toFixed(4)}`);
+            lines.push(`- 压缩后继续: ${turnsAfter} 轮`);
+          }
+        }
+
+        lines.push('');
+        lines.push('---');
+        lines.push('*数据由 CompactionTracker 自动记录，存储于 compaction-model.ts。*');
+
+        return lines.join('\n');
+      },
+    },
+  ];
 }

@@ -242,6 +242,13 @@ export class Agent {
     return this.compactionTracker.getStats(this.pricing);
   }
 
+  /** Public accessors for the compaction stats tool. */
+  getCompactionTracker(): CompactionTracker { return this.compactionTracker; }
+  getPricing(): Pricing | undefined { return this.pricing; }
+  getCompactRatio(): number { return this.compactRatio; }
+  getRecentKeep(): number { return this.recentKeep; }
+  getContextWindow(): number { return this.contextWindow; }
+
   /** Set the path for persisting auto-tuned compaction config. */
   setCompactionConfigPath(projectPath: string): void {
     this._compactionConfigPath = projectPath.replace(/\\/g, '/') + '/.hologram/compaction-config.json';
