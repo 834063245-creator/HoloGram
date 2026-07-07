@@ -339,10 +339,22 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
         }
         case 'run_shell': {
           const cmd = String(args['command'] || '');
-          if (/pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd)) {
-            snippet = '🧪 测试完成后建议: 1) validate_project 查看简报 2) trace_impact 检查变更波及范围';
-          } else if (/npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd)) {
-            snippet = '🔧 构建/安装完成后建议: 跑相关测试确认无回归，必要时调 validate_project 查看项目健康 snapshot';
+          const isTest = /pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd);
+          const isBuild = /npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd);
+
+          if (isTest || isBuild) {
+            const parsed = parseBuildOutput(cmd, result);
+            if (parsed) {
+              cacheBuildResult(parsed);
+              snippet = parsed.outcome === 'pass'
+                ? `✅ ${parsed.summary}`
+                : `❌ ${parsed.summary}`;
+            }
+            if (isTest) {
+              if (!snippet) snippet = '🧪 测试完成。→ validate_project 查看简报';
+            } else {
+              if (!snippet) snippet = '🔧 构建完成。→ 跑相关测试确认无回归';
+            }
           }
           break;
         }
@@ -428,6 +440,7 @@ import {
   formatDiagnostics,
   refreshGitBlame,
   refreshGitStatus,
+  cacheBuildResult,
 } from './state-inject';
 
 const MAX_STATE_BYTES = 600;
@@ -474,6 +487,63 @@ export function createStatePreflightHook(): PreflightHook {
 }
 
 // ── Helpers ──
+
+// ── Build/test output parser ──
+
+/** Parse stdout/stderr from a build or test command into a structured result. */
+function parseBuildOutput(cmd: string, output: string): { command: string; outcome: 'pass' | 'fail'; summary: string } | null {
+  const label = cmd.split(' ').slice(0, 2).join(' '); // "cargo build", "npm test"
+
+  // Cargo build
+  if (/cargo\s+build/.test(cmd)) {
+    const errors = (output.match(/^error(\[|:)/gm) || []).length;
+    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors` };
+    if (/Finished\s+dev/.test(output) || /Finished\s+release/.test(output)) return { command: label, outcome: 'pass', summary: '编译通过' };
+    return null;
+  }
+
+  // Cargo test
+  if (/cargo\s+test/.test(cmd)) {
+    const failures = output.match(/failures:/);
+    if (failures) {
+      const m = output.match(/(\d+)\s+failed/);
+      return { command: label, outcome: 'fail', summary: m ? `${m[1]} failed` : '有失败' };
+    }
+    const m = output.match(/test result: ok(?:\.\s+(\d+)\s+passed)?/);
+    if (m) return { command: label, outcome: 'pass', summary: m[1] ? `${m[1]} passed` : '全部通过' };
+    return null;
+  }
+
+  // npm test / jest
+  if (/npm\s+(test|run\s+test)|jest|npx\s+jest/.test(cmd)) {
+    const failures = output.match(/(\d+)\s+failing/);
+    if (failures) return { command: label, outcome: 'fail', summary: `${failures[1]} failing` };
+    const m = output.match(/Tests:\s+(\d+)\s+passed/);
+    if (m) return { command: label, outcome: 'pass', summary: `${m[1]} passed` };
+    return null;
+  }
+
+  // pytest
+  if (/pytest|python\s+-m\s+pytest/.test(cmd)) {
+    const failed = output.match(/(\d+)\s+failed/);
+    if (failed && parseInt(failed[1]) > 0) return { command: label, outcome: 'fail', summary: `${failed[1]} failed` };
+    const passed = output.match(/(\d+)\s+passed/);
+    if (passed) return { command: label, outcome: 'pass', summary: `${passed[1]} passed` };
+    return null;
+  }
+
+  // Generic build (make, cmake, npm install, pip, yarn)
+  if (/make|cmake|npm\s+install|pip\s+install|npx|yarn/.test(cmd)) {
+    const errors = (output.match(/^error(\[|:)/gm) || []).length + (output.match(/\bERROR\b/g) || []).length;
+    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors` };
+    const warnings = (output.match(/\bwarning\b/gi) || []).length;
+    if (/^(npm |yarn )/.test(cmd) && output.includes('added')) return { command: label, outcome: 'pass', summary: '安装完成' };
+    if (warnings > 0) return { command: label, outcome: 'pass', summary: `完成 (${warnings} warnings)` };
+    return { command: label, outcome: 'pass', summary: '完成' };
+  }
+
+  return null;
+}
 
 // ── search_content → 图谱符号交叉匹配 ──
 
