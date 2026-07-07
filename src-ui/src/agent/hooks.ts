@@ -278,8 +278,24 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           break;
         }
         case 'search_content': {
-          const files = extractFilesFromSearchResult(result);
-          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          // Extract symbol names from matched lines, cross-reference with fileIndex
+          const graphSymbols = extractGraphSymbolsFromSearch(result, (fp: string) => ctx.getNodesInFile(fp));
+          if (graphSymbols.length > 0) {
+            const parts = graphSymbols.map(s => {
+              const info: string[] = [];
+              if (s.fanIn > 0) info.push(`↓${s.fanIn}`);
+              if (s.fanOut > 0) info.push(`↑${s.fanOut}`);
+              return `\`${s.name}\`${info.length > 0 ? ` (${info.join(' ')})` : ''}`;
+            });
+            const highImpact = graphSymbols.filter(s => s.fanIn >= 5);
+            snippet = `图谱命中: ${parts.join(', ')}。`;
+            if (highImpact.length > 0) {
+              snippet += ` → \`${highImpact[0].name}\` 下游多, 调 trace_impact 看波及`;
+            }
+          } else {
+            const files = extractFilesFromSearchResult(result);
+            if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          }
           break;
         }
         case 'glob': {
@@ -458,6 +474,67 @@ export function createStatePreflightHook(): PreflightHook {
 }
 
 // ── Helpers ──
+
+// ── search_content → 图谱符号交叉匹配 ──
+
+interface SearchGraphSymbol {
+  name: string;
+  fanIn: number;
+  fanOut: number;
+  file: string;
+}
+
+/** Extract identifier-like words from a line of code. */
+function extractIdentifiers(text: string): string[] {
+  const m = text.match(/\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b/g);
+  if (!m) return [];
+  return [...new Set(m)];
+}
+
+/** Cross-reference search_content matches with fileIndex: which matched
+ *  identifiers are known graph symbols? Returns top 5 matches sorted by fanIn. */
+function extractGraphSymbolsFromSearch(
+  result: string,
+  getNodes: (fp: string) => NodeBrief[],
+): SearchGraphSymbol[] {
+  try {
+    const parsed = JSON.parse(result);
+    const matches = parsed.matches || parsed.results || [];
+    if (!Array.isArray(matches)) return [];
+
+    const seen = new Set<string>();
+    const symbols: SearchGraphSymbol[] = [];
+
+    for (const m of matches) {
+      const file = m.file || '';
+      if (!file) continue;
+
+      // Extract identifiers from matched content
+      const content = m.match_content || m.content || m.line || '';
+      const idents = extractIdentifiers(content);
+
+      // Get symbols in this file from the in-memory fileIndex
+      const fileNodes = getNodes(file);
+      if (fileNodes.length === 0) continue;
+
+      // Cross-reference: which identifiers are actual graph symbols?
+      for (const n of fileNodes) {
+        if (idents.includes(n.name) && !seen.has(n.name)) {
+          seen.add(n.name);
+          symbols.push({ name: n.name, fanIn: n.fanIn, fanOut: n.fanOut, file });
+          if (symbols.length >= 5) {
+            symbols.sort((a, b) => b.fanIn - a.fanIn);
+            return symbols;
+          }
+        }
+      }
+    }
+    symbols.sort((a, b) => b.fanIn - a.fanIn);
+    return symbols.slice(0, 5);
+  } catch {
+    return [];
+  }
+}
 
 function extractFilesFromSearchResult(result: string): string[] {
   try {
