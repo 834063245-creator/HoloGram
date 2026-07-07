@@ -545,6 +545,10 @@ export class Workspace {
       maxTokens: active.maxTokens ?? 0,
     }, chatPanel.sink);
 
+    // Load persisted auto-tune config (fire-and-forget)
+    this.agent.setCompactionConfigPath(this.path);
+    this.agent.applyAutoTuneConfig().catch(() => {});
+
     // Sub-agent tool
     try {
       const agentRef = this.agent;
@@ -666,6 +670,8 @@ export class Workspace {
           contextWindow: s.agent?.contextWindow,
           maxTokens: act.maxTokens ?? 0,
         }, chatPanel.sink);
+        newAgent.setCompactionConfigPath(ws.path);
+        newAgent.applyAutoTuneConfig().catch(() => {});
         if (hookCtx) {
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));

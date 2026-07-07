@@ -18,7 +18,8 @@ import { bus } from '../ui/events';
 import { log } from './logger';
 import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
 import { SessionStore } from './session-store';
-import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats } from './compaction-model';
+import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats, maybeTune, type CompactionConfig } from './compaction-model';
+import { invoke } from '../bridge';
 import { StreamingToolExecutor } from './streaming-executor';
 
 // Shared types — also used internally by this file
@@ -136,6 +137,7 @@ export class Agent {
 
   // Compaction cost model tracker
   private compactionTracker = new CompactionTracker();
+  private _compactionConfigPath: string | null = null;
 
   constructor(
     prov: Provider,
@@ -151,7 +153,10 @@ export class Agent {
     this.pricing = opts.pricing;
     this.maxTokens = opts.maxTokens ?? 0;
     this.contextWindow = opts.contextWindow ?? 1000000; // 1M tokens default — covers all current models, triggers compaction only when truly needed
-    this.compactRatio = opts.compactRatio ?? 0.7;
+    // ponytail: 0.55 puts threshold at 550K tokens (1M window).
+    // 0.7 was too high — largest real sessions (450-630K) never triggered.
+    // Tune based on compaction-model.ts data when enough samples accumulate.
+    this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
     this.sink = sink;
 
@@ -235,6 +240,73 @@ export class Agent {
   /** Get compaction cost model stats for the current session. */
   getCompactionStats(): CompactionSessionStats {
     return this.compactionTracker.getStats(this.pricing);
+  }
+
+  /** Set the path for persisting auto-tuned compaction config. */
+  setCompactionConfigPath(projectPath: string): void {
+    this._compactionConfigPath = projectPath.replace(/\\/g, '/') + '/.hologram/compaction-config.json';
+  }
+
+  /** Try to load persisted compaction config. Returns null if none saved. */
+  async loadCompactionConfig(): Promise<CompactionConfig | null> {
+    if (!this._compactionConfigPath) return null;
+    try {
+      const raw = await invoke<string>('read_file_content', { filePath: this._compactionConfigPath });
+      // Strip cat -n line numbers
+      const stripped = raw.replace(/^\s*\d+\t/gm, '');
+      return JSON.parse(stripped);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Apply auto-tuned compaction params. Returns the config if applied. */
+  async applyAutoTuneConfig(): Promise<CompactionConfig | null> {
+    const config = await this.loadCompactionConfig();
+    if (!config) return null;
+    this.contextWindow = 1_000_000;
+    this.compactRatio = config.compactRatio;
+    this.recentKeep = config.recentKeep;
+    log.info('agent', 'auto-tune applied', {
+      compactRatio: config.compactRatio,
+      recentKeep: config.recentKeep,
+      tunedAt: new Date(config.tunedAt).toISOString(),
+      samples: config.sampleCount,
+    });
+    return config;
+  }
+
+  /** Check if we have enough data, and if so, compute & persist optimal params.
+   *  Called after each compaction. Never throws — best-effort background tuning. */
+  private async tryAutoTune(): Promise<void> {
+    const result = maybeTune(this.compactionTracker, this.compactRatio, this.recentKeep, this.pricing);
+    if (!result || !result.changed) return;
+
+    const { config } = result;
+    log.info('agent', 'auto-tune recommendation', {
+      compactRatio: config.compactRatio,
+      recentKeep: config.recentKeep,
+      samples: config.sampleCount,
+      reasoning: config.reasoning,
+    });
+
+    this.sink({
+      kind: EventKind.Notice,
+      level: 'info',
+      text: `[自动调优] ${config.reasoning}。参数已保存，下次会话生效。`,
+    });
+
+    // Persist for next session
+    if (this._compactionConfigPath) {
+      try {
+        await invoke('write_file_content', {
+          filePath: this._compactionConfigPath,
+          content: JSON.stringify(config, null, 2),
+        });
+      } catch {
+        // best-effort
+      }
+    }
   }
 
   /** Retract one turn: remove user message + following assistant + tool messages
@@ -941,6 +1013,7 @@ export class Agent {
         postTokens: estimateTokens(postChars),
         outcome: 'summary',
       });
+      this.tryAutoTune(); // fire-and-forget
       this.sink({
         kind: EventKind.Notice,
         level: 'info',
@@ -1049,6 +1122,7 @@ export class Agent {
         postTokens: estimateTokens(postChars),
         outcome: 'summary',
       });
+      this.tryAutoTune(); // fire-and-forget
       this.sink({
         kind: EventKind.Notice,
         level: 'info',

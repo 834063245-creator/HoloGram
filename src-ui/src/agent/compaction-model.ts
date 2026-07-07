@@ -336,6 +336,94 @@ export class CompactionTracker {
   }
 }
 
+// ── Auto-tune: persist optimal params across sessions ──
+
+export interface CompactionConfig {
+  compactRatio: number;
+  recentKeep: number;
+  tunedAt: number;          // timestamp of last tune
+  sampleCount: number;      // number of compaction events used
+  avgCompressionRatio: number;
+  avgLossFactor: number;
+  reasoning: string;        // human-readable explanation
+}
+
+const MIN_SAMPLES_FOR_TUNE = 5;
+
+/** Compute optimal params from tracker data. Returns null if not enough data. */
+export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Pricing): CompactionConfig | null {
+  const stats = tracker.getStats(pricing);
+  if (stats.events.length < MIN_SAMPLES_FOR_TUNE) return null;
+
+  // Average compression ratio across all events
+  const avgCompressionRatio = stats.events.reduce((sum, e) => {
+    if (e.regionTokensEst === 0) return sum;
+    return sum + (e.summaryOutputTokens / e.regionTokensEst);
+  }, 0) / stats.events.length;
+
+  // Average turns after compaction
+  const avgTurnsAfter = stats.turnsAfterCompaction.length > 0
+    ? stats.turnsAfterCompaction.reduce((a, b) => a + b, 0) / stats.turnsAfterCompaction.length
+    : 0;
+
+  // Average region size
+  const avgRegionMsgs = stats.events.reduce((sum, e) => sum + e.regionMsgCount, 0) / stats.events.length;
+  const avgRegionTokens = stats.events.reduce((sum, e) => sum + e.regionTokensEst, 0) / stats.events.length;
+
+  // Average message tokens
+  const avgMsgTokens = avgRegionMsgs > 0 ? avgRegionTokens / avgRegionMsgs : 500;
+
+  // Loss factor from observed re-reads / dup tools
+  const lossFactor = tracker.estimateLossFactor();
+  const avgLossPerEvent = stats.events.length > 0 ? lossFactor / stats.events.length : 0;
+
+  // Average turn cost
+  const avgTurnCost = tracker.estimateAvgTurnCost(avgRegionTokens, avgRegionTokens * 0.15, pricing);
+
+  // Compute optimal recentKeep
+  const { k: optimalK } = optimalRecentKeep(
+    Math.round(avgRegionMsgs),
+    avgMsgTokens,
+    avgTurnCost,
+    0.3,
+    pricing?.input,
+  );
+
+  // Compute optimal compactRatio based on expected session length
+  const { r: optimalR } = optimalCompactRatio(
+    1_000_000,
+    avgMsgTokens,
+    stats.totalTurns,
+    avgTurnCost,
+  );
+  // Clamp to reasonable range
+  const tunedR = Math.max(0.35, Math.min(0.75, optimalR));
+
+  // Build reasoning
+  const parts: string[] = [];
+  parts.push(`${stats.events.length}次压缩, 平均压缩比 ${(avgCompressionRatio * 100).toFixed(1)}%, 每次平均信息丢失 ${avgLossPerEvent.toFixed(2)} 轮`);
+  parts.push(`compactRatio: ${(optimalR * 100).toFixed(0)}% → 夹到 ${(tunedR * 100).toFixed(0)}%`);
+  parts.push(`recentKeep: ${optimalK}`);
+
+  return {
+    compactRatio: tunedR,
+    recentKeep: optimalK,
+    tunedAt: Date.now(),
+    sampleCount: stats.events.length,
+    avgCompressionRatio,
+    avgLossFactor: avgLossPerEvent,
+    reasoning: parts.join(' | '),
+  };
+}
+
+/** Try to auto-tune and return a recommendation. Caller decides whether to apply. */
+export function maybeTune(tracker: CompactionTracker, currentR: number, currentK: number, pricing?: Pricing): { config: CompactionConfig; changed: boolean } | null {
+  const config = tuneCompactionParams(tracker, pricing);
+  if (!config) return null;
+  const changed = Math.abs(config.compactRatio - currentR) > 0.05 || config.recentKeep !== currentK;
+  return { config, changed };
+}
+
 // ── Diagnostic report (for /compact-stats or MCP tool) ──
 
 export function formatCompactionReport(stats: CompactionSessionStats, pricing?: Pricing): string {
