@@ -512,8 +512,7 @@ async function init(): Promise<void> {
       if (!workspace?.path) { statusText.textContent = '请先打开项目'; return; }
       try {
         const beforePath = `${workspace.path}/hologram_before.json`;
-        const afterPath = `${workspace.path}/hologram_graph.json`;
-        const diffJson = await invoke<string>('hologram_diff', { before_path: beforePath, after_path: afterPath });
+        const diffJson = await invoke<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
         const diff = JSON.parse(diffJson);
         if (diff.is_empty) {
           statusText.textContent = '已创建变更基线 · 再次分析后即可比较差异';

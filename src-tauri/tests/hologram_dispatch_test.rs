@@ -42,9 +42,9 @@ fn test_tools_list_includes_key_explore() {
         serde_json::from_str(&hologram_tools_list_impl()).unwrap();
     let names: Vec<&str> = schemas.iter()
         .filter_map(|s| s["name"].as_str()).collect();
-    assert!(names.contains(&"hologram_explore"));
-    assert!(names.contains(&"hologram_neighbors"));
-    assert!(names.contains(&"hologram_dataflow"));
+    assert!(names.contains(&"explore_deps"), "must include explore_deps");
+    assert!(names.contains(&"get_neighbors"), "must include get_neighbors");
+    assert!(names.contains(&"trace_dataflow"), "must include trace_dataflow");
 }
 
 // ═══════════════════════════════════════════════════════
@@ -60,21 +60,21 @@ fn test_call_unknown_tool_returns_error() {
 
 #[test]
 fn test_call_search_missing_query() {
-    let result = hologram_call_impl("hologram_search", &json!({}));
+    let result = hologram_call_impl("search_symbols", &json!({}));
     let v = parse(&result);
     assert!(v.get("error").is_some(), "search without query must error");
 }
 
 #[test]
 fn test_call_neighbors_missing_node_id() {
-    let result = hologram_call_impl("hologram_neighbors", &json!({}));
+    let result = hologram_call_impl("get_neighbors", &json!({}));
     let v = parse(&result);
     assert!(v.get("error").is_some(), "neighbors without node_id must error");
 }
 
 #[test]
 fn test_call_preflight_missing_files() {
-    let result = hologram_call_impl("hologram_run_preflight", &json!({}));
+    let result = hologram_call_impl("preflight_check", &json!({}));
     let v = parse(&result);
     assert!(v.get("error").is_some(), "preflight without files must error");
 }
@@ -82,14 +82,14 @@ fn test_call_preflight_missing_files() {
 #[test]
 fn test_call_status_works_without_engine() {
     // status returns empty state even without engine initialized
-    let result = hologram_call_impl("hologram_status", &json!({}));
+    let result = hologram_call_impl("engine_status", &json!({}));
     let v = parse(&result);
     assert!(v["phase"].as_str().is_some(), "status must return phase");
 }
 
 #[test]
 fn test_call_graph_summary_errors_without_engine() {
-    let result = hologram_call_impl("hologram_graph_summary", &json!({}));
+    let result = hologram_call_impl("graph_summary", &json!({}));
     let v = parse(&result);
     // graph_summary needs engine data — should error gracefully
     assert!(v.get("error").is_some() || v.get("total_nodes").is_some(),
@@ -131,7 +131,7 @@ fn clear_test_engine() {
 #[test]
 fn test_call_neighbors_with_data() {
     init_test_engine();
-    let result = hologram_call_impl("hologram_neighbors", &json!({"node_id": "a"}));
+    let result = hologram_call_impl("get_neighbors", &json!({"nodeId": "a"}));
     let v = parse(&result);
     assert!(v.get("neighbor_count").is_some(), "must return neighbor_count");
     assert!(v.get("neighbors").is_some(), "must return neighbors array");
@@ -140,7 +140,7 @@ fn test_call_neighbors_with_data() {
 #[test]
 fn test_call_impact_with_data() {
     init_test_engine();
-    let result = hologram_call_impl("hologram_impact", &json!({"node_id": "a", "depth": 3}));
+    let result = hologram_call_impl("trace_impact", &json!({"nodeId": "a", "depth": 3}));
     let v = parse(&result);
     assert!(v.get("layers").is_some(), "must return layers");
 }
@@ -148,7 +148,7 @@ fn test_call_impact_with_data() {
 #[test]
 fn test_call_search_finds_nodes() {
     init_test_engine();
-    let result = hologram_call_impl("hologram_search", &json!({"query": "mod", "limit": 10}));
+    let result = hologram_call_impl("search_symbols", &json!({"query": "mod", "limit": 10}));
     let v = parse(&result);
     let count = v["count"].as_u64().unwrap_or(0);
     assert!(count > 0, "search must find at least one node");
@@ -157,7 +157,7 @@ fn test_call_search_finds_nodes() {
 #[test]
 fn test_call_node_returns_full_info() {
     init_test_engine();
-    let result = hologram_call_impl("hologram_node", &json!({"node_id": "a"}));
+    let result = hologram_call_impl("inspect_symbol", &json!({"nodeId": "a"}));
     let v = parse(&result);
     assert!(v["node"].is_object(), "must return node object");
     assert!(v["incoming_count"].as_u64().is_some(), "must have incoming_count");
@@ -167,7 +167,7 @@ fn test_call_node_returns_full_info() {
 #[test]
 fn test_call_graph_summary_with_data() {
     init_test_engine();
-    let result = hologram_call_impl("hologram_graph_summary", &json!({}));
+    let result = hologram_call_impl("graph_summary", &json!({}));
     let v = parse(&result);
     // graph_summary needs engine state — verifies graceful handling
     assert!(v.is_object(), "must return JSON object");
