@@ -38,5 +38,6 @@ pub use dynamic_dispatch::synthesize_dynamic_edges;
 pub use di_reflection::detect_di_reflection;
 pub use di_reflection::detect_dynamic_imports;
 pub use di_reflection::detect_eval;
+pub use di_reflection::detect_cross_lang_calls;
 pub use dataflow_synthesis::synthesize_dataflow_edges;
 pub use policy_check::policy_check_from_index;
