@@ -349,11 +349,13 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               snippet = parsed.outcome === 'pass'
                 ? `✅ ${parsed.summary}`
                 : `❌ ${parsed.summary}`;
-            }
-            if (isTest) {
-              if (!snippet) snippet = '🧪 测试完成。→ validate_project 查看简报';
             } else {
-              if (!snippet) snippet = '🔧 构建完成。→ 跑相关测试确认无回归';
+              // Fallback: output format not recognized, cache a generic result
+              // so the agent knows the command ran — just can't parse the outcome
+              const label = cmd.split(' ').slice(0, 2).join(' ');
+              const tail = result.slice(-200).replace(/\n/g, ' ');
+              cacheBuildResult({ command: label, outcome: 'pass', summary: `完成 (输出未解析)` });
+              snippet = `⚠️ 完成，但无法解析输出格式。尾部: ${tail}`;
             }
           }
           break;
