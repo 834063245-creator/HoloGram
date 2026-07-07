@@ -33,6 +33,8 @@ use crate::adapter::type_registry::TypeRegistry;
 use crate::analysis::coupling::compute_coupling;
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::di_reflection::detect_di_reflection;
+use crate::analysis::di_reflection::detect_dynamic_imports;
+use crate::analysis::di_reflection::detect_eval;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
 use crate::graph::resolver::CrossFileResolver;
@@ -563,6 +565,38 @@ impl Engine {
             name: "DI / Reflection".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", di_edges),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 5.6. Dynamic import detection
+        set_progress("动态导入检测", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let dyn_imp_edges = detect_dynamic_imports(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        info!(count = dyn_imp_edges, "[engine] dynamic import markers created");
+        eprintln!("[engine] stage: dynamic-import done in {:.1}s ({} markers)",
+            stage_start.elapsed().as_secs_f64(), dyn_imp_edges);
+        stage_timings.push(StageTiming {
+            name: "Dynamic Import".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} markers", dyn_imp_edges),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 5.7. Eval / dynamic code detection
+        set_progress("Eval检测", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let eval_edges = detect_eval(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        info!(count = eval_edges, "[engine] eval markers created");
+        eprintln!("[engine] stage: eval done in {:.1}s ({} markers)",
+            stage_start.elapsed().as_secs_f64(), eval_edges);
+        stage_timings.push(StageTiming {
+            name: "Eval Detection".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} markers", eval_edges),
         });
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());
