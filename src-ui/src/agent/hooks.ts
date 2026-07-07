@@ -278,8 +278,24 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           break;
         }
         case 'search_content': {
-          const files = extractFilesFromSearchResult(result);
-          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          // Extract symbol names from matched lines, cross-reference with fileIndex
+          const graphSymbols = extractGraphSymbolsFromSearch(result, (fp: string) => ctx.getNodesInFile(fp));
+          if (graphSymbols.length > 0) {
+            const parts = graphSymbols.map(s => {
+              const info: string[] = [];
+              if (s.fanIn > 0) info.push(`↓${s.fanIn}`);
+              if (s.fanOut > 0) info.push(`↑${s.fanOut}`);
+              return `\`${s.name}\`${info.length > 0 ? ` (${info.join(' ')})` : ''}`;
+            });
+            const highImpact = graphSymbols.filter(s => s.fanIn >= 5);
+            snippet = `图谱命中: ${parts.join(', ')}。`;
+            if (highImpact.length > 0) {
+              snippet += ` → \`${highImpact[0].name}\` 下游多, 调 trace_impact 看波及`;
+            }
+          } else {
+            const files = extractFilesFromSearchResult(result);
+            if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          }
           break;
         }
         case 'glob': {
@@ -323,10 +339,24 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
         }
         case 'run_shell': {
           const cmd = String(args['command'] || '');
-          if (/pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd)) {
-            snippet = '🧪 测试完成后建议: 1) validate_project 查看简报 2) trace_impact 检查变更波及范围';
-          } else if (/npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd)) {
-            snippet = '🔧 构建/安装完成后建议: 跑相关测试确认无回归，必要时调 validate_project 查看项目健康 snapshot';
+          const isTest = /pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd);
+          const isBuild = /npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd);
+
+          if (isTest || isBuild) {
+            const parsed = parseBuildOutput(cmd, result);
+            if (parsed) {
+              cacheBuildResult(parsed);
+              snippet = parsed.outcome === 'pass'
+                ? `✅ ${parsed.summary}`
+                : `❌ ${parsed.summary}`;
+            } else {
+              // Fallback: output format not recognized, cache a generic result
+              // so the agent knows the command ran — just can't parse the outcome
+              const label = cmd.split(' ').slice(0, 2).join(' ');
+              const tail = result.slice(-200).replace(/\n/g, ' ');
+              cacheBuildResult({ command: label, outcome: 'pass', summary: `完成 (输出未解析)` });
+              snippet = `⚠️ 完成，但无法解析输出格式。尾部: ${tail}`;
+            }
           }
           break;
         }
@@ -410,9 +440,9 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 import {
   buildPreReadBlock,
   formatDiagnostics,
-  formatPostEdit,
   refreshGitBlame,
   refreshGitStatus,
+  cacheBuildResult,
 } from './state-inject';
 
 const MAX_STATE_BYTES = 600;
@@ -443,32 +473,6 @@ export function createStateReadHook(projectPath: string): Hook {
   };
 }
 
-/** Post-edit hook — acknowledges check scheduling after agent writes files. */
-export function createStatePostEditHook(): Hook {
-  return {
-    name: 'state-postedit',
-    shouldEnrich(toolName) {
-      return ['write_file_content', 'edit_file', 'delete_file_or_dir', 'rename_file_or_dir', 'move_file'].includes(toolName);
-    },
-    async enrich(toolName, args, result) {
-      const files: string[] = [];
-      const fp = args.file_path as string;
-      if (fp) files.push(fp);
-      const src = args.source as string;
-      if (src) files.push(src);
-      const dst = args.destination as string;
-      if (dst) files.push(dst);
-      // dedupe
-      const unique = [...new Set(files)];
-
-      const msg = formatPostEdit(unique);
-      if (!msg) return result;
-
-      return result + `\n\n📋 ${msg}`;
-    },
-  };
-}
-
 /** Preflight hook — adds diagnostics context before editing a file. */
 export function createStatePreflightHook(): PreflightHook {
   return {
@@ -485,6 +489,124 @@ export function createStatePreflightHook(): PreflightHook {
 }
 
 // ── Helpers ──
+
+// ── Build/test output parser ──
+
+/** Parse stdout/stderr from a build or test command into a structured result. */
+function parseBuildOutput(cmd: string, output: string): { command: string; outcome: 'pass' | 'fail'; summary: string } | null {
+  const label = cmd.split(' ').slice(0, 2).join(' '); // "cargo build", "npm test"
+
+  // Cargo build
+  if (/cargo\s+build/.test(cmd)) {
+    const errors = (output.match(/^error(\[|:)/gm) || []).length;
+    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors` };
+    if (/Finished\s+dev/.test(output) || /Finished\s+release/.test(output)) return { command: label, outcome: 'pass', summary: '编译通过' };
+    return null;
+  }
+
+  // Cargo test
+  if (/cargo\s+test/.test(cmd)) {
+    const failures = output.match(/failures:/);
+    if (failures) {
+      const m = output.match(/(\d+)\s+failed/);
+      return { command: label, outcome: 'fail', summary: m ? `${m[1]} failed` : '有失败' };
+    }
+    const m = output.match(/test result: ok(?:\.\s+(\d+)\s+passed)?/);
+    if (m) return { command: label, outcome: 'pass', summary: m[1] ? `${m[1]} passed` : '全部通过' };
+    return null;
+  }
+
+  // npm test / jest
+  if (/npm\s+(test|run\s+test)|jest|npx\s+jest/.test(cmd)) {
+    const failures = output.match(/(\d+)\s+failing/);
+    if (failures) return { command: label, outcome: 'fail', summary: `${failures[1]} failing` };
+    const m = output.match(/Tests:\s+(\d+)\s+passed/);
+    if (m) return { command: label, outcome: 'pass', summary: `${m[1]} passed` };
+    return null;
+  }
+
+  // pytest
+  if (/pytest|python\s+-m\s+pytest/.test(cmd)) {
+    const failed = output.match(/(\d+)\s+failed/);
+    if (failed && parseInt(failed[1]) > 0) return { command: label, outcome: 'fail', summary: `${failed[1]} failed` };
+    const passed = output.match(/(\d+)\s+passed/);
+    if (passed) return { command: label, outcome: 'pass', summary: `${passed[1]} passed` };
+    return null;
+  }
+
+  // Generic build (make, cmake, npm install, pip, yarn)
+  if (/make|cmake|npm\s+install|pip\s+install|npx|yarn/.test(cmd)) {
+    const errors = (output.match(/^error(\[|:)/gm) || []).length + (output.match(/\bERROR\b/g) || []).length;
+    if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors` };
+    const warnings = (output.match(/\bwarning\b/gi) || []).length;
+    if (/^(npm |yarn )/.test(cmd) && output.includes('added')) return { command: label, outcome: 'pass', summary: '安装完成' };
+    if (warnings > 0) return { command: label, outcome: 'pass', summary: `完成 (${warnings} warnings)` };
+    return { command: label, outcome: 'pass', summary: '完成' };
+  }
+
+  return null;
+}
+
+// ── search_content → 图谱符号交叉匹配 ──
+
+interface SearchGraphSymbol {
+  name: string;
+  fanIn: number;
+  fanOut: number;
+  file: string;
+}
+
+/** Extract identifier-like words from a line of code. */
+function extractIdentifiers(text: string): string[] {
+  const m = text.match(/\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b/g);
+  if (!m) return [];
+  return [...new Set(m)];
+}
+
+/** Cross-reference search_content matches with fileIndex: which matched
+ *  identifiers are known graph symbols? Returns top 5 matches sorted by fanIn. */
+function extractGraphSymbolsFromSearch(
+  result: string,
+  getNodes: (fp: string) => NodeBrief[],
+): SearchGraphSymbol[] {
+  try {
+    const parsed = JSON.parse(result);
+    const matches = parsed.matches || parsed.results || [];
+    if (!Array.isArray(matches)) return [];
+
+    const seen = new Set<string>();
+    const symbols: SearchGraphSymbol[] = [];
+
+    for (const m of matches) {
+      const file = m.file || '';
+      if (!file) continue;
+
+      // Extract identifiers from matched content
+      const content = m.match_content || m.content || m.line || '';
+      const idents = extractIdentifiers(content);
+
+      // Get symbols in this file from the in-memory fileIndex
+      const fileNodes = getNodes(file);
+      if (fileNodes.length === 0) continue;
+
+      // Cross-reference: which identifiers are actual graph symbols?
+      for (const n of fileNodes) {
+        if (idents.includes(n.name) && !seen.has(n.name)) {
+          seen.add(n.name);
+          symbols.push({ name: n.name, fanIn: n.fanIn, fanOut: n.fanOut, file });
+          if (symbols.length >= 5) {
+            symbols.sort((a, b) => b.fanIn - a.fanIn);
+            return symbols;
+          }
+        }
+      }
+    }
+    symbols.sort((a, b) => b.fanIn - a.fanIn);
+    return symbols.slice(0, 5);
+  } catch {
+    return [];
+  }
+}
 
 function extractFilesFromSearchResult(result: string): string[] {
   try {
