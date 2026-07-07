@@ -23,8 +23,8 @@ import { MemoryManager, createMemoryTools } from './agent/memory';
 import { memoryBundleHealth, memoryBundleRecall, memoryBundleAnalyze, memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
-import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePostEditHook, createStatePreflightHook } from './agent/hooks';
-import { refreshGitStatus, refreshTimeline, refreshGraphMeta, buildTurnStartBlock } from './agent/state-inject';
+import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePreflightHook } from './agent/hooks';
+import { refreshGitStatus, refreshTimeline, buildTurnStartBlock } from './agent/state-inject';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import type { Tool } from './agent/tool';
@@ -567,7 +567,6 @@ export class Workspace {
       hooks.register(createGraphContextHook(ctx));
       // State hooks: LSP diagnostics + git blame on read, check feedback on write
       hooks.register(createStateReadHook(this.path));
-      hooks.register(createStatePostEditHook());
       this.agent.setHooks(hooks);
 
       // Preflight: warn before edit_file / write_file
@@ -578,10 +577,9 @@ export class Workspace {
       this.agent.setPreflightHooks(preflightHooks);
     }
 
-    // Cold-start: prime state caches (git status, timeline, graph metadata, etc.)
+    // Cold-start: prime state caches (git status, timeline)
     refreshGitStatus(this.path).catch(() => {});
     refreshTimeline(this.path).catch(() => {});
-    refreshGraphMeta(this.path).catch(() => {});
 
     this.onStatusChange?.('[Agent] ✅ 已就绪');
     chatPanel.setAgent(this.agent);
@@ -609,7 +607,11 @@ export class Workspace {
         };
         if (ws.graphData) {
           const schemas = await loadHologramSchemas();
-          for (const tool of schemas.map(s => mcpSchemaToTool(s, factoryExec))) r.register(tool);
+          const holoExec: ToolExecutor = async (name, args) => {
+            const result = await invoke<string>('hologram_call', { tool: name, args });
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          };
+          for (const tool of schemas.map(s => mcpSchemaToTool(s, holoExec))) r.register(tool);
           // dataflow_save / dataflow_query — Tauri commands, not MCP tools
           r.register({
             name: () => 'dataflow_save',
@@ -670,7 +672,6 @@ export class Workspace {
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));
           hooks.register(createStateReadHook(ws.path));
-          hooks.register(createStatePostEditHook());
           newAgent.setHooks(hooks);
           const preflightHooks = new PreflightHookRegistry();
           preflightHooks.register(createGraphPreflightHook(hookCtx));
