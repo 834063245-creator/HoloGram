@@ -2306,6 +2306,14 @@ export class ChatPanel {
       return;
     }
 
+    // Detect /compact-stats command
+    if (text === '/compact-stats') {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.sendAgentText('查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）');
+      return;
+    }
+
     // Detect /compact command
     if (text === '/compact') {
       this.inputArea.value = '';
@@ -3668,6 +3676,7 @@ export class ChatPanel {
         <div class="sp-group-title">操作</div>
         <button class="sp-item" data-cmd="new">${iconHtml('refresh', 10)} 重置当前会话<span class="sp-key">/new</span></button>
         <button class="sp-item" data-cmd="compact">${iconHtml('save', 10)} 压缩上下文<span class="sp-key">/compact</span></button>
+        <button class="sp-item" data-cmd="compact-stats">${iconHtml('check-circle', 10)} 压缩统计<span class="sp-key">/compact-stats</span></button>
         <button class="sp-item" data-cmd="memory">${iconHtml('bookmark', 10)} 查看记忆<span class="sp-key">/memory</span></button>
         <button class="sp-item" data-cmd="remember">${iconHtml('save', 10)} 记住一件事<span class="sp-key">/remember</span></button>
         <button class="sp-item" data-cmd="export">${iconHtml('export-file', 10)} 导出对话<span class="sp-key">/export</span></button>
@@ -3719,6 +3728,11 @@ export class ChatPanel {
         }
         if (cmd === 'compact') {
           this.inputArea.value = '/compact';
+          this.sendMessage();
+          return;
+        }
+        if (cmd === 'compact-stats') {
+          this.inputArea.value = '/compact-stats';
           this.sendMessage();
           return;
         }
