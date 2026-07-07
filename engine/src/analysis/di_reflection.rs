@@ -1100,6 +1100,367 @@ fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, line: usize
     node_id
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Cross-language call detection — subprocess / FFI / HTTP
+// ═══════════════════════════════════════════════════════════════
+
+/// Detect cross-language call boundaries: subprocess exec, FFI loading,
+/// and HTTP client calls. These are runtime bridges that static analysis
+/// fundamentally cannot trace past. Creates `<cross-lang:*>` marker nodes.
+pub fn detect_cross_lang_calls(
+    graph: &mut Graph,
+    project_root: &Path,
+    parse_cache: &ParseCache,
+    discovered_files: &[std::path::PathBuf],
+) -> usize {
+    let mut added = 0usize;
+
+    let mut files: HashSet<String> = HashSet::new();
+    for p in discovered_files {
+        let s = p.to_string_lossy();
+        let lower = s.to_lowercase();
+        if lower.ends_with(".py") || lower.ends_with(".js") || lower.ends_with(".ts")
+            || lower.ends_with(".tsx") || lower.ends_with(".mjs") || lower.ends_with(".java")
+            || lower.ends_with(".go") || lower.ends_with(".rs") || lower.ends_with(".rb")
+            || lower.ends_with(".cs")
+        {
+            files.insert(s.replace('\\', "/"));
+        }
+    }
+
+    for file in &files {
+        let lower = file.to_lowercase();
+        let abs_key = if file.contains(':') {
+            file.clone()
+        } else {
+            project_root.join(file).to_string_lossy().replace('\\', "/")
+        };
+
+        let source: String;
+        let source_ref: &str;
+        if let Some((cached_src, _)) = parse_cache.get(&abs_key) {
+            source = cached_src.clone();
+            source_ref = &source;
+        } else {
+            let full_path = project_root.join(file);
+            match std::fs::read_to_string(&full_path) {
+                Ok(s) => { source = s; source_ref = &source; }
+                Err(_) => continue,
+            }
+        }
+
+        if lower.ends_with(".py") {
+            added += detect_py_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs") {
+            added += detect_js_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".java") {
+            added += detect_java_cross_lang(graph, file, source_ref);
+        } else if lower.ends_with(".go") {
+            added += detect_go_cross_lang(graph, file, source_ref);
+        }
+    }
+
+    added
+}
+
+// ── Python: subprocess, os.system, ctypes, requests ──
+
+fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+        return 0;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    // FFI loaders → <cross-lang:ffi>
+    let ffi_loaders: HashSet<&str> = [
+        "CDLL", "cdll", "WinDLL", "windll", "dlopen",
+    ].iter().cloned().collect();
+
+    // HTTP clients → <cross-lang:http>
+    let http_methods: HashSet<&str> = [
+        "get", "post", "put", "delete", "patch", "head", "options", "request",
+    ].iter().cloned().collect();
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
+                let line = node.start_position().row + 1;
+                let enclosing = find_py_enclosing_func(&node, source, file);
+                let mut marker = String::new();
+                let mut is_cross = false;
+
+                // subprocess.Popen / os.system / etc.
+                if func_name.ends_with(".Popen") || func_name.ends_with(".run")
+                    || func_name.ends_with(".call") || func_name.ends_with(".check_output")
+                {
+                    marker = format!("<cross-lang:subprocess:{}>", func_name);
+                    is_cross = true;
+                } else if func_name == "system" || func_name == "popen" || func_name == "exec_command" {
+                    // os.system / os.popen / etc. — need attribute check
+                    if func.kind() == "attribute" {
+                        marker = format!("<cross-lang:subprocess:{}>", func_name);
+                        is_cross = true;
+                    }
+                }
+                // ctypes.CDLL / cffi.dlopen / requests.get / httpx.post
+                else if func.kind() == "attribute" {
+                    let last = func_name.rsplit('.').next().unwrap_or("");
+                    if ffi_loaders.contains(last) {
+                        marker = format!("<cross-lang:ffi:{}>", func_name);
+                        is_cross = true;
+                    } else {
+                        // Check for HTTP client: requests.get, httpx.post, etc.
+                        let parts: Vec<&str> = func_name.rsplitn(2, '.').collect();
+                        if parts.len() == 2 {
+                            let module = parts[1];
+                            let method = parts[0];
+                            let is_http_module = module == "requests" || module == "httpx"
+                                || module.contains("urllib") || module == "aiohttp"
+                                || module.contains("session");
+                            let is_http_method = http_methods.contains(method);
+                            if is_http_module && is_http_method {
+                                marker = format!("<cross-lang:http:{}>", func_name);
+                                is_cross = true;
+                            }
+                        }
+                    }
+                }
+
+                if is_cross {
+                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                    if graph.get_edge(&edge_id).is_none() {
+                        graph.add_edge(Edge {
+                            id: edge_id, source: src_id, target: tgt_id,
+                            kind: EdgeKind::Calls, coupling_depth: 4, // L4: cross-lang boundary
+                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                        });
+                        added += 1;
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+// ── JS/TS: child_process.exec/spawn, fetch, axios ──
+
+fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
+    let ext = if is_ts { "ts" } else { "js" };
+    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&lang).is_err() { return 0; }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
+                let line = node.start_position().row + 1;
+                let enclosing = find_js_enclosing_func(&node, source, file);
+                let mut marker = String::new();
+
+                // fetch() — global HTTP bridge (identifier, not member_expression)
+                if func_text == "fetch" {
+                    marker = "<cross-lang:http:fetch>".to_string();
+                }
+                // exec() / spawn() — may be destructured from child_process
+                else if func_text == "exec" || func_text == "spawn"
+                    || func_text == "execSync" || func_text == "fork"
+                {
+                    marker = format!("<cross-lang:subprocess:{}>", func_text);
+                }
+                // member_expression patterns: child_process.exec, axios.get, etc.
+                else if func.kind() == "member_expression" {
+                    if func_text.ends_with(".exec") || func_text.ends_with(".spawn")
+                        || func_text.ends_with(".execSync") || func_text.ends_with(".fork")
+                    {
+                        marker = format!("<cross-lang:subprocess:{}>", func_text);
+                    }
+                    else if func_text.ends_with(".fetch") {
+                        marker = format!("<cross-lang:http:{}>", func_text);
+                    }
+                    // axios.get / axios.post / got.get
+                    else if func_text.ends_with(".get") || func_text.ends_with(".post")
+                        || func_text.ends_with(".put") || func_text.ends_with(".delete")
+                        || func_text.ends_with(".patch")
+                    {
+                        let obj = func_text.rsplitn(2, '.').nth(1).unwrap_or("");
+                        if obj == "axios" || obj == "got" || obj == "superagent" {
+                            marker = format!("<cross-lang:http:{}>", func_text);
+                        }
+                    }
+                }
+
+                if !marker.is_empty() {
+                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                    if graph.get_edge(&edge_id).is_none() {
+                        graph.add_edge(Edge {
+                            id: edge_id, source: src_id, target: tgt_id,
+                            kind: EdgeKind::Calls, coupling_depth: 4,
+                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                        });
+                        added += 1;
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+// ── Java: Runtime.exec, ProcessBuilder, HttpClient ──
+
+fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("java").expect("java grammar")).is_err() {
+        return 0;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "method_invocation" {
+            let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+            let line = node.start_position().row + 1;
+            let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
+
+            // Runtime.getRuntime().exec(cmd) / ProcessBuilder.start()
+            if text.contains(".exec(") || text.contains("ProcessBuilder") {
+                let marker = if text.contains("ProcessBuilder") {
+                    "<cross-lang:subprocess:ProcessBuilder>".to_string()
+                } else {
+                    "<cross-lang:subprocess:Runtime.exec>".to_string()
+                };
+                let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                if graph.get_edge(&edge_id).is_none() {
+                    graph.add_edge(Edge {
+                        id: edge_id, source: src_id, target: tgt_id,
+                        kind: EdgeKind::Calls, coupling_depth: 4,
+                        cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                    });
+                    added += 1;
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
+// ── Go: exec.Command, os/exec, net/http ──
+
+fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&GRAMMAR_LOADER.get("go").expect("go grammar")).is_err() {
+        return 0;
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t, None => return 0,
+    };
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
+                let line = node.start_position().row + 1;
+                let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
+
+                // exec.Command / exec.CommandContext → subprocess
+                let is_exec = func_text == "exec.Command" || func_text == "exec.CommandContext"
+                    || func_text.ends_with(".Command") || func_text.ends_with(".CommandContext");
+                if is_exec {
+                    let marker = format!("<cross-lang:subprocess:{}>", func_text);
+                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                    if graph.get_edge(&edge_id).is_none() {
+                        graph.add_edge(Edge {
+                            id: edge_id, source: src_id, target: tgt_id,
+                            kind: EdgeKind::Calls, coupling_depth: 4,
+                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                        });
+                        added += 1;
+                    }
+                }
+
+                // http.Get / http.Post / http.NewRequest — HTTP bridge
+                if func.kind() == "selector_expression" {
+                    if func_text.ends_with(".Get") || func_text.ends_with(".Post")
+                        || func_text.ends_with(".Do") || func_text.ends_with(".NewRequest")
+                    {
+                        let marker = format!("<cross-lang:http:{}>", func_text);
+                        let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
+                        let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                        let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
+                        if graph.get_edge(&edge_id).is_none() {
+                            graph.add_edge(Edge {
+                                id: edge_id, source: src_id, target: tgt_id,
+                                kind: EdgeKind::Calls, coupling_depth: 4,
+                                cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                            });
+                            added += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() { stack.push(child); }
+    }
+
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1350,5 +1711,106 @@ def execute(code):
         let source = "function add(a, b) { return a + b; }\n";
         let added = detect_js_ts_eval(&mut g, "math.js", source);
         assert_eq!(added, 0, "No eval → 0 edges");
+    }
+
+    // ── Cross-language tests ──
+
+    #[test]
+    fn test_detect_py_subprocess_popen() {
+        let mut g = Graph::new();
+        let source = r#"
+def run_shell():
+    import subprocess
+    proc = subprocess.Popen(['ls', '-la'])
+"#;
+        let added = detect_py_cross_lang(&mut g, "runner.py", source);
+        assert!(added >= 1, "Should detect subprocess.Popen, got {}", added);
+    }
+
+    #[test]
+    fn test_detect_py_requests_get() {
+        let mut g = Graph::new();
+        let source = r#"
+def fetch_data():
+    import requests
+    resp = requests.get('https://api.example.com/data')
+"#;
+        let added = detect_py_cross_lang(&mut g, "api.py", source);
+        assert!(added >= 1, "Should detect requests.get, got {}", added);
+    }
+
+    #[test]
+    fn test_detect_py_ctypes_cdll() {
+        let mut g = Graph::new();
+        let source = r#"
+def load_native():
+    import ctypes
+    lib = ctypes.CDLL('./mylib.so')
+"#;
+        let added = detect_py_cross_lang(&mut g, "ffi.py", source);
+        assert!(added >= 1, "Should detect ctypes.CDLL, got {}", added);
+    }
+
+    #[test]
+    fn test_detect_js_child_process_exec() {
+        let mut g = Graph::new();
+        let source = r#"
+function run(cmd) {
+    const { exec } = require('child_process');
+    exec(cmd);
+}
+"#;
+        let added = detect_js_cross_lang(&mut g, "process.js", source);
+        assert!(added >= 1, "Should detect child_process.exec, got {}", added);
+    }
+
+    #[test]
+    fn test_detect_js_fetch() {
+        let mut g = Graph::new();
+        let source = r#"
+async function getData() {
+    const resp = await fetch('https://api.example.com');
+    return resp.json();
+}
+"#;
+        let added = detect_js_cross_lang(&mut g, "fetch.js", source);
+        assert!(added >= 1, "Should detect fetch(), got {}", added);
+    }
+
+    #[test]
+    fn test_detect_java_runtime_exec() {
+        let mut g = Graph::new();
+        let source = r#"
+public class Runner {
+    public void run(String cmd) {
+        Runtime.getRuntime().exec(cmd);
+    }
+}
+"#;
+        let added = detect_java_cross_lang(&mut g, "Runner.java", source);
+        assert!(added >= 1, "Should detect Runtime.exec, got {}", added);
+    }
+
+    #[test]
+    fn test_detect_go_exec_command() {
+        let mut g = Graph::new();
+        let source = r#"
+package main
+import "os/exec"
+func main() {
+    cmd := exec.Command("ls", "-la")
+    cmd.Run()
+}
+"#;
+        let added = detect_go_cross_lang(&mut g, "main.go", source);
+        assert!(added >= 1, "Should detect exec.Command, got {}", added);
+    }
+
+    #[test]
+    fn test_no_cross_lang_returns_zero() {
+        let mut g = Graph::new();
+        let source = "def add(a, b):\n    return a + b\n";
+        let added = detect_py_cross_lang(&mut g, "math.py", source);
+        assert_eq!(added, 0, "No cross-lang calls → 0 edges");
     }
 }

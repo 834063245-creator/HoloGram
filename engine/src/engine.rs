@@ -35,6 +35,7 @@ use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::di_reflection::detect_di_reflection;
 use crate::analysis::di_reflection::detect_dynamic_imports;
 use crate::analysis::di_reflection::detect_eval;
+use crate::analysis::di_reflection::detect_cross_lang_calls;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
 use crate::graph::resolver::CrossFileResolver;
@@ -597,6 +598,22 @@ impl Engine {
             name: "Eval Detection".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} markers", eval_edges),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 5.8. Cross-language call detection
+        set_progress("跨语言调用检测", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let xlang_edges = detect_cross_lang_calls(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        info!(count = xlang_edges, "[engine] cross-language call markers created");
+        eprintln!("[engine] stage: cross-lang done in {:.1}s ({} markers)",
+            stage_start.elapsed().as_secs_f64(), xlang_edges);
+        stage_timings.push(StageTiming {
+            name: "Cross-Lang".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} markers", xlang_edges),
         });
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());
