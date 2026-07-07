@@ -456,6 +456,54 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     return '(mock: watcher not available in browser)';
   }
 
+  // hologram_call — unified dispatch for all hologram engine tools
+  if (cmd === 'hologram_call') {
+    const toolName = args?.tool as string;
+    if (toolName && toolName in MOCK_TOOL_RESPONSES) {
+      const v = MOCK_TOOL_RESPONSES[toolName];
+      return typeof v === 'function' ? v(args?.args as Record<string, unknown>) : v;
+    }
+    console.warn(`[mock] hologram_call — no mock for tool: ${toolName}`, args);
+    return JSON.stringify({ mock: true, cmd: 'hologram_call', tool: toolName, note: 'No mock data for this tool' });
+  }
+
+  // hologram_tools_list — return mock tool schemas matching engine all_schemas()
+  if (cmd === 'hologram_tools_list') {
+    return JSON.stringify([
+      { name: 'explore_deps', description: 'NL-powered dependency exploration', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'search_symbols', description: 'Find symbols by name', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+      { name: 'get_neighbors', description: 'Get direct neighbors of a node', inputSchema: { type: 'object', properties: { nodeId: { type: 'string' } }, required: ['nodeId'] } },
+      { name: 'trace_impact', description: 'Blast radius analysis', inputSchema: { type: 'object', properties: { nodeId: { type: 'string' } }, required: ['nodeId'] } },
+      { name: 'find_dep_path', description: 'Find paths between two nodes', inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] } },
+      { name: 'inspect_symbol', description: 'Complete info about one symbol', inputSchema: { type: 'object', properties: { nodeId: { type: 'string' } }, required: ['nodeId'] } },
+      { name: 'symbol_history', description: 'Decision history for a node', inputSchema: { type: 'object', properties: { nodeId: { type: 'string' } }, required: ['nodeId'] } },
+      { name: 'get_community', description: 'Community info for a node', inputSchema: { type: 'object', properties: { nodeId: { type: 'string' } }, required: ['nodeId'] } },
+      { name: 'cluster_report', description: 'Community structure report', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'fragile_modules', description: 'Top N most fragile modules', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'detect_cycles', description: 'Find circular dependencies', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'thread_conflicts', description: 'Thread × resource conflicts', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'coupling_report', description: 'Coupling depth distribution', inputSchema: { type: 'object', properties: { module: { type: 'string' } }, required: ['module'] } },
+      { name: 'arch_blindspots', description: 'Architecture blind-spot radar', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'graph_summary', description: 'High-level project overview', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'async_edges', description: 'List all async/temporal edges', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'project_timeline', description: 'Chronological project audit log', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'analyze_project', description: 'Re-analyze project directory', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+      { name: 'graph_diff', description: 'Diff current vs baseline graph', inputSchema: { type: 'object', properties: { beforePath: { type: 'string' } }, required: ['beforePath'] } },
+      { name: 'preflight_check', description: 'Change-impact rehearsal', inputSchema: { type: 'object', properties: { path: { type: 'array' } }, required: ['path'] } },
+      { name: 'validate_project', description: 'Full constraint validation', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+      { name: 'project_health', description: 'Project health snapshot', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+      { name: 'rename_symbol', description: 'Safe symbol rename', inputSchema: { type: 'object', properties: { oldName: { type: 'string' }, newName: { type: 'string' } }, required: ['oldName', 'newName'] } },
+      { name: 'engine_status', description: 'Engine status and memory stats', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'check_boundaries', description: 'Check boundary rules', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'find_unused', description: 'Find potentially unused symbols', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'trace_dataflow', description: 'Per-function variable tracing', inputSchema: { type: 'object', properties: { files: { type: 'array' } }, required: ['files'] } },
+      { name: 'resolve_call', description: 'LSP resolve call target', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'infer_type', description: 'LSP infer expression type', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'find_implementations', description: 'LSP find all implementations', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'find_references', description: 'LSP find all references', inputSchema: { type: 'object', properties: {}, required: [] } },
+    ]);
+  }
+
   // Look up in mock responses
   if (cmd in MOCK_TOOL_RESPONSES) {
     const v = MOCK_TOOL_RESPONSES[cmd];

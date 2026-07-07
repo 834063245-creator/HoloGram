@@ -97,39 +97,15 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            // ── Hologram graph commands ──
+            // ── Hologram dispatch — ALL engine tools route through hologram_call ──
             commands::tools::hologram_tools_list,
             commands::tools::hologram_call,
-            commands::hologram::hologram_analyze,
-            commands::hologram::hologram_neighbors,
-            commands::hologram::hologram_impact,
-            commands::hologram::hologram_path,
-            commands::hologram::hologram_graph_diff, // name="hologram_diff"
-            commands::hologram::hologram_fragile,
-            commands::hologram::hologram_cycle,
-            commands::hologram::hologram_search,
-            commands::hologram::hologram_coupling_report,
-            commands::hologram::hologram_blindspots,
-            commands::hologram::hologram_thread_conflicts,
-            commands::hologram::hologram_clusters,
-            commands::hologram::hologram_graph_summary,
-            commands::hologram::hologram_rename,
-            commands::hologram::hologram_explore,
+            // ── Legacy commands (custom logic not yet in engine ToolRegistry) ──
             commands::hologram::hologram_run_check,
-            commands::hologram::hologram_run_health,
-            commands::hologram::hologram_history,
-            commands::hologram::hologram_node,
-            commands::hologram::hologram_unused,
-            commands::hologram::hologram_community,
-            commands::hologram::hologram_delayed,
-            commands::hologram::hologram_run_preflight,
-            commands::hologram::hologram_status,
-            commands::hologram::hologram_policy_check,
-            commands::hologram::hologram_timeline,
             commands::hologram::hologram_hotspots,
             commands::hologram::hologram_record_event,
             commands::hologram::hologram_gate_check,
-            commands::dataflow::hologram_dataflow,
+            // ── Dataflow commands ──
             commands::dataflow::dataflow_save,
             commands::dataflow::dataflow_query,
             commands::dataflow::dataflow_delete,

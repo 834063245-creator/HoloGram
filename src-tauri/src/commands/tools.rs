@@ -2212,29 +2212,34 @@ mod tests {
         assert!(!tools.is_empty(), "must return at least one hologram tool");
         for tool in &tools {
             let name = tool["name"].as_str().expect("every tool must have a name");
-            assert!(name.starts_with("hologram_"), "tool name must start with hologram_: {name}");
+            assert!(!name.is_empty(), "every tool must have a non-empty name");
+            assert!(
+                tool["inputSchema"].is_object(),
+                "tool '{name}' must have an inputSchema"
+            );
         }
     }
 
     #[test]
     fn hologram_call_dispatches_all_tools_no_not_found() {
+        // ponytail: test ToolRegistry::dispatch directly instead of through
+        // hologram_call (which needs a State param not available in unit tests).
+        // Calls with empty args may get param-validation errors — that's expected.
+        // The only real failure is "Tool not found", which means a tool is in
+        // all_schemas() but missing from the dispatch match block.
         let raw = hologram_tools_list().expect("hologram_tools_list should succeed");
         let tools: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("should parse");
 
         for tool in &tools {
             let name = tool["name"].as_str().unwrap();
-            let result = hologram_call(name.to_string(), serde_json::json!({}));
-            match result {
-                Ok(output) => {
-                    let v: serde_json::Value = serde_json::from_str(&output).expect("should be valid JSON");
-                    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                        assert!(
-                            !err.contains("Tool not found"),
-                            "Tool '{name}' not found in ToolRegistry::dispatch — did you add it to the match block?"
-                        );
-                    }
+            let result = ToolRegistry::dispatch(name, &serde_json::json!({}));
+            if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
+                if err.starts_with("Tool not found") {
+                    panic!(
+                        "Tool '{name}' not found in ToolRegistry::dispatch — did you add it to the match block?"
+                    );
                 }
-                Err(e) => panic!("hologram_call('{name}') failed: {e}"),
+                // param validation errors are expected with empty args — skip
             }
         }
     }
