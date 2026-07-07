@@ -110,85 +110,6 @@ export function getCheckStatusCached(): CheckStatusSummary | null {
   return checkCache;
 }
 
-// ── Graph metadata cache (community, dead code) ──
-
-const fileCommunityCache = new Map<string, string>(); // filePath → "auth (12 files)"
-const deadNodeCache = new Set<string>(); // node names with no references
-const fragileFileCache = new Map<string, number>(); // filePath → fragility score (0-100)
-
-let _graphMetaLoaded = false;
-
-/** One-time refresh: query cluster_report + find_unused, cache results. */
-export async function refreshGraphMeta(projectPath: string): Promise<void> {
-  if (_graphMetaLoaded) return;
-  try {
-    const [clusterJson, unusedJson, fragileJson] = await Promise.all([
-      invoke<string>('hologram_call', { tool: 'cluster_report', args: { path: projectPath } }),
-      invoke<string>('hologram_call', { tool: 'find_unused', args: { path: projectPath } }),
-      invoke<string>('hologram_call', { tool: 'fragile_modules', args: { path: projectPath } }),
-    ]);
-    // Parse communities: map node names → "label (N files)"
-    const cluster = JSON.parse(clusterJson);
-    const communities = cluster.communities || [];
-    for (const c of communities) {
-      const label = `${c.label || `社区${c.id}`} (${c.node_count || c.nodes?.length || 0})`;
-      for (const n of (c.nodes || [])) {
-        const name = typeof n === 'string' ? n : n.name || n.id || '';
-        if (name) fileCommunityCache.set(name, label);
-      }
-    }
-    // Parse dead code: collect node names
-    const unused = JSON.parse(unusedJson);
-    const dead = unused.nodes || unused.unused || [];
-    for (const n of dead) {
-      const name = typeof n === 'string' ? n : n.name || n.id || '';
-      if (name) deadNodeCache.add(name);
-    }
-    // Parse fragility: map file → score
-    const fragile = JSON.parse(fragileJson);
-    const modules = fragile.modules || fragile.fragile_modules || [];
-    for (const m of modules) {
-      const f = m.file || m.file_path || '';
-      const score = m.score || m.fragility_score || m.fan_in || 0;
-      if (f && score > 30) fragileFileCache.set(f, score); // only cache notable scores
-    }
-    _graphMetaLoaded = true;
-  } catch { /* silent */ }
-}
-
-/** Look up community label for a file — checks file name against known symbols. */
-function getCommunityForFile(filePath: string): string | null {
-  const fname = filePath.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^.]+$/, '') || '';
-  for (const [nodeName, label] of fileCommunityCache) {
-    if (nodeName.includes(fname) || fname.includes(nodeName)) {
-      return label;
-    }
-  }
-  return null;
-}
-
-/** Check if a symbol name appears in the dead-code list. */
-function isDeadNode(name: string): boolean {
-  return deadNodeCache.has(name);
-}
-
-/** Format graph metadata for pre-read injection. */
-export function formatGraphMeta(filePath: string): string | null {
-  const parts: string[] = [];
-  const community = getCommunityForFile(filePath);
-  if (community) parts.push(`社区: ${community}`);
-  const fname = filePath.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^.]+$/, '') || '';
-  if (isDeadNode(fname)) parts.push('⚠️ 此文件包含无引用符号');
-  // Check fragility — match by file path suffix
-  for (const [f, score] of fragileFileCache) {
-    if (filePath.replace(/\\/g, '/').endsWith(f.replace(/\\/g, '/')) || f.replace(/\\/g, '/').endsWith(filePath.replace(/\\/g, '/'))) {
-      parts.push(`脆弱度: ${score}/100`);
-      break;
-    }
-  }
-  return parts.length > 0 ? `[图谱] ${parts.join(' | ')}` : null;
-}
-
 // ── Timeline cache ──
 
 interface TimelineEvent {
@@ -287,13 +208,6 @@ export function formatBlame(filePath: string): string | null {
   return `[Git] ${fname}: ${blame}`;
 }
 
-/** Format post-edit acknowledgement. */
-export function formatPostEdit(changedFiles: string[]): string | null {
-  if (changedFiles.length === 0) return null;
-  const names = changedFiles.map(f => f.replace(/\\/g, '/').split('/').pop()).join(', ');
-  return `[简报] 已调度检查 (${changedFiles.length} 文件: ${names})`;
-}
-
 // ── Turn-start snapshot — full state block for system-reminder injection ──
 
 /** Build the full turn-start injection block from all cached sources. */
@@ -315,8 +229,6 @@ export function buildPreReadBlock(filePath: string): string {
   if (diag) lines.push(diag);
   const blame = formatBlame(filePath);
   if (blame) lines.push(blame);
-  const meta = formatGraphMeta(filePath);
-  if (meta) lines.push(meta);
   return lines.join('\n');
 }
 

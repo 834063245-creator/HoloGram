@@ -410,7 +410,6 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 import {
   buildPreReadBlock,
   formatDiagnostics,
-  formatPostEdit,
   refreshGitBlame,
   refreshGitStatus,
 } from './state-inject';
@@ -439,32 +438,6 @@ export function createStateReadHook(projectPath: string): Hook {
         return full + result;
       }
       return result;
-    },
-  };
-}
-
-/** Post-edit hook — acknowledges check scheduling after agent writes files. */
-export function createStatePostEditHook(): Hook {
-  return {
-    name: 'state-postedit',
-    shouldEnrich(toolName) {
-      return ['write_file_content', 'edit_file', 'delete_file_or_dir', 'rename_file_or_dir', 'move_file'].includes(toolName);
-    },
-    async enrich(toolName, args, result) {
-      const files: string[] = [];
-      const fp = args.file_path as string;
-      if (fp) files.push(fp);
-      const src = args.source as string;
-      if (src) files.push(src);
-      const dst = args.destination as string;
-      if (dst) files.push(dst);
-      // dedupe
-      const unique = [...new Set(files)];
-
-      const msg = formatPostEdit(unique);
-      if (!msg) return result;
-
-      return result + `\n\n📋 ${msg}`;
     },
   };
 }
