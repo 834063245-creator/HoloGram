@@ -2613,10 +2613,13 @@ export class ChatPanel {
     assistant.tokensUsed = (assistant.tokensUsed || 0) + tokensUsed;
   }
 
-  /** Push a notice message to the log. */
+  /** Push a notice message to the log.
+   *  ponytail: uses _scheduleSync (debounced rAF) instead of direct _syncMessagesToDOM.
+   *  This breaks the tight coupling between notice creation and full DOM rebuild,
+   *  weakening the 21-node render cycle. Notices batch with other pending renders. */
   private _addNoticeMessage(text: string, level: 'info' | 'warn' | 'error'): void {
     this.messages.push(createNoticeMessage(text, level));
-    this._syncMessagesToDOM();
+    this._scheduleSync();
     this.scrollBottom();
   }
 
@@ -3629,6 +3632,22 @@ export class ChatPanel {
     this._addNoticeMessage(text, level);
   }
 
+  /** Show a lightweight DOM toast in the footer (does NOT go through message model).
+   *  Used for UI-only notifications (e.g. mode switch) to avoid feeding back into
+   *  the render cycle via addNotice → _addNoticeMessage → _scheduleSync. */
+  private _showFooterToast(text: string): void {
+    const toast = document.createElement('div');
+    toast.className = 'chat-footer-toast';
+    toast.textContent = text;
+    this.footerEl.appendChild(toast);
+    // Trigger CSS transition
+    requestAnimationFrame(() => toast.classList.add('visible'));
+    setTimeout(() => {
+      toast.classList.remove('visible');
+      setTimeout(() => toast.remove(), 300);
+    }, 2000);
+  }
+
   // ── Footer — model badge, slash commands, usage ──
 
   private updateFooter(): void {
@@ -3905,7 +3924,11 @@ export class ChatPanel {
         saveSettings(s);
         popup.classList.remove('open');
         this._onModeChange?.();
-        this.addNotice(`模式已切换为 "${CHAT_MODES.find(m => m.id === modeId)?.label}"`, 'info');
+        // ponytail: use DOM toast instead of addNotice to avoid feeding back into
+        // the message render cycle (updateFooter → _buildModePopup → addNotice →
+        // _addNoticeMessage → _syncMessagesToDOM / _scheduleSync → render).
+        const modeLabel = CHAT_MODES.find(m => m.id === modeId)?.label || modeId;
+        this._showFooterToast(`模式已切换为 "${modeLabel}"`);
       });
     });
 

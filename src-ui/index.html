@@ -2183,6 +2183,23 @@
     }
     .chat-slash-label { font-weight: 700; }
 
+    /* Footer toast — lightweight notification, bypasses message model.
+       Used for UI-only notices (mode switch etc.) to avoid render cycle feedback. */
+    .chat-footer-toast {
+      position: absolute; bottom: 100%; right: 8px; z-index: 59;
+      margin-bottom: 6px;
+      font-family: var(--font-hud); font-size: calc(9px * var(--font-scale));
+      color: var(--starlight-dim);
+      background: rgba(20, 35, 60, 0.92);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(50, 80, 140, 0.3);
+      padding: 4px 10px;
+      opacity: 0; transform: translateY(4px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+    }
+    .chat-footer-toast.visible { opacity: 1; transform: translateY(0); }
+
     /* Slash popup menu */
     .chat-slash-popup {
       position: absolute; bottom: 100%; right: 8px; z-index: 60;
