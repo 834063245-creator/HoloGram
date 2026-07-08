@@ -69,6 +69,10 @@ export interface CompactionSessionStats {
 const DEFAULT_C_IN = 3.0;   // $3/1M input
 const DEFAULT_C_OUT = 15.0; // $15/1M output
 
+/** ponytail: each re-read or duplicate tool call after compaction counts as
+ *  0.25 extra turns — agent usually recovers quickly, not a full turn. */
+const LOSS_FACTOR_PER_EVENT = 0.25;
+
 // ── Token estimation (matches agent.ts:830) ──
 
 export function estimateTokens(chars: number): number {
@@ -314,7 +318,7 @@ export class CompactionTracker {
    *  ponytail: heuristic — each re-read or duplicate tool call counts as
    *  0.25 extra turns (not a full turn since agent usually recovers quickly). */
   estimateLossFactor(): number {
-    return (this.reReads + this.dupTools) * 0.25;
+    return (this.reReads + this.dupTools) * LOSS_FACTOR_PER_EVENT;
   }
 
   /** Compute average turn cost from pricing and token estimates. */
@@ -427,6 +431,11 @@ export function maybeTune(tracker: CompactionTracker, currentR: number, currentK
 
 // ── Diagnostic report (for /compact-stats or MCP tool) ──
 
+/** ponytail: shared cost calc — used by both formatCompactionReport and the agent tool. */
+function compactionEventCost(e: CompactionEvent, pricing?: Pricing): number {
+  return (e.summaryInputTokens * (pricing?.input ?? DEFAULT_C_IN) + e.summaryOutputTokens * (pricing?.output ?? DEFAULT_C_OUT)) / 1_000_000;
+}
+
 export function formatCompactionReport(stats: CompactionSessionStats, pricing?: Pricing): string {
   const lines: string[] = [
     `# 压缩成本分析报告`,
@@ -438,7 +447,7 @@ export function formatCompactionReport(stats: CompactionSessionStats, pricing?: 
     `| 估算省 token | ${stats.estimatedTokensSaved.toLocaleString()} |`,
     `| 重读文件次数 | ${stats.reReadCount} |`,
     `| 重复工具调用 | ${stats.duplicateToolCalls} |`,
-    `| 估算信息丢失轮次 | ${(stats.reReadCount + stats.duplicateToolCalls) * 0.25} |`,
+    `| 估算信息丢失轮次 | ${(stats.reReadCount + stats.duplicateToolCalls) * LOSS_FACTOR_PER_EVENT} |`,
     `| 总会话轮次 | ${stats.totalTurns} |`,
   ];
 
@@ -456,7 +465,7 @@ export function formatCompactionReport(stats: CompactionSessionStats, pricing?: 
       lines.push(`- 压缩区域: ${e.regionMsgCount} 条消息, ~${e.regionTokensEst.toLocaleString()} tokens`);
       lines.push(`- 摘要大小: ~${e.summaryOutputTokens.toLocaleString()} tokens`);
       lines.push(`- 压缩比: ${compressionRatio}% (${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens)`);
-      lines.push(`- 压缩 LLM 调用费: $${((e.summaryInputTokens * (pricing?.input ?? DEFAULT_C_IN) + e.summaryOutputTokens * (pricing?.output ?? DEFAULT_C_OUT)) / 1_000_000).toFixed(4)}`);
+      lines.push(`- 压缩 LLM 调用费: $${compactionEventCost(e, pricing).toFixed(4)}`);
       lines.push(`- 压缩后继续: ${turnsAfter} 轮`);
     }
   }
@@ -520,7 +529,7 @@ export function createCompactionTools(
         lines.push(`- 当前会话轮次: ${stats.totalTurns}`);
         lines.push(`- 重读文件: ${stats.reReadCount} 次`);
         lines.push(`- 重复工具调用: ${stats.duplicateToolCalls} 次`);
-        lines.push(`- 估算信息丢失: ${((stats.reReadCount + stats.duplicateToolCalls) * 0.25).toFixed(1)} 轮`);
+        lines.push(`- 估算信息丢失: ${((stats.reReadCount + stats.duplicateToolCalls) * LOSS_FACTOR_PER_EVENT).toFixed(1)} 轮`);
         lines.push(`- 压缩总成本: $${stats.totalSummaryCost.toFixed(4)}`);
 
         if (stats.events.length >= 5) {
@@ -547,7 +556,7 @@ export function createCompactionTools(
             lines.push(`### #${i + 1} ${e.outcome === 'summary' ? '✅ 总结' : e.outcome === 'truncated' ? '✂️ 截断' : '⏸️ 卡住'}`);
             lines.push(`- 压缩 ${e.regionMsgCount} 条消息 → 摘要 ${e.summaryOutputTokens.toLocaleString()} tokens`);
             lines.push(`- 上下文: ${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens (${ratio}%)`);
-            lines.push(`- 压缩成本: $${((e.summaryInputTokens * (pricing?.input ?? 3) + e.summaryOutputTokens * (pricing?.output ?? 15)) / 1_000_000).toFixed(4)}`);
+            lines.push(`- 压缩成本: $${compactionEventCost(e, pricing).toFixed(4)}`);
             lines.push(`- 压缩后继续: ${turnsAfter} 轮`);
           }
         }
