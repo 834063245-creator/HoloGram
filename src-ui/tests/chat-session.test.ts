@@ -350,6 +350,9 @@ describe('ChatPanel session persistence', () => {
 
       await panel.autoRestoreLastSession('D:/test');
 
+      // Flush rAF so _scheduleSync fires (notices are now debounced via rAF)
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
       // Verify a notice was added (autoRestoreLastSession → no lastId → addNotice)
       const notices = document.querySelectorAll('.msg-notice');
       // The notice is "未找到历史会话，已创建新会话"

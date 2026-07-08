@@ -979,7 +979,12 @@ export class Agent {
         return 'truncated';
       }
       const region = msgs.slice(head, start);
-      const summary = await this.summarizeRegion(signal, region);
+      let summary: string | null = null;
+      try {
+        summary = await this.summarizeRegion(signal, region);
+      } catch (e: any) {
+        log.warn('agent', `summarizeRegion failed (${e?.message || e}), falling back to truncation`);
+      }
       if (!summary) {
         // ponytail: summarization failed, force-truncate as fallback
         const truncated: Message[] = [
@@ -1179,24 +1184,44 @@ export class Agent {
 规则：简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于消息中的内容。`;
 
     const transcript = renderTranscript(msgs);
-    const gen = this.prov.stream(signal, {
-      messages: [
-        { role: 'system', content: summaryPrompt },
-        { role: 'user', content: transcript },
-      ],
-      tools: [], // no tools for summarization
-      temperature: 0.3, // low temp for factual summary
-      max_tokens: 0,
-    });
 
-    let text = '';
-    for await (const chunk of gen) {
-      if (chunk.type === ChunkType.Text && chunk.text) {
-        text += chunk.text;
+    // ponytail: timeout guard — summarization calls the LLM API; without a timeout,
+    // a hung connection freezes the agent indefinitely during compaction. We use a
+    // separate AbortController with a 30s deadline, linked to the caller's signal.
+    const SUMMARIZE_TIMEOUT_MS = 30_000;
+    const timeoutCtrl = new AbortController();
+    const timeoutId = setTimeout(() => timeoutCtrl.abort(), SUMMARIZE_TIMEOUT_MS);
+    const onExternalAbort = () => timeoutCtrl.abort();
+    signal.addEventListener('abort', onExternalAbort, { once: true });
+
+    try {
+      const gen = this.prov.stream(timeoutCtrl.signal, {
+        messages: [
+          { role: 'system', content: summaryPrompt },
+          { role: 'user', content: transcript },
+        ],
+        tools: [], // no tools for summarization
+        temperature: 0.3, // low temp for factual summary
+        max_tokens: 0,
+      });
+
+      let text = '';
+      for await (const chunk of gen) {
+        if (chunk.type === ChunkType.Text && chunk.text) {
+          text += chunk.text;
+        }
+        if (chunk.type === ChunkType.Error) throw chunk.err!;
       }
-      if (chunk.type === ChunkType.Error) throw chunk.err!;
+      return text.trim();
+    } catch (e: any) {
+      if (timeoutCtrl.signal.aborted && !signal.aborted) {
+        log.warn('agent', 'summarizeRegion timed out after 30s — falling back to truncation');
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeoutId);
+      signal.removeEventListener('abort', onExternalAbort);
     }
-    return text.trim();
   }
 
   private toolReadOnly(name: string): boolean {
