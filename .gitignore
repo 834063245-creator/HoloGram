@@ -84,10 +84,14 @@ preflight/
 # ── Project docs (markdown specs, plans, guides) ──
 docs_archive/
 specs/
-docs/
+docs/*
+!docs/agents/
+docs/agents/*
+!docs/agents/*
 
 # Internal design notes — not for public
 AGENTS.md
+CLAUDE.md
 BUGS.md
 PROJECT.md
 ARCHITECTURE_PLAN.md
