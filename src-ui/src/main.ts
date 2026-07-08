@@ -300,11 +300,7 @@ function setupIcons(): void {
     // Wrap existing text in a span so icon survives textContent changes
     const textContent = el.childNodes.length > 1 ? el.childNodes[1]?.textContent || '' : '';
     if (textContent.trim()) {
-      (el as HTMLElement).innerHTML = svgStr;
-      const label = document.createElement('span');
-      label.className = 'btn-label';
-      label.textContent = textContent.trim();
-      el.appendChild(label);
+      (el as HTMLElement).innerHTML = svgStr + `<span class="btn-label">${textContent.trim()}</span>`;
     }
   });
 }
