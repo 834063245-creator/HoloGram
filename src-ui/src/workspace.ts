@@ -121,6 +121,12 @@ export class Workspace {
   private _active: boolean = false;
   private _unlisteners: Array<() => void> = [];
 
+  /** Guard: true while the initial cold-start render (step 4 of open()) is in flight.
+   *  Prevents graph-updated events from stomping on the in-progress render with
+   *  a second _renderImpl → clearGraph() call that disposes GPU resources the
+   *  first render is still using. */
+  _initialRenderActive: boolean = false;
+
   get active(): boolean { return this._active; }
 
   // ── UI callbacks (set by main.ts) ──
@@ -232,9 +238,18 @@ export class Workspace {
       // ponytail: _renderImpl runs heavy sync prep (Map/Array builds for N nodes)
       // before its first await. Without setTimeout, the main thread is blocked
       // and "正在渲染图谱..." never paints — user sees stale "正在分析...".
+      // ponytail 2: _initialRenderActive prevents graph-updated from calling
+      // doGraphUpdate→render→_renderImpl→clearGraph() while this render is
+      // in flight (cold-start race: fire-and-forget analyze_and_load emits
+      // graph-updated → get_full_graph → doGraphUpdate → render stomps on us).
       console.log('[Workspace.open] step 4: scheduling render...');
       ws.onStatusChange?.('正在渲染图谱...');
-      setTimeout(() => { console.log('[Workspace.open] render starting'); starGraph.render(ws.graphData); }, 0);
+      ws._initialRenderActive = true;
+      setTimeout(async () => {
+        console.log('[Workspace.open] render starting');
+        try { await starGraph.render(ws.graphData); } catch { /* render handles its own errors */ }
+        ws._initialRenderActive = false;
+      }, 0);
 
       // 5. Wire persistent event listeners (graph-updated, analysis-complete, analysis-failed)
       console.log('[Workspace.open] step 5: wiring listeners...');
@@ -246,6 +261,15 @@ export class Workspace {
           if (eventRoot && !isSamePath(eventRoot, ws.path)) return;
           const nc = summary.total_nodes || summary.node_count || 0;
           if (nc > 0 && ws.path) {
+            // ponytail: if the initial cold-start render is still in flight,
+            // don't stomp on it with another _renderImpl → clearGraph().
+            // The initial render already has ws.graphData (cachedGraph).
+            // Subsequent graph-updated events will trigger doGraphUpdate normally
+            // once _initialRenderActive clears.
+            if (ws._initialRenderActive) {
+              console.log('[Workspace.open] graph-updated: skipping (initial render in flight)');
+              return;
+            }
             try {
               const raw = await invoke<string>('get_full_graph');
               ws.graphData = JSON.parse(raw);
