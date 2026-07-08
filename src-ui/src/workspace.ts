@@ -508,19 +508,21 @@ export class Workspace {
       for (const tool of createMemoryTools(this.memoryManager)) { registry.register(tool); }
     }
 
-    // Compaction stats tool
-    {
-      const agentRef = this.agent;
+    // Compaction stats tool — ponytail: extracted helper, used in both main agent and factory
+    const registerCompactionTools = (agent: Agent, reg: ToolRegistry): void => {
       for (const tool of createCompactionTools(
-        () => agentRef?.getCompactionTracker() ?? null,
-        () => agentRef?.getPricing(),
-        () => agentRef ? {
-          compactRatio: agentRef.getCompactRatio?.() ?? 0.55,
-          recentKeep: agentRef.getRecentKeep?.() ?? 4,
-          contextWindow: agentRef.getContextWindow?.() ?? 1_000_000,
-        } : { compactRatio: 0.55, recentKeep: 4, contextWindow: 1_000_000 },
-        async () => agentRef?.loadCompactionConfig?.() ?? null,
-      )) { registry.register(tool); }
+        () => agent.getCompactionTracker(),
+        () => agent.getPricing(),
+        () => ({
+          compactRatio: agent.getCompactRatio(),
+          recentKeep: agent.getRecentKeep(),
+          contextWindow: agent.getContextWindow(),
+        }),
+        async () => agent.loadCompactionConfig(),
+      )) { reg.register(tool); }
+    };
+    if (this.agent) {
+      registerCompactionTools(this.agent, registry);
     }
 
     // Task tracking tools
@@ -707,15 +709,7 @@ export class Workspace {
           ));
         }
         // Compaction stats tool
-        {
-          const agentRef = newAgent;
-          for (const tool of createCompactionTools(
-            () => agentRef.getCompactionTracker(),
-            () => agentRef.getPricing(),
-            () => ({ compactRatio: agentRef.getCompactRatio(), recentKeep: agentRef.getRecentKeep(), contextWindow: agentRef.getContextWindow() }),
-            async () => agentRef.loadCompactionConfig(),
-          )) { r.register(tool); }
-        }
+        registerCompactionTools(newAgent, r);
         return newAgent;
       });
     }

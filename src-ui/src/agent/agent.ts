@@ -941,6 +941,13 @@ export class Agent {
     );
   }
 
+  /** ponytail: record compaction + auto-tune if summary outcome.
+   *  Centralizes the pattern repeated across compactNow and triggerAutoCompact. */
+  private recordCompactionEvent(event: CompactionEvent): void {
+    this.compactionTracker.recordCompaction(event);
+    if (event.outcome === 'summary') this.tryAutoTune();
+  }
+
   /** Manual compaction trigger (from /compact command). Returns summary text or error. */
   async compactNow(signal: AbortSignal): Promise<string> {
     if (this.compactRunning) throw new Error('compaction already in progress');
@@ -960,7 +967,7 @@ export class Agent {
         ];
         this.session = truncated;
         ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
-        this.compactionTracker.recordCompaction({
+        this.recordCompactionEvent({
           ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
           summaryInputTokens: 0, summaryOutputTokens: 0,
           tailMsgCount: Math.min(tailCount, msgs.length - head),
@@ -982,7 +989,7 @@ export class Agent {
         ];
         this.session = truncated;
         ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
-        this.compactionTracker.recordCompaction({
+        this.recordCompactionEvent({
           ts: Date.now(), regionMsgCount: region.length, regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
           summaryInputTokens: 0, summaryOutputTokens: 0,
           tailMsgCount: msgs.length - Math.max(head, msgs.length - tailCount),
@@ -1009,7 +1016,7 @@ export class Agent {
       const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
       const preChars = msgs.reduce((s, m) => s + (m.content?.length || 0), 0);
       const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
-      this.compactionTracker.recordCompaction({
+      this.recordCompactionEvent({
         ts: Date.now(),
         regionMsgCount: region.length,
         regionTokensEst: estimateTokens(regionChars),
@@ -1020,7 +1027,6 @@ export class Agent {
         postTokens: estimateTokens(postChars),
         outcome: 'summary',
       });
-      this.tryAutoTune(); // fire-and-forget
       this.sink({
         kind: EventKind.Notice,
         level: 'info',
@@ -1070,7 +1076,7 @@ export class Agent {
     if (start - head < 4) {
       this.compactStuck = true;
       this.compactRunning = false;
-      this.compactionTracker.recordCompaction({
+      this.recordCompactionEvent({
         ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
         summaryInputTokens: 0, summaryOutputTokens: 0,
         tailMsgCount: tailCount, preTokens: estimated, postTokens: estimated,
@@ -1118,7 +1124,7 @@ export class Agent {
       // ── Compaction model instrumentation ──
       const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
       const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
-      this.compactionTracker.recordCompaction({
+      this.recordCompactionEvent({
         ts: Date.now(),
         regionMsgCount: region.length,
         regionTokensEst: estimateTokens(regionChars),
@@ -1129,7 +1135,6 @@ export class Agent {
         postTokens: estimateTokens(postChars),
         outcome: 'summary',
       });
-      this.tryAutoTune(); // fire-and-forget
       this.sink({
         kind: EventKind.Notice,
         level: 'info',
