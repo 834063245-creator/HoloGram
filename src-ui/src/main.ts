@@ -297,6 +297,11 @@ function setupIcons(): void {
     const svgStr = iconSvg(iconName);
     el.insertAdjacentHTML('afterbegin', svgStr);
     (el as HTMLElement).classList.add('toolbar-btn');
+    // Wrap existing text in a span so icon survives textContent changes
+    const textContent = el.childNodes.length > 1 ? el.childNodes[1]?.textContent || '' : '';
+    if (textContent.trim()) {
+      (el as HTMLElement).innerHTML = svgStr + `<span class="btn-label">${textContent.trim()}</span>`;
+    }
   });
 }
 // ── Helper: set up agent with placeholder workspace (no project loaded) ──
@@ -657,7 +662,8 @@ async function init(): Promise<void> {
     const ws = workspace;
     if (!ws?.path) { statusText.textContent = '请先打开项目'; return; }
     btnReanalyze.disabled = true;
-    btnReanalyze.textContent = '分析中…';
+    const lbl = btnReanalyze.querySelector('.btn-label');
+    if (lbl) lbl.textContent = '分析中…'; else btnReanalyze.textContent = '分析中…';
     statusText.textContent = '重新分析中…';
     try {
       console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
@@ -681,7 +687,8 @@ async function init(): Promise<void> {
       statusText.textContent = `重分析失败: ${e}`;
     } finally {
       btnReanalyze.disabled = false;
-      btnReanalyze.textContent = '重分析';
+      const lbl = btnReanalyze.querySelector('.btn-label');
+      if (lbl) lbl.textContent = '重分析'; else btnReanalyze.textContent = '重分析';
     }
   });
 
