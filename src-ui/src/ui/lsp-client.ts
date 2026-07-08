@@ -192,6 +192,7 @@ export function registerCompletionProvider(
   monaco: typeof import('monaco-editor'),
 ): void {
   const provider = monaco.languages.registerCompletionItemProvider(lang, {
+    triggerCharacters: ['.', ':', '"', '\'', '/', ' '],
     provideCompletionItems: async (model, position) => {
       try {
         const result = await invoke<any>('lsp_request', {

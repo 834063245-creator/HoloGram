@@ -146,10 +146,18 @@ pub async fn lsp_start(
                 "rootUri": root_uri,
                 "capabilities": {
                     "textDocument": {
-                        "completion": { "dynamicRegistration": true },
-                        "hover": { "dynamicRegistration": true },
-                        "definition": { "dynamicRegistration": true },
-                        "references": { "dynamicRegistration": true },
+                        "completion": {
+                            "completionItem": {
+                                "snippetSupport": true,
+                                "documentationFormat": ["markdown", "plaintext"],
+                            },
+                            "triggerCharacters": [".", ":", "\"", "'", "/", " "],
+                        },
+                        "hover": {
+                            "contentFormat": ["markdown", "plaintext"],
+                        },
+                        "definition": { "linkSupport": true },
+                        "references": {},
                         "publishDiagnostics": { "relatedInformation": true },
                     }
                 }
