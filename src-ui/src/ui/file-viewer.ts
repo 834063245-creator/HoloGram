@@ -800,7 +800,7 @@ export class FileViewer {
         'java', 'c', 'cpp', 'csharp', 'ruby', 'lua', 'php',
         'swift', 'dart', 'haskell', 'elixir', 'erlang', 'zig',
         'shell', 'html', 'css', 'scss', 'less', 'yaml', 'yml',
-        'scala', 'r', 'nix', 'ocaml',
+        'scala', 'kotlin', 'r', 'nix', 'ocaml',
       ]);
       // ponytail: use project root as rootUri so LSP can find tsconfig/pyproject/etc.
       const rootUri = this.projectPath
@@ -1184,6 +1184,15 @@ function detectLanguage(fileName: string): string {
     json: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml',
     md: 'markdown', sql: 'sql', sh: 'shell', bash: 'shell',
     toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+    dart: 'dart',
+    hs: 'haskell', lhs: 'haskell',
+    ex: 'elixir', exs: 'elixir',
+    erl: 'erlang', hrl: 'erlang',
+    zig: 'zig',
+    scala: 'scala',
+    r: 'r',
+    nix: 'nix',
+    ml: 'ocaml', mli: 'ocaml',
   };
   return map[ext] || 'plaintext';
 }

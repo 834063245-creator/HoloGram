@@ -59,6 +59,7 @@ fn detect_lsp(language: &str) -> Option<(&str, Vec<&str>)> {
         "css" | "scss" | "less" => Some(("vscode-css-language-server", vec!["--stdio"])),
         "yaml" | "yml" => Some(("yaml-language-server", vec!["--stdio"])),
         "scala" => Some(("metals", vec![])),
+        "kotlin" => Some(("kotlin-language-server", vec![])),
         "r" => Some(("R", vec!["--slave", "-e", "languageserver::run()"])),
         "nix" => Some(("nil", vec![])),
         "ocaml" => Some(("ocamllsp", vec![])),
