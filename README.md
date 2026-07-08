@@ -61,30 +61,11 @@
 
 ## Agent 详解
 
-HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统的两层，天然联动。Hook 体系在 Agent 调工具时自动注入图上下文，Agent 不需要主动查图，信息直接出现在结果顶部。
+HoloGram 内置全功能编码 Agent——不是"接了个聊天框"。图和 Agent 是同一系统的两层：Hook 体系在工具调用时自动注入图上下文（preflight 影响分析、文件依赖度标注），Agent 不需要主动查图。
 
-| 能力 | 说明 |
-|---|---|
-| **30 个图工具（无前缀，直接调用）** | `explore_deps` / `get_neighbors` / `trace_impact` / `find_dep_path` / `search_symbols` / `graph_summary` / `project_health` / `engine_status` / `cluster_report` / `graph_diff` / `analyze_project` / `validate_project` / `preflight_check` / `rename_symbol` / `check_boundaries` / `find_unused` / `trace_dataflow` / `fragile_modules` / `detect_cycles` / `thread_conflicts` / `coupling_report` / `arch_blindspots` / `async_edges` / `project_timeline` / `inspect_symbol` / `get_community` / `resolve_call` / `infer_type` / `find_implementations` / `find_references`。全部走图数据库查询，不读源文件。 |
-| **Preflight 自动影响分析** | Agent 调 `edit_file` / `write_file` 时，preflight hook 用内存 fileIndex 即时评估波及范围——被依赖最多的符号、风险等级（LOW/MEDIUM/HIGH）——注入到工具结果顶部。< 0.1ms，零延迟。 |
-| **Graph Context Hook** | Agent 读文件时，结果顶部自动附上符号概览 + fan-in/fan-out + "改 X 前调 trace_impact"引导。Agent 搜文件时（`search_content`），hook 从匹配行提取标识符，交叉比对 fileIndex，命中则注入图符号的依赖度。写代码后跑测试/构建，hook 解析 exit code，下一轮 turn-start 自动注入结果。 |
-| **Agent ↔ 星图双向实时联动** | Agent 调工具 → 3D 视图实时响应。path → 路径高亮，fragile → 脆弱节点标琥珀，cycle → 循环节点标红，impact → 聚焦飞行，diff → 绿增红删。 |
-| **图作为输入设备** | Shift+双节点 → BFS 最短路径 → Agent 自动分析依赖链风险。Alt+框选区域 → Agent 自动总结模块关系。单击任意节点 → 详情卡 + "问 Agent"入口。 |
-| **全面板覆盖** | 星图详情卡 · 简报违规行 · 文件查看器 · 时间轴事件 · 约束面板——5 个面板全部有"问 Agent"按钮，点一下自动带上下文。 |
-| **Agent 透镜** | 图上只亮 Agent 访问过的节点（其余降至 1% 透明度），渐变虚线串联最近推理步骤。一键切换，看清 Agent "看过哪里"。 |
-| **NL 自然语言探索** | `explore_deps` 接受自然语言查询——"DataRequest 怎么 validate"——引擎自动切词消歧，BFS 路径搜索，一次返回调用链 + 波及范围 + 源码 + 架构告警。 |
-| **子 Agent 分叉** | `agent_spawn` — `fork` 模式继承父上下文 + fork 指令（子 Agent 在 git worktree 隔离环境执行），`fresh` 模式干净起跑。子 Agent 完成后自动 diff 并回传结果。 |
-| **上下文窗口管理** | 窗口使用率 70% 时自动压缩：LLM 生成结构化摘要（目标 / 决策 / 文件 / 错误 / TODO），释放上下文空间。支持手动 `/compact`。 |
-| **Storm Breaker 死循环检测** | 连续 3 次相同工具 + 相同错误 → 自动注入循环预警到工具结果中，防止 Agent 陷入死循环。 |
-| **并行工具执行** | 只读工具（图查询 / `read_file` 等）并行执行，破坏性工具（`edit_file` / `run_shell` 等）串行执行。按 `tool.readOnly()` 自动分批。 |
-| **记忆系统（Markdown + AuraSDK 双存储）** | 跨会话持久记忆，四档置信度（fact / reference / background / suppressed），4 个管理工具（`hologram_memory_save` / `hologram_memory_read` / `hologram_memory_list` / `hologram_memory_delete`）。项目级 `.hologram/memory/*.md` + 全局 `~/.hologram/global_memory/*.md`，自动注入 system prompt。AuraSDK（SDR + MinHash 语义召回）提供 dual-write 和语义检索，Agent 初始化时自动召回项目相关记忆。状态栏可展开日志面板实时显示记忆注入状态。 |
-| **任务管理** | Agent 自管理 5 个工具：`task_create` / `task_update` / `task_list` / `task_get` / `task_stop`。状态生命周期：pending → in_progress → completed / cancelled。会话内追踪。 |
-| **权限系统** | 全息式审批弹窗（脉动指示器 + 终端风格参数展示 + allow/deny/remember）。6 步裁决级联：工具 Deny → 工具 Ask → 工具自检 → 模式检查 → 工具 Allow → 默认放行。4 层安全：Tool 规则 + Bash 危险检测（11 种）/ 文件安全 / Git 子命令 + 旁路免疫层 + 审计日志。 |
-| **工具输出截断** | 每个工具返回上限 32KB，超出部分截断并附工具专属建议（如"用 offset/limit 翻页"、"缩窄路径"）。防止上下文污染。 |
-| **提示缓存追踪** | 双提供商按 1M token 计价，累计会话缓存命中/未命中统计。 |
-| **Web 搜索集成** | `web_search` 工具 → LLM 自动总结原始搜索结果 → 结构化结论。 |
-| **会话恢复** | 对话历史自动保存到 `.hologram/sessions/`（每个会话独立 JSON），重启或切换项目后恢复。支持消息插入和回合撤回。 |
-| **Agent 隔离** | 子 Agent 在 git worktree 沙箱中运行（`.hologram/worktrees/agent-{id}`），双向路径映射（主仓库 ↔ worktree）。完成后自动 cherry-pick 合并或丢弃清理。 |
+**核心能力：** 30 个图查询工具 | 并行工具执行 | 上下文自动压缩 | 子 Agent 分叉（git worktree 隔离）| 记忆系统（Markdown + AuraSDK 语义召回）| Storm Breaker 死循环检测 | 6 步权限裁决 | Web 搜索 | 5 面板联动提问
+
+**Agent 的工具集和系统提示词都在代码里实时同步——README 不维护二手副本。** 完整功能列表和工具地图见 Agent 系统提示词：[`workspace.ts → buildSystemPrompt`](src-ui/src/workspace.ts#L845)。
 
 ---
 
@@ -125,99 +106,13 @@ HoloGram 的 Agent 不是"接了个聊天框"——图和 Agent 是同一系统�
 
 引擎通过 `hologram_call` (Tauri) 或 JSON-RPC 2.0 over stdio (MCP) 暴露 30 个工具（含 4 个 LSP 按需工具）。所有结构图工具走图数据库查询，不读源文件。
 
-#### 聚合类
+覆盖：聚合查询（`explore_deps` `graph_summary`）· 路径查询（`get_neighbors` `trace_impact` `find_dep_path` `search_symbols`）· 风险分析（`fragile_modules` `detect_cycles` `thread_conflicts` `coupling_report` `arch_blindspots` `preflight_check` `check_boundaries`）· 社区（`get_community` `cluster_report`）· LSP 按需（`resolve_call` `infer_type` `find_implementations` `find_references`）· 符号（`inspect_symbol` `find_unused` `trace_dataflow`）· 时间线（`symbol_history` `async_edges` `project_timeline` `graph_diff`）· 工程（`analyze_project` `validate_project` `project_health` `rename_symbol` `engine_status`）
 
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **explore_deps** | `query` 自然语言或符号名<br/>`symbols` 符号名数组（二选一）<br/>`includeSource` 是否返回源码（默认 true） | 统一聚合查询，一次返回 6 部分：Flow（双向 BFS 调用路径，含文件:行号） + Blast Radius（波及范围，区分依赖方/测试） + Relationships（符号间边，按类型分组） + Source Code（声明行 ±30 行上下文，28000 字符预算） + Architecture Alerts（循环/脆弱/L4/线程冲突） + Metadata。NL 输入自动分词消歧。 |
-| **graph_summary** | 无参数 | 图摘要：节点总数 / 边总数 / 各类型数量分布。 |
+**→ 完整参数说明和用法见 [Agent 系统提示词的工具地图](src-ui/src/workspace.ts#L870-L960)。** 别名指向、参数签名、调用示例都在那里——那是 Agent 自己看的权威来源，永远最新。
 
-#### 路径类
+Agent 的工具集由两部分组成：引擎提供的 30 个图查询工具 + Agent 自身内置的 50+ 个操作工具（文件、Git、Shell、搜索、Web、记忆、任务、隔离等）。所有工具对 Agent 透明——Agent 不区分来源，统一调用。
 
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **get_neighbors** | `nodeId` 节点 ID（必填） | 一阶邻居，返回邻居节点列表 + 所有出入边（含 `coupling_depth`）。 |
-| **trace_impact** | `nodeId` 源节点（必填）<br/>`depth` BFS 最大深度（默认 3） | BFS 分层波及分析，返回每层节点列表。 |
-| **find_dep_path** | `from` + `to`（必填）<br/>`depth` 搜索深度（默认 20） | 两节点间最短路径，含跳数和边类型。 |
-| **search_symbols** | `query` 部分名称或 ID（必填）<br/>`limit` 最大结果数（默认 20） | 模糊搜索节点，FTS5 优先，回退线性扫描。 |
-
-#### 风险类
-
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **fragile_modules** | `limit` 返回条数（默认 5） | Top N 脆弱模块，按 L4 封装违规密度排序。高排名≠坏了——核心枢纽天然排名高。 |
-| **detect_cycles** | `mode` 过滤器：`all` / `data` / `llm`（默认 all） | 循环依赖检测，按模式分类返回。 |
-| **thread_conflicts** | `nodeId` 可选 | 线程 × 共享资源冲突矩阵。扫描项目 + 图 Medium 节点。 |
-| **coupling_report** | `module` 模块文件路径（必填） | 完整 L1-L4 耦合深度分布（L1/L2 来自结构图，L3/L4 来自数据流引擎）+ fragility score。 |
-| **arch_blindspots** | `filter` 边界类型过滤（默认 all） | 架构盲区聚合：L4 封装穿透 + 未加锁并发 + 循环依赖。 |
-| **preflight_check** | `path` 文件路径数组（必填） | 改前三步预演：① 结构波及（BFS impact）② 数据流分析（共享变量→L3，时序边→L4）③ 综合风险等级（LOW/MEDIUM/HIGH）。 |
-| **check_boundaries** | `rules` 规则数组 或 `source` + `target` 快捷模式<br/>`edge_kinds` 边类型过滤（默认 `["imports"]`） | 架构边界规则引擎。支持 glob 和 regex 模式自动识别，10 种边类型。违规去重，每条规则独立通过/失败/违规数，支持自定义 message。可直接接入 CI。 |
-
-#### 社区类
-
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **get_community** | `nodeId` 节点 ID（必填） | 节点社区归属（社区 ID、标签、成员数、兄弟节点列表）。 |
-| **cluster_report** | `minSize` 最小社区规模（默认 3）<br/>`maxNodes` 输出截断（默认 20，最大 200） | 代码库社区/集群结构报告，社区标签按最常见文件词干自动派生。 |
-
-#### LSP 按需查询
-
-> 对接原生 LSP 服务器。没有对应语言环境时自动降级，不报错。<br/>
-> 使用前需安装对应 LSP（见下方 [LSP 环境搭建](#lsp-环境搭建)）。装完重启 HoloGram。
-
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **resolve_call** | `file`（必填）<br/>`line` / `column` 可选 | 调用目标解析——`a.foo()` → 具体的 `Animal.foo()`。原生 LSP 优先，手写 fallback。 |
-| **infer_type** | `file`（必填）<br/>`line` / `column`（必填） | 符号类型解析。原生 LSP hover 优先。 |
-| **find_implementations** | `file`（必填）<br/>`line` / `column`（必填） | 接口/trait 的所有实现。原生 LSP `textDocument/implementation`。 |
-| **find_references** | `file`（必填）<br/>`line` / `column`（必填）<br/>`includeDeclaration` 可选 | 符号的所有引用位置。原生 LSP `textDocument/references`，fallback 到图边 |
-
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **inspect_symbol** | `nodeId` 节点 ID（必填） | 单节点完整信息：身份 + 出入度 + 社区 + 所有出入边按 `coupling_depth`/`cross_file`/`temporal_delay_sec` 分组。 |
-| **find_unused** | `limit` 最大结果（默认 20，最大 200）<br/>`kindFilter` 节点类型，逗号分隔（默认 `"function,class"`） | 潜在死代码：in_degree=0 的符号，按 out_degree 降序排列——影响最大的排最前。 |
-| **trace_dataflow** | `files` 文件路径数组（必填） | **走 tree-sitter 重解析，不走图数据库。** 按函数追踪变量读写 + 跨函数共享状态（含读写者列表）+ 异步触发 + 调用序列。 |
-
-#### 时间线类
-
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **symbol_history** | `nodeId` 节点 ID（必填） | 全局时间线（最近 20 条）+ 该节点出入度统计。 |
-| **async_edges** | `files` 文件路径数组（可选） | 查询数据流引擎，返回异步代码模式：triggers、awaits、sequence_calls 及延迟值。 |
-| **project_timeline** | `limit` 最大事件数（默认 100） | 因果审计时间线，含末次变更记录。 |
-| **graph_diff** | `beforePath` 基线 JSON 路径（必填） | 当前图 vs 基线快照 diff——增/删/改节点和边。基线不存在时自动创建。 |
-
-#### 工程类
-
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **analyze_project** | `path` 项目根目录（必填） | 后台异步重分析项目，非阻塞，立即返回"已启动"。 |
-| **validate_project** | `path` 项目根目录（必填） | 全量约束校验：保存基线 → 重分析（**同步阻塞**）→ diff → 约束验证 → 时间线记录。 |
-| **project_health** | `path` 项目根目录（必填）<br/>`days` 回溯天数（默认 30） | 健康评分 0-100：图密度 40 分 + 耦合健康 30 分（L4 比）+ 脆弱评分 20 分 + 循环评分 10 分。含各维度明细。 |
-| **rename_symbol** | `oldName` + `newName`（必填）<br/>`dryRun` 仅预览（默认 false） | 图内安全重命名（节点名 + 持久化存储），预览模式显示匹配节点/文件。 |
-| **engine_status** | 无参数 | 引擎状态（phase / store / 节点数 / 边数 / 辅助索引 / 文件监听）。 |
-
-#### 图工具 vs Agent 内置工具
-
-Agent 的工具集由两部分组成：引擎提供的 30 个图查询工具 + Agent 自身内置的 50+ 个操作工具。所有工具对 Agent 透明——Agent 不区分来源，统一调用。
-
-| 来源 | 数量 | 类别 | 工具 |
-|---|---|---|---|
-| **引擎** | **30** | 图查询 / 风险 / 社区 / LSP / 时间线 / 工程 | `explore_deps` `get_neighbors` `trace_impact` `find_dep_path` `search_symbols` `fragile_modules` `detect_cycles` `thread_conflicts` `coupling_report` `arch_blindspots` `preflight_check` `check_boundaries` `get_community` `cluster_report` `inspect_symbol` `find_unused` `trace_dataflow` `symbol_history` `async_edges` `project_timeline` `graph_diff` `analyze_project` `validate_project` `project_health` `rename_symbol` `engine_status` `graph_summary` `resolve_call` `infer_type` `find_implementations` `find_references` |
-| **Agent 内置** | **50+** | | |
-|  | 9 | 文件操作 | `read_file` `write_file` `edit_file` `list_directory` `create_directory` `delete_file` `move_file` `rename_file` `read_constraints` |
-|  | 13 | Git | `git_status` `git_diff` `git_log` `git_stage` `git_commit` `git_push` `git_pull` `git_init` `git_checkout` `git_create_branch` `git_discard` `git_stash_push` `git_stash_pop` |
-|  | 3 | Shell | `run_shell` `bash_output` `bash_kill` |
-|  | 5 | Agent 隔离 | `agent_isolation_create` `agent_isolation_diff` `agent_isolation_merge` `agent_isolation_discard` `agent_isolation_status` |
-|  | 5 | 任务管理 | `task_create` `task_update` `task_list` `task_get` `task_stop` |
-|  | 4 | 记忆系统 | `hologram_memory_save` `hologram_memory_read` `hologram_memory_list` `hologram_memory_delete` |
-|  | 2 | 代码搜索 | `search_content` `glob` |
-|  | 2 | Web | `web_search` `web_fetch` |
-|  | 1 | 子 Agent | `agent_spawn` |
-|  | 1 | 交互 | `ask_user` |
-|  | 2 | 数据流 | `dataflow_save` `dataflow_query` |
-
-> **引擎图工具**走图数据库（MemoryIndex + SQLite FTS5），不读源文件，省 token。**Agent 内置工具**走 Tauri IPC → Rust 后端，直接操作文件系统、Git、Shell 等。
+> **引擎图工具**走图数据库（MemoryIndex + SQLite FTS5），不读源文件，省 token。**Agent 内置工具**走 Tauri IPC → Rust 后端。
 
 ### 分析管道
 
@@ -245,67 +140,14 @@ Agent 的工具集由两部分组成：引擎提供的 30 个图查询工具 + A
 
 ### 框架路由
 
-8 种框架的 URL→handler 模式检测（tree-sitter 图案匹配，非 LSP）：
-
-| 框架 | 检测模式 |
-|------|----------|
-| **Django** | `path()` / `re_path()` / `url()` |
-| **Express** | `app.get()` / `router.post()` / `app.use()` |
-| **FastAPI** | `@app.get()` / `@router.post()` |
-| **Flask** | `@app.route(path, methods=[...])` |
-| **Rails** | `get '/path', to: 'ctrl#action'` |
-| **Spring** | `@GetMapping` / `@PostMapping` |
-| **Gin** | `r.GET()` / `r.POST()` / `r.Group()` |
-| **NestJS** | `@Controller('prefix')` + `@Get()` |
+支持 18 种框架的 URL→handler 模式检测（tree-sitter 图案匹配，非 LSP）。覆盖 Django / Express / FastAPI / Flask / Rails / Spring / Gin / NestJS / Koa / Fiber / Phoenix / Rocket / Laravel / ASP.NET / Fastify 等。
+**→ 完整列表见 [`engine/src/analysis/framework_routes.rs`](engine/src/analysis/framework_routes.rs)。**
 
 ### LSP 工具（按需调用）
 
-4 个 MCP 工具对接原生 LSP 服务器，提供精确的类型级查询（不是手写解析器）。Agent 或外部客户端按需调用，不预计算。
+4 个 MCP 工具对接原生 LSP 服务器（`resolve_call` `infer_type` `find_implementations` `find_references`），返回精确类型级查询。没有 LSP 时自动降级到手写 fallback。引擎自动探测 PATH，不捆绑 LSP 二进制。
 
-| 工具 | 参数 | 说明 |
-|------|------|------|
-| **resolve_call** | `file`（必填）<br/>`line` / `column` 可选 | 解析文件中的调用目标——`a.foo()` → 具体的 `Animal.foo()`。先调原生 LSP 查定义，找不到了走手写 fallback。 |
-| **infer_type** | `file`（必填）<br/>`line` / `column`（必填） | 解析指定位置符号的类型。优先用原生 LSP hover 信息。 |
-| **find_implementations** | `file`（必填）<br/>`line` / `column`（必填） | 查找接口/trait 的所有实现。走原生 LSP `textDocument/implementation`。 |
-| **find_references** | `file`（必填）<br/>`line` / `column`（必填）<br/>`includeDeclaration` 可选 | 查找符号的所有引用位置。走原生 LSP `textDocument/references`，fallback 到图边搜索。 |
-
-> **LSP 工具是可选的。** 没有 LSP 时，HoloGram 自动降级到手写 fallback（8 种语言 4,000+ 行 tree-sitter 类型推导）。结果是"能用的粗略答案"，装了 LSP 升级为"精确答案"。
-
-### LSP 环境搭建
-
-HoloGram **不捆绑 LSP 服务器**——它们太大（pyright 100MB+、jdtls 200MB+），且开发者通常已有。首次调用某个语言的 LSP 工具时，引擎自动探测 PATH，找到了就启动常驻，找不到就降级。
-
-> **安装完语言环境后重启 HoloGram 即可生效**——启动时重新扫描 PATH。
-
-| 语言 | 扩展名 | LSP 服务器 | 安装方式 |
-|------|--------|-----------|---------|
-| **Python** | `.py` `.pyi` | pyright | `npm i -g pyright` 或 `pip install pyright` |
-| **TypeScript / JS** | `.ts` `.tsx` `.js` `.jsx` `.mjs` `.cjs` `.mts` `.cts` | typescript-language-server | `npm i -g typescript-language-server typescript` |
-| **Rust** | `.rs` | rust-analyzer | `rustup component add rust-analyzer` 或系统包管理器 |
-| **Go** | `.go` | gopls | `go install golang.org/x/tools/gopls@latest` |
-| **Java** | `.java` | jdtls | [Eclipse JDT LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) — 推荐通过 nvim-jdtls 或 Mason 安装 |
-| **C / C++** | `.c` `.h` `.cpp` `.hpp` `.cc` `.hh` `.cxx` `.hxx` | clangd | 通常随 LLVM 安装，或 `apt install clangd` / `brew install llvm` |
-| **C#** | `.cs` | omnisharp | `dotnet tool install --global omnisharp` 或通过 VS Code C# 扩展自带 |
-| **Ruby** | `.rb` | solargraph | `gem install solargraph` |
-| **Lua** | `.lua` | lua-language-server | [GitHub Release](https://github.com/LuaLS/lua-language-server/releases) 或 `npm i -g lua-language-server` |
-| **PHP** | `.php` | intelephense | `npm i -g intelephense` |
-| **Swift** | `.swift` | sourcekit-lsp | Xcode 自带 |
-| **Dart** | `.dart` | dart | Flutter/Dart SDK 自带 |
-| **Haskell** | `.hs` | haskell-language-server | `ghcup install hls` |
-| **Elixir** | `.ex` `.exs` | elixir-ls | [GitHub Release](https://github.com/elixir-lsp/elixir-ls/releases) |
-| **Erlang** | `.erl` `.hrl` | erlang_ls | [GitHub Release](https://github.com/erlang-ls/erlang_ls/releases) |
-| **Zig** | `.zig` | zls | `zig build` 或 [GitHub Release](https://github.com/zigtools/zls/releases) |
-| **Bash / Shell** | `.sh` `.bash` | bash-language-server | `npm i -g bash-language-server` |
-| **HTML** | `.html` | vscode-html-language-server | `npm i -g vscode-langservers-extracted` |
-| **CSS / SCSS / Less** | `.css` `.scss` `.less` | vscode-css-language-server | 同上 |
-| **YAML** | `.yaml` `.yml` | yaml-language-server | `npm i -g yaml-language-server` |
-| **Scala** | `.scala` | metals | [Scala Metals](https://scalameta.org/metals/) — 推荐通过 coursier 安装 |
-| **R** | `.r` `.R` | languageserver | `install.packages("languageserver")` |
-| **Nix** | `.nix` | nil | [GitHub Release](https://github.com/oxalica/nil/releases) 或 `nix profile install nixpkgs#nil` |
-| **OCaml** | `.ml` `.mli` | ocamllsp | `opam install ocaml-lsp-server` |
-| **Kotlin** | `.kt` `.kts` | kotlin-language-server | [GitHub Release](https://github.com/fwcd/kotlin-language-server/releases) |
-
-> **不想装？完全没问题。** 没有 LSP 时工具自动降级，不会报错。
+**→ LSP 安装指南和语言对应关系见 [Agent 系统提示词](src-ui/src/workspace.ts#L1030-L1080)。**
 
 ### 存储引擎
 
@@ -502,38 +344,8 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 
 ## 支持语言
 
-| 语言 | 引擎 |
-|---|---|
-| Python | tree-sitter |
-| TypeScript | tree-sitter |
-| JavaScript | tree-sitter |
-| Go | tree-sitter |
-| Rust | tree-sitter |
-| Java | tree-sitter |
-| C | tree-sitter |
-| C++ | tree-sitter |
-| Ruby | tree-sitter |
-| Lua | tree-sitter |
-| C# | tree-sitter |
-| Swift | tree-sitter |
-| Dart | tree-sitter |
-| Scala | tree-sitter |
-| Haskell | tree-sitter |
-| HTML | tree-sitter |
-| CSS | tree-sitter |
-| PHP | tree-sitter |
-| OCaml | tree-sitter |
-| R | tree-sitter |
-| Nix | tree-sitter |
-| Bash | tree-sitter |
-| YAML | tree-sitter |
-| Zig | tree-sitter |
-| Elixir | tree-sitter |
-| Erlang | tree-sitter |
-| Kotlin | tree-sitter · DLL |
-| TOML | tree-sitter · DLL |
-| Markdown | tree-sitter · DLL |
-> 26 门静态链接 + 3 门动态加载（.dll/.so/.dylib），零外部依赖。
+26 门语言静态链接（tree-sitter）+ 3 门动态加载（DLL）——覆盖 Python · TS/JS · Go · Rust · Java · C/C++ · Ruby · Lua · C# · Swift · Dart · Scala · Haskell · HTML · CSS · PHP · OCaml · R · Nix · Bash · YAML · Zig · Elixir · Erlang · Kotlin · TOML · Markdown。
+**→ 引擎内置的扩展名映射见 [`engine/src/adapter/grammar_loader.rs → supported_extensions()`](engine/src/adapter/grammar_loader.rs)。**
 
 ---
 
