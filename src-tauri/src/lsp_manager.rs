@@ -10,6 +10,8 @@
 // to pending senders. Notifications (textDocument/did*) skip this — they
 // flow to the frontend via the lsp-message event for diagnostics.
 
+#[cfg(windows)] use std::os::windows::process::CommandExt;
+
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -74,12 +76,14 @@ pub async fn lsp_start(
     let (cmd, args) = detect_lsp(&language)
         .ok_or_else(|| format!("不支持的语言或未安装 LSP: {}", language))?;
 
-    let mut child = Command::new(cmd)
-        .args(&args)
+    let mut c = Command::new(cmd);
+    c.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    { c.creation_flags(crate::utils::NO_WINDOW); }
+    let mut child = c.spawn()
         .map_err(|e| format!("无法启动 LSP ({cmd}): {e}"))?;
 
     crate::os_sandbox::assign_to_job(&child);

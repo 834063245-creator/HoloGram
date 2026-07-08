@@ -8,6 +8,14 @@
 
 use std::path::{Path, PathBuf};
 
+/// Create a git Command with CREATE_NO_WINDOW on Windows (prevents console flash).
+fn git_cmd() -> std::process::Command {
+    let mut c = std::process::Command::new("git");
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; c.creation_flags(crate::utils::NO_WINDOW); }
+    c
+}
+
 /// Isolation level for agent operations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IsolationKind {
@@ -67,7 +75,7 @@ impl AgentIsolation {
         let head = git_rev_parse(main_repo_path, "HEAD")?;
 
         // git worktree add --detach <path>
-        let output = std::process::Command::new("git")
+        let output = git_cmd()
             .args(["-C"])
             .arg(normalize(main_repo_path))
             .args(["worktree", "add", "--detach"])
@@ -187,7 +195,7 @@ impl AgentIsolation {
 
     fn cherry_pick_and_clean(&self, commit: &str, wt: &Path) -> Result<String, String> {
         let main = normalize(&self.main_repo_path);
-        let output = std::process::Command::new("git")
+        let output = git_cmd()
             .args(["-C", &main, "cherry-pick", commit])
             .output()
             .map_err(|e| format!("git cherry-pick 失败: {e}"))?;
@@ -195,7 +203,7 @@ impl AgentIsolation {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Abort cherry-pick if it failed
-            let _ = std::process::Command::new("git")
+            let _ = git_cmd()
                 .args(["-C", &main, "cherry-pick", "--abort"])
                 .output();
             return Err(format!("合并失败: {stderr}"));
@@ -241,7 +249,7 @@ fn validate_agent_id(id: &str) -> Result<(), String> {
 }
 
 fn git_rev_parse(repo_path: &Path, refname: &str) -> Result<String, String> {
-    let output = std::process::Command::new("git")
+    let output = git_cmd()
         .args(["-C", &normalize(repo_path), "rev-parse", refname])
         .output()
         .map_err(|e| format!("git rev-parse 失败: {e}"))?;
@@ -253,7 +261,7 @@ fn git_rev_parse(repo_path: &Path, refname: &str) -> Result<String, String> {
 }
 
 fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
-    let output = std::process::Command::new("git")
+    let output = git_cmd()
         .args(["-C", &normalize(repo_path)])
         .args(args)
         .output()
@@ -263,7 +271,7 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn remove_worktree(main_repo_path: &Path, worktree_path: &Path) -> Result<(), String> {
-    let output = std::process::Command::new("git")
+    let output = git_cmd()
         .args([
             "-C",
             &normalize(main_repo_path),
@@ -280,7 +288,7 @@ fn remove_worktree(main_repo_path: &Path, worktree_path: &Path) -> Result<(), St
         if worktree_path.exists() {
             let _ = std::fs::remove_dir_all(worktree_path);
         }
-        let _ = std::process::Command::new("git")
+        let _ = git_cmd()
             .args(["-C", &normalize(main_repo_path), "worktree", "prune"])
             .output();
         let stderr = String::from_utf8_lossy(&output.stderr);
