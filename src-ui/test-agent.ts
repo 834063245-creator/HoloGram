@@ -7,7 +7,7 @@
  * 或修改下面的 API_KEY
  */
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as readline from 'readline';
 import { Agent } from './src/agent/agent';
 import { ToolRegistry, createHologramTestTools } from './src/agent/tool';
@@ -36,44 +36,44 @@ async function pythonExec(toolName: string, args: Record<string, unknown>): Prom
   switch (toolName) {
     case 'hologram_analyze': {
       const path = args.path as string || PROJECT_ROOT;
-      return run(`${PYTHON} -m src_python analyze "${path}" -o "${GRAPH_FILE}"`);
+      return run(['-m', 'src_python', 'analyze', path, '-o', GRAPH_FILE]);
     }
     case 'hologram_neighbors': {
       const nodeId = args.node_id as string;
-      return run(`${PYTHON} -m src_python neighbors "${nodeId}" -g "${graph}"`);
+      return run(['-m', 'src_python', 'neighbors', nodeId, '-g', graph]);
     }
     case 'hologram_impact': {
       const nodeId = args.node_id as string;
       const d = args.max_depth as number;
       if (d && d > 0) {
-        return run(`${PYTHON} -m src_python impact "${nodeId}" -d ${d} -g "${graph}"`);
+        return run(['-m', 'src_python', 'impact', nodeId, '-d', String(d), '-g', graph]);
       }
-      return run(`${PYTHON} -m src_python impact "${nodeId}" -g "${graph}"`);
+      return run(['-m', 'src_python', 'impact', nodeId, '-g', graph]);
     }
     case 'hologram_path': {
       const from = args.from as string;
       const to = args.to as string;
-      return run(`${PYTHON} -m src_python path "${from}" "${to}" -g "${graph}"`);
+      return run(['-m', 'src_python', 'path', from, to, '-g', graph]);
     }
     case 'hologram_diff': {
       const before = args.before_path as string;
       const after = (args.after_path as string) || GRAPH_FILE;
-      return run(`${PYTHON} -m src_python diff "${before}" "${after}"`);
+      return run(['-m', 'src_python', 'diff', before, after]);
     }
     case 'hologram_fragile': {
       const limit = args.limit || 10;
-      return run(`${PYTHON} -m src_python fragile -l ${limit} -g "${graph}"`);
+      return run(['-m', 'src_python', 'fragile', '-l', String(limit), '-g', graph]);
     }
     case 'hologram_cycle': {
       const mode = args.mode || 'all';
-      return run(`${PYTHON} -m src_python cycle -m ${mode} -g "${graph}"`);
+      return run(['-m', 'src_python', 'cycle', '-m', mode, '-g', graph]);
     }
     case 'hologram_coupling_report': {
       const module = args.module as string;
-      return run(`${PYTHON} -m src_python coupling-report "${module}" -g "${graph}"`);
+      return run(['-m', 'src_python', 'coupling-report', module, '-g', graph]);
     }
     case 'hologram_graph_summary': {
-      return run(`${PYTHON} -c "
+      const script = `
 import sys, json
 sys.path.insert(0, '${PROJECT_ROOT}/src_python')
 from core.graph import Graph
@@ -98,7 +98,8 @@ print(json.dumps({
     'density': density,
     'top_node_kinds': sorted(node_types.items(), key=lambda x: x[1], reverse=True)[:10]
 }, indent=2, ensure_ascii=False))
-"`);
+`;
+      return run(['-c', script]);
     }
     case 'hologram_blindspots':
     case 'hologram_thread_conflicts':
@@ -111,9 +112,9 @@ print(json.dumps({
   }
 }
 
-function run(cmd: string): string {
+function run(args: string[]): string {
   try {
-    const result = execSync(cmd, {
+    const result = execFileSync(PYTHON, args, {
       cwd: PROJECT_ROOT,
       encoding: 'utf-8',
       timeout: 30000,
