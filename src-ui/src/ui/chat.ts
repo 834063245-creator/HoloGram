@@ -133,6 +133,7 @@ export class ChatPanel {
   private projectPath = '';
   private onOpenSettings: (() => void) | null = null;
   private _onModeChange: (() => void) | null = null;
+  private _onTrailToggle: (() => void) | null = null;
   private footerClickCleanup: (() => void) | null = null;
   private lastAgentDiag = '';
 
@@ -194,6 +195,7 @@ export class ChatPanel {
 
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
   setOnModeChange(fn: () => void): void { this._onModeChange = fn; }
+  setOnTrailToggle(fn: () => void): void { this._onTrailToggle = fn; }
   setAgentFactory(fn: () => Promise<Agent | null>): void { this.agentFactory = fn; }
 
   constructor(container: HTMLElement) {
@@ -3708,6 +3710,7 @@ export class ChatPanel {
         <button class="sp-item" data-cmd="compact-stats">${iconHtml('check-circle', 10)} 压缩统计<span class="sp-key">/compact-stats</span></button>
         <button class="sp-item" data-cmd="memory">${iconHtml('bookmark', 10)} 查看记忆<span class="sp-key">/memory</span></button>
         <button class="sp-item" data-cmd="remember">${iconHtml('save', 10)} 记住一件事<span class="sp-key">/remember</span></button>
+        <button class="sp-item" data-cmd="trail">${iconHtml('link', 10)} 显示探索轨迹<span class="sp-key">/trail</span></button>
         <button class="sp-item" data-cmd="export">${iconHtml('export-file', 10)} 导出对话<span class="sp-key">/export</span></button>
       </div>
       <div class="sp-group">
@@ -3773,6 +3776,11 @@ export class ChatPanel {
         if (cmd === 'remember') {
           this.inputArea.value = '/remember ';
           this.inputArea.focus();
+          return;
+        }
+        if (cmd === 'trail') {
+          this._onTrailToggle?.();
+          this.addNotice(this._onTrailToggle ? '已切换探索轨迹显示' : '轨迹功能未就绪', 'info');
           return;
         }
         if (cmd === 'export') {
