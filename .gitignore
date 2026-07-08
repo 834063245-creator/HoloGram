@@ -90,6 +90,8 @@ docs/agents/*
 !docs/agents/*
 
 # Internal design notes — not for public
+CODE_OF_CONDUCT.md
+INCREMENTAL-GRAPH-UPDATE.md
 AGENTS.md
 CLAUDE.md
 BUGS.md
