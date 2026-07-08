@@ -844,7 +844,8 @@ export class StarGraph {
 
   // Step 2: Agent lens & trail
   private _lensActive = false;
-  private _trailLine: THREE.LineSegments | null = null;
+  private _trailActive = false;
+  private _trailLine: THREE.LineSegments | LineSegments2 | null = null;
 
   // Blast
   private blastMode = false;
@@ -2702,20 +2703,79 @@ export class StarGraph {
     this._clearTrailLine();
   }
 
-  // ── Agent Trail (Step 2) — dashed line through visited nodes ──
+    // ── Agent Trail (retrospective mode) — thick glowing line + visited node highlight ──
 
-  /**
-   * Draw a dashed line through the sequence of node names (max 20 steps).
-   * Most recent nodes are brighter. Earlier nodes fade out.
-   */
-  updateAgentTrail(nodeNames: string[]): void {
+  /** Activate retrospective trail mode: highlight all visited nodes, dim others
+   *  to 30% (not 2.5% — still visible, just backgrounded), draw a thick glowing
+   *  trail line through the exploration sequence, and fly camera to the centroid. */
+  showAgentTrail(visitedNames: Set<string>, trailNames: string[]): void {
+    if (this._nodeCount === 0) return;
+
+    // 1. Find indices for visited nodes
+    const visitedIndices = new Set<number>();
+    for (const name of visitedNames) {
+      const idx = this._findNodeIndexByName(name);
+      if (idx >= 0) visitedIndices.add(idx);
+    }
+    if (visitedIndices.size === 0) return;
+
+    // 2. Apply lens: visited at 80%, unvisited at 30% (readable backdrop)
+    for (let i = 0; i < this._nodeCount; i++) {
+      this._overrideFlags[i] = 1;
+      if (visitedIndices.has(i)) {
+        this._setGlowAlpha(i, 0.85);
+        this._setCoreVisible(i, true);
+      } else {
+        this._setGlowAlpha(i, 0.30);
+      }
+    }
+    this._flushOverrideAttrs();
+
+    // 3. Dim edges so trail pops
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as LineMaterial).opacity = 0.015;
+    }
+
+    // 4. Draw thick trail line
+    this._drawAgentTrail(trailNames);
+
+    // 5. Fly camera to trail centroid
+    this._flyToCentroid(visitedIndices);
+
+    this._trailActive = true;
+  }
+
+  /** Restore normal rendering from trail mode. */
+  hideAgentTrail(): void {
+    if (!this._trailActive) return;
+    this._trailActive = false;
+
+    for (let i = 0; i < this._nodeCount; i++) {
+      this._overrideFlags[i] = 0;
+      this._setGlowAlpha(i, 0.55);
+      this._setCoreVisible(i, true);
+    }
+    this._flushOverrideAttrs();
+
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as LineMaterial).opacity =
+        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+    }
+
+    this._clearTrailLine();
+  }
+
+  get isTrailActive(): boolean { return this._trailActive; }
+
+  /** Draw the thick glowing trail line through visited nodes. Uses LineMaterial
+   *  for variable width support. */
+  private _drawAgentTrail(trailNames: string[]): void {
     this._clearTrailLine();
 
-    if (!nodeNames || nodeNames.length < 2 || this._nodeCount === 0) return;
+    if (!trailNames || trailNames.length < 2) return;
 
-    // Map names to indices (fuzzy match), skip consecutive duplicates
     const indices: number[] = [];
-    for (const name of nodeNames) {
+    for (const name of trailNames) {
       const idx = this._findNodeIndexByName(name);
       if (idx >= 0) {
         if (indices.length === 0 || indices[indices.length - 1] !== idx) {
@@ -2723,47 +2783,46 @@ export class StarGraph {
         }
       }
     }
-
     if (indices.length < 2) return;
 
     const pos = this.nodePositions;
     const verts: number[] = [];
     const colors: number[] = [];
-
     for (let k = 0; k < indices.length - 1; k++) {
-      const i = indices[k];
-      const j = indices[k + 1];
-      verts.push(
-        pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2],
-        pos[j * 3], pos[j * 3 + 1], pos[j * 3 + 2],
-      );
-      // Fade: earlier segments are dimmer, latest segment is brightest
-      const t = (k + 1) / (indices.length - 1); // 0..1, later = brighter
-      const bright = 0.2 + t * 0.7;
-      // Cyan trail
-      colors.push(0.2 * bright, bright, bright, 0.2 * bright, bright, bright);
+      const i = indices[k], j = indices[k + 1];
+      verts.push(pos[i*3], pos[i*3+1], pos[i*3+2], pos[j*3], pos[j*3+1], pos[j*3+2]);
+      const t = (k + 1) / (indices.length - 1);
+      const bright = 0.4 + t * 0.6;
+      colors.push(0.15*bright, 0.9*bright, bright, 0.15*bright, 0.9*bright, bright);
     }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
-    this._trailLine = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(verts);
+    geo.setColors(colors);
+    this._trailLine = new LineSegments2(geo, new LineMaterial({
+      color: 0x33ccff,
+      linewidth: 2.5,
       vertexColors: true,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.85,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      worldUnits: false,
     }));
+    this._trailLine.renderOrder = 999;
     this.nodeGroup.add(this._trailLine);
   }
 
-  /** Remove the existing trail line from the scene. */
+  /** Remove the existing trail line. Handles both LineSegments (old) and LineSegments2 (new). */
   private _clearTrailLine(): void {
     if (this._trailLine) {
       this.nodeGroup.remove(this._trailLine);
-      this._trailLine.geometry.dispose();
-      (this._trailLine.material as THREE.Material).dispose();
+      if (this._trailLine.geometry) this._trailLine.geometry.dispose();
+      const mat = this._trailLine.material;
+      if (mat) {
+        if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+        else mat.dispose();
+      }
       this._trailLine = null;
     }
   }
@@ -4641,6 +4700,7 @@ export class StarGraph {
     this.detailCard?.classList.remove('visible');
     // Step 2: Clear lens & trail state
     this._lensActive = false;
+    this._trailActive = false;
     this._clearTrailLine();
   }
 

@@ -10,7 +10,6 @@
 import type { StarGraph } from './graph';
 import { bus } from './events';
 import { shell } from './app-shell';
-import { dbg } from './debug';
 
 /**
  * Shared helper — send a question to the Agent (opens chat panel if closed).
@@ -26,11 +25,11 @@ export class AgentVisualizer {
   /** Set of node names the agent has ever touched (for lens mode). */
   private _visitedNodes = new Set<string>();
 
-  /** Ordered trail of recently focused nodes (max 20, for trail line). */
+    /** Ordered trail of recently focused nodes (max 50, for trail line). */
   private _trail: string[] = [];
 
-  /** Whether the agent lens overlay is currently active. */
-  private _lensActive = false;
+  /** Whether the retrospective trail visualization is currently active. */
+  private _trailActive = false;
 
   constructor(graph: StarGraph) {
     this.graph = graph;
@@ -43,19 +42,39 @@ export class AgentVisualizer {
     this.graph = graph;
   }
 
-  /** Toggle agent lens mode — only visited nodes remain bright, others dim to 1%. */
-  toggleLens(): boolean {
-    this._lensActive = !this._lensActive;
-    if (this._lensActive) {
-      this.graph.setAgentLens(this._visitedNodes);
+  /** Toggle retrospective trail mode — shows the Agent's exploration path as
+   *  a glowing cyan trail through visited nodes, with unvisited nodes dimmed to
+   *  30% (still visible as backdrop). Camera flies to the trail centroid. */
+  toggleTrail(): boolean {
+    if (this._trailActive) {
+      this.hideTrail();
     } else {
-      this.graph.clearAgentLens();
+      this.showTrail();
     }
-    return this._lensActive;
+    return this._trailActive;
   }
 
-  get isLensActive(): boolean { return this._lensActive; }
+  /** Activate trail mode. */
+  showTrail(): void {
+    if (this._visitedNodes.size === 0) return;
+    this._trailActive = true;
+    this.graph.showAgentTrail(this._visitedNodes, this._trail);
+  }
+
+  /** Deactivate trail mode, restore normal rendering. */
+  hideTrail(): void {
+    this._trailActive = false;
+    this.graph.hideAgentTrail();
+  }
+
+  get isTrailActive(): boolean { return this._trailActive; }
   get visitedCount(): number { return this._visitedNodes.size; }
+
+  // Backward compat — old toggleLens/AgentLens APIs map to trail mode
+  /** @deprecated Use toggleTrail() instead. */
+  toggleLens(): boolean { return this.toggleTrail(); }
+  /** @deprecated Use isTrailActive instead. */
+  get isLensActive(): boolean { return this._trailActive; }
 
   // ── Event handlers ────────────────────────────────────
 
@@ -65,83 +84,34 @@ export class AgentVisualizer {
 
   private _onToolDone(data: { toolName: string; args: Record<string, unknown>; output: string }): void {
     try {
-      dbg('agent-viz', `tool="${data.toolName}"`);
-
       // Extract focused node names from tool args (for lens + trail)
       const focusedNodes = this._extractFocusedNodes(data.toolName, data.args);
       for (const name of focusedNodes) {
         this._visitedNodes.add(name);
-        // Deduplicate consecutive same-node trail entries
         if (this._trail.length === 0 || this._trail[this._trail.length - 1] !== name) {
           this._trail.push(name);
-          if (this._trail.length > 20) this._trail.shift();
+          if (this._trail.length > 50) this._trail.shift();
         }
       }
 
-      // ── Visual effects ──
-      switch (data.toolName) {
-        case 'find_dep_path':
-          this._handlePath(data.args);
-          break;
-        case 'trace_impact':
-          this._handleImpact(data.args);
-          break;
-        case 'get_neighbors':
-          this._handleNeighbors(data.args);
-          break;
-        case 'coupling_report':
-          this._handleCouplingReport(data.args);
-          break;
-        case 'fragile_modules':
-          this._handleFragile(data.output);
-          break;
-        case 'detect_cycles':
-          this._handleCycle(data.output);
-          break;
-        case 'hologram_diff':
-          this._handleDiff(data.output);
-          break;
-        case 'arch_blindspots':
-          this._handleBlindspots(data.output);
-          break;
-        case 'validate_project':
-          this._handleRunCheck(data.output);
-          break;
-        case 'symbol_history':
-          this._handleHistory(data.args);
-          break;
-        case 'get_community':
-          this._handleCommunity(data.output);
-          break;
-        case 'async_edges':
-          this._handleDelayed(data.output);
-          break;
-        case 'hologram_changes':
-          this._handleChanges(data.output);
-          break;
+      // If trail mode is active, update the visualization live
+      if (this._trailActive && this._visitedNodes.size > 0) {
+        this.graph.showAgentTrail(this._visitedNodes, this._trail);
       }
 
-      // ── Update trail line ──
-      if (this._trail.length >= 2) {
-        this.graph.updateAgentTrail(this._trail);
-      }
-
-      // ── Update lens if active ──
-      if (this._lensActive && this._visitedNodes.size > 0) {
-        this.graph.setAgentLens(this._visitedNodes);
-      }
-
-      // ── Notify other components of focus change ──
       if (focusedNodes.length > 0) {
         bus.emit('agent:focus-changed', {
           nodeNames: focusedNodes,
           toolName: data.toolName,
+          visitedCount: this._visitedNodes.size,
         });
       }
     } catch {
       // Visualization failure must never break chat or agent
     }
   }
+
+  // ── Focus extraction ──
 
   /** Extract node names the agent is explicitly focusing on in this tool call. */
   private _extractFocusedNodes(toolName: string, args: Record<string, unknown>): string[] {
@@ -166,181 +136,4 @@ export class AgentVisualizer {
     }
     return names;
   }
-
-  // ── Individual visual-effect handlers ─────────────────
-
-  private _handlePath(args: Record<string, unknown>): void {
-    const from = String(args['from'] || args['from_node'] || '');
-    const to = String(args['to'] || args['to_node'] || '');
-    if (!from || !to) return;
-    this.graph.showPathOnGraph(from, to);
-  }
-
-  private _handleImpact(args: Record<string, unknown>): void {
-    const node = String(args['node_id'] || args['nodeId'] || '');
-    dbg('agent-viz.impact', `node="${node}"`);
-    if (!node) return;
-    this.graph.highlightNodeNames([node], '#60a0ff');
-  }
-
-  private _handleNeighbors(args: Record<string, unknown>): void {
-    const node = String(args['node_id'] || args['nodeId'] || '');
-    dbg('agent-viz.neighbors', `node="${node}"`);
-    if (!node) return;
-    this.graph.highlightNodeNames([node], '#60a0ff');
-  }
-
-  private _handleCouplingReport(args: Record<string, unknown>): void {
-    const module = String(args['module'] || args['module_name'] || args['moduleName'] || '');
-    dbg('agent-viz.coupling', `module="${module}"`);
-    if (!module) return;
-    this.graph.highlightNodeNames([module], '#60a0ff');
-  }
-
-  private _handleFragile(resultText: string): void {
-    const names = parseFragileOutput(resultText);
-    if (names.length > 0) {
-      this.graph.highlightNodeNames(names, '#f0b848');
-    }
-  }
-
-  private _handleCycle(resultText: string): void {
-    const names = parseCycleOutput(resultText);
-    if (names.length > 0) {
-      this.graph.highlightNodeNames(names, '#d94444');
-    }
-  }
-
-  private _handleDiff(resultText: string): void {
-    let diffData: any;
-    try { diffData = JSON.parse(resultText); } catch { return; }
-    if (diffData && !diffData.is_empty) {
-      this.graph.showDiff(diffData);
-    }
-  }
-
-  private _handleBlindspots(resultText: string): void {
-    let data: any;
-    try { data = JSON.parse(resultText); } catch { return; }
-    const names: string[] = [];
-    const items = Array.isArray(data) ? data : (data?.blindspots || data?.results || []);
-    for (const item of items) {
-      const name = item?.node_name || item?.name || item?.module || '';
-      if (name) names.push(String(name));
-    }
-    if (names.length > 0) {
-      this.graph.highlightNodeNames(names, '#f0b848');
-    }
-  }
-
-  private _handleRunCheck(resultText: string): void {
-    let data: any;
-    try { data = JSON.parse(resultText); } catch { return; }
-    const signals = data?.signals || [];
-    const names: string[] = [];
-    for (const sig of signals) {
-      const nodeNames = sig?.affected_nodes || [];
-      names.push(...nodeNames.map(String));
-    }
-    if (names.length > 0) {
-      this.graph.highlightNodeNames(names, '#d94444');
-    }
-  }
-
-  private _handleHistory(args: Record<string, unknown>): void {
-    const node = String(args['node_id'] || args['nodeId'] || '');
-    dbg('agent-viz.history', `node="${node}"`);
-    if (!node) return;
-    this.graph.highlightNodeNames([node], '#60a0ff');
-  }
-
-  private _handleCommunity(resultText: string): void {
-    let data: any;
-    try { data = JSON.parse(resultText); } catch { return; }
-    const names: string[] = [];
-    const siblings = data?.sibling_nodes || [];
-    for (const sid of siblings) names.push(String(sid));
-    if (data?.node_id) names.push(String(data.node_id));
-    if (names.length > 0) {
-      this.graph.highlightNodeNames(names, '#a088e0');
-    }
-  }
-
-  private _handleDelayed(resultText: string): void {
-    let data: any;
-    try { data = JSON.parse(resultText); } catch { return; }
-    const names = new Set<string>();
-    for (const d of (data?.realtime || [])) {
-      if (d.source?.name) names.add(String(d.source.name));
-      if (d.target?.name) names.add(String(d.target.name));
-    }
-    for (const d of (data?.periodic || [])) {
-      if (d.source?.name) names.add(String(d.source.name));
-      if (d.target?.name) names.add(String(d.target.name));
-    }
-    if (names.size > 0) {
-      this.graph.highlightNodeNames(Array.from(names), '#f0b848');
-    }
-  }
-
-  private _handleChanges(resultText: string): void {
-    let data: any;
-    try { data = JSON.parse(resultText); } catch { return; }
-    const nodes = data?.last_change?.affected_nodes || [];
-    const names = nodes.map(String);
-    if (names.length > 0) {
-      this.graph.highlightNodeNames(names, '#d94444');
-    }
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-// Text parsers (shared helpers, unchanged from Step 1)
-// ═══════════════════════════════════════════════════════
-
-/**
- * Parse fragile_modules tabular output.
- * Format:
- *   Top N Most Fragile Modules:
- *     Module                    L4   L3   L2   L1   Score
- *     -----------------------  ---  ---  ---  ---  ------
- *     my.module.name             5    3    2    1   0.850
- */
-function parseFragileOutput(text: string): string[] {
-  const names: string[] = [];
-  const lines = text.split('\n');
-  let inTable = false;
-  for (const line of lines) {
-    if (line.includes('---') && line.includes('--')) {
-      inTable = true;
-      continue;
-    }
-    if (!inTable) continue;
-    const m = line.match(/^\s{2}(\S+)\s+\d+/);
-    if (m && m[1]) {
-      names.push(m[1]);
-    }
-  }
-  return names;
-}
-
-/**
- * Parse detect_cycles output.
- * Format:
- *   [category] 环长 N 跳: A → B → C
- */
-function parseCycleOutput(text: string): string[] {
-  const names = new Set<string>();
-  const arrowLines = text.match(/→.+→/g);
-  if (arrowLines) {
-    for (const line of arrowLines) {
-      const parts = line.split('→').map(s => s.trim());
-      for (const p of parts) {
-        if (p && p.length < 120 && !p.startsWith('[')) {
-          names.add(p);
-        }
-      }
-    }
-  }
-  return Array.from(names);
 }

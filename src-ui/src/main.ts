@@ -402,6 +402,7 @@ async function init(): Promise<void> {
 
   // Agent visualizer
   agentViz = new AgentVisualizer(starGraph);
+  chatPanel.setOnTrailToggle(() => agentViz?.toggleTrail());
 
   // Graph interaction
   new GraphInteraction();
