@@ -3,7 +3,7 @@
 
 [package]
 name = "hologram"
-version = "0.1.0"
+version = "6.1.1"
 description = "全息观测站"
 authors = ["Hologram Team"]
 edition = "2021"

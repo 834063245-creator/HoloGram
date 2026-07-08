@@ -1,18 +1,59 @@
 # Copyright (c) 2026 Wenbing Jing. MIT License.
 # SPDX-License-Identifier: MIT
 
-# CI is disabled — engine source no longer public.
-# Builds happen locally. Binaries published via GitHub Releases.
-# See scripts/release.sh for local build + upload workflow.
-
-name: CI (no-op)
+name: CI
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  noop:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: windows-latest
     steps:
-      - run: echo "CI skipped — binary-only distribution. Build locally with scripts/release.sh"
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src-ui/package-lock.json
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            engine -> target
+            src-tauri -> target
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+
+      - name: Build frontend
+        run: cd src-ui && npm ci && npm run build
+
+      - name: Test frontend
+        run: cd src-ui && npm test
+
+      - name: Build engine
+        run: cd engine && cargo build --release
+
+      - name: Test engine
+        run: cd engine && cargo test --release
+
+      - name: Build Tauri app
+        run: cd src-tauri && cargo tauri build
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: hologram-msi
+          path: src-tauri/target/release/bundle/msi/*.msi
