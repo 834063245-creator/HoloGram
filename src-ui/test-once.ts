@@ -2,7 +2,7 @@
  * Agent 单次测试 — 发送一条消息，打印结果，退出。
  * 用法：npx tsx test-once.ts "你的问题"
  */
-import { execFileSync } from 'child_process';
+import { execSync } from 'child_process';
 import { Agent, EventKind } from './src/agent/agent';
 import type { AgentEvent } from './src/agent/agent';
 import { ToolRegistry, createHologramTestTools } from './src/agent/tool';
@@ -15,49 +15,49 @@ const GRAPH_FILE = process.env.GRAPH_FILE || `${PROJECT_ROOT}/hologram_full.json
 
 async function pythonExec(toolName: string, args: Record<string, unknown>): Promise<string> {
   try {
-    let pyArgs: string[];
+    let cmd: string;
     const graph = (args.graph as string) || GRAPH_FILE;
     switch (toolName) {
       case 'hologram_analyze': {
         const path = (args.path as string) || PROJECT_ROOT;
-        pyArgs = ['-m', 'src_python', 'analyze', path, '-o', GRAPH_FILE];
+        cmd = `${PYTHON} -m src_python analyze "${path}" -o "${GRAPH_FILE}"`;
         break;
       }
       case 'hologram_neighbors': {
-        pyArgs = ['-m', 'src_python', 'neighbors', args.node_id as string, '-g', graph];
+        cmd = `${PYTHON} -m src_python neighbors "${args.node_id}" -g "${graph}"`;
         break;
       }
       case 'hologram_impact': {
         const d = args.max_depth as number;
         cmd = d && d > 0
-          ? ['-m', 'src_python', 'impact', args.node_id as string, '-d', String(d), '-g', graph]
-          : ['-m', 'src_python', 'impact', args.node_id as string, '-g', graph];
+          ? `${PYTHON} -m src_python impact "${args.node_id}" -d ${d} -g "${graph}"`
+          : `${PYTHON} -m src_python impact "${args.node_id}" -g "${graph}"`;
         break;
       }
       case 'hologram_path': {
-        pyArgs = ['-m', 'src_python', 'path', args.from as string, args.to as string, '-g', graph];
+        cmd = `${PYTHON} -m src_python path "${args.from}" "${args.to}" -g "${graph}"`;
         break;
       }
       case 'hologram_diff': {
-        pyArgs = ['-m', 'src_python', 'diff', args.before_path as string, (args.after_path as string) || GRAPH_FILE];
+        cmd = `${PYTHON} -m src_python diff "${args.before_path}" "${args.after_path || GRAPH_FILE}"`;
         break;
       }
       case 'hologram_fragile': {
         const limit = args.limit || 10;
-        pyArgs = ['-m', 'src_python', 'fragile', '-l', String(limit), '-g', graph];
+        cmd = `${PYTHON} -m src_python fragile -l ${limit} -g "${graph}"`;
         break;
       }
       case 'hologram_cycle': {
         const mode = args.mode || 'all';
-        pyArgs = ['-m', 'src_python', 'cycle', '-m', mode, '-g', graph];
+        cmd = `${PYTHON} -m src_python cycle -m ${mode} -g "${graph}"`;
         break;
       }
       case 'hologram_coupling_report': {
-        pyArgs = ['-m', 'src_python', 'coupling-report', args.module as string, '-g', graph];
+        cmd = `${PYTHON} -m src_python coupling-report "${args.module}" -g "${graph}"`;
         break;
       }
       case 'hologram_graph_summary': {
-        const script = `
+        cmd = `${PYTHON} -c "
 import sys, json
 sys.path.insert(0, '${PROJECT_ROOT}/src_python')
 from core.graph import Graph
@@ -82,15 +82,14 @@ print(json.dumps({
     'density': density,
     'top_node_kinds': sorted(node_types.items(), key=lambda x: x[1], reverse=True)[:10]
 }, indent=2, ensure_ascii=False))
-`;
-        pyArgs = ['-c', script];
+"`;
         break;
       }
       default:
         return `工具 "${toolName}" 暂未在 CLI 测试模式中实现。`;
     }
 
-    const result = execFileSync(PYTHON, pyArgs, {
+    const result = execSync(cmd, {
       cwd: PROJECT_ROOT,
       encoding: 'utf-8',
       timeout: 30000,

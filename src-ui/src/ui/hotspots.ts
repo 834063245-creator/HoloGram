@@ -8,7 +8,6 @@ import { invoke } from '../bridge';
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
-import DOMPurify from 'dompurify';
 import type { StarGraph } from './graph';
 
 interface HotspotItem {
@@ -171,7 +170,7 @@ export class HotspotsPanel {
       html += `</div>`;
     }
 
-    this.content.innerHTML = DOMPurify.sanitize(html);
+    this.content.innerHTML = html;
 
     // Wire click → navigate to file on star graph
     this.content.querySelectorAll('.hs-item').forEach(el => {

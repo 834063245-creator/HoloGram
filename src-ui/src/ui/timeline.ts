@@ -10,7 +10,6 @@ import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import type { CheckResult } from './check';
-import DOMPurify from 'dompurify';
 
 interface TimelineEvent {
   id: number;
@@ -243,7 +242,7 @@ export class TimelinePanel {
     }
 
     html += '</div>';
-    this.content.innerHTML = DOMPurify.sanitize(html);
+    this.content.innerHTML = html;
 
     // Wire up "Ask Agent" buttons
     this.content.querySelectorAll('.tl-ask-btn').forEach(el => {
