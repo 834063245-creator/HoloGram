@@ -1,17 +1,60 @@
 # Copyright (c) 2026 Wenbing Jing. MIT License.
 # SPDX-License-Identifier: MIT
 
-# Release is done locally via scripts/release.sh — builds engine + app + uploads.
-# This workflow is a no-op placeholder.
-
-name: Release (no-op)
+name: Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
 
 jobs:
-  noop:
-    runs-on: ubuntu-latest
+  release:
+    runs-on: windows-latest
     steps:
-      - run: echo "Release skipped — binary-only distribution. Use scripts/release.sh locally"
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src-ui/package-lock.json
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            engine -> target
+            src-tauri -> target
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+
+      - name: Build frontend
+        run: cd src-ui && npm ci && npm run build
+
+      - name: Test frontend
+        run: cd src-ui && npm test
+
+      - name: Build engine
+        run: cd engine && cargo build --release
+
+      - name: Test engine
+        run: cd engine && cargo test --release
+
+      - name: Build Tauri app
+        run: cd src-tauri && cargo tauri build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            engine/target/release/hologram-engine.exe
