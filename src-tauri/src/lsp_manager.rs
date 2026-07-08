@@ -16,7 +16,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}};
+use std::sync::{Arc, Mutex, mpsc, atomic::{AtomicU32, Ordering}};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
@@ -137,10 +137,18 @@ pub async fn lsp_start(
         sessions.lock().unwrap().remove(&sid);
     });
 
-    // Send initialize
+    // Send initialize and WAIT for the response before returning.
+    // Without this, didOpen and textDocument/completion can race ahead
+    // of the server's initialization (especially slow ones like tsserver).
+    // Uses mpsc (not tokio oneshot) to stay Send-safe for Tauri commands.
+    let (tx, rx) = mpsc::channel();
     {
+        let init_id = req_id.fetch_add(1, Ordering::Relaxed);
+        // Route the response through the mpsc sender — reader thread picks it up
+        let pending = pending.clone();
+        let tx = tx.clone();
         let init = serde_json::json!({
-            "jsonrpc": "2.0", "id": req_id.fetch_add(1, Ordering::Relaxed),
+            "jsonrpc": "2.0", "id": init_id,
             "method": "initialize",
             "params": {
                 "processId": std::process::id(),
@@ -167,6 +175,20 @@ pub async fn lsp_start(
         let mut lock = stdin.lock().unwrap();
         writeln!(lock, "{}", serde_json::to_string(&init).unwrap()).ok();
         lock.flush().ok();
+        // Register a oneshot that forwards to mpsc
+        let (otx, orx) = oneshot::channel();
+        pending.lock().unwrap().insert(init_id, otx);
+        // Bridge: tokio oneshot → std mpsc (the reader thread resolves tokio oneshots)
+        std::thread::spawn(move || {
+            let _ = tx.send(orx.blocking_recv());
+        });
+    }
+
+    // Wait for initialize response (30s timeout so broken servers don't hang forever)
+    match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(val)) => { let _ = val; /* initialize succeeded */ }
+        Ok(Err(_)) => { return Err(format!("LSP 初始化失败 ({})", cmd)); }
+        Err(_) => { return Err(format!("LSP 初始化超时 ({})", cmd)); }
     }
 
     // Send initialized notification
