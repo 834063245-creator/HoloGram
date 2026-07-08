@@ -7,6 +7,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(windows)] use std::os::windows::process::CommandExt;
+
 mod agent_isolation;
 mod aura_memory;
 mod mcp_manager;
@@ -229,12 +231,13 @@ fn main() {
                 if let Some(exe_dir) = exe_path.parent() {
                     let mb = exe_dir.join("memory-bundle.exe");
                     if mb.exists() {
-                        std::process::Command::new(&mb)
-                            .stdin(std::process::Stdio::null())
+                        let mut mc = std::process::Command::new(&mb);
+                        mc.stdin(std::process::Stdio::null())
                             .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn()
-                            .ok();
+                            .stderr(std::process::Stdio::null());
+                        #[cfg(windows)]
+                        { mc.creation_flags(crate::utils::NO_WINDOW); }
+                        mc.spawn().ok();
                     }
                 }
             }
