@@ -999,10 +999,30 @@ impl MemoryIndex {
     /// Returns owned values — caller owns the result.
     pub fn edges_iter(&self) -> Vec<(String, Vec<(String, EdgeKind, u8, Option<f64>)>)> {
         let mut results = Vec::with_capacity(self.node_by_idx.len());
+        let mut seen: HashSet<u32> = HashSet::new();
         for &src_handle in &self.node_by_idx {
+            seen.insert(src_handle);
             let raw = self.collect_outgoing(src_handle);
             if raw.is_empty() { continue; }
             let src_str = self.get_str(src_handle).to_string();
+            let mut targets = Vec::with_capacity(raw.len());
+            for &(tgt, kind_u8, coupling, delay) in &raw {
+                targets.push((
+                    self.get_str(tgt).to_string(),
+                    EdgeKind::from_u8(kind_u8),
+                    coupling,
+                    unpack_delay(delay),
+                ));
+            }
+            results.push((src_str, targets));
+        }
+        // ponytail: unflushed nodes (inserted but not yet in dense index) — edges
+        // are in pending_adds. Walk them so callers see edges before flush_pending().
+        for &(src, _, _, _, _) in &self.pending_adds {
+            if !seen.insert(src) { continue; }
+            let raw = self.collect_outgoing(src);
+            if raw.is_empty() { continue; }
+            let src_str = self.get_str(src).to_string();
             let mut targets = Vec::with_capacity(raw.len());
             for &(tgt, kind_u8, coupling, delay) in &raw {
                 targets.push((
