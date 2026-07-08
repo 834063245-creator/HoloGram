@@ -574,13 +574,6 @@ pub(crate) fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<Str
     .map_err(|e| format!("Engine error: {}", e))
 }
 
-pub(crate) fn with_store<F: Fn(&engine::storage::MemoryIndex) -> serde_json::Value>(f: F) -> Result<String, String> {
-    engine_api::engine_read(|idx| {
-        serde_json::to_string(&f(idx)).unwrap_or_default()
-    })
-    .map_err(|e| format!("Engine error: {}", e))
-}
-
 /// Serialize full graph JSON — shared by frontend and analyze_and_load.
 /// Reads from Engine exclusively.
 pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
@@ -672,6 +665,7 @@ pub(crate) fn derive_community_label(node_ids: &[String]) -> String {
         .unwrap_or_else(|| "社区".to_string())
 }
 
+#[allow(dead_code)] // used by tests in main.rs
 pub(crate) fn diff_to_json(before: &Graph, after: &Graph) -> serde_json::Value {
     let d = before.diff(after);
     let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| serde_json::json!({

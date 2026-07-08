@@ -4,19 +4,9 @@
 
 use tauri;
 use serde_json;
-use std::path::PathBuf;
 use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::routing::preflight::{check_timeline_props, load_baseline, save_baseline};
-use engine::pipeline::discovery;
-
-/// Discover source files using supported language extensions, capped at limit.
-fn discover_source_files(root: &PathBuf, limit: usize) -> Vec<PathBuf> {
-    let exts: Vec<String> = engine::engine::GRAMMAR_LOADER.supported_extensions();
-    let ext_strs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
-    discovery::discover_files(root, &ext_strs)
-        .into_iter().take(limit).collect()
-}
 
 #[tauri::command]
 pub(crate) async fn get_full_graph(
