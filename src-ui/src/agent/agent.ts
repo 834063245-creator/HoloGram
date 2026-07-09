@@ -392,6 +392,98 @@ export class Agent {
     return this.runLoop(signal);
   }
 
+  // ══════════════════════════════════════════════════════
+  // Goal Loop — autonomous multi-turn execution
+  // ══════════════════════════════════════════════════════
+
+  /** Run a goal autonomously: plan → delegate to sub-agents → verify → repeat.
+   *  Keeps going until the goal is achieved or confirmed impossible.
+   *  The model drives the loop; sub-agents (via agent_spawn) do the concrete work
+   *  with clean contexts, preventing long-context drift and hallucination.
+   *
+   *  ponytail: serial by design. Parallel is an optimization, not a correctness
+   *  requirement — serial sub-agent spawns guarantee no file conflicts. */
+  async runGoal(signal: AbortSignal, goal: string): Promise<{ status: 'completed' | 'failed' | 'aborted'; summary: string }> {
+    const goalPrompt = `<goal>
+## 总体目标
+${goal}
+
+## 执行模式
+你是目标驱动的执行Agent，会持续工作直到目标达成。你不会在中间停下来等用户。
+
+## 执行规则
+1. **规划** — 把目标分解为连续的、可验证的具体步骤
+2. **委派** — 每个具体步骤（改代码、跑命令、查文件、搜索）使用 \`agent_spawn\` fork 模式委派子Agent执行。子Agent有干净上下文，只做一件事，返回结果
+3. **验证** — 每步完成后检查结果。正确→继续下一步，错误→分析原因→修正指令→重新委派
+4. **循环** — 持续 规划→委派→验证→下一步，直到目标全部达成
+5. **不要反问** — 不要在中间停下来问用户"要继续吗"。直接继续
+6. **完成信号** — 目标达成时输出 \`[GOAL_COMPLETE]\` 并附摘要。无法达成时输出 \`[GOAL_FAILED]\` 并说明阻塞原因
+
+## 禁止
+- 输出纯文本分析后停止（分析完必须进入下一步行动）
+- 反复分析同一问题而不行动
+- 在子Agent完成后跳过验证直接声明完成
+
+现在开始。
+</goal>`;
+
+    this.session.push({ role: 'user', content: goalPrompt });
+    this.sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
+
+    for (let iter = 0; !signal.aborted; iter++) {
+      bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
+
+      try {
+        await this.runLoop(signal);
+      } catch (e: any) {
+        if (e?.message === 'aborted') return { status: 'aborted', summary: '被中断' };
+        return { status: 'failed', summary: `执行异常: ${e?.message || e}` };
+      }
+
+      const last = this._lastAssistantContent();
+      if (!last) {
+        this.sink({ kind: EventKind.Notice, level: 'error', text: '目标执行异常: 模型未产出响应' });
+        return { status: 'failed', summary: '模型未产出响应' };
+      }
+
+      if (/\[GOAL_COMPLETE\]/i.test(last)) {
+        this.sink({ kind: EventKind.Notice, level: 'info', text: '✅ 目标达成' });
+        return { status: 'completed', summary: last };
+      }
+      if (/\[GOAL_FAILED\]/i.test(last)) {
+        this.sink({ kind: EventKind.Notice, level: 'warn', text: '❌ 目标失败' });
+        return { status: 'failed', summary: last };
+      }
+
+      // Goal in progress — auto-continue
+      this.session.push({
+        role: 'user',
+        content: `<system-reminder>
+目标未完成。已完成 ${iter + 1} 轮。
+
+如果目标尚未达成: 规划下一步（不重复已完成步骤）→ agent_spawn 委派 → 验证结果。
+如果目标已全部达成: 输出 [GOAL_COMPLETE] 并附摘要。
+如果遇到无法克服的障碍: 输出 [GOAL_FAILED] 并说明原因。
+
+禁止反问用户。禁止只分析不行动。
+</system-reminder>`,
+      });
+      this.sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 第 ${iter + 1} 轮完成，继续…` });
+    }
+
+    return { status: 'aborted', summary: '目标被中断' };
+  }
+
+  private _lastAssistantContent(): string {
+    const session = this.getSession();
+    for (let i = session.length - 1; i >= 0; i--) {
+      if (session[i].role === 'assistant' && typeof session[i].content === 'string') {
+        return session[i].content as string;
+      }
+    }
+    return '';
+  }
+
   /** Drive the tool loop without adding a user message. Used by fork children
    *  whose session already ends with the fork directive. */
   private async runLoop(signal: AbortSignal): Promise<void> {
