@@ -148,7 +148,7 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
             }
             imp::Shell::Cmd => format!("cmd /s /c \"{}\"", command),
         };
-        imp::spawn_job_only(&cmdline, cwd, true)
+        imp::spawn_sandboxed(&cmdline, cwd, true)
     }
     #[cfg(target_os = "macos")]
     {
@@ -279,7 +279,7 @@ mod imp {
         fn DeriveAppContainerSidFromAppContainerName(
             name: *const u16, sid_out: *mut *mut std::ffi::c_void,
         ) -> i32;
-        // ACL for granting file access to AppContainer SID
+        fn ConvertStringSidToSidW(str: *const u16, sid: *mut *mut std::ffi::c_void) -> i32;
         fn GetNamedSecurityInfoW(
             name: *const u16, obj_type: i32, sec_info: u32,
             owner: *mut *mut std::ffi::c_void, group: *mut *mut std::ffi::c_void,
@@ -560,10 +560,27 @@ mod imp {
     // ── AppContainer (Phase 4b) ──
 
     static APPCONTAINER_SID: OnceLock<Option<isize>> = OnceLock::new();
+    static INTERNET_CLIENT_SID: OnceLock<Option<isize>> = OnceLock::new();
     const APPCONTAINER_NAME: &str = "hologram-sandbox\0";
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Get the INTERNET_CLIENT well-known capability SID (S-1-15-3-1).
+    /// Cached via OnceLock — only derived once per process lifetime.
+    fn internet_client_sid() -> Option<isize> {
+        *INTERNET_CLIENT_SID.get_or_init(|| {
+            let sid_str = wide("S-1-15-3-1\0");
+            let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
+            let ok = unsafe { ConvertStringSidToSidW(sid_str.as_ptr(), &mut sid) };
+            if ok == 0 || sid.is_null() {
+                eprintln!("[hologram] ConvertStringSidToSidW(INTERNET_CLIENT) failed");
+                None
+            } else {
+                Some(sid as isize)
+            }
+        })
     }
 
     fn init_appcontainer() {
@@ -925,11 +942,16 @@ mod imp {
             attr_list: std::ptr::null_mut(),
         };
 
-        // Security capabilities with AppContainer SID
+        // Security capabilities with AppContainer SID + INTERNET_CLIENT
+        let internet_sid = internet_client_sid();
+        let mut cap_attr = internet_sid.map(|s| SidAndAttributes {
+            sid: s as *mut std::ffi::c_void,
+            attributes: 0,
+        });
         let sec_caps = SecurityCapabilities {
             appcontainer_sid: ac_sid,
-            capabilities: std::ptr::null_mut(), // no extra capabilities → no internet
-            capability_count: 0,
+            capabilities: cap_attr.as_mut().map_or(std::ptr::null_mut(), |c| c),
+            capability_count: if internet_sid.is_some() { 1 } else { 0 },
             _reserved: 0,
         };
 
