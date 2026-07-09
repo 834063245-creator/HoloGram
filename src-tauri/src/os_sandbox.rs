@@ -663,7 +663,22 @@ mod imp {
     }
 
     /// Grant AppContainer SID read/write/execute on project root and TEMP,
-    /// read/execute on Program Files and System32 (to load executables/DLLs).
+    /// read/execute on dynamically-discovered tool directories from PATH.
+    ///
+    /// # Design
+    /// Hardcoded per-machine paths (like `C:\Program Files\Git\mingw64\bin`)
+    /// are inherently fragile — users install tools in wildly different locations.
+    /// Instead, this function:
+    ///
+    /// 1. Grants FULL_ACCESS on project root + TEMP (agent needs to read/write files).
+    /// 2. Grants READ|EXECUTE on a small set of OS-critical directories
+    ///    (System32, WinSxS, SysWOW64) that EVERY process needs to load system DLLs.
+    /// 3. Scans PATH for common tool executables (bash, node, python, git, cargo, etc.)
+    ///    and grants READ|EXECUTE on each tool's installation tree.
+    ///
+    /// This means a user who installed Git in `E:\PortableApps\Git` or node via
+    /// nvm at `C:\Users\alice\AppData\Roaming\nvm\v20.11.0` will work out of the
+    /// box — no per-machine config needed.
     fn grant_appcontainer_fs(raw_sid: *mut std::ffi::c_void) {
         let project = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let temp = std::env::temp_dir();
@@ -671,37 +686,193 @@ mod imp {
         let canon_project = std::fs::canonicalize(&project).unwrap_or(project);
         let canon_temp = std::fs::canonicalize(&temp).unwrap_or(temp);
 
-        // ponytail: grant on known tool directories so bash/node/git can load.
-        // CRITICAL: each directory that contains EXEs or DLLs must be explicitly
-        // listed. Windows ACL inheritance (SUB_CONTAINERS_AND_OBJECTS_INHERIT)
-        // only applies to NEW objects — existing files in subdirectories are NOT
-        // automatically granted access. If a directory is missing, processes
-        // running inside AppContainer will get STATUS_DLL_INIT_FAILED (0xC0000142).
-        // Git Bash specifically needs mingw64/bin for msys-2.0.dll.
-        let tool_dirs_read_exec = [
-            r"C:\Program Files\Git",
-            r"C:\Program Files\Git\bin",
-            r"C:\Program Files\Git\usr\bin",
-            r"C:\Program Files\Git\mingw64\bin",  // msys-2.0.dll, cygwin1.dll, etc.
-            r"C:\Program Files\nodejs",
+        // ── OS bootstrap directories (MUST be present for any process to start) ──
+        let os_bootstrap = &[
             r"C:\Windows\System32",
-            r"C:\Windows\WinSxS",    // SxS manifests + actual DLLs that cmd.exe loads at startup
-            r"C:\Windows\SysWOW64",  // 32-bit subsystem DLLs on 64-bit Windows (WOW64 layer)
+            r"C:\Windows\SysWOW64",
+            r"C:\Windows\WinSxS",
         ];
 
-        // Full access (read/write/execute) on project and temp
+        // ── Full access on project + temp ──
         let path_rwe = canon_project.to_string_lossy().replace('/', "\\");
         let path_temp = canon_temp.to_string_lossy().replace('/', "\\");
-
         let _ = grant_path_acl(&path_rwe, raw_sid, FILE_ALL_ACCESS);
         let _ = grant_path_acl(&path_temp, raw_sid, FILE_ALL_ACCESS);
 
-        // Read/execute on tool directories
-        for dir in &tool_dirs_read_exec {
+        // ── OS bootstrap ──
+        for dir in os_bootstrap {
             if std::path::Path::new(dir).exists() {
                 let _ = grant_path_acl(dir, raw_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
             }
         }
+
+        // ── Dynamic tool discovery from PATH ──
+        let granted = collect_and_grant_tool_dirs(raw_sid);
+        eprintln!(
+            "[hologram] AppContainer: granted access to {} tool directories \
+             (+ project root + TEMP + OS bootstrap)",
+            granted,
+        );
+    }
+
+    /// Scan PATH for known tool executables, discover their install roots, and
+    /// grant READ|EXECUTE on each unique directory tree.
+    ///
+    /// Returns the number of directories granted.
+    fn collect_and_grant_tool_dirs(raw_sid: *mut std::ffi::c_void) -> usize {
+        use std::collections::HashSet;
+
+        // Tools we look for on PATH. For each, we grant not just the directory
+        // containing the EXE, but also its sibling `lib`, `bin`, `usr/bin`,
+        // `mingw64/bin` directories — tools like Git Bash load DLLs from these.
+        const SEARCH_EXES: &[&str] = &[
+            "bash.exe",      // Git Bash / MSYS2
+            "node.exe",      // Node.js
+            "python.exe",    // Python
+            "python3.exe",   // Python 3
+            "git.exe",       // Git
+            "cargo.exe",     // Rust
+            "rustc.exe",     // Rust
+            "go.exe",        // Go
+            "java.exe",      // Java
+            "javac.exe",     // Java
+            "ruby.exe",      // Ruby
+            "perl.exe",      // Perl
+            "php.exe",       // PHP
+            "dotnet.exe",    // .NET
+            "npx.cmd",       // npm runner
+            "npm.cmd",       // npm
+            "pnpm.cmd",      // pnpm
+            "yarn.cmd",      // yarn
+        ];
+
+        let path_var = std::env::var("PATH").unwrap_or_default();
+        let mut granted = HashSet::new();
+        let mut count = 0;
+
+        // Split PATH on ';' (Windows)
+        for dir in path_var.split(';') {
+            let dir = dir.trim();
+            if dir.is_empty() { continue; }
+            if !std::path::Path::new(dir).exists() { continue; }
+
+            // Check if any of our known tools live in this directory
+            let mut found_tool = false;
+            for exe in SEARCH_EXES {
+                if std::path::Path::new(&format!("{}/{}", dir, exe)).exists() {
+                    found_tool = true;
+                    break;
+                }
+            }
+            if !found_tool { continue; }
+
+            // Normalize and canonicalize the directory
+            let canon = std::fs::canonicalize(dir).unwrap_or_else(|_| std::path::PathBuf::from(dir));
+            let dir_str = canon.to_string_lossy().replace('/', "\\");
+
+            if !granted.insert(dir_str.clone()) { continue; }
+            let _ = grant_path_acl(&dir_str, raw_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+            count += 1;
+
+            // ── Heuristic: for bash.exe, walk up to find the Git/MSYS2 root ──
+            // and grant its sub-trees (mingw64/bin, usr/bin, etc.)
+            if std::path::Path::new(&format!("{}/bash.exe", dir_str)).exists() {
+                // Walk up from the bin directory to find the install root
+                if let Some(install_root) = find_install_root(&dir_str) {
+                    // Common Git/MSYS2 sub-trees that contain DLLs
+                    let sub_dirs = &[
+                        "mingw64/bin", "mingw64/lib", "mingw32/bin", "mingw32/lib",
+                        "usr/bin", "usr/lib", "lib", "libexec",
+                        "bin",           // already granted, but ensure consistency
+                        "ssl/certs",     // git SSL certs
+                        "etc",           // gitconfig etc.
+                    ];
+                    for sub in sub_dirs {
+                        let sub_path = format!("{}\\{}", install_root, sub);
+                        let sub_path = sub_path.replace('/', "\\");
+                        if std::path::Path::new(&sub_path).exists()
+                            && granted.insert(sub_path.clone())
+                        {
+                            let _ = grant_path_acl(
+                                &sub_path, raw_sid,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                            );
+                            count += 1;
+                        }
+                    }
+                }
+            }
+
+            // ── Heuristic: for node.exe, also grant npm global prefix ──
+            if std::path::Path::new(&format!("{}/node.exe", dir_str)).exists() {
+                // Try to read npm prefix
+                if let Ok(output) = std::process::Command::new("npm")
+                    .args(["config", "get", "prefix"])
+                    .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+                    .output()
+                {
+                    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !prefix.is_empty()
+                        && std::path::Path::new(&prefix).exists()
+                    {
+                        let canon = std::fs::canonicalize(&prefix)
+                            .unwrap_or_else(|_| std::path::PathBuf::from(&prefix));
+                        let prefix_str = canon.to_string_lossy().replace('/', "\\");
+                        if granted.insert(prefix_str.clone()) {
+                            let _ = grant_path_acl(
+                                &prefix_str, raw_sid,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                            );
+                            count += 1;
+                        }
+                    }
+                }
+            }
+
+            // Safety cap — don't blow up startup time
+            if count >= 120 { break; }
+        }
+
+        count
+    }
+
+    /// Given a directory containing bash.exe, walk up to find the Git/MSYS2
+    /// install root (the directory that contains `bin/`, `mingw64/`, `usr/`, etc.).
+    /// Returns None if the structure doesn't match.
+    fn find_install_root(bin_dir: &str) -> Option<String> {
+        let path = std::path::Path::new(bin_dir);
+
+        // Try: bin_dir is <root>/bin
+        if let Some(parent) = path.parent() {
+            let mingw64 = parent.join("mingw64");
+            let usr = parent.join("usr");
+            if mingw64.exists() || usr.exists() {
+                return Some(parent.to_string_lossy().replace('/', "\\"));
+            }
+        }
+
+        // Try: bin_dir is <root>/mingw64/bin (atypical MSYS2 layout)
+        if let Some(mingw64) = path.parent() {
+            if let Some(root) = mingw64.parent() {
+                let bin = root.join("bin");
+                let usr = root.join("usr");
+                if bin.exists() || usr.exists() {
+                    return Some(root.to_string_lossy().replace('/', "\\"));
+                }
+            }
+        }
+
+        // Try: bin_dir is <root>/usr/bin
+        if let Some(usr) = path.parent() {
+            if let Some(root) = usr.parent() {
+                let bin = root.join("bin");
+                if bin.exists() {
+                    return Some(root.to_string_lossy().replace('/', "\\"));
+                }
+            }
+        }
+
+        None
     }
 
     /// Add an ACCESS_ALLOWED_ACE to a directory's DACL for the given SID.
