@@ -2226,16 +2226,17 @@
     }
     .chat-footer-toast.visible { opacity: 1; transform: translateY(0); }
 
-    /* ── Slash inline command panel (below input, absolutely positioned) ── */
+    /* ── Slash command popup ── */
     .chat-slash-panel {
-      position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 60;
-      max-height: 200px; overflow-y: auto; overflow-x: hidden;
-      margin-bottom: 6px; padding: 4px;
+      position: absolute; bottom: 100%; right: 8px; z-index: 60;
+      min-width: 200px; max-width: 280px;
+      max-height: 300px; overflow-y: auto; overflow-x: hidden;
+      margin-bottom: 4px; padding: 4px;
       background: var(--panel-bg);
-      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-      border: 1px solid rgba(50, 80, 140, 0.3);
-      border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(50, 80, 140, 0.25);
+      border-radius: 0;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
       display: none; flex-direction: column; gap: 2px;
       font-family: var(--font-body);
     }
