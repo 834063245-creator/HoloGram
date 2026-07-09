@@ -8,6 +8,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: windows-latest
@@ -33,23 +36,23 @@ jobs:
             engine -> target
             src-tauri -> target
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli
+      - name: Build & test engine
+        run: |
+          cd engine
+          cargo build --release
+          cargo test --release
 
-      - name: Build frontend
-        run: cd src-ui && npm ci && npm run build
+      - name: Build & test frontend
+        run: |
+          cd src-ui
+          npm ci
+          npm run build
+          npm test
 
-      - name: Test frontend
-        run: cd src-ui && npm test
-
-      - name: Build engine
-        run: cd engine && cargo build --release
-
-      - name: Test engine
-        run: cd engine && cargo test --release
-
-      - name: Build Tauri app
-        run: cd src-tauri && cargo tauri build
+      - name: Build Tauri app (MSI bundle)
+        run: |
+          cd src-tauri
+          npx @tauri-apps/cli@^2 build --ci
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

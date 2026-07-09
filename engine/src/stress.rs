@@ -301,9 +301,14 @@ fn get_rss_mb() -> f64 {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        if let Ok(output) = Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-Process -Id $pid).WorkingSet64 / 1MB"])
-            .output()
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-Command", "(Get-Process -Id $pid).WorkingSet64 / 1MB"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        if let Ok(output) = c.output()
         {
             if let Ok(s) = String::from_utf8(output.stdout) {
                 return s.trim().parse().unwrap_or(0.0);

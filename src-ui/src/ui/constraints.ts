@@ -9,6 +9,7 @@ import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import { bus } from './events';
 import { shell } from './app-shell';
+import DOMPurify from 'dompurify';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;
@@ -290,7 +291,7 @@ export class ConstraintsPanel {
     html += `<button class="cs-btn cs-btn-reset">${iconHtml('reset', 10)} 重置</button>`;
     html += '</div>';
 
-    this.content.innerHTML = html;
+    this.content.innerHTML = DOMPurify.sanitize(html);
     this.wireFormEvents();
   }
 
