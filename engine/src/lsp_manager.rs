@@ -414,12 +414,20 @@ impl LspManager {
     }
 
     fn spawn_server(cfg: &LspServerConfig, root: &str) -> Result<LspProcess, String> {
-        let mut child = Command::new(cfg.command)
-            .args(cfg.args)
+        let mut c = Command::new(cfg.command);
+        c.args(cfg.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW = 0x08000000 — prevents console flash when
+            // spawning LSP servers (rust-analyzer, pyright, etc.) from a
+            // GUI-subsystem parent process.
+            c.creation_flags(0x08000000);
+        }
+        let mut child = c.spawn()
             .map_err(|e| format!("spawn {}: {}", cfg.command, e))?;
 
         let stdin = child.stdin.take().ok_or("no stdin")?;

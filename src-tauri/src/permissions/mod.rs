@@ -576,7 +576,6 @@ mod smoke {
 #[cfg(test)]
 mod regression {
     use super::*;
-    use crate::permissions::rule::{parse_rule_value, Behavior, PermissionRule, RuleSource};
     use crate::tools::{EditTool, GitTool, ReadTool};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

@@ -857,6 +857,10 @@ export class StarGraph {
 
   // Incremental-update abort: cancel in-flight layout when new data arrives
   private _layoutAbort: AbortController | null = null;
+  // Guard: true while _renderImpl is rebuilding the scene. Animation loop skips
+  // rendering to avoid accessing disposed GPU resources (causes ghost artifacts
+  // and cold-start blank screen on slow machines).
+  private _renderInProgress = false;
 
   // ── Community / Galaxy fold overlay ──────────────────────
   private foldMode = false;
@@ -4268,10 +4272,14 @@ export class StarGraph {
     // Cancel any in-flight layout from a previous render
     if (this._layoutAbort) { this._layoutAbort.abort(); }
     this._layoutAbort = new AbortController();
+    // Block animation loop during scene rebuild — prevents access to
+    // disposed GPU resources which causes ghost artifacts and cold-start
+    // blank screens on slower machines.
+    this._renderInProgress = true;
     this.clearGraph();
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
-    if (nodes.length === 0) { this.updateStatus(0, 0); return; }
+    if (nodes.length === 0) { this.updateStatus(0, 0); this._renderInProgress = false; return; }
     this.graphNodes = nodes;
 
     const nodeIdx = new Map<string, number>();
@@ -4563,6 +4571,7 @@ export class StarGraph {
     // Fix: container may have been display:none during constructor onResize().
     // Defer resize one frame to ensure CSS layout has settled.
     requestAnimationFrame(() => this.onResize());
+    this._renderInProgress = false;
   }
 
   // -- end of _renderImpl; render() wrapper is above --
@@ -5215,6 +5224,11 @@ export class StarGraph {
     const now = performance.now();
     if (now - this._lastFrameTime < 33.33) return;
     this._lastFrameTime = now;
+
+    // Skip rendering while scene is being rebuilt — prevents WebGL errors
+    // from accessing disposed InstancedMesh/Points geometry and eliminates
+    // ghost artifacts on cold-start.
+    if (this._renderInProgress) return;
 
     const isMinimal = false;
     const isFull = true;

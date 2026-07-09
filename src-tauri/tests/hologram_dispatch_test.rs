@@ -24,7 +24,7 @@ fn test_tools_list_returns_tools() {
 }
 
 #[test]
-fn test_tools_list_each_tool_has_inputSchema() {
+fn test_tools_list_each_tool_has_input_schema() {
     let schemas: Vec<Value> =
         serde_json::from_str(&hologram_tools_list_impl()).unwrap();
     for s in &schemas {

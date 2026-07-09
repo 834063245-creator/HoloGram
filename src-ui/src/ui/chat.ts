@@ -623,7 +623,7 @@ export class ChatPanel {
     html += '</div>';
 
     html += '</div>';
-    this.contextPanel.innerHTML = html;
+    this.contextPanel.innerHTML = DOMPurify.sanitize(html);
   }
 
   // ── State transitions (GSAP-powered) ──
@@ -3678,7 +3678,7 @@ export class ChatPanel {
       </div>`;
     }
 
-    this.footerEl.innerHTML = `
+    this.footerEl.innerHTML = DOMPurify.sanitize(`
       <div class="chat-footer-left">
         <button class="chat-model-badge chat-model-clickable" title="点击切换模型 · ${active?.name} / ${active?.model}">
           ${iconHtml('agent', 10)} ${modelLabel}${thinking}
@@ -3695,7 +3695,7 @@ export class ChatPanel {
           ${iconHtml('code', 12)}<span class="chat-slash-label">/</span>
         </button>
         <button class="chat-session-add chat-attach-btn" title="附加文件">${iconHtml('file-plus', 13)}</button>
-      </div>`;
+      </div>`);
 
     this._buildModePopup(mode);
 
