@@ -872,35 +872,10 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
       execute: (args) => exec('git_pull', { path: args.path }),
     },
 
-    // ── Web Search ──
-    {
-      name: () => 'web_search',
-      description: () =>
-        'Search the web for documentation, solutions, or references. Returns a concise summary with source links — the search results are already read and summarized, so you can use the information directly without calling web_fetch on every link.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Search query',
-          },
-        },
-        required: ['query'],
-      }),
-      readOnly: () => true,
-      execute: async (args, onProgress) => {
-        try {
-          onProgress?.('搜索中…');
-          const rawResults = await exec('web_search', args);
-          if (!provider) return rawResults; // no LLM available, return raw
-          onProgress?.('摘要中…');
-          const summary = await summarizeSearchResults(provider, args.query as string, rawResults);
-          return summary;
-        } catch (e: any) {
-          return JSON.stringify({ error: `web_search failed: ${e.message || e}` });
-        }
-      },
-    },
+    // ── Web Search — 已禁用 (2026-07)
+    // DDG HTML scrape 被反爬封锁，Bing 中文结果不可用，国内无免费搜索 API。
+    // 保留代码骨架，待有可用后端时恢复。
+    // 启用步骤: 1) 取消注释 2) Rust 端接 Brave/Tavily/SearXNG API
 
     // ── Web Fetch ──
     {
@@ -1132,8 +1107,9 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
   ];
 }
 
-// ponytail: single-turn LLM call to summarise search results, same pattern as Agent.summarizeRegion.
-// No tools, low temp — factual summary with source links preserved.
+// ── summarizeSearchResults — 随 web_search 禁用 (2026-07) ──
+// 待 web_search 恢复时取消注释。
+/*
 async function summarizeSearchResults(provider: Provider, query: string, rawResults: string): Promise<string> {
   const prompt = `Summarise the following web search results for the query "${query}".
 
@@ -1174,6 +1150,7 @@ ${rawResults}`;
     clearTimeout(timeout);
   }
 }
+*/
 
 // ═══════════════════════════════════════════════════════════════
 // Sub-Agent Tool — spawn a child Agent for parallel / delegated work
