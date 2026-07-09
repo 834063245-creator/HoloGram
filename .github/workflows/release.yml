@@ -1,45 +1,27 @@
+# 打 v* tag 自动出 MSI。两步：编前端 → 打包。
 name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 jobs:
   release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
+        with: { node-version: '20' }
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
+        with: { toolchain: stable }
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            engine -> target
-            src-tauri -> target
-
-      - name: Build engine (release)
-        run: cargo build --release
-        working-directory: engine
-
-      - name: Build frontend
-        run: npm ci && npm run build
+      - run: npm ci && npm run build
         working-directory: src-ui
 
-      - name: Build MSI
-        run: npx @tauri-apps/cli@^2 build
+      - run: npx @tauri-apps/cli@^2 build
         working-directory: src-tauri
 
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            engine/target/release/hologram-engine.exe
+          files: src-tauri/target/release/bundle/msi/*.msi
