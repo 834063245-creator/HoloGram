@@ -3,17 +3,12 @@ name: CodeQL
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: github/codeql-action/init@v4
-        with:
-          languages: javascript-typescript
-
+        with: { languages: javascript-typescript }
       - uses: github/codeql-action/analyze@v4

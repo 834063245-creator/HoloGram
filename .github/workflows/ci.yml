@@ -1,3 +1,4 @@
+# 每次 push 到 main：编译检查 + 跑测试。不过就不让合。
 name: CI
 
 on:
@@ -11,29 +12,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
+        with: { node-version: '20' }
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
+        with: { toolchain: stable }
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            engine -> target
-            src-tauri -> target
-
-      - name: Test engine
-        run: cargo test --release
+      - run: cargo test --release
         working-directory: engine
 
-      - name: Test frontend
-        run: npm ci && npm run build && npm test
+      - run: npm ci && npm run build && npm test
         working-directory: src-ui
 
-      - name: Check Tauri compiles
-        run: cargo check --release
+      - run: cargo check --release
         working-directory: src-tauri
