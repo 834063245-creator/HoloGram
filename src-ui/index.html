@@ -2034,6 +2034,7 @@
 
     /* Input area */
     .chat-input-area {
+      position: relative;  /* anchor for slash panel */
       display: flex; align-items: flex-end; gap: 6px;
       padding: 10px 12px;
       border-top: 1px solid rgba(40, 60, 100, 0.18);
@@ -2225,15 +2226,15 @@
     }
     .chat-footer-toast.visible { opacity: 1; transform: translateY(0); }
 
-    /* ── Slash inline command panel (normal flow, sits between input and footer) ── */
+    /* ── Slash inline command panel (below input, absolutely positioned) ── */
     .chat-slash-panel {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 60;
       max-height: 200px; overflow-y: auto; overflow-x: hidden;
-      margin: 0 8px; padding: 4px;
+      margin: 2px 6px 0 6px; padding: 4px;
       background: var(--panel-bg);
       backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
       border: 1px solid rgba(50, 80, 140, 0.3);
-      border-top: none;
-      border-radius: 0 0 8px 8px;
+      border-radius: 8px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.45);
       display: none; flex-direction: column; gap: 2px;
       font-family: var(--font-body);
