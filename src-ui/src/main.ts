@@ -25,6 +25,7 @@ import { AgentVisualizer } from './ui/agent-visualizer';
 import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 import { Workspace, isSamePath } from './workspace';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 
 // ── Worker layout helper ──
@@ -620,6 +621,12 @@ async function init(): Promise<void> {
   });
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
   btnSettings.addEventListener('click', () => { settingsPanel.toggle(); });
+
+  // ── Window controls (decorations:false — custom title bar) ──
+  const win = getCurrentWindow();
+  document.getElementById('btn-minimize')?.addEventListener('click', () => win.minimize());
+  document.getElementById('btn-maximize')?.addEventListener('click', () => win.toggleMaximize());
+  document.getElementById('btn-close')?.addEventListener('click', () => win.close());
 
   // Save sessions on close
   window.addEventListener('beforeunload', () => {

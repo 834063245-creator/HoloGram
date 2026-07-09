@@ -357,6 +357,11 @@
       box-shadow: 0 1px 0 rgba(100,150,220,0.05), 0 6px 28px rgba(0,0,0,0.5);
       display: flex; align-items: center; padding: 0 14px; gap: 0;
     }
+    /* Make toolbar the drag region — replaces native title bar */
+    #toolbar { -webkit-app-region: drag; }
+    #toolbar button, #toolbar input, #toolbar .spacer, #toolbar #search-wrap {
+      -webkit-app-region: no-drag;
+    }
 
     /* ── Top-edge power indicator — slow breathing glow line ── */
     #toolbar::before {
@@ -461,6 +466,26 @@
     #toolbar button:active::after { opacity: 0.5; }
     #toolbar button:disabled { opacity: 0.25; cursor: default; }
     #toolbar button:disabled::after { display: none; }
+
+    /* ── Window control buttons (decorations:false — custom title bar) ── */
+    #toolbar button.win-ctrl {
+      width: calc(32px * var(--font-scale));
+      min-width: calc(32px * var(--font-scale));
+      padding: 0;
+      justify-content: center;
+      font-size: calc(11px * var(--font-scale));
+      color: var(--text-faint);
+      border-radius: 0;
+      margin-left: 1px;
+    }
+    #toolbar button.win-ctrl:hover {
+      color: var(--text-soft);
+      background: rgba(100,160,240,0.12);
+    }
+    #toolbar button.win-close:hover {
+      color: #fff;
+      background: #c0392b;
+    }
 
     /* ── Search capsule — glass with inner glow ── */
     #search-wrap {
@@ -4390,7 +4415,11 @@
     </div>
     <span class="sep"></span>
     <button id="btn-shortcuts" data-icon="info" title="快捷键 (?)">快捷键</button>
-    <span id="tb-path"></span>
+        <span id="tb-path"></span>
+    <span class="sep"></span>
+    <button id="btn-minimize" class="win-ctrl" title="最小化" data-icon="minimize">─</button>
+    <button id="btn-maximize" class="win-ctrl" title="最大化" data-icon="maximize">□</button>
+    <button id="btn-close" class="win-ctrl win-close" title="关闭" data-icon="close">✕</button>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════
