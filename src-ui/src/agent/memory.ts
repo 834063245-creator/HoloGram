@@ -70,6 +70,9 @@ export class MemoryManager {
     this.globalDirPath = globalPath || null;
   }
 
+  /** Public accessor for CLAUDE.md loading. */
+  get globalDir(): string | null { return this.globalDirPath; }
+
   /** Whether AuraSDK semantic recall has been initialized. */
   get auraReady(): boolean { return this._auraReady; }
 
