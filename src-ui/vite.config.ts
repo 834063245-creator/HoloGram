@@ -18,4 +18,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
   },
+  optimizeDeps: {
+    exclude: ['@tauri-apps/api'],
+  },
 });

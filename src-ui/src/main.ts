@@ -622,14 +622,23 @@ async function init(): Promise<void> {
   btnSettings.addEventListener('click', () => { settingsPanel.toggle(); });
 
   // ── Window controls (decorations:false — custom title bar) ──
-  document.getElementById('btn-minimize')?.addEventListener('click', async () => {
-    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().minimize(); } catch {}
+  // ponytail: load once, cache ref — per-click dynamic import was losing errors in empty catch {}
+  let _appWindow: any = null;
+  async function getAppWindow() {
+    if (!_appWindow) {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      _appWindow = getCurrentWindow();
+    }
+    return _appWindow;
+  }
+  document.getElementById('btn-minimize')?.addEventListener('click', () => {
+    getAppWindow().then(w => w.minimize()).catch(e => console.error('[win] minimize failed:', e));
   });
-  document.getElementById('btn-maximize')?.addEventListener('click', async () => {
-    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().toggleMaximize(); } catch {}
+  document.getElementById('btn-maximize')?.addEventListener('click', () => {
+    getAppWindow().then(w => w.toggleMaximize()).catch(e => console.error('[win] toggleMaximize failed:', e));
   });
-  document.getElementById('btn-close')?.addEventListener('click', async () => {
-    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().close(); } catch {}
+  document.getElementById('btn-close')?.addEventListener('click', () => {
+    getAppWindow().then(w => w.close()).catch(e => console.error('[win] close failed:', e));
   });
 
   // Save sessions on close
