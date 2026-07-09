@@ -5,8 +5,6 @@
 // 替代 chat.ts 中三处硬编码：HTML 模板、点击分发、路由匹配。
 // Skills 在渲染时通过 provider 动态注入，无需修改注册表。
 
-import { iconHtml } from './icons';
-
 // ── Types ──
 
 export interface CommandDef {
@@ -15,8 +13,6 @@ export interface CommandDef {
   label: string;
   /** 副标题 / 描述 */
   description?: string;
-  /** icons.ts 中的图标名 */
-  icon: string;
   /** 分组: '会话' | '记忆' | '分析' | '技能' | '文件' */
   group: string;
   /** 快捷路径，如 '/memory'。用于输入匹配和提示 */
@@ -62,7 +58,6 @@ export class CommandRegistry {
           id: `skill:${s.name}`,
           label: s.name,
           description: s.description || `执行技能 ${s.name}`,
-          icon: 'zap',
           group: '技能',
           shortcut: `/${s.name}`,
           action: { type: 'skill', skillName: s.name },
@@ -91,7 +86,7 @@ export class CommandRegistry {
     });
   }
 
-  /** 渲染命令项 HTML */
+  /** 渲染命令项 HTML — no icons, just label + description + shortcut */
   renderItem(cmd: CommandDef, query?: string): string {
     const highlight = (text: string) => {
       if (!query) return text;
@@ -112,7 +107,6 @@ export class CommandRegistry {
 
     return `
       <button class="sp-item" data-cmd-id="${cmd.id}" data-shortcut="${cmd.shortcut}">
-        <span class="sp-icon">${iconHtml(cmd.icon as any, 12)}</span>
         <span class="sp-label">${label}</span>
         ${desc}
         ${shortcut}
@@ -149,7 +143,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'new',
     label: '重置当前会话',
     description: '清空对话历史，保留项目上下文',
-    icon: 'refresh-ccw',
     group: '会话',
     shortcut: '/new',
     action: { type: 'local', handler: () => {} },
@@ -158,7 +151,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'compact',
     label: '压缩上下文',
     description: '压缩对话历史以节省 token',
-    icon: 'minimize',
     group: '会话',
     shortcut: '/compact',
     action: { type: 'local', handler: () => {} },
@@ -167,7 +159,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'compact-stats',
     label: '压缩统计',
     description: '查看上下文压缩的运行数据',
-    icon: 'bar-chart',
     group: '会话',
     shortcut: '/compact-stats',
     action: { type: 'send', text: '查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）', displayLabel: '/compact-stats' },
@@ -176,7 +167,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'export',
     label: '导出对话',
     description: '导出当前会话为 Markdown',
-    icon: 'download',
     group: '会话',
     shortcut: '/export',
     action: { type: 'local', handler: () => {} },
@@ -185,7 +175,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'trail',
     label: '显示探索轨迹',
     description: '切换依赖探索轨迹的可视化',
-    icon: 'link',
     group: '会话',
     shortcut: '/trail',
     action: { type: 'local', handler: () => {} },
@@ -195,7 +184,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'memory',
     label: '查看记忆',
     description: '列出所有已保存的记忆',
-    icon: 'bookmark',
     group: '记忆',
     shortcut: '/memory',
     action: { type: 'send', text: '列出所有已保存的记忆（使用 hologram_memory_list）', displayLabel: '/memory' },
@@ -204,7 +192,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'remember',
     label: '记住一件事',
     description: '保存一条事实到记忆库',
-    icon: 'save',
     group: '记忆',
     shortcut: '/remember',
     action: { type: 'fill', text: '/remember ' },
@@ -214,7 +201,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'fragile',
     label: '查找脆弱模块',
     description: '哪些模块耦合最深？',
-    icon: 'alert-triangle',
     group: '分析',
     shortcut: '/fragile',
     action: { type: 'send', text: '哪些模块最脆弱？按耦合深度排名分析。', displayLabel: '/fragile' },
@@ -223,7 +209,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'cycle',
     label: '检查循环依赖',
     description: '查找所有循环依赖环',
-    icon: 'refresh-cw',
     group: '分析',
     shortcut: '/cycle',
     action: { type: 'send', text: '检查循环依赖，分析每个环的风险和修复建议。', displayLabel: '/cycle' },
@@ -232,7 +217,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'impact',
     label: '影响分析',
     description: '分析最近改动的影响范围',
-    icon: 'crosshair',
     group: '分析',
     shortcut: '/impact',
     action: { type: 'send', text: '分析最近改动的影响范围。', displayLabel: '/impact' },
@@ -241,7 +225,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'path',
     label: '依赖路径查询',
     description: '查询两个模块之间的依赖路径',
-    icon: 'git-branch',
     group: '分析',
     shortcut: '/path',
     action: { type: 'fill', text: '追踪从 ' },
@@ -251,7 +234,6 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     id: 'goal',
     label: '自主目标',
     description: 'Agent 自主循环直到完成目标',
-    icon: 'target',
     group: '会话',
     shortcut: '/goal',
     action: { type: 'fill', text: '/goal ' },

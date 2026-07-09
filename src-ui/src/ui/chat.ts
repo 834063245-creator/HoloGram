@@ -3755,8 +3755,8 @@ export class ChatPanel {
       if (cmd) this._executeCommand(cmd);
     });
 
-    // Attach panel to main panel (not footer — floats above input)
-    this.panel.appendChild(panel);
+    // Attach to footer so `bottom: 100%` positions it right above the input area
+    this.footerEl.appendChild(panel);
 
     // Attach file button
     this.footerEl.querySelector('.chat-attach-btn')?.addEventListener('click', () => {
