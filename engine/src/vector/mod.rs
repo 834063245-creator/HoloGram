@@ -216,6 +216,35 @@ mod tests {
     }
 
     #[test]
+    fn test_real_generated_index() {
+        // Verify the vector index built during tauri dev actually works
+        let path = "D:/HoloGramHG/.hologram/vectors.usearch";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("SKIP: {path} not found — run analyze first");
+            return;
+        }
+        let vi = CodeVectorIndex::new(path);
+        let n = vi.load().unwrap();
+        eprintln!("Loaded {n} vectors from {path}");
+
+        // Test searches against the actual HoloGram codebase
+        let tests = [
+            ("payment processing", "Should find payment/transaction related code"),
+            ("window button minimize", "Should find window control UI code"),
+            ("graph community layout", "Should find graph/community detection code"),
+        ];
+        for (query, desc) in &tests {
+            let results = vi.search(query, 5).unwrap();
+            eprintln!("\n--- {desc} ---");
+            eprintln!("  query: \"{query}\"");
+            for (id, score) in &results {
+                eprintln!("  {:.2}  {id}", score);
+            }
+            assert!(!results.is_empty(), "search '{query}' should return results");
+        }
+    }
+
+    #[test]
     fn test_vector_index_build_search() {
         let tmp = std::env::temp_dir().join("hologram_vi_test");
         let _ = std::fs::create_dir_all(&tmp);
