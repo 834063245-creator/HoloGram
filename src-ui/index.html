@@ -2225,41 +2225,69 @@
     }
     .chat-footer-toast.visible { opacity: 1; transform: translateY(0); }
 
-    /* Slash popup menu */
-    .chat-slash-popup {
-      position: absolute; bottom: 100%; right: 8px; z-index: 60;
-      margin-bottom: 4px;
+    /* ── Slash inline command panel ── */
+    .chat-slash-panel {
+      position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 60;
+      margin-bottom: 6px;
+      max-height: 300px; overflow-y: auto; overflow-x: hidden;
       background: var(--panel-bg);
-      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(50, 80, 140, 0.25);
-      border-radius: 0; padding: 4px;
-      min-width: 200px;
-      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
-      display: none; flex-direction: column; gap: 2px;
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(50, 80, 140, 0.3);
+      border-radius: 8px; padding: 6px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+      display: none; flex-direction: column; gap: 4px;
     }
-    .chat-slash-popup.open { display: flex; }
+    .chat-slash-panel.open { display: flex; }
     .sp-group { display: flex; flex-direction: column; gap: 1px; }
+    .sp-group + .sp-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(50,80,140,0.12); }
     .sp-group-title {
       font-family: var(--font-hud); font-size: calc(7px * var(--font-scale)); font-weight: 600;
-      letter-spacing: 1px; text-transform: uppercase;
+      letter-spacing: 1.2px; text-transform: uppercase;
       color: var(--text-dim);
-      padding: 3px 8px 1px 8px;
+      padding: 2px 10px 2px 10px;
     }
     .sp-item {
-      display: flex; align-items: center; gap: 6px;
-      font-size: calc(10px * var(--font-scale)); padding: 5px 8px; border-radius: 0; cursor: pointer;
-      background: transparent; color: rgba(145, 180, 225, 0.65);
+      display: flex; align-items: center; gap: 8px;
+      font-size: calc(10.5px * var(--font-scale)); padding: 6px 10px; border-radius: 6px; cursor: pointer;
+      background: transparent; color: rgba(160, 195, 240, 0.7);
       border: none; text-align: left; font-family: var(--font-body);
-      transition: all var(--snap);
+      transition: all 0.1s ease;
     }
-    .sp-item:hover {
-      background: rgba(30, 55, 100, 0.3);
+    .sp-item:hover,
+    .sp-item.sp-active {
+      background: rgba(40, 70, 120, 0.4);
       color: var(--starlight-dim);
+    }
+    .sp-item.sp-active {
+      background: rgba(30, 60, 110, 0.55);
+      color: #c8dfff;
+    }
+    .sp-icon {
+      flex-shrink: 0; width: 18px; height: 18px;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0.7;
+    }
+    .sp-label {
+      flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .sp-desc {
+      font-size: calc(8.5px * var(--font-scale));
+      color: var(--text-faint);
+      margin-left: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 160px;
     }
     .sp-key {
       font-family: var(--font-mono); font-size: calc(8px * var(--font-scale));
       color: var(--text-faint);
-      margin-left: auto;
+      background: rgba(255,255,255,0.04);
+      padding: 1px 6px; border-radius: 3px;
+      margin-left: auto; flex-shrink: 0;
+    }
+    .sp-match {
+      background: rgba(90, 150, 230, 0.25);
+      color: #b0d0ff;
+      border-radius: 2px; padding: 0 1px;
     }
 
     /* ── Progress bar (agent step feedback) ── */
