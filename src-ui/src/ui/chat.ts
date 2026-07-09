@@ -2428,6 +2428,15 @@ export class ChatPanel {
       return;
     }
 
+    // Unknown slash command — route to Skill tool
+    if (text.startsWith('/') && !text.includes(' ')) {
+      const skillName = text.slice(1);
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.sendAgentText(`Execute skill: ${skillName}`, text);
+      return;
+    }
+
     // Auto-label session on first user message
     if (this.activeIdx >= 0) {
       const session = this.sessions[this.activeIdx];

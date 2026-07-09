@@ -27,7 +27,7 @@ import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePreflightHook } from './agent/hooks';
 import { refreshGitStatus, refreshTimeline, buildTurnStartBlock } from './agent/state-inject';
-import { loadSkills, createSkillTool, type SkillDef } from './agent/skills';
+import { SkillRegistry, createSkillTool } from './agent/skills';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import type { Tool } from './agent/tool';
@@ -107,7 +107,7 @@ export class Workspace {
   registry: ToolRegistry | null = null;
   memoryManager: MemoryManager | null = null;
   taskManager: TaskManager = new TaskManager();
-  skills: SkillDef[] = [];
+  skillRegistry: SkillRegistry | null = null;
 
   // ── Check state ──
   checkRunning: boolean = false;
@@ -412,11 +412,8 @@ export class Workspace {
     const graphNodes = extractGraphNodeNames(this.graphData);
     try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
 
-    // Load skills from .hologram/skills/
-    try { this.skills = await loadSkills(this.path); } catch { /* no skills dir */ }
-    if (this.skills.length > 0) {
-      this.onStatusChange?.(`[Skill] 已加载 ${this.skills.length} 个技能`);
-    }
+    // Init skill registry (hot-loads on first Skill tool call)
+    this.skillRegistry = new SkillRegistry(this.path);
 
     // ── AuraSDK semantic recall ──
     let memoryBundleSection = '';
@@ -535,9 +532,9 @@ export class Workspace {
     registry.alias('read_file', 'read_file_content');
     // ponytail: symbol_history / cluster_report now first-class in all_schemas() — no aliases needed
 
-    // Skill tool
-    if (this.skills.length > 0) {
-      registry.register(createSkillTool(this.skills));
+    // Skill tool (always registered — hot-loads on call)
+    if (this.skillRegistry) {
+      registry.register(createSkillTool(this.skillRegistry));
     }
 
     // Memory tools
@@ -710,8 +707,8 @@ export class Workspace {
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
         // ponytail: symbol_history / cluster_report now first-class — no aliases needed
-        if (ws.skills.length > 0) {
-          r.register(createSkillTool(ws.skills));
+        if (ws.skillRegistry) {
+          r.register(createSkillTool(ws.skillRegistry));
         }
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
