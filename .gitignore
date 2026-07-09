@@ -37,11 +37,18 @@ hologram_graph_files.json
 # Binaries
 *.dll
 !grammars/*.dll
+!src-tauri/onnxruntime.dll
 *.exe
 !release-bin/*.exe
 *.pdb
 *.so
 *.dylib
+
+# Embedding model binary (80MB) — user downloads locally
+src-tauri/models/*.onnx
+
+# ONNX Runtime DLL — bundled for Tauri resources
+# ponytail: ! rule above allows this specific path
 
 # Test projects
 test_projects/
