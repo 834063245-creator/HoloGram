@@ -686,40 +686,29 @@ pub(crate) async fn search_code(
             }
         };
 
-        Ok(output.to_string())
+        // Append semantic vector search results (ponytail: best-effort, silent skip if unavailable)
+        let mut output_val = output;
+        if !is_regex {
+            let vector_path = std::path::Path::new(&root).join(".hologram").join("vectors.usearch");
+            let vi = hologram_engine::vector::CodeVectorIndex::new(&vector_path);
+            if vi.exists_on_disk() {
+                if let Ok(n) = vi.load() {
+                    if n > 0 {
+                        if let Ok(hits) = vi.search(&pattern, 10) {
+                            if !hits.is_empty() {
+                                let vec_results: Vec<serde_json::Value> = hits.into_iter()
+                                    .map(|(id, score)| serde_json::json!({"node_id": id, "score": (score * 100.0).round() as u32}))
+                                    .collect();
+                                output_val["vector_hits"] = serde_json::json!(vec_results);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(output_val.to_string())
     }).await.map_err(|e| format!("搜索任务失败: {e}"))?
-}
-
-/// Semantic vector search over the codebase embedding index.
-/// Returns ranked (node_id, score) pairs.
-#[tauri::command]
-pub(crate) async fn search_vector(
-    directory: String,
-    query: String,
-    top_k: Option<usize>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    let root = crate::utils::resolve_read_dispatch(&directory, false, &state, &app).await?;
-    let k = top_k.unwrap_or(20).min(50);
-    let vector_path = std::path::Path::new(&root).join(".hologram").join("vectors.usearch");
-
-    let vi = hologram_engine::vector::CodeVectorIndex::new(&vector_path);
-    if !vi.exists_on_disk() {
-        return Ok(serde_json::json!({ "results": [], "hint": "vector index not built yet — run analyze first" }).to_string());
-    }
-
-    let loaded = vi.load().map_err(|e| format!("vector index load failed: {e}"))?;
-    if loaded == 0 {
-        return Ok(serde_json::json!({ "results": [] }).to_string());
-    }
-
-    let hits = vi.search(&query, k).map_err(|e| format!("vector search failed: {e}"))?;
-    let results: Vec<serde_json::Value> = hits.into_iter().map(|(id, score)| {
-        serde_json::json!({ "node_id": id, "score": score })
-    }).collect();
-
-    Ok(serde_json::json!({ "results": results, "count": results.len() }).to_string())
 }
 
 /// Alias: LLM sometimes generates "search_content" instead of "search_code".

@@ -132,7 +132,6 @@ fn main() {
             // ── Search & editing ──
             commands::tools::search_code,
             commands::tools::search_content,
-            commands::tools::search_vector,
             commands::tools::glob,
             commands::tools::edit_file,
             // ── Web ──
