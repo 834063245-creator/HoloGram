@@ -37,6 +37,7 @@ import {
   findToolPart,
 } from './message-model';
 import { renderMessage, type RenderCallbacks } from './message-renderer';
+import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
 
 /** Copy-to-clipboard with visual feedback. Shows check-circle icon for 1.5s then restores copy icon. */
 function showCopiedFeedback(btn: HTMLElement, iconSize = 12): void {
@@ -161,8 +162,10 @@ export class ChatPanel {
   private pillBadge!: HTMLElement;
   private _lastAgentState: 'idle' | 'thinking' | 'running' | 'error' = 'idle';
 
-  // ── New: slash auto-popup ref (item 14) ──
-  private _slashPopup: HTMLElement | null = null;
+  // ── Slash inline panel (command palette, registry-driven) ──
+  private _slashPanel: HTMLElement | null = null;
+  private _slashNavIdx = 0;
+  private _slashVisibleCmds: CommandDef[] = [];
 
   // ── New: agent panel tabs + status bar ──
   private _activeTab: 'chat' | 'tools' | 'context' = 'chat';
@@ -2031,15 +2034,12 @@ export class ChatPanel {
           return;
         }
       }
-      // ── / slash popup keyboard nav ──
-      if (this._slashPopup?.classList.contains('open')) {
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Escape') {
-          // handled by existing sp-item click logic — only close on Escape here
-          if (e.key === 'Escape') {
-            this._slashPopup.classList.remove('open');
-          }
-          return;
-        }
+      // ── / slash panel keyboard nav ──
+      if (this._slashPanel?.classList.contains('open')) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); this._navigateSlashPanel(1); return; }
+        if (e.key === 'ArrowUp')   { e.preventDefault(); this._navigateSlashPanel(-1); return; }
+        if (e.key === 'Enter')     { e.preventDefault(); this._selectSlashItem(); return; }
+        if (e.key === 'Escape')    { this._hideSlashPanel(); return; }
       }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -2081,8 +2081,8 @@ export class ChatPanel {
       }
       if (e.key === 'Escape') {
         // Close popups first
-        if (this._slashPopup?.classList.contains('open')) {
-          this._slashPopup.classList.remove('open');
+        if (this._slashPanel?.classList.contains('open')) {
+          this._hideSlashPanel();
           return;
         }
         this.close();
@@ -2318,92 +2318,43 @@ export class ChatPanel {
       return;
     }
 
-    // Redirect slash commands to sendAgentText
-    if (text === '/memory') {
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      this.sendAgentText('列出所有已保存的记忆（使用 hologram_memory_list）', '/memory');
-      return;
-    }
-    if (text.startsWith('/remember ')) {
-      const fact = text.slice('/remember '.length).trim();
-      if (!fact) {
-        this.addNotice('用法: /remember 要记住的内容', 'info');
+    // ── Registry-driven slash commands ──
+    if (text.startsWith('/')) {
+      // Parameterized commands — need special handling
+      if (text.startsWith('/remember ')) {
+        const fact = text.slice('/remember '.length).trim();
         this.inputArea.value = '';
         this.inputArea.style.height = 'auto';
+        if (!fact) { this.addNotice('用法: /remember 要记住的内容', 'info'); return; }
+        import('../agent/memory.js').then(m => m.authorizeFactSave());
+        this.sendAgentText(
+          `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
+          `/remember ${fact}`,
+        );
         return;
       }
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      // Authorize fact-level save — consumed by the next hologram_memory_save call.
-      // The Agent cannot call this function; only /remember can trigger it.
-      import('../agent/memory.js').then(m => m.authorizeFactSave());
-      this.sendAgentText(
-        `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
-        `/remember ${fact}`,
-      );
-      return;
-    }
-
-    if (text.startsWith('/goal ')) {
-      const goal = text.slice('/goal '.length).trim();
-      if (!goal) {
-        this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
+      if (text.startsWith('/goal ')) {
+        const goal = text.slice('/goal '.length).trim();
         this.inputArea.value = '';
         this.inputArea.style.height = 'auto';
+        if (!goal) { this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info'); return; }
+        this.runGoal(goal);
         return;
       }
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      this.runGoal(goal);
-      return;
-    }
-
-    // Detect /new command
-    if (text === '/new') {
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      this.newSession();
-      return;
-    }
-
-    // Detect /compact-stats command
-    if (text === '/compact-stats') {
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      this.sendAgentText('查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）', '/compact-stats');
-      return;
-    }
-
-    // Detect /compact command
-    if (text === '/compact') {
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      if (!this.agent) return;
-      this.addTurnSep();
-      this.appendUserBubble('/compact');
-      this.scrollBottom();
-      this.addNotice('正在压缩上下文…', 'info');
-      const ctrl = new AbortController();
-      this.agent.compactNow(ctrl.signal).then(() => {
-        this.messages = [];
-        resetMsgIdCounter();
-        this._streamingAssistantId = null;
-        this.msgList.innerHTML = '';
-        // Use renderRestoredSession which now uses messages[]
-        this.renderRestoredSession();
-      }).catch((err) => {
-        this.addNotice(`压缩失败: ${err.message}`, 'error');
-      });
-      return;
-    }
-
-    // Detect /export command
-    if (text === '/export') {
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      this.exportSession();
-      return;
+      // Look up simple commands in registry
+      const cmd = CommandRegistry.instance.findByShortcut(text.trim());
+      if (cmd) {
+        this._executeCommand(cmd);
+        return;
+      }
+      // Unknown slash command — route to Skill tool
+      if (!text.includes(' ')) {
+        const skillName = text.slice(1);
+        this.inputArea.value = '';
+        this.inputArea.style.height = 'auto';
+        this.sendAgentText(`Execute skill: ${skillName}`, text);
+        return;
+      }
     }
 
     // ── Insert path: Agent is running, inject message into session ──
@@ -2425,15 +2376,6 @@ export class ChatPanel {
       this.addTurnSep();
       this.appendUserBubble(text);
       this.scrollBottom();
-      return;
-    }
-
-    // Unknown slash command — route to Skill tool
-    if (text.startsWith('/') && !text.includes(' ')) {
-      const skillName = text.slice(1);
-      this.inputArea.value = '';
-      this.inputArea.style.height = 'auto';
-      this.sendAgentText(`Execute skill: ${skillName}`, text);
       return;
     }
 
@@ -3760,107 +3702,61 @@ export class ChatPanel {
 
     this._buildModePopup(mode);
 
-    // Popup menu for /
-    const popup = document.createElement('div');
-    popup.className = 'chat-slash-popup';
-    popup.innerHTML = `
-      <div class="sp-group">
-        <div class="sp-group-title">操作</div>
-        <button class="sp-item" data-cmd="new">${iconHtml('refresh', 10)} 重置当前会话<span class="sp-key">/new</span></button>
-        <button class="sp-item" data-cmd="compact">${iconHtml('save', 10)} 压缩上下文<span class="sp-key">/compact</span></button>
-        <button class="sp-item" data-cmd="compact-stats">${iconHtml('check-circle', 10)} 压缩统计<span class="sp-key">/compact-stats</span></button>
-        <button class="sp-item" data-cmd="memory">${iconHtml('bookmark', 10)} 查看记忆<span class="sp-key">/memory</span></button>
-        <button class="sp-item" data-cmd="remember">${iconHtml('save', 10)} 记住一件事<span class="sp-key">/remember</span></button>
-        <button class="sp-item" data-cmd="trail">${iconHtml('link', 10)} 显示探索轨迹<span class="sp-key">/trail</span></button>
-        <button class="sp-item" data-cmd="export">${iconHtml('export-file', 10)} 导出对话<span class="sp-key">/export</span></button>
-      </div>
-      <div class="sp-group">
-        <div class="sp-group-title">查询</div>
-        <button class="sp-item" data-cmd="q" data-text="哪些模块最脆弱？">${iconHtml('alert', 10)} 查找脆弱模块</button>
-        <button class="sp-item" data-cmd="q" data-text="检查循环依赖">${iconHtml('refresh', 10)} 检查循环依赖</button>
-        <button class="sp-item" data-cmd="q" data-text="分析最近改动的影响">${iconHtml('blast', 10)} 影响分析</button>
-        <button class="sp-item" data-cmd="q" data-text="" data-placeholder="追踪从 ">${iconHtml('link', 10)} 依赖路径查询</button>
-      </div>`;
-    this.footerEl.appendChild(popup);
-    this._slashPopup = popup;
+    // ── Slash inline panel (registry-driven) ──
+    const panel = document.createElement('div');
+    panel.className = 'chat-slash-panel';
+    this._slashPanel = panel;
+
+    // Register default commands + wire local handlers
+    CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
+    this._wireCommandHandlers();
 
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
       this.onOpenSettings?.();
     });
 
-    // / button → toggle popup
+    // / button → focus input + trigger inline panel
     const trigger = this.footerEl.querySelector('.chat-slash-trigger') as HTMLElement;
     trigger?.addEventListener('click', (e) => {
       e.stopPropagation();
-      popup.classList.toggle('open');
+      this.inputArea.focus();
+      const val = this.inputArea.value;
+      const pos = this.inputArea.selectionStart || 0;
+      if (!val || pos === val.length) {
+        this.inputArea.value = val + '/';
+        this.inputArea.setSelectionRange((val + '/').length, (val + '/').length);
+      }
+      this.inputArea.style.height = 'auto';
+      this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+      this.inputArea.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    // Close popup on outside click (clean up previous listener to prevent zombie handlers)
+    // Close panel on outside click
     if (this.footerClickCleanup) {
       document.removeEventListener('click', this.footerClickCleanup as unknown as EventListener);
     }
     const handler = (e: MouseEvent) => {
-      if (!popup.contains(e.target as Node) && e.target !== trigger) {
-        popup.classList.remove('open');
+      if (!panel.contains(e.target as Node) && e.target !== trigger && !this.inputArea.contains(e.target as Node)) {
+        this._hideSlashPanel();
       }
     };
     document.addEventListener('click', handler);
     this.footerClickCleanup = handler as unknown as (() => void);
 
-    // Popup items
-    popup.querySelectorAll('.sp-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        popup.classList.remove('open');
-        const el = item as HTMLElement;
-        const cmd = el.dataset['cmd'];
-        if (cmd === 'new') {
-          this.inputArea.value = '/new';
-          this.sendMessage();
-          return;
-        }
-        if (cmd === 'compact') {
-          this.inputArea.value = '/compact';
-          this.sendMessage();
-          return;
-        }
-        if (cmd === 'compact-stats') {
-          this.inputArea.value = '/compact-stats';
-          this.sendMessage();
-          return;
-        }
-        if (cmd === 'memory') {
-          this.inputArea.value = '/memory';
-          this.sendMessage();
-          return;
-        }
-        if (cmd === 'remember') {
-          this.inputArea.value = '/remember ';
-          this.inputArea.focus();
-          return;
-        }
-        if (cmd === 'trail') {
-          this._onTrailToggle?.();
-          this.addNotice(this._onTrailToggle ? '已切换探索轨迹显示' : '轨迹功能未就绪', 'info');
-          return;
-        }
-        if (cmd === 'export') {
-          this.exportSession();
-          return;
-        }
-        // Query commands — fill input text
-        const text = el.dataset['text'] || '';
-        const placeholder = el.dataset['placeholder'] || '';
-        this.inputArea.value = text;
-        if (placeholder && !text) {
-          this.inputArea.value = placeholder;
-          this.inputArea.setSelectionRange(placeholder.length, placeholder.length);
-        }
-        this.inputArea.style.height = 'auto';
-        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
-        this.inputArea.focus();
-      });
+    // Panel click → execute command
+    panel.addEventListener('mousedown', (e) => {
+      // Prevent blur before click fires
+      e.preventDefault();
+      const item = (e.target as HTMLElement).closest('.sp-item') as HTMLElement;
+      if (!item) return;
+      const cmdId = item.dataset['cmdId'] || '';
+      const cmd = this._slashVisibleCmds.find(c => c.id === cmdId);
+      if (cmd) this._executeCommand(cmd);
     });
+
+    // Attach panel to main panel (not footer — floats above input)
+    this.panel.appendChild(panel);
 
     // Attach file button
     this.footerEl.querySelector('.chat-attach-btn')?.addEventListener('click', () => {
@@ -4323,7 +4219,116 @@ export class ChatPanel {
     this.inputArea.focus();
   }
 
-  // ── Slash auto-popup (item 14) ──
+  // ── Slash inline panel (item 14, registry-driven) ──
+
+  /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */
+  private _wireCommandHandlers(): void {
+    const reg = CommandRegistry.instance;
+    // Update local-action commands that need ChatPanel instance
+    const override = (id: string, handler: () => void) => {
+      const idx = DEFAULT_COMMANDS.findIndex(c => c.id === id);
+      if (idx >= 0 && DEFAULT_COMMANDS[idx].action.type === 'local') {
+        (DEFAULT_COMMANDS[idx].action as any).handler = handler;
+      }
+    };
+    override('new', () => { this.inputArea.value = ''; this.inputArea.style.height = 'auto'; this.newSession(); });
+    override('compact', () => {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      if (!this.agent) return;
+      this.addTurnSep();
+      this.appendUserBubble('/compact');
+      this.scrollBottom();
+      this.addNotice('正在压缩上下文…', 'info');
+      const ctrl = new AbortController();
+      this.agent.compactNow(ctrl.signal).then(() => {
+        this.messages = [];
+        resetMsgIdCounter();
+        this._streamingAssistantId = null;
+        this.msgList.innerHTML = '';
+        this.renderRestoredSession();
+      }).catch((err) => {
+        this.addNotice(`压缩失败: ${err.message}`, 'error');
+      });
+    });
+    override('export', () => this.exportSession());
+    override('trail', () => {
+      this._onTrailToggle?.();
+      this.addNotice(this._onTrailToggle ? '已切换探索轨迹显示' : '轨迹功能未就绪', 'info');
+    });
+  }
+
+  /** Execute a command from the registry. */
+  private _executeCommand(cmd: CommandDef): void {
+    this._hideSlashPanel();
+    const action = cmd.action;
+    switch (action.type) {
+      case 'send':
+        this.sendAgentText(action.text, action.displayLabel);
+        break;
+      case 'fill':
+        this.inputArea.value = action.text;
+        this.inputArea.style.height = 'auto';
+        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+        this.inputArea.focus();
+        this.inputArea.setSelectionRange(action.text.length, action.text.length);
+        break;
+      case 'local':
+        action.handler();
+        break;
+      case 'skill':
+        this.sendAgentText(`Execute skill: ${action.skillName}`, `/${action.skillName}`);
+        break;
+    }
+  }
+
+  /** Show the slash panel with optional query filter. */
+  private _showSlashPanel(query?: string): void {
+    if (!this._slashPanel) return;
+    const cmds = query ? CommandRegistry.instance.filter(query) : CommandRegistry.instance.getAll();
+    this._slashVisibleCmds = cmds;
+    this._slashNavIdx = 0;
+    this._slashPanel.innerHTML = CommandRegistry.instance.renderPanel(cmds, query);
+    this._slashPanel.classList.add('open');
+    // Highlight first item
+    this._highlightSlashItem(0);
+  }
+
+  /** Hide the slash panel. */
+  private _hideSlashPanel(): void {
+    if (!this._slashPanel) return;
+    this._slashPanel.classList.remove('open');
+    this._slashVisibleCmds = [];
+    this._slashNavIdx = 0;
+  }
+
+  /** Highlight the nth visible item in the slash panel. */
+  private _highlightSlashItem(idx: number): void {
+    if (!this._slashPanel) return;
+    const items = this._slashPanel.querySelectorAll('.sp-item');
+    items.forEach((el, i) => {
+      el.classList.toggle('sp-active', i === idx);
+      if (i === idx) (el as HTMLElement).scrollIntoView?.({ block: 'nearest' });
+    });
+    this._slashNavIdx = idx;
+  }
+
+  /** Execute the currently highlighted slash command. */
+  private _selectSlashItem(): void {
+    if (!this._slashPanel?.classList.contains('open')) return;
+    const cmd = this._slashVisibleCmds[this._slashNavIdx];
+    if (cmd) this._executeCommand(cmd);
+  }
+
+  /** Navigate slash panel items with arrow keys. Returns true if handled. */
+  private _navigateSlashPanel(delta: number): boolean {
+    if (!this._slashPanel?.classList.contains('open')) return false;
+    const max = this._slashVisibleCmds.length;
+    if (max === 0) return false;
+    const next = (this._slashNavIdx + delta + max) % max;
+    this._highlightSlashItem(next);
+    return true;
+  }
 
   private handleSlashInput(): void {
     const val = this.inputArea.value;
@@ -4331,21 +4336,22 @@ export class ChatPanel {
     const textBefore = val.slice(0, cursorPos);
 
     // Show on / at line start or after space
-    const showPopup = /(?:^|\s)\/$/.test(textBefore);
+    const showPanel = /(?:^|\s)\/$/.test(textBefore);
 
-    if (showPopup && this._slashPopup) {
-      this._slashPopup.classList.add('open');
-      // Filter items by text after /
-      const query = textBefore.slice(textBefore.lastIndexOf('/') + 1).toLowerCase();
-      this._slashPopup.querySelectorAll('.sp-item').forEach((item) => {
-        const el = item as HTMLElement;
-        const cmd = el.dataset['cmd'] || '';
-        const text = (el.textContent || '').toLowerCase();
-        const match = !query || cmd.includes(query) || text.includes(query);
-        el.style.display = match ? '' : 'none';
-      });
-    } else if (!showPopup && this._slashPopup && !textBefore.includes('/')) {
-      this._slashPopup.classList.remove('open');
+    if (showPanel) {
+      const slashIdx = textBefore.lastIndexOf('/');
+      const query = textBefore.slice(slashIdx + 1);
+      this._showSlashPanel(query);
+    } else if (!textBefore.includes('/')) {
+      this._hideSlashPanel();
+    }
+    // If user continues typing after / (e.g. "/mem"), still filter
+    else {
+      const slashIdx = textBefore.lastIndexOf('/');
+      const query = textBefore.slice(slashIdx + 1);
+      if (query.length > 0) {
+        this._showSlashPanel(query);
+      }
     }
   }
 
