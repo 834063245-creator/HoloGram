@@ -637,6 +637,76 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
       execute: (args) => exec('bash_kill', { jobId: args.jobId }),
     },
 
+    // ── Shell: Monitor — 轮询直到条件满足 ──
+    {
+      name: () => 'monitor',
+      description: () =>
+        'Poll a shell command at an interval until its output matches a regex pattern. Use after starting a long-running background task (e.g. cargo build, npm test) instead of manually re-calling bash_output — the monitor does the polling loop for you. Returns accumulated output when the condition matches or timeout fires. Read-only: does not modify files.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: 'Shell command to poll. Typically "bash_output <jobId>" to check a background job, but can be any idempotent read command.',
+          },
+          until: {
+            type: 'string',
+            description: 'Regex pattern (case-insensitive) matched against stdout+stderr. Monitor stops when this matches. E.g. "Build succeeded|Finished|FAILED|test result:"',
+          },
+          timeoutMs: {
+            type: 'integer',
+            description: 'Max total wait time in milliseconds (default: 300000 = 5 min, max: 600000 = 10 min).',
+            default: 300000,
+          },
+          intervalMs: {
+            type: 'integer',
+            description: 'Polling interval in milliseconds (default: 3000 = 3s, min: 1000 = 1s).',
+            default: 3000,
+          },
+        },
+        required: ['command', 'until'],
+      }),
+      readOnly: () => true,
+      execute: async (args, onProgress) => {
+        const command = (args['command'] as string) || '';
+        const until = (args['until'] as string) || '';
+        const maxMs = Math.min((args['timeoutMs'] as number) || 300_000, 600_000);
+        const intervalMs = Math.max(1000, (args['intervalMs'] as number) || 3000);
+        const deadline = Date.now() + maxMs;
+
+        // ponytail: compile regex, fall back to escaped literal on bad pattern
+        let re: RegExp;
+        try { re = new RegExp(until, 'i'); } catch { re = new RegExp(until.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+
+        let last = '';
+        let n = 0;
+        const sleep = (ms: number) => new Promise<void>(r => { setTimeout(r, ms); });
+
+        while (Date.now() < deadline) {
+          n++;
+          const rem = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+          onProgress?.(`[轮询 #${n}] 剩余 ${rem}s…`);
+
+          try {
+            last = await exec('exec_command', { command, timeoutMs: 30_000 });
+          } catch (e: any) {
+            last = `monitor: 命令失败 — ${e?.message || e}`;
+          }
+
+          if (re.test(last)) {
+            onProgress?.('✓ 条件满足，监控结束。');
+            return last;
+          }
+
+          if (Date.now() + intervalMs >= deadline) break;
+          await sleep(intervalMs);
+        }
+
+        const elapsed = Math.round((Date.now() - (deadline - maxMs)) / 1000);
+        return last + `\n\n[monitor] 超时 (${n} 轮, ${elapsed}s)。未匹配: /${until}/i`;
+      },
+    },
+
     // ── Git ──
     {
       name: () => 'git_status',
