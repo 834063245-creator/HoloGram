@@ -2120,6 +2120,16 @@ export class ChatPanel {
     this.footerEl.className = 'chat-footer';
     this.panel.appendChild(this.footerEl);
 
+    // ── Slash inline panel — created once in buildDOM, floats above footer ──
+    const slashPanel = document.createElement('div');
+    slashPanel.className = 'chat-slash-panel';
+    this._slashPanel = slashPanel;
+    this.footerEl.appendChild(slashPanel);
+
+    // Register default commands + wire local handlers (one-time setup)
+    CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
+    this._wireCommandHandlers();
+
     // ── Pill core — optical sapphire reticle ──
     // ponytail: single clean geometric mark instead of 4 overlapping polygons
     const pillStar = document.createElement('div');
@@ -3701,16 +3711,6 @@ export class ChatPanel {
       </div>`);
 
     this._buildModePopup(mode);
-
-    // ── Slash inline panel (beneath input, absolutely positioned) ──
-    const panel = document.createElement('div');
-    panel.className = 'chat-slash-panel';
-    this._slashPanel = panel;
-    inputWrap.appendChild(panel);
-
-    // Register default commands + wire local handlers
-    CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
-    this._wireCommandHandlers();
 
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
