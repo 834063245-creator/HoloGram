@@ -286,6 +286,7 @@ async function runCheck(): Promise<void> {
 function doSearch(): void {
   const query = searchInput.value.trim(); if (!query) return;
   const found = starGraph.focusNode(query);
+  searchInput.blur(); // ponytail: 搜完释放焦点，恢复键盘快捷键
   if (!found) { statusText.textContent = `未找到 "${query}"`; setTimeout(() => { if (statusText.textContent === `未找到 "${query}"`) statusText.textContent = '就绪'; }, 2000); }
 }
 
@@ -733,6 +734,9 @@ async function init(): Promise<void> {
 
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+
+  // ponytail: 点 graph 画布时释放搜索框焦点，Three.js canvas 不会自动抢焦点
+  graphEl.addEventListener('pointerdown', () => { if (document.activeElement === searchInput) searchInput.blur(); });
 
   // Fold / Reset camera
   btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });
