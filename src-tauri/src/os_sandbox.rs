@@ -671,11 +671,18 @@ mod imp {
         let canon_project = std::fs::canonicalize(&project).unwrap_or(project);
         let canon_temp = std::fs::canonicalize(&temp).unwrap_or(temp);
 
-        // ponytail: grant on known tool directories so bash/node/git can load
+        // ponytail: grant on known tool directories so bash/node/git can load.
+        // CRITICAL: each directory that contains EXEs or DLLs must be explicitly
+        // listed. Windows ACL inheritance (SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+        // only applies to NEW objects — existing files in subdirectories are NOT
+        // automatically granted access. If a directory is missing, processes
+        // running inside AppContainer will get STATUS_DLL_INIT_FAILED (0xC0000142).
+        // Git Bash specifically needs mingw64/bin for msys-2.0.dll.
         let tool_dirs_read_exec = [
             r"C:\Program Files\Git",
             r"C:\Program Files\Git\bin",
             r"C:\Program Files\Git\usr\bin",
+            r"C:\Program Files\Git\mingw64\bin",  // msys-2.0.dll, cygwin1.dll, etc.
             r"C:\Program Files\nodejs",
             r"C:\Windows\System32",
             r"C:\Windows\WinSxS",    // SxS manifests + actual DLLs that cmd.exe loads at startup
