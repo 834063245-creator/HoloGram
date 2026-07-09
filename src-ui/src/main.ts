@@ -622,24 +622,17 @@ async function init(): Promise<void> {
   btnSettings.addEventListener('click', () => { settingsPanel.toggle(); });
 
   // ── Window controls (decorations:false — custom title bar) ──
-  // ponytail: load once, cache ref — per-click dynamic import was losing errors in empty catch {}
-  let _appWindow: any = null;
-  async function getAppWindow() {
-    if (!_appWindow) {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      _appWindow = getCurrentWindow();
-    }
-    return _appWindow;
+  // ponytail: 绕过所有 import，直接调 __TAURI_INTERNALS__ IPC — 跟 bridge.ts 同一条路
+  function _winCmd(cmd: string): void {
+    const t = (window as any).__TAURI_INTERNALS__;
+    if (!t) return;
+    const label = t.metadata?.currentWindow?.label || 'main';
+    const p = t.invoke(`plugin:window|${cmd}`, { label });
+    if (p && typeof p.catch === 'function') p.catch((e: any) => console.error(`[win] ${cmd}:`, e));
   }
-  document.getElementById('btn-minimize')?.addEventListener('click', () => {
-    getAppWindow().then(w => w.minimize()).catch(e => console.error('[win] minimize failed:', e));
-  });
-  document.getElementById('btn-maximize')?.addEventListener('click', () => {
-    getAppWindow().then(w => w.toggleMaximize()).catch(e => console.error('[win] toggleMaximize failed:', e));
-  });
-  document.getElementById('btn-close')?.addEventListener('click', () => {
-    getAppWindow().then(w => w.close()).catch(e => console.error('[win] close failed:', e));
-  });
+  document.getElementById('btn-minimize')?.addEventListener('click', () => _winCmd('minimize'));
+  document.getElementById('btn-maximize')?.addEventListener('click', () => _winCmd('toggle_maximize'));
+  document.getElementById('btn-close')?.addEventListener('click', () => _winCmd('close'));
 
   // Save sessions on close
   window.addEventListener('beforeunload', () => {
