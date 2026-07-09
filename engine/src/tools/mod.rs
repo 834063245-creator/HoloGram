@@ -114,7 +114,6 @@ impl ToolRegistry {
             "infer_type" => handler_resolve_type(args),
             "find_implementations" => handler_find_implementations(args),
             "find_references" => handler_find_references(args),
-            "search_vector" => handler_vector_search(args),
             _ => json!({"error": format!("Tool not found: {}", name)}),
         }
     }
@@ -883,17 +882,22 @@ fn handler_search(args: &Value) -> Value {
     if query_str.is_empty() {
         return json!({"error": "query is required"});
     }
+    // 1. FTS5 exact search
     if let Ok(results) = engine::engine_fts_search(query_str, limit) {
         if !results.is_empty() {
-            return json!({
+            let mut out = json!({
                 "query": query_str,
                 "count": results.len(),
                 "results": results.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
                 "engine": "fts5",
             });
+            // append vector results if available
+            merge_vector_hits(&mut out, query_str, limit);
+            return out;
         }
     }
-    with_graph(|g| {
+    // 2. Linear fuzzy fallback
+    let mut out = with_graph(|g| {
         let results = query::search_nodes(g, query_str);
         let count = results.len().min(limit);
         json!({
@@ -902,7 +906,33 @@ fn handler_search(args: &Value) -> Value {
             "results": results.iter().take(limit).map(|n| node_to_value(n)).collect::<Vec<_>>(),
             "engine": "linear",
         })
-    })
+    });
+    // append vector results
+    merge_vector_hits(&mut out, query_str, limit);
+    out
+}
+
+/// Append vector (semantic) search results to the output if available.
+/// ponytail: fire-and-forget — if vector index isn't built, silently skip.
+fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
+    let root = project_root();
+    if root.as_os_str().is_empty() { return; }
+    let vector_path = root.join(".hologram").join("vectors.usearch");
+    let vi = crate::vector::CodeVectorIndex::new(&vector_path);
+    if !vi.exists_on_disk() { return; }
+    if vi.load().unwrap_or(0) == 0 { return; }
+    if let Ok(hits) = vi.search(query, limit) {
+        if !hits.is_empty() {
+            let vec_results: Vec<Value> = hits.into_iter()
+                .map(|(node_id, score)| json!({"node_id": node_id, "vector_score": (score * 100.0).round() as u32}))
+                .collect();
+            out["vector_hits"] = json!(vec_results);
+            if let Some(obj) = out.as_object_mut() {
+                let prev = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                obj.insert("count".into(), json!(prev + vec_results.len() as u64));
+            }
+        }
+    }
 }
 
 fn handler_explore(args: &Value) -> Value {
@@ -1974,52 +2004,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "lsp",
         },
-        // ── Semantic search ──
-        ToolSchema {
-            name: "search_vector",
-            description: "Semantic (vector) search over the codebase — find code by what it DOES, not just by name. Use when you can't remember the exact function name but know what it does (e.g. \"payment retry logic\" → finds `handleTimeout`, `exponentialBackoff`). Complements search_symbols (exact name) and search_code (text pattern). Requires vector index to be built (happens automatically during analysis).",
-            params: &[
-                p!("query", "string", "Natural language description of what you're looking for"),
-                p!("project_root", "string", "Project directory path (where .hologram/vectors.usearch lives)"),
-                p!("top_k", "integer", "Number of results (default 10, max 50)"),
-            ],
-            required: &["query", "project_root"],
-            read_only: true,
-            category: "graph",
-        },
     ]
-}
-
-// ── Vector search handler ──
-
-fn handler_vector_search(args: &Value) -> Value {
-    let query = get_str(args, &["query"]);
-    let root = get_str(args, &["project_root", "root", "path"]);
-    let top_k = get_usize(args, "top_k", 10).min(50);
-
-    if query.is_empty() || root.is_empty() {
-        return json!({"error": "query and project_root are required"});
-    }
-
-    let vector_path = Path::new(&root).join(".hologram").join("vectors.usearch");
-    let vi = crate::vector::CodeVectorIndex::new(&vector_path);
-    if !vi.exists_on_disk() {
-        return json!({"results": [], "hint": "vector index not built yet — run analyze_project first"});
-    }
-
-    match vi.load() {
-        Ok(0) => json!({"results": [], "hint": "vector index is empty"}),
-        Ok(_) => match vi.search(&query, top_k) {
-            Ok(hits) => {
-                let results: Vec<Value> = hits.into_iter().map(|(id, score)| {
-                    json!({"node_id": id, "score": (score * 100.0).round() as u32})
-                }).collect();
-                json!({"results": results, "count": results.len()})
-            }
-            Err(e) => json!({"error": format!("search failed: {e}")}),
-        },
-        Err(e) => json!({"error": format!("load failed: {e}")}),
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════
