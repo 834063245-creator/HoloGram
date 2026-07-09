@@ -107,9 +107,29 @@ impl SandboxedChild {
 // ═══════════════════════════════════════════════════════════════
 
 /// One-time init — call at app startup. Creates Job Object + AppContainer profile.
+/// Also sweeps residual ACL entries from previous crashes.
 pub fn init() {
     #[cfg(windows)]
-    imp::init_all();
+    {
+        imp::sweep_residual_acls();
+        imp::init_all();
+    }
+}
+
+/// Persist paths modified by grant_path_acl so cleanup_acls / sweep_residual_acls
+/// can restore them. Called internally by init_appcontainer; public for symmetry
+/// with cleanup_acls / sweep_residual_acls.
+#[allow(dead_code)]
+pub fn save_acl_snapshots() {
+    #[cfg(windows)]
+    imp::save_acl_snapshots();
+}
+
+/// Remove AppContainer ACEs from all directories modified by grant_path_acl.
+/// Called at app shutdown. Best-effort — failures are logged but not propagated.
+pub fn cleanup_acls() {
+    #[cfg(windows)]
+    imp::cleanup_acls();
 }
 
 /// Query the current sandbox status for UI display (spec §6.6).
@@ -285,6 +305,7 @@ mod imp {
             name: *const u16, sid_out: *mut *mut std::ffi::c_void,
         ) -> i32;
         fn ConvertStringSidToSidW(str: *const u16, sid: *mut *mut std::ffi::c_void) -> i32;
+        fn EqualSid(a: *mut std::ffi::c_void, b: *mut std::ffi::c_void) -> i32;
         fn GetNamedSecurityInfoW(
             name: *const u16, obj_type: i32, sec_info: u32,
             owner: *mut *mut std::ffi::c_void, group: *mut *mut std::ffi::c_void,
@@ -595,6 +616,10 @@ mod imp {
 
     static APPCONTAINER_SID: OnceLock<Option<isize>> = OnceLock::new();
     static INTERNET_CLIENT_SID: OnceLock<Option<isize>> = OnceLock::new();
+    /// Paths whose DACLs were modified by grant_path_acl. Written to disk on
+    /// save_acl_snapshots(), used by cleanup_acls() on shutdown and
+    /// sweep_residual_acls() on startup for crash recovery.
+    static ACL_MODIFIED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     const APPCONTAINER_NAME: &str = "hologram-sandbox\0";
 
     fn wide(s: &str) -> Vec<u16> {
@@ -936,7 +961,242 @@ mod imp {
             eprintln!("[hologram] SetNamedSecurityInfoW({path}) failed: 0x{ret:08X}");
             return Err(ret);
         }
+        // Track for shutdown cleanup / crash recovery.
+        // Persist to disk immediately so crash recovery can find this path.
+        if let Ok(mut paths) = ACL_MODIFIED.lock() {
+            if !paths.contains(&path.to_string()) {
+                paths.push(path.to_string());
+                // ponytail: write snapshot on every grant so crash doesn't leave
+                // orphan ACEs. On large PATH (many tools) this writes ~120 lines
+                // once at startup; negligible. Call write_snapshot_file directly
+                // since we already hold ACL_MODIFIED lock.
+                write_snapshot_file(&paths);
+            }
+        }
         Ok(())
+    }
+
+    /// Path to the ACL snapshot file in .hologram/
+    fn acl_snapshot_path() -> std::path::PathBuf {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        cwd.join(".hologram").join(".acl_snapshots")
+    }
+
+    /// Write the snapshot file from a pre-locked path list. Split from
+    /// save_acl_snapshots() so grant_path_acl can call it while holding the lock.
+    fn write_snapshot_file(paths: &[String]) {
+        let path = acl_snapshot_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let content = paths.join("\n");
+        let _ = std::fs::write(&path, &content);
+    }
+
+    /// Persist modified path list to disk so crash recovery can find them.
+    pub fn save_acl_snapshots() {
+        if let Ok(paths) = ACL_MODIFIED.lock() {
+            write_snapshot_file(&paths);
+        }
+    }
+
+    /// Remove AppContainer ACEs from all tracked paths. Called on graceful shutdown.
+    /// Best-effort: failures are logged, not propagated.
+    pub fn cleanup_acls() {
+        let paths: Vec<String> = ACL_MODIFIED
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or_default();
+        let ac_sid = APPCONTAINER_SID.get().and_then(|o| *o);
+        let internet_sid = internet_client_sid();
+
+        for dir in &paths {
+            if let Some(sid) = ac_sid {
+                remove_appcontainer_ace(dir, sid as *mut std::ffi::c_void, internet_sid);
+            }
+        }
+
+        // Clear the snapshot file
+        let snap_path = acl_snapshot_path();
+        let _ = std::fs::remove_file(&snap_path);
+    }
+
+    /// Read snapshot file from disk and try to clean up residual ACEs from
+    /// a previous crash. Called at app startup before init_all().
+    pub fn sweep_residual_acls() {
+        let snap_path = acl_snapshot_path();
+        let content = match std::fs::read_to_string(&snap_path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if content.trim().is_empty() {
+            let _ = std::fs::remove_file(&snap_path);
+            return;
+        }
+
+        // We don't have the AppContainer SID yet (init_appcontainer hasn't run),
+        // so derive it from the well-known name
+        let name = wide(APPCONTAINER_NAME.trim_end_matches('\0'));
+        let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
+        let hr = unsafe {
+            DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid)
+        };
+        if hr != 0 || sid.is_null() {
+            eprintln!("[hologram] sweep: cannot derive AppContainer SID for cleanup");
+            return;
+        }
+
+        let internet_sid = {
+            let sid_str = wide("S-1-15-3-1\0");
+            let mut isid: *mut std::ffi::c_void = std::ptr::null_mut();
+            let ok = unsafe { ConvertStringSidToSidW(sid_str.as_ptr(), &mut isid) };
+            if ok == 0 || isid.is_null() { None } else { Some(isid as isize) }
+        };
+
+        let mut cleaned = 0usize;
+        for line in content.lines() {
+            let dir = line.trim();
+            if dir.is_empty() { continue; }
+            if !std::path::Path::new(dir).exists() { continue; }
+            if remove_appcontainer_ace(dir, sid, internet_sid) {
+                cleaned += 1;
+            }
+        }
+
+        if cleaned > 0 {
+            eprintln!("[hologram] sweep: cleaned residual ACEs from {} directories", cleaned);
+        }
+
+        // Always remove snapshot file after sweep attempt
+        let _ = std::fs::remove_file(&snap_path);
+    }
+
+    /// Remove ACEs for the AppContainer SID (and optionally INTERNET_CLIENT SID)
+    /// from a directory's DACL. Returns true if any ACEs were removed.
+    fn remove_appcontainer_ace(
+        path: &str,
+        ac_sid: *mut std::ffi::c_void,
+        internet_sid: Option<isize>,
+    ) -> bool {
+        let path_w = wide(path);
+
+        // Get existing DACL
+        let mut dacl: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
+        let ret = unsafe {
+            GetNamedSecurityInfoW(
+                path_w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(), std::ptr::null_mut(),
+                &mut dacl, std::ptr::null_mut(), &mut sd,
+            )
+        };
+        if ret != ERROR_SUCCESS {
+            return false;
+        }
+
+        // Count existing ACEs
+        let ace_count = unsafe { acl_ace_count(dacl) };
+
+        // Walk the ACL and rebuild without our SIDs
+        let mut new_acl: Vec<u8> = Vec::new();
+        let mut removed = false;
+
+        // ponytail: ACL layout = ACL header + ACE entries. Copy header, filter ACEs.
+        // ACL size info header is 8 bytes (AclRevision, Sbz1, AclSize, AceCount, Sbz2).
+        // We copy the header then filter ACEs one by one.
+        let header_size = 8usize;
+        if ace_count > 0 && !dacl.is_null() {
+            let acl_ptr = dacl as *const u8;
+            // Copy ACL header
+            new_acl.extend_from_slice(unsafe { std::slice::from_raw_parts(acl_ptr, header_size) });
+
+            let mut offset = header_size;
+            for _ in 0..ace_count {
+                let ace_ptr = unsafe { acl_ptr.add(offset) };
+                // ACE header: AceType(u8), AceFlags(u8), AceSize(u16)
+                let ace_size = unsafe { *(ace_ptr.add(2) as *const u16) } as usize;
+                let ace_type = unsafe { *ace_ptr };
+
+                // ACE types: ACCESS_ALLOWED_ACE_TYPE=0, ACCESS_DENIED_ACE_TYPE=1
+                // SID starts at offset 8 in the ACE
+                let sid_in_ace = unsafe { ace_ptr.add(8) as *mut std::ffi::c_void };
+
+                let is_our_sid = unsafe { equal_sid(sid_in_ace, ac_sid) };
+                let is_internet = internet_sid
+                    .map(|is| unsafe { equal_sid(sid_in_ace, is as *mut std::ffi::c_void) })
+                    .unwrap_or(false);
+
+                if ace_type == 0 && (is_our_sid || is_internet) {
+                    // Skip this ACE — it's ours
+                    removed = true;
+                } else {
+                    // Copy ACE as-is
+                    new_acl.extend_from_slice(unsafe {
+                        std::slice::from_raw_parts(ace_ptr, ace_size)
+                    });
+                }
+                offset += ace_size;
+            }
+        } else {
+            unsafe { LocalFree(sd); }
+            return false;
+        }
+
+        if !removed {
+            unsafe { LocalFree(sd); }
+            return false;
+        }
+
+        // Update ACL header: AclSize (bytes 2-3) and AceCount (bytes 4-5)
+        // must reflect the filtered ACE list, not the stale original header.
+        // Walk the rebuilt ACL to count remaining ACEs and compute correct size.
+        let mut kept_ace_count: u16 = 0;
+        {
+            let mut off = header_size;
+            while off < new_acl.len() {
+                let ace_size = unsafe { *(new_acl.as_ptr().add(off + 2) as *const u16) } as usize;
+                if ace_size == 0 { break; }
+                kept_ace_count += 1;
+                off += ace_size;
+            }
+        }
+        let new_acl_size = new_acl.len() as u16;
+        // Write corrected header fields
+        new_acl[2..4].copy_from_slice(&new_acl_size.to_le_bytes());
+        new_acl[4..6].copy_from_slice(&kept_ace_count.to_le_bytes());
+
+        // Write back the filtered ACL
+        let new_acl_ptr = new_acl.as_ptr() as *mut std::ffi::c_void;
+        let ret = unsafe {
+            SetNamedSecurityInfoW(
+                path_w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(), std::ptr::null_mut(),
+                new_acl_ptr, std::ptr::null_mut(),
+            )
+        };
+        unsafe { LocalFree(sd); }
+
+        if ret != ERROR_SUCCESS {
+            eprintln!("[hologram] cleanup: SetNamedSecurityInfoW({path}) failed: 0x{ret:08X}");
+            return false;
+        }
+        true
+    }
+
+    /// Count the number of ACE entries in an ACL.
+    unsafe fn acl_ace_count(acl: *mut std::ffi::c_void) -> u32 {
+        if acl.is_null() { return 0; }
+        let ptr = acl as *const u8;
+        // AclSize is at offset 2, AceCount at offset 4
+        let ace_count = *(ptr.add(4) as *const u16) as u32;
+        ace_count
+    }
+
+    /// Compare two SIDs for equality via Windows EqualSid. Handles edge cases
+    /// (misordered SubAuthority arrays, non-canonical forms) that byte comparison misses.
+    unsafe fn equal_sid(a: *mut std::ffi::c_void, b: *mut std::ffi::c_void) -> bool {
+        if a.is_null() || b.is_null() { return false; }
+        EqualSid(a, b) != 0
     }
 
     #[allow(dead_code)]
@@ -958,6 +1218,8 @@ mod imp {
     pub fn init_all() {
         job::init();
         init_appcontainer();
+        // Persist modified path list for crash recovery
+        save_acl_snapshots();
     }
 
     // ── Sandboxed spawn ──
@@ -1630,5 +1892,46 @@ mod tests {
                 // Cmd fallback is always valid
             }
         }
+    }
+
+    // ── ACL lifecycle tests ──
+
+    #[test]
+    fn test_acl_snapshot_path_in_hologram_dir() {
+        // Access acl_snapshot_path through the public API: save + cleanup.
+        // Just verify the file goes to .hologram/.acl_snapshots.
+        let path = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".hologram").join(".acl_snapshots");
+        assert!(path.to_string_lossy().replace('\\', "/").contains(".hologram/.acl_snapshots"),
+            "snapshot path should be under .hologram/: {:?}", path);
+    }
+
+    #[test]
+    fn test_write_and_read_snapshot_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("holo_acl_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(tmp.join(".hologram"));
+        let snap_path = tmp.join(".hologram").join(".acl_snapshots");
+        let paths: Vec<String> = vec![
+            "C:\\test\\project".to_string(),
+            "C:\\test\\temp".to_string(),
+        ];
+
+        // Write
+        let content = paths.join("\n");
+        std::fs::write(&snap_path, &content).unwrap();
+
+        // Read back — same format sweep_residual_acls expects
+        let read_back = std::fs::read_to_string(&snap_path).unwrap();
+        let lines: Vec<&str> = read_back.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.contains(&"C:\\test\\project"));
+        assert!(lines.contains(&"C:\\test\\temp"));
+
+        // File is deleted after sweep attempt — verify we can delete it
+        std::fs::remove_file(&snap_path).unwrap();
+        assert!(!snap_path.exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

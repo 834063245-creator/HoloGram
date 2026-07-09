@@ -26,6 +26,7 @@ pub(crate) mod os_sandbox;
 mod workspace;
 mod utils;
 mod commands;
+mod confined_fs;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -84,6 +85,8 @@ fn main() {
                 }
                 // Stop Unity
                 let _ = commands::tools::UNITY_MANAGER.stop();
+                // Remove AppContainer ACEs from project directories
+                os_sandbox::cleanup_acls();
                 // Hard exit to ensure no zombie processes
                 std::process::exit(0);
             }
