@@ -2120,16 +2120,6 @@ export class ChatPanel {
     this.footerEl.className = 'chat-footer';
     this.panel.appendChild(this.footerEl);
 
-    // ── Slash inline panel — created once in buildDOM, floats above footer ──
-    const slashPanel = document.createElement('div');
-    slashPanel.className = 'chat-slash-panel';
-    this._slashPanel = slashPanel;
-    this.footerEl.appendChild(slashPanel);
-
-    // Register default commands + wire local handlers (one-time setup)
-    CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
-    this._wireCommandHandlers();
-
     // ── Pill core — optical sapphire reticle ──
     // ponytail: single clean geometric mark instead of 4 overlapping polygons
     const pillStar = document.createElement('div');
@@ -3712,6 +3702,9 @@ export class ChatPanel {
 
     this._buildModePopup(mode);
 
+    // ── Slash panel: create once, re-append after footer wipe ──
+    const panel = this._setupSlashPanel();
+
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
       this.onOpenSettings?.();
@@ -3744,20 +3737,6 @@ export class ChatPanel {
     };
     document.addEventListener('click', handler);
     this.footerClickCleanup = handler as unknown as (() => void);
-
-    // Panel click → execute command
-    panel.addEventListener('mousedown', (e) => {
-      // Prevent blur before click fires
-      e.preventDefault();
-      const item = (e.target as HTMLElement).closest('.sp-item') as HTMLElement;
-      if (!item) return;
-      const cmdId = item.dataset['cmdId'] || '';
-      const cmd = this._slashVisibleCmds.find(c => c.id === cmdId);
-      if (cmd) this._executeCommand(cmd);
-    });
-
-    // Attach to footer so `bottom: 100%` positions it right above the input area
-    this.footerEl.appendChild(panel);
 
     // Attach file button
     this.footerEl.querySelector('.chat-attach-btn')?.addEventListener('click', () => {
@@ -4221,6 +4200,33 @@ export class ChatPanel {
   }
 
   // ── Slash inline panel (item 14, registry-driven) ──
+
+  /** Create slash panel once, wire events once, re-append after each footer wipe.
+   *  Called from updateFooter which does footerEl.innerHTML = ... every time. */
+  private _setupSlashPanel(): HTMLElement {
+    if (!this._slashPanel) {
+      const panel = document.createElement('div');
+      panel.className = 'chat-slash-panel';
+      this._slashPanel = panel;
+
+      // One-time setup
+      CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
+      this._wireCommandHandlers();
+
+      // Panel click → execute command
+      panel.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const item = (e.target as HTMLElement).closest('.sp-item') as HTMLElement;
+        if (!item) return;
+        const cmdId = item.dataset['cmdId'] || '';
+        const cmd = this._slashVisibleCmds.find(c => c.id === cmdId);
+        if (cmd) this._executeCommand(cmd);
+      });
+    }
+    // Re-append after footerEl.innerHTML wipe
+    this.footerEl.appendChild(this._slashPanel);
+    return this._slashPanel;
+  }
 
   /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */
   private _wireCommandHandlers(): void {
