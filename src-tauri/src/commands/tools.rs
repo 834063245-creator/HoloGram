@@ -220,19 +220,8 @@ pub(crate) async fn read_file_content(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = crate::utils::resolve_read_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
-    let content = std::fs::read_to_string(&real_path)
-        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
-    let lines: Vec<&str> = content.lines().collect();
-    let start = offset.unwrap_or(0).min(lines.len());
-    let end = limit
-        .map(|l| (start + l).min(lines.len()))
-        .unwrap_or(lines.len());
-    // ponytail: cat -n format — line numbers help the LLM reference exact lines
-    let numbered: Vec<String> = lines[start..end].iter().enumerate()
-        .map(|(i, l)| format!("{:>6}\t{}", start + i + 1, l))
-        .collect();
-    Ok(numbered.join("\n"))
+    let (_, content) = crate::confined_fs::read_text(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
+    Ok(crate::confined_fs::format_lines(&content, offset, limit))
 }
 
 /// Batch-read multiple memory files at once — avoids N IPC round-trips.
@@ -258,9 +247,7 @@ pub(crate) async fn read_file_base64(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = crate::utils::resolve_read_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
-    let bytes = std::fs::read(&real_path)
-        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
+    let (_, bytes) = crate::confined_fs::read_bytes(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
@@ -272,18 +259,8 @@ pub(crate) async fn write_file_content(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let real_path = crate::utils::resolve_write_dispatch(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
+    let real_path = crate::confined_fs::write_text(&file_path, &content, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
-    if let Some(parent) = real_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("无法创建目录: {}", e))?;
-    }
-    // Atomic write: temp file then rename
-    let tmp_path = format!("{}.tmp", rp);
-    std::fs::write(&tmp_path, &content)
-        .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
-    std::fs::rename(&tmp_path, &rp)
-        .map_err(|e| format!("无法保存文件 {}: {}", rp, e))?;
 
     // Hook: record timeline + update changed_files for 简报
     if let Some(ref handle) = *state.lock().unwrap() {
@@ -297,7 +274,7 @@ pub(crate) async fn write_file_content(
     }
 
     let size = content.len();
-    let preview = preview_content(&content, 80, 20);
+    let preview = crate::confined_fs::preview(&content, 80, 20);
     Ok(format!(
         "已写入 {} ({})\n```\n{}\n```",
         rp,
@@ -340,9 +317,8 @@ pub(crate) async fn create_directory(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let resolved = crate::utils::resolve_write_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
-    std::fs::create_dir_all(&resolved)
-        .map_err(|e| format!("无法创建目录 {}: {}", path, e))
+    crate::confined_fs::create_dir(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    Ok(())
 }
 
 /// Return the global memory directory path for cross-project memory storage.
@@ -363,15 +339,7 @@ pub(crate) async fn delete_file_or_dir(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = crate::utils::resolve_write_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
-    if !real.exists() { return Err(format!("路径不存在: {}", path)); }
-    if real.is_dir() {
-        std::fs::remove_dir_all(&real)
-            .map_err(|e| format!("无法删除目录 {}: {}", path, e))
-    } else {
-        std::fs::remove_file(&real)
-            .map_err(|e| format!("无法删除文件 {}: {}", path, e))
-    }?;
+    let real = crate::confined_fs::delete(&path, is_agent.unwrap_or(false), &state, &app).await?;
     // Hook: record timeline + update changed_files
     // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = real.to_string_lossy().replace('\\', "/");
@@ -396,10 +364,7 @@ pub(crate) async fn rename_file_or_dir(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let is_agent = is_agent.unwrap_or(false);
-    let resolved_from = crate::utils::resolve_write_dispatch(&from, is_agent, &state, &app).await?;
-    let resolved_to = crate::utils::resolve_write_dispatch(&to, is_agent, &state, &app).await?;
-    std::fs::rename(&resolved_from, &resolved_to)
-        .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))?;
+    let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, &state, &app).await?;
     // Hook: record timeline + update changed_files
     // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
@@ -424,13 +389,7 @@ pub(crate) async fn move_file(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let is_agent = is_agent.unwrap_or(false);
-    let src_real = crate::utils::resolve_read_dispatch(&source, is_agent, &state, &app).await?;
-    let dest_real = crate::utils::resolve_write_dispatch(&dest_dir, is_agent, &state, &app).await?;
-    let name = src_real.file_name()
-        .ok_or_else(|| format!("无效路径: {}", source))?;
-    let dest = dest_real.join(name);
-    std::fs::rename(&src_real, &dest)
-        .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))?;
+    let (_, dest) = crate::confined_fs::move_into_dir(&source, &dest_dir, is_agent, &state, &app).await?;
     // Hook: record timeline + update changed_files
     // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = dest.to_string_lossy().replace('\\', "/");
@@ -453,7 +412,7 @@ pub(crate) async fn open_in_explorer(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let real = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    let real = crate::confined_fs::verify_read_path(&path, is_agent.unwrap_or(false), &state, &app).await?;
     #[cfg(target_os = "windows")]
     {
         if real.is_dir() {
@@ -810,11 +769,10 @@ pub(crate) async fn edit_file(
 ) -> Result<String, String> {
     let is_agent = is_agent.unwrap_or(false);
     // ponytail: edit = read then write — Agent needs both checks, UI skips rules
-    crate::utils::resolve_read_dispatch(&file_path, is_agent, &state, &app).await?;
+    // confined_fs::read_text handles read permission + sandbox + safety + I/O in one call
+    let (_, content) = crate::confined_fs::read_text(&file_path, is_agent, &state, &app).await?;
     let resolved = crate::utils::resolve_write_dispatch(&file_path, is_agent, &state, &app).await?;
     let file_path = resolved.to_string_lossy().to_string();
-    let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
 
     let replace_all = replace_all.unwrap_or(false);
     let count = if replace_all {
@@ -914,12 +872,8 @@ pub(crate) async fn edit_file(
         content.replacen(&old_string, &new_string, 1)
     };
 
-    // Atomic write: temp file then rename (prevents corruption on crash)
-    let tmp_path = format!("{}.tmp", file_path);
-    std::fs::write(&tmp_path, &new_content)
-        .map_err(|e| format!("无法写入临时文件 {}: {}", tmp_path, e))?;
-    std::fs::rename(&tmp_path, &file_path)
-        .map_err(|e| format!("无法保存文件 {}: {}", file_path, e))?;
+    // Atomic write via the project's atomic helper (permissions already checked above)
+    crate::utils::write_atomic(&file_path, &new_content)?;
 
     // Record timeline event + update changed files for check (简报)
     // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
@@ -985,24 +939,6 @@ fn build_edit_snippet(content: &str, old: &str, new: &str, match_line: usize) ->
         if i < lines.len() { out.push_str(&format!("  {}\n", lines[i])); }
     }
     out.trim_end().to_string()
-}
-
-/// Preview the first `max_lines` lines of content, truncating each line to `max_width` chars.
-fn preview_content(content: &str, max_width: usize, max_lines: usize) -> String {
-    content.lines()
-        .take(max_lines)
-        .map(|l| {
-            if l.len() <= max_width {
-                l.to_string()
-            } else {
-                // ponytail: byte-slice on &str panics inside multi-byte chars (e.g. CJK).
-                // chars().take() always lands on a char boundary.
-                let truncated: String = l.chars().take(max_width).collect();
-                format!("{}…", truncated)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2184,45 +2120,6 @@ pub(crate) fn agent_isolation_prune(
 mod tests {
     use super::*;
 
-    #[test]
-    fn preview_content_ascii_short_lines_passthrough() {
-        let input = "hello\nworld\nfoo bar baz";
-        let out = preview_content(input, 80, 20);
-        assert_eq!(out, input);
-    }
-
-    #[test]
-    fn preview_content_truncates_long_ascii_line() {
-        let input = "a".repeat(100);
-        let out = preview_content(&input, 80, 20);
-        assert!(out.ends_with('…'), "should end with ellipsis: {out:?}");
-        assert_eq!(out.chars().count(), 81); // 80 chars + '…' (3 bytes)
-    }
-
-    #[test]
-    fn preview_content_does_not_panic_on_multibyte_utf8() {
-        // '给' is 3 bytes (0xE7 0xBB 0x99). 79 bytes of ASCII + '给' = 82 bytes.
-        // max_width=80 would land inside '给' at byte 80 — the old byte-slice panicked.
-        let input = "x".repeat(79) + "给中文内容测试";
-        let out = preview_content(&input, 80, 20);
-        assert!(out.ends_with('…'), "should truncate safely at char boundary: {out:?}");
-    }
-
-    #[test]
-    fn preview_content_all_cjk_line_truncated() {
-        let input = "中".repeat(100);
-        let out = preview_content(&input, 80, 20);
-        assert!(out.ends_with('…'), "should truncate CJK-only line: {out:?}");
-        // 80 CJK chars = 240 bytes, should produce 80 chars + '…'
-        assert_eq!(out.chars().count(), 81);
-    }
-
-    #[test]
-    fn preview_content_respects_max_lines() {
-        let input = "a\nb\nc\nd\ne\nf";
-        let out = preview_content(input, 80, 2);
-        assert_eq!(out.lines().count(), 2);
-    }
 
     #[test]
     fn hologram_tools_list_returns_tools() {
