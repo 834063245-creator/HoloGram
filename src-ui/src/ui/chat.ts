@@ -3702,8 +3702,9 @@ export class ChatPanel {
 
     this._buildModePopup(mode);
 
-    // ── Slash panel: create once, re-append after footer wipe ──
-    const panel = this._setupSlashPanel();
+    // ── Slash panel: create once, outside footerEl so innerHTML can't kill it ──
+    this._setupSlashPanel();
+    const panel = this._slashPanel!;
 
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
@@ -4201,31 +4202,26 @@ export class ChatPanel {
 
   // ── Slash inline panel (item 14, registry-driven) ──
 
-  /** Create slash panel once, wire events once, re-append after each footer wipe.
-   *  Called from updateFooter which does footerEl.innerHTML = ... every time. */
-  private _setupSlashPanel(): HTMLElement {
-    if (!this._slashPanel) {
-      const panel = document.createElement('div');
-      panel.className = 'chat-slash-panel';
-      this._slashPanel = panel;
+  /** Create slash panel once, outside footerEl so updateFooter's innerHTML wipe
+   *  doesn't destroy it. Anchored to panel (position:fixed), floats above footer. */
+  private _setupSlashPanel(): void {
+    if (this._slashPanel) return;
+    const panel = document.createElement('div');
+    panel.className = 'chat-slash-panel';
+    this._slashPanel = panel;
+    this.panel.appendChild(panel);
 
-      // One-time setup
-      CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
-      this._wireCommandHandlers();
+    CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
+    this._wireCommandHandlers();
 
-      // Panel click → execute command
-      panel.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        const item = (e.target as HTMLElement).closest('.sp-item') as HTMLElement;
-        if (!item) return;
-        const cmdId = item.dataset['cmdId'] || '';
-        const cmd = this._slashVisibleCmds.find(c => c.id === cmdId);
-        if (cmd) this._executeCommand(cmd);
-      });
-    }
-    // Re-append after footerEl.innerHTML wipe
-    this.footerEl.appendChild(this._slashPanel);
-    return this._slashPanel;
+    panel.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const item = (e.target as HTMLElement).closest('.sp-item') as HTMLElement;
+      if (!item) return;
+      const cmdId = item.dataset['cmdId'] || '';
+      const cmd = this._slashVisibleCmds.find(c => c.id === cmdId);
+      if (cmd) this._executeCommand(cmd);
+    });
   }
 
   /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */
