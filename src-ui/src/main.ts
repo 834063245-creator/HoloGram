@@ -623,15 +623,37 @@ async function init(): Promise<void> {
 
   // ── Window controls (decorations:false — custom title bar) ──
   // ponytail: 绕过所有 import，直接调 __TAURI_INTERNALS__ IPC — 跟 bridge.ts 同一条路
+  const _winLabel: string = ((window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label) || 'main';
   function _winCmd(cmd: string): void {
     const t = (window as any).__TAURI_INTERNALS__;
     if (!t) return;
-    const label = t.metadata?.currentWindow?.label || 'main';
-    const p = t.invoke(`plugin:window|${cmd}`, { label });
+    const p = t.invoke(`plugin:window|${cmd}`, { label: _winLabel });
     if (p && typeof p.catch === 'function') p.catch((e: any) => console.error(`[win] ${cmd}:`, e));
   }
+
+  const btnMaximize = document.getElementById('btn-maximize')!;
+  const _maxIcon = { normal: '□', maximized: '❐' };
+  async function _syncMaximizeIcon(): Promise<void> {
+    try {
+      const t = (window as any).__TAURI_INTERNALS__;
+      if (!t) return;
+      const ok = await t.invoke('plugin:window|is_maximized', { label: _winLabel });
+      btnMaximize.innerHTML = ok ? _maxIcon.maximized : _maxIcon.normal;
+      btnMaximize.title = ok ? '还原' : '最大化';
+    } catch { /* best-effort */ }
+  }
+  btnMaximize.addEventListener('click', () => {
+    _winCmd('toggle_maximize');
+    setTimeout(() => _syncMaximizeIcon(), 200); // ponytail: 等窗口动画完成
+  });
+  // 双击标题栏 / Win+↑↓ 等外部触发
+  let _maxSyncTimer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(_maxSyncTimer);
+    _maxSyncTimer = window.setTimeout(() => _syncMaximizeIcon(), 200);
+  });
+
   document.getElementById('btn-minimize')?.addEventListener('click', () => _winCmd('minimize'));
-  document.getElementById('btn-maximize')?.addEventListener('click', () => _winCmd('toggle_maximize'));
   document.getElementById('btn-close')?.addEventListener('click', () => _winCmd('close'));
 
   // Save sessions on close
