@@ -621,6 +621,36 @@ impl Engine {
         // Pipeline no longer precomputes dataflow edges at graph build time.
         // Agent tools call the query engine directly when tracing variables.
 
+        // ── 5.9 Extract source snippets for vector index ──
+        // ponytail: uses parse_cache (file→source) + node ID prefix matching
+        // instead of per-node locations. Node IDs encode file path:
+        //   "src.main.handle_payment" → file "src/main.py"
+        set_progress("源码片段提取", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let mut snippets_extracted = 0usize;
+        for (file_path, (source, _)) in result.parse_cache.iter() {
+            let module_id = crate::path_utils::normalize_path(file_path)
+                .replace(['/', '\\'], ".");
+            for (_, node) in result.graph.nodes.iter_mut() {
+                if node.snippet.is_some() { continue; }
+                // Check if this node belongs to this file (node ID starts with module_id)
+                if node.id == module_id || node.id.starts_with(&format!("{module_id}.")) {
+                    if let Some(snippet) = crate::vector::extract_snippet(source, &node.name, &node.kind) {
+                        node.snippet = Some(snippet);
+                        snippets_extracted += 1;
+                    }
+                }
+            }
+        }
+        let snippet_elapsed = stage_start.elapsed().as_secs_f64();
+        eprintln!("[engine] stage: snippet-extract done in {:.1}s ({} snippets)",
+            snippet_elapsed, snippets_extracted);
+        stage_timings.push(StageTiming {
+            name: "Snippet Extract".into(),
+            elapsed_secs: snippet_elapsed,
+            detail: format!("{} snippets", snippets_extracted),
+        });
+
         // ponytail: release parse_cache after synthesis
         result.parse_cache.clear();
         result.parse_cache.shrink_to_fit();
@@ -654,6 +684,27 @@ impl Engine {
         let node_count = result.graph.node_count();
         let edge_count = result.graph.edge_count();
         let elapsed = started_at.elapsed().as_secs_f64();
+
+        // 7.5. Build semantic vector index (fire-and-forget in background)
+        // ponytail: uses nodes with snippets populated in step 5.9.
+        // Runs on a background thread — doesn't block pipeline completion.
+        let vector_nodes: Vec<crate::graph::Node> = result.graph.nodes.values().cloned().collect();
+        let vector_path = project_root.join(".hologram").join("vectors.usearch");
+        std::thread::spawn(move || {
+            let vi = crate::vector::CodeVectorIndex::new(&vector_path);
+            match vi.build(&vector_nodes) {
+                Ok(n) => {
+                    if n > 0 {
+                        if let Err(e) = vi.save() {
+                            tracing::warn!("[vector] save failed: {e}");
+                        } else {
+                            tracing::info!("[vector] index built: {} vectors saved to {}", n, vector_path.display());
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("[vector] build skipped: {e}"),
+            }
+        });
 
         // 8. Store into GraphStore (MemoryIndex + SQLite)
         set_progress("写入数据库", 0, 0, "");

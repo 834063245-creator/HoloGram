@@ -245,6 +245,7 @@ impl SqliteDb {
                     name: row.get(1)?,
                     kind,
                     location: row.get(3)?,
+                    snippet: None,
                     properties,
                     out_degree: row.get::<_, i64>(5).unwrap_or(0) as u32,
                     in_degree: row.get::<_, i64>(6).unwrap_or(0) as u32,
