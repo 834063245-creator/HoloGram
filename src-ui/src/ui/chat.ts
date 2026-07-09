@@ -2265,6 +2265,44 @@ export class ChatPanel {
     });
   }
 
+  /** Run a goal autonomously — Agent keeps going until done or failed.
+   *  ponytail: same UI scaffolding as sendAgentText, but calls runGoal instead of run. */
+  private runGoal(goal: string): void {
+    if (!this.agent || this.running) return;
+    this.setRunning(true);
+    this._userScrolledUp = false;
+
+    const hint = this.msgList.querySelector('.chat-hint');
+    if (hint) hint.remove();
+
+    this.addTurnSep();
+    this.turnPairs.push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
+    this.appendUserBubble(`🎯 ${goal}`);
+
+    this.scrollBottom();
+    this.abortCtrl = new AbortController();
+
+    this.agent.runGoal(this.abortCtrl.signal, goal).then((result) => {
+      this.addNotice(
+        result.status === 'completed' ? `✅ 目标达成: ${result.summary.slice(0, 120)}` :
+        result.status === 'failed' ? `❌ 目标失败: ${result.summary.slice(0, 120)}` :
+        '目标被中断',
+        result.status === 'completed' ? 'info' : 'warn',
+      );
+    }).catch((err: any) => {
+      if (err.message?.includes('aborted')) {
+        this.addNotice('目标执行已中止', 'info');
+      } else {
+        this.addNotice(`目标错误: ${err.message || err}`, 'error');
+      }
+    }).finally(() => {
+      this.setRunning(false);
+      this.abortCtrl = null;
+      this.finishTurn();
+      bus.emit('chat:turn-done', {});
+    });
+  }
+
   private async sendMessage(): Promise<void> {
     // Reset auto-scroll for this new turn
     this._userScrolledUp = false;
@@ -2304,6 +2342,20 @@ export class ChatPanel {
         `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
         `/remember ${fact}`,
       );
+      return;
+    }
+
+    if (text.startsWith('/goal ')) {
+      const goal = text.slice('/goal '.length).trim();
+      if (!goal) {
+        this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
+        this.inputArea.value = '';
+        this.inputArea.style.height = 'auto';
+        return;
+      }
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.runGoal(goal);
       return;
     }
 
