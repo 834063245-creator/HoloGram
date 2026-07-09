@@ -25,44 +25,34 @@ use crate::graph::{Node, NodeKind};
 
 pub struct OnnxEmbedder {
     session: onnx_ffi::OrtSession,
-    tokenizer: tokenizer::BpeTokenizer,
+    tokenizer: tokenizer::WordPieceTokenizer,
     dim: usize,
 }
 
 impl OnnxEmbedder {
-    pub const MODEL_ID: &str = "intfloat/multilingual-e5-large";
-    pub const DIM: usize = 1024;
+    pub const MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
+    pub const DIM: usize = 384;
 
-    /// Create embedder. Searches for model in HF cache (memory-bundle-rs cache dir),
-    /// then downloads if needed.
+    /// Create embedder. Searches for model in HF cache, then bundled path.
     pub fn new() -> Result<Self, String> {
         let cache_dir = hf_cache_dir();
         let model_key = Self::MODEL_ID.replace('/', "--");
         let model_root = cache_dir.join("hub").join(format!("models--{model_key}"));
 
-        // Find latest snapshot
-        let snap_dir = find_snapshot(&model_root)
+        // Find model in HF cache, or bundled with app
+        let (model_path, tok_path) = find_model_files(&model_root)
+            .or_else(|| find_bundled_model())
             .ok_or_else(|| format!(
-                "Model not found at {}. Please run memory-bundle once to download it, or place model at that path.",
-                model_root.display()
+                "Model '{}' not found. Download from HuggingFace to {} or bundle with app.",
+                Self::MODEL_ID, model_root.display()
             ))?;
-
-        let model_path = snap_dir.join("onnx").join("model.onnx");
-        let tok_path = snap_dir.join("tokenizer.json");
-
-        if !model_path.exists() {
-            return Err(format!("model.onnx not found at {}", model_path.display()));
-        }
-        if !tok_path.exists() {
-            return Err(format!("tokenizer.json not found at {}", tok_path.display()));
-        }
 
         info!("[vector] loading ONNX model from {}", model_path.display());
         let session = onnx_ffi::OrtSession::new(
             model_path.to_str().ok_or("non-UTF8 model path")?
         )?;
 
-        let tokenizer = tokenizer::BpeTokenizer::from_file(
+        let tokenizer = tokenizer::WordPieceTokenizer::from_file(
             tok_path.to_str().ok_or("non-UTF8 tokenizer path")?
         ).map_err(|e| format!("tokenizer init failed: {e}"))?;
 
@@ -72,18 +62,11 @@ impl OnnxEmbedder {
 
     pub fn dim(&self) -> usize { self.dim }
 
-    /// Embed a single text. E5 models benefit from "query: " prefix for queries
-    /// and "passage: " prefix for passages.
-    pub fn embed(&self, text: &str, is_query: bool) -> Result<Vec<f32>, String> {
+    /// Embed text → 384-dim vector. Mean pooling over sequence.
+    pub fn embed(&self, text: &str, _is_query: bool) -> Result<Vec<f32>, String> {
         if text.trim().is_empty() { return Ok(vec![0.0f32; self.dim]); }
 
-        let input = if is_query {
-            format!("query: {text}")
-        } else {
-            format!("passage: {text}")
-        };
-
-        let (ids, mask) = self.tokenizer.encode(&input)
+        let (ids, mask) = self.tokenizer.encode(text)
             .map_err(|e| format!("tokenize failed: {e}"))?;
         let seq_len = ids.len();
 
@@ -116,16 +99,40 @@ fn hf_cache_dir() -> PathBuf {
         .into()
 }
 
-fn find_snapshot(model_root: &Path) -> Option<PathBuf> {
+/// Find model.onnx + vocab.txt in HuggingFace cache snapshot.
+fn find_model_files(model_root: &Path) -> Option<(PathBuf, PathBuf)> {
     let snapshots = model_root.join("snapshots");
     if !snapshots.exists() { return None; }
-    let entries = std::fs::read_dir(&snapshots).ok()?;
-    for entry in entries.flatten() {
+    for entry in std::fs::read_dir(&snapshots).ok()?.flatten() {
         let path = entry.path();
-        if path.join("onnx").join("model.onnx").exists()
-            && path.join("tokenizer.json").exists()
-        {
-            return Some(path);
+        // MiniLM: look for model.onnx (ONNX export) or model.safetensors → need ONNX
+        let onnx_path = path.join("onnx").join("model.onnx");
+        let model_path = if onnx_path.exists() {
+            onnx_path
+        } else {
+            path.join("model.onnx")
+        };
+        let vocab_path = path.join("vocab.txt");
+        if model_path.exists() && vocab_path.exists() {
+            return Some((model_path, vocab_path));
+        }
+    }
+    None
+}
+
+/// Find model bundled with the app (next to exe).
+fn find_bundled_model() -> Option<(PathBuf, PathBuf)> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidates = [
+        exe_dir.join("models").join("all-MiniLM-L6-v2"),
+        exe_dir.join("all-MiniLM-L6-v2"),
+        PathBuf::from("models/all-MiniLM-L6-v2"),
+    ];
+    for dir in &candidates {
+        let model = dir.join("model.onnx");
+        let vocab = dir.join("vocab.txt");
+        if model.exists() && vocab.exists() {
+            return Some((model, vocab));
         }
     }
     None
