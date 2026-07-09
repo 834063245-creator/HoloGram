@@ -1869,6 +1869,8 @@ pub(crate) async fn permission_ask_response(
                 // Use suggestion behavior if available, fall back to allow/deny from button
                 let behavior = rule_behavior.as_deref().unwrap_or(if allow { "allow" } else { "deny" });
                 ctx.add_session_rule(rule_str, behavior);
+                // Persist to .hologram/permissions.json so the rule survives restarts
+                crate::permissions::rule::append_project_rule(&ctx.project_root, rule_str, behavior);
             }
         }
     }
