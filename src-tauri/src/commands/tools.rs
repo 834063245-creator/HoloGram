@@ -551,11 +551,6 @@ pub(crate) async fn search_code(
         let mut results: Vec<serde_json::Value> = Vec::new();
         let mut file_sets: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut file_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let skip_dirs: Vec<&str> = vec![
-            ".git", "node_modules", ".venv", "venv", "__pycache__",
-            "target", "dist", ".next", ".nuxt", "build", ".cache",
-            ".hologram", ".idea", ".vscode",
-        ];
         let skip_extensions: Vec<&str> = vec![
             "exe", "dll", "so", "dylib", "bin", "o", "a",
             "png", "jpg", "jpeg", "gif", "ico", "svg",
@@ -576,8 +571,9 @@ pub(crate) async fn search_code(
         for entry in walkdir::WalkDir::new(&root)
             .into_iter()
             .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                !skip_dirs.iter().any(|d| name == *d)
+                !e.file_type().is_dir() || !is_ignored_path(
+                    &e.path().to_string_lossy().replace('\\', "/"),
+                )
             })
         {
             let entry = match entry {

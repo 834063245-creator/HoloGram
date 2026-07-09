@@ -145,7 +145,6 @@ fn aura_dll_path() -> Result<PathBuf, String> {
     let candidates = [
         PathBuf::from("../grammars/aura.dll"),
         PathBuf::from("grammars/aura.dll"),
-        PathBuf::from("D:/hologramHG/grammars/aura.dll"),
     ];
     for p in &candidates {
         if p.exists() {
