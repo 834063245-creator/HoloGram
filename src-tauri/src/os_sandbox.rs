@@ -140,14 +140,19 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     #[cfg(windows)]
     {
         let shell = imp::detect_shell();
-        let cmdline = match shell {
-            imp::Shell::Bash(ref bash_path) => {
-                // ponytail: bash is UTF-8 native — no GBK mojibake on Chinese paths.
-                // current_dir() sets the OS working dir; bash/MSYS translates it to POSIX.
-                format!("\"{}\" -c {}", bash_path, quote_cmd(command))
+        // If bash is cached, try it first; fall back to Cmd on spawn failure.
+        if let imp::Shell::Bash(ref bash_path) = shell {
+            let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
+            match imp::spawn_sandboxed(&cmdline, cwd, true) {
+                Ok(child) => return Ok(child),
+                Err(e) => {
+                    eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
+                    // Fall through to Cmd path below
+                }
             }
-            imp::Shell::Cmd => format!("cmd /s /c \"{}\"", command),
-        };
+        }
+        // Cmd path
+        let cmdline = format!("cmd /s /c \"{}\"", command);
         imp::spawn_sandboxed(&cmdline, cwd, true)
     }
     #[cfg(target_os = "macos")]
@@ -443,14 +448,18 @@ mod imp {
         ];
         for path in &bash_candidates {
             if std::path::Path::new(path).exists() {
-                return Shell::Bash(path.to_string());
+                if smoke_test_bash(path) {
+                    return Shell::Bash(path.to_string());
+                }
+                // bash found on disk but fails to spawn — keep looking
             }
         }
         // Try to locate via where.exe git → Git\cmd\git.exe → ..\bin\bash.exe
-        // CREATE_NO_WINDOW: suppress cmd.exe flash on every spawn (ponytail #2047).
+        // ponytail: DETACHED_PROCESS | CREATE_NO_WINDOW together avoids the
+        // old DLL_INIT_FAILED bug where CREATE_NO_WINDOW alone was used.
         if let Ok(output) = std::process::Command::new("where")
             .arg("git")
-            .creation_flags(CREATE_NO_WINDOW)
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .output()
         {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -460,18 +469,46 @@ mod imp {
                     if let Some(git_root) = cmd_dir.parent() {
                         let bash = git_root.join("bin").join("bash.exe");
                         if bash.exists() {
-                            return Shell::Bash(bash.to_string_lossy().into_owned());
+                            let bash_str = bash.to_string_lossy().into_owned();
+                            if smoke_test_bash(&bash_str) {
+                                return Shell::Bash(bash_str);
+                            }
                         }
                     }
                     // Also check if bash.exe is in the same directory (atypical installs)
                     let bash = cmd_dir.join("bash.exe");
                     if bash.exists() {
-                        return Shell::Bash(bash.to_string_lossy().into_owned());
+                        let bash_str = bash.to_string_lossy().into_owned();
+                        if smoke_test_bash(&bash_str) {
+                            return Shell::Bash(bash_str);
+                        }
                     }
                 }
             }
         }
         Shell::Cmd
+    }
+
+    /// Smoke-test: spawn `bash -c "exit 0"` to verify bash actually works
+    /// before caching it as the system shell. Returns false if spawn fails,
+    /// hangs, or returns non-zero exit code — we fall back to Cmd.
+    /// ponytail: this catches broken Git Bash installs where bash.exe exists
+    /// on disk but msys-2.0.dll or other deps fail to init, which would
+    /// otherwise cause a STATUS_DLL_INIT_FAILED popup on every shell spawn.
+    fn smoke_test_bash(bash_path: &str) -> bool {
+        let mut c = std::process::Command::new(bash_path);
+        c.arg("-c").arg("exit 0")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+        match c.spawn() {
+            Ok(mut child) => match child.wait() {
+                Ok(status) => status.success(),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
     }
 
     /// Detect the best available shell. Result is cached — only runs once.
