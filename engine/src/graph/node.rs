@@ -42,6 +42,10 @@ pub struct Node {
     pub kind: NodeKind,
     /// Source file location: "src/main.py" or "src/main.rs:42"
     pub location: Option<String>,
+    /// Source code text for this node (function body, class definition, etc.)
+    /// Populated during parsing; used by the vector index for semantic search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
     /// Arbitrary metadata
     pub properties: serde_json::Value,
     /// Pre-computed degree (fixes O(V×E) community label bug)
@@ -62,6 +66,7 @@ impl Node {
             name: name.into(),
             kind,
             location: None,
+            snippet: None,
             properties: serde_json::Value::Object(Default::default()),
             out_degree: 0,
             in_degree: 0,

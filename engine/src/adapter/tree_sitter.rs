@@ -155,7 +155,9 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
     let mut counter = 0u32;
     let module_id = file_id.replace(['/', '\\'], ".");
     let ext = file_id.rsplit('.').next().unwrap_or("");
-    nodes.push(Node::new(&module_id, file_id, NodeKind::File));
+    let mut file_node = Node::new(&module_id, file_id, NodeKind::File);
+    file_node.location = Some(file_id.to_string());
+    nodes.push(file_node);
 
     let root = tree.root_node();
     // Scope stack: (node, scope_id) — tracks enclosing function/class for accurate call attribution
@@ -213,7 +215,10 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                         NodeKind::Class
                     };
                     counter+=1; edges.push(Edge::new(format!("def_{}_{}", file_id, counter), &module_id, &nid, EdgeKind::Defines));
-                    nodes.push(Node::new(&nid, name, nkind));
+                    let mut n = Node::new(&nid, name, nkind);
+                    let row = nn.start_position().row;
+                    n.location = Some(format!("{}:{}", file_id, row + 1));
+                    nodes.push(n);
                     emit_inherits_edges(&node, source, ext, &nid, &module_id, file_id, &mut counter, &mut edges);
                     // Children inherit this function/class as scope
                     push_children_with_scope(&node, &nid, &mut to_visit);
