@@ -495,14 +495,11 @@ mod imp {
     /// ponytail: this catches broken Git Bash installs where bash.exe exists
     /// on disk but msys-2.0.dll or other deps fail to init, which would
     /// otherwise cause a STATUS_DLL_INIT_FAILED popup on every shell spawn.
+    /// IMPORTANT: goes through spawn_sandboxed (not raw Command::new) so the
+    /// test reflects the actual AppContainer sandbox environment bash will run in.
     fn smoke_test_bash(bash_path: &str) -> bool {
-        let mut c = std::process::Command::new(bash_path);
-        c.arg("-c").arg("exit 0")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-        match c.spawn() {
+        let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
+        match spawn_sandboxed(&cmdline, ".", false) {
             Ok(mut child) => match child.wait() {
                 Ok(status) => status.success(),
                 Err(_) => false,
