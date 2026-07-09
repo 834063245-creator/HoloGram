@@ -37,22 +37,21 @@ jobs:
             src-tauri -> target
 
       - name: Build & test engine
+        working-directory: engine
         run: |
-          cd engine
           cargo build --release
           cargo test --release
 
       - name: Build & test frontend
+        working-directory: src-ui
         run: |
-          cd src-ui
           npm ci
           npm run build
           npm test
 
       - name: Build Tauri app (MSI bundle)
-        run: |
-          cd src-tauri
-          npx @tauri-apps/cli@^2 build --ci
+        working-directory: src-tauri
+        run: npx @tauri-apps/cli@^2 build 2>&1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

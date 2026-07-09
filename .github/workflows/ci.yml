@@ -38,19 +38,18 @@ jobs:
             src-tauri -> target
 
       - name: Build & test engine
+        working-directory: engine
         run: |
-          cd engine
           cargo build --release
           cargo test --release
 
       - name: Build & test frontend
+        working-directory: src-ui
         run: |
-          cd src-ui
           npm ci
           npm run build
           npm test
 
-      - name: Build Tauri app (verify compilation only)
-        run: |
-          cd src-tauri
-          npx @tauri-apps/cli@^2 build --ci
+      - name: Verify Tauri compiles
+        working-directory: src-tauri
+        run: npx @tauri-apps/cli@^2 build 2>&1
