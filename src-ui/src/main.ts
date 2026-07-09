@@ -25,7 +25,6 @@ import { AgentVisualizer } from './ui/agent-visualizer';
 import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 import { Workspace, isSamePath } from './workspace';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 
 // ── Worker layout helper ──
@@ -623,10 +622,15 @@ async function init(): Promise<void> {
   btnSettings.addEventListener('click', () => { settingsPanel.toggle(); });
 
   // ── Window controls (decorations:false — custom title bar) ──
-  const win = getCurrentWindow();
-  document.getElementById('btn-minimize')?.addEventListener('click', () => win.minimize());
-  document.getElementById('btn-maximize')?.addEventListener('click', () => win.toggleMaximize());
-  document.getElementById('btn-close')?.addEventListener('click', () => win.close());
+  document.getElementById('btn-minimize')?.addEventListener('click', async () => {
+    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().minimize(); } catch {}
+  });
+  document.getElementById('btn-maximize')?.addEventListener('click', async () => {
+    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().toggleMaximize(); } catch {}
+  });
+  document.getElementById('btn-close')?.addEventListener('click', async () => {
+    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().close(); } catch {}
+  });
 
   // Save sessions on close
   window.addEventListener('beforeunload', () => {
