@@ -822,19 +822,10 @@ impl Engine {
 
             info!("[engine watcher] watching {:?} for source changes", root);
 
-            // Source extensions that trigger re-analysis
-            const SOURCE_EXTS: &[&str] = &[
-                "py", "pyi", "pyx", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts",
-                "go", "rs", "java", "c", "h", "cpp", "hpp", "cc", "hh", "cxx", "hxx",
-                "rb", "lua", "cs", "swift", "dart", "scala", "sc", "hs",
-                "json", "html", "htm", "css",
-            ];
-            const IGNORE_DIRS: &[&str] = &[
-                ".git", ".hologram", "node_modules", "__pycache__",
-                "target", ".venv", "venv", ".tox", ".mypy_cache",
-                ".pytest_cache", ".ruff_cache", "dist", "build",
-                ".vscode", ".idea", ".fleet", ".cursor",
-            ];
+            // Source extensions — derived from grammar_loader so newly installed
+            // grammar DLLs are automatically tracked without code changes.
+            let source_exts: std::collections::HashSet<String> =
+                GRAMMAR_LOADER.supported_extensions().into_iter().collect();
 
             let mut pending = false;
             let mut changed_paths: Vec<(PathBuf, String)> = Vec::new();
@@ -861,10 +852,10 @@ impl Engine {
                         }
                         let is_tracked = |p: &PathBuf| -> bool {
                             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                            let is_src = SOURCE_EXTS.contains(&ext);
-                            let is_ignored = p.components().any(|c| {
-                                IGNORE_DIRS.contains(&c.as_os_str().to_str().unwrap_or(""))
-                            });
+                            let is_src = source_exts.contains(ext);
+                            let is_ignored = crate::pipeline::discovery::is_ignored_path(
+                                &p.to_string_lossy()
+                            );
                             is_src && !is_ignored
                         };
                         if !event.paths.iter().any(|p| is_tracked(p)) {

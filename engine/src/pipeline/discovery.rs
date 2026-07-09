@@ -100,6 +100,7 @@ pub const IGNORED_DIRS: &[&str] = &[
     ".hologram", "htmlcov", ".reasonix", ".codegraph", ".ruff_cache",
     ".next", ".nuxt", "out", ".angular", ".cache", "coverage",
     "vendored", "generated", "tests",
+    ".vscode", ".idea", ".fleet", ".cursor",  // editors
 ];
 
 /// Check if a directory entry should be excluded from traversal.
