@@ -283,11 +283,34 @@ async function runCheck(): Promise<void> {
 
 // ── Search ──
 
-function doSearch(): void {
+async function doSearch(): Promise<void> {
   const query = searchInput.value.trim(); if (!query) return;
   const found = starGraph.focusNode(query);
   searchInput.blur(); // ponytail: 搜完释放焦点，恢复键盘快捷键
-  if (!found) { statusText.textContent = `未找到 "${query}"`; setTimeout(() => { if (statusText.textContent === `未找到 "${query}"`) statusText.textContent = '就绪'; }, 2000); }
+  if (!found) {
+    // ponytail: exact match failed → fallback to semantic vector search
+    statusText.textContent = `未找到精确匹配 "${query}"，尝试语义搜索…`;
+    try {
+      const root = workspace?.path || '';
+      const json = await invoke<string>('search_vector', { directory: root, query, topK: 10 });
+      const data = JSON.parse(json);
+      const results = data.results as Array<{node_id: string; score: number}>;
+      if (results && results.length > 0) {
+        // Focus the top result
+        const topId = results[0].node_id;
+        // node_id format: "src.main.handle_payment" — extract name
+        const parts = topId.split('.');
+        const name = parts[parts.length - 1];
+        starGraph.focusNode(name);
+        statusText.textContent = `语义匹配: ${name} (${(results[0].score * 100).toFixed(0)}%) — 共 ${results.length} 个结果`;
+      } else {
+        statusText.textContent = `未找到 "${query}"`;
+      }
+    } catch {
+      statusText.textContent = `未找到 "${query}"`;
+    }
+    setTimeout(() => { if (statusText.textContent.startsWith('未找到') || statusText.textContent.startsWith('语义匹配')) statusText.textContent = '就绪'; }, 3000);
+  }
 }
 
 // ── Icon setup ──
