@@ -1466,7 +1466,6 @@ dependencies = [
 name = "hologram-engine"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "libloading 0.8.9",
  "mimalloc",

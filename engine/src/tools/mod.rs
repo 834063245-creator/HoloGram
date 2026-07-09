@@ -923,6 +923,11 @@ fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     if vi.load().unwrap_or(0) == 0 { return; }
     if let Ok(hits) = vi.search(query, limit) {
         if !hits.is_empty() {
+            let top = &hits[0];
+            tracing::info!(
+                "[vector] {} hits for \"{}\" — top: {} ({:.0}%)",
+                hits.len(), query, top.0, top.1 * 100.0
+            );
             let vec_results: Vec<Value> = hits.into_iter()
                 .map(|(node_id, score)| json!({"node_id": node_id, "vector_score": (score * 100.0).round() as u32}))
                 .collect();
@@ -1248,6 +1253,11 @@ fn handler_status(_args: &Value) -> Value {
                 engine::EngineState::Error(_) => "error",
             };
             let is_watching = engine::with_engine(|eng| eng.is_watching()).unwrap_or(false);
+            let vi_path = project_root().join(".hologram").join("vectors.usearch");
+            let vi_exists = vi_path.exists();
+            let vi_count = if vi_exists {
+                crate::vector::CodeVectorIndex::new(&vi_path).load().unwrap_or(0)
+            } else { 0 };
             json!({
                 "phase": phase,
                 "store": "MemoryIndex",
@@ -1255,6 +1265,7 @@ fn handler_status(_args: &Value) -> Value {
                 "edges": edges,
                 "has_aux_indexes": has_aux,
                 "is_watching": is_watching,
+                "vector_index": { "exists": vi_exists, "vectors": vi_count },
             })
         }
         Err(_) => json!({"phase": "empty", "store": "none", "nodes": 0, "edges": 0}),
