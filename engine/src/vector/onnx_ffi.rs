@@ -56,23 +56,25 @@ static API: OnceLock<&'static OrtApi> = OnceLock::new();
 fn get_api() -> Result<&'static OrtApi, String> {
     if let Some(api) = API.get() { return Ok(api); }
 
-    // Search paths: next to exe, target/release, memory-bundle-rs
-    let search_paths = [
-        "onnxruntime.dll",
-        "target/release/onnxruntime.dll",
-        "../../memory-bundle-rs/onnxruntime.dll",
-        "../memory-bundle-rs/onnxruntime.dll",
-    ];
+    // Search paths: exe directory (bundled resource), cwd, memory-bundle-rs dev paths
+    let mut search_paths = vec!["onnxruntime.dll".to_string()];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            search_paths.insert(0, dir.join("onnxruntime.dll").to_string_lossy().to_string());
+        }
+    }
+    search_paths.push("target/release/onnxruntime.dll".to_string());
+    search_paths.push("../../memory-bundle-rs/onnxruntime.dll".to_string());
 
     let mut lib = None;
-    for path in &search_paths {
-        if let Ok(l) = unsafe { libloading::Library::new(path) } {
+    for path in search_paths {
+        if let Ok(l) = unsafe { libloading::Library::new(&path) } {
             lib = Some(l);
             break;
         }
     }
 
-    let lib = lib.ok_or("onnxruntime.dll not found in search paths")?;
+    let lib = lib.ok_or_else(|| format!("onnxruntime.dll not found. Searched: {:?}", std::env::current_exe().ok()))?;
 
     let get_api_base: libloading::Symbol<OrtGetApiBaseFunc> = unsafe {
         lib.get(b"OrtGetApiBase")
