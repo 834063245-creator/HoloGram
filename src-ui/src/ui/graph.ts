@@ -4263,6 +4263,7 @@ export class StarGraph {
       await this._renderImpl(graph);
     } catch (e) {
       console.error('[StarGraph] render crashed:', e);
+      this._renderInProgress = false;
       try { this.clearGraph(); } catch { /* best effort */ }
       this.updateStatus(0, 0);
     }
