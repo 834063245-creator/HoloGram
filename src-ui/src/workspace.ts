@@ -554,8 +554,8 @@ export class Workspace {
 
     const pricing = defaultPricing(active.kind, active.model);
     const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
-    const claudeMdSection = await loadClaudeMdContext(this.path, globalDir);
-    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection, claudeMdSection);
+
+    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection);
     const agentOpts = settings.agent || {};
 
     const mode = CHAT_MODES.find(m => m.id === agentOpts.chatMode) || CHAT_MODES[0];
@@ -707,8 +707,7 @@ export class Workspace {
           try { memSection = await mm.loadPromptSection(graphNodes); } catch { /* ignore */ }
         }
         const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
-        const claudeMd = await loadClaudeMdContext(ws.path, mm?.globalDir ?? undefined);
-        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap, '', claudeMd), {
+        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,
@@ -841,40 +840,7 @@ function extractGraphNodeNames(graphData: unknown): string[] | undefined {
   return undefined;
 }
 
-// ── CLAUDE.md context loader ──
-// ponytail: reads project + user CLAUDE.md, formats in CC-style "Contents of <path>" blocks.
-// Strips cat -n line numbers from read_file_content output. Silent on missing files.
-async function loadClaudeMdContext(projectPath: string, globalDir?: string): Promise<string> {
-  const parts: string[] = [];
-  const stripLn = (s: string) => s.replace(/^\s*\d+\t/gm, '');
-
-  // Project CLAUDE.md
-  try {
-    const fp = `${projectPath.replace(/\\/g, '/')}/CLAUDE.md`;
-    const raw = await invoke<string>('read_file_content', { filePath: fp });
-    const body = stripLn(raw).trim();
-    if (body && !body.startsWith('error:')) {
-      parts.push(`Contents of ${fp} (project instructions, checked into the codebase):\n\n${body}`);
-    }
-  } catch { /* file doesn't exist — skip */ }
-
-  // User CLAUDE.md (~/.claude/CLAUDE.md) — derive home from global memory dir
-  if (globalDir) {
-    try {
-      const home = globalDir.replace(/\/\.hologram\/global_memory\/?$/, '');
-      const fp = `${home}/.claude/CLAUDE.md`;
-      const raw = await invoke<string>('read_file_content', { filePath: fp });
-      const body = stripLn(raw).trim();
-      if (body && !body.startsWith('error:')) {
-        parts.push(`Contents of ${fp} (user's private global instructions for all projects):\n\n${body}`);
-      }
-    } catch { /* skip */ }
-  }
-
-  return parts.join('\n\n');
-}
-
-export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapshot = '', memoryBundleSection = '', claudeMdSection = ''): string {
+export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapshot = '', memoryBundleSection = ''): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
@@ -886,9 +852,9 @@ export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapsh
 身份：你是一个代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断。
 语言：始终用中文回复。代码和文件名用原样标记。
 行为：诚实——不确定的事不说。工具返回空结果不要编造。提示用户可能需要加载项目。`;
-	    if (claudeMdSection.trim()) {
-	      prompt += `\n\n## 用户与项目指令\n${claudeMdSection}`;
-	    };
+
+
+
     if (memorySection.trim()) {
       prompt += `\n\n## 记忆库\n${memorySection}\n\n> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。`;
     }
@@ -916,7 +882,6 @@ export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapsh
 - 你能直接调用 ${ws.path || '项目'} 的依赖图数据（${nodes} 节点、${edges} 条边）
 - 你看到的图已被分析引擎预处理，节点代表函数/类/模块/文件，边代表调用/继承/导入/时序关系
 ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` : ''}
-${claudeMdSection.trim() ? `\n## 用户与项目指令\n${claudeMdSection}\n` : ''}'
 ## 核心规则
 1. **诚实**：工具返回空结果就说"未找到"。数据正常就说"无异常"。不要编造节点名或关系，也不要为了显得"有发现"而夸大正常数据。
 2. **精确**：引用节点名时用图表中的准确名称。不确定就用工具查。
