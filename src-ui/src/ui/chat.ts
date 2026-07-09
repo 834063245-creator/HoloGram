@@ -3702,11 +3702,11 @@ export class ChatPanel {
 
     this._buildModePopup(mode);
 
-    // ── Slash inline panel (registry-driven) — inserted between input and footer ──
+    // ── Slash inline panel (beneath input, absolutely positioned) ──
     const panel = document.createElement('div');
     panel.className = 'chat-slash-panel';
     this._slashPanel = panel;
-    this.panel.insertBefore(panel, this.footerEl);
+    inputWrap.appendChild(panel);
 
     // Register default commands + wire local handlers
     CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
