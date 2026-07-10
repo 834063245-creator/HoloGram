@@ -99,9 +99,13 @@ export interface EngineSnapshot {
   sessionDrift: number;
   /** LSP: files with high-call-count symbols (top 20) */
   lspHotspots: Array<{ file: string; symbol: string; callers: number }>;
+  /** LSP: real call-resolution data from resolve_call (on-demand per-file) */
+  lspCallers: Map<string, Array<{ symbol: string; count: number }>>;
   /** Synthesis: blindspot markers grouped by type */
   synthesisAlerts: Array<{ type: string; count: number; detail: string }>;
-  /** Vector: top symbol names for semantic neighbor lookup (deferred) */
+  /** Vector: semantic neighbor map: file -> similar symbol names */
+  semanticNeighbors: Map<string, Array<{ name: string; file: string }>>;
+  /** Vector: ready flag */
   vectorReady: boolean;
 }
 
@@ -968,6 +972,31 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
               for (const h of fileHit.slice(0, 3)) {
                 lines.push(`│  • ${h.symbol} — ~${h.callers} 调用者`);
               }
+            }
+          }
+
+          // ── LSP real call resolution ──
+          if (eng.lspCallers.size > 0) {
+            const callerEntries = eng.lspCallers.get(normFp)
+              || [...eng.lspCallers.entries()].find(([k]) =>
+                k.replace(/\\/g, '/').toLowerCase().includes(normFp)
+              )?.[1];
+            if (callerEntries && callerEntries.length > 0) {
+              lines.push(`│  LSP 调用者 (真实解析):`);
+              for (const c of callerEntries.slice(0, 3)) {
+                lines.push(`│  • \`${c.symbol}\` — ${c.count} 次调用`);
+              }
+            }
+          }
+
+          // ── Semantic neighbors ──
+          if (eng.semanticNeighbors.size > 0) {
+            const neighbors = eng.semanticNeighbors.get(normFp)
+              || [...eng.semanticNeighbors.entries()].find(([k]) =>
+                k.replace(/\\/g, '/').toLowerCase().includes(normFp)
+              )?.[1];
+            if (neighbors && neighbors.length > 0) {
+              lines.push(`│  语义邻居: ${neighbors.map(n => `\`${n.name}\``).join(', ')}`);
             }
           }
 
