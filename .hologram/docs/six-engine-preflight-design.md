@@ -1,6 +1,6 @@
 # 六引擎协同 Preflight 设计文档
 
-> 状态: 施工中 — 分析引擎已接入，LSP/合成/向量待接入
+> 状态: ✅ 已落地 — 分析/合成引擎接入，全部 post-hook 工具覆盖，子Agent 已继承
 > 更新: 2026-07-13
 
 ---
@@ -135,11 +135,12 @@
 ## 六、实现优先级
 
 1. ✅ 解析引擎（fileIndex）— 已接入
-2. ✅ 分析引擎（fragility/cycles/health）— 已接入
+2. ✅ 分析引擎（fragility/cycles/health）— 已接入，并行加载
 3. ✅ 合成引擎（arch_blindspots）— 已接入，并行加载
-4. ⬜ LSP 引擎 — 调用者信息最有价值，先做
-5. ⬜ 向量引擎 — 语义邻居提示，锦上添花
-6. ⬜ 会话趋势对比 — drift 计算已做，需要更细粒度（per-file drift）
+4. ✅ Post-hook 全覆盖 — read_file, search_content, search_symbols, inspect_symbol, git_diff, run_shell
+5. ✅ Ambient-hook — 子Agent 自动继承 loadEngineSnapshot + fork directive
+6. ⬜ LSP 引擎 — `resolve_call` 直接查询（当前从 fragility 推导热点）
+7. ⬜ 向量引擎 — 语义邻居提示，锦上添花
 
 ---
 
