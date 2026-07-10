@@ -130,9 +130,6 @@ export class Agent {
   // Last usage for status display
   private lastUsage: Usage | undefined;
 
-  // Event sink
-  private sink: EventSink;
-
   // Pending user message inserts (queued during tool execution, applied at safe boundary)
   private _pendingInserts: string[] = [];
 
@@ -153,7 +150,6 @@ export class Agent {
     tools: ToolRegistry,
     systemPrompt: string,
     opts: AgentOptions = {},
-    sink: EventSink = () => {},
     sessionStore?: SessionStore,
   ) {
     this.prov = prov;
@@ -167,7 +163,6 @@ export class Agent {
     // Tune based on compaction-model.ts data when enough samples accumulate.
     this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
-    this.sink = sink;
     this._subagentDepth = opts.subagentDepth ?? 0;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
@@ -221,12 +216,11 @@ export class Agent {
     sessionId: string,
     sessionStore: SessionStore,
     opts: AgentOptions = {},
-    sink: EventSink = () => {},
   ): Promise<Agent | null> {
     const msgs = await sessionStore.load(sessionId);
     if (msgs.length === 0) return null;
 
-    const agent = new Agent(prov, tools, '', { ...opts, sessionId }, sink, sessionStore);
+    const agent = new Agent(prov, tools, '', { ...opts, sessionId }, sessionStore);
     // Restore system prompt at position 0
     if (systemPrompt) {
       if (msgs.length > 0 && msgs[0].role === 'system') {
@@ -307,7 +301,7 @@ export class Agent {
       reasoning: config.reasoning,
     });
 
-    this.sink({
+    bus.emit('agent:event', {
       kind: EventKind.Notice,
       level: 'info',
       text: `[自动调优] ${config.reasoning}。参数已保存，下次会话生效。`,
@@ -335,7 +329,7 @@ export class Agent {
     }
     this.session.splice(sessionIndex, end - sessionIndex);
     ++this.sessionGen;
-    this.sink({ kind: EventKind.SessionChanged });
+    bus.emit('agent:event', { kind: EventKind.SessionChanged });
   }
 
   /** Predicted session index of the next insert. Call before insertMessage to get index. */
@@ -346,7 +340,7 @@ export class Agent {
   /** Insert a user message mid-run. Queued safely; agent sees it next loop iteration. */
   insertMessage(text: string): void {
     this._pendingInserts.push(text);
-    this.sink({ kind: EventKind.Notice, level: 'info', text: '消息已插入，Agent 将在下一轮看到' });
+    bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: '消息已插入，Agent 将在下一轮看到' });
   }
 
   // ── Sub-agent lifecycle ──
@@ -401,7 +395,7 @@ export class Agent {
     }
     this._pendingInserts = [];
     // Signal chat.ts to finalize current turn before new response starts
-    this.sink({ kind: EventKind.TurnStarted });
+    bus.emit('agent:event', { kind: EventKind.TurnStarted });
   }
 
   /** Apply queued memory updates at a safe boundary.
@@ -430,7 +424,7 @@ export class Agent {
     this.stormCount = 0;
     this.compactStuck = false;
     this.compactionTracker.reset();
-    this.sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
+    bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
   }
 
   /** Check whether this agent is already a fork child (for recursion guard). */
@@ -498,7 +492,7 @@ ${goal}
 </goal>`;
 
     this.session.push({ role: 'user', content: goalPrompt });
-    this.sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
+    bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
 
     for (let iter = 0; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
       bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
@@ -516,16 +510,16 @@ ${goal}
 
       const last = this._lastAssistantContent();
       if (!last) {
-        this.sink({ kind: EventKind.Notice, level: 'error', text: '目标执行异常: 模型未产出响应' });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'error', text: '目标执行异常: 模型未产出响应' });
         return { status: 'failed', summary: '模型未产出响应' };
       }
 
       if (/\[GOAL_COMPLETE\]/i.test(last)) {
-        this.sink({ kind: EventKind.Notice, level: 'info', text: '✅ 目标达成' });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: '✅ 目标达成' });
         return { status: 'completed', summary: last };
       }
       if (/\[GOAL_FAILED\]/i.test(last)) {
-        this.sink({ kind: EventKind.Notice, level: 'warn', text: '❌ 目标失败' });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'warn', text: '❌ 目标失败' });
         return { status: 'failed', summary: last };
       }
 
@@ -546,11 +540,11 @@ ${goal}
 禁止反问用户。禁止只分析不行动。
 </system-reminder>`,
       });
-      this.sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 第 ${iter + 1} 轮完成，继续…` });
+      bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: `[目标] 第 ${iter + 1} 轮完成，继续…` });
     }
     // Max iterations reached — forced termination
     if (!signal.aborted) {
-      this.sink({ kind: EventKind.Notice, level: 'warn', text: `[目标] 达到最大迭代 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止` });
+      bus.emit('agent:event', { kind: EventKind.Notice, level: 'warn', text: `[目标] 达到最大迭代 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止` });
       return { status: 'failed', summary: `达到最大迭代次数 ${Agent.MAX_GOAL_ITERATIONS}。请拆分目标为更小单元。` };
     }
 
@@ -573,7 +567,7 @@ ${goal}
     const turnStart = performance.now();
     const genAtStart = this.sessionGen;
     log.info('agent', 'turn started', { model: this.prov.name() });
-    this.sink({ kind: EventKind.TurnStarted });
+    bus.emit('agent:event', { kind: EventKind.TurnStarted });
 
     for (let step = 0; ; step++) {
       // 每轮循环前检查中止信号与会话替换
@@ -591,7 +585,7 @@ ${goal}
 
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
-      const executor = new StreamingToolExecutor(this.tools, this.sink, this.hooks, this.preflightHooks);
+      const executor = new StreamingToolExecutor(this.tools, (ev: AgentEvent) => bus.emit('agent:event', ev), this.hooks, this.preflightHooks);
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
         log.error('agent', 'stream error', { error: String(err.message || err) });
@@ -610,7 +604,7 @@ ${goal}
         this.cacheHitTotal += usage.cache_hit_tokens;
         this.cacheMissTotal += usage.cache_miss_tokens;
         this.lastUsage = usage;
-        this.sink({
+        bus.emit('agent:event', {
           kind: EventKind.Usage,
           usage,
           pricing: this.pricing,
@@ -622,7 +616,7 @@ ${goal}
       // Abnormal finish reason warning
       const warnMsg = finishReasonMessage(usage);
       if (warnMsg) {
-        this.sink({ kind: EventKind.Notice, level: 'warn', text: warnMsg });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'warn', text: warnMsg });
       }
 
       // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls.
@@ -631,7 +625,7 @@ ${goal}
           text = reasoning ? '(思考完成)' : '(等待中)';
         } else {
           log.warn('agent', 'empty assistant turn — skipping push to avoid API 400');
-          this.sink({ kind: EventKind.Notice, level: 'warn', text: 'Provider 本次调用了但无内容返回，已跳过此轮。' });
+          bus.emit('agent:event', { kind: EventKind.Notice, level: 'warn', text: 'Provider 本次调用了但无内容返回，已跳过此轮。' });
           return;
         }
       }
@@ -715,14 +709,14 @@ ${goal}
       // regardless of whether the error is normally retryable.
       if (this.isContextLengthError(lastErr) && !this.compactStuck && !this.compactRunning) {
         log.info('agent', 'reactive compact triggered by context-length error');
-        this.sink({ kind: EventKind.Notice, level: 'warn', text: '上下文过长，自动压缩后重试…' });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'warn', text: '上下文过长，自动压缩后重试…' });
         try {
           await this.compactNow(signal);
           // compactNow replaced this.session — skip backoff, retry immediately
           continue;
         } catch {
           // compactNow failed — fall through to normal retry/abort logic
-          this.sink({ kind: EventKind.Notice, level: 'warn', text: '自动压缩失败，尝试直接重试…' });
+          bus.emit('agent:event', { kind: EventKind.Notice, level: 'warn', text: '自动压缩失败，尝试直接重试…' });
         }
       }
 
@@ -738,7 +732,7 @@ ${goal}
       // Backoff before retry
       const delay = backoffDelay(attempt);
       log.info('agent', `stream retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`, { error: String(lastErr.message || lastErr) });
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.Notice,
         level: 'warn',
         text: `模型调用失败，${(delay / 1000).toFixed(1)}s 后重试 (${attempt + 1}/${MAX_RETRIES})…`,
@@ -751,7 +745,7 @@ ${goal}
     }
 
     // Retries exhausted
-    this.sink({
+    bus.emit('agent:event', {
       kind: EventKind.Notice,
       level: 'error',
       text: `模型调用失败，已重试 ${MAX_RETRIES} 次：${lastErr?.message || '未知错误'}。请检查网络连接和 API 设置。`,
@@ -795,18 +789,18 @@ ${goal}
             reasoning += chunk.text || '';
             if (chunk.signature) signature = chunk.signature;
             if (chunk.text) {
-              this.sink({ kind: EventKind.Reasoning, text: chunk.text });
+              bus.emit('agent:event', { kind: EventKind.Reasoning, text: chunk.text });
             }
             break;
 
           case ChunkType.Text:
             text += chunk.text || '';
-            this.sink({ kind: EventKind.Text, text: chunk.text });
+            bus.emit('agent:event', { kind: EventKind.Text, text: chunk.text });
             break;
 
           case ChunkType.ToolCallStart:
             if (chunk.tool_call) {
-              this.sink({
+              bus.emit('agent:event', {
                 kind: EventKind.ToolDispatch,
                 tool: {
                   id: chunk.tool_call.id,
@@ -847,13 +841,13 @@ ${goal}
     }
 
     if (err) {
-      this.sink({ kind: EventKind.Notice, level: 'error', text: `模型调用失败: ${err.message || err}` });
+      bus.emit('agent:event', { kind: EventKind.Notice, level: 'error', text: `模型调用失败: ${err.message || err}` });
       return { text: '', reasoning: '', signature: '', calls: [], usage, err };
     }
 
     // Close the text stream
     if (text || reasoning) {
-      this.sink({ kind: EventKind.Message, text, reasoning });
+      bus.emit('agent:event', { kind: EventKind.Message, text, reasoning });
     }
 
     return { text, reasoning, signature, calls, usage, err: undefined };
@@ -868,7 +862,7 @@ ${goal}
     // Emit dispatch events (with full args)
     for (const c of calls) {
       const t = this.tools.get(c.name);
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.ToolDispatch,
         tool: {
           id: c.id,
@@ -903,7 +897,7 @@ ${goal}
     for (let i = 0; i < calls.length; i++) {
       const o = outcomes[i];
       const t = this.tools.get(calls[i].name);
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.ToolResult,
         tool: {
           id: calls[i].id,
@@ -986,7 +980,7 @@ ${goal}
       }
       const toolStart = performance.now();
       result = await t.execute(args, (chunk) => {
-        this.sink({
+        bus.emit('agent:event', {
           kind: EventKind.ToolProgress,
           tool: { id: call.id, name: call.name, args: call.arguments, output: chunk, read_only: t?.readOnly() ?? false },
         });
@@ -1078,7 +1072,7 @@ ${goal}
       outcomes[0].output +
       `\n\n[loop guard] ${subject} has now failed ${this.stormCount} times in a row with the same error. Re-sending it will not help. Change approach: if an argument is being truncated, write less in one call and split the work; otherwise fix the arguments, use a different tool, or explain the blocker in your final answer.`;
 
-    this.sink({
+    bus.emit('agent:event', {
       kind: EventKind.Notice,
       level: 'warn',
       text: `loop guard: ${short} failed ${this.stormCount}× the same way — nudging the model to change approach`,
@@ -1156,7 +1150,7 @@ ${goal}
           postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
           outcome: 'stuck',
         });
-        this.sink({ kind: EventKind.Notice, level: 'info', text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
         return 'truncated';
       }
       const region = msgs.slice(head, start);
@@ -1183,7 +1177,7 @@ ${goal}
           postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
           outcome: 'truncated',
         });
-        this.sink({ kind: EventKind.Notice, level: 'info', text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
+        bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
         return 'truncated';
       }
 
@@ -1213,7 +1207,7 @@ ${goal}
         postTokens: estimateTokens(postChars),
         outcome: 'summary',
       });
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.Notice,
         level: 'info',
         text: `上下文已压缩: ${region.length} 条消息 → 摘要 (保留了最近 ${msgs.length - start} 条)`,
@@ -1241,13 +1235,13 @@ ${goal}
     }
     if (this.compactStuck) return;
     if (this.compactRunning) {
-      this.sink({ kind: EventKind.Notice, level: 'info', text: '压缩已在运行中，跳过重复触发' });
+      bus.emit('agent:event', { kind: EventKind.Notice, level: 'info', text: '压缩已在运行中，跳过重复触发' });
       return;
     }
     this.compactRunning = true;
 
     // Auto-compact: trigger summarization in background after this turn
-    this.sink({
+    bus.emit('agent:event', {
       kind: EventKind.Notice,
       level: 'info',
       text: `上下文使用率 ${(ratio * 100).toFixed(0)}% — 自动压缩中…`,
@@ -1268,7 +1262,7 @@ ${goal}
         tailMsgCount: tailCount, preTokens: estimated, postTokens: estimated,
         outcome: 'stuck',
       });
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.Notice,
         level: 'warn',
         text: `上下文窗口 ${(ratio * 100).toFixed(0)}% 已满但对话太短无法压缩。建议用 /new 开启新会话。`,
@@ -1296,7 +1290,7 @@ ${goal}
       if (postEstimate / this.contextWindow > 0.95) {
         this.compactStuck = true;
         this.compactRunning = false;
-        this.sink({
+        bus.emit('agent:event', {
           kind: EventKind.Notice,
           level: 'warn',
           text: `压缩后上下文仍占用 ${(postEstimate / this.contextWindow * 100).toFixed(0)}%。建议用 /new 开启新会话。`,
@@ -1321,7 +1315,7 @@ ${goal}
         postTokens: estimateTokens(postChars),
         outcome: 'summary',
       });
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.Notice,
         level: 'info',
         text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
@@ -1330,7 +1324,7 @@ ${goal}
       if (genAtStart !== this.sessionGen) { this.compactRunning = false; return; } // session replaced, discard
       this.compactStuck = true;
       this.compactRunning = false;
-      this.sink({
+      bus.emit('agent:event', {
         kind: EventKind.Notice,
         level: 'warn',
         text: '自动压缩失败。建议用 /new 开启新会话或手动 /compact。',
@@ -1518,17 +1512,18 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       subTools,
       subSystem,
       { temperature: 0.3, subagentDepth: this._subagentDepth + 1, contextWindow: this.contextWindow },
-      (ev) => {
-        // Forward text chunks for progress display
-        if (ev.kind === EventKind.Text && ev.text && onProgress) {
-          onProgress(ev.text);
-        }
-        // Forward tool dispatch/results so UI can show sub-agent activity
-        if (ev.kind === EventKind.ToolDispatch) {
-          onProgress?.(`🔧 ${(ev as any).name || '?'}\n`);
-        }
-      },
     );
+
+    // Listen for sub-agent events for progress display
+    const subProgressHandler = (ev: AgentEvent) => {
+      if (ev.kind === EventKind.Text && ev.text && onProgress) {
+        onProgress(ev.text);
+      }
+      if (ev.kind === EventKind.ToolDispatch) {
+        onProgress?.(`🔧 ${(ev as any).name || '?'}\n`);
+      }
+    };
+    bus.on('agent:event', subProgressHandler);
 
     let subAgentSucceeded = false;
     try {
@@ -1542,6 +1537,8 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     } catch (e: any) {
       return { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
+      // Clean up sub-agent progress listener
+      bus.off('agent:event', subProgressHandler);
       // Auto-diff + merge/discard based on success
       if (isolationId) {
         const diffT = this.tools.get('agent_isolation_diff');
