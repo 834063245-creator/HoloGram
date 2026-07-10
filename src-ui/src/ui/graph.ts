@@ -17,6 +17,11 @@ import { shell } from './app-shell';
 import { t, getLang, setLang } from '../i18n';
 import { gpuLayout } from './gpu-layout';
 import { layout3D, fibonacciSphere, spiralGalaxies, repelCommunityCentroids } from './graph-layout';
+import { NODE_COLORS, GLOW_COLORS, edgeColorByType, edgeOpacityByDepth, edgeWidthByDepth, hexToCSS, communityColor, BG_COLOR, TYPE_LABELS } from './graph-colors';
+import { createGlowTexture, createSpikeTexture } from './graph-textures';
+import { makeGlowPointMaterial, makeCoreFresnelMaterial, _GLSL_HSL2RGB } from './graph-shaders';
+import * as Scene from './graph-scene';
+import { buildLegend, buildFocusBanner } from './graph-ui';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
@@ -50,148 +55,9 @@ interface GraphDiffJson {
 }
 
 
-// ── Color Palette ────────────────────────────────────────────
+// ═════ Colors + Textures moved to graph-colors.ts / graph-textures.ts ═══
 
-// ponytail: 8 代码符号色相均分(210/180/150/120/90/60/30/0°)，存储金系明度递减，时序紫系明度递减
-const NODE_COLORS: Record<string, number> = {
-  symbol: 0x6ab0ff, SYMBOL: 0x6ab0ff,     // 210° 蓝 — 通用符号
-  function: 0x4ad8c8, FUNCTION: 0x4ad8c8, // 175° 青 — 函数
-  method: 0x4ad8c8, METHOD: 0x4ad8c8,     // 175° 青 — 方法
-  class: 0x7fd84a, CLASS: 0x7fd84a,       // 105° 绿 — 类
-  module: 0xd8d84a, MODULE: 0xd8d84a,     // 60°  黄 — 模块
-  interface: 0xf0a850, INTERFACE: 0xf0a850, // 30° 橙 — 接口
-  variable: 0xf07070, VARIABLE: 0xf07070, // 0°   红 — 变量
-  constant: 0xd850b0, CONSTANT: 0xd850b0, // 320° 品红 — 常量
-  medium: 0xf0c060, MEDIUM: 0xf0c060,
-  file: 0xf0c060, FILE: 0xf0c060,         // 40° 金
-  database: 0xe0a040, DATABASE: 0xe0a040, // 35° 暗金
-  cache: 0xd09030, CACHE: 0xd09030,       // 30° 更暗
-  queue: 0xc08020, QUEUE: 0xc08020,       // 25° 最暗
-  temporal: 0xc098ff, TEMPORAL: 0xc098ff,
-  thread: 0xc098ff, THREAD: 0xc098ff,     // 270° 紫
-  timer: 0xa880ff, TIMER: 0xa880ff,       // 260° 蓝紫
-  trigger: 0x9068ff, TRIGGER: 0x9068ff,   // 250° 更蓝紫
-};
-const GLOW_COLORS: Record<string, number> = {
-  symbol: 0x2a6acc, SYMBOL: 0x2a6acc,
-  function: 0x1a9888, FUNCTION: 0x1a9888,
-  method: 0x1a9888, METHOD: 0x1a9888,
-  class: 0x4a982a, CLASS: 0x4a982a,
-  module: 0x98982a, MODULE: 0x98982a,
-  interface: 0xc07028, INTERFACE: 0xc07028,
-  variable: 0xc03838, VARIABLE: 0xc03838,
-  constant: 0x983070, CONSTANT: 0x983070,
-  medium: 0xcc8800, MEDIUM: 0xcc8800,
-  file: 0xcc8800, FILE: 0xcc8800,
-  database: 0xb07000, DATABASE: 0xb07000,
-  cache: 0x905800, CACHE: 0x905800,
-  queue: 0x704000, QUEUE: 0x704000,
-  temporal: 0x7855cc, TEMPORAL: 0x7855cc,
-  thread: 0x7855cc, THREAD: 0x7855cc,
-  timer: 0x6040bb, TIMER: 0x6040bb,
-  trigger: 0x4830aa, TRIGGER: 0x4830aa,
-};
-
-// ponytail: 10 边各独立色相 — 结构系冷色, 数据系暖色, 时序系紫橙; 旧引擎 data/temporal 兼容映射
-const _EDGE_COLORS: Record<string, number> = {
-  calls: 0x4a9adf,       // 210° 蓝
-  imports: 0x4adfdf,     // 180° 青
-  defines: 0x4adf8a,     // 150° 青绿
-  inherits: 0xff66dd,    // 315° 品红
-  reads: 0x66dd66,       // 120° 绿
-  writes: 0xff5566,      // 355° 红
-  shares: 0xffaa44,      // 35° 橙
-  triggers: 0xff8833,    // 22° 橙红
-  awaits: 0xc068ff,      // 280° 紫
-  sequences: 0x8866ff,   // 250° 蓝紫
-  data: 0xff5566,        // 兼容旧引擎
-  temporal: 0xff8833,
-  structural: 0x4a9adf,
-};
-function edgeColorByType(edgeType: string, direction: string, crossFile = false): THREE.Color {
-  const et = edgeType.toLowerCase();
-  if (et === 'data') return new THREE.Color(direction === 'write' ? _EDGE_COLORS.writes : _EDGE_COLORS.reads);
-  if (et === 'structural') return new THREE.Color(_EDGE_COLORS.calls);
-  if (et === 'inherits' || (crossFile && direction === 'inherit')) return new THREE.Color(_EDGE_COLORS.inherits);
-  const hex = _EDGE_COLORS[et] ?? _EDGE_COLORS.calls;
-  return new THREE.Color(hex);
-}
-function edgeOpacityByDepth(depth: number): number {
-  // ponytail: m 0.05→0.02 总览极淡; 边类型辨识靠图例筛选+hover 提亮
-  const m = 0.02;
-  switch (depth) { case 1: return 0.04 * m; case 2: return 0.11 * m; case 3: return 0.17 * m; case 4: return 0.22 * m; default: return 0.08 * m; }
-}
-
-function edgeWidthByDepth(depth: number): number {
-  switch (depth) { case 1: return 1.0; case 2: return 1.4; case 3: return 1.8; case 4: return 2.4; default: return 1.2; }
-}
-
-function hexToCSS(hex: number): string { return '#' + hex.toString(16).padStart(6, '0'); }
-
-/** Deterministic hashed color from a community ID string. Same ID → same hue. */
-function communityColor(communityId: string): number {
-  let hash = 0;
-  for (let i = 0; i < communityId.length; i++) {
-    hash = ((hash << 5) - hash) + communityId.charCodeAt(i);
-    hash |= 0; // 32-bit int
-  }
-  const hue = ((hash & 0x7fffffff) % 360) / 360;
-  const color = new THREE.Color();
-  color.setHSL(hue, 0.55, 0.52);
-  return color.getHex();
-}
-
-const BG_COLOR = 0x030812;
-const TYPE_LABELS: Record<string, string> = {
-  symbol: 'SYM', function: 'FN', method: 'MTH', class: 'CLS',
-  module: 'MOD', variable: 'VAR', constant: 'CST', interface: 'IFC',
-  medium: 'MED', file: 'FILE', database: 'DB', cache: 'CACHE', queue: 'Q',
-  temporal: 'TMP', thread: 'THR', timer: 'TIM', trigger: 'TRG',
-};
-
-// ── Glow Textures ─────────────────────────────────────────────
-
-function createGlowTexture(): THREE.Texture {
-  const size = 128, c = document.createElement('canvas');
-  c.width = c.height = size; const ctx = c.getContext('2d')!;
-  const h = size / 2;
-  const g = ctx.createRadialGradient(h, h, 0, h, h, h);
-  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.02, 'rgba(255,255,255,0.95)');
-  g.addColorStop(0.08, 'rgba(255,255,255,0.55)'); g.addColorStop(0.2, 'rgba(255,255,255,0.18)');
-  g.addColorStop(0.45, 'rgba(255,255,255,0.03)'); g.addColorStop(0.7, 'rgba(255,255,255,0.004)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
-  return new THREE.CanvasTexture(c);
-}
-
-function createSpikeTexture(): THREE.Texture {
-  const size = 256, c = document.createElement('canvas');
-  c.width = c.height = size; const ctx = c.getContext('2d')!;
-  const cx = size / 2, cy = size / 2;
-  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, size / 2);
-  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.03, 'rgba(255,255,255,0.9)');
-  g.addColorStop(0.1, 'rgba(255,255,255,0.5)'); g.addColorStop(0.25, 'rgba(255,255,255,0.15)');
-  g.addColorStop(0.5, 'rgba(255,255,255,0.02)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 6; i++) {
-    const a = (i * Math.PI) / 3, sx = Math.cos(a), sy = Math.sin(a);
-    const w = ctx.createLinearGradient(cx, cy, cx + sx * size * 0.45, cy + sy * size * 0.45);
-    w.addColorStop(0, 'rgba(255,255,255,0.7)'); w.addColorStop(0.15, 'rgba(255,240,220,0.4)');
-    w.addColorStop(0.5, 'rgba(255,200,150,0.08)'); w.addColorStop(1, 'transparent');
-    ctx.fillStyle = w; ctx.beginPath();
-    ctx.moveTo(cx + sx * 3, cy + sy * 3); ctx.lineTo(cx + sx * size * 0.48, cy + sy * size * 0.48);
-    ctx.lineTo(cx - sy * 1.5, cy + sx * 1.5); ctx.lineTo(cx + sy * 1.5, cy - sx * 1.5); ctx.fill();
-    const cg = ctx.createLinearGradient(cx, cy, cx - sx * size * 0.35, cy - sy * size * 0.35);
-    cg.addColorStop(0, 'rgba(255,255,255,0.5)'); cg.addColorStop(0.15, 'rgba(200,220,255,0.3)');
-    cg.addColorStop(0.5, 'rgba(150,180,255,0.05)'); cg.addColorStop(1, 'transparent');
-    ctx.fillStyle = cg; ctx.beginPath();
-    ctx.moveTo(cx - sx * 3, cy - sy * 3); ctx.lineTo(cx - sx * size * 0.38, cy - sy * size * 0.38);
-    ctx.lineTo(cx + sy * 1.2, cy - sx * 1.2); ctx.lineTo(cx - sy * 1.2, cy + sx * 1.2); ctx.fill();
-  }
-  return new THREE.CanvasTexture(c);
-}
-
-// ═══════════ Layout moved to graph-layout.ts ═══════════
+// ═══════════ Layout moved to graph-layout.ts ═══════════ ═══════════
 
 // ═══════════════════════════════════════════════════════════════
 // StarGraph — 深空星图 (mode-aware from construction)
@@ -552,47 +418,18 @@ export class StarGraph {
 
   // ── Starfield ────────────────────────────────────────────
 
-  // ── Nebula dust (full mode) ──────────────────────────────
+  // ── Nebula dust → graph-scene.ts ──
   private nebulaDust!: THREE.Points;
   private nebulaPhases: number[] = [];
 
   private buildNebulaDust(): void {
-    const count = 300;
-    const posArr = new Float32Array(count * 3);
-    const colArr = new Float32Array(count * 3);
-    const rMin = 80, rMax = 900;
-    for (let i = 0; i < count; i++) {
-      const r = rMin + Math.random() * (rMax - rMin);
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      posArr[i * 3] = Math.cos(theta) * Math.sin(phi) * r;
-      posArr[i * 3 + 1] = Math.sin(phi) * r * 0.4;
-      posArr[i * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
-      // Deep space colors: purple, teal, amber
-      const hues = [0.6, 0.65, 0.7, 0.55, 0.12, 0.08]; // purples, teals, warm ambers
-      const hue = hues[Math.floor(Math.random() * hues.length)];
-      const c = new THREE.Color(); c.setHSL(hue, 0.6, 0.5 + Math.random() * 0.3);
-      colArr[i * 3] = c.r; colArr[i * 3 + 1] = c.g; colArr[i * 3 + 2] = c.b;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
-    const mat = new THREE.PointsMaterial({
-      size: 18, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.12,
-    });
-    this.nebulaDust = new THREE.Points(geo, mat);
-    this.nebulaPhases = new Array(count).fill(0).map(() => Math.random() * Math.PI * 2);
-    this.scene.add(this.nebulaDust);
+    const res = Scene.buildNebulaDust(this.scene, this.glowTex);
+    this.nebulaDust = res.points;
+    this.nebulaPhases = res.phases;
   }
 
   private animateNebulaDust(): void {
-    if (!this.nebulaDust) return;
-    this.nebulaDust.rotation.y += 0.0001;
-    this.nebulaDust.rotation.x += 0.00005;
-    // Subtle opacity pulse
-    const op = 0.08 + Math.sin(this.pulseTime * 0.2) * 0.04;
-    (this.nebulaDust.material as THREE.PointsMaterial).opacity = op;
+    Scene.animateNebulaDust(this.nebulaDust, this.pulseTime);
   }
 
   private buildStarfield(): void {
@@ -4525,11 +4362,7 @@ export class StarGraph {
   // ── Focus subgraph (detail-card button triggered) ────────────
 
   private buildFocusBanner(): void {
-    this.focusSubgraphBanner = document.createElement('div');
-    this.focusSubgraphBanner.id = 'graph-focus-banner';
-    this.focusSubgraphBanner.textContent = '';
-    this.focusSubgraphBanner.addEventListener('click', () => this.exitFocusSubgraph());
-    this.container.appendChild(this.focusSubgraphBanner);
+    this.focusSubgraphBanner = buildFocusBanner(this.container, () => this.exitFocusSubgraph());
   }
 
   private enterFocusSubgraph(idx: number): void {
