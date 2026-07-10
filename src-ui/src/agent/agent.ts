@@ -356,13 +356,17 @@ export class Agent {
   }
 
   /** Inject a sub-agent result as a pending task notification.
-   *  Safe: queued and applied at the next safe boundary, never mid-stream. */
+   *  Safe: queued and applied at the next safe boundary, never mid-stream.
+   *  Truncates output at 4000 chars to prevent context pollution. */
   injectTaskNotification(text: string): void {
+    const truncated = text.length > 4000
+      ? text.slice(0, 4000) + `\n…[截断 ${text.length - 4000} 字符]`
+      : text;
     this._pendingInserts.push(
-      `<task-notification>\n子Agent 任务完成:\n${text}\n</task-notification>`,
+      `<task-notification>\n子Agent 任务完成:\n${truncated}\n</task-notification>`,
     );
-    // Don't emit notice here — the pool's onDone already handles the UI event.
-    // The injected message will be seen by the model at the next safe boundary.
+    // Emit bus event so UI (status bar, notification system) can react
+    bus.emit('agent:task-notification', { text: truncated, length: text.length, truncated: text.length > 4000 });
   }
 
   /** Cascade abort: stop all sub-agents when the parent is interrupted. */

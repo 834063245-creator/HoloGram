@@ -68,7 +68,8 @@ export class SubAgentPool {
   setOnDone(cb: SubAgentDoneCallback): void { this.onDone = cb; }
 
   /** Fire-and-forget spawn. Returns the handle ID immediately.
-   *  Rejects if at maxConcurrent. Times out after defaultTimeoutMs. */
+   *  Rejects if at maxConcurrent. Times out after defaultTimeoutMs.
+   *  Idempotent: if callId already has a running agent, returns that agent's ID. */
   spawn(
     description: string,
     runFn: (onMessage?: (msg: string) => void) => Promise<{ text: string; err?: string }>,
@@ -76,6 +77,15 @@ export class SubAgentPool {
     callId?: string,
     timeoutMs?: number,
   ): string | null {
+    // Idempotency: duplicate callId → return existing
+    if (callId) {
+      for (const [id, pending] of this.agents) {
+        if (pending.callId === callId) return id;
+      }
+      for (const h of this.completed) {
+        if (h.id === callId || (h as any)._callId === callId) return h.id;
+      }
+    }
     // Concurrency cap
     if (this.agents.size >= this.maxConcurrent) {
       return null; // caller should handle: return "busy" message to parent
