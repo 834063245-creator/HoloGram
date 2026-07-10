@@ -261,6 +261,22 @@ function resetCheckPanelState(): void {
     passed_checks: [], blast_radius: 0, cross_community_edges: 0,
     new_cycles: 0, new_thread_conflicts: 0, api_signature_changes: 0,
   });
+  clearCheckBadge();
+}
+
+function setCheckBadge(violations: number): void {
+  const existing = btnCheck.querySelector('.toolbar-badge');
+  if (existing) existing.remove();
+  if (violations <= 0) return;
+  const badge = document.createElement('span');
+  badge.className = 'toolbar-badge';
+  badge.textContent = `${violations}`;
+  btnCheck.appendChild(badge);
+}
+
+function clearCheckBadge(): void {
+  const existing = btnCheck.querySelector('.toolbar-badge');
+  if (existing) existing.remove();
 }
 
 function notifyAllPanels(ws: Workspace): void {
@@ -493,6 +509,11 @@ async function init(): Promise<void> {
     updateTabs();
   });
 
+  bus.on('check:result', ({ passed, violations }: { passed: boolean; violations: number }) => {
+    if (passed) { clearCheckBadge(); return; }
+    setCheckBadge(violations);
+  });
+
   bus.on('chat:turn-done', () => {
     if (workspace?.path) chatPanel.saveActiveSession(workspace.path).catch(() => {});
   });
@@ -563,6 +584,8 @@ async function init(): Promise<void> {
     if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
     checkPanel.toggle();
     if (checkPanel.isOpen() && workspace?.path) runCheck();
+    // Clear badge on open — user has acknowledged
+    clearCheckBadge();
     updateTabs();
   });
 
