@@ -12,6 +12,9 @@ pub mod blindspots;
 pub mod explore;
 pub mod framework_routes;
 pub mod dynamic_dispatch;
+pub mod dynamic_boundaries;
+pub mod dynamic_dispatch_react;
+pub mod dynamic_dispatch_vue;
 pub mod di_reflection;
 pub mod policy_check;
 

@@ -165,6 +165,13 @@ impl SqliteDb {
                     value TEXT
                 );
 
+                -- Name segment vocabulary for camelCase/PascalCase token search
+                CREATE TABLE IF NOT EXISTS name_segment_vocab (
+                    segment TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    PRIMARY KEY (segment, name)
+                ) WITHOUT ROWID;
+
 ",
             )
             .map_err(|e| format!("ensure schema: {}", e))?;
@@ -203,6 +210,17 @@ impl SqliteDb {
         // Init schema version if not present
         let _ = self.conn.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')",
+            [],
+        );
+
+        // Migration: add metadata column to edges (v4.1)
+        let _ = self.conn.execute(
+            "ALTER TABLE edges ADD COLUMN metadata TEXT",
+            [],
+        );
+        // Migration: add lsp_resolved column to edges
+        let _ = self.conn.execute(
+            "ALTER TABLE edges ADD COLUMN lsp_resolved INTEGER DEFAULT 0",
             [],
         );
 

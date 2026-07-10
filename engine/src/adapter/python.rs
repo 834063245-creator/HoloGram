@@ -118,6 +118,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                                         cross_file: false,
                                         temporal_delay_sec: None,
                                         lsp_resolved: false,
+                                        metadata: None,
                                     });
                                 }
                             }

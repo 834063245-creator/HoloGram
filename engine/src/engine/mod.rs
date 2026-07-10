@@ -173,6 +173,10 @@ pub struct Engine {
     /// JoinHandle for the watcher thread. Used by stop_watcher() to confirm
     /// the old thread has exited before starting a new one.
     watcher_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+
+    /// Pending file changes detected by the watcher but not yet synced.
+    /// Each entry: (path, timestamp_ms, is_indexing).
+    pending_changes: Mutex<Vec<(String, u64, bool)>>,
 }
 
 impl Engine {
@@ -187,6 +191,7 @@ impl Engine {
             state: RwLock::new(EngineState::Uninitialized),
             watcher_running: Arc::new(AtomicBool::new(false)),
             watcher_handle: Mutex::new(None),
+            pending_changes: Mutex::new(Vec::new()),
         }
     }
 

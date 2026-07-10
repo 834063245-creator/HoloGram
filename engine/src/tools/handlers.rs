@@ -1,3 +1,4 @@
+
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
@@ -13,11 +14,16 @@ use crate::routing::preflight::{load_baseline, run_full_check, save_baseline};
 use super::{get_str, get_usize, project_root, with_store};
 use super::{with_graph, resolve_in_index, resolve_in_graph};
 use super::{node_to_value, edge_to_value, discover_source_files, derive_comm_label};
+use super::ToolResponse;
 
-pub(crate) fn handler_neighbors(args: &Value) -> Value {
+pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
     let node_id = get_str(args, &["node_id", "nodeId"]);
     if node_id.is_empty() {
-        return json!({"error": "node_id is required"});
+        return ToolResponse::Degraded {
+            guidance: "node_id is required".into(),
+            fallback: "Provide a valid node_id to look up neighbors".into(),
+            details: json!({}),
+        };
     }
     match engine::engine_read(|idx| {
         let resolved = match resolve_in_index(idx, &node_id) {
@@ -36,14 +42,18 @@ pub(crate) fn handler_neighbors(args: &Value) -> Value {
             "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
         })
     }) {
+        Ok(value) if value.get("error").is_none() => return ToolResponse::Success(value),
         Ok(value) => {
-            if value.get("error").is_none() {
-                return value;
-            }
+            let msg = value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            return ToolResponse::Degraded {
+                guidance: msg.into(),
+                fallback: "Use search_symbols to find the node first".into(),
+                details: json!({}),
+            };
         }
         Err(_) => {}
     }
-    with_graph(|g| {
+    ToolResponse::Success(with_graph(|g| {
         let resolved = match resolve_in_graph(g, &node_id) {
             Some(rid) => rid,
             None => return json!({"error": format!("Node {} not found", node_id)}),
@@ -59,16 +69,20 @@ pub(crate) fn handler_neighbors(args: &Value) -> Value {
             "incoming": incoming,
             "outgoing": outgoing,
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_impact(args: &Value) -> Value {
+pub(crate) fn handler_impact(args: &Value) -> ToolResponse {
     let node_id = get_str(args, &["node_id", "nodeId"]);
     if node_id.is_empty() {
-        return json!({"error": "node_id is required"});
+        return ToolResponse::Degraded {
+            guidance: "node_id is required".into(),
+            fallback: "Use search_symbols to find the node first".into(),
+            details: json!({}),
+        };
     }
     let depth = get_usize(args, "depth", 3);
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let resolved = match resolve_in_index(idx, &node_id) {
             Some(rid) => rid,
             None => return json!({"error": format!("Node {} not found", node_id)}),
@@ -81,17 +95,21 @@ pub(crate) fn handler_impact(args: &Value) -> Value {
             "total_affected_nodes": total_affected.saturating_sub(1),
             "layers": layers.iter().map(|(d, nodes)| json!({"depth": d, "nodes": nodes})).collect::<Vec<_>>(),
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_path(args: &Value) -> Value {
+pub(crate) fn handler_path(args: &Value) -> ToolResponse {
     let from_id = get_str(args, &["from_id", "fromId", "from"]);
     let to_id = get_str(args, &["to_id", "toId", "to"]);
     if from_id.is_empty() || to_id.is_empty() {
-        return json!({"error": "from_id and to_id are required"});
+        return ToolResponse::Degraded {
+            guidance: "from_id and to_id are required".into(),
+            fallback: "Use search_symbols to find both nodes first".into(),
+            details: json!({}),
+        };
     }
     let depth = get_usize(args, "depth", 20).max(1);
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let resolved_from = match resolve_in_index(idx, &from_id) {
             Some(rid) => rid,
             None => return json!({"error": format!("Node {} not found", from_id)}),
@@ -104,17 +122,21 @@ pub(crate) fn handler_path(args: &Value) -> Value {
             Some(path) => json!({"from_id": resolved_from, "to_id": resolved_to, "path_count": 1, "paths": [path]}),
             None => json!({"from_id": resolved_from, "to_id": resolved_to, "path_count": 0, "paths": []}),
         }
-    })
+    }))
 }
 
 // ponytail: handler_history deleted — symbol_history now routes to handler_node (richer output)
 
-pub(crate) fn handler_community(args: &Value) -> Value {
+pub(crate) fn handler_community(args: &Value) -> ToolResponse {
     let node_id = get_str(args, &["node_id", "nodeId"]);
     if node_id.is_empty() {
-        return json!({"error": "node_id is required"});
+        return ToolResponse::Degraded {
+            guidance: "node_id is required".into(),
+            fallback: "Use search_symbols to find the node first".into(),
+            details: json!({}),
+        };
     }
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let resolved = match resolve_in_index(idx, &node_id) {
             Some(rid) => rid,
             None => return json!({"error": format!("Node {} not found", node_id)}),
@@ -163,10 +185,10 @@ pub(crate) fn handler_community(args: &Value) -> Value {
             },
             "sibling_nodes": siblings,
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_delayed(args: &Value) -> Value {
+pub(crate) fn handler_delayed(args: &Value) -> ToolResponse {
     let files: Vec<String> = args
         .get("files")
         .and_then(|v| v.as_array())
@@ -208,7 +230,7 @@ pub(crate) fn handler_delayed(args: &Value) -> Value {
         }
     }
     let total = triggers.len() + awaits.len() + sequences.len();
-    json!({
+    ToolResponse::Success(json!({
         "total_delayed_edges": total,
         "triggers_count": triggers.len(),
         "awaits_count": awaits.len(),
@@ -217,17 +239,17 @@ pub(crate) fn handler_delayed(args: &Value) -> Value {
         "awaits": awaits,
         "sequences": sequences,
         "_note": "from dataflow engine (on-demand query, no graph storage)",
-    })
+    }))
 }
 
 // ═══════════════════════════════════════════════════════════════
 // V2 Analysis Handlers
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn handler_fragile(args: &Value) -> Value {
+pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
     let limit = get_usize(args, "limit", 5).max(1);
     let root = project_root();
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         // ── Step 1: Aggregate graph structure scores per file ──
         // Walk all nodes, group by file (from location), sum fan + coupling penalty.
         let mut file_scores: std::collections::HashMap<String, (f64, usize)> = std::collections::HashMap::new();
@@ -319,12 +341,12 @@ pub(crate) fn handler_fragile(args: &Value) -> Value {
         }).collect();
 
         json!({"fragile_modules": result, "limit": limit})
-    })
+    }))
 }
 
-pub(crate) fn handler_cycle(args: &Value) -> Value {
+pub(crate) fn handler_cycle(args: &Value) -> ToolResponse {
     let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("all");
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let classified = classify_cycles_from_index(idx);
         let all_cycles: Vec<_> = classified["cycles"]
             .as_array()
@@ -342,13 +364,13 @@ pub(crate) fn handler_cycle(args: &Value) -> Value {
             _ => all_cycles,
         };
         json!({"total_cycles": filtered.len(), "mode_filter": mode, "cycles": filtered})
-    })
+    }))
 }
 
-pub(crate) fn handler_thread_conflicts(args: &Value) -> Value {
+pub(crate) fn handler_thread_conflicts(args: &Value) -> ToolResponse {
     let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str()).map(|s| s.to_string());
     let root = project_root();
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let mut resources = serde_json::Map::new();
         let files: Vec<PathBuf> = discover_source_files(&root, 500);
         let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
@@ -434,16 +456,20 @@ pub(crate) fn handler_thread_conflicts(args: &Value) -> Value {
             "unlocked_resources": unlocked_keys,
             "_note": "shared vars from dataflow engine + Medium nodes from graph",
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_coupling_report(args: &Value) -> Value {
+pub(crate) fn handler_coupling_report(args: &Value) -> ToolResponse {
     let module = get_str(args, &["module_name", "module"]);
     if module.is_empty() {
-        return json!({"error": "module_name is required"});
+        return ToolResponse::Degraded {
+            guidance: "module_name is required".into(),
+            fallback: "Use cluster_report to find modules first".into(),
+            details: json!({}),
+        };
     }
     let root = project_root();
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let report = coupling_report_from_index(idx, &module);
         let l1 = report["L1"].as_u64().unwrap_or(0) as u32;
         let l2 = report["L2"].as_u64().unwrap_or(0) as u32;
@@ -497,19 +523,19 @@ pub(crate) fn handler_coupling_report(args: &Value) -> Value {
             "fragility": format!("{:.1}", fragility),
             "_note": "L1/L2 from graph, L3/L4 from dataflow engine",
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_timeline(args: &Value) -> Value {
+pub(crate) fn handler_timeline(args: &Value) -> ToolResponse {
     let limit = get_usize(args, "limit", 100).max(1);
     let events = engine::engine_query_timeline(limit).unwrap_or_default();
-    json!({"events": events, "total": events.len()})
+    ToolResponse::Success(json!({"events": events, "total": events.len()}))
 }
 
-pub(crate) fn handler_blindspots(args: &Value) -> Value {
+pub(crate) fn handler_blindspots(args: &Value) -> ToolResponse {
     let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
     let root = project_root();
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let files: Vec<PathBuf> = discover_source_files(&root, 500);
         let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
         let mut l4 = count_l4_from_index(idx);
@@ -546,10 +572,10 @@ pub(crate) fn handler_blindspots(args: &Value) -> Value {
         let cycles = detect_cycles_from_index(idx);
         let blind = find_blindspots(l4, cycles.len(), conflict_count);
         json!(blind)
-    })
+    }))
 }
 
-pub(crate) fn handler_preflight(args: &Value) -> Value {
+pub(crate) fn handler_preflight(args: &Value) -> ToolResponse {
     let files: Vec<String> = args
         .get("files")
         .or_else(|| args.get("path"))
@@ -557,10 +583,14 @@ pub(crate) fn handler_preflight(args: &Value) -> Value {
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     if files.is_empty() {
-        return json!({"error": "files list is required"});
+        return ToolResponse::Degraded {
+            guidance: "files list is required".into(),
+            fallback: "Provide a list of file paths to check".into(),
+            details: json!({}),
+        };
     }
     let root = project_root();
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let mut file_reports = Vec::new();
         for file in &files {
             let affected_nodes = idx.get_nodes_by_file(file);
@@ -627,14 +657,18 @@ pub(crate) fn handler_preflight(args: &Value) -> Value {
             "dataflow_signals": df_signals,
             "dataflow_summary": {"shared_vars": shared_vars, "temporal_edges": temporal},
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_search(args: &Value) -> Value {
+pub(crate) fn handler_search(args: &Value) -> ToolResponse {
     let query_str = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let limit = get_usize(args, "limit", 20);
     if query_str.is_empty() {
-        return json!({"error": "query is required"});
+        return ToolResponse::Degraded {
+            guidance: "query is required".into(),
+            fallback: "Provide a search query string".into(),
+            details: json!({}),
+        };
     }
     // 1. FTS5 exact search
     if let Ok(results) = engine::engine_fts_search(query_str, limit) {
@@ -647,7 +681,7 @@ pub(crate) fn handler_search(args: &Value) -> Value {
             });
             // append vector results if available
             merge_vector_hits(&mut out, query_str, limit);
-            return out;
+            return ToolResponse::Success(out);
         }
     }
     // 2. Linear fuzzy fallback
@@ -663,7 +697,7 @@ pub(crate) fn handler_search(args: &Value) -> Value {
     });
     // append vector results
     merge_vector_hits(&mut out, query_str, limit);
-    out
+    ToolResponse::Success(out)
 }
 
 /// Append vector (semantic) search results to the output if available.
@@ -716,7 +750,7 @@ pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     }
 }
 
-pub(crate) fn handler_explore(args: &Value) -> Value {
+pub(crate) fn handler_explore(args: &Value) -> ToolResponse {
     let symbols: Vec<String> = args
         .get("symbols")
         .and_then(|v| v.as_array())
@@ -724,21 +758,25 @@ pub(crate) fn handler_explore(args: &Value) -> Value {
         .unwrap_or_default();
     let query_str = args.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
     if symbols.is_empty() && query_str.is_none() {
-        return json!({"error": "symbols array or query string is required"});
+        return ToolResponse::Degraded {
+            guidance: "symbols array or query string is required".into(),
+            fallback: "Provide either a list of symbols or a natural language query".into(),
+            details: json!({}),
+        };
     }
     let include_source = args.get("includeSource").and_then(|v| v.as_bool()).unwrap_or(true);
     let root = project_root();
-    with_graph(|g| explore(g, &root, &symbols, query_str.as_deref(), include_source))
+    ToolResponse::Success(with_graph(|g| explore(g, &root, &symbols, query_str.as_deref(), include_source)))
 }
 
-pub(crate) fn handler_graph_summary(_args: &Value) -> Value {
-    with_store(|idx| graph_summary_from_index(idx))
+pub(crate) fn handler_graph_summary(_args: &Value) -> ToolResponse {
+    ToolResponse::Success(with_store(|idx| graph_summary_from_index(idx)))
 }
 
-pub(crate) fn handler_clusters(args: &Value) -> Value {
+pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {
     let min_size = get_usize(args, "min_size", 3).max(1);
     let max_nodes = get_usize(args, "max_nodes", 20).max(1).min(200);
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let mut comm_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
         let mut has_any = false;
         for node in idx.nodes_iter() {
@@ -779,15 +817,19 @@ pub(crate) fn handler_clusters(args: &Value) -> Value {
             "max_nodes_per_community": max_nodes,
             "communities": filtered,
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_diff(args: &Value) -> Value {
+pub(crate) fn handler_diff(args: &Value) -> ToolResponse {
     let before_path = args.get("before_path").or_else(|| args.get("beforePath")).and_then(|v| v.as_str()).unwrap_or("");
     if before_path.is_empty() {
-        return json!({"error": "before_path is required"});
+        return ToolResponse::Degraded {
+            guidance: "before_path is required".into(),
+            fallback: "Provide a path to the baseline graph JSON file".into(),
+            details: json!({}),
+        };
     }
-    with_graph(|after| {
+    ToolResponse::Success(with_graph(|after| {
         let before = match Graph::from_json_file(before_path) {
             Ok(g) => g,
             Err(_) => {
@@ -818,26 +860,38 @@ pub(crate) fn handler_diff(args: &Value) -> Value {
             "added_edges": diff.added_edges.len(),
             "removed_edges": diff.removed_edges.len(),
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_analyze(args: &Value) -> Value {
+pub(crate) fn handler_analyze(args: &Value) -> ToolResponse {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     if path.is_empty() {
-        return json!({"error": "path is required"});
+        return ToolResponse::Degraded {
+            guidance: "path is required".into(),
+            fallback: "Provide the project root directory path".into(),
+            details: json!({}),
+        };
     }
     let root = PathBuf::from(path);
     if !root.exists() {
-        return json!({"error": format!("Path not found: {}", path)});
+        return ToolResponse::Degraded {
+            guidance: format!("Path not found: {}", path),
+            fallback: "Verify the path exists and try again".into(),
+            details: json!({}),
+        };
     }
     if let Err(e) = engine::engine_init(&root) {
-        return json!({"error": format!("Engine init failed: {}", e)});
+        return ToolResponse::Degraded {
+            guidance: format!("Engine init failed: {}", e),
+            fallback: "Check engine logs and retry".into(),
+            details: json!({}),
+        };
     }
     if engine::engine_state().is_analyzing() {
-        return json!({
+        return ToolResponse::Success(json!({
             "status": "already_running",
             "message": "Analysis already in progress. Call engine_status to track progress.",
-        });
+        }));
     }
     let root_clone = root.clone();
     std::thread::Builder::new()
@@ -854,20 +908,28 @@ pub(crate) fn handler_analyze(args: &Value) -> Value {
             }
         })
         .ok();
-    json!({
+    ToolResponse::Success(json!({
         "status": "started",
         "message": "Analysis running in background. Call engine_status to track progress.",
-    })
+    }))
 }
 
-pub(crate) fn handler_run_check(args: &Value) -> Value {
+pub(crate) fn handler_run_check(args: &Value) -> ToolResponse {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     if path.is_empty() {
-        return json!({"error": "path is required"});
+        return ToolResponse::Degraded {
+            guidance: "path is required".into(),
+            fallback: "Provide the project root directory path".into(),
+            details: json!({}),
+        };
     }
     let root = PathBuf::from(path);
     if !root.exists() {
-        return json!({"error": format!("Path not found: {}", path)});
+        return ToolResponse::Degraded {
+            guidance: format!("Path not found: {}", path),
+            fallback: "Verify the path exists and try again".into(),
+            details: json!({}),
+        };
     }
     // Load baseline snapshot (saved from last check) for before/after diff
     let before = load_baseline(&root);
@@ -877,11 +939,19 @@ pub(crate) fn handler_run_check(args: &Value) -> Value {
         _ => {
             match engine::engine_init(&root) {
                 Ok(_) => {}
-                Err(e) => return json!({"error": format!("Engine init failed: {}", e)}),
+                Err(e) => return ToolResponse::Degraded {
+                    guidance: format!("Engine init failed: {}", e),
+                    fallback: "Check engine logs and retry".into(),
+                    details: json!({}),
+                },
             }
             match engine::engine_analyze(&root) {
                 Ok(r) => r.graph,
-                Err(e) => return json!({"error": e}),
+                Err(e) => return ToolResponse::Degraded {
+                    guidance: e,
+                    fallback: "Check project structure and retry".into(),
+                    details: json!({}),
+                },
             }
         }
     };
@@ -922,14 +992,18 @@ pub(crate) fn handler_run_check(args: &Value) -> Value {
         });
         let _ = engine::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props);
     }
-    json!(check_result)
+    ToolResponse::Success(json!(check_result))
 }
 
-pub(crate) fn handler_run_health(args: &Value) -> Value {
+pub(crate) fn handler_run_health(args: &Value) -> ToolResponse {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let days = get_usize(args, "days", 30);
     if path.is_empty() {
-        return json!({"error": "path is required"});
+        return ToolResponse::Degraded {
+            guidance: "path is required".into(),
+            fallback: "Provide the project root directory path".into(),
+            details: json!({}),
+        };
     }
     let root = project_root();
     let dataflow_l4: usize = {
@@ -945,7 +1019,7 @@ pub(crate) fn handler_run_health(args: &Value) -> Value {
         }
         l4
     };
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let summary = graph_summary_from_index(idx);
         let n = idx.node_count().max(1) as f64;
         let e = idx.edge_count() as f64;
@@ -978,19 +1052,23 @@ pub(crate) fn handler_run_health(args: &Value) -> Value {
             "summary": summary,
             "note": "Health trend requires historical snapshots — showing current state only.",
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_rename(args: &Value) -> Value {
+pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
     let old_name = args.get("old_name").or_else(|| args.get("oldName")).and_then(|v| v.as_str()).unwrap_or("");
     let new_name = args.get("new_name").or_else(|| args.get("newName")).and_then(|v| v.as_str()).unwrap_or("");
     let dry_run = args.get("dry_run").or_else(|| args.get("dryRun")).and_then(|v| v.as_bool()).unwrap_or(false);
     let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str());
     if old_name.is_empty() || new_name.is_empty() {
-        return json!({"error": "old_name and new_name are required"});
+        return ToolResponse::Degraded {
+            guidance: "old_name and new_name are required".into(),
+            fallback: "Provide both the old and new symbol names".into(),
+            details: json!({}),
+        };
     }
     if dry_run {
-        return with_graph(|g| {
+        return ToolResponse::Success(with_graph(|g| {
             let matched: Vec<_> = g.nodes.values().filter(|n| n.name == old_name).collect();
             if matched.is_empty() {
                 return json!({"error": format!("No nodes match '{}'", old_name)});
@@ -1004,16 +1082,24 @@ pub(crate) fn handler_rename(args: &Value) -> Value {
                 "files_to_modify": matched.iter().filter_map(|n| n.location.clone()).collect::<Vec<_>>(),
                 "message": format!("Dry run: {} nodes would be renamed from '{}' to '{}'. Execute with dry_run=false to commit.", matched.len(), old_name, new_name),
             })
-        });
+        }));
     }
     let (matched_ids, count) = {
         match engine::engine_read(|idx| {
             let ids: Vec<String> = idx.nodes_iter().filter(|n| n.name == old_name).map(|n| n.id.clone()).collect();
             (ids.len(), ids)
         }) {
-            Ok((0, _)) => return json!({"error": format!("No nodes match '{}'", old_name)}),
+            Ok((0, _)) => return ToolResponse::Degraded {
+                guidance: format!("No nodes match '{}'", old_name),
+                fallback: "Use search_symbols to find the correct symbol name".into(),
+                details: json!({}),
+            },
             Ok((cnt, ids)) => (ids, cnt),
-            Err(e) => return json!({"error": e}),
+            Err(e) => return ToolResponse::Degraded {
+                guidance: e,
+                fallback: "Engine read failed, retry once".into(),
+                details: json!({}),
+            },
         }
     };
     if let Err(e) = engine::engine_write(|idx| {
@@ -1021,20 +1107,24 @@ pub(crate) fn handler_rename(args: &Value) -> Value {
             idx.rename_node_name(nid, &new_name);
         }
     }) {
-        return json!({"error": e});
+        return ToolResponse::Degraded {
+            guidance: e,
+            fallback: "Engine write failed, retry once".into(),
+            details: json!({}),
+        };
     }
     let _ = engine::engine_save();
-    json!({
+    ToolResponse::Success(json!({
         "dry_run": false,
         "old_name": old_name,
         "new_name": new_name,
         "renamed_count": count,
         "renamed_ids": matched_ids,
         "note": "Rename applied to graph and persisted to storage.",
-    })
+    }))
 }
 
-pub(crate) fn handler_status(_args: &Value) -> Value {
+pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
     let state = engine::engine_state();
     match engine::engine_read(|idx| (idx.node_count(), idx.edge_count(), idx.has_aux_indexes())) {
         Ok((nodes, edges, has_aux)) => {
@@ -1051,7 +1141,7 @@ pub(crate) fn handler_status(_args: &Value) -> Value {
             let vi_count = if vi_exists {
                 crate::vector::CodeVectorIndex::new(&vi_path).load().unwrap_or(0)
             } else { 0 };
-            json!({
+            ToolResponse::Success(json!({
                 "phase": phase,
                 "store": "MemoryIndex",
                 "nodes": nodes,
@@ -1059,13 +1149,13 @@ pub(crate) fn handler_status(_args: &Value) -> Value {
                 "has_aux_indexes": has_aux,
                 "is_watching": is_watching,
                 "vector_index": { "exists": vi_exists, "vectors": vi_count },
-            })
+            }))
         }
-        Err(_) => json!({"phase": "empty", "store": "none", "nodes": 0, "edges": 0}),
+        Err(_) => ToolResponse::Success(json!({"phase": "empty", "store": "none", "nodes": 0, "edges": 0})),
     }
 }
 
-pub(crate) fn handler_policy_check(args: &Value) -> Value {
+pub(crate) fn handler_policy_check(args: &Value) -> ToolResponse {
     let rules: Value = if let Some(r) = args.get("rules").cloned() {
         r
     } else if let (Some(source), Some(target)) = (
@@ -1083,17 +1173,25 @@ pub(crate) fn handler_policy_check(args: &Value) -> Value {
         }
         json!([rule])
     } else {
-        return json!({"error": "Provide either 'rules' (array of rule objects) or both 'source' and 'target' (string patterns)."});
+        return ToolResponse::Degraded {
+            guidance: "Provide either 'rules' (array of rule objects) or both 'source' and 'target' (string patterns).".into(),
+            fallback: "Define boundary rules with source/target file patterns".into(),
+            details: json!({}),
+        };
     };
-    with_store(|idx| policy_check_from_index(idx, &rules))
+    ToolResponse::Success(with_store(|idx| policy_check_from_index(idx, &rules)))
 }
 
-pub(crate) fn handler_node(args: &Value) -> Value {
+pub(crate) fn handler_node(args: &Value) -> ToolResponse {
     let node_id = get_str(args, &["node_id", "nodeId"]);
     if node_id.is_empty() {
-        return json!({"error": "node_id is required"});
+        return ToolResponse::Degraded {
+            guidance: "node_id is required".into(),
+            fallback: "Use search_symbols to find the node first".into(),
+            details: json!({}),
+        };
     }
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let resolved = match resolve_in_index(idx, &node_id) {
             Some(rid) => rid,
             None => return json!({"error": format!("Node '{}' not found in graph", node_id)}),
@@ -1128,10 +1226,10 @@ pub(crate) fn handler_node(args: &Value) -> Value {
             "incoming_by_kind": group_by_kind(&incoming),
             "outgoing_by_kind": group_by_kind(&outgoing),
         })
-    })
+    }))
 }
 
-pub(crate) fn handler_unused(args: &Value) -> Value {
+pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     let limit = get_usize(args, "limit", 20).min(200);
     let kind_str = args
         .get("kind_filter")
@@ -1139,7 +1237,7 @@ pub(crate) fn handler_unused(args: &Value) -> Value {
         .unwrap_or("function,class");
     let kind_label = kind_str.to_string();
     let kinds: Vec<&str> = kind_str.split(',').map(|s| s.trim()).collect();
-    with_store(|idx| {
+    ToolResponse::Success(with_store(|idx| {
         let mut candidates: Vec<&Node> = idx
             .nodes_iter()
             .filter(|n| n.in_degree == 0 && kinds.iter().any(|k| n.kind.as_str() == *k))
@@ -1159,18 +1257,22 @@ pub(crate) fn handler_unused(args: &Value) -> Value {
                 "community_id": n.community_id,
             })).collect::<Vec<_>>(),
         })
-    })
+    }))
 }
 
 /// On-demand type-aware call resolution. Tries real LSP server first,
 /// falls back to handwritten adapters transparently.
-pub(crate) fn handler_resolve_call(args: &Value) -> Value {
+pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
     let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let func_name = args.get("function").and_then(|v| v.as_str()).unwrap_or("");
     let line = args.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let column = args.get("column").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     if file_path.is_empty() {
-        return json!({"error": "file is required"});
+        return ToolResponse::Degraded {
+            guidance: "file is required".into(),
+            fallback: "Provide the file path to resolve calls in".into(),
+            details: json!({}),
+        };
     }
     let root = project_root();
     let abs_path = if Path::new(file_path).is_absolute() {
@@ -1184,7 +1286,11 @@ pub(crate) fn handler_resolve_call(args: &Value) -> Value {
     // Read source
     let source = match std::fs::read_to_string(&abs_path) {
         Ok(s) => s,
-        Err(e) => return json!({"error": format!("cannot read file: {}", e)}),
+        Err(e) => return ToolResponse::Degraded {
+            guidance: format!("cannot read file: {}", e),
+            fallback: "Check the file path and permissions".into(),
+            details: json!({}),
+        },
     };
 
     // ── Path 1: Real LSP server (if pool is warm) ──
@@ -1209,26 +1315,34 @@ pub(crate) fn handler_resolve_call(args: &Value) -> Value {
 
     if let Some(ref locs) = lsp_result {
         if !locs.is_empty() {
-            return json!({
+            return ToolResponse::Success(json!({
                 "file": path_str,
                 "function": func_name,
                 "backend": "native_lsp",
                 "definitions": locs,
                 "note": "resolved via real LSP server",
-            });
+            }));
         }
     }
 
     // ── Path 2: Handwritten adapter (always available) ──
     let Some(tree) = engine::reparse_source_lsp(&source, &ext) else {
-        return json!({"error": format!("parse failed or unsupported extension: {}", ext)});
+        return ToolResponse::Degraded {
+            guidance: format!("parse failed or unsupported extension: {}", ext),
+            fallback: "Use a supported file extension or native LSP".into(),
+            details: json!({}),
+        };
     };
     let module_qn = path_str.trim_end_matches(&format!(".{}", ext)).replace(['/', '\\'], ".");
     let registry = match engine::engine_read_graph(|g| {
         crate::adapter::type_registry::TypeRegistry::from_graph(g)
     }) {
         Ok(r) => r,
-        Err(e) => return json!({"error": format!("cannot access graph: {}", e)}),
+        Err(e) => return ToolResponse::Degraded {
+            guidance: format!("cannot access graph: {}", e),
+            fallback: "Ensure the project has been analyzed first".into(),
+            details: json!({}),
+        },
     };
 
     use crate::adapter::*;
@@ -1246,7 +1360,11 @@ pub(crate) fn handler_resolve_call(args: &Value) -> Value {
         "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry),
         "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry),
         "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry),
-        _ => return json!({"error": format!("unsupported extension: .{}", ext)}),
+        _ => return ToolResponse::Degraded {
+            guidance: format!("unsupported extension: .{}", ext),
+            fallback: "Use a supported language extension".into(),
+            details: json!({}),
+        },
     };
 
     let call_values: Vec<Value> = raw_calls
@@ -1271,21 +1389,28 @@ pub(crate) fn handler_resolve_call(args: &Value) -> Value {
             .collect()
     };
 
-    json!({
+    ToolResponse::Success(json!({
         "file": path_str,
         "function": func_name,
         "backend": if lsp_result.is_some() { "hybrid" } else { "handwritten" },
         "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
         "resolved_calls": filtered,
         "total": filtered.len(),
-    })
+    }))
 }
 
 /// Resolve the type of a symbol at a specific position.
-pub(crate) fn handler_resolve_type(args: &Value) -> Value {
+pub(crate) fn handler_resolve_type(args: &Value) -> ToolResponse {
     let (path_str, source, ext) = match resolve_tool_prepare(args) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => {
+            let msg = e.get("error").and_then(|v| v.as_str()).unwrap_or("Invalid arguments");
+            return ToolResponse::Degraded {
+                guidance: msg.into(),
+                fallback: "Provide a valid file path".into(),
+                details: json!({}),
+            };
+        }
     };
     let line = get_usize(args, "line", 0) as u32;
     let column = get_usize(args, "column", 0) as u32;
@@ -1293,18 +1418,22 @@ pub(crate) fn handler_resolve_type(args: &Value) -> Value {
     // Try native LSP
     match crate::lsp_manager::LspManager::resolve_type(&path_str, &source, line, column, &ext) {
         Ok(hover) if !hover.is_empty() => {
-            return json!({
+            return ToolResponse::Success(json!({
                 "file": path_str, "line": line, "column": column,
                 "backend": "native_lsp",
                 "type_info": hover,
-            });
+            }));
         }
         _ => {}
     }
 
     // Fallback: handwritten type inference via eval_expr_type on the adapter
     let Some(tree) = engine::reparse_source_lsp(&source, &ext) else {
-        return json!({"error": format!("parse failed for .{}", ext)});
+        return ToolResponse::Degraded {
+            guidance: format!("parse failed for .{}", ext),
+            fallback: "Use a supported language extension".into(),
+            details: json!({}),
+        };
     };
     // ponytail: walk to the node at (line, column) in the parse tree and eval its type
     // For now return what the adapter can do at file level
@@ -1313,7 +1442,11 @@ pub(crate) fn handler_resolve_type(args: &Value) -> Value {
         crate::adapter::type_registry::TypeRegistry::from_graph(g)
     }) {
         Ok(r) => r,
-        Err(e) => return json!({"error": format!("cannot access graph: {}", e)}),
+        Err(e) => return ToolResponse::Degraded {
+            guidance: format!("cannot access graph: {}", e),
+            fallback: "Ensure the project has been analyzed first".into(),
+            details: json!({}),
+        },
     };
 
     use crate::adapter::*;
@@ -1330,26 +1463,37 @@ pub(crate) fn handler_resolve_type(args: &Value) -> Value {
         "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry),
         "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry),
         "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry),
-        _ => return json!({"error": format!("unsupported extension: .{}", ext)}),
+        _ => return ToolResponse::Degraded {
+            guidance: format!("unsupported extension: .{}", ext),
+            fallback: "Use a supported language extension".into(),
+            details: json!({}),
+        },
     }
     .into_iter()
     .map(|rc| json!({"caller": rc.caller_qn, "callee": rc.callee_qn, "strategy": rc.strategy, "confidence": rc.confidence}))
     .collect();
 
-    json!({
+    ToolResponse::Success(json!({
         "file": path_str, "line": line, "column": column,
         "backend": "handwritten",
         "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
         "note": "Type resolution via call targets — use native LSP (rust-analyzer/gopls/pyright) for precise type info",
         "resolved_calls": calls,
-    })
+    }))
 }
 
 /// Find all implementations of an interface/trait at a specific position.
-pub(crate) fn handler_find_implementations(args: &Value) -> Value {
+pub(crate) fn handler_find_implementations(args: &Value) -> ToolResponse {
     let (path_str, source, ext) = match resolve_tool_prepare(args) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => {
+            let msg = e.get("error").and_then(|v| v.as_str()).unwrap_or("Invalid arguments");
+            return ToolResponse::Degraded {
+                guidance: msg.into(),
+                fallback: "Provide a valid file path".into(),
+                details: json!({}),
+            };
+        }
     };
     let line = get_usize(args, "line", 0) as u32;
     let column = get_usize(args, "column", 0) as u32;
@@ -1357,7 +1501,7 @@ pub(crate) fn handler_find_implementations(args: &Value) -> Value {
     // Try native LSP
     match crate::lsp_manager::LspManager::find_implementations(&path_str, &source, line, column, &ext) {
         Ok(locs) if !locs.is_empty() => {
-            return json!({
+            return ToolResponse::Success(json!({
                 "file": path_str, "line": line, "column": column,
                 "backend": "native_lsp",
                 "implementations": locs.iter().map(|l| json!({
@@ -1366,7 +1510,7 @@ pub(crate) fn handler_find_implementations(args: &Value) -> Value {
                     "column": l.range_start_char,
                 })).collect::<Vec<_>>(),
                 "count": locs.len(),
-            });
+            }));
         }
         _ => {}
     }
@@ -1382,24 +1526,35 @@ pub(crate) fn handler_find_implementations(args: &Value) -> Value {
                 .take(50)
                 .map(|(qn, _)| json!({"qualified_name": qn}))
                 .collect();
-            json!({
+            ToolResponse::Success(json!({
                 "file": path_str, "line": line, "column": column,
                 "backend": "registry",
                 "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
                 "note": "Registry-based fallback — use native LSP for precise interface implementations",
                 "implementations": impls,
                 "count": impls.len(),
-            })
+            }))
         }
-        Err(e) => json!({"error": format!("cannot access graph: {}", e)}),
+        Err(e) => ToolResponse::Degraded {
+            guidance: format!("cannot access graph: {}", e),
+            fallback: "Ensure the project has been analyzed first".into(),
+            details: json!({}),
+        },
     }
 }
 
 /// Find all references to a symbol at a specific position.
-pub(crate) fn handler_find_references(args: &Value) -> Value {
+pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
     let (path_str, source, ext) = match resolve_tool_prepare(args) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => {
+            let msg = e.get("error").and_then(|v| v.as_str()).unwrap_or("Invalid arguments");
+            return ToolResponse::Degraded {
+                guidance: msg.into(),
+                fallback: "Provide a valid file path".into(),
+                details: json!({}),
+            };
+        }
     };
     let line = get_usize(args, "line", 0) as u32;
     let column = get_usize(args, "column", 0) as u32;
@@ -1408,7 +1563,7 @@ pub(crate) fn handler_find_references(args: &Value) -> Value {
     // Try native LSP
     match crate::lsp_manager::LspManager::find_references(&path_str, &source, line, column, &ext) {
         Ok(locs) if !locs.is_empty() => {
-            return json!({
+            return ToolResponse::Success(json!({
                 "file": path_str, "line": line, "column": column,
                 "backend": "native_lsp",
                 "references": locs.iter().map(|l| json!({
@@ -1417,7 +1572,7 @@ pub(crate) fn handler_find_references(args: &Value) -> Value {
                     "column": l.range_start_char,
                 })).collect::<Vec<_>>(),
                 "count": locs.len(),
-            });
+            }));
         }
         _ => {}
     }
@@ -1442,8 +1597,12 @@ pub(crate) fn handler_find_references(args: &Value) -> Value {
             "count": refs.len(),
         })
     }) {
-        Ok(v) => v,
-        Err(e) => json!({"error": format!("cannot access graph: {}", e)}),
+        Ok(v) => ToolResponse::Success(v),
+        Err(e) => ToolResponse::Degraded {
+            guidance: format!("cannot access graph: {}", e),
+            fallback: "Ensure the project has been analyzed first".into(),
+            details: json!({}),
+        },
     }
 }
 
@@ -1466,14 +1625,18 @@ pub(crate) fn resolve_tool_prepare(args: &Value) -> Result<(String, String, Stri
     Ok((path_str, source, ext))
 }
 
-pub(crate) fn handler_dataflow(args: &Value) -> Value {
+pub(crate) fn handler_dataflow(args: &Value) -> ToolResponse {
     let files: Vec<String> = args
         .get("files")
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     if files.is_empty() {
-        return json!({"error": "files is required and must be a non-empty array"});
+        return ToolResponse::Degraded {
+            guidance: "files is required and must be a non-empty array".into(),
+            fallback: "Provide an array of file paths to trace dataflow".into(),
+            details: json!({}),
+        };
     }
     let root = project_root();
     let paths: Vec<PathBuf> = files
@@ -1506,5 +1669,5 @@ pub(crate) fn handler_dataflow(args: &Value) -> Value {
             Err(e) => json!({"file": r.file, "error": e}),
         })
         .collect();
-    json!({"results": json_results})
+    ToolResponse::Success(json!({"results": json_results}))
 }

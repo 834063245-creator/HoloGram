@@ -4,6 +4,7 @@
 // Tool registry — schema definitions + handler dispatch for all 27 hologram_* tools.
 // Separated from MCP transport so Tauri / TCP / CLI can share the same tool layer.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -71,16 +72,37 @@ impl ToolRegistry {
         &REGISTRY
     }
 
+    const DEFAULT_MCP_TOOLS: &[&str] = &[
+        "explore_deps",
+        "search_symbols",
+        "inspect_symbol",
+        "preflight_check",
+        "fragile_modules",
+        "detect_cycles",
+    ];
+
+    fn get_active_tool_names() -> Vec<String> {
+        match std::env::var("HOLOGRAM_MCP_TOOLS") {
+            Ok(val) if val == "*" => all_schemas().iter().map(|s| s.name.to_string()).collect(),
+            Ok(val) => val.split(',').map(|s| s.trim().to_string()).collect(),
+            Err(_) => Self::DEFAULT_MCP_TOOLS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
     pub fn tools_list(&self) -> Vec<Value> {
-        all_schemas().iter().map(|s| s.mcp_value()).collect()
+        let active: HashSet<String> = Self::get_active_tool_names().into_iter().collect();
+        all_schemas().iter()
+            .filter(|s| active.contains(s.name))
+            .map(|s| s.mcp_value())
+            .collect()
     }
 
     pub fn get_schema(&self, name: &str) -> Option<&'static ToolSchema> {
         all_schemas().iter().find(|s| s.name == name)
     }
 
-    pub fn dispatch(name: &str, args: &Value) -> Value {
-        match name {
+    pub fn dispatch(name: &str, args: &Value, id: &Value) -> Value {
+        let resp = match name {
             "get_neighbors" => handlers::handler_neighbors(args),
             "trace_impact" => handlers::handler_impact(args),
             "find_dep_path" => handlers::handler_path(args),
@@ -111,8 +133,13 @@ impl ToolRegistry {
             "infer_type" => handlers::handler_resolve_type(args),
             "find_implementations" => handlers::handler_find_implementations(args),
             "find_references" => handlers::handler_find_references(args),
-            _ => json!({"error": format!("Tool not found: {}", name)}),
-        }
+            _ => return ToolResponse::Degraded {
+                guidance: format!("Tool not found: {}", name),
+                fallback: "Check tools/list for available tools".into(),
+                details: json!({}),
+            }.to_mcp_value(id),
+        };
+        resp.to_mcp_value(id)
     }
 }
 
@@ -122,6 +149,9 @@ impl ToolRegistry {
 
 
 mod handlers;
+mod response;
+pub(crate) use response::ToolResponse;
+pub mod staleness;
 pub(crate) fn get_str(args: &Value, keys: &[&str]) -> String {
     for key in keys {
         if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
@@ -252,6 +282,7 @@ pub(crate) fn edge_to_value(e: &Edge) -> Value {
         "coupling_depth": e.coupling_depth,
         "cross_file": e.cross_file,
         "temporal_delay_sec": e.temporal_delay_sec,
+        "metadata": e.metadata,
     })
 }
 
@@ -583,16 +614,19 @@ mod tests {
 
     #[test]
     fn test_dispatch_unknown_tool() {
-        let result = ToolRegistry::dispatch("nonexistent_tool", &json!({}));
-        assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("not found"));
+        let dummy_id = json!(1);
+        let result = ToolRegistry::dispatch("nonexistent_tool", &json!({}), &dummy_id);
+        // Degraded response is still a success (no error field in JSON-RPC)
+        assert!(result.get("result").is_some(), "unknown tool should return degraded result, not error");
     }
 
     #[test]
     fn test_all_tools_dispatchable() {
+        let dummy_id = json!(1);
         let schemas = all_schemas();
         for schema in schemas {
             let args = json!({});
-            let result = ToolRegistry::dispatch(schema.name, &args);
+            let result = ToolRegistry::dispatch(schema.name, &args, &dummy_id);
             assert!(result.is_object(), "dispatch({}) must return a JSON object", schema.name);
         }
     }
@@ -618,14 +652,23 @@ mod tests {
 
     #[test]
     fn test_missing_required_params_error() {
-        let result = ToolRegistry::dispatch("get_neighbors", &json!({}));
-        assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("node_id"));
-        let result = ToolRegistry::dispatch("find_dep_path", &json!({}));
-        assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("from_id"));
-        let result = ToolRegistry::dispatch("coupling_report", &json!({}));
-        assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("module_name"));
-        let result = ToolRegistry::dispatch("search_symbols", &json!({}));
-        assert!(result.get("error").and_then(|v| v.as_str()).unwrap().contains("query"));
+        let dummy_id = json!(1);
+        let result = ToolRegistry::dispatch("get_neighbors", &json!({}), &dummy_id);
+        // Degraded result wraps in JSON-RPC success format with _isDegraded flag
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("node_id") || text.contains("nodeId"),
+            "get_neighbors should degrade on missing nodeId, got: {}", text);
+        let result = ToolRegistry::dispatch("find_dep_path", &json!({}), &dummy_id);
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("from_id") || text.contains("fromId"),
+            "find_dep_path should degrade on missing params");
+        let result = ToolRegistry::dispatch("coupling_report", &json!({}), &dummy_id);
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("module_name") || text.contains("module"),
+            "coupling_report should degrade on missing module_name");
+        let result = ToolRegistry::dispatch("search_symbols", &json!({}), &dummy_id);
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("query"), "search_symbols should degrade on missing query");
     }
 
     #[test]

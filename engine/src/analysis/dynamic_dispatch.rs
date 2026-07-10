@@ -138,6 +138,7 @@ fn walk_js_ts_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, sour
                             cross_file: false,
                             temporal_delay_sec: Some(0.0),
                             lsp_resolved: false,
+                            metadata: None,
                         };
                         graph.add_edge(edge);
                         added += 1;
@@ -301,6 +302,7 @@ fn walk_py_dispatch_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree
                             cross_file: false,
                             temporal_delay_sec: Some(0.0),
                             lsp_resolved: false,
+                            metadata: None,
                         };
                         graph.add_edge(edge);
                         added += 1;

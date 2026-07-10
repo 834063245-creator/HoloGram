@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
+use crate::engine;
+
 // All graph access goes through Engine (engine::engine_* functions).
 // GRAPH_STORE / CACHED_GRAPH / ANALYZE_LOCK / with_graph_store — all removed.
 
@@ -42,6 +44,39 @@ pub fn parse_serve_args() -> Option<Option<String>> {
     if is_serve { Some(project_root) } else { None }
 }
 
+
+fn has_active_index() -> bool {
+    engine::engine_read(|idx| idx.node_count() > 0).unwrap_or(false)
+}
+
+const HOLOGRAM_INSTRUCTIONS_INDEXED: &str = r#"
+# HoloGram — 3D code dependency graph with query tools
+
+HoloGram has pre-parsed this project into a dependency graph. Use these tools
+instead of grep/Read for structural questions — the graph already did that work.
+
+## Primary tool: hologram_explore_deps
+
+Use `hologram_explore_deps` for almost any code question. Give it symbol names
+or a natural-language question. It returns:
+- The call path between named symbols (including dynamic-dispatch hops)
+- Verbatim, line-numbered source (same format as Read — safe to Edit from)
+- Blast radius of what depends on them
+- Architecture alerts (cycles, fragile modules, concurrency)
+
+## Anti-patterns
+
+- Don't re-verify explore_deps results with grep — they come from full AST parse
+- Don't Read files that explore_deps already returned source for
+- Don't grep/glob first to find symbols — search_symbols + explore_deps does it
+"#;
+
+const HOLOGRAM_INSTRUCTIONS_NO_INDEX: &str = r#"
+# HoloGram — 3D code dependency graph
+
+No project index loaded yet. Use `hologram_analyze_project` to create one,
+or open a project folder to auto-analyze.
+"#;
 
 // ═══════════════════════════════════════════════════════════════
 // MCP Server
@@ -138,32 +173,16 @@ impl McpServer {
         json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
     }
 
-    fn tool_result(id: &Value, data: Value) -> Value {
-        let text = serde_json::to_string(&data).unwrap_or_default();
-        McpServer::success_response(id, json!({
-            "content": [{ "type": "text", "text": text }],
-            "_meta": {
-                "generator": "HoloGram v4.0",
-                "license": "MIT",
-                "copyright": "Copyright (c) 2026 Wenbing Jing"
-            }
-        }))
-    }
-
-    /// Like tool_result but detects embedded {"error": "..."} in closures
-    /// and converts them to proper JSON-RPC error responses.
-    fn result_or_error(id: &Value, data: Value) -> Value {
-        if let Some(msg) = data.get("error").and_then(|e| e.as_str()) {
-            McpServer::error_response(id, -32603, msg)
-        } else {
-            McpServer::tool_result(id, data)
-        }
-    }
-
     // ── initialize ──
 
     fn handle_initialize(&self, id: &Value) -> Value {
         info!("MCP initialize handshake");
+        let instructions = if has_active_index() {
+            HOLOGRAM_INSTRUCTIONS_INDEXED
+        } else {
+            HOLOGRAM_INSTRUCTIONS_NO_INDEX
+        };
+
         McpServer::success_response(id, json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
@@ -175,7 +194,8 @@ impl McpServer {
                 "author": "Wenbing Jing",
                 "license": "MIT",
                 "homepage": "https://github.com/834063245-creator/HoloGram"
-            }
+            },
+            "instructions": instructions
         }))
     }
 
@@ -193,8 +213,18 @@ impl McpServer {
         let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        let result = crate::tools::ToolRegistry::dispatch(tool_name, &args);
-        Self::result_or_error(id, result)
+        let mut result = crate::tools::ToolRegistry::dispatch(tool_name, &args, id);
+
+        // Inject staleness banner when pending file changes exist
+        if let Some(banner) = crate::tools::staleness::check_staleness(&result) {
+            if let Some(obj) = result.as_object_mut() {
+                if let Some(res) = obj.get_mut("result").and_then(|r| r.as_object_mut()) {
+                    res.insert("_stalenessBanner".into(), json!(banner));
+                }
+            }
+        }
+
+        result
     }
 }
 
@@ -259,10 +289,10 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert!(tools.len() >= 30, "at least 30 tools defined");
+        assert!(tools.len() >= 6, "at least 6 default tools exposed");
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-        assert!(names.contains(&"get_neighbors"));
-        assert!(names.contains(&"analyze_project"));
+        assert!(names.contains(&"explore_deps"), "default tools must include explore_deps");
+        assert!(names.contains(&"search_symbols"), "default tools must include search_symbols");
     }
 
     #[test]
@@ -271,7 +301,9 @@ mod tests {
         let req = serde_json::to_string(&make_tool_call("nonexistent_tool", json!({}), 2)).unwrap();
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32603);
+        // Unknown tool returns a Degraded response (success with _isDegraded flag)
+        assert!(v.get("result").is_some(), "unknown tool should return degraded success");
+        assert!(v.get("error").is_none(), "unknown tool should NOT be a JSON-RPC error");
     }
 
     // ── Tool: timeline ──

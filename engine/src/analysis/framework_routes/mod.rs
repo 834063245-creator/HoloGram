@@ -323,8 +323,9 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usiz
             kind: EdgeKind::Calls,
             coupling_depth: 1,
             cross_file: false,
-            temporal_delay_sec: None,
+                        temporal_delay_sec: None,
             lsp_resolved: false,
+            metadata: None,
         };
 
         graph.add_node(route_node);
