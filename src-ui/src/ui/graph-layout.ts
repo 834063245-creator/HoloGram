@@ -153,6 +153,106 @@ async function simulateForces(
 // are placed in a spiral-arm pattern — hubs at center, leaves in arms.
 // O(n) total, no iterations. Game-engine-style procedural generation.
 
+/**
+ * Local layout relaxation for incremental updates.
+ * Runs a short force simulation on a subgraph (new nodes + their neighbors),
+ * treating existing nodes as anchored (they don't move). Call after
+ * `applyGraphDiff` appends new nodes.
+ *
+ * @param allPos - All node positions (Float32Array, n*3). Modified in-place.
+ * @param n - Total node count.
+ * @param allPairs - All edge pairs (source, target indices).
+ * @param affectedIndices - Indices of nodes that need layout (new + neighbors).
+ * @param anchoredIndices - Indices of existing nodes to keep fixed.
+ * @param signal - Optional abort signal.
+ */
+export async function relaxNewNodes(
+  allPos: Float32Array,
+  n: number,
+  allPairs: [number, number][],
+  affectedIndices: Set<number>,
+  anchoredIndices: Set<number>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const affected = [...affectedIndices];
+  if (affected.length === 0) return;
+
+  // Build local index map: global idx → local idx
+  const gl2loc = new Map<number, number>();
+  affected.forEach((gi, li) => gl2loc.set(gi, li));
+
+  const m = affected.length;
+  const shellR = Math.cbrt(Math.max(n, 10)) * 5; // small shell for local relax
+  const vel = new Float32Array(m * 3);
+  // Copy current positions (we modify allPos in-place, but use local pos for sim)
+  const pos = new Float32Array(m * 3);
+  for (let li = 0; li < m; li++) {
+    const gi = affected[li];
+    pos[li * 3] = allPos[gi * 3];
+    pos[li * 3 + 1] = allPos[gi * 3 + 1];
+    pos[li * 3 + 2] = allPos[gi * 3 + 2];
+  }
+
+  // Build local edge pairs (only edges where both nodes are in affected set)
+  const localPairs: [number, number][] = [];
+  for (const [s, t] of allPairs) {
+    const ls = gl2loc.get(s), lt = gl2loc.get(t);
+    if (ls !== undefined && lt !== undefined) localPairs.push([ls, lt]);
+  }
+
+  // Light parameters — short run, strong damping
+  const rep = 300, att = 0.03, damp = 0.55;
+  const maxIter = 8; // few iterations — layout should be close already
+  const REP_CAP = shellR * 6;
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    if (signal?.aborted) return;
+
+    // Repulsion (all local pairs)
+    for (let i = 0; i < m; i++) {
+      for (let j = i + 1; j < m; j++) {
+        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+        const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const f = Math.min(rep / (dist * dist + 1), REP_CAP);
+        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
+        vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
+      }
+    }
+    // Attraction (local edges)
+    for (const [s, t] of localPairs) {
+      const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
+      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      const f = Math.min(dist * att, REP_CAP);
+      vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
+      vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
+    }
+    // Damping + update
+    for (let i = 0; i < m * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+    // Zero vel for anchored nodes → no movement
+    for (let li = 0; li < m; li++) {
+      const gi = affected[li];
+      if (anchoredIndices.has(gi)) { vel[li * 3] = 0; vel[li * 3 + 1] = 0; vel[li * 3 + 2] = 0; }
+    }
+    // NaN guard
+    if (iter % 3 === 0) {
+      for (let i = 0; i < m * 3; i++) {
+        if (!isFinite(pos[i])) { pos[i] = allPos[affected[Math.floor(i / 3)] * 3 + (i % 3)]; vel[i] = 0; }
+      }
+    }
+    if (iter % 2 === 1 && iter < maxIter - 1) {
+      await new Promise<void>(r => setTimeout(r, 0));
+    }
+  }
+
+  // Write back new positions for affected nodes
+  for (let li = 0; li < m; li++) {
+    const gi = affected[li];
+    allPos[gi * 3] = pos[li * 3];
+    allPos[gi * 3 + 1] = pos[li * 3 + 1];
+    allPos[gi * 3 + 2] = pos[li * 3 + 2];
+  }
+}
+
 export function spiralGalaxies(
   pos: Float32Array,
   n: number,

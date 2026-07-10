@@ -110,6 +110,9 @@ export class Agent {
   private _subagentDepth = 0;
   private static readonly MAX_SUBAGENT_DEPTH = 3;
 
+  // Goal loop safety: max iterations before forced termination
+  private static readonly MAX_GOAL_ITERATIONS = 20;
+
   // PreToolUse hooks — enrich tool results with graph context
   private hooks: HookRegistry | null = null;
 
@@ -492,7 +495,7 @@ ${goal}
     this.session.push({ role: 'user', content: goalPrompt });
     this.sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
 
-    for (let iter = 0; !signal.aborted; iter++) {
+    for (let iter = 0; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
       bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
 
       try {
@@ -518,10 +521,14 @@ ${goal}
       }
 
       // Goal in progress — auto-continue
+      const poolSummary = this._subAgentPool?.summary() || '';
+      const pendingHint = this._subAgentPool && this._subAgentPool.runningCount > 0
+        ? `\n⚠️ 仍有 ${this._subAgentPool.runningCount} 个子Agent运行中，等待结果到达后再规划下一步。`
+        : '';
       this.session.push({
         role: 'user',
         content: `<system-reminder>
-目标未完成。已完成 ${iter + 1} 轮。
+目标未完成。已完成 ${iter + 1}/${Agent.MAX_GOAL_ITERATIONS} 轮。${pendingHint}
 
 如果目标尚未达成: 规划下一步（不重复已完成步骤）→ agent_spawn 委派 → 验证结果。
 如果目标已全部达成: 输出 [GOAL_COMPLETE] 并附摘要。
@@ -531,6 +538,11 @@ ${goal}
 </system-reminder>`,
       });
       this.sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 第 ${iter + 1} 轮完成，继续…` });
+    }
+    // Max iterations reached — forced termination
+    if (!signal.aborted) {
+      this.sink({ kind: EventKind.Notice, level: 'warn', text: `[目标] 达到最大迭代 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止` });
+      return { status: 'failed', summary: `达到最大迭代次数 ${Agent.MAX_GOAL_ITERATIONS}。请拆分目标为更小单元。` };
     }
 
     return { status: 'aborted', summary: '目标被中断' };
@@ -1395,6 +1407,7 @@ ${goal}
     prompt: string,
     onProgress?: (chunk: string) => void,
           mode: 'fork' | 'fresh' = 'fresh',
+    toolAllowlist?: string[] | null,
     ): Promise<{ text: string; err?: string }> {
       // Depth-based recursion guard
       if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
@@ -1406,7 +1419,7 @@ ${goal}
     // mode if isolation tool is unavailable or creation fails.
     let isolationId: string | null = null;
     if (mode === 'fork' && !!this.tools.get('agent_isolation_create')) {
-      isolationId = `agent-${Date.now()}`;
+      isolationId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const createT = this.tools.get('agent_isolation_create');
         if (createT) await createT.execute({ agent_id: isolationId });
@@ -1415,10 +1428,21 @@ ${goal}
       }
     }
 
-    // Clone all tools from parent — sub-agent has full agency
+    // Clone tools from parent — apply allowlist filter if specified
     const subTools = new ToolRegistry();
+    const allowed = toolAllowlist && toolAllowlist.length > 0
+      ? new Set(toolAllowlist)
+      : null;
     for (const t of this.tools.all()) {
-      subTools.register(t);
+      if (!allowed || allowed.has(t.name())) {
+        subTools.register(t);
+      }
+    }
+    if (allowed) {
+      // Auto-remove recursive-spawn tools when allowlist is present (safer default)
+      subTools.unregister('agent_spawn');
+      subTools.unregister('agent_message');
+      subTools.unregister('agent_stop_all');
     }
 
     let subSystem: string;
@@ -1449,7 +1473,7 @@ ${prompt}
 4. **直接给结论** — 不要反问、不要建议下一步、不要写论文
 5. **验证** — 改完代码后跑编译/测试确认没炸
 
-## 父Agent近期上下文
+## 父Agent近期上下文（⚠️ 快照 — 可能已过期。操作前自行验证文件当前状态）
 ${recentContext}`;
     } else {
       // Fresh mode: also remove recursive spawn tools + job tools
@@ -1505,28 +1529,44 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     } finally {
       // Auto-diff + merge/discard based on success
       if (isolationId) {
+        const diffT = this.tools.get('agent_isolation_diff');
+        const mergeT = this.tools.get('agent_isolation_merge');
+        const discardT = this.tools.get('agent_isolation_discard');
         try {
-          const diffT = this.tools.get('agent_isolation_diff');
-          const mergeT = this.tools.get('agent_isolation_merge');
-          const discardT = this.tools.get('agent_isolation_discard');
           if (diffT) {
             const diffResult = await diffT.execute({ agent_id: isolationId });
+            let mergeSucceeded = false;
+            if (subAgentSucceeded && mergeT) {
+              try {
+                await mergeT.execute({ agent_id: isolationId });
+                mergeSucceeded = true;
+              } catch (mergeErr: any) {
+                // Merge conflict — inject error notification to parent
+                const errMsg = mergeErr?.message || String(mergeErr);
+                log.warn('agent', `merge conflict for ${isolationId}: ${errMsg}`);
+                this.injectTaskNotification(
+                  `❌ 子Agent "${description}" 的合并失败 (冲突): ${errMsg}。变更已保存到 diff，需手动处理。`,
+                );
+                bus.emit('agent:sub-merge-failed', {
+                  agentId: isolationId,
+                  description,
+                  error: errMsg,
+                  diff: diffResult,
+                });
+              }
+            }
             bus.emit('agent:sub-isolation-diff', {
               agentId: isolationId,
               diff: diffResult,
-              merged: subAgentSucceeded,
-              discarded: !subAgentSucceeded,
+              merged: mergeSucceeded,
+              discarded: !subAgentSucceeded || !mergeSucceeded,
             });
-            if (subAgentSucceeded && mergeT) {
-              // Success → merge changes into main worktree
-              await mergeT.execute({ agent_id: isolationId });
-            }
           }
           // Always discard the isolation worktree after diff
           if (discardT) {
             await discardT.execute({ agent_id: isolationId });
           }
-        } catch { /* best effort */ }
+        } catch { /* best effort — cleanup */ }
       }
     }
   }

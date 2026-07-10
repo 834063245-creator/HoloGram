@@ -1166,6 +1166,7 @@ export type SubAgentSpawner = (
   prompt: string,
   onProgress?: (chunk: string) => void,
   mode?: 'fork' | 'fresh',
+  toolAllowlist?: string[] | null,
 ) => Promise<{ text: string; err?: string }>;
 
 export function createSubAgentTool(
@@ -1191,6 +1192,11 @@ export function createSubAgentTool(
           type: 'string',
           description: 'Omit to fork (inherit full context — DEFAULT). Set to "fresh" for a clean-slate sub-agent with no parent context.',
         },
+        tool_allowlist: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional list of tool names the sub-agent is allowed to use. If omitted, all tools are available. Example: ["read_file", "search_content", "inspect_symbol"] for a read-only research agent.',
+        },
       },
       required: ['description', 'prompt'],
     }),
@@ -1199,6 +1205,7 @@ export function createSubAgentTool(
       const description = (args['description'] as string) || '子任务';
       const prompt = (args['prompt'] as string) || '';
       const subagentType = args['subagent_type'] as string | undefined;
+      const toolAllowlist = args['tool_allowlist'] as string[] | undefined;
       if (!prompt) return '(agent_spawn: prompt is required)';
       const mode = subagentType ? 'fresh' : 'fork';
       const callId = (args['_callId'] as string) || `sub_${Date.now()}`;
@@ -1206,13 +1213,13 @@ export function createSubAgentTool(
             // G2: async spawn via pool — fire-and-forget, parent doesn't block
       if (pool) {
         // Emit spawn event for UI
-        bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
+        bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode, toolAllowlist });
 
         // Register done callback: emit UI event + inject result as task-notification
         const spawnId = pool.spawn(
           description,
           async (onMsg) => {
-            const result = await spawner(description, prompt, onMsg, mode);
+            const result = await spawner(description, prompt, onMsg, mode, toolAllowlist ?? null);
             return result;
           },
           (chunk) => {
@@ -1230,7 +1237,7 @@ export function createSubAgentTool(
       // Fallback: synchronous spawn (legacy behavior, no pool)
       const startTime = performance.now();
       let stepCount = 0;
-      bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
+      bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode, toolAllowlist });
 
       const wrappedProgress = (chunk: string) => {
         stepCount++;
@@ -1238,7 +1245,7 @@ export function createSubAgentTool(
         bus.emit('agent:sub-progress', { parentToolId: callId, text: chunk });
       };
 
-      const result = await spawner(description, prompt, wrappedProgress, mode);
+      const result = await spawner(description, prompt, wrappedProgress, mode, toolAllowlist ?? null);
       const elapsed = Math.round(performance.now() - startTime);
 
       bus.emit('agent:sub-done', {

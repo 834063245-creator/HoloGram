@@ -1977,9 +1977,15 @@ export class ChatPanel {
         if (dist > 40) this._userScrolledUp = true;
       }, 150);
     });
+    // scrollend: fires after user finishes scrolling (native event, not from JS programmatic scroll)
+    this.msgList.addEventListener('scrollend', () => {
+      const dist = this.msgList.scrollHeight - this.msgList.scrollTop - this.msgList.clientHeight;
+      if (dist > 40) this._userScrolledUp = true;
+      else this._userScrolledUp = false;
+    });
     // Use scroll event only for the "back at bottom → resume" direction
     this.msgList.addEventListener('scroll', () => {
-      if (!this._userScrolledUp) return; // nothing to resume
+      if (!this._userScrolledUp) return;
       const dist = this.msgList.scrollHeight - this.msgList.scrollTop - this.msgList.clientHeight;
       if (dist <= 40) this._userScrolledUp = false;
     });
@@ -2825,38 +2831,56 @@ export class ChatPanel {
 
   private _doSyncMessagesToDOM(): void {
     const callbacks = this._renderCallbacks();
-    const currentChildCount = this.msgList.children.length;
     const msgCount = this.messages.length;
+
+    // Count non-injected children (skip perm cards + task notifications)
+    let msgChildCount = 0;
+    for (const child of this.msgList.children) {
+      if (!(child instanceof Element && (child.classList.contains('perm-inline-card') || child.classList.contains('task-notification')))) {
+        msgChildCount++;
+      }
+    }
 
     // If only the last message changed (streaming), re-render just that
     if (
-      msgCount === currentChildCount &&
+      msgCount === msgChildCount &&
       msgCount > 0 &&
       this._streamingAssistantId
     ) {
       const lastIdx = msgCount - 1;
       const lastMsg = this.messages[lastIdx];
       if (lastMsg.role === 'assistant' && lastMsg._id === this._streamingAssistantId) {
-        const oldEl = this.msgList.children[lastIdx] as HTMLElement;
-        const el = renderMessage(lastMsg, callbacks);
-        el.dataset.messageId = lastMsg._id;
-        // Keep reasoning blocks open if they were open before
-        const wasOpen = oldEl.querySelector('.msg-reasoning-open');
-        if (wasOpen) {
-          for (const block of el.querySelectorAll('.msg-reasoning')) {
-            block.querySelector('.msg-reasoning-content')?.classList.add('msg-reasoning-open');
-            const tgl = block.querySelector('.msg-reasoning-toggle');
-            if (tgl) tgl.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
-          }
+        // Find the last non-injected DOM child
+        let domIdx = this.msgList.children.length - 1;
+        while (domIdx >= 0 && (this.msgList.children[domIdx] as Element).classList?.contains('perm-inline-card')) {
+          domIdx--;
         }
-        oldEl.replaceWith(el);
-        this.scrollBottom();
-        return;
+        if (domIdx >= 0) {
+          const oldEl = this.msgList.children[domIdx] as HTMLElement;
+          const el = renderMessage(lastMsg, callbacks);
+          el.dataset.messageId = lastMsg._id;
+          // Keep reasoning blocks open if they were open before
+          const wasOpen = oldEl.querySelector('.msg-reasoning-open');
+          if (wasOpen) {
+            for (const block of el.querySelectorAll('.msg-reasoning')) {
+              block.querySelector('.msg-reasoning-content')?.classList.add('msg-reasoning-open');
+              const tgl = block.querySelector('.msg-reasoning-toggle');
+              if (tgl) tgl.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
+            }
+          }
+          oldEl.replaceWith(el);
+          this.scrollBottom();
+          return;
+        }
       }
     }
 
+    // Snapshot scroll position before rebuild — restore if user is scrolled up
+    const savedScrollTop = this.msgList.scrollTop;
+    const savedScrollHeight = this.msgList.scrollHeight;
+    const wasAtBottom = (savedScrollHeight - savedScrollTop - this.msgList.clientHeight) <= 40;
+
     // Full rebuild — preserve injected siblings (permission cards) across re-render.
-    // Streaming executor (Window B) can trigger this while a perm card is showing.
     const existing = Array.from(this.msgList.children);
 
     // Collect injected elements (perm cards, task notifications) to preserve
@@ -2864,7 +2888,7 @@ export class ChatPanel {
     for (let i = 0; i < existing.length; i++) {
       const el = existing[i];
       if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification')) {
-        injects.push({ el, afterIdx: i - 1 }); // re-insert after the preceding message
+        injects.push({ el, afterIdx: i - 1 });
         existing.splice(i, 1);
         i--;
       }
@@ -2882,11 +2906,11 @@ export class ChatPanel {
       }
     }
 
-    // Remove excess children (skip injects — already removed above)
+    // Remove excess children (skip injects)
     while (this.msgList.children.length > msgCount) {
       const last = this.msgList.lastChild;
       if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification'))) {
-        break; // don't remove injects
+        break;
       }
       last?.remove();
     }
@@ -2897,7 +2921,15 @@ export class ChatPanel {
       this.msgList.insertBefore(el, ref);
     }
 
-    this.scrollBottom();
+    // Restore scroll position if user was scrolled up; otherwise scroll to bottom
+    if (wasAtBottom || !this._userScrolledUp) {
+      this.scrollBottom();
+    } else {
+      // Restore approximate scroll position — new content may have different heights
+      const newHeight = this.msgList.scrollHeight;
+      const offset = newHeight - savedScrollHeight;
+      this.msgList.scrollTop = Math.max(0, savedScrollTop + offset);
+    }
   }
 
   // ── Throttled rAF sync — avoids O(n²) re-render on high-frequency streams ──
@@ -3731,6 +3763,9 @@ export class ChatPanel {
 
     // ── Slash panel: create once, outside footerEl so innerHTML can't kill it ──
     this._setupSlashPanel();
+    // Harden: force-hide panel during footer rebuild to prevent ghost artifacts
+    // from leftover state when the panel was open during a mode transition.
+    this._hideSlashPanel();
     const panel = this._slashPanel!;
 
     // Model badge click → open settings
@@ -3990,12 +4025,12 @@ export class ChatPanel {
   }
 
   private scrollBottom(): void {
-    // Only suppress auto-scroll during active text streaming, not during
-    // tool execution or between turns.  Otherwise one manual scroll-up
-    // during a long tool call freezes the view for the rest of the turn.
-    if (this._userScrolledUp && this._streamingAssistantId) return;
+    // Force-scroll: always go to bottom unless the user has manually scrolled up.
+    // Only check _userScrolledUp — no _streamingAssistantId gate. Tool execution
+    // events also trigger DOM rebuilds and we must not fight the user's scroll.
+    if (this._userScrolledUp) return;
     requestAnimationFrame(() => {
-      if (this._userScrolledUp && this._streamingAssistantId) return;
+      if (this._userScrolledUp) return;
       this.msgList.scrollTop = this.msgList.scrollHeight;
     });
   }
@@ -4284,10 +4319,11 @@ export class ChatPanel {
     this._highlightSlashItem(0);
   }
 
-  /** Hide the slash panel. */
+  /** Hide the slash panel — removes open class AND clears DOM to prevent ghost artifacts. */
   private _hideSlashPanel(): void {
     if (!this._slashPanel) return;
     this._slashPanel.classList.remove('open');
+    this._slashPanel.innerHTML = '';
     this._slashVisibleCmds = [];
     this._slashNavIdx = 0;
   }
@@ -4341,6 +4377,10 @@ export class ChatPanel {
       const query = textBefore.slice(slashIdx + 1);
       if (query.length > 0) {
         this._showSlashPanel(query);
+      } else {
+        // Slash exists but no query (e.g. multi-slash paths like "a/b/" or just "/")
+        // Keep panel open but show all commands — prevents ghost-panel state
+        this._showSlashPanel('');
       }
     }
   }
