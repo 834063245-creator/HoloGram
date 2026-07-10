@@ -189,6 +189,23 @@ export class StreamingToolExecutor {
       }
     }
 
+    // ── Architecture gate: HIGH risk → return blocked result, don't execute ──
+    if (preflightWarning && preflightWarning.includes('风险等级: HIGH')) {
+      const forceGate = args['_forceGate'] === true || args['_forceGate'] === 'true';
+      if (!forceGate) {
+        const blockedResult: PendingResult = {
+          call,
+          output: preflightWarning + '\n\n' +
+            '🚫 架构门禁已阻止此操作。\n' +
+            '使用 trace_impact 查看完整波及范围。\n' +
+            '确认安全后，带 _forceGate: true 重试同一工具调用。',
+          truncated: false,
+        };
+        this.emitResult(call, tool, blockedResult);
+        return blockedResult;
+      }
+    }
+
     // ponytail: inject _callId for agent_spawn so sub-agent events can correlate
     if (call.name === 'agent_spawn') {
       args['_callId'] = call.id;
