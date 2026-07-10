@@ -19,6 +19,7 @@ function getFontScale(): number {
 }
 import { startLsp, didOpen, didChange, didClose, stopAllLsp, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
 import { ChatPanel } from './chat';
+import { stripLineNumbers } from './chat-session';
 import { FileTranslator } from './file-translator';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -771,7 +772,7 @@ export class FileViewer {
     try {
       const raw = await invoke<string>('read_file_content', { filePath: filePath });
       // ponytail: read_file_content returns cat -n format. Strip before passing to Monaco/LSP.
-      const content = ChatPanel.stripLineNumbers(raw);
+      const content = stripLineNumbers(raw);
 
       // Dispose temp loading model
       loadingModel.dispose();
