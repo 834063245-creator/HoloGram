@@ -43,4 +43,7 @@ export interface ChatAgentHandle {
 
   /** 批量停止所有子Agent */
   stopAllSubAgents(): string[];
+
+  /** 当前正在运行的子Agent数量 */
+  runningSubAgentCount(): number;
 }
