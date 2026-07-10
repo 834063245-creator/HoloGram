@@ -852,7 +852,8 @@ pub(crate) fn is_private_ip(host: &str) -> bool {
         }
         IpAddr::V6(v6) => {
             let segs = v6.segments();
-                        segs[0] & 0xffc0 == 0xfe80
+            // link-local (fe80::/10) or ULA (fc00::/7 — includes fd00::/8)
+            (segs[0] & 0xffc0 == 0xfe80) || (segs[0] & 0xfe00 == 0xfc00)
         }
     }
 }

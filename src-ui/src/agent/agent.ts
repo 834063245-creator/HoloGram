@@ -501,9 +501,13 @@ ${goal}
       try {
         await this.runLoop(signal);
       } catch (e: any) {
+        this._saveSession(); // save before exit on error
         if (e?.message === 'aborted') return { status: 'aborted', summary: '被中断' };
         return { status: 'failed', summary: `执行异常: ${e?.message || e}` };
       }
+
+      // Persist after each successful iteration — survives crash between rounds
+      this._saveSession();
 
       const last = this._lastAssistantContent();
       if (!last) {

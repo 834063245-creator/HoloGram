@@ -212,6 +212,9 @@ pub(crate) async fn search_code(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
+/// Alias for search_code — identical implementation, separate Tauri command
+/// for tool name compatibility (Agent tools: search_content, search_code).
+/// If search_code's behavior changes, this inherits it automatically.
 pub(crate) async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
     max_results: Option<usize>, use_regex: Option<bool>,
