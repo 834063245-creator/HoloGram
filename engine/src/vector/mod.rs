@@ -11,7 +11,7 @@
 
 mod embed;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 
