@@ -189,6 +189,11 @@ export class StreamingToolExecutor {
       }
     }
 
+    // ponytail: inject _callId for agent_spawn so sub-agent events can correlate
+    if (call.name === 'agent_spawn') {
+      args['_callId'] = call.id;
+    }
+
     try {
       const toolStart = performance.now();
       let output = '';
