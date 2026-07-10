@@ -1209,7 +1209,7 @@ export function createSubAgentTool(
         bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
 
         // Register done callback: emit UI event + inject result as task-notification
-        pool.spawn(
+        const spawnId = pool.spawn(
           description,
           async (onMsg) => {
             const result = await spawner(description, prompt, onMsg, mode);
@@ -1221,6 +1221,9 @@ export function createSubAgentTool(
           },
           callId,
         );
+        if (!spawnId) {
+          return `无法启动子Agent：已达到并发上限（${pool.runningCount} 个正在运行）。请等待已有子Agent完成后再试，或用 agent_stop_all 批量停止。`;
+        }
         return `Fork started — processing in background\n[task-notification: 子Agent "${description}" 已启动 (ID: ${callId})。结果将通过独立通知返回。]`;
       }
 

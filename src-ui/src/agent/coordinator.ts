@@ -36,6 +36,9 @@ interface PendingAgent {
 
 export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
 
+const DEFAULT_MAX_CONCURRENT = 5;
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 /** Pool of asynchronously running sub-agents.
  *  Spawn is fire-and-forget — parent agent doesn't block.
  *  Results are collected via pollCompleted() or injected as task-notifications. */
@@ -43,17 +46,41 @@ export class SubAgentPool {
   private agents = new Map<string, PendingAgent>();
   private completed: SubAgentHandle[] = [];
   private onDone: SubAgentDoneCallback | null = null;
+  private maxConcurrent: number;
+  private defaultTimeoutMs: number;
+  private timeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  constructor(maxConcurrent = DEFAULT_MAX_CONCURRENT, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
+    this.maxConcurrent = maxConcurrent;
+    this.defaultTimeoutMs = defaultTimeoutMs;
+  }
+
+  private _emitCount(): void {
+    bus.emit('agent:sub-pool-update', {
+      running: this.agents.size,
+      completed: this.completed.length,
+      maxConcurrent: this.maxConcurrent,
+      ids: [...this.agents.keys()],
+    });
+  }
 
   /** Register a callback invoked when ANY sub-agent completes. Used for UI events. */
   setOnDone(cb: SubAgentDoneCallback): void { this.onDone = cb; }
 
-  /** Fire-and-forget spawn. Returns the handle ID immediately. */
+  /** Fire-and-forget spawn. Returns the handle ID immediately.
+   *  Rejects if at maxConcurrent. Times out after defaultTimeoutMs. */
   spawn(
     description: string,
     runFn: (onMessage?: (msg: string) => void) => Promise<{ text: string; err?: string }>,
     onMessage?: (msg: string) => void,
     callId?: string,
-  ): string {
+    timeoutMs?: number,
+  ): string | null {
+    // Concurrency cap
+    if (this.agents.size >= this.maxConcurrent) {
+      return null; // caller should handle: return "busy" message to parent
+    }
+
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const handle: SubAgentHandle = {
       id,
@@ -66,7 +93,13 @@ export class SubAgentPool {
       this.agents.set(id, { handle, resolve, onMessage, callId });
     });
 
+    const cleanup = () => {
+      const t = this.timeouts.get(id);
+      if (t) { clearTimeout(t); this.timeouts.delete(id); }
+    };
+
     const finish = (text: string, err?: string) => {
+      cleanup();
       const pending = this.agents.get(id);
       if (pending) {
         if (err) {
@@ -80,10 +113,16 @@ export class SubAgentPool {
         this.completed.push(pending.handle);
         pending.resolve(text);
         this.agents.delete(id);
-        // Notify UI + registered callback
+        this._emitCount();
         if (this.onDone) this.onDone(pending.handle, pending.callId);
       }
     };
+
+    // Timeout
+    const ms = timeoutMs ?? this.defaultTimeoutMs;
+    this.timeouts.set(id, setTimeout(() => {
+      finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`);
+    }, ms));
 
     // Fire and forget — don't await
     runFn(onMessage).then(
@@ -91,6 +130,7 @@ export class SubAgentPool {
       (err) => finish('', String(err?.message || err)),
     );
 
+    this._emitCount();
     return id;
   }
 
@@ -113,11 +153,14 @@ export class SubAgentPool {
   stop(id: string): boolean {
     const pending = this.agents.get(id);
     if (!pending) return false;
+    const t = this.timeouts.get(id);
+    if (t) { clearTimeout(t); this.timeouts.delete(id); }
     pending.handle.status = SubAgentStatus.Stopped;
     pending.handle.error = 'stopped by user';
     this.completed.push(pending.handle);
     pending.resolve('');
     this.agents.delete(id);
+    this._emitCount();
     return true;
   }
 
@@ -125,14 +168,16 @@ export class SubAgentPool {
   stopAll(): string[] {
     const stopped: string[] = [];
     for (const [id, pending] of this.agents) {
+      const t = this.timeouts.get(id);
+      if (t) { clearTimeout(t); this.timeouts.delete(id); }
       pending.handle.status = SubAgentStatus.Stopped;
       pending.handle.error = 'stopped by user';
       this.completed.push(pending.handle);
       pending.resolve('');
       stopped.push(id);
-      if (this.onDone) this.onDone(pending.handle, pending.callId);
     }
     this.agents.clear();
+    this._emitCount();
     return stopped;
   }
 
