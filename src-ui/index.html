@@ -2246,8 +2246,9 @@
       box-shadow: 0 8px 28px rgba(0,0,0,0.45);
       display: none; flex-direction: column; gap: 2px;
       font-family: var(--font-body);
+      pointer-events: none; /* safety: never block input when closed */
     }
-    .chat-slash-panel.open { display: flex; }
+    .chat-slash-panel.open { display: flex; pointer-events: auto; }
     .sp-group { display: flex; flex-direction: column; gap: 1px; }
     .sp-group + .sp-group { margin-top: 2px; padding-top: 2px; border-top: 1px solid rgba(50,80,140,0.1); }
     .sp-group-title {

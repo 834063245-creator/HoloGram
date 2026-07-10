@@ -854,23 +854,24 @@ export class Workspace {
   doGraphUpdate(starGraph: StarGraph, checkPanel: CheckPanel, diff?: any): void {
     if (!this.graphData) return;
     const nodeCount = Array.isArray(this.graphData.nodes) ? this.graphData.nodes.length : Object.keys(this.graphData.nodes || {}).length;
-    // ponytail: incremental path — no clearGraph, no layout recalc, no camera reset
+    // ponytail: incremental path — no clearGraph, no camera reset, local layout relax on new nodes
     if (diff && starGraph.hasGraph) {
-      try {
-        starGraph.applyGraphDiff(diff, this.graphData);
+      starGraph.applyGraphDiff(diff, this.graphData).then(() => {
         this.onStatusChange?.(`已增量更新 (${nodeCount} 节点)`);
-      } catch (e) {
+        this.runCheck(checkPanel);
+      }).catch((e) => {
         console.error('[doGraphUpdate] incremental failed, falling back to full render:', e);
         starGraph.render(this.graphData);
         this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
         if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
-      }
+        this.runCheck(checkPanel);
+      });
     } else {
       starGraph.render(this.graphData);
       this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
       if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
+      this.runCheck(checkPanel);
     }
-    this.runCheck(checkPanel);
   }
 }
 

@@ -16,7 +16,7 @@ import { bus } from './events';
 import { shell } from './app-shell';
 import { t, getLang, setLang } from '../i18n';
 import { gpuLayout } from './gpu-layout';
-import { layout3D, fibonacciSphere, spiralGalaxies, repelCommunityCentroids } from './graph-layout';
+import { layout3D, fibonacciSphere, spiralGalaxies, repelCommunityCentroids, relaxNewNodes } from './graph-layout';
 import { NODE_COLORS, GLOW_COLORS, edgeColorByType, edgeOpacityByDepth, edgeWidthByDepth, hexToCSS, communityColor, BG_COLOR, TYPE_LABELS } from './graph-colors';
 import { createGlowTexture, createSpikeTexture } from './graph-textures';
 import { makeGlowPointMaterial, makeCoreFresnelMaterial, _GLSL_HSL2RGB } from './graph-shaders';
@@ -2292,7 +2292,7 @@ export class StarGraph {
    * no progressive reveal. Preserves hover/selected/blast/filter/diff state.
    * Falls back to full render() if no existing graph.
    */
-  applyGraphDiff(diff: GraphDiffJson, fullGraph: GraphJSON): void {
+  async applyGraphDiff(diff: GraphDiffJson, fullGraph: GraphJSON): Promise<void> {
     if (this._nodeCount === 0) { this.render(fullGraph); return; }
 
     // Exit fold mode — incremental + fold is visually inconsistent
@@ -2303,6 +2303,9 @@ export class StarGraph {
     for (let i = 0; i < this.graphNodes.length; i++) {
       if (!this._deadIndices.has(i) && this.graphNodes[i]) nodeIdxMap.set(this.graphNodes[i].id, i);
     }
+
+    const newIndices = new Set<number>(); // track which nodes are new
+    const neighborIndices = new Set<number>(); // neighbors of new nodes
 
     // 1. Removed nodes → mark dead
     for (const rn of diff.removed_nodes) {
@@ -2333,17 +2336,53 @@ export class StarGraph {
         this._rebuildNodeBuffers(Math.ceil(needed * 1.2));
       }
       this._appendNodes(diff.added_nodes, fullGraph, nodeIdxMap);
+      // Track new indices
+      for (const n of diff.added_nodes) {
+        const idx = nodeIdxMap.get(n.id);
+        if (idx !== undefined) newIndices.add(idx);
+      }
     }
 
-    // 4. Rebuild edges if any changed
+    // 4. Rebuild edges if any changed — rebuilds edgeDataList, neighborMap, edgeIndexOf
     if (diff.added_edges.length > 0 || diff.removed_edges.length > 0) {
       this._rebuildEdgeData(fullGraph, nodeIdxMap);
     }
 
-    // 5. Update communities from full graph
+    // 5. Collect neighbor indices for local layout relaxation
+    for (const ni of newIndices) {
+      for (const nb of (this.neighborMap[ni] || [])) {
+        if (!newIndices.has(nb)) neighborIndices.add(nb);
+      }
+    }
+
+    // 6. Local force relaxation — new nodes + their neighbors,
+    //    treating neighbors as anchored (only new nodes move freely)
+    if (newIndices.size > 0) {
+      const affected = new Set([...newIndices, ...neighborIndices]);
+      // Build edge pairs from edgeDataList
+      const allPairs: [number, number][] = this.edgeDataList.map(e => [e.s, e.t]);
+      try {
+        await relaxNewNodes(
+          this.nodePositions,
+          this._nodeCount,
+          allPairs,
+          affected,
+          neighborIndices, // anchors: existing neighbors stay fixed
+        );
+      } catch (e) {
+        console.warn('[StarGraph] local relax failed, positions may be suboptimal:', e);
+      }
+      // Sync updated positions to GPU buffers
+      this._syncNodePositions([...affected]);
+    }
+
+    // 7. Sync GPU core positions for all modified nodes
+    this._syncNodeCoreMatrices();
+
+    // 8. Update communities from full graph
     this.communities = ((fullGraph as any).hierarchical_communities || (fullGraph as any).communities || []) as CommunityData[];
 
-    // 6. Clear stale interaction state pointing to dead nodes
+    // 9. Clear stale interaction state pointing to dead nodes
     if (this.hoveredIdx >= 0 && this._deadIndices.has(this.hoveredIdx)) { this.hoveredIdx = -1; this.targetHoverScale = 0; }
     if (this.selectedIdx >= 0 && this._deadIndices.has(this.selectedIdx)) this.selectedIdx = -1;
     if (this._analysis.blastSource >= 0 && this._deadIndices.has(this._analysis.blastSource)) { this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; }
@@ -2351,8 +2390,7 @@ export class StarGraph {
     if (this._analysis._pathSource >= 0 && this._deadIndices.has(this._analysis._pathSource)) { this._analysis._pathSource = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
     if (this._analysis._pathTarget >= 0 && this._deadIndices.has(this._analysis._pathTarget)) { this._analysis._pathTarget = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
 
-
-    // 8. Re-apply diff overlay if active (new nodes might be in the diff set)
+    // 10. Re-apply diff overlay if active (new nodes might be in the diff set)
     if (this.diffActive && this.diffAddedIds.size + this.diffRemovedIds.size + this.diffModifiedIds.size > 0) {
       const saved = {
         added_nodes: [...this.diffAddedIds].map(id => ({ id })),
@@ -2363,11 +2401,64 @@ export class StarGraph {
       this.showDiff(saved);
     }
 
-    // 9. Update status
+    // 11. Update status
     const aliveCount = this._nodeCount - this._deadIndices.size;
     this.updateStatus(aliveCount, this.edgeDataList.length);
 
     this._flushOverrideAttrs();
+  }
+
+  /**
+   * Sync node positions from nodePositions to GPU buffers (glow Points).
+   * Called after local layout relaxation updates positions.
+   */
+  private _syncNodePositions(indices: number[]): void {
+    const _m = new THREE.Matrix4();
+    const _v = new THREE.Vector3();
+    const _q = new THREE.Quaternion();
+    const gAttr = this.nodeGlowsPoints?.geometry.attributes;
+    const g2Attr = this.nodeGlows2Points?.geometry.attributes;
+    for (const i of indices) {
+      if (i >= this._nodeCount) continue;
+      const px = this.nodePositions[i * 3], py = this.nodePositions[i * 3 + 1], pz = this.nodePositions[i * 3 + 2];
+      // Core matrix
+      const s = this._coreScales[i] || 0.28;
+      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
+        _v.set(px, py, pz), _q, new THREE.Vector3(s, s, s),
+      ));
+      // Glow point positions
+      if (gAttr) {
+        (gAttr['position'].array as Float32Array)[i * 3] = px;
+        (gAttr['position'].array as Float32Array)[i * 3 + 1] = py;
+        (gAttr['position'].array as Float32Array)[i * 3 + 2] = pz;
+      }
+      if (g2Attr) {
+        (g2Attr['position'].array as Float32Array)[i * 3] = px;
+        (g2Attr['position'].array as Float32Array)[i * 3 + 1] = py;
+        (g2Attr['position'].array as Float32Array)[i * 3 + 2] = pz;
+      }
+    }
+    this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
+    if (gAttr) gAttr['position'].needsUpdate = true;
+    if (g2Attr) g2Attr['position'].needsUpdate = true;
+  }
+
+  /** Sync all core matrices — call after incremental update to flush positions. */
+  private _syncNodeCoreMatrices(): void {
+    const _m = new THREE.Matrix4();
+    const _v = new THREE.Vector3();
+    const _q = new THREE.Quaternion();
+    for (let i = 0; i < this._nodeCount; i++) {
+      if (this._deadIndices.has(i)) continue;
+      const s = this._coreScales[i] || 0.28;
+      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
+        _v.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]),
+        _q, new THREE.Vector3(s, s, s),
+      ));
+    }
+    this.nodeCoresInstanced.count = this._nodeCount;
+    this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
+    this.nodeCoresInstanced.boundingSphere = null;
   }
 
   // ══════════════════════════════════════════════════════════
