@@ -289,10 +289,10 @@ mod tests {
         let resp = srv.handle_request(&req).unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert!(tools.len() >= 6, "at least 6 default tools exposed");
+        assert!(tools.len() >= 30, "at least 30 tools exposed");
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-        assert!(names.contains(&"explore_deps"), "default tools must include explore_deps");
-        assert!(names.contains(&"search_symbols"), "default tools must include search_symbols");
+        assert!(names.contains(&"get_neighbors"));
+        assert!(names.contains(&"analyze_project"));
     }
 
     #[test]
