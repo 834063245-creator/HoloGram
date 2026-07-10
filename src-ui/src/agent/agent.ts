@@ -1491,9 +1491,11 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       },
     );
 
+    let subAgentSucceeded = false;
     try {
       // Fork and fresh both use run() — fork has its own system prompt + stripped tools
       await subAgent.run(signal, mode === 'fork' ? prompt : '开始执行。');
+      subAgentSucceeded = true;
       // Extract the last assistant message as the result
       const session = subAgent.getSession();
       const lastAssistant = [...session].reverse().find(m => m.role === 'assistant');
@@ -1501,7 +1503,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     } catch (e: any) {
       return { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
-      // Auto-diff + auto-merge: after fork agent finishes, check for changes
+      // Auto-diff + merge/discard based on success
       if (isolationId) {
         try {
           const diffT = this.tools.get('agent_isolation_diff');
@@ -1512,13 +1514,15 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
             bus.emit('agent:sub-isolation-diff', {
               agentId: isolationId,
               diff: diffResult,
+              merged: subAgentSucceeded,
+              discarded: !subAgentSucceeded,
             });
-            // Auto-merge: apply changes back to main worktree
-            if (mergeT) {
+            if (subAgentSucceeded && mergeT) {
+              // Success → merge changes into main worktree
               await mergeT.execute({ agent_id: isolationId });
             }
           }
-          // Clean up the isolation worktree
+          // Always discard the isolation worktree after diff
           if (discardT) {
             await discardT.execute({ agent_id: isolationId });
           }
