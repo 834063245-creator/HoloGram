@@ -135,6 +135,9 @@ export class Workspace {
    *  first render is still using. */
   _initialRenderActive: boolean = false;
 
+  /** Preflight GraphContext — stored so engine snapshot can be refreshed after writes. */
+  _preflightCtx: GraphContext | null = null;
+
   get active(): boolean { return this._active; }
 
   // ── UI callbacks (set by main.ts) ──
@@ -305,6 +308,8 @@ export class Workspace {
         if (FILE_MODIFY_TOOLS.has(evt.toolName)) {
           ws.scheduleCheck();
           bus.emit('timeline:refresh');
+          // Refresh engine snapshot — tracks cumulative structure drift
+          if (ws._preflightCtx) scheduleEngineSnapshotRefresh(ws._preflightCtx, ws.path);
         }
       };
       bus.on('agent:tool-done', onToolDone);
@@ -690,9 +695,9 @@ export class Workspace {
       // Preflight: warn before edit_file / write_file
       const preflightHooks = new PreflightHookRegistry();
       preflightHooks.register(createGraphPreflightHook(ctx));
-      // State preflight: diagnostics before editing a file
       preflightHooks.register(createStatePreflightHook());
       this.agent.setPreflightHooks(preflightHooks);
+      this._preflightCtx = ctx; // stash for post-write snapshot refresh
     }
 
     // Cold-start: prime state caches (git status, timeline)
@@ -800,6 +805,7 @@ export class Workspace {
           preflightHooks.register(createGraphPreflightHook(hookCtx));
           preflightHooks.register(createStatePreflightHook());
           newAgent.setPreflightHooks(preflightHooks);
+          loadEngineSnapshot(hookCtx, ws.path).catch(() => {});
         }
         // Sub-agent tool — same as _setupAgentInner
         {
@@ -900,9 +906,11 @@ export class Workspace {
 
 // ═══════════════════════════════════════════════════════════════
 // loadEngineSnapshot — fetch engine-level data for enriched preflight
+// Called once at Agent startup (baseline), then after each write tool
+// to compute session drift against the baseline.
 // ═══════════════════════════════════════════════════════════════
 
-async function loadEngineSnapshot(ctx: GraphContext, projectPath: string): Promise<void> {
+async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefresh = false): Promise<void> {
   try {
     // Fragility ranking (top 15)
     const fragileRaw = await invoke<string>('hologram_call', {
@@ -937,23 +945,51 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string): Promi
     const healthData = JSON.parse(healthRaw);
     const healthScore = healthData.coupling_density_score || healthData.score || 0;
 
-    // Build baseline fragility map from rankings
-    const baselineFragility = new Map<string, number>();
-    for (const r of fragilityRanks) {
-      baselineFragility.set(r.file, r.score);
+    // Build baseline from first call, compute drift on subsequent calls
+    let baselineFragility: Map<string, number>;
+    let sessionDrift = 0;
+
+    if (!isRefresh && !ctx.engine) {
+      // Initial load: snapshot the baseline
+      baselineFragility = new Map<string, number>();
+      for (const r of fragilityRanks) {
+        baselineFragility.set(r.file, r.score);
+      }
+    } else {
+      // Refresh: compare against existing baseline
+      const prev = ctx.engine?.baselineFragility;
+      if (prev && prev.size > 0) {
+        let delta = 0;
+        for (const r of fragilityRanks) {
+          const before = prev.get(r.file) ?? 0;
+          if (r.score > before) delta += (r.score - before) / Math.max(before, 1);
+        }
+        sessionDrift = delta;
+      }
+      baselineFragility = ctx.engine?.baselineFragility ?? new Map();
     }
 
-    // Mutate ctx — preflight hook reads it synchronously from now on
     ctx.engine = {
       fragilityRanks,
       cycleCount,
       healthScore,
       baselineFragility,
-      sessionDrift: 0, // baseline on first load
+      sessionDrift,
     };
   } catch (e) {
     console.warn('[loadEngineSnapshot] engine data unavailable, preflight runs in lightweight mode:', e);
   }
+}
+
+/** Debounced refresh of engine snapshot after a file-modifying tool completes.
+ *  Fires at most once per 3 seconds — multiple rapid edits batch into one refresh. */
+let _snapshotRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleEngineSnapshotRefresh(ctx: GraphContext, projectPath: string): void {
+  if (_snapshotRefreshTimer) clearTimeout(_snapshotRefreshTimer);
+  _snapshotRefreshTimer = setTimeout(() => {
+    _snapshotRefreshTimer = null;
+    loadEngineSnapshot(ctx, projectPath, true).catch(() => {});
+  }, 3000);
 }
 
 // ═══════════════════════════════════════════════════════════════
