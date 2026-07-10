@@ -4657,32 +4657,47 @@ export class StarGraph {
 
   private clearGraph(): void {
     this._revealCancelled = true; // cancel any in-flight progressive reveal
-    // Dispose materials/geometries before removing to prevent GPU memory leak (audit HIGH fix)
-    const disposeGroup = (g: THREE.Group) => {
-      while (g.children.length) {
-        const child = g.children[0];
-        if ((child as THREE.Mesh).geometry) (child as THREE.Mesh).geometry.dispose();
-        const mat = (child as THREE.Mesh).material;
-        if (mat) {
-          if (Array.isArray(mat)) mat.forEach(m => (m as THREE.Material).dispose());
-          else (mat as THREE.Material).dispose();
-        }
-        g.remove(child);
-      }
-    };
-    disposeGroup(this.nodeGroup);
-    disposeGroup(this.edgeGroup);
-    disposeGroup(this.highlightEdgeGroup);
-    disposeGroup(this.commFoldGroup);
-    // Dispose stored references (prevent GPU leak across re-renders)
-    // IMPORTANT: nodeCores share this.sphereGeo — do NOT dispose individual core geometries
-    if (this.nodeCoresInstanced) { (this.nodeCoresInstanced.material as THREE.Material)?.dispose(); }
-    if (this.nodeGlowsPoints) { (this.nodeGlowsPoints.material as THREE.Material)?.dispose(); this.nodeGlowsPoints.geometry?.dispose(); }
-    if (this.nodeGlows2Points) { (this.nodeGlows2Points.material as THREE.Material)?.dispose(); this.nodeGlows2Points.geometry?.dispose(); }
-    for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
+    // ── Explicit cleanup: each object type knows what to dispose.
+    //     DO NOT use a blind disposeGroup walk — nodeCoresInstanced shares
+    //     this.sphereGeo (created in constructor, reused across re-renders).
+    //     disposeGroup would destroy sphereGeo's WebGL buffers, causing
+    //     subsequent InstancedMesh renders to come out blank (cold-start + watcher race).
+
+    // Node cores: dispose material only — sphereGeo is shared, built once in constructor.
+    if (this.nodeCoresInstanced) {
+      (this.nodeCoresInstanced.material as THREE.Material)?.dispose();
+      this.nodeGroup.remove(this.nodeCoresInstanced);
+    }
+    // Glow Points: dispose geometry + material (rebuilt fresh each render).
+    if (this.nodeGlowsPoints) {
+      (this.nodeGlowsPoints.material as THREE.Material)?.dispose();
+      this.nodeGlowsPoints.geometry?.dispose();
+      this.nodeGroup.remove(this.nodeGlowsPoints);
+    }
+    if (this.nodeGlows2Points) {
+      (this.nodeGlows2Points.material as THREE.Material)?.dispose();
+      this.nodeGlows2Points.geometry?.dispose();
+      this.nodeGroup.remove(this.nodeGlows2Points);
+    }
+    // Any remaining stray children in nodeGroup (shouldn't be any, but paranoia).
+    while (this.nodeGroup.children.length) {
+      this.nodeGroup.remove(this.nodeGroup.children[0]);
+    }
+
+    // Edge groups — dispose materials + geometries, clear children.
+    for (const lines of this.edgeLineGroups) {
+      lines.geometry?.dispose();
+      (lines.material as THREE.Material)?.dispose();
+    }
+    while (this.edgeGroup.children.length) this.edgeGroup.remove(this.edgeGroup.children[0]);
+    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+
+    // Legacy: edgeLineGroups array may hold references already disposed above — clear.
+    this.edgeLineGroups = [];
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
-    // batched: nodeCores/nodeGlows/nodeGlows2 replaced by InstancedMesh+Points this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = []; this.edgeLineGroups = [];
+    this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = []; this.communityRingGroup.clear(); this._communityGlowSprites = []; this._hoveredCommunityIdx = -1;
     this.foldMode = false; this.enteredGalaxyId = null; this.enteredSubCommunityId = null;

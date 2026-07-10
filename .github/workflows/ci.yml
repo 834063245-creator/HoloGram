@@ -1,4 +1,4 @@
-# 每次 push 到 main：编译检查 + 跑测试。不过就不让合。
+# CI — 编译检查 + 跑测试。不过就不让合。
 name: CI
 
 on:
@@ -7,21 +7,62 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs when new commits push to the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    runs-on: windows-latest
+  # ═══════════════════════════════════════════════════════════
+  # Frontend — 最快的，独立跑
+  # ═══════════════════════════════════════════════════════════
+  frontend:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with: { node-version: '22' }
+
+      - run: npm ci
+        working-directory: src-ui
+
+      - run: npm run build
+        working-directory: src-ui
+
+      - run: npm test
+        working-directory: src-ui
+
+  # ═══════════════════════════════════════════════════════════
+  # Engine — Rust 单元测试
+  # ═══════════════════════════════════════════════════════════
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { toolchain: stable }
 
       - run: cargo test --release
         working-directory: engine
 
-      - run: npm ci && npm run build && npm test
+  # ═══════════════════════════════════════════════════════════
+  # Tauri — Windows only, needs WebView2
+  # ═══════════════════════════════════════════════════════════
+  tauri:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { toolchain: stable }
+
+      # Pre-build frontend so Tauri can bundle it.
+      - run: npm ci
+        working-directory: src-ui
+      - run: npm run build
         working-directory: src-ui
 
+      # Tauri check — fast compile-only pass, no linking.
       - run: cargo check --release
         working-directory: src-tauri
