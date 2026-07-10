@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use parking_lot::RwLock;
 use rusqlite::Connection;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::graph::{EdgeKind, Graph};
 use crate::pipeline::runner::analyze_project;
@@ -517,7 +517,6 @@ mod watcher;
 mod lsp;
 pub use grammar::GRAMMAR_LOADER;
 pub use lsp::reparse_source_lsp;
-use lsp::reparse_for_lsp;
 
 /// Global engine instance.
 ///
@@ -679,6 +678,7 @@ pub fn engine_try_incremental(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::lsp::reparse_for_lsp;
 
     #[test]
     fn test_engine_new_uninitialized() {

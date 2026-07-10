@@ -357,14 +357,24 @@ pub(crate) async fn delete_file_or_dir(
 
 #[tauri::command]
 pub(crate) async fn rename_file_or_dir(
-    from: String,
-    to: String,
+    file_path: String,
+    new_name: String,
     is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let is_agent = is_agent.unwrap_or(false);
-    let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, &state, &app).await?;
+    // Construct target path: parent directory + new name.
+    let parent = std::path::Path::new(&file_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let to = if parent.is_empty() {
+        new_name.clone()
+    } else {
+        format!("{}/{}", parent.trim_end_matches('/'), new_name.trim_start_matches('/'))
+    };
+    let (_, resolved_to) = crate::confined_fs::rename(&file_path, &to, is_agent, &state, &app).await?;
     // Hook: record timeline + update changed_files
     // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
@@ -382,17 +392,18 @@ pub(crate) async fn rename_file_or_dir(
 
 #[tauri::command]
 pub(crate) async fn move_file(
-    source: String,
-    dest_dir: String,
+    from: String,
+    to: String,
     is_agent: Option<bool>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let is_agent = is_agent.unwrap_or(false);
-    let (_, dest) = crate::confined_fs::move_into_dir(&source, &dest_dir, is_agent, &state, &app).await?;
+    // Use rename() — it does fs::rename(from, to) which handles both
+    // cross-directory moves and same-directory renames (like mv).
+    let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, &state, &app).await?;
     // Hook: record timeline + update changed_files
-    // Skip timeline + changed_files for ignored paths (.hologram, .git, etc.)
-    let rp = dest.to_string_lossy().replace('\\', "/");
+    let rp = resolved_to.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         if !is_ignored_path(&rp) {
             let short = rp.rsplit('/').next().unwrap_or(&rp);
