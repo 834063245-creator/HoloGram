@@ -45,6 +45,7 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 export class SubAgentPool {
   private agents = new Map<string, PendingAgent>();
   private completed: SubAgentHandle[] = [];
+  private static readonly MAX_COMPLETED = 20; // cap to prevent memory leak
   private onDone: SubAgentDoneCallback | null = null;
   private maxConcurrent: number;
   private defaultTimeoutMs: number;
@@ -62,6 +63,14 @@ export class SubAgentPool {
       maxConcurrent: this.maxConcurrent,
       ids: [...this.agents.keys()],
     });
+  }
+
+  /** Add to completed list, capped to prevent unbounded memory growth. */
+  private _addCompleted(handle: SubAgentHandle): void {
+    this.completed.push(handle);
+    if (this.completed.length > SubAgentPool.MAX_COMPLETED) {
+      this.completed = this.completed.slice(-SubAgentPool.MAX_COMPLETED);
+    }
   }
 
   /** Register a callback invoked when ANY sub-agent completes. Used for UI events. */
@@ -120,7 +129,7 @@ export class SubAgentPool {
           pending.handle.status = SubAgentStatus.Completed;
           pending.handle.result = text;
         }
-        this.completed.push(pending.handle);
+        this._addCompleted(pending.handle);
         pending.resolve(text);
         this.agents.delete(id);
         this._emitCount();
@@ -167,7 +176,7 @@ export class SubAgentPool {
     if (t) { clearTimeout(t); this.timeouts.delete(id); }
     pending.handle.status = SubAgentStatus.Stopped;
     pending.handle.error = 'stopped by user';
-    this.completed.push(pending.handle);
+    this._addCompleted(pending.handle);
     pending.resolve('');
     this.agents.delete(id);
     this._emitCount();
@@ -182,7 +191,7 @@ export class SubAgentPool {
       if (t) { clearTimeout(t); this.timeouts.delete(id); }
       pending.handle.status = SubAgentStatus.Stopped;
       pending.handle.error = 'stopped by user';
-      this.completed.push(pending.handle);
+      this._addCompleted(pending.handle);
       pending.resolve('');
       stopped.push(id);
     }

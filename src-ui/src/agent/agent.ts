@@ -1452,6 +1452,11 @@ ${prompt}
 ## 父Agent近期上下文
 ${recentContext}`;
     } else {
+      // Fresh mode: also remove recursive spawn tools + job tools
+      subTools.unregister('agent_spawn');
+      subTools.unregister('agent_message');
+      subTools.unregister('agent_stop_all');
+
       subSystem = `你是主 Agent 派出的子任务 Agent。执行一个聚焦的专项任务。
 
 ## 任务
@@ -1473,7 +1478,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       this.prov,
       subTools,
       subSystem,
-      { temperature: 0.3, subagentDepth: this._subagentDepth + 1 },
+      { temperature: 0.3, subagentDepth: this._subagentDepth + 1, contextWindow: this.contextWindow },
       (ev) => {
         // Forward text chunks for progress display
         if (ev.kind === EventKind.Text && ev.text && onProgress) {
@@ -1496,16 +1501,21 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     } catch (e: any) {
       return { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
-      // Auto-diff: after fork agent finishes (success or error), check for changes
-      if (isolationId && this.tools.get('agent_isolation_diff')) {
+      // Auto-diff + auto-merge: after fork agent finishes, check for changes
+      if (isolationId) {
         try {
           const diffT = this.tools.get('agent_isolation_diff');
+          const mergeT = this.tools.get('agent_isolation_merge');
           if (diffT) {
             const diffResult = await diffT.execute({ agent_id: isolationId });
             bus.emit('agent:sub-isolation-diff', {
               agentId: isolationId,
               diff: diffResult,
             });
+            // Auto-merge: apply changes back to main worktree
+            if (mergeT) {
+              await mergeT.execute({ agent_id: isolationId });
+            }
           }
         } catch { /* best effort */ }
       }

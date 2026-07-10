@@ -17,7 +17,7 @@ import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
-import { ToolRegistry, createCodingTools, createSubAgentTool, createAgentStopAllTool, agentInvoke, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createCodingTools, createSubAgentTool, createAgentStopAllTool, createAgentMessageTool, agentInvoke, type ToolExecutor } from './agent/tool';
 import { SubAgentPool, type SubAgentHandle } from './agent/coordinator';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
@@ -647,6 +647,8 @@ export class Workspace {
       ));
       // Register batch stop tool
       registry.register(createAgentStopAllTool(() => pool));
+      // Register agent message tool
+      registry.register(createAgentMessageTool(pool));
     } catch (e) { console.error('[setupAgent] sub-agent tool registration failed:', e); }
 
     // Wire tool schemas to UI panel — dynamic, not hardcoded
