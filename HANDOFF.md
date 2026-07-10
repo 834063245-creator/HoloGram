@@ -3,7 +3,7 @@
 ## 已完成的上帝文件拆分
 
 ### engine/src/analysis/framework_routes/（2445 → 920 + 18×~70）
-- 18 个框架各一文件，调度器 + 共享工具在 mod.rs，40 个测试
+- 18 个框架各一文件，调度器 + 共享工具在 mod.rs
 
 ### engine/src/analysis/di_reflection/（1971 → 700 + 1500）
 - 语言级 detector 函数抽到 langs.rs
@@ -11,16 +11,22 @@
 ### engine/src/tools/（2120 → 660 + 1470）
 - 30 个 handler 函数抽到 handlers.rs
 
+### graph.ts 布局拆分 (ded0100)
+- 5434 → 4911 行 (-523)
+- 提取 `graph-layout.ts`：fibonacciSphere / simulateForces / spiralGalaxies / repelCommunityCentroids / layout3D
+
+### graph.ts 五模块拆分 (898161e)
+- 4911 → 4745 行 (-166)
+- 新增：`graph-colors.ts` / `graph-textures.ts` / `graph-shaders.ts` / `graph-scene.ts` / `graph-ui.ts`
+- **合计 5434 → 4745（-689 行，-12.7%）**
+
 ## 已完成的架构修复
 
 ### chat.ts ↔ agent.ts 编译期循环解耦 (51add3b)
-- 新增 `chat-agent-handle.ts` 接口，9 个方法签名
-- chat.ts 不再 import Agent 类，改为 `import type { ChatAgentHandle }`
-- 31 节点环从编译期降级为纯运行时 sink 回调链
+- 新增 `chat-agent-handle.ts` 接口，chat.ts 不再 import Agent 类
 
 ### agent_spawn 事件关联修复 (3ce654c)
-- streaming-executor 补齐 `_callId` 注入，子 Agent 事件能正确关联到父工具卡片
-- 新增 3 个测试 (agent-spawn-callid.test.ts)
+- streaming-executor 补齐 `_callId` 注入，新增 3 个测试
 
 ### chat.ts UI bug 修复 (a69a88e)
 1. 错误卡片被 streaming DOM 同步清除 → msg-error-card 加入保留列表
@@ -35,17 +41,14 @@
 ### 流式输出卡顿修复 (2137d5c)
 - 重试期间 notice 插在 streaming assistant 前面，保持增量渲染路径
 
-### graph.ts 布局函数拆分 (ded0100)
-- 5434 → 4911 行 (-523 行，-9.6%)
-- 提取 5 个纯算法函数到 `graph-layout.ts`：fibonacciSphere / simulateForces / spiralGalaxies / repelCommunityCentroids / layout3D
-- graph-layout.ts 零 THREE.js 依赖，纯 TypeScript
-- graph.ts 保留 GPU 布局调用链（gpuLayout.compute + spiralGalaxies + repelCommunityCentroids），CPU fallback 走 layout3D
+### 报错改为普通聊天消息 (e05c984)
+- 删除 addErrorNotice DOM 卡片（42行），错误全部走 addNotice → 消息模型统一渲染
 
 ## 还没动
 
 | 文件 | 行数 | 为什么 |
 |------|------|--------|
-| `src-ui/src/ui/graph.ts` | 4911 | 渲染函数全在 StarGraph 类内，依赖 THREE.js 状态 |
+| `src-ui/src/ui/graph.ts` | 4745 | StarGraph 渲染管线（_renderImpl/buildNodes/buildEdges/animate）深度绑定 THREE.js 实例 |
 | `engine/src/engine.rs` | 2079 | 生命周期 + LSP + FTL + 增量全耦合 |
 | `src-tauri/src/commands/tools.rs` | 1959 | Tauri 命令 + 后台 job 系统 |
 | `src-tauri/src/os_sandbox.rs` | 1732 | 单一职责，不需要拆 |
@@ -69,7 +72,7 @@ npx vite build            # 零错误（~45s）
 
 ## 下一步建议
 
-1. **graph.ts 渲染拆分**：渲染函数（buildNodes/buildEdges/buildStarfield 等）→ graph-renderer.ts。比布局复杂——所有函数都在 StarGraph 类内且依赖 THREE.js 实例状态
-2. **engine.rs**：等 graph.ts 拆完再动
-3. **search_content 竞态**：引擎 `file_index` 构建完成前加 guard
-4. **git_commit Ask 不生效**：系统规则 `Git(commit)` Ask + 用户点了"本次会话允许"但新 `git_commit` 仍弹窗——规则匹配 bug
+1. **engine.rs**：生命周期 + LSP + FTL + 增量全耦合，优先级最高
+2. **graph.ts 渲染管线**：buildNodes/buildEdges/animate 需要接口抽象才能拆出
+3. **search_content 竞态**：引擎 file_index 构建完成前加 guard
+4. **git_commit Ask 不生效**：系统规则匹配 bug
