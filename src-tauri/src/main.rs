@@ -180,6 +180,8 @@ fn main() {
             commands::tools::start_unity,
             commands::tools::stop_unity,
             commands::tools::unity_status,
+            // ── Sandbox ──
+            commands::tools::sandbox_status,
             // ── Engine IPC ──
             commands::tools::engine_get_graph,
             commands::tools::engine_neighbors,
@@ -217,6 +219,15 @@ fn main() {
         .setup(|app| {
             // Phase 4a: OS sandbox — Job Object for die-with-parent
             os_sandbox::init();
+            // Warn if OS sandbox is degraded — permission engine is the fallback
+            let s = os_sandbox::status();
+            if !matches!(s, os_sandbox::SandboxStatus::Available) {
+                let reason = match &s {
+                    os_sandbox::SandboxStatus::Degraded { reason } => reason.as_str(),
+                    _ => "OS sandbox 不可用",
+                };
+                eprintln!("[hologram] ⚠ SANDBOX DEGRADED: {reason} — permission engine is the only barrier");
+            }
             // v4 Phase 4: server for Unity events
             commands::tools::start_unity_event_server(app.handle().clone());
             // Memory Bundle: spawn if exe found next to hologram

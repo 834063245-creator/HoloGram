@@ -133,7 +133,7 @@ pub fn cleanup_acls() {
 }
 
 /// Query the current sandbox status for UI display (spec §6.6).
-#[allow(dead_code)] // ponytail: wired into frontend in later phase
+/// Query the current sandbox status for UI display (spec §6.6).
 pub fn status() -> SandboxStatus {
     #[cfg(windows)]
     { imp::status() }
@@ -143,13 +143,6 @@ pub fn status() -> SandboxStatus {
     { linux::status() }
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     { SandboxStatus::Unavailable }
-}
-
-/// Check whether OS sandbox is available. Same as status() but named for
-/// the spec-compatible API (spec §6.6–§6.7).
-#[allow(dead_code)] // spec API, not yet called from UI
-pub fn is_sandbox_available() -> SandboxStatus {
-    status()
 }
 
 /// Spawn a shell command in the sandbox. Handles shell selection and applies
@@ -340,6 +333,8 @@ mod imp {
     // Job Object limits
     const JOB_OBJECT_LIMIT_DIE_ON_JOB_CLOSE: u32 = 0x00002000;
     const JOB_OBJECT_LIMIT_BREAKAWAY_OK: u32 = 0x00000800;
+    const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: u32 = 0x00000008;
+    const JOB_OBJECT_LIMIT_JOB_MEMORY: u32 = 0x00000200;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
 
     // ACL
@@ -572,7 +567,14 @@ mod imp {
                 let mut limits: JobObjectExtendedLimitInformationRaw =
                     unsafe { std::mem::zeroed() };
                 limits.basic.limit_flags =
-                    JOB_OBJECT_LIMIT_DIE_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+                    JOB_OBJECT_LIMIT_DIE_ON_JOB_CLOSE
+                    | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+                    | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                    | JOB_OBJECT_LIMIT_JOB_MEMORY;
+                limits.basic.active_process_limit = 64;
+                // ponytail: 1 GiB job memory cap — generous for normal dev tools,
+                // tight enough to stop a runaway memory leak from taking down the OS.
+                limits.job_memory_limit = 1024 * 1024 * 1024;
                 let ret = unsafe {
                     SetInformationJobObject(
                         h, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -606,7 +608,6 @@ mod imp {
             unsafe { AssignProcessToJobObject(job, process) != 0 }
         }
 
-        #[allow(dead_code)]
         pub fn is_active() -> bool {
             JOB.get().and_then(|o| *o).is_some()
         }
@@ -1199,7 +1200,6 @@ mod imp {
         EqualSid(a, b) != 0
     }
 
-    #[allow(dead_code)]
     pub fn status() -> SandboxStatus {
         let has_job = job::is_active();
         let has_ac = APPCONTAINER_SID.get().and_then(|o| *o).is_some();
