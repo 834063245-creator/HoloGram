@@ -386,8 +386,8 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             if (parsed.community) {
               snippet = `社区归属: ${parsed.community}。→ 调 get_community 查看同社区节点`;
             }
-            // Engine-layer: tag synthesis alerts if this symbol participates
-            if (ctx.engine && ctx.engine.synthesisAlerts.length > 0 && parsed.node_id) {
+            // Engine-layer: tag synthesis alerts
+            if (ctx.engine && ctx.engine.synthesisAlerts.length > 0) {
               const alerts = ctx.engine.synthesisAlerts.map(a => a.type).join(', ');
               snippet = (snippet || '') + ` 合成标记: ${alerts}`;
             }
@@ -423,6 +423,11 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               snippet = parsed.outcome === 'pass'
                 ? `✅ ${parsed.summary}`
                 : `❌ ${parsed.summary}`;
+              // Engine-layer: on failure, report fragility context
+              if (parsed.outcome === 'fail' && ctx.engine && ctx.engine.fragilityRanks.length > 0) {
+                const top = ctx.engine.fragilityRanks[0];
+                snippet += ` | 最脆弱模块: ${top.file.split('/').pop()} (${top.score.toFixed(0)}) → 考虑是否本次改动触发了退化`;
+              }
             } else {
               // Fallback: output format not recognized, cache a generic result
               // so the agent knows the command ran — just can't parse the outcome
