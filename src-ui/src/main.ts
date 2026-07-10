@@ -15,6 +15,7 @@ import { ConstraintsPanel } from './ui/constraints';
 import { HotspotsPanel } from './ui/hotspots';
 import { DataflowPanel } from './ui/dataflow-panel';
 import { SettingsPanel } from './ui/settings-panel';
+import { SubAgentPanel } from './ui/subagent-panel';
 import { bus } from './ui/events';
 import { shell } from './ui/app-shell';
 import { initLogger, log } from './agent/logger';
@@ -160,6 +161,7 @@ let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
 let hotspotsPanel: HotspotsPanel;
 let dataflowPanel: DataflowPanel;
+let subAgentPanel: SubAgentPanel;
 
 // ── Folder picker ──
 
@@ -435,6 +437,9 @@ async function init(): Promise<void> {
    // Dataflow panel (floating window)
    dataflowPanel = new DataflowPanel(document.body);
 
+   // Sub-agent task panel
+   subAgentPanel = new SubAgentPanel(document.body);
+
    // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
    dataflowPanel.onParseQuery = async (nl: string): Promise<string[]> => {
      try {
@@ -564,6 +569,11 @@ async function init(): Promise<void> {
   // Dataflow panel (floating, independent of dock tabs)
   document.getElementById('btn-dataflow')?.addEventListener('click', () => {
     dataflowPanel.toggle();
+  });
+
+  // Sub-agent panel
+  document.getElementById('btn-subagent')?.addEventListener('click', () => {
+    subAgentPanel.toggle();
   });
 
   // Diff
