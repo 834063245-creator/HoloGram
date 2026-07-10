@@ -368,6 +368,15 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           if (nodes.length > 0) {
             const names = nodes.map(n => `\`${n.name}\``).join(', ');
             snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 get_neighbors 查看依赖`;
+            // Engine-layer: highlight high-fragility files among search hits
+            if (ctx.engine) {
+              const rankHit = nodes.some(node =>
+                ctx.engine!.fragilityRanks.some(r => r.file.toLowerCase().includes(node.name.toLowerCase()))
+              );
+              if (rankHit) {
+                snippet += ` ⚠ 命中了高脆弱度模块 → 调 trace_impact`;
+              }
+            }
           }
           break;
         }
@@ -377,12 +386,29 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             if (parsed.community) {
               snippet = `社区归属: ${parsed.community}。→ 调 get_community 查看同社区节点`;
             }
+            // Engine-layer: tag synthesis alerts if this symbol participates
+            if (ctx.engine && ctx.engine.synthesisAlerts.length > 0 && parsed.node_id) {
+              const alerts = ctx.engine.synthesisAlerts.map(a => a.type).join(', ');
+              snippet = (snippet || '') + ` 合成标记: ${alerts}`;
+            }
           } catch {}
           break;
         }
         case 'git_diff': {
           const files = extractFilesFromDiffResult(result);
-          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+          if (files.length > 0) {
+            snippet = ctx.getSearchContext(files.slice(0, 3));
+            // Engine-layer: fragility summary for changed files
+            if (ctx.engine) {
+              const hot = files.filter(f => {
+                const nf = f.replace(/\\/g, '/').toLowerCase();
+                return ctx.engine!.fragilityRanks.some(r => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
+              });
+              if (hot.length > 0) {
+                snippet = (snippet || '') + ` ⚠ ${hot.length} 个变更文件在高脆弱度排名中`;
+              }
+            }
+          }
           break;
         }
         case 'run_shell': {
