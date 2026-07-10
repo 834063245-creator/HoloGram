@@ -34,4 +34,13 @@ export interface ChatAgentHandle {
 
   /** 在 Agent 运行中插入用户消息 */
   insertMessage(text: string): void;
+
+  /** 子Agent完成通知：异步注入结果到父Agent消息流。不阻塞当前轮次 */
+  injectTaskNotification(text: string): void;
+
+  /** 级联取消：父Agent中断时停止所有运行中的子Agent */
+  cascadeAbort(): void;
+
+  /** 批量停止所有子Agent */
+  stopAllSubAgents(): string[];
 }

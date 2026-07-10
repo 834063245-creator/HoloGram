@@ -17,7 +17,8 @@ import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
-import { ToolRegistry, createCodingTools, createSubAgentTool, agentInvoke, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createCodingTools, createSubAgentTool, createAgentStopAllTool, agentInvoke, type ToolExecutor } from './agent/tool';
+import { SubAgentPool, type SubAgentHandle } from './agent/coordinator';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { createCompactionTools, type CompactionConfig } from './agent/compaction-model';
@@ -101,13 +102,17 @@ export class Workspace {
   // ── View state ──
   diffActive: boolean = false;
 
-  // ── Agent & memory ──
+    // ── Agent & memory ──
   agent: Agent | null = null;
   prov: Provider | null = null;
   registry: ToolRegistry | null = null;
   memoryManager: MemoryManager | null = null;
   taskManager: TaskManager = new TaskManager();
   skillRegistry: SkillRegistry | null = null;
+
+  // ── Sub-agent pool ──
+  subAgentPool = new SubAgentPool();
+  private _agentAbort: AbortController | null = null;
 
   // ── Check state ──
   checkRunning: boolean = false;
@@ -602,13 +607,44 @@ export class Workspace {
     this.agent.setCompactionConfigPath(this.path);
     this.agent.applyAutoTuneConfig().catch(() => {});
 
-    // Sub-agent tool
+    // Sub-agent tool — with async pool for fire-and-forget spawn
     try {
       const agentRef = this.agent;
+      const pool = this.subAgentPool;
+
+      // Wire pool completion → UI events + task-notification injection
+      pool.setOnDone((handle: SubAgentHandle, callId?: string) => {
+        // Emit UI done event
+        bus.emit('agent:sub-done', {
+          parentToolId: callId || handle.id,
+          summary: {
+            description: handle.description,
+            steps: 0,
+            elapsedMs: Date.now() - handle.startedAt,
+            hasError: handle.status === 'failed',
+          },
+        });
+
+        // Inject result back into parent as task-notification
+        const resultText = handle.status === 'failed'
+          ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
+          : `[子 Agent 完成: ${handle.description}] ${(handle.result || '').slice(0, 500)}`;
+        agentRef.injectTaskNotification(resultText);
+      });
+
+      // Wire pool reference into Agent for cascade abort / stopAll
+      agentRef.setSubAgentPool(pool);
+
       registry.register(createSubAgentTool(
         async (description, prompt, onProgress, mode) =>
-          agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress, mode),
+          agentRef.spawnSubAgent(
+            this._agentAbort?.signal ?? new AbortController().signal,
+            description, prompt, onProgress, mode,
+          ),
+        pool,
       ));
+      // Register batch stop tool
+      registry.register(createAgentStopAllTool(() => pool));
     } catch (e) { console.error('[setupAgent] sub-agent tool registration failed:', e); }
 
     // Wire tool schemas to UI panel — dynamic, not hardcoded

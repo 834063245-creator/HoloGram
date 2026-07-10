@@ -37,6 +37,11 @@ export class ToolRegistry {
     this.tools.set(t.name(), t);
   }
 
+  /** Remove a tool by name. No-op if the tool doesn't exist. */
+  unregister(name: string): void {
+    this.tools.delete(name);
+  }
+
   /** Register an alias — same implementation, different name shown to LLM.
    *  Alias also appears in schemas() so LLM can use either name. */
   alias(aliasName: string, existingName: string): void {
@@ -1198,9 +1203,13 @@ export function createSubAgentTool(
       const mode = subagentType ? 'fresh' : 'fork';
       const callId = (args['_callId'] as string) || `sub_${Date.now()}`;
 
-      // G2: async spawn via pool — fire-and-forget, parent doesn't block
+            // G2: async spawn via pool — fire-and-forget, parent doesn't block
       if (pool) {
-        const id = pool.spawn(
+        // Emit spawn event for UI
+        bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
+
+        // Register done callback: emit UI event + inject result as task-notification
+        pool.spawn(
           description,
           async (onMsg) => {
             const result = await spawner(description, prompt, onMsg, mode);
@@ -1210,13 +1219,9 @@ export function createSubAgentTool(
             onProgress?.(chunk);
             bus.emit('agent:sub-progress', { parentToolId: callId, text: chunk });
           },
+          callId,
         );
-        bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode });
-        return JSON.stringify({
-          task_id: id,
-          status: 'started',
-          message: `子Agent已启动: ${description}。结果将通过 task-notification 返回。`,
-        });
+        return `Fork started — processing in background\n[task-notification: 子Agent "${description}" 已启动 (ID: ${callId})。结果将通过独立通知返回。]`;
       }
 
       // Fallback: synchronous spawn (legacy behavior, no pool)
@@ -1280,6 +1285,28 @@ export function createAgentMessageTool(pool?: import('./coordinator').SubAgentPo
       if (!to || !message) return '需要 to 和 message 参数。';
       const ok = pool.sendMessage(to, message);
       return ok ? '消息已发送' : '子Agent未找到或已结束';
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// agent_stop_all — 批量停止所有子Agent
+// ═══════════════════════════════════════════════════════════════
+
+export function createAgentStopAllTool(
+  getPool: () => import('./coordinator').SubAgentPool | null,
+): Tool {
+  return {
+    name: () => 'agent_stop_all',
+    description: () => '停止所有正在运行的子Agent。返回被停止的子Agent ID列表。无参数。',
+    parameters: () => ({ type: 'object', properties: {} }),
+    readOnly: () => false,
+    execute: async () => {
+      const pool = getPool();
+      if (!pool) return '子Agent池未初始化';
+      const stopped = pool.stopAll();
+      if (stopped.length === 0) return '没有运行中的子Agent';
+      return `已停止 ${stopped.length} 个子Agent: ${stopped.join(', ')}`;
     },
   };
 }

@@ -339,6 +339,41 @@ export class Agent {
     this.sink({ kind: EventKind.Notice, level: 'info', text: '消息已插入，Agent 将在下一轮看到' });
   }
 
+  // ── Sub-agent lifecycle ──
+
+  /** Reference to the sub-agent pool. Set by workspace after construction. */
+  private _subAgentPool: import('./coordinator').SubAgentPool | null = null;
+
+  setSubAgentPool(pool: import('./coordinator').SubAgentPool): void {
+    this._subAgentPool = pool;
+  }
+
+  /** Inject a sub-agent result as a pending task notification.
+   *  Safe: queued and applied at the next safe boundary, never mid-stream. */
+  injectTaskNotification(text: string): void {
+    this._pendingInserts.push(
+      `<task-notification>\n子Agent 任务完成:\n${text}\n</task-notification>`,
+    );
+    // Don't emit notice here — the pool's onDone already handles the UI event.
+    // The injected message will be seen by the model at the next safe boundary.
+  }
+
+  /** Cascade abort: stop all sub-agents when the parent is interrupted. */
+  cascadeAbort(): void {
+    const pool = this._subAgentPool;
+    if (pool) {
+      const stopped = pool.stopAll();
+      if (stopped.length > 0) {
+        log.info('agent', `cascade abort: stopped ${stopped.length} sub-agents`);
+      }
+    }
+  }
+
+  /** Batch stop all running sub-agents. Returns the IDs of stopped agents. */
+  stopAllSubAgents(): string[] {
+    return this._subAgentPool?.stopAll() ?? [];
+  }
+
   /** Apply queued inserts at a safe boundary (top of loop, after tool results committed). */
   private _applyPendingInserts(): void {
     if (this._pendingInserts.length === 0) return;
@@ -384,6 +419,22 @@ export class Agent {
     return this.session.some(m =>
       m.role === 'user' && typeof m.content === 'string' && m.content.includes(`<${FORK_BOILERPLATE_TAG}>`),
     );
+  }
+
+  /** Extract recent tool results from the parent session as context for a fork.
+   *  Strips system prompt, assistant tool_calls, and truncates to the last N messages. */
+  extractRecentContext(maxMessages: number): string {
+    const recent = this.session
+      .filter(m => m.role !== 'system') // don't leak parent system prompt
+      .slice(-maxMessages);
+    if (recent.length === 0) return '(无父Agent上下文)';
+    return recent.map(m => {
+      const roleLabel = m.role === 'assistant' ? '主Agent' :
+        m.role === 'tool' ? `工具结果(${m.name || '?'})` : '用户';
+      const content = typeof m.content === 'string' ? m.content.slice(0, 2000) :
+        JSON.stringify(m.content).slice(0, 2000);
+      return `[${roleLabel}] ${content}`;
+    }).join('\n\n');
   }
 
   /** Run one turn: append user input, drive the tool loop. */
@@ -1360,31 +1411,35 @@ ${goal}
     }
 
     let subSystem: string;
-    let forkSession: Message[] | undefined;
 
     if (mode === 'fork') {
-      // Inherit parent context: clone session → add placeholder tool_results
-      // for the current batch → append fork directive as user message.
-      // Placeholder tool_results keep the message structure valid for the API
-      // (assistant with tool_calls must be followed by tool results).
-      const parentSession = [...this.session];
-      const lastMsg = parentSession[parentSession.length - 1];
-      if (lastMsg.role === 'assistant' && lastMsg.tool_calls && lastMsg.tool_calls.length > 0) {
-        for (const call of lastMsg.tool_calls) {
-          parentSession.push({
-            role: 'tool',
-            content: FORK_PLACEHOLDER_RESULT,
-            tool_call_id: call.id,
-            name: call.name,
-          });
-        }
-      }
-      parentSession.push({
-        role: 'user',
-        content: buildForkDirective(prompt),
-      });
-      forkSession = parentSession;
-      subSystem = ''; // no system prompt — inherited from parent context
+      // Fork mode: build a clean sub-agent with its OWN system prompt.
+      // We do NOT inherit the parent session — that causes the fork to inherit
+      // the parent's system prompt (e.g. "delegate via agent_spawn") and the
+      // fork then tries to spawn sub-agents of its own, hitting the recursion
+      // guard. Instead: fresh session with fork-specific system prompt.
+      //
+      // We still inject the parent's recent tool outputs as context so the fork
+      // knows what files were already read/modified — but we strip the parent's
+      // tool_calls (the fork shouldn't see "calls it didn't make").
+      const recentContext = this.extractRecentContext(12);
+      subTools.unregister('agent_spawn'); // fork children cannot spawn further forks
+      subTools.unregister('agent_message'); // no messaging between forks
+
+      subSystem = `你是主Agent派出的工作进程（fork）。你不是主Agent，不要尝试委派子任务。
+
+## 你的任务
+${prompt}
+
+## 硬性规则
+1. **直接执行** — 你有全部工具权限，直接读、写、搜索、跑命令。不要 spawn 子Agent
+2. **专注** — 只完成分配给你的任务，不要偏离
+3. **先查后动** — 涉及代码库的，先查再动手
+4. **直接给结论** — 不要反问、不要建议下一步、不要写论文
+5. **验证** — 改完代码后跑编译/测试确认没炸
+
+## 父Agent近期上下文
+${recentContext}`;
     } else {
       subSystem = `你是主 Agent 派出的子任务 Agent。执行一个聚焦的专项任务。
 
@@ -1409,19 +1464,20 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       subSystem,
       { temperature: 0.3 },
       (ev) => {
+        // Forward text chunks for progress display
         if (ev.kind === EventKind.Text && ev.text && onProgress) {
           onProgress(ev.text);
+        }
+        // Forward tool dispatch/results so UI can show sub-agent activity
+        if (ev.kind === EventKind.ToolDispatch) {
+          onProgress?.(`🔧 ${(ev as any).name || '?'}\n`);
         }
       },
     );
 
     try {
-      if (mode === 'fork' && forkSession) {
-        subAgent.setSession(forkSession);
-        await subAgent.runLoop(signal);
-      } else {
-        await subAgent.run(signal, '开始执行。');
-      }
+      // Fork and fresh both use run() — fork has its own system prompt + stripped tools
+      await subAgent.run(signal, mode === 'fork' ? prompt : '开始执行。');
       // Extract the last assistant message as the result
       const session = subAgent.getSession();
       const lastAssistant = [...session].reverse().find(m => m.role === 'assistant');
