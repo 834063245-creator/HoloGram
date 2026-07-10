@@ -20,8 +20,7 @@ use parking_lot::RwLock;
 use rusqlite::Connection;
 use tracing::info;
 
-use crate::graph::{EdgeKind, Graph};
-use crate::pipeline::runner::analyze_project;
+use crate::graph::Graph;
 use crate::storage::{GraphStore, MemoryIndex, SqliteDb};
 use crate::storage::sqlite::{timeline_query, timeline_record, timeline_record_with_props};
 
@@ -679,6 +678,7 @@ pub fn engine_try_incremental(
 mod tests {
     use super::*;
     use crate::engine::lsp::reparse_for_lsp;
+    use crate::pipeline::runner::analyze_project;
 
     #[test]
     fn test_engine_new_uninitialized() {
