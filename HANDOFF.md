@@ -68,7 +68,14 @@
 | Bug | 说明 | 状态 |
 |-----|------|------|
 | `search_content` 间歇空结果 | 引擎 analyze_project 后索引窗口期竞态 | ✅ `swap_index` 加 has_aux_indexes 守卫 |
-| `git_commit` 等每次弹 Ask | 系统规则 `Git(commit)` Ask + 用户点了"本次会话允许"但规则不匹配 | ✅ 添加回归测试 r10 + permission_ask_response 防御日志 |
+| `git_commit` 等每次弹 Ask | 系统规则 Git(commit) Ask + 用户点了"本次会话允许"但规则不匹配 | ✅ 回归测试 r10 + permission_ask_response 防御日志 |
+
+### 本次发现的工具参数 bug 🆕
+
+| Bug | 说明 | 状态 |
+|-----|------|------|
+| `move_file` | 前端传 `{from,to}` 但 Tauri 期望 `{source,dest_dir}` → 参数全空 | ✅ 改为 `{from,to}` + 用 `rename()` |
+| `rename_file` | 前端传 `{filePath,newName}` 但 Tauri 期望 `{from,to}` → 参数全空 | ✅ 改为 `{file_path,new_name}` + 自动拼接父目录 |
 
 ## 构建
 

@@ -128,26 +128,6 @@ pub(crate) async fn rename(
     Ok((resolved_from, resolved_to))
 }
 
-/// Move a file into a target directory. Source gets read check, dest directory
-/// gets write check. Returns (source_path, dest_path).
-pub(crate) async fn move_into_dir(
-    source: &str,
-    dest_dir: &str,
-    is_agent: bool,
-    state: &tauri::State<'_, WorkspaceState>,
-    app: &AppHandle,
-) -> Result<(PathBuf, PathBuf), String> {
-    let src_real = crate::utils::resolve_read_dispatch(source, is_agent, state, app).await?;
-    let dest_real = crate::utils::resolve_write_dispatch(dest_dir, is_agent, state, app).await?;
-    let name = src_real
-        .file_name()
-        .ok_or_else(|| format!("无效路径: {}", source))?;
-    let dest = dest_real.join(name);
-    std::fs::rename(&src_real, &dest)
-        .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))?;
-    Ok((src_real, dest))
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Presentation helpers — formatting, not I/O
 // ═══════════════════════════════════════════════════════════════
