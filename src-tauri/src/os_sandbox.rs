@@ -509,13 +509,12 @@ mod imp {
     /// before caching it as the system shell. Returns false if spawn fails,
     /// hangs, or returns non-zero exit code — we fall back to Cmd.
     /// ponytail: this catches broken Git Bash installs where bash.exe exists
-    /// on disk but msys-2.0.dll or other deps fail to init, which would
-    /// otherwise cause a STATUS_DLL_INIT_FAILED popup on every shell spawn.
-    /// IMPORTANT: goes through spawn_sandboxed (not raw Command::new) so the
-    /// test reflects the actual AppContainer sandbox environment bash will run in.
+    /// on disk but msys-2.0.dll or other deps fail to init.
+    /// Uses spawn_job_only (Job Object, no AppContainer) — reflects the actual
+    /// execution environment used by spawn_shell.
     fn smoke_test_bash(bash_path: &str) -> bool {
         let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
-        match spawn_sandboxed(&cmdline, ".", false) {
+        match spawn_job_only(&cmdline, ".", false) {
             Ok(mut child) => match child.wait() {
                 Ok(status) => status.success(),
                 Err(_) => false,
