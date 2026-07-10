@@ -35,11 +35,17 @@
 ### 流式输出卡顿修复 (2137d5c)
 - 重试期间 notice 插在 streaming assistant 前面，保持增量渲染路径
 
+### graph.ts 布局函数拆分 (ded0100)
+- 5434 → 4911 行 (-523 行，-9.6%)
+- 提取 5 个纯算法函数到 `graph-layout.ts`：fibonacciSphere / simulateForces / spiralGalaxies / repelCommunityCentroids / layout3D
+- graph-layout.ts 零 THREE.js 依赖，纯 TypeScript
+- graph.ts 保留 GPU 布局调用链（gpuLayout.compute + spiralGalaxies + repelCommunityCentroids），CPU fallback 走 layout3D
+
 ## 还没动
 
 | 文件 | 行数 | 为什么 |
 |------|------|--------|
-| `src-ui/src/ui/graph.ts` | ~4900 | 布局参数锁定，layout3D 不能动渲染逻辑 |
+| `src-ui/src/ui/graph.ts` | 4911 | 渲染函数全在 StarGraph 类内，依赖 THREE.js 状态 |
 | `engine/src/engine.rs` | 2079 | 生命周期 + LSP + FTL + 增量全耦合 |
 | `src-tauri/src/commands/tools.rs` | 1959 | Tauri 命令 + 后台 job 系统 |
 | `src-tauri/src/os_sandbox.rs` | 1732 | 单一职责，不需要拆 |
@@ -63,6 +69,7 @@ npx vite build            # 零错误（~45s）
 
 ## 下一步建议
 
-1. **graph.ts 拆分**：布局（layout3D/simulateForces）→ graph-layout.ts，渲染 → graph-renderer.ts
+1. **graph.ts 渲染拆分**：渲染函数（buildNodes/buildEdges/buildStarfield 等）→ graph-renderer.ts。比布局复杂——所有函数都在 StarGraph 类内且依赖 THREE.js 实例状态
 2. **engine.rs**：等 graph.ts 拆完再动
 3. **search_content 竞态**：引擎 `file_index` 构建完成前加 guard
+4. **git_commit Ask 不生效**：系统规则 `Git(commit)` Ask + 用户点了"本次会话允许"但新 `git_commit` 仍弹窗——规则匹配 bug
