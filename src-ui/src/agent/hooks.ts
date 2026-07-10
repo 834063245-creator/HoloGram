@@ -291,11 +291,22 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           const fp = String(args['filePath'] || args['file_path'] || '');
           if (fp) {
             snippet = ctx.getImpactSummary(fp);
-            // If file has functions, suggest dataflow trace
             const nodes = ctx.getNodesInFile(fp);
             const hasFuncs = nodes.some(n => n.kind === 'function' || n.kind === 'method');
             if (hasFuncs && snippet) {
               snippet += ' 共享变量/异步链 → trace_dataflow 追踪。';
+            }
+            // Engine-layer: fragility rank
+            if (ctx.engine) {
+              const normFp = fp.replace(/\\/g, '/').toLowerCase();
+              const rankEntry = ctx.engine.fragilityRanks.find(r =>
+                r.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+                normFp.includes(r.file.replace(/\\/g, '/').toLowerCase())
+              );
+              if (rankEntry) {
+                const rank = ctx.engine.fragilityRanks.indexOf(rankEntry) + 1;
+                snippet = (snippet || '') + ` 脆弱度 #${rank} (${rankEntry.score.toFixed(0)}) → 改前调 trace_impact`;
+              }
             }
           }
           break;
@@ -317,7 +328,21 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             }
           } else {
             const files = extractFilesFromSearchResult(result);
-            if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
+            if (files.length > 0) {
+              snippet = ctx.getSearchContext(files.slice(0, 3));
+              // Engine-layer: flag if any match is a high-fragility file
+              if (ctx.engine) {
+                const hot = files.filter(f => {
+                  const nf = f.replace(/\\/g, '/').toLowerCase();
+                  return ctx.engine!.fragilityRanks.some(r =>
+                    r.file.replace(/\\/g, '/').toLowerCase().includes(nf)
+                  );
+                });
+                if (hot.length > 0) {
+                  snippet = (snippet || '') + ` ⚠ 其中 ${hot.length} 个文件在高脆弱度排名中 → 谨慎修改`;
+                }
+              }
+            }
           }
           break;
         }
