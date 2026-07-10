@@ -4345,14 +4345,18 @@ export class ChatPanel {
     this._slashNavIdx = 0;
     this._slashPanel.innerHTML = CommandRegistry.instance.renderPanel(cmds, query);
     this._slashPanel.classList.add('open');
+    this._slashPanel.style.display = '';
     // Highlight first item
     this._highlightSlashItem(0);
   }
 
-  /** Hide the slash panel — removes open class AND clears DOM to prevent ghost artifacts. */
+  /** Hide the slash panel — aggressive cleanup: clear DOM + force layout removal.
+   *  Using style.display (not just CSS class) because CSS cascade can be unreliable
+   *  when multiple rules fight over visibility during streaming/panel morph transitions. */
   private _hideSlashPanel(): void {
     if (!this._slashPanel) return;
     this._slashPanel.classList.remove('open');
+    this._slashPanel.style.display = 'none';
     this._slashPanel.innerHTML = '';
     this._slashVisibleCmds = [];
     this._slashNavIdx = 0;
