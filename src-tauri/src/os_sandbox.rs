@@ -156,7 +156,7 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
         // If bash is cached, try it first; fall back to Cmd on spawn failure.
         if let imp::Shell::Bash(ref bash_path) = shell {
             let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
-            match imp::spawn_sandboxed(&cmdline, cwd, true) {
+            match imp::spawn_job_only(&cmdline, cwd, true) {
                 Ok(child) => return Ok(child),
                 Err(e) => {
                     eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
@@ -166,7 +166,7 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
         }
         // Cmd path
         let cmdline = format!("cmd /s /c \"{}\"", command);
-        imp::spawn_sandboxed(&cmdline, cwd, true)
+        imp::spawn_job_only(&cmdline, cwd, true)
     }
     #[cfg(target_os = "macos")]
     {
@@ -1463,7 +1463,7 @@ mod imp {
         }
 
         // CreateProcessW — suspended so we can assign to Job first
-        let flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS;
+        let flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS | CREATE_NO_WINDOW;
         let mut proc_info = ProcInfo { process: 0, thread: 0, pid: 0, tid: 0 };
         let ok = unsafe {
             CreateProcessW(
@@ -1528,7 +1528,7 @@ mod imp {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+            .creation_flags(CREATE_NO_WINDOW);
         let child = c.spawn()?;
         job::assign(&child);
         Ok(super::SandboxedChild {
