@@ -962,6 +962,51 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
       }
     }
 
+    // ── LSP real call resolution: resolve_call on top 3 fragile files ──
+    const lspCallers = new Map<string, Array<{ symbol: string; count: number }>>();
+    for (const r of fragilityRanks.slice(0, 3)) {
+      try {
+        const resolveRaw = await invoke<string>('hologram_call', {
+          tool: 'resolve_call',
+          args: { file: r.file },
+        }).catch(() => '{}');
+        const resolveData = JSON.parse(resolveRaw);
+        if (resolveData.calls && Array.isArray(resolveData.calls)) {
+          // Aggregate caller counts per function
+          const funcCallers = new Map<string, number>();
+          for (const c of resolveData.calls) {
+            const fn = c.callee || c.function || c.name || '';
+            if (fn) funcCallers.set(fn, (funcCallers.get(fn) || 0) + 1);
+          }
+          const sorted = [...funcCallers.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([symbol, count]) => ({ symbol, count }));
+          if (sorted.length > 0) lspCallers.set(r.file, sorted);
+        }
+      } catch { /* per-file LSP can fail silently */ }
+    }
+
+    // ── Semantic neighbors: search_symbols on top fragile module names ──
+    const semanticNeighbors = new Map<string, Array<{ name: string; file: string }>>();
+    for (const r of fragilityRanks.slice(0, 3)) {
+      const symbol = r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+      if (!symbol) continue;
+      try {
+        const searchRaw = await invoke<string>('hologram_call', {
+          tool: 'search_symbols',
+          args: { query: symbol, limit: 5 },
+        }).catch(() => '{"results":[]}');
+        const searchData = JSON.parse(searchRaw);
+        const results = searchData.results || [];
+        const neighbors = results
+          .filter((s: any) => (s.name || '').toLowerCase() !== symbol.toLowerCase())
+          .slice(0, 3)
+          .map((s: any) => ({ name: s.name || '', file: s.location || s.file || '' }));
+        if (neighbors.length > 0) semanticNeighbors.set(r.file, neighbors);
+      } catch { /* search can fail silently */ }
+    }
+
     // ── Baseline / drift ──
     let baselineFragility: Map<string, number>;
     let sessionDrift = 0;
@@ -991,8 +1036,10 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
       baselineFragility,
       sessionDrift,
       lspHotspots,
+      lspCallers,
       synthesisAlerts,
-      vectorReady: false, // deferred until on-demand lookup
+      semanticNeighbors,
+      vectorReady: semanticNeighbors.size > 0,
     };
   } catch (e) {
     console.warn('[loadEngineSnapshot] engine data unavailable, preflight runs in lightweight mode:', e);
