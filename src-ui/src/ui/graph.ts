@@ -1101,46 +1101,11 @@ export class StarGraph {
     }
   }
 
-  private rebuildHighlightEdges(nodeIdx: number): void {
-    if (this._analysis.blastMode) return;
-    // In focus subgraph mode, rebuild both focus edges + hover edges together
-    if (this.focusSubgraphActive) {
-      this._buildFocusSubgraphEdges();
-      if (nodeIdx >= 0 && nodeIdx < this._nodeCount) {
-        const edges = this.edgeIndexOf[nodeIdx];
-        if (edges.length > 0) {
-          const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
-          const degNorm = 1 / Math.pow(edges.length, 0.25);
-          for (const ei of edges) {
-            const d = this.edgeDataList[ei];
-            verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-            const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-            const nearB = 2.5 * degNorm * 0.3;
-            const farB  = 2.5 * degNorm;
-            if (d.s === nodeIdx) {
-              colors.push(Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB),
-                          Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB));
-            } else {
-              colors.push(Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB),
-                          Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB));
-            }
-          }
-          const geo = new THREE.BufferGeometry();
-          geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-          geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-          this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })));
-        }
-      }
-      return;
-    }
-    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    if (nodeIdx < 0 || nodeIdx >= this._nodeCount) return;
+  /** Build hover edge verts+colors for a node — degree-normalized brightness gradient. */
+  private _buildHoverEdgeVerts(nodeIdx: number, verts: number[], colors: number[]): void {
     const edges = this.edgeIndexOf[nodeIdx];
     if (edges.length === 0) return;
-    const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
-    // ponytail: degree-normalized brightness + per-vertex gradient.
-    // Dim at hovered node (30%), bright at far end (100%). Prevents hub
-    // over-exposure while keeping low-degree nodes clearly visible.
+    const pos = this.nodePositions;
     const degNorm = 1 / Math.pow(edges.length, 0.25);
     for (const ei of edges) {
       const d = this.edgeDataList[ei];
@@ -1156,6 +1121,29 @@ export class StarGraph {
                     Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB));
       }
     }
+  }
+
+  private rebuildHighlightEdges(nodeIdx: number): void {
+    if (this._analysis.blastMode) return;
+    if (this.focusSubgraphActive) {
+      this._buildFocusSubgraphEdges();
+      if (nodeIdx >= 0 && nodeIdx < this._nodeCount) {
+        const verts: number[] = [], colors: number[] = [];
+        this._buildHoverEdgeVerts(nodeIdx, verts, colors);
+        if (verts.length > 0) {
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+          geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+          this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })));
+        }
+      }
+      return;
+    }
+    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    if (nodeIdx < 0 || nodeIdx >= this._nodeCount) return;
+    const verts: number[] = [], colors: number[] = [];
+    this._buildHoverEdgeVerts(nodeIdx, verts, colors);
+    if (verts.length === 0) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
