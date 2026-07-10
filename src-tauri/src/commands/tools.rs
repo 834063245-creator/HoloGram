@@ -1792,7 +1792,16 @@ pub(crate) async fn permission_ask_response(
                 ctx.add_session_rule(rule_str, behavior);
                 // Persist to .hologram/permissions.json so the rule survives restarts
                 crate::permissions::rule::append_project_rule(&ctx.project_root, rule_str, behavior);
+                tracing::info!(
+                    "[perm] session rule added: {}({}) → {}",
+                    rule_str, behavior,
+                    if allow { "allowed this operation" } else { "denied this operation" }
+                );
+            } else {
+                tracing::warn!("[perm] remember=true but get_ctx failed — session rule NOT saved");
             }
+        } else {
+            tracing::warn!("[perm] remember=true but rule_to_add is None — frontend may have lost suggestions");
         }
     }
     Ok(())
