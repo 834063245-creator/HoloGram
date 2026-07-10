@@ -1506,6 +1506,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
         try {
           const diffT = this.tools.get('agent_isolation_diff');
           const mergeT = this.tools.get('agent_isolation_merge');
+          const discardT = this.tools.get('agent_isolation_discard');
           if (diffT) {
             const diffResult = await diffT.execute({ agent_id: isolationId });
             bus.emit('agent:sub-isolation-diff', {
@@ -1516,6 +1517,10 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
             if (mergeT) {
               await mergeT.execute({ agent_id: isolationId });
             }
+          }
+          // Clean up the isolation worktree
+          if (discardT) {
+            await discardT.execute({ agent_id: isolationId });
           }
         } catch { /* best effort */ }
       }
