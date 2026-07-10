@@ -820,6 +820,10 @@ export class Workspace {
         const cnt = (result.l5_violations?.length||0) + (result.l4_violations?.length||0)
           + (result.l3_violations?.length||0) + (result.l2_violations?.length||0);
         bus.emit('check:result', { passed: result.passed, violations: cnt });
+        // Push status-bar notification — visible even when check panel is closed
+        if (!result.passed) {
+          this.onStatusChange?.(`⚠ 简报未通过: ${cnt} 条违规`);
+        }
       } catch (parseErr) {
         console.error('[runCheck] JSON parse failed:', parseErr, 'raw:', json.slice(0, 200));
         this.onStatusChange?.('简报解析失败');
