@@ -20,7 +20,29 @@ pub(crate) fn hologram_call(tool: String, mut args: serde_json::Value, state: ta
             map.insert("changed_files".to_string(), serde_json::json!(changed_files));
         }
     }
-    Ok(ToolRegistry::dispatch(&tool, &args).to_string())
+    let dummy_id = serde_json::json!(null);
+    let result = ToolRegistry::dispatch(&tool, &args, &dummy_id);
+    // Unwrap MCP JSON-RPC envelope → return raw tool output text.
+    // After ToolResponse migration, dispatch() wraps everything in
+    // {"jsonrpc":"2.0","id":...,"result":{"content":[{"type":"text","text":"..."}]}}.
+    // All Tauri callers (timeline, check, dataflow, graph-partitioner, Agent)
+    // expect the raw tool JSON, not the envelope.
+    let text = result
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    if text.is_empty() {
+        // Fallback: it might be a Degraded response or error
+        if let Some(err) = result.get("error") {
+            return Err(format!("Engine error: {:?}", err));
+        }
+        return Err("Engine returned empty result".to_string());
+    }
+    Ok(text.to_string())
 }
 
 #[tauri::command]
@@ -52,9 +74,11 @@ mod tests {
     fn hologram_call_dispatches_all_tools_no_not_found() {
         let raw = hologram_tools_list().expect("hologram_tools_list should succeed");
         let tools: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("should parse");
+        let dummy_id = serde_json::json!(null);
         for tool in &tools {
             let name = tool["name"].as_str().unwrap();
-            let result = ToolRegistry::dispatch(name, &serde_json::json!({}));
+            let result = ToolRegistry::dispatch(name, &serde_json::json!({}), &dummy_id);
+            // After ToolResponse migration, unknown tools return Degraded (success with _isDegraded)
             if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
                 if err.starts_with("Tool not found") {
                     panic!(
