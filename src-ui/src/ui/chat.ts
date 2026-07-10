@@ -5,8 +5,9 @@
 // 纯 DOM 渲染，EventSink → 消息气泡 / 工具卡片 / 思考折叠
 // Agent 引擎 (agent.ts) 已完整，此文件只管"把事件画到屏幕上"
 
-import type { Agent, AgentEvent } from '../agent/agent';
-import { EventKind } from '../agent/agent';
+import type { ChatAgentHandle } from '../agent/chat-agent-handle';
+import type { AgentEvent } from '../agent/agent-types';
+import { EventKind } from '../agent/agent-types';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
@@ -55,7 +56,7 @@ const PANEL_ID = 'chat-panel';
 interface ChatSession {
   id: number;
   label: string;
-  agent: Agent;
+  agent: ChatAgentHandle;
 }
 
 let nextSessionId = 1;
@@ -86,7 +87,7 @@ export class ChatPanel {
   // Session state
   private sessions: ChatSession[] = [];
   private activeIdx = -1;
-  private agentFactory: (() => Promise<Agent | null>) | null = null;
+  private agentFactory: (() => Promise<ChatAgentHandle | null>) | null = null;
 
   // User focus tracking — so the Agent knows what file/node the user is looking at
   private _userFocusFile: string | null = null;
@@ -199,7 +200,7 @@ export class ChatPanel {
   setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
   setOnModeChange(fn: () => void): void { this._onModeChange = fn; }
   setOnTrailToggle(fn: () => void): void { this._onTrailToggle = fn; }
-  setAgentFactory(fn: () => Promise<Agent | null>): void { this.agentFactory = fn; }
+  setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void { this.agentFactory = fn; }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -242,11 +243,11 @@ export class ChatPanel {
 
   // ── Public API ──
 
-  private get agent(): Agent | null {
+  private get agent(): ChatAgentHandle | null {
     return this.sessions[this.activeIdx]?.agent ?? null;
   }
 
-  setAgent(agent: Agent | null): void {
+  setAgent(agent: ChatAgentHandle | null): void {
     if (!agent) return;
     // Replace all sessions — setAgent is boot/setup, not session management.
     // ponytail: clear old sessions (including placeholder) so the workspace
@@ -271,7 +272,7 @@ export class ChatPanel {
     this.addNotice('已连接到当前项目', 'info');
   }
 
-  getAgent(): Agent | null { return this.agent; }
+  getAgent(): ChatAgentHandle | null { return this.agent; }
   setStarGraph(g: StarGraph): void { this.starGraph = g; }
   setProjectPath(p: string): void {
     // ponytail: clear user focus when project changes — stale node/file refs
