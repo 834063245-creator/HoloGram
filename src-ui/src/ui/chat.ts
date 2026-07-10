@@ -97,6 +97,8 @@ export class ChatPanel {
   private starGraph: StarGraph | null = null;
   private abortCtrl: AbortController | null = null;
   private running = false;
+  private _permCardCount = 0; // live permission cards awaiting user decision
+  private _stopBtnPollId: ReturnType<typeof setInterval> | null = null;
 
   // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
   // All chat messages are stored here. The renderer builds DOM from this array.
@@ -342,6 +344,7 @@ export class ChatPanel {
       this.summonPanel();
     }
     return new Promise((resolve) => {
+      this._permCardCount++;
       const card = document.createElement('div');
       card.className = 'perm-inline-card';
 
@@ -379,6 +382,7 @@ export class ChatPanel {
 
       let resultRef: { allow: boolean; remember: boolean } = { allow: false, remember: false };
       const resolveAndClose = (result: { allow: boolean; remember: boolean }) => {
+        this._permCardCount = Math.max(0, this._permCardCount - 1);
         resultRef = result;
         cleanupCard();
         resolve(result);
@@ -2502,36 +2506,62 @@ export class ChatPanel {
       this.agent?.cascadeAbort();
       // 解散所有待审批弹窗（防止权限门死锁）
       cancelPendingApprovals();
+      this._permCardCount = 0;
       // 立即视觉反馈 — 不等 .finally()，防止卡死时 UI 无响应
       this.inputArea.disabled = false;
       this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
-      this.stopBtn.classList.add('hidden');
-      this.sendBtn.classList.remove('hidden');
       this.addNotice('正在中止…', 'info');
       // 安全超时：3 秒内若 Agent 没响应，强制复位
       const safety = setTimeout(() => {
         if (this.running) {
           this.running = false;
           this.abortCtrl = null;
+          this._updateStopButton();
           this.finishTurn();
           this.addNotice('已强制中止（超时）', 'warn');
         }
       }, 3000);
       // 如果 Agent 正常响应了，取消安全超时
       const poll = setInterval(() => {
-        if (!this.running) {
+        if (!this._isBusy()) {
           clearTimeout(safety);
           clearInterval(poll);
         }
       }, 200);
       this.abortCtrl = null;
+      this._updateStopButton();
+    }
+  }
+
+  /** Is ANY agent (main or sub) currently working? Single source of truth. */
+  private _isBusy(): boolean {
+    return this.running
+      || (this.agent?.runningSubAgentCount?.() ?? 0) > 0
+      || this._permCardCount > 0;
+  }
+
+  /** Sync stop button visibility to _isBusy() truth — call whenever state may have changed. */
+  private _updateStopButton(): void {
+    const busy = this._isBusy();
+    this.stopBtn.classList.toggle('hidden', !busy);
+    if (!busy) {
+      this.sendBtn.classList.remove('hidden');
+      if (this._stopBtnPollId) { clearInterval(this._stopBtnPollId); this._stopBtnPollId = null; }
+    } else if (!this._stopBtnPollId) {
+      // Poll while busy — catches sub-agent completion without explicit callback plumbing
+      this._stopBtnPollId = setInterval(() => {
+        if (!this._isBusy()) {
+          this.stopBtn.classList.add('hidden');
+          this.sendBtn.classList.remove('hidden');
+          if (this._stopBtnPollId) { clearInterval(this._stopBtnPollId); this._stopBtnPollId = null; }
+        }
+      }, 500);
     }
   }
 
   private setRunning(r: boolean): void {
     this.running = r;
-    // ponytail: keep input + send enabled during run so user can insert messages
-    this.stopBtn.classList.toggle('hidden', !r);
+    this._updateStopButton();
     if (r) {
       this.inputArea.placeholder = 'Agent 思考中… 可直接输入消息插入对话';
       this._updateStatusBar('thinking', '分析中…');

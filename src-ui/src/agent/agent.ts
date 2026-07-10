@@ -388,6 +388,11 @@ export class Agent {
     return this._subAgentPool?.stopAll() ?? [];
   }
 
+  /** Current count of running sub-agents. */
+  runningSubAgentCount(): number {
+    return this._subAgentPool?.runningCount ?? 0;
+  }
+
   /** Apply queued inserts at a safe boundary (top of loop, after tool results committed). */
   private _applyPendingInserts(): void {
     if (this._pendingInserts.length === 0) return;
@@ -660,6 +665,12 @@ ${goal}
           content: r?.output || `error: tool "${call.name}" did not produce a result`,
           tool_call_id: call.id,
           name: call.name,
+        });
+        // Emit tool-done event so panels can auto-refresh
+        bus.emit('agent:tool-done', {
+          toolName: call.name,
+          args: (() => { try { return JSON.parse(call.arguments || '{}'); } catch { return {}; } })(),
+          output: r?.output || '',
         });
       }
 

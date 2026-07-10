@@ -294,6 +294,21 @@ export class Workspace {
       });
       ws._unlisteners.push(unlistenGraphUpdated);
 
+      // Agent tool-done → auto-trigger briefings when files may have changed
+      const FILE_MODIFY_TOOLS = new Set([
+        'write_file', 'edit_file', 'delete_file', 'rename_file', 'move_file',
+        'git_commit', 'git_stage', 'git_push', 'git_pull',
+        'run_shell', 'rename_symbol',
+      ]);
+      const onToolDone = (evt: { toolName: string }) => {
+        if (FILE_MODIFY_TOOLS.has(evt.toolName)) {
+          ws.scheduleCheck();
+          bus.emit('timeline:refresh');
+        }
+      };
+      bus.on('agent:tool-done', onToolDone);
+      ws._unlisteners.push(() => bus.off('agent:tool-done', onToolDone));
+
       const unlistenAnalysisComplete = await listen<string>(
         'analysis-complete',
         async (event) => {
