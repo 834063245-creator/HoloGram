@@ -816,6 +816,16 @@ export class Workspace {
         checkPanel.update(result);
         checkPanel.loadAndRenderGate(this.path).catch(() => {});
         bus.emit('timeline:refresh');
+
+        // Push status bar notification on failure
+        if (!result.passed) {
+          const cnt = (result.l5_violations?.length||0) + (result.l4_violations?.length||0)
+            + (result.l3_violations?.length||0) + (result.l2_violations?.length||0);
+          const nv = result.new_violations || 0;
+          let msg = `⚠ 简报未通过: ${cnt} 条违规`;
+          if (nv > 0) msg += `（+${nv} 新增）`;
+          this.onStatusChange?.(msg);
+        }
       } catch (parseErr) {
         console.error('[runCheck] JSON parse failed:', parseErr, 'raw:', json.slice(0, 200));
         this.onStatusChange?.('简报解析失败');
