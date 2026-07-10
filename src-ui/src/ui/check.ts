@@ -71,6 +71,7 @@ export class CheckPanel {
     this.lastResult = result;
     this.viewingHistory = false;
     this.historyTimestamp = '';
+    this.showHistoryList = false;
     this.renderResult(result);
 
     // Feed check result to state injection cache so the agent sees it
@@ -98,8 +99,14 @@ export class CheckPanel {
   showCurrent(): void {
     this.viewingHistory = false;
     this.historyTimestamp = '';
+    this.showHistoryList = false;
     if (this.lastResult) {
       this.renderResult(this.lastResult);
+    } else {
+      this.content.innerHTML = '';
+      const empty = ce('div', 'check-history-empty');
+      empty.textContent = '暂无简报数据';
+      this.content.appendChild(empty);
     }
   }
 
@@ -190,6 +197,7 @@ export class CheckPanel {
 
   close(): void {
     this.openState = false;
+    this.showHistoryList = false; // reset — next open shows current, not stale history
     this.panel.classList.remove('check-open');
     shell.notifyPanelChanged();
   }
