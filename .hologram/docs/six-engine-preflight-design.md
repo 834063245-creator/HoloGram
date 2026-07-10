@@ -136,8 +136,8 @@
 
 1. ✅ 解析引擎（fileIndex）— 已接入
 2. ✅ 分析引擎（fragility/cycles/health）— 已接入
-3. ⬜ LSP 引擎 — 调用者信息最有价值，先做
-4. ⬜ 合成引擎 — 框架/DI 盲区检测
+3. ✅ 合成引擎（arch_blindspots）— 已接入，并行加载
+4. ⬜ LSP 引擎 — 调用者信息最有价值，先做
 5. ⬜ 向量引擎 — 语义邻居提示，锦上添花
 6. ⬜ 会话趋势对比 — drift 计算已做，需要更细粒度（per-file drift）
 
@@ -149,3 +149,36 @@
 - ❌ 不改 Agent prompt 让它"先调 trace_impact"（hook 替它调了）
 - ❌ 不在 preflight 里做增量更新（那是 watcher 的事）
 - ❌ 不串行调引擎（各自独立，用 Promise.all）
+
+---
+
+## 八、Hook 编排矩阵
+
+引擎数据不只服务于 `edit_file` 的门禁。三种注入时机，覆盖所有工具：
+
+### Pre-hook（执行前拦截）
+
+| 工具 | 引擎 | 行为 |
+|------|------|------|
+| `edit_file`, `write_file` | 分析+LSP+合成 | 风险评级 → HIGH 拦截 |
+| `delete_file`, `move_file`, `rename_file` | 分析 | 文件级影响评估 |
+| `git_discard`, `git_checkout` | 分析 | 丢弃的改动波及了多少下游 |
+| `git_commit` | 分析+合成 | 暂存区变更的整体风险评估 |
+
+### Post-hook（执行后上下文注入）
+
+| 工具 | 引擎 | 注入内容 |
+|------|------|---------|
+| `read_file` | 分析+LSP | 文件脆弱排名、LSP 调用者数、"改前调 trace_impact" |
+| `search_content` | 分析 | 匹配文件中哪些是高危模块 |
+| `search_symbols` | 分析+向量 | 符号脆弱度、语义邻居建议 |
+| `inspect_symbol` | 分析+合成 | 社区归属、框架标记 |
+| `git_diff` | 分析 | 变更文件的脆弱度汇总 |
+| `run_shell` (test/build) | 分析 | 构建结果关联到修改文件的脆弱度 |
+
+### Ambient-hook（子Agent 环境注入）
+
+| 工具 | 引擎 | 注入内容 |
+|------|------|---------|
+| `agent_spawn` | 分析+合成 | 子Agent system prompt 中注入目标文件的引擎摘要 |
+| `task_create` | 分析 | 任务关联文件是否高危，提示 Agent 优先评估风险 |
