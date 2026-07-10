@@ -22,6 +22,8 @@ import { createGlowTexture, createSpikeTexture } from './graph-textures';
 import { makeGlowPointMaterial, makeCoreFresnelMaterial, _GLSL_HSL2RGB } from './graph-shaders';
 import * as Scene from './graph-scene';
 import { buildLegend, buildFocusBanner } from './graph-ui';
+import { GraphFold, type FoldHost, type GalaxyMeta } from './graph-fold';
+import { GraphAnalysis, type AnalysisHost } from './graph-analysis';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
@@ -191,13 +193,8 @@ export class StarGraph {
   private _trailActive = false;
   private _trailLine: THREE.LineSegments | LineSegments2 | null = null;
 
-  // Blast
-  private blastMode = false;
-  private blastSource = -1;
-  private blastDistances: number[] = [];
-  private blastMaxDist = 3; // Reduced from 8 to 3 for more focused impact analysis
-  private blastEdgeType: string = 'all'; // 'all', 'structural', 'data', 'temporal'
-  private blastDirection: string = 'both'; // 'both', 'outbound', 'inbound'
+  // Blast + Path — delegated to GraphAnalysis
+  private _analysis: GraphAnalysis;
 
   // Incremental-update abort: cancel in-flight layout when new data arrives
   private _layoutAbort: AbortController | null = null;
@@ -206,20 +203,10 @@ export class StarGraph {
   // and cold-start blank screen on slow machines).
   private _renderInProgress = false;
 
-  // ── Community / Galaxy fold overlay ──────────────────────
-  private foldMode = false;
-  private enteredGalaxyId: string | null = null;             // null=universe, string=inside a galaxy
-  private enteredSubCommunityId: string | null = null;       // null=whole galaxy, string=drilled into sub-community
-  private _drillStack: string[] = [];                        // multi-level sub-community drill path (top = current)
+    // ── Community / Galaxy fold overlay ──────────────────────
+  private _fold: GraphFold;
   private communities: CommunityData[] = [];
   private nodeCommMap = new Map<number, string>();           // nodeIdx → communityId
-  private _subCommByNodeIdx = new Map<number, string>();     // nodeIdx → subCommunityId (inside constellation)
-  private commFoldGroup = new THREE.Group();                 // galaxy clouds + constellation edges
-  // Galaxy cloud data (computed after layout)
-  private galaxyMeta: { id: string; label: string; centroid: THREE.Vector3; memberIndices: number[]; radius: number }[] = [];
-  private communityRingGroup = new THREE.Group();
-  private galaxyClouds: THREE.Points[] = [];
-  private galaxyGlows: THREE.Object3D[] = [];
 
   // Post-processing (full mode only)
   private composer!: EffectComposer;
@@ -291,11 +278,13 @@ export class StarGraph {
 
     if (true) this.buildHoloGrid();
 
+    this._fold = new GraphFold(this as unknown as FoldHost);
+    this._analysis = new GraphAnalysis(this as unknown as AnalysisHost);
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
     this.galaxyGroup.add(this.nodeGroup);
-    this.galaxyGroup.add(this.commFoldGroup);
-    this.galaxyGroup.add(this.communityRingGroup);
+    this.galaxyGroup.add(this._fold.commFoldGroup);
+    this.galaxyGroup.add(this._fold.communityRingGroup);
     this.scene.add(this.galaxyGroup);
 
     this.raycaster = new THREE.Raycaster();
@@ -373,7 +362,7 @@ export class StarGraph {
       if (pointerDragged) return;
       // Step 3: Shift+click → quick path mode
       if (e.shiftKey) {
-        this._handleShiftClick(e);
+        this._analysis._handleShiftClick(e);
         return;
       }
       this.onClick(e);
@@ -385,18 +374,18 @@ export class StarGraph {
         if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return; }
         if (this._promptBarEl?.style.display === 'flex') { this._hidePrompt(); return; }
         if (this._selecting) { this._selecting = false; this._hideSelectRect(); this.controls.enabled = true; return; }
-        if (this._shiftSourceIdx >= 0) { this._clearShiftPath(); return; }
-        if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
-        if (this.enteredSubCommunityId) { this.exitSubCommunity(); return; }
-        if (this.enteredGalaxyId) { this.exitGalaxy(); return; }
+        if (this._analysis._shiftSourceIdx >= 0) { this._analysis._clearShiftPath(); return; }
+        if (this._analysis._pathSource >= 0) { this._analysis.clearPath(); e.stopImmediatePropagation(); return; }
+        if (this._fold.enteredSubCommunityId) { this._fold.exitSubCommunity(); return; }
+        if (this._fold.enteredGalaxyId) { this._fold.exitGalaxy(); return; }
         // In universe fold view: ESC exits fold mode
-        if (this.foldMode) { this.setFoldMode(false); return; }
-        if (this.blastMode) { this.exitBlastMode(); return; }
+        if (this._fold.foldMode) { this._fold.setFoldMode(false); return; }
+        if (this._analysis.blastMode) { this._analysis.exitBlastMode(); return; }
       }
       if (e.key === 'b' || e.key === 'B') {
-        if (this.blastMode) { this.exitBlastMode(); }
-        else if (this.hoveredIdx >= 0) { this.startBlastMode(this.hoveredIdx); }
-        else if (this.selectedIdx >= 0) { this.startBlastMode(this.selectedIdx); }
+        if (this._analysis.blastMode) { this._analysis.exitBlastMode(); }
+        else if (this.hoveredIdx >= 0) { this._analysis.startBlastMode(this.hoveredIdx); }
+        else if (this.selectedIdx >= 0) { this._analysis.startBlastMode(this.selectedIdx); }
       }
     };
     window.addEventListener('keydown', this._onKeyDown);
@@ -410,11 +399,6 @@ export class StarGraph {
       if (ready) console.log('[StarGraph] GPU layout ready');
     }).catch(() => { /* GPU init failure is non-critical; CPU fallback used */ });
   }
-
-  // ── Cross-edge energy flow (fold mode) ──────────────────
-  private crossFlowParticles!: THREE.Points;
-  private crossFlowData: { segIdx: number; t: number; speed: number }[] = [];
-  private crossFlowSegments: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number }[] = [];
 
   // ── Starfield ────────────────────────────────────────────
 
@@ -562,7 +546,7 @@ export class StarGraph {
 
   private updateTooltip(): void {
     // Galaxy hover takes priority — tooltip already set by updateHover()
-    if (this.foldMode && this.hoveredGalaxyIdx >= 0) return;
+    if (this._fold.foldMode && this.hoveredGalaxyIdx >= 0) return;
     if (this.hoveredIdx < 0 || this.hoveredIdx >= this._nodeCount) { this.tooltipEl.classList.remove('visible'); return; }
     const node = this.graphNodes[this.hoveredIdx];
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
@@ -640,7 +624,7 @@ export class StarGraph {
     // Blast radius
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) this.startBlastMode(this.selectedIdx);
+      if (this.selectedIdx >= 0) this._analysis.startBlastMode(this.selectedIdx);
     });
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('contextmenu', (e) => {
       e.stopPropagation(); e.preventDefault();
@@ -676,22 +660,22 @@ export class StarGraph {
     this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-type]').forEach(btn => {
       btn.addEventListener('pointerdown', (e) => {
         e.stopPropagation(); e.preventDefault();
-        this.blastEdgeType = (btn as HTMLElement).dataset.type || 'all';
+        this._analysis.blastEdgeType = (btn as HTMLElement).dataset.type || 'all';
         this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-type]').forEach(b => {
           b.classList.toggle('active', b === btn);
         });
-        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
+        if (this._analysis.blastMode) { this._analysis.computeBlastDistances(); this._analysis.buildBlastEdges(); this._analysis.updateBlastNodeColors(); }
       });
     });
     // Blast filter: direction
     this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-dir]').forEach(btn => {
       btn.addEventListener('pointerdown', (e) => {
         e.stopPropagation(); e.preventDefault();
-        this.blastDirection = (btn as HTMLElement).dataset.dir || 'both';
+        this._analysis.blastDirection = (btn as HTMLElement).dataset.dir || 'both';
         this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-dir]').forEach(b => {
           b.classList.toggle('active', b === btn);
         });
-        if (this.blastMode) { this.computeBlastDistances(); this.buildBlastEdges(); this.updateBlastNodeColors(); }
+        if (this._analysis.blastMode) { this._analysis.computeBlastDistances(); this._analysis.buildBlastEdges(); this._analysis.updateBlastNodeColors(); }
       });
     });
   }
@@ -705,7 +689,7 @@ export class StarGraph {
 
     // Helper: intersect galaxy core sprites and return the community id
     const hitCloudId = (): string | null => {
-      const coreSprites = this.galaxyGlows.filter((_, i) => i % 2 === 1);
+      const coreSprites = this._fold.galaxyGlows.filter((_, i) => i % 2 === 1);
       const hits = this.raycaster.intersectObjects(coreSprites);
       if (hits.length > 0) {
         return (hits[0].object.userData['galaxyId'] as string) || null;
@@ -714,24 +698,24 @@ export class StarGraph {
     };
 
     // In universe view: click galaxy cloud → enterGalaxy
-    if (this.foldMode && !this.enteredGalaxyId) {
+    if (this._fold.foldMode && !this._fold.enteredGalaxyId) {
       const cid = hitCloudId();
-      if (cid) { this.enterGalaxy(cid); }
+      if (cid) { this._fold.enterGalaxy(cid); }
       return;
     }
 
     // Inside a galaxy or sub-community: dispatch based on whether we're in cloud or constellation view
-    if (this.foldMode && this.enteredGalaxyId) {
+    if (this._fold.foldMode && this._fold.enteredGalaxyId) {
       // Current parent is the deepest sub-community, or the galaxy itself
-      const activeParentId = this._drillStack.length > 0
-        ? this._drillStack[this._drillStack.length - 1]
-        : this.enteredGalaxyId;
+      const activeParentId = this._fold._drillStack.length > 0
+        ? this._fold._drillStack[this._fold._drillStack.length - 1]
+        : this._fold.enteredGalaxyId;
 
       // Check if current parent has sub-communities (→ cloud view) or not (→ constellation view)
-      if (this._hasVisibleSubCommunities(activeParentId)) {
+      if (this._fold._hasVisibleSubCommunities(activeParentId)) {
         // Cloud view: click sub-cloud → enterSubCommunity
         const cid = hitCloudId();
-        if (cid) { this.enterSubCommunity(cid); }
+        if (cid) { this._fold.enterSubCommunity(cid); }
         return;
       }
     }
@@ -832,15 +816,9 @@ export class StarGraph {
     this.detailCard.style.left = `${left}px`; this.detailCard.style.top = `${top}px`;
   }
 
-  // ── Path finding ─────────────────────────────────────────
+  // ── Path finding — delegated to GraphAnalysis ──────────────
 
-  private _pathSource = -1;
-  private _pathTarget = -1;
-  private _pathNodes = new Set<number>();
-  private _pathEdges = new Set<number>();
-
-  // ── Step 3: Shift+click quick path mode ───────────────────
-  private _shiftSourceIdx = -1;
+  // ── Step 3: Shift+click quick path mode — delegated to GraphAnalysis ──
   private _onKeyDown?: (e: KeyboardEvent) => void;
 
   // ── Step 3: Alt+drag rectangle selection ──────────────────
@@ -858,134 +836,6 @@ export class StarGraph {
   private _langHandler: ((data: { lang: string }) => void) | null = null;
   private _showPromptBound: ((data: { title: string; question: string }) => void) | null = null;
 
-  private setPathSource(idx: number): void {
-    if (this.focusSubgraphActive) this.exitFocusSubgraph();
-    this._pathSource = idx;
-    this._pathTarget = -1;
-    this._pathNodes.clear(); this._pathEdges.clear();
-    // Highlight the source node in cyan
-    this.highlightPathNodes();
-    const st = document.getElementById('status-text');
-    if (st) st.innerHTML = `${iconHtml('link', 11)} 路径起点: ${this.graphNodes[idx].name} · 右键目标节点选"路径"完成 · ESC 取消`;
-  }
-
-  private setPathTarget(idx: number): void {
-    this._pathTarget = idx;
-    this.findShortestPath();
-    const st = document.getElementById('status-text');
-    const len = this._pathNodes.size;
-    if (st) st.textContent = len > 0
-      ? `${iconHtml('link', 11)} 路径: ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} · ${len} 节点 · ESC 清除`
-      : `${iconHtml('link', 11)} 未找到 ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} 的路径`;
-  }
-
-  private findShortestPath(): void {
-    this._pathNodes.clear(); this._pathEdges.clear();
-    const src = this._pathSource, dst = this._pathTarget;
-    if (src < 0 || dst < 0) return;
-    // BFS with parent tracking
-    const n = this._nodeCount;
-    const visited = new Array<boolean>(n).fill(false);
-    const parent = new Array<number>(n).fill(-1);
-    const parentEdge = new Array<number>(n).fill(-1);
-    const queue = [src];
-    visited[src] = true;
-    let found = false;
-    while (queue.length > 0 && !found) {
-      const u = queue.shift()!;
-      for (let ei = 0; ei < (this.edgeIndexOf[u]?.length || 0); ei++) {
-        const edgeIdx = this.edgeIndexOf[u][ei];
-        const d = this.edgeDataList[edgeIdx];
-        const v = d.s === u ? d.t : d.s;
-        if (!visited[v]) {
-          visited[v] = true;
-          parent[v] = u;
-          parentEdge[v] = edgeIdx;
-          queue.push(v);
-          if (v === dst) { found = true; break; }
-        }
-      }
-    }
-    if (!found) return;
-    // Backtrack to collect path
-    let cur = dst;
-    while (cur !== src) {
-      this._pathNodes.add(cur);
-      this._pathEdges.add(parentEdge[cur]);
-      cur = parent[cur];
-    }
-    this._pathNodes.add(src);
-    this.highlightPathNodes();
-  }
-
-  private highlightPathNodes(): void {
-    const src = this._pathSource;
-    // Update all node glows: path nodes bright cyan, others dim
-    for (let i = 0; i < this._nodeCount; i++) {
-      const onPath = this._pathNodes.has(i) || i === src;
-      this._overrideFlags[i] = 1; // all nodes overridden during path mode
-      if (i < this._nodeCount) {
-        this._setGlowAlpha(i, onPath ? 0.9 : (this._pathNodes.size > 0 ? 0.06 : 0.55));
-        if (onPath) {
-          this._setGlowColor(i,
-            i === src ? 0x44ffdd : i === this._pathTarget ? 0xff8844 : 0x44ddff);
-        }
-      }
-      if (i < this._nodeCount) {
-        { let _v=onPath || this._pathNodes.size === 0; this._setCoreVisible(i, _v); }
-      }
-    }
-    this._flushOverrideAttrs();
-    // Dim/hide non-path edges
-    for (const lines of this.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity =
-        this._pathNodes.size > 0 ? 0.01 : edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
-    }
-    // Brighten path edges
-    this.rebuildPathEdges();
-  }
-
-  private rebuildPathEdges(): void {
-    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    if (this._pathEdges.size === 0) return;
-    const pos = this.nodePositions;
-    const verts: number[] = [];
-    for (const ei of this._pathEdges) {
-      const d = this.edgeDataList[ei];
-      verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2],
-                 pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      color: 0x44ffcc, transparent: true, opacity: 0.8,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
-  }
-
-  private clearPath(): void {
-    this._pathSource = -1;
-    this._pathTarget = -1;
-    this._pathNodes.clear();
-    this._pathEdges.clear();
-    // Restore normal appearance — clear override flags, shader takes over
-    for (let i = 0; i < this._nodeCount; i++) {
-      this._overrideFlags[i] = 0;
-      if (i < this._nodeCount) {
-        this._setGlowAlpha(i, 0.55);
-        this._setGlowColor(i, this.nodeGlowColors[i]);
-      }
-      this._setCoreVisible(i, true);
-    }
-    this._flushOverrideAttrs();
-    for (const lines of this.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
-    }
-    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    const st = document.getElementById('status-text');
-    if (st && st.innerHTML?.includes('link')) st.innerHTML = '就绪';
-  }
 
   // ── Step 3: Shift+click quick path mode ──────────────────
 
@@ -1000,57 +850,6 @@ export class StarGraph {
     return hits.length > 0 ? hits.length > 0 ? (hits[0].instanceId ?? -1) : -1 : -1;
   }
 
-  private _handleShiftClick(e: PointerEvent): void {
-    const idx = this._hitNode(e);
-    if (idx < 0) {
-      // Shift+click on empty → cancel
-      this._clearShiftPath();
-      return;
-    }
-    if (this._shiftSourceIdx < 0) {
-      // First Shift+click → set source
-      this._shiftSourceIdx = idx;
-      const node = this.graphNodes[idx];
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('link', 11)} 路径起点: ${node.name} · Shift+点击目标节点完成 · ESC 取消`;
-      // Briefly pulse the source node
-      if (idx < this._nodeCount) {
-        this._setGlowColor(idx, 0x44ffdd);
-        this._setGlowAlpha(idx, 0.9);
-      }
-    } else if (idx === this._shiftSourceIdx) {
-      // Same node → cancel
-      this._clearShiftPath();
-    } else {
-      // Second Shift+click → find path & emit event
-      const srcIdx = this._shiftSourceIdx;
-      const srcNode = this.graphNodes[srcIdx];
-      const tgtNode = this.graphNodes[idx];
-      // Use existing path finding
-      this.setPathSource(srcIdx);
-      this.setPathTarget(idx);
-      const pathNames = Array.from(this._pathNodes)
-        .map(i => this.graphNodes[i]?.name || '')
-        .filter(Boolean);
-      // Emit event
-      bus.emit('graph:path-selected', {
-        from: { name: srcNode.name, id: srcNode.id, type: (srcNode.type || srcNode.kind || 'symbol') as string },
-        to: { name: tgtNode.name, id: tgtNode.id, type: (tgtNode.type || tgtNode.kind || 'symbol') as string },
-        pathLength: pathNames.length,
-        pathNames,
-      });
-      this._shiftSourceIdx = -1;
-    }
-  }
-
-  private _clearShiftPath(): void {
-    if (this._shiftSourceIdx >= 0 && this._shiftSourceIdx < this._nodeCount) {
-      this._setGlowColor(this._shiftSourceIdx, this.nodeGlowColors[this._shiftSourceIdx], 0.55);
-    }
-    this._shiftSourceIdx = -1;
-    const st = document.getElementById('status-text');
-    if (st && st.innerHTML?.includes('link')) st.innerHTML = '就绪';
-  }
 
   // ── Step 3: Alt+drag rectangle selection ─────────────────
 
@@ -1128,7 +927,7 @@ export class StarGraph {
     // Flash the selected nodes briefly
     this.highlightNodeNames(nodeNames.slice(0, 30), '#60a0ff');
     setTimeout(() => {
-      if (!this.blastMode && this._pathSource < 0 && !this._lensActive) {
+      if (!this._analysis.blastMode && this._analysis._pathSource < 0 && !this._lensActive) {
         this.clearAgentHighlight();
       }
     }, 2500);
@@ -1251,20 +1050,20 @@ export class StarGraph {
     if (!isFinite(this.mouse.x) || !isFinite(this.mouse.y)) return;
 
     // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
-    const cloudViewActive = this.foldMode && this.galaxyGlows.length > 0;
+    const cloudViewActive = this._fold.foldMode && this._fold.galaxyGlows.length > 0;
     if (cloudViewActive) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
       this.raycaster.setFromCamera(this.mouse, this.camera);
-      const coreSprites = this.galaxyGlows.filter((_, i) => i % 2 === 1);
+      const coreSprites = this._fold.galaxyGlows.filter((_, i) => i % 2 === 1);
       const galaxyHits = this.raycaster.intersectObjects(coreSprites);
       if (galaxyHits.length > 0 && this.mouse.x > -999) {
         this.container.style.cursor = 'pointer';
         const gIdx = galaxyHits[0].object.userData['galaxyIndex'] as number | undefined;
-        if (gIdx !== undefined && gIdx < this.galaxyMeta.length) {
+        if (gIdx !== undefined && gIdx < this._fold.galaxyMeta.length) {
           this.hoveredGalaxyIdx = gIdx;
-          const gm = this.galaxyMeta[gIdx];
+          const gm = this._fold.galaxyMeta[gIdx];
           const shortName = (gm.label || gm.id).split('/')[0].replace(/_/g, ' ');
-          const isSub = !!this.enteredGalaxyId;
+          const isSub = !!this._fold.enteredGalaxyId;
           this.tooltipEl.querySelector('.tt-name')!.textContent = `${isSub ? '📁' : '🌌'} ${shortName}`;
           this.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
           this.tooltipEl.querySelector('.tt-loc')!.textContent = isSub ? '点击钻入子社区' : '点击进入查看内部连线';
@@ -1303,7 +1102,7 @@ export class StarGraph {
   }
 
   private rebuildHighlightEdges(nodeIdx: number): void {
-    if (this.blastMode) return;
+    if (this._analysis.blastMode) return;
     // In focus subgraph mode, rebuild both focus edges + hover edges together
     if (this.focusSubgraphActive) {
       this._buildFocusSubgraphEdges();
@@ -1375,7 +1174,7 @@ export class StarGraph {
       this.tmpVec3.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]);
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
-      if (behind || this.foldMode) { div.style.display = 'none'; continue; }
+      if (behind || this._fold.foldMode) { div.style.display = 'none'; continue; }
       const focused = i === hoverI || i === selI;
       div.style.display = '';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
@@ -1384,16 +1183,16 @@ export class StarGraph {
       div.style.fontSize = focused ? '13px' : '11px';
     }
     // Galaxy labels — no distance fade, hover brightens
-    for (let k = 0; k < this.galaxyLabelDivs.length; k++) {
-      const div = this.galaxyLabelDivs[k];
+    for (let k = 0; k < this._fold.galaxyLabelDivs.length; k++) {
+      const div = this._fold.galaxyLabelDivs[k];
       const gIdx = Number(div.dataset['galaxyIndex']);
-      if (gIdx === undefined || gIdx >= this.galaxyMeta.length) continue;
-      const gm = this.galaxyMeta[gIdx];
+      if (gIdx === undefined || gIdx >= this._fold.galaxyMeta.length) continue;
+      const gm = this._fold.galaxyMeta[gIdx];
       this.tmpVec3.copy(gm.centroid);
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
       const hovered = gIdx === this.hoveredGalaxyIdx;
-      div.style.display = (!behind && this.foldMode && !this.enteredGalaxyId) ? '' : 'none';
+      div.style.display = (!behind && this._fold.foldMode && !this._fold.enteredGalaxyId) ? '' : 'none';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       div.style.opacity = hovered ? '0.9' : '0.3';
@@ -1405,116 +1204,6 @@ export class StarGraph {
 
   // ── Blast ────────────────────────────────────────────────
 
-  private startBlastMode(idx: number): void {
-    if (this.focusSubgraphActive) this.exitFocusSubgraph();
-    this.blastMode = true; this.blastSource = idx; this.computeBlastDistances(); this.buildBlastEdges();
-    const st = document.getElementById('status-text');
-    const inRadius = this.blastDistances.filter(d => d >= 0).length;
-    if (st) st.innerHTML = `${iconHtml('blast', 12)} 波及: ${this.graphNodes[idx]?.name || '?'}  ·  ${inRadius} 节点  ·  B/ESC 退出`;
-  }
-
-  private computeBlastDistances(): void {
-    const n = this._nodeCount;
-    this.blastDistances = new Array(n).fill(-1);
-    if (this.blastSource < 0) return;
-    this.blastDistances[this.blastSource] = 0;
-    const queue = [this.blastSource];
-    console.log(`[DEBUG] computeBlastDistances: source=${this.blastSource}, maxDist=${this.blastMaxDist}, edgeType=${this.blastEdgeType}, direction=${this.blastDirection}`);
-    while (queue.length > 0) {
-      const u = queue.shift()!, du = this.blastDistances[u];
-      if (du >= this.blastMaxDist) continue;
-      // Filter neighbors based on edge type and direction
-      for (const v of this.neighborMap[u] || []) {
-        if (this.blastDistances[v] === -1) {
-          // Check if ANY edge between u and v passes the filter
-          const passesFilter = this.edgeIndexOf[u].some(ei => {
-            const d = this.edgeDataList[ei];
-            if ((d.s !== u || d.t !== v) && (d.s !== v || d.t !== u)) return false;
-            if (this.blastEdgeType !== 'all' && d.edgeType !== this.blastEdgeType) return false;
-            if (this.blastDirection === 'outbound' && d.s !== u) return false;
-            if (this.blastDirection === 'inbound' && d.t !== u) return false;
-            return true;
-          });
-          if (passesFilter) { this.blastDistances[v] = du + 1; queue.push(v); }
-        }
-      }
-    }
-    const reached = this.blastDistances.filter(d => d >= 0).length;
-    console.log(`[DEBUG] computeBlastDistances: reached ${reached} nodes`);
-  }
-
-  private buildBlastEdges(): void {
-    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    if (!this.blastMode) return;
-    const pos = this.nodePositions, verts: number[] = [], colors: number[] = [];
-    console.log(`[DEBUG] buildBlastEdges: edgeType=${this.blastEdgeType}, direction=${this.blastDirection}`);
-    let edgeCount = 0;
-    for (const d of this.edgeDataList) {
-      const ds = this.blastDistances[d.s], dt = this.blastDistances[d.t];
-      if (ds < 0 || dt < 0) continue;
-      // Apply edge type filter
-      if (this.blastEdgeType !== 'all' && d.edgeType !== this.blastEdgeType) continue;
-      // Apply direction filter
-      if (this.blastDirection === 'outbound' && d.s !== this.blastSource && ds > dt) continue;
-      if (this.blastDirection === 'inbound' && d.t !== this.blastSource && dt > ds) continue;
-      verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      const minD = Math.min(ds, dt);
-      const c = minD === 0 ? new THREE.Color(0xffffff) : minD === 1 ? new THREE.Color(0xff6644) : minD <= 3 ? new THREE.Color(0xffaa44) : new THREE.Color(0xffdd88);
-      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
-      edgeCount++;
-    }
-    console.log(`[DEBUG] buildBlastEdges: rendered ${edgeCount} edges`);
-    if (verts.length === 0) return;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })));
-  }
-
-  private exitBlastMode(): void {
-    this.blastMode = false; this.blastSource = -1; this.blastDistances = [];
-    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    // ponytail: reset override flags so shader resumes animation.
-    // Core colors need explicit reset (InstancedMesh, not shader-driven).
-    for (let i = 0; i < this._nodeCount; i++) {
-      this._overrideFlags[i] = 0;
-      this._setCoreColor(i, this.nodeCoreColors[i]);
-      const base = this.getNodeBaseScale(i);
-      this._setCoreScale(i, base * 0.35);
-    }
-    // Restore glow colors to defaults so when override is cleared,
-    // the base color attribute has correct values for shader to animate from
-    for (let i = 0; i < this._nodeCount; i++) {
-      const gc = new THREE.Color(this.nodeGlowColors[i]);
-      this._setGlowRgba(i, gc.r, gc.g, gc.b, 0.85);
-      if (this._glow2Rgba.length > 0) this._setGlow2Rgba(i, gc.r, gc.g, gc.b, 0.55);
-    }
-    this._flushOverrideAttrs();
-    const st = document.getElementById('status-text');
-    if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
-  }
-
-  private updateBlastNodeColors(): void {
-    if (!this.blastMode) return;
-    for (let i = 0; i < this._nodeCount; i++) {
-      const d = this.blastDistances[i];
-      if (d >= 0) {
-        this._overrideFlags[i] = 1;
-        const c = new THREE.Color();
-        if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
-        this._setGlowColor(i, c);
-        this._setGlowAlpha(i, 0.7);
-        this._setCoreColor(i, c);
-        const base = this.getNodeBaseScale(i);
-        this._setCoreScale(i, base * (d === 0 ? 2 : 1));
-      } else {
-        this._overrideFlags[i] = 1;
-        this._setGlowAlpha(i, 0.12);
-      }
-    }
-    // Flush override flags to GPU
-    this._flushOverrideAttrs();
-  }
 
   private _flushOverrideAttrs(): void {
     if (this.nodeGlowsPoints?.geometry.attributes['override']) {
@@ -1588,7 +1277,7 @@ export class StarGraph {
     if (idx < 0) idx = this.graphNodes.findIndex((n, i) => isAlive(n, i) && n.name.toLowerCase().includes(q));
     if (idx < 0) return false;
     // If fold mode is on, enter that galaxy instead of flying to node
-    if (this.foldMode) {
+    if (this._fold.foldMode) {
       const cid = this.nodeCommMap.get(idx);
       if (cid) { this.enterGalaxy(cid); return true; }
       // Orphan node — can't enter, just fly
@@ -1861,19 +1550,11 @@ export class StarGraph {
   }
 
   /** Show the dependency path between two nodes on the graph. */
-  showPathOnGraph(fromName: string, toName: string): boolean {
-    const srcIdx = this._findNodeIndexByName(fromName);
-    const dstIdx = this._findNodeIndexByName(toName);
-    if (srcIdx < 0 || dstIdx < 0) return false;
-    this.setPathSource(srcIdx);
-    this.setPathTarget(dstIdx);
-    return this._pathNodes.size > 0;
-  }
 
   /** Clear all Agent-triggered highlights (path + node highlight). */
   clearAgentHighlight(): void {
     this._clearAgentHighlightState();
-    this.clearPath();
+    this._analysis.clearPath();
     // Also restore any file highlight if active
     if (this._fileHighlight) {
       this._applyFileHighlight();
@@ -2216,59 +1897,25 @@ export class StarGraph {
   }
 
   // ══════════════════════════════════════════════════════════
-  // Community / Galaxy fold overlay
+  // Community / Galaxy fold overlay — delegated to GraphFold
   // ══════════════════════════════════════════════════════════
 
-  get isFolded(): boolean { return this.foldMode; }
-  get isInsideGalaxy(): boolean { return this.enteredGalaxyId !== null; }
-  get communityCount(): number { return this.communities.length; }
+  get isFolded(): boolean { return this._fold.isFolded; }
+  get isInsideGalaxy(): boolean { return this._fold.isInsideGalaxy; }
+  get communityCount(): number { return this._fold.communityCount; }
 
-  /** Toggle galaxy fold overlay on/off. Re-renders from stored data. */
-  setFoldMode(on: boolean): void {
-    if (on === this.foldMode) return;
-    this.foldMode = on;
-    this.enteredGalaxyId = null;
-    if (on) {
-      // Dark-universe fold: subdued exposure + bloom
-      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 0.6;
-      // Full mode: subtle bloom for fold view
-      if (true) {
-        if (this.composer.passes.indexOf(this.bloomPass) === -1) {
-          this.composer.addPass(this.bloomPass);
-        }
-        this.bloomPass.strength = 0.2;
-        this.bloomPass.threshold = 0.9;
-      }
-      // Standard mode: no bloom, nothing to adjust
-      this.applyFoldOverlay();
-      // Start cross-edge energy flow
-      this.initCrossEdgeFlow();
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
-    } else {
-      this.clearFoldOverlay();
-      // Restore original tone mapping + bloom for this mode
-      if (true) {
-        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.4;
-        this.bloomPass.strength = 0.35;
-        this.bloomPass.threshold = 0.85;
-        if (this.composer.passes.indexOf(this.bloomPass) === -1) {
-          this.composer.addPass(this.bloomPass);
-        }
-      } else {
-        // Standard mode: no bloom, just reset tone mapping
-        this.renderer.toneMapping = THREE.NoToneMapping;
-        this.renderer.toneMappingExposure = 1.0;
-      }
-    }
-  }
+  setFoldMode(on: boolean): void { this._fold.setFoldMode(on); }
+  toggleFold(): void { this._fold.toggleFold(); }
+  enterGalaxy(galaxyId: string): void { this._fold.enterGalaxy(galaxyId); }
+  exitGalaxy(): void { this._fold.exitGalaxy(); }
+  enterSubCommunity(subCommId: string): void { this._fold.enterSubCommunity(subCommId); }
+  exitSubCommunity(): void { this._fold.exitSubCommunity(); }
+  showGalaxyLabel(gm: { id: string; label: string; centroid: THREE.Vector3 } | undefined): void { this._fold.showGalaxyLabel(gm); }
 
   // ponytail: 总览(相机距 target > graphRadius*2.2)关 bloom 防边密集叠加区被 bloom 扩散成雾;
   // 聚焦(< graphRadius*1.6)开 bloom 让 hover/选中节点发光鲜明。滞回 30 帧防阈值抖动回弹。
   private _updateBloomByDistance(): void {
-    if (this._graphRadius < 1 || this.foldMode) return;
+    if (this._graphRadius < 1 || this._fold.foldMode) return;
     const dist = this.camera.position.distanceTo(this.controls.target);
     const farThresh = this._graphRadius * 2.2;
     const nearThresh = this._graphRadius * 1.6;
@@ -2288,8 +1935,6 @@ export class StarGraph {
       }
     }
   }
-
-  toggleFold(): void { this.setFoldMode(!this.foldMode); }
 
   // ── Diff overlay (P4: 变更回看着色) ──────────────────────
 
@@ -2663,7 +2308,7 @@ export class StarGraph {
     if (this._nodeCount === 0) { this.render(fullGraph); return; }
 
     // Exit fold mode — incremental + fold is visually inconsistent
-    if (this.foldMode) this.setFoldMode(false);
+    if (this._fold.foldMode) this.setFoldMode(false);
 
     // Build node ID → index map (alive nodes only)
     const nodeIdxMap = new Map<string, number>();
@@ -2713,10 +2358,10 @@ export class StarGraph {
     // 6. Clear stale interaction state pointing to dead nodes
     if (this.hoveredIdx >= 0 && this._deadIndices.has(this.hoveredIdx)) { this.hoveredIdx = -1; this.targetHoverScale = 0; }
     if (this.selectedIdx >= 0 && this._deadIndices.has(this.selectedIdx)) this.selectedIdx = -1;
-    if (this.blastSource >= 0 && this._deadIndices.has(this.blastSource)) { this.blastMode = false; this.blastSource = -1; this.blastDistances = []; }
+    if (this._analysis.blastSource >= 0 && this._deadIndices.has(this._analysis.blastSource)) { this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; }
     if (this.focusNodeIdx >= 0 && this._deadIndices.has(this.focusNodeIdx)) { this.focusActive = false; this.focusNodeIdx = -1; }
-    if (this._pathSource >= 0 && this._deadIndices.has(this._pathSource)) { this._pathSource = -1; this._pathNodes.clear(); this._pathEdges.clear(); }
-    if (this._pathTarget >= 0 && this._deadIndices.has(this._pathTarget)) { this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear(); }
+    if (this._analysis._pathSource >= 0 && this._deadIndices.has(this._analysis._pathSource)) { this._analysis._pathSource = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
+    if (this._analysis._pathTarget >= 0 && this._deadIndices.has(this._analysis._pathTarget)) { this._analysis._pathTarget = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
 
 
     // 8. Re-apply diff overlay if active (new nodes might be in the diff set)
@@ -2743,780 +2388,22 @@ export class StarGraph {
   //   Layer 2 (inside):   single constellation — member nodes + internal edges lit
   // ══════════════════════════════════════════════════════════
 
-  private static readonly CONSTELLATION_COLOR = 0xffaa44;
-  /** Communities with fewer members than this are hidden from the galaxy view. */
-  private static readonly MIN_GALAXY_SIZE = 5;
 
-  private _communityGlowSprites: THREE.Sprite[] = [];
-  private _hoveredCommunityIdx = -1;
 
-  private _buildCommunityRings(): void {
-    while (this.communityRingGroup.children.length > 0) {
-      this.communityRingGroup.remove(this.communityRingGroup.children[0]);
-    }
-    this._communityGlowSprites = [];
-    // Build soft radial glow texture
-    const size = 128;
-    const cvs = document.createElement('canvas'); cvs.width = size; cvs.height = size;
-    const ctx = cvs.getContext('2d')!;
-    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    gradient.addColorStop(0, 'rgba(255,255,255,0)');
-    gradient.addColorStop(0.55, 'rgba(255,255,255,0)');
-    gradient.addColorStop(0.75, 'rgba(255,255,255,0.06)');
-    gradient.addColorStop(0.9, 'rgba(255,255,255,0.18)');
-    gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = gradient; ctx.fillRect(0, 0, size, size);
-    const glowTex = new THREE.CanvasTexture(cvs);
 
-    for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
-      const gm = this.galaxyMeta[gi];
-      if (gm.radius <= 0) continue;
-      const hue = ((gm.id.split('').reduce((h, c) => ((h << 5) - h) + c.charCodeAt(0), 0) & 0x7fffffff) % 360) / 360;
-      const color = new THREE.Color().setHSL(hue, 0.3, 0.5);
-      const mat = new THREE.SpriteMaterial({ map: glowTex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0 });
-      const sprite = new THREE.Sprite(mat);
-      sprite.position.copy(gm.centroid);
-      sprite.scale.setScalar(gm.radius * 2.5);
-      this.communityRingGroup.add(sprite);
-      this._communityGlowSprites.push(sprite);
-    }
-  }
 
-  private _updateCommunityRingHover(): void {
-    const prev = this._hoveredCommunityIdx;
-    let next = -1;
-    if (this.hoveredIdx >= 0 && this.hoveredIdx < this._nodeCount) {
-      for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
-        if (this.galaxyMeta[gi].memberIndices.includes(this.hoveredIdx)) { next = gi; break; }
-      }
-    }
-    if (next === prev) return;
-    if (prev >= 0 && this._communityGlowSprites[prev]) {
-      (this._communityGlowSprites[prev].material as THREE.SpriteMaterial).opacity = 0;
-    }
-    if (next >= 0 && this._communityGlowSprites[next]) {
-      (this._communityGlowSprites[next].material as THREE.SpriteMaterial).opacity = 0.25;
-    }
-    this._hoveredCommunityIdx = next;
-  }
 
-  private applyFoldOverlay(): void {
-    // Hide all nodes
-    for (let i = 0; i < this._nodeCount; i++) {
-      this._setCoreVisible(i, false);
-      if (i < this._nodeCount) this._setGlowAlpha(i, 0);
-      if (this._glow2Rgba.length > 0) this._setGlow2Alpha(i, 0);
-    }
-    // Hide ALL edges — additive blending makes even 0.02 accumulate to bright
-    for (const lines of this.edgeLineGroups) {
-      lines.visible = false;
-    }
-    while (this.highlightEdgeGroup.children.length) {
-      this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    }
-    // edge flow handled inside edgeLineGroups — no separate particle cleanup needed
-    if (this.enteredGalaxyId) {
-      // Layer 2: inside a galaxy — show its nodes + internal edges as a constellation
-      this._showConstellation(this.enteredGalaxyId);
-    } else {
-      // Layer 1: universe view — galaxy clouds at centroids, no cross edges
-      this.buildGalaxyClouds();
-    }
-  }
 
-  private clearFoldOverlay(): void {
-    this.hoveredGalaxyIdx = -1;
-    this.hideGalaxyTitle();
-    const isFull = true;
-    for (let i = 0; i < this._nodeCount; i++) {
-      const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
-      const glowColor = GLOW_COLORS[kind] || 0x4488cc;
-      const coreColor = glowColor; // dark-universe: type-colored core, not white-hot
-      if (i < this._nodeCount) { this._setCoreVisible(i, true); this._setCoreColor(i, coreColor); }
-      if (i < this._nodeCount) { this._setGlowAlpha(i, 0.55); this._setGlowColor(i, glowColor); }
-          }
-    for (const lines of this.edgeLineGroups) {
-      lines.visible = true;
-      (lines.material as any).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
-    }
-    // edge flow visibility restored via edgeLineGroups
-    this._disposeFoldChildren();
-    this.clearCrossEdgeFlow();
-    this.galaxyClouds = []; this.galaxyGlows = [];
-  }
 
-  /** Dispose all children of commFoldGroup, releasing GPU resources. */
-  private _disposeFoldChildren(): void {
-    while (this.commFoldGroup.children.length) {
-      const child = this.commFoldGroup.children[0];
-      if ((child as any).geometry) (child as any).geometry.dispose();
-      const mat = (child as any).material;
-      if (mat) {
-        if (Array.isArray(mat)) mat.forEach((m: THREE.Material) => m.dispose());
-        else (mat as THREE.Material).dispose();
-      }
-      this.commFoldGroup.remove(child);
-    }
-  }
 
-  /** Reveal one galaxy as a constellation: member nodes glow + internal edges bright.
-   * Returns count of sub-communities found. */
-  private _showConstellation(galaxyId: string): number {
-    const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-    if (!gm) return 0;
-    const isFull = true;
-    const cc = new THREE.Color(StarGraph.CONSTELLATION_COLOR);
-    for (const mi of gm.memberIndices) {
-      if (mi < this._nodeCount) {
-        this._setCoreVisible(mi, true);
-        this._setCoreColor(mi, StarGraph.CONSTELLATION_COLOR);
-      }
-      if (mi < this._nodeCount) {
-        this._setGlowAlpha(mi, 0.55);
-        this._setGlowColor(mi, StarGraph.CONSTELLATION_COLOR);
-      }
-    }
-    // Internal edges for this galaxy only
-    // ponytail: 用 memberIndices Set 判断归属, 不依赖 nodeCommMap 层级 —
-    // 之前 nodeCommMap 存 level1 而 galaxyId 是 level0 → 永远不匹配 → 内部边全被过滤
-    const pos = this.nodePositions;
-    const verts: number[] = [], colors: number[] = [];
-    const memberSet = new Set(gm.memberIndices);
-    for (let ei = 0; ei < this.edgeDataList.length; ei++) {
-      const { s, t } = this.edgeDataList[ei];
-      if (!memberSet.has(s) || !memberSet.has(t)) continue;
-      verts.push(pos[s * 3], pos[s * 3 + 1], pos[s * 3 + 2], pos[t * 3], pos[t * 3 + 1], pos[t * 3 + 2]);
-      colors.push(cc.r, cc.g, cc.b, cc.r, cc.g, cc.b);
-    }
-    if (verts.length > 0) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-      geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-      this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.06,
-        depthWrite: false, blending: THREE.AdditiveBlending,
-      })));
-    }
 
-    // Show sub-communities (Level 1+) if they exist
-    // Match any community whose parent_id matches this galaxy
-    const subCommunities = this.communities.filter(c => {
-      if (!c.parent_id || c.parent_id !== galaxyId) return false;
-      // level may be number or string from JSON round-trip; cast robustly
-      const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 1;
-    });
-    let subCount = 0;
-    this._subCommByNodeIdx.clear();
-    if (subCommunities.length > 0) {
-      const subColors = [0x66aaff, 0xff66aa, 0x66ffaa, 0xffaa66, 0xaa66ff]; // Distinct colors for sub-communities
-      subCommunities.forEach((subComm, idx) => {
-        const subColor = new THREE.Color(subColors[idx % subColors.length]);
-        const subMembers: number[] = [];
-        for (const nid of subComm.node_ids) {
-          const nodeIdx = this.graphNodes.findIndex(n => n.id === nid);
-          if (nodeIdx >= 0) {
-            subMembers.push(nodeIdx);
-            this._subCommByNodeIdx.set(nodeIdx, subComm.id);
-          }
-        }
-        if (subMembers.length > 0) subCount++;
-        // Highlight sub-community nodes with distinct color (override full mode white)
-        for (const mi of subMembers) {
-          if (mi < this._nodeCount) {
-            this._setCoreColor(mi, subColor);
-          }
-          if (mi < this._nodeCount) {
-            this._setGlowColor(mi, subColor);
-          }
-        }
-      });
-    }
-    return subCount;
-  }
 
   /** Enter a galaxy: hide clouds, reveal its constellation. */
-  private galaxyTitleEl!: HTMLDivElement;
 
-  enterGalaxy(galaxyId: string): void {
-    if (!this.foldMode || this.enteredGalaxyId === galaxyId) return;
-    this.enteredGalaxyId = galaxyId;
-    this.enteredSubCommunityId = null;
-    this._drillStack = []; // Reset sub-community drill path
-    // Dismiss any lingering galaxy hover tooltip
-    this.hoveredGalaxyIdx = -1;
-    this.container.style.cursor = '';
-    this.tooltipEl?.classList.remove('visible');
-    // Clear fold group
-    this._disposeFoldChildren();
-    this.galaxyClouds = []; this.galaxyGlows = [];
 
-    // Find sub-communities of this galaxy
-    const subCommunities = this.communities.filter(c => {
-      if (!c.parent_id || c.parent_id !== galaxyId) return false;
-      const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 1;
-    });
 
-    if (subCommunities.length > 0) {
-      // Has sub-communities → show sub-community clouds (drill deeper)
-      this._showSubCommunityClouds(subCommunities);
-      const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-      this.showGalaxyTitle(gm);
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
-    } else {
-      // Leaf galaxy → show constellation (all member nodes)
-      this._showConstellation(galaxyId);
-      const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-      // Set up independent camera orbit around the constellation centroid
-      if (gm) {
-        let clusterRadius = 30;
-        for (const mi of gm.memberIndices) {
-          const dx = this.nodePositions[mi * 3] - gm.centroid.x;
-          const dy = this.nodePositions[mi * 3 + 1] - gm.centroid.y;
-          const dz = this.nodePositions[mi * 3 + 2] - gm.centroid.z;
-          clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
-        }
-        const viewDist = clusterRadius * 3.2;
-        const camPos = gm.centroid.clone().add(
-          new THREE.Vector3(viewDist * 0.55, viewDist * 0.4, viewDist * 0.7));
-        this.focusTarget.copy(camPos);
-        this.focusStartCam.copy(this.camera.position);
-        this.focusStartLook.copy(this.controls.target);
-        this._constellationLookTarget = gm.centroid.clone();
-        this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
-        this._focusStartTime = performance.now();
-        this.controls.target.copy(gm.centroid);
-        this.controls.enablePan = true;
-        this.controls.minDistance = clusterRadius * 1.5;
-        this.controls.maxDistance = clusterRadius * 8;
-      }
-      this.showGalaxyTitle(gm);
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
-    }
-  }
 
   /** Render sub-community clouds — clickable "mini galaxies" inside a parent galaxy. */
-  private _showSubCommunityClouds(subCommunities: CommunityData[]): void {
-    // Build temporary galaxyMeta entries for sub-community clouds
-    const subMeta: { id: string; label: string; centroid: THREE.Vector3; memberIndices: number[]; radius: number }[] = [];
-    for (const sc of subCommunities) {
-      const memberIndices: number[] = [];
-      let sx = 0, sy = 0, sz = 0;
-      for (const nid of sc.node_ids) {
-        const idx = this.graphNodes.findIndex(n => n.id === nid);
-        if (idx >= 0) {
-          memberIndices.push(idx);
-          sx += this.nodePositions[idx * 3];
-          sy += this.nodePositions[idx * 3 + 1];
-          sz += this.nodePositions[idx * 3 + 2];
-        }
-      }
-      if (memberIndices.length === 0) continue;
-      subMeta.push({
-        id: sc.id,
-        label: sc.label,
-        centroid: new THREE.Vector3(sx / memberIndices.length, sy / memberIndices.length, sz / memberIndices.length),
-        memberIndices,
-        radius: 0,
-      });
-    }
-    // Hide all nodes
-    for (let i = 0; i < this._nodeCount; i++) {
-      this._setCoreVisible(i, false);
-      if (i < this._nodeCount) this._setGlowAlpha(i, 0);
-    }
-    // Save original galaxyMeta if not already saved, then swap for cloud rendering
-    if (!this._savedGalaxyMeta) this._savedGalaxyMeta = this.galaxyMeta;
-    this.galaxyMeta = subMeta;
-    this.buildGalaxyClouds();
-    // Tighten hover targets for sub-community clouds (core sprites are oversized by default)
-    for (let i = 0; i < this.galaxyGlows.length; i++) {
-      this.galaxyGlows[i].scale.multiplyScalar(i % 2 === 1 ? 0.4 : 0.35);
-    }
-    for (const cloud of this.galaxyClouds) {
-      cloud.scale.multiplyScalar(0.6);
-    }
-
-    // Frame camera on all sub-community centroids
-    if (subMeta.length > 0) {
-      let cx = 0, cy = 0, cz = 0;
-      for (const sm of subMeta) { cx += sm.centroid.x; cy += sm.centroid.y; cz += sm.centroid.z; }
-      cx /= subMeta.length; cy /= subMeta.length; cz /= subMeta.length;
-      let maxR = 30;
-      for (const sm of subMeta) {
-        const dx = sm.centroid.x - cx, dy = sm.centroid.y - cy, dz = sm.centroid.z - cz;
-        maxR = Math.max(maxR, Math.sqrt(dx * dx + dy * dy + dz * dz));
-      }
-      const centroid = new THREE.Vector3(cx, cy, cz);
-      const viewDist = Math.max(maxR * 3.0, 120);
-      this.focusTarget.copy(centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)));
-      this.focusStartCam.copy(this.camera.position);
-      this.focusStartLook.copy(this.controls.target);
-      this._constellationLookTarget = centroid.clone();
-      this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
-      this._focusStartTime = performance.now();
-      this.controls.target.copy(centroid);
-      this.controls.minDistance = maxR * 1.5;
-      this.controls.maxDistance = maxR * 12;
-    }
-  }
-
-  /** When flying to constellation, controls look at centroid, not at camera target. */
-  private _constellationLookTarget = new THREE.Vector3();
-
-  /** Show fixed galaxy title at top of viewport when inside a constellation. */
-  private showGalaxyTitle(gm: { id: string; label: string } | undefined): void {
-    if (!this.galaxyTitleEl) {
-      this.galaxyTitleEl = document.createElement('div');
-      this.galaxyTitleEl.id = 'galaxy-title';
-      this.galaxyTitleEl.style.cssText =
-        'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:15;' +
-        'font-size: calc(18px * var(--font-scale));font-weight:700;letter-spacing:1px;pointer-events:none;' +
-        'color:#ffcc80;text-shadow:0 0 20px rgba(255,160,40,0.6),0 0 40px rgba(255,100,20,0.3);' +
-        'transition:opacity 0.3s;opacity:0;';
-      this.container.appendChild(this.galaxyTitleEl);
-    }
-    const shortName = gm ? gm.label.split('/')[0].replace(/_/g, ' ') : '';
-    this.galaxyTitleEl.textContent = `🌌 ${shortName}`;
-    this.galaxyTitleEl.style.opacity = '1';
-  }
-
-  private hideGalaxyTitle(): void {
-    if (this.galaxyTitleEl) this.galaxyTitleEl.style.opacity = '0';
-  }
-
-  /** Show a temporary floating label at the galaxy centroid. */
-  private showGalaxyLabel(gm: { id: string; label: string; centroid: THREE.Vector3 } | undefined): void {
-    if (!gm) return;
-    const label = document.createElement('div');
-    label.className = 'galaxy-flash-label';
-    label.textContent = `🌌 ${gm.label || gm.id}`;
-    label.style.cssText = 'position:absolute;z-index:12;pointer-events:none;font-size: calc(16px * var(--font-scale));font-weight:700;color:#ffe0a0;text-shadow:0 0 20px rgba(255,180,60,0.8),0 0 40px rgba(255,140,30,0.4);white-space:nowrap;opacity:0;transition:opacity 0.2s;';
-    const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
-    this.tmpVec3.copy(gm.centroid).project(this.camera);
-    label.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
-    label.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
-    label.style.transform = 'translate(-50%, -50%)';
-    this.container.appendChild(label);
-    requestAnimationFrame(() => { label.style.opacity = '1'; });
-    setTimeout(() => { label.style.opacity = '0'; setTimeout(() => label.remove(), 300); }, 1800);
-  }
-
-  /** Check if a community has visible sub-communities (Level 1+ with enough members). */
-  private _hasVisibleSubCommunities(parentId: string): boolean {
-    return this.communities.some(c => {
-      if (!c.parent_id || c.parent_id !== parentId) return false;
-      const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 1 && c.node_ids.length >= 4;
-    });
-  }
-
-  /** Exit galaxy back to universe view. */
-  exitGalaxy(): void {
-    if (!this.foldMode || !this.enteredGalaxyId) return;
-    this.enteredGalaxyId = null;
-    this.enteredSubCommunityId = null;
-    this._drillStack = [];
-    this.hideGalaxyTitle();
-    // Restore free controls — zoom range scaled to graph size
-    this.controls.enablePan = true;
-    this.controls.minDistance = Math.max(1, this._graphRadius * 0.005);
-    this.controls.maxDistance = this._graphRadius * 6;
-    this.camera.near = Math.max(0.1, this.controls.minDistance * 0.5);
-    this.camera.far = this.controls.maxDistance * 2;
-    this.camera.updateProjectionMatrix();
-    this._disposeFoldChildren();
-    // Restore original galaxyMeta BEFORE applyFoldOverlay (it calls buildGalaxyClouds)
-    if (this._savedGalaxyMeta) { this.galaxyMeta = this._savedGalaxyMeta; this._savedGalaxyMeta = null; }
-    // Properly restore fold overlay — hides all nodes/edges, shows galaxy clouds
-    this.applyFoldOverlay();
-    const st = document.getElementById('status-text');
-    if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
-  }
-
-  /** Stash for original galaxyMeta when drilling into sub-cloud view. */
-  private _savedGalaxyMeta: typeof this.galaxyMeta | null = null;
-
-  /** Drill into a sub-community — show sub-clouds if it has children, or constellation if leaf. */
-  enterSubCommunity(subCommId: string): void {
-    if (!this.foldMode || !this.enteredGalaxyId || this.enteredSubCommunityId === subCommId) return;
-    const subComm = this.communities.find(c => c.id === subCommId);
-    if (!subComm) return;
-    this._drillStack.push(subCommId);
-    this.enteredSubCommunityId = subCommId;
-    // Dismiss any lingering cloud hover tooltip
-    this.hoveredGalaxyIdx = -1;
-    this.container.style.cursor = '';
-    this.tooltipEl?.classList.remove('visible');
-    this._disposeFoldChildren();
-    this.galaxyClouds = []; this.galaxyGlows = [];
-
-    // Check for deeper sub-communities
-    const deeperSubs = this.communities.filter(c => {
-      if (!c.parent_id || c.parent_id !== subCommId) return false;
-      const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 2;
-    });
-
-    if (deeperSubs.length > 0) {
-      // Has deeper sub-communities → show them as clouds
-      this._showSubCommunityClouds(deeperSubs);
-      const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
-      this.showGalaxyTitle({ id: subCommId, label: subComm.label });
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
-    } else {
-      // Leaf sub-community → show constellation (nodes with edges)
-      // Hide all nodes first
-      for (let i = 0; i < this._nodeCount; i++) {
-        this._setCoreVisible(i, false);
-        if (i < this._nodeCount) this._setGlowAlpha(i, 0);
-      }
-      // Show only sub-community members
-      const shownIndices: number[] = [];
-      for (const nid of subComm.node_ids) {
-        const idx = this.graphNodes.findIndex(n => n.id === nid);
-        if (idx >= 0) {
-          shownIndices.push(idx);
-          if (idx < this._nodeCount) {
-            this._setCoreVisible(idx, true);
-            this._setCoreColor(idx, 0xffaa44);
-          }
-          if (idx < this._nodeCount) {
-            this._setGlowAlpha(idx, 0.55);
-            this._setGlowColor(idx, 0xffaa44);
-            this._setGlowAlpha(idx, 0.7);
-          }
-        }
-      }
-      this._buildSubCommunityEdges(subComm.node_ids);
-      // Camera frame
-      let sx = 0, sy = 0, sz = 0;
-      for (const mi of shownIndices) {
-        sx += this.nodePositions[mi * 3]; sy += this.nodePositions[mi * 3 + 1]; sz += this.nodePositions[mi * 3 + 2];
-      }
-      const centroid = new THREE.Vector3(sx / shownIndices.length, sy / shownIndices.length, sz / shownIndices.length);
-      let clusterRadius = 30;
-      for (const mi of shownIndices) {
-        const dx = this.nodePositions[mi * 3] - centroid.x;
-        const dy = this.nodePositions[mi * 3 + 1] - centroid.y;
-        const dz = this.nodePositions[mi * 3 + 2] - centroid.z;
-        clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
-      }
-      const viewDist = clusterRadius * 3.5;
-      this.focusTarget.copy(centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)));
-      this.focusStartCam.copy(this.camera.position);
-      this.focusStartLook.copy(this.controls.target);
-      this._constellationLookTarget = centroid.clone();
-      this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
-      this._focusStartTime = performance.now();
-      this.controls.target.copy(centroid);
-      this.controls.minDistance = clusterRadius * 1.5;
-      this.controls.maxDistance = clusterRadius * 8;
-      const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
-      this.showGalaxyTitle({ id: subCommId, label: subComm.label });
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('focus', 12)} 子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`;
-    }
-  }
-
-  /** Exit sub-community: pop drill stack, restore parent's view. */
-  exitSubCommunity(): void {
-    if (!this.foldMode || this._drillStack.length === 0) return;
-    // Pop current sub-community from stack
-    this._drillStack.pop();
-    this._disposeFoldChildren();
-    this.galaxyClouds = []; this.galaxyGlows = [];
-
-    if (this._drillStack.length > 0) {
-      // Still inside a sub-community chain — restore that sub-community's view
-      const parentSubId = this._drillStack[this._drillStack.length - 1];
-      this.enteredSubCommunityId = parentSubId;
-      const parentSub = this.communities.find(c => c.id === parentSubId);
-      if (!parentSub) return;
-      // Check if this parent has deeper sub-communities
-      if (this._hasVisibleSubCommunities(parentSubId)) {
-        const deeperSubs = this.communities.filter(c => c.parent_id === parentSubId && Number(c.level) >= 2);
-        this._showSubCommunityClouds(deeperSubs);
-        const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
-        this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
-        const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
-      } else {
-        // Leaf — show constellation for this sub-community
-        for (let i = 0; i < this._nodeCount; i++) {
-          this._setCoreVisible(i, false);
-          if (i < this._nodeCount) this._setGlowAlpha(i, 0);
-        }
-        const shownIndices: number[] = [];
-        for (const nid of parentSub.node_ids) {
-          const idx = this.graphNodes.findIndex(n => n.id === nid);
-          if (idx >= 0) {
-            shownIndices.push(idx);
-            if (idx < this._nodeCount) { this._setCoreVisible(idx, true); this._setCoreColor(idx, 0xffaa44); }
-            if (idx < this._nodeCount) { this._setGlowAlpha(idx, 0.55); this._setGlowColor(idx, 0xffaa44); this._setGlowAlpha(idx, 0.7); }
-          }
-        }
-        this._buildSubCommunityEdges(parentSub.node_ids);
-        const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
-        this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
-        const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('focus', 12)} 子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`;
-      }
-    } else {
-      // Back at galaxy level — restore galaxy's view
-      this.enteredSubCommunityId = null;
-      const galaxyId = this.enteredGalaxyId;
-      if (!galaxyId) return;
-      if (this._hasVisibleSubCommunities(galaxyId)) {
-        const subCommunities = this.communities.filter(c => c.parent_id === galaxyId && Number(c.level) >= 1);
-        this._showSubCommunityClouds(subCommunities);
-        const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-        this.showGalaxyTitle(gm);
-        const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
-      } else {
-        this._showConstellation(galaxyId);
-        const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-        this.showGalaxyTitle(gm);
-        const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
-      }
-    }
-  }
-
-  /** Build internal edges for a sub-community's member nodes. */
-  private _buildSubCommunityEdges(nodeIds: string[]): void {
-    const memberSet = new Set(nodeIds);
-    const pos = this.nodePositions;
-    const verts: number[] = [], colors: number[] = [];
-    const cc = new THREE.Color(0xffaa44);
-    for (const d of this.edgeDataList) {
-      const nidS = this.graphNodes[d.s]?.id, nidT = this.graphNodes[d.t]?.id;
-      if (!nidS || !nidT) continue;
-      if (!memberSet.has(nidS) || !memberSet.has(nidT)) continue;
-      verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      colors.push(cc.r, cc.g, cc.b, cc.r, cc.g, cc.b);
-    }
-    if (verts.length === 0) return;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.08,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
-  }
-
-  // ── Galaxy clouds (universe view) ────────────────────────
-
-  /** Build galaxy clusters — dense core + sparse halo, each visually distinct. */
-  private buildGalaxyClouds(): void {
-    this.galaxyClouds = []; this.galaxyGlows = [];
-    // ponytail: 实心球+薄晕 — 中心用 SphereGeometry+NormalBlending 有实体遮挡感不叠加过曝;
-    // 外晕用 Sprite AdditiveBlending 但极淡只做边缘光; 配色复用 communityColor 全色环
-    for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
-      const gm = this.galaxyMeta[gi];
-      // ponytail: 球半径=cbrt(成员数)*系数, 体积∝节点数, 大小星团差距明显; 用 gm.radius 做上限防超出占地
-      const sizeByCount = Math.cbrt(gm.memberIndices.length) * 8;
-      const r = Math.min(sizeByCount, Math.max(20, gm.radius || 30) * 0.5);
-      const colorHex = communityColor(gm.id);
-      const color = new THREE.Color(colorHex);
-
-      // 外晕 sprite (偶数位) — 略大于球体, 极淡边缘光
-      const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.glowTex, color, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.1,
-      }));
-      halo.position.copy(gm.centroid);
-      halo.scale.setScalar(r * 1.15);
-      halo.userData = { galaxyIndex: gi, galaxyId: gm.id };
-      this.commFoldGroup.add(halo); this.galaxyGlows.push(halo);
-
-      // 中心实体球 (奇数位, hover raycast 命中) — fresnel 边缘发光, 中心暗, 全息能量体质感
-      const core = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 32, 24),
-        new THREE.ShaderMaterial({
-          uniforms: { uColor: { value: new THREE.Color(colorHex) }, uOpacity: { value: 1.0 } },
-          vertexShader: /* glsl */ `
-            varying vec3 vNormal;
-            varying vec3 vViewDir;
-            void main() {
-              vec4 mv = modelViewMatrix * vec4(position, 1.0);
-              gl_Position = projectionMatrix * mv;
-              vNormal = normalize(normalMatrix * normal);
-              vViewDir = normalize(-mv.xyz);
-            }
-          `,
-          fragmentShader: /* glsl */ `
-            uniform vec3 uColor;
-            uniform float uOpacity;
-            varying vec3 vNormal;
-            varying vec3 vViewDir;
-            void main() {
-              float f = 1.0 - abs(dot(normalize(vNormal), normalize(vViewDir)));
-              float edge = pow(f, 2.5);
-              vec3 col = mix(uColor * 0.15, uColor * 1.6, edge);
-              float alpha = (0.35 + edge * 0.55) * uOpacity;
-              gl_FragColor = vec4(col, alpha);
-            }
-          `,
-          transparent: true, depthWrite: false, side: THREE.FrontSide,
-          blending: THREE.NormalBlending,
-        }),
-      );
-      core.position.copy(gm.centroid);
-      core.userData = { galaxyIndex: gi, galaxyId: gm.id };
-      this.commFoldGroup.add(core); this.galaxyGlows.push(core);
-    }
-    // ── Draw cross-galaxy edges (inter-cluster connections) ──
-    this.buildCrossEdges();
-    // ── Show labels for the largest galaxies ──
-    this.buildGalaxyLabels();
-  }
-
-  private galaxyLabelDivs: HTMLDivElement[] = [];
-  private buildGalaxyLabels(): void {
-    // Clean old labels
-    for (const d of this.galaxyLabelDivs) d.remove();
-    this.galaxyLabelDivs = [];
-    // Label the top ~15 galaxies by size
-    const maxLabels = Math.min(15, this.galaxyMeta.length);
-    for (let gi = 0; gi < maxLabels; gi++) {
-      const gm = this.galaxyMeta[gi];
-      const div = document.createElement('div');
-      div.className = 'galaxy-label';
-      // Extract a short name from the label (first part before /)
-      const shortName = gm.label.split('/')[0].replace(/^test_/, '').replace(/_/g, ' ');
-      div.textContent = shortName.length > 24 ? shortName.slice(0, 22) + '…' : shortName;
-      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
-      this.container.appendChild(div);
-      div.dataset['galaxyIndex'] = String(gi); div.dataset['galaxyId'] = gm.id;
-      this.galaxyLabelDivs.push(div);
-    }
-  }
-
-  private buildCrossEdges(): void {
-    const seen = new Set<string>();
-    const verts: number[] = [], colors: number[] = [];
-    const pos = this.nodePositions;
-    for (const d of this.edgeDataList) {
-      const sc = this.nodeCommMap.get(d.s), tc = this.nodeCommMap.get(d.t);
-      if (!sc && !tc) continue;
-      if (sc === tc) continue;
-      const key = [sc || '', tc || ''].sort().join('::') + `::${d.edgeType}::${d.direction}`;
-      if (seen.has(key)) continue; seen.add(key);
-      const gs = sc ? this.galaxyMeta.find(g => g.id === sc) : null;
-      const gt = tc ? this.galaxyMeta.find(g => g.id === tc) : null;
-      // Skip edges where either end belongs to a community too small to have a galaxy cloud
-      if (!gs || !gt) continue;
-      verts.push(
-        gs.centroid.x, gs.centroid.y, gs.centroid.z,
-        gt.centroid.x, gt.centroid.y, gt.centroid.z);
-      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-      colors.push(c.r * 1.2, c.g * 1.2, c.b * 1.2, c.r * 1.2, c.g * 1.2, c.b * 1.2);
-    }
-    if (verts.length === 0) return;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.08,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
-  }
-
-  // ── Cross-edge energy flow (data streaming between galaxies) ──
-
-  private initCrossEdgeFlow(): void {
-    if (this.crossFlowParticles) {
-      this.commFoldGroup.remove(this.crossFlowParticles);
-      this.crossFlowParticles.geometry.dispose();
-      (this.crossFlowParticles.material as THREE.Material).dispose();
-    }
-    // Build segment list from cross-edges
-    this.crossFlowSegments = [];
-    const seen = new Set<string>();
-    const pos = this.nodePositions;
-    for (const d of this.edgeDataList) {
-      const sc = this.nodeCommMap.get(d.s), tc = this.nodeCommMap.get(d.t);
-      if (!sc || !tc || sc === tc) continue;
-      const gs = this.galaxyMeta.find(g => g.id === sc);
-      const gt = this.galaxyMeta.find(g => g.id === tc);
-      if (!gs || !gt) continue;
-      const key = [sc, tc].sort().join('::');
-      if (seen.has(key)) continue; seen.add(key);
-      this.crossFlowSegments.push({
-        x1: gs.centroid.x, y1: gs.centroid.y, z1: gs.centroid.z,
-        x2: gt.centroid.x, y2: gt.centroid.y, z2: gt.centroid.z,
-      });
-    }
-    if (this.crossFlowSegments.length === 0) return;
-    // Create flow particles — 5 per segment for density
-    const totalParticles = this.crossFlowSegments.length * 5;
-    const pArr = new Float32Array(totalParticles * 3);
-    const cArr = new Float32Array(totalParticles * 3);
-    this.crossFlowData = [];
-    for (let i = 0; i < totalParticles; i++) {
-      const segIdx = i % this.crossFlowSegments.length;
-      const seg = this.crossFlowSegments[segIdx];
-      const t = Math.random();
-      pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
-      pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
-      pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
-      // Dark-universe: dim flow colors
-      const colorChoice = Math.random();
-      if (colorChoice < 0.4) {
-        cArr[i * 3] = 0.12; cArr[i * 3 + 1] = 0.28; cArr[i * 3 + 2] = 0.32; // dim cyan
-      } else if (colorChoice < 0.8) {
-        cArr[i * 3] = 0.30; cArr[i * 3 + 1] = 0.24; cArr[i * 3 + 2] = 0.10; // dim gold
-      } else {
-        cArr[i * 3] = 0.28; cArr[i * 3 + 1] = 0.26; cArr[i * 3 + 2] = 0.24; // dim warm
-      }
-      this.crossFlowData.push({ segIdx, t, speed: 0.004 + Math.random() * 0.012 });
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
-    const mat = new THREE.PointsMaterial({
-      size: 2.0, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.03,
-    });
-    this.crossFlowParticles = new THREE.Points(geo, mat);
-    this.commFoldGroup.add(this.crossFlowParticles);
-  }
-
-  private animateCrossEdgeFlow(): void {
-    if (!this.crossFlowParticles || this.crossFlowSegments.length === 0) return;
-    const pArr = this.crossFlowParticles.geometry.attributes['position'].array as Float32Array;
-    for (let i = 0; i < this.crossFlowData.length; i++) {
-      const fd = this.crossFlowData[i];
-      fd.t += fd.speed;
-      if (fd.t > 1.1) fd.t = -0.1;
-      if (fd.t < 0) fd.t += 1.1;
-      const seg = this.crossFlowSegments[fd.segIdx];
-      if (!seg) continue;
-      const t = Math.max(0, Math.min(1, fd.t));
-      pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
-      pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
-      pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
-    }
-    this.crossFlowParticles.geometry.attributes['position'].needsUpdate = true;
-  }
-
-  private clearCrossEdgeFlow(): void {
-    if (this.crossFlowParticles) {
-      this.commFoldGroup.remove(this.crossFlowParticles);
-      this.crossFlowParticles.geometry.dispose();
-      (this.crossFlowParticles.material as THREE.Material).dispose();
-    }
-    this.crossFlowData = []; this.crossFlowSegments = [];
-  }
-
   private _gaussRand(): number {
     let u = 0, v = 0;
     while (u === 0) u = Math.random();
@@ -3530,9 +2417,9 @@ export class StarGraph {
     if (this._resettingCamera) {
       this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget, t);
       this.controls.target.lerpVectors(this.focusStartLook, this._initCamTarget, t);
-    } else if (this.enteredGalaxyId !== null) {
+    } else if (this._fold.enteredGalaxyId !== null) {
       this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget, t);
-      this.controls.target.lerpVectors(this.focusStartLook, this._constellationLookTarget, t);
+      this.controls.target.lerpVectors(this.focusStartLook, this._fold._constellationLookTarget, t);
     } else {
       // ponytail: focusTarget=相机终点(已含视线方向偏移), _focusLookTarget=看向的点
       this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget, t);
@@ -3552,7 +2439,7 @@ export class StarGraph {
     }
     if (t >= 1) {
       this.focusActive = false; this._resettingCamera = false;
-      if (this.enteredGalaxyId === null && !this._resettingCamera && this.focusNodeIdx >= 0) {
+      if (this._fold.enteredGalaxyId === null && !this._resettingCamera && this.focusNodeIdx >= 0) {
         setTimeout(() => this.restoreFocusNode(), 800);
       }
     }
@@ -3659,7 +2546,7 @@ export class StarGraph {
     const level0Communities = level0Comms;
     // Pre-compute galaxy members (centroids filled after layout)
     // Only keep communities above minimum size — single-node communities are noise
-    this.galaxyMeta = [];
+    this._fold.galaxyMeta = [];
     let skippedSingletons = 0;
     for (const comm of level0Communities) {
       const members: number[] = [];
@@ -3667,14 +2554,14 @@ export class StarGraph {
         const idx = nodeIdx.get(nid);
         if (idx !== undefined) members.push(idx);
       }
-      if (members.length >= StarGraph.MIN_GALAXY_SIZE) {
-        this.galaxyMeta.push({ id: comm.id, label: comm.label, centroid: new THREE.Vector3(), memberIndices: members, radius: 0 });
-      } else if (members.length > 0 && members.length < StarGraph.MIN_GALAXY_SIZE) {
+      if (members.length >= GraphFold.MIN_GALAXY_SIZE) {
+        this._fold.galaxyMeta.push({ id: comm.id, label: comm.label, centroid: new THREE.Vector3(), memberIndices: members, radius: 0 });
+      } else if (members.length > 0 && members.length < GraphFold.MIN_GALAXY_SIZE) {
         skippedSingletons += members.length;
       }
     }
     // Sort galaxies by size descending so largest render first (OCD-friendly)
-    this.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
+    this._fold.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
 
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
@@ -3856,7 +2743,7 @@ export class StarGraph {
     this._startProgressiveReveal(nodes.length);
 
     // ── Compute galaxy centroids + radii from layout ──────────
-    for (const gm of this.galaxyMeta) {
+    for (const gm of this._fold.galaxyMeta) {
       let sx = 0, sy = 0, sz = 0;
       for (const mi of gm.memberIndices) {
         sx += rawPos[mi * 3]; sy += rawPos[mi * 3 + 1]; sz += rawPos[mi * 3 + 2];
@@ -3872,10 +2759,10 @@ export class StarGraph {
       dists.sort((a, b) => a - b);
       gm.radius = dists[Math.floor(dists.length * 0.9)] || 30;
     }
-    this._buildCommunityRings();
+    this._fold._buildCommunityRings();
 
     // ── Apply fold overlay if active ─────────────────────────
-    if (this.foldMode) this.applyFoldOverlay();
+    if (this._fold.foldMode) this._fold.applyFoldOverlay();
 
     this.updateStatus(nodes.length, edges.length, graph.meta);
     if (this.legendEl) this.legendEl.style.display = '';
@@ -4006,32 +2893,32 @@ export class StarGraph {
     }
     while (this.edgeGroup.children.length) this.edgeGroup.remove(this.edgeGroup.children[0]);
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    while (this._fold.commFoldGroup.children.length) this._fold.commFoldGroup.remove(this._fold.commFoldGroup.children[0]);
 
     // Legacy: edgeLineGroups array may hold references already disposed above — clear.
     this.edgeLineGroups = [];
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
     this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = [];
-    this.galaxyClouds = []; this.galaxyGlows = [];
-    this.galaxyMeta = []; this.communityRingGroup.clear(); this._communityGlowSprites = []; this._hoveredCommunityIdx = -1;
-    this.foldMode = false; this.enteredGalaxyId = null; this.enteredSubCommunityId = null;
-    this._drillStack = [];
-    this._subCommByNodeIdx.clear();
-    this._savedGalaxyMeta = null;
-    this.hideGalaxyTitle();
-    this._pathSource = -1; this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear();
-    this._shiftSourceIdx = -1; this._selecting = false;
+    this._fold.galaxyClouds = []; this._fold.galaxyGlows = [];
+    this._fold.galaxyMeta = []; this._fold.communityRingGroup.clear(); this._fold._communityGlowSprites = []; this._fold._hoveredCommunityIdx = -1;
+    this._fold.foldMode = false; this._fold.enteredGalaxyId = null; this._fold.enteredSubCommunityId = null;
+    this._fold._drillStack = [];
+    this._fold._subCommByNodeIdx.clear();
+    this._fold._savedGalaxyMeta = null;
+    this._fold.hideGalaxyTitle();
+    this._analysis._pathSource = -1; this._analysis._pathTarget = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear();
+    this._analysis._shiftSourceIdx = -1; this._selecting = false;
     this._hidePrompt();
-    for (const d of this.galaxyLabelDivs) d.remove();
-    this.galaxyLabelDivs = [];
+    for (const d of this._fold.galaxyLabelDivs) d.remove();
+    this._fold.galaxyLabelDivs = [];
     this.neighborMap = []; this.edgeIndexOf = [];
     this._deadIndices.clear();
     this.hoveredIdx = -1; this.targetHoverScale = 0;
     this.focusActive = false; this.focusNodeIdx = -1; this.selectedIdx = -1;
     this._edgeTypeFilter = null;
     this._nodeKindFilter = null;
-    this.blastMode = false; this.blastSource = -1; this.blastDistances = []; this.l34Count = [];
+    this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; this.l34Count = [];
     this._diagMsg = '';
     if (this.legendEl) this.legendEl.style.display = 'none';
     this.focusSubgraphActive = false; this.focusSubgraphIdx = -1; this.focusSubgraphVisibleIndices.clear();
@@ -4525,7 +3412,7 @@ export class StarGraph {
       let text = `${nodeCount} 节点 · ${edgeCount} 边 · S${sCount} D${dCount} T${tCount}`;
       if (l4 > 0) text += ` · ${iconHtml('block', 10)} L4×${l4}`;
       else if (l3 > 0) text += ` · ${iconHtml('alert', 10)} L3×${l3}`;
-      if (this.foldMode && this.galaxyMeta.length > 0) text += ` · ${iconHtml('galaxy', 10)} ${this.galaxyMeta.length} 星座`;
+      if (this._fold.foldMode && this._fold.galaxyMeta.length > 0) text += ` · ${iconHtml('galaxy', 10)} ${this._fold.galaxyMeta.length} 星座`;
       st.innerHTML = text;
     }
   }
@@ -4579,8 +3466,8 @@ export class StarGraph {
                   || this.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
     const mouseOnCanvas = this.mouse.x > -999;
     const isActive = camMoved || mouseOnCanvas || this.hoveredIdx >= 0
-                  || this.focusProgress > 0 || this.blastMode
-                  || (this._pathSource >= 0) || this._selecting;
+                  || this.focusProgress > 0 || this._analysis.blastMode
+                  || (this._analysis._pathSource >= 0) || this._selecting;
     if (isActive) { this._idleCounter = 0; } else { this._idleCounter++; }
     this._lastCamPos.copy(this.camera.position);
     this._lastCamTarget.copy(this.controls.target);
@@ -4656,13 +3543,13 @@ export class StarGraph {
     // With shader-driven glow, no per-frame reset needed — shader animates non-overridden nodes.
 
     // Galaxy cloud breathe + hover ...
-    if (this.foldMode && !this.enteredGalaxyId) {
-      this.animateCrossEdgeFlow();
-      for (let k = 0; k < this.galaxyGlows.length; k++) {
-        const glow = this.galaxyGlows[k];
+    if (this._fold.foldMode && !this._fold.enteredGalaxyId) {
+      this._fold.animateCrossEdgeFlow();
+      for (let k = 0; k < this._fold.galaxyGlows.length; k++) {
+        const glow = this._fold.galaxyGlows[k];
         if (!glow) continue;
         const gi = Math.floor(k / 2);
-        const gm = this.galaxyMeta[gi];
+        const gm = this._fold.galaxyMeta[gi];
         if (!gm) continue;
         const hovered = gi === this.hoveredGalaxyIdx;
         if (k % 2 === 0) {
@@ -4682,7 +3569,7 @@ export class StarGraph {
     this.pulseTime += 0.03 * (isFull ? 1.5 : 1);
 
     if (!IDLE || this._idleCounter % 3 === 0) {
-      this.updateTooltip(); this.updateLabels(); this._updateCommunityRingHover();
+      this.updateTooltip(); this.updateLabels(); this._fold._updateCommunityRingHover();
     }
     this.controls.update();
     this.composer.render();
@@ -4711,7 +3598,7 @@ export class StarGraph {
 
   destroy(): void {
     cancelAnimationFrame(this.animId);
-    this.communityRingGroup.clear();
+    this._fold.communityRingGroup.clear();
     // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
     this._revealCancelled = true;
     // Clear prompt auto-hide timer (audit: prevent timeout after destroy)
@@ -4723,8 +3610,8 @@ export class StarGraph {
     if (this._langHandler) { bus.off('lang:changed', this._langHandler); this._langHandler = null; }
     if (this._showPromptBound) { bus.off('graph:show-prompt', this._showPromptBound); this._showPromptBound = null; }
     // Dispose all GPU resources
-    for (const cloud of this.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
-    for (const glow of this.galaxyGlows) ((glow as THREE.Mesh).material as THREE.Material).dispose();
+    for (const cloud of this._fold.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
+    for (const glow of this._fold.galaxyGlows) ((glow as THREE.Mesh).material as THREE.Material).dispose();
     if (this.nebulaDust) { this.nebulaDust.geometry.dispose(); (this.nebulaDust.material as THREE.Material).dispose(); }
     // Dispose InstancedMesh cores + glows
     if (this.nodeCoresInstanced) { (this.nodeCoresInstanced.material as THREE.Material)?.dispose(); }
@@ -4735,8 +3622,8 @@ export class StarGraph {
     this.renderer.dispose();
     this.renderer.domElement.remove();
     this.glowTex.dispose(); this.sphereGeo.dispose();
-    for (const d of this.galaxyLabelDivs) d.remove(); this.galaxyLabelDivs = [];
-    this.galaxyTitleEl?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
+    for (const d of this._fold.galaxyLabelDivs) d.remove(); this._fold.galaxyLabelDivs = [];
+    this._fold.galaxyTitleEl?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
     this._selectRectEl?.remove();
     this._promptBarEl?.remove();
   }
