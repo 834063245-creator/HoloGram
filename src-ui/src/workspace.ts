@@ -27,6 +27,7 @@ import { memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePreflightHook } from './agent/hooks';
+import type { GraphContext } from './agent/hooks';
 import { refreshGitStatus, refreshTimeline, buildTurnStartBlock } from './agent/state-inject';
 import { SkillRegistry, createSkillTool } from './agent/skills';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
@@ -677,6 +678,9 @@ export class Workspace {
     if (this.graphData) {
       const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(this.graphData);
       const ctx = createGraphContext(fileIndex, fanIn, fanOut);
+      // Fire-and-forget: load engine snapshot (fragility, cycles, health)
+      // into ctx.engine for enriched preflight warnings
+      loadEngineSnapshot(ctx, this.path).catch(() => {});
       const hooks = new HookRegistry();
       hooks.register(createGraphContextHook(ctx));
       // State hooks: LSP diagnostics + git blame on read, check feedback on write
@@ -891,6 +895,64 @@ export class Workspace {
       if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
       this.runCheck(checkPanel);
     }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// loadEngineSnapshot — fetch engine-level data for enriched preflight
+// ═══════════════════════════════════════════════════════════════
+
+async function loadEngineSnapshot(ctx: GraphContext, projectPath: string): Promise<void> {
+  try {
+    // Fragility ranking (top 15)
+    const fragileRaw = await invoke<string>('hologram_call', {
+      tool: 'fragile_modules',
+      args: { limit: 15 },
+    });
+    const fragileData = JSON.parse(fragileRaw);
+    const fragilityRanks: Array<{ file: string; score: number }> = [];
+    if (fragileData.fragile_modules || fragileData.modules) {
+      const list = fragileData.fragile_modules || fragileData.modules;
+      for (const m of list) {
+        fragilityRanks.push({
+          file: m.file || m.module || '',
+          score: m.fragility_score || m.score || 0,
+        });
+      }
+    }
+
+    // Cycle count
+    const cycleRaw = await invoke<string>('hologram_call', {
+      tool: 'detect_cycles',
+      args: { mode: 'all' },
+    });
+    const cycleData = JSON.parse(cycleRaw);
+    const cycleCount = cycleData.total_cycles || cycleData.cycles?.length || 0;
+
+    // Project health (coupling density)
+    const healthRaw = await invoke<string>('hologram_call', {
+      tool: 'project_health',
+      args: { path: projectPath, days: 30 },
+    });
+    const healthData = JSON.parse(healthRaw);
+    const healthScore = healthData.coupling_density_score || healthData.score || 0;
+
+    // Build baseline fragility map from rankings
+    const baselineFragility = new Map<string, number>();
+    for (const r of fragilityRanks) {
+      baselineFragility.set(r.file, r.score);
+    }
+
+    // Mutate ctx — preflight hook reads it synchronously from now on
+    ctx.engine = {
+      fragilityRanks,
+      cycleCount,
+      healthScore,
+      baselineFragility,
+      sessionDrift: 0, // baseline on first load
+    };
+  } catch (e) {
+    console.warn('[loadEngineSnapshot] engine data unavailable, preflight runs in lightweight mode:', e);
   }
 }
 
