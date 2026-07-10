@@ -671,26 +671,48 @@ pub(crate) fn handler_search(args: &Value) -> Value {
 pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     let root = project_root();
     if root.as_os_str().is_empty() { return; }
-    let vector_path = root.join(".hologram").join("vectors.usearch");
-    let vi = crate::vector::CodeVectorIndex::new(&vector_path);
-    if !vi.exists_on_disk() { return; }
-    if vi.load().unwrap_or(0) == 0 { return; }
-    if let Ok(hits) = vi.search(query, limit) {
-        if !hits.is_empty() {
-            let top = &hits[0];
-            tracing::info!(
-                "[vector] {} hits for \"{}\" — top: {} ({:.0}%)",
-                hits.len(), query, top.0, top.1 * 100.0
-            );
-            let vec_results: Vec<Value> = hits.into_iter()
-                .map(|(node_id, score)| json!({"node_id": node_id, "vector_score": (score * 100.0).round() as u32}))
-                .collect();
-            out["vector_hits"] = json!(vec_results);
-            if let Some(obj) = out.as_object_mut() {
-                let prev = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                obj.insert("count".into(), json!(prev + vec_results.len() as u64));
-            }
+    // Use cached index — avoids reloading 40+ MB from disk on every search
+    let (index, slots) = match crate::vector::get_or_load_index(&root) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+    let idx = index.read().unwrap();
+    let idx = match idx.as_ref() {
+        Some(i) => i,
+        None => return,
+    };
+    let slot_data = slots.read().unwrap();
+    if slot_data.is_empty() { return; }
+
+    let q_vec = crate::vector::embed(query);
+    let results = match idx.search(&q_vec, limit) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    let mut hits: Vec<(String, f32)> = Vec::with_capacity(results.keys.len());
+    for (slot_key, distance) in results.keys.iter().zip(results.distances.iter()) {
+        let slot = *slot_key as usize;
+        if slot < slot_data.len() {
+            let similarity = 1.0 - (*distance as f32).min(2.0).max(0.0);
+            hits.push((slot_data[slot].clone(), similarity));
         }
+    }
+    if hits.is_empty() { return; }
+
+    let top = &hits[0];
+    tracing::info!(
+        "[vector] {} hits for \"{}\" — top: {} ({:.0}%)",
+        hits.len(), query, top.0, top.1 * 100.0
+    );
+    let vec_results: Vec<Value> = hits.into_iter()
+        .map(|(node_id, score)| json!({"node_id": node_id, "vector_score": (score * 100.0).round() as u32}))
+        .collect();
+    out["vector_hits"] = json!(vec_results);
+    if let Some(obj) = out.as_object_mut() {
+        // Don't add to count — vector_hits is a separate field.
+        // count reflects the primary (FTS5/linear) result set only.
+        obj.insert("vector_count".into(), json!(vec_results.len()));
     }
 }
 

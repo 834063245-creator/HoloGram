@@ -202,11 +202,16 @@ impl AgentIsolation {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Abort cherry-pick if it failed
-            let _ = git_cmd()
-                .args(["-C", &main, "cherry-pick", "--abort"])
-                .output();
-            return Err(format!("合并失败: {stderr}"));
+            // Abort cherry-pick to leave main repo clean
+            match git_cmd().args(["-C", &main, "cherry-pick", "--abort"]).output() {
+                Err(e) => return Err(format!("merge 失败且 cherry-pick --abort 失败: {e}。请手动 git cherry-pick --abort")),
+                Ok(abort) if !abort.status.success() => {
+                    let abort_stderr = String::from_utf8_lossy(&abort.stderr);
+                    return Err(format!("merge 失败且 cherry-pick --abort 失败: {abort_stderr}。请手动 git cherry-pick --abort"));
+                }
+                Ok(_) => {}
+            }
+            return Err(format!("合并失败 (cherry-pick 已中止): {stderr}"));
         }
 
         remove_worktree(&self.main_repo_path, wt)?;

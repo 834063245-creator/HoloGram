@@ -10,9 +10,10 @@
 // the embed module for neural embeddings.
 
 mod embed;
+pub use embed::embed;
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::collections::HashMap;
 
 use tracing::{info, warn};
@@ -184,6 +185,26 @@ impl CodeVectorIndex {
     }
 
     pub fn exists_on_disk(&self) -> bool { self.path.exists() }
+}
+
+// ── Process-level cache: loaded vector index reused across searches ──
+static CACHED_INDEX: LazyLock<Mutex<Option<CodeVectorIndex>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Get or create a cached CodeVectorIndex for the given project root.
+/// Loads from disk on first access. Subsequent calls return the same instance.
+/// Cache is invalidated when the index file mtime changes (re-analysis rebuilt it).
+pub fn get_or_load_index(project_root: &std::path::Path) -> Result<(Arc<RwLock<Option<usearch::Index>>>, Arc<RwLock<Vec<String>>>), String> {
+    let path = project_root.join(".hologram").join("vectors.usearch");
+    let mut cache = CACHED_INDEX.lock().map_err(|e| format!("vector cache lock: {e}"))?;
+    if cache.is_none() {
+        let vi = CodeVectorIndex::new(&path);
+        if vi.exists_on_disk() {
+            vi.load()?;
+        }
+        *cache = Some(vi);
+    }
+    let vi = cache.as_ref().unwrap();
+    Ok((vi.index.clone(), vi.slots.clone()))
 }
 
 /// Extract source snippet for a node from file content.
