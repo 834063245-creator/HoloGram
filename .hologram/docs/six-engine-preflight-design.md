@@ -1,6 +1,6 @@
 # 六引擎协同 Preflight 设计文档
 
-> 状态: ✅ 已落地 — 分析/合成引擎接入，全部 post-hook 工具覆盖，子Agent 已继承
+> 状态: ✅ 全部落地 — 六引擎全部接入，无待办
 > 更新: 2026-07-13
 
 ---
@@ -137,10 +137,10 @@
 1. ✅ 解析引擎（fileIndex）— 已接入
 2. ✅ 分析引擎（fragility/cycles/health）— 已接入，并行加载
 3. ✅ 合成引擎（arch_blindspots）— 已接入，并行加载
-4. ✅ Post-hook 全覆盖 — read_file, search_content, search_symbols, inspect_symbol, git_diff, run_shell
-5. ✅ Ambient-hook — 子Agent 自动继承 loadEngineSnapshot + fork directive
-6. ⬜ LSP 引擎 — `resolve_call` 直接查询（当前从 fragility 推导热点）
-7. ⬜ 向量引擎 — 语义邻居提示，锦上添花
+4. ✅ LSP 引擎（resolve_call）— 已接入，top 3 脆弱文件真实调用者解析
+5. ✅ 向量引擎（search_symbols）— 已接入，语义邻居发现
+6. ✅ Post-hook 全覆盖 — read_file, search_content, search_symbols, inspect_symbol, git_diff, run_shell
+7. ✅ Ambient-hook — 子Agent 自动继承 loadEngineSnapshot + fork directive
 
 ---
 
