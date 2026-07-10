@@ -58,6 +58,8 @@ export class CheckPanel {
   private lastResult: CheckResult | null = null;
   private viewingHistory = false;
   private historyTimestamp = '';
+  private historyEvents: Array<{ timestamp: string; summary: string; props: any }> = [];
+  private showHistoryList = false;
 
   constructor(container: HTMLElement) {
     this.buildDOM(container);
@@ -99,6 +101,77 @@ export class CheckPanel {
     if (this.lastResult) {
       this.renderResult(this.lastResult);
     }
+  }
+
+  /** Toggle inline history list — queries timeline for recent check events. */
+  async toggleHistoryList(): Promise<void> {
+    if (this.showHistoryList) {
+      this.showHistoryList = false;
+      this.showCurrent();
+      return;
+    }
+    this.showHistoryList = true;
+    await this.loadHistory();
+  }
+
+  private async loadHistory(): Promise<void> {
+    try {
+      const { invoke } = await import('../bridge');
+      const json = await invoke<string>('hologram_call', {
+        tool: 'project_timeline',
+        args: { limit: 80 },
+      });
+      const data = JSON.parse(json) as { events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }> };
+      this.historyEvents = (data.events || [])
+        .filter(e => e.event_type === 'commit_clean' || e.event_type === 'commit_violation')
+        .map(e => ({ timestamp: e.timestamp, summary: e.summary, props: e.properties }));
+    } catch {
+      this.historyEvents = [];
+    }
+    this.renderHistoryList();
+  }
+
+  private renderHistoryList(): void {
+    this.content.innerHTML = '';
+    const banner = ce('div', 'check-history-banner');
+    const label = ce('span', 'check-history-label');
+    label.textContent = `历史简报 (${this.historyEvents.length} 条)`;
+    banner.appendChild(label);
+    const backBtn = ce('button', 'check-history-back');
+    backBtn.textContent = '返回当前';
+    backBtn.addEventListener('click', () => { this.showHistoryList = false; this.showCurrent(); });
+    banner.appendChild(backBtn);
+    this.content.appendChild(banner);
+
+    if (this.historyEvents.length === 0) {
+      const empty = ce('div', 'check-history-empty');
+      empty.textContent = '暂无历史简报';
+      this.content.appendChild(empty);
+      return;
+    }
+
+    const list = ce('div', 'check-history-list');
+    for (const ev of this.historyEvents) {
+      const item = ce('div', 'check-history-item');
+      const passed = ev.props?.passed !== false;
+      const status = ce('span', passed ? 'check-history-status check-history-pass' : 'check-history-status check-history-fail');
+      status.textContent = passed ? '✓' : '✗';
+      item.appendChild(status);
+      const info = ce('div', 'check-history-info');
+      const sum = ce('div', 'check-history-summary');
+      sum.textContent = ev.summary;
+      info.appendChild(sum);
+      const ts = ce('div', 'check-history-time');
+      ts.textContent = fmtTime(ev.timestamp);
+      info.appendChild(ts);
+      item.appendChild(info);
+      item.addEventListener('click', () => {
+        this.showHistoryList = false;
+        this.showHistory(ev.props as CheckResult, ev.timestamp);
+      });
+      list.appendChild(item);
+    }
+    this.content.appendChild(list);
   }
 
   getLastResult(): CheckResult | null {
@@ -166,6 +239,17 @@ export class CheckPanel {
       this.close();
     });
     tab.appendChild(closeBtn);
+
+    // History button (right before close)
+    const histBtn = document.createElement('button');
+    histBtn.className = 'check-history-btn';
+    histBtn.innerHTML = iconHtml('timeline', 14);
+    histBtn.title = '查看历史';
+    histBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleHistoryList();
+    });
+    tab.appendChild(histBtn);
 
     this.panel.appendChild(tab);
 
