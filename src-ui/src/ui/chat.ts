@@ -2478,12 +2478,7 @@ export class ChatPanel {
       } else if (err.message?.includes('paused after')) {
         this.addNotice(err.message, 'warn');
       } else {
-        // Error card with actions (item 8)
-        this.addErrorNotice(err.message || String(err), '', [
-          { label: '重试本次请求', onClick: () => { this.inputArea.value = text; this.sendMessage(); } },
-          { label: '压缩上下文', onClick: () => { this.inputArea.value = '/compact'; this.sendMessage(); } },
-          { label: '新建会话', onClick: () => { this.newSession(); } },
-        ]);
+        this.addNotice(`错误: ${err.message || String(err)}。发送任意消息重试，或输入 /compact 压缩上下文，或输入 /new 新建会话`, 'error');
       }
     } finally {
       this.setRunning(false);
@@ -2745,15 +2740,7 @@ export class ChatPanel {
           .run(this.abortCtrl.signal, userText)
           .catch((err: any) => {
             if (!err.message?.includes('aborted')) {
-              this.addErrorNotice(err.message || String(err), '', [
-                {
-                  label: '重试',
-                  onClick: () => {
-                    this.inputArea.value = userText;
-                    this.sendMessage();
-                  },
-                },
-              ]);
+              this.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
             }
           })
           .finally(() => {
@@ -2874,7 +2861,7 @@ export class ChatPanel {
     const injects: { el: Element; afterIdx: number }[] = [];
     for (let i = 0; i < existing.length; i++) {
       const el = existing[i];
-      if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification') || el.classList.contains('msg-error-card')) {
+      if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification')) {
         injects.push({ el, afterIdx: i - 1 }); // re-insert after the preceding message
         existing.splice(i, 1);
         i--;
@@ -2896,7 +2883,7 @@ export class ChatPanel {
     // Remove excess children (skip injects — already removed above)
     while (this.msgList.children.length > msgCount) {
       const last = this.msgList.lastChild;
-      if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification') || last.classList.contains('msg-error-card'))) {
+      if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification'))) {
         break; // don't remove injects
       }
       last?.remove();
@@ -3339,9 +3326,7 @@ export class ChatPanel {
             this.agent.run(this.abortCtrl.signal, text)
               .catch((err: any) => {
                 if (!err.message?.includes('aborted')) {
-                  this.addErrorNotice(err.message || String(err), '', [
-                    { label: '重试', onClick: () => { this.inputArea.value = text; this.sendMessage(); } },
-                  ]);
+                  this.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
                 }
               })
               .finally(() => {
@@ -4074,46 +4059,6 @@ export class ChatPanel {
         node.parentNode!.replaceChild(fragment, node);
       }
     }
-  }
-
-  // ── Error card (item 8) ──
-
-  private addErrorNotice(text: string, detail: string, actions: Array<{ label: string; onClick: () => void }>): void {
-    const el = document.createElement('div');
-    el.className = 'msg-error-card';
-    const title = document.createElement('div');
-    title.className = 'msg-error-card-title';
-    title.innerHTML = `${iconHtml('alert', 13)} ${escapeHtml(text)}`;
-    el.appendChild(title);
-
-    if (detail) {
-      const detailEl = document.createElement('div');
-      detailEl.className = 'msg-error-card-detail';
-      detailEl.textContent = detail;
-      // Expand toggle
-      const expandBtn = document.createElement('button');
-      expandBtn.className = 'msg-error-card-btn';
-      expandBtn.textContent = '展开详情';
-      expandBtn.addEventListener('click', () => {
-        detailEl.classList.toggle('expanded');
-        expandBtn.textContent = detailEl.classList.contains('expanded') ? '收起' : '展开详情';
-      });
-      el.appendChild(detailEl);
-      el.appendChild(expandBtn);
-    }
-
-    const actionsRow = document.createElement('div');
-    actionsRow.className = 'msg-error-card-actions';
-    for (const a of actions) {
-      const btn = document.createElement('button');
-      btn.className = 'msg-error-card-btn';
-      btn.textContent = a.label;
-      btn.addEventListener('click', a.onClick);
-      actionsRow.appendChild(btn);
-    }
-    el.appendChild(actionsRow);
-    this.msgList.appendChild(el);
-    this.scrollBottom();
   }
 
   // ── @ file reference autocomplete (item 5) ──
