@@ -2492,6 +2492,8 @@ export class ChatPanel {
   private abort(): void {
     if (this.abortCtrl) {
       this.abortCtrl.abort();
+      // 级联中止所有子Agent
+      this.agent?.cascadeAbort();
       // 解散所有待审批弹窗（防止权限门死锁）
       cancelPendingApprovals();
       // 立即视觉反馈 — 不等 .finally()，防止卡死时 UI 无响应

@@ -6,6 +6,7 @@
 
 import type { Message } from '../provider/types';
 import type { Agent } from './agent';
+import { bus } from '../ui/events';
 
 export enum SubAgentStatus {
   Running = 'running',
@@ -30,7 +31,10 @@ interface PendingAgent {
   handle: SubAgentHandle;
   resolve: Resolver;
   onMessage?: MessageCallback;
+  callId?: string; // tool call ID for event correlation
 }
+
+export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
 
 /** Pool of asynchronously running sub-agents.
  *  Spawn is fire-and-forget — parent agent doesn't block.
@@ -38,12 +42,17 @@ interface PendingAgent {
 export class SubAgentPool {
   private agents = new Map<string, PendingAgent>();
   private completed: SubAgentHandle[] = [];
+  private onDone: SubAgentDoneCallback | null = null;
+
+  /** Register a callback invoked when ANY sub-agent completes. Used for UI events. */
+  setOnDone(cb: SubAgentDoneCallback): void { this.onDone = cb; }
 
   /** Fire-and-forget spawn. Returns the handle ID immediately. */
   spawn(
     description: string,
     runFn: (onMessage?: (msg: string) => void) => Promise<{ text: string; err?: string }>,
     onMessage?: (msg: string) => void,
+    callId?: string,
   ): string {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const handle: SubAgentHandle = {
@@ -54,14 +63,12 @@ export class SubAgentPool {
     };
 
     const promise = new Promise<string>((resolve) => {
-      this.agents.set(id, { handle, resolve, onMessage });
+      this.agents.set(id, { handle, resolve, onMessage, callId });
     });
 
-    // Fire and forget — don't await
-    runFn(onMessage).then(
-      ({ text, err }) => {
-        const pending = this.agents.get(id);
-        if (!pending) return; // already stopped/discarded
+    const finish = (text: string, err?: string) => {
+      const pending = this.agents.get(id);
+      if (pending) {
         if (err) {
           pending.handle.status = SubAgentStatus.Failed;
           pending.handle.error = err;
@@ -73,17 +80,15 @@ export class SubAgentPool {
         this.completed.push(pending.handle);
         pending.resolve(text);
         this.agents.delete(id);
-      },
-      (err) => {
-        const pending = this.agents.get(id);
-        if (!pending) return;
-        pending.handle.status = SubAgentStatus.Failed;
-        pending.handle.error = String(err?.message || err);
-        pending.handle.result = pending.handle.error;
-        this.completed.push(pending.handle);
-        pending.resolve(pending.handle.error || '');
-        this.agents.delete(id);
-      },
+        // Notify UI + registered callback
+        if (this.onDone) this.onDone(pending.handle, pending.callId);
+      }
+    };
+
+    // Fire and forget — don't await
+    runFn(onMessage).then(
+      ({ text, err }) => finish(text, err),
+      (err) => finish('', String(err?.message || err)),
     );
 
     return id;
@@ -114,6 +119,21 @@ export class SubAgentPool {
     pending.resolve('');
     this.agents.delete(id);
     return true;
+  }
+
+  /** Stop all running sub-agents. Returns the list of stopped agent IDs. */
+  stopAll(): string[] {
+    const stopped: string[] = [];
+    for (const [id, pending] of this.agents) {
+      pending.handle.status = SubAgentStatus.Stopped;
+      pending.handle.error = 'stopped by user';
+      this.completed.push(pending.handle);
+      pending.resolve('');
+      stopped.push(id);
+      if (this.onDone) this.onDone(pending.handle, pending.callId);
+    }
+    this.agents.clear();
+    return stopped;
   }
 
   /** Get a summary of all agents (running + completed). */
