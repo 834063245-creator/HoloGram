@@ -7,14 +7,13 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel in-progress runs when new commits push to the same branch/PR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ═══════════════════════════════════════════════════════════
-  # Frontend — 最快的，独立跑
+  # Frontend — ubuntu, 最快的，独立跑
   # ═══════════════════════════════════════════════════════════
   frontend:
     runs-on: ubuntu-latest
@@ -22,47 +21,40 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
-
       - run: npm ci
         working-directory: src-ui
-
       - run: npm run build
         working-directory: src-ui
-
       - run: npm test
         working-directory: src-ui
 
   # ═══════════════════════════════════════════════════════════
-  # Engine — Rust 单元测试
+  # Rust — windows only (engine tests segfault on Linux, tauri
+  # needs engine binary as resource).
   # ═══════════════════════════════════════════════════════════
-  engine:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { toolchain: stable }
-
-      - run: cargo test --release
-        working-directory: engine
-
-  # ═══════════════════════════════════════════════════════════
-  # Tauri — Windows only, needs WebView2
-  # ═══════════════════════════════════════════════════════════
-  tauri:
+  rust:
     runs-on: windows-latest
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { toolchain: stable }
+        with:
+          toolchain: stable
+          cache: false  # no workspace Cargo.toml at repo root
 
-      # Pre-build frontend so Tauri can bundle it.
+      # Engine: test + build (binary needed by tauri resource)
+      - run: cargo test --release
+        working-directory: engine
+      - run: cargo build --release
+        working-directory: engine
+
+      # Tauri: check (needs engine binary + frontend dist)
       - run: npm ci
         working-directory: src-ui
       - run: npm run build
         working-directory: src-ui
-
-      # Tauri check — fast compile-only pass, no linking.
       - run: cargo check --release
         working-directory: src-tauri
