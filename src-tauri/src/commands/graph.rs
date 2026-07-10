@@ -5,6 +5,7 @@
 use tauri::{Emitter, Manager};
 use hologram_engine::analysis::graph_summary;
 use hologram_engine::graph::query;
+use hologram_engine::engine as engine_api;
 
 #[tauri::command]
 pub(crate) async fn load_graph_json(
@@ -138,11 +139,24 @@ pub(crate) async fn analyze_and_load(path: String, force: Option<bool>, app: tau
 pub(crate) async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<String, String> {
     let app2 = app.clone();
     let path2 = path.clone();
+    // Snapshot current graph before analysis so we can compute a diff for incremental update.
+    let before = engine_api::engine_read_graph(|g| g.clone()).ok();
     std::thread::spawn(move || {
         match crate::utils::direct_analyze(&path2, true) {
             Ok(_) => {
                 let _ = std::fs::write(crate::utils::project_root().join(".last_project"), &path2);
-                let _ = app2.emit("analysis-complete", serde_json::json!({"path": path2}));
+                let diff = crate::workspace::compute_watcher_diff(before.as_ref());
+                let (nc, ec) = engine_api::engine_read(|idx| (idx.node_count(), idx.edge_count())).unwrap_or((0, 0));
+                let mut summary = serde_json::json!({
+                    "path": path2,
+                    "total_nodes": nc,
+                    "node_count": nc,
+                    "edge_count": ec,
+                });
+                if let Some(d) = diff {
+                    summary["diff"] = d;
+                }
+                let _ = app2.emit("analysis-complete", summary.to_string());
             }
             Err(e) => {
                 let _ = app2.emit("analysis-failed", serde_json::json!({"path": path2, "error": e}));
