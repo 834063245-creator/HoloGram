@@ -32,6 +32,7 @@ interface PendingAgent {
   resolve: Resolver;
   onMessage?: MessageCallback;
   callId?: string; // tool call ID for event correlation
+  finished?: boolean; // guard against double-finish (timeout + promise race)
 }
 
 export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
@@ -120,6 +121,8 @@ export class SubAgentPool {
     const finish = (text: string, err?: string) => {
       cleanup();
       const pending = this.agents.get(id);
+      if (!pending || pending.finished) return;
+      pending.finished = true;
       if (pending) {
         if (err) {
           pending.handle.status = SubAgentStatus.Failed;

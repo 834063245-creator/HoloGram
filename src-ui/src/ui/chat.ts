@@ -4373,10 +4373,14 @@ export class ChatPanel {
     const subEl = document.createElement('div');
     subEl.className = 'msg-sub-agent';
     subEl.dataset['subId'] = data.id;
+    subEl.dataset['startedAt'] = String(Date.now());
+    subEl.dataset['mode'] = data.mode;
+    subEl.title = `${data.description} · ${data.mode === 'fork' ? '继承上下文' : '独立'} · 运行中…`;
     subEl.innerHTML = `
       <div class="msg-sub-agent-header">
         ${iconHtml('puzzle', 12)} 子 Agent: ${escapeHtml(data.description)}
-        <span style="font-size: calc(8px * var(--font-scale));opacity:0.5">${data.mode === 'fork' ? '继承上下文' : '独立'}</span>
+        <span class="sub-agent-mode">${data.mode === 'fork' ? '继承上下文' : '独立'}</span>
+        <span class="sub-agent-status">⚡ 运行中</span>
       </div>
       <div class="msg-sub-agent-body open"></div>`;
     this.currentBubble!.appendChild(subEl);
@@ -4392,6 +4396,14 @@ export class ChatPanel {
       body.textContent += data.text;
       body.scrollTop = body.scrollHeight;
     }
+    // Update status hover
+    const status = subEl.querySelector('.sub-agent-status') as HTMLElement;
+    if (status) {
+      const lines = (body?.textContent || '').split('\n').filter(l => l.trim()).length;
+      const started = Number(subEl.dataset['startedAt']) || Date.now();
+      const elapsed = Math.round((Date.now() - started) / 1000);
+      subEl.title = `${subEl.dataset['mode'] || 'fork'} · ${lines} 行输出 · ${elapsed}s`;
+    }
   }
 
   private handleSubDone(data: { parentToolId: string; summary: any }): void {
@@ -4399,28 +4411,41 @@ export class ChatPanel {
     const subEl = this.msgList.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
     if (!subEl) return;
     const body = subEl.querySelector('.msg-sub-agent-body') as HTMLElement;
+    const status = subEl.querySelector('.sub-agent-status') as HTMLElement;
+    const header = subEl.querySelector('.msg-sub-agent-header') as HTMLElement;
     if (body) body.classList.remove('open');
     this._bumpPillBadge();
 
-    // Collapse and show summary
-    subEl.innerHTML = `
-      <div class="msg-sub-agent-summary">
-        ${iconHtml('puzzle', 12)} 子 Agent 完成 · ${data.summary?.steps || '?'} 步 · ${data.summary?.elapsedMs ? (data.summary.elapsedMs / 1000).toFixed(1) + 's' : ''}
-        ${data.summary?.hasError ? ` · ${iconHtml('alert', 10)} 有错误` : ''}
-        · <button class="pre-code-btn" style="display:inline">查看输出</button>
-      </div>`;
+    // Update status indicator + hover
+    const icon = data.summary?.hasError ? '❌' : '✅';
+    const elapsed = data.summary?.elapsedMs
+      ? (data.summary.elapsedMs / 1000).toFixed(1) + 's'
+      : '';
+    if (status) status.innerHTML = `${icon} 完成 · ${elapsed}`;
+    if (body) {
+      const lines = (body.textContent || '').split('\n').filter(l => l.trim()).length;
+      subEl.title = `${data.summary?.description || ''} · ${icon} · ${lines} 行输出 · ${elapsed}`;
+    }
 
-    // Toggle body visibility
-    const toggleBtn = subEl.querySelector('button');
-    const origBody = body;
+    // Prepend summary bar WITHOUT destroying body (preserves body reference for toggle)
+    const summaryBar = document.createElement('div');
+    summaryBar.className = 'msg-sub-agent-summary';
+    summaryBar.innerHTML =
+      `${iconHtml('puzzle', 12)} 子 Agent 完成 · ${data.summary?.steps || '?'} 步 · ${elapsed}` +
+      `${data.summary?.hasError ? ` · ${iconHtml('alert', 10)} 有错误` : ''}` +
+      ` · <button class="pre-code-btn" style="display:inline">${body?.style.display === 'none' ? '展开输出' : '收起输出'}</button>`;
+
+    // Toggle: show/hide body, flip button text
+    const toggleBtn = summaryBar.querySelector('button');
     toggleBtn?.addEventListener('click', () => {
-      if (subEl.contains(origBody)) {
-        origBody.remove();
-      } else {
-        subEl.appendChild(origBody);
-        origBody.classList.add('open');
-      }
+      if (!body) return;
+      const hidden = body.style.display === 'none';
+      body.style.display = hidden ? '' : 'none';
+      (toggleBtn as HTMLElement).textContent = hidden ? '收起输出' : '展开输出';
     });
+
+    // Insert summary before body
+    subEl.insertBefore(summaryBar, body);
   }
 
   // ── Code block action buttons (item 6) ──
