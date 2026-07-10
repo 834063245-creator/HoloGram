@@ -892,7 +892,9 @@ export class ChatPanel {
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
-    cancelPendingApprovals();
+    // ponytail: don't cancel pending permissions while agent is running —
+    // sub-agents may be mid-write and the dialog is their only path through.
+    if (!this.running) cancelPendingApprovals();
     this.closeHistory();
     this._hideSlashPanel();
     shell.notifyPanelChanged();
@@ -935,7 +937,7 @@ export class ChatPanel {
     if (this.projectPath && this.activeIdx >= 0) {
       this.saveActiveSession(this.projectPath).catch(() => {});
     }
-    cancelPendingApprovals();
+    if (!this.running) cancelPendingApprovals();
     this.closeHistory();
     this._hideSlashPanel();
     shell.notifyPanelChanged();
