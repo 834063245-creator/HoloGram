@@ -2642,11 +2642,23 @@ export class ChatPanel {
   }
 
   /** Push a notice message to the log.
-   *  ponytail: uses _scheduleSync (debounced rAF) instead of direct _syncMessagesToDOM.
-   *  This breaks the tight coupling between notice creation and full DOM rebuild,
-   *  weakening the 21-node render cycle. Notices batch with other pending renders. */
+   *  ponytail: insert BEFORE the streaming assistant (if any) so the incremental
+   *  render path in _doSyncMessagesToDOM stays active. If the notice is at the
+   *  tail, lastMsg.role !== 'assistant' and every rAF frame does a full rebuild. */
   private _addNoticeMessage(text: string, level: 'info' | 'warn' | 'error'): void {
-    this.messages.push(createNoticeMessage(text, level));
+    if (this._streamingAssistantId) {
+      // Find the streaming assistant's index and insert the notice right before it
+      const assistIdx = this.messages.findIndex(
+        (m) => m.role === 'assistant' && (m as AssistantMessage)._id === this._streamingAssistantId,
+      );
+      if (assistIdx >= 0) {
+        this.messages.splice(assistIdx, 0, createNoticeMessage(text, level));
+      } else {
+        this.messages.push(createNoticeMessage(text, level));
+      }
+    } else {
+      this.messages.push(createNoticeMessage(text, level));
+    }
     this._scheduleSync();
     this.scrollBottom();
   }
