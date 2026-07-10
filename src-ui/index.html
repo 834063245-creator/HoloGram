@@ -463,6 +463,14 @@
       transition: transform 0.05s ease;
       box-shadow: inset 0 0 8px rgba(80,140,240,0.1);
     }
+    #toolbar button .toolbar-badge {
+      position: absolute; top: 2px; right: 2px;
+      font-family: var(--font-mono); font-size: calc(8px * var(--font-scale)); font-weight: 700;
+      background: var(--fail); color: #fff; padding: 1px 5px; border-radius: 8px;
+      min-width: 16px; text-align: center; line-height: 1.2;
+      box-shadow: 0 0 6px rgba(217,68,68,0.5);
+      pointer-events: none;
+    }
     #toolbar button:active::after { opacity: 0.5; }
     #toolbar button:disabled { opacity: 0.25; cursor: default; }
     #toolbar button:disabled::after { display: none; }
