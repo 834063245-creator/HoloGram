@@ -754,4 +754,42 @@ mod regression {
             err
         );
     }
+
+    /// 回归 — git_commit 会话 Allow 规则不生效
+    /// 修前: 用户点"本次会话允许"后 add_session_rule("Git(commit)", "allow")
+    ///       但下次 has_permission_to_use_tool 仍返回 Ask（规则不匹配）。
+    /// 修后: 会话 Allow 规则必须在 git::check 的 find_allow 步骤生效，
+    ///       返回 Allow 而非 Ask。
+    #[test]
+    fn r10_git_session_allow_overrides_system_ask() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        let tool = GitTool {
+            repo_path: root.to_string_lossy().to_string(),
+            subcommand: "commit".into(),
+        };
+
+        // First call: should Ask (system Git(commit) rule)
+        let suggestions = match has_permission_to_use_tool(&tool, &ctx) {
+            PermissionDecision::Ask { suggestions, .. } => {
+                assert!(!suggestions.is_empty(), "must include suggestion rule");
+                suggestions
+            }
+            other => panic!("expected Ask for Git(commit), got: {:?}", other),
+        };
+
+        // Simulate user clicking "本次会话允许"
+        let rule_str = &suggestions[0].rule;
+        let behavior = &suggestions[0].behavior;
+        ctx.add_session_rule(rule_str, behavior);
+
+        // Second call: should Allow (session rule overrides system Ask)
+        match has_permission_to_use_tool(&tool, &ctx) {
+            PermissionDecision::Allow => {} // expected
+            other => panic!(
+                "session Allow rule must override system Ask — expected Allow, got: {:?}",
+                other
+            ),
+        }
+    }
 }

@@ -140,8 +140,15 @@ impl GraphStore {
         &self.project_root
     }
 
-    /// Swap the in-memory index with a new one. Holds write lock briefly.
-    pub fn swap_index(&self, new_idx: MemoryIndex) {
+        /// Swap the in-memory index with a new one. Holds write lock briefly.
+    /// Guard: verifies aux indexes are built before serving queries.
+    /// If aux indexes are missing (race window after degraded load),
+    /// rebuilds them inline to prevent empty search results.
+    pub fn swap_index(&self, mut new_idx: MemoryIndex) {
+        if !new_idx.has_aux_indexes() {
+            tracing::warn!("[store] swap_index: new index missing aux indexes, rebuilding inline");
+            new_idx.ensure_aux_indexes();
+        }
         let mut old = self.index.write();
         *old = new_idx;
     }

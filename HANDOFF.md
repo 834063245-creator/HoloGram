@@ -2,6 +2,14 @@
 
 ## 已完成的上帝文件拆分
 
+### engine/src/engine/ — 五模块拆分 🆕
+- **2079 → mod.rs(~870 core) + 4 子模块（grammar/pipeline/watcher/lsp）**
+- `grammar.rs`（44行）：GRAMMAR_LOADER 26 语言静态注册
+- `pipeline.rs`（347行）：run_pipeline 10 阶段编排
+- `watcher.rs`（290行）：is_watching/start_watcher/stop_watcher/handle_watcher_changes
+- `lsp.rs`（186行）：reparse_for_lsp/resolve_calls_lsp/TL_LSP_PARSER
+- `mod.rs`（~870行核心 + ~600行测试）：Engine struct + 生命周期 + 全局函数 + 测试
+
 ### engine/src/analysis/framework_routes/（2445 → 920 + 18×~70）
 - 18 个框架各一文件，调度器 + 共享工具在 mod.rs
 
@@ -49,16 +57,18 @@
 | 文件 | 行数 | 为什么 |
 |------|------|--------|
 | `src-ui/src/ui/graph.ts` | 4745 | StarGraph 渲染管线（_renderImpl/buildNodes/buildEdges/animate）深度绑定 THREE.js 实例 |
-| `engine/src/engine.rs` | 2079 | 生命周期 + LSP + FTL + 增量全耦合 |
+| `engine/src/engine/mod.rs` | ~870 core | ✅ **已拆分**（+grammar/pipeline/watcher/lsp） |
 | `src-tauri/src/commands/tools.rs` | 1959 | Tauri 命令 + 后台 job 系统 |
 | `src-tauri/src/os_sandbox.rs` | 1732 | 单一职责，不需要拆 |
 
 ## 已知 bug（未修）
 
-| Bug | 说明 |
-|-----|------|
-| `search_content` 间歇空结果 | 引擎 analyze_project 后索引窗口期竞态 |
-| `git_commit` 等每次弹 Ask | 系统规则 `Git(commit)` Ask + 用户点了"本次会话允许"但规则不匹配 |
+（本次会话已修复以下两个 bug ✅）
+
+| Bug | 说明 | 状态 |
+|-----|------|------|
+| `search_content` 间歇空结果 | 引擎 analyze_project 后索引窗口期竞态 | ✅ `swap_index` 加 has_aux_indexes 守卫 |
+| `git_commit` 等每次弹 Ask | 系统规则 `Git(commit)` Ask + 用户点了"本次会话允许"但规则不匹配 | ✅ 添加回归测试 r10 + permission_ask_response 防御日志 |
 
 ## 构建
 
