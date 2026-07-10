@@ -894,6 +894,7 @@ export class ChatPanel {
     }
     cancelPendingApprovals();
     this.closeHistory();
+    this._hideSlashPanel();
     shell.notifyPanelChanged();
   }
 
@@ -936,6 +937,7 @@ export class ChatPanel {
     }
     cancelPendingApprovals();
     this.closeHistory();
+    this._hideSlashPanel();
     shell.notifyPanelChanged();
   }
 
@@ -2840,7 +2842,7 @@ export class ChatPanel {
     const injects: { el: Element; afterIdx: number }[] = [];
     for (let i = 0; i < existing.length; i++) {
       const el = existing[i];
-      if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification')) {
+      if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification') || el.classList.contains('msg-error-card')) {
         injects.push({ el, afterIdx: i - 1 }); // re-insert after the preceding message
         existing.splice(i, 1);
         i--;
@@ -2862,7 +2864,7 @@ export class ChatPanel {
     // Remove excess children (skip injects — already removed above)
     while (this.msgList.children.length > msgCount) {
       const last = this.msgList.lastChild;
-      if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification'))) {
+      if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification') || last.classList.contains('msg-error-card'))) {
         break; // don't remove injects
       }
       last?.remove();
@@ -3017,6 +3019,11 @@ export class ChatPanel {
 
       case EventKind.SessionChanged:
         this._syncMessagesToDOM();
+        break;
+
+      default:
+        // Unknown event kind — log and ignore, don't corrupt streaming state
+        console.warn('[chat] renderEvent: unknown event kind', (ev as any).kind);
         break;
     }
   }
@@ -4578,8 +4585,8 @@ function formatToolResult(toolName: string, text: string, truncated: boolean, ar
     return formatDiffResult(body, args);
   }
 
-  // ── Code: run_shell, search_content → code block ──
-  if (toolName === 'run_shell') {
+  // ── Code: run_shell, bash_output, monitor → code block ──
+  if (toolName === 'run_shell' || toolName === 'bash_output' || toolName === 'monitor') {
     return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
   }
   if (toolName === 'search_content') {
