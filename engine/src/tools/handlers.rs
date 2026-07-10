@@ -902,7 +902,24 @@ pub(crate) fn handler_run_check(args: &Value) -> Value {
         } else {
             format!("Check failed: {} violations", violation_count)
         };
-        let props = json!({"passed": check_result["passed"], "violation_count": check_result["violation_count"]});
+        let props = json!({
+            "passed": check_result["passed"],
+            "violation_count": check_result["violation_count"],
+            "summary": check_result["summary"],
+            "total_changed_files": check_result["total_changed_files"],
+            "blast_radius": check_result["blast_radius"],
+            "new_cycles": check_result["new_cycles"],
+            "new_thread_conflicts": check_result["new_thread_conflicts"],
+            "api_signature_changes": check_result["api_signature_changes"],
+            "new_violations": check_result["new_violations"],
+            "resolved_violations": check_result["resolved_violations"],
+            "persistent_violations": check_result["persistent_violations"],
+            "l5_violations": check_result["l5_violations"],
+            "l4_violations": check_result["l4_violations"],
+            "l3_violations": check_result["l3_violations"],
+            "l2_violations": check_result["l2_violations"],
+            "timestamp": check_result["timestamp"],
+        });
         let _ = engine::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props);
     }
     json!(check_result)
