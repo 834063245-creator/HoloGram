@@ -97,6 +97,12 @@ export interface EngineSnapshot {
   baselineFragility: Map<string, number>;
   /** Drift since session start: positive = degraded */
   sessionDrift: number;
+  /** LSP: files with high-call-count symbols (top 20) */
+  lspHotspots: Array<{ file: string; symbol: string; callers: number }>;
+  /** Synthesis: blindspot markers grouped by type */
+  synthesisAlerts: Array<{ type: string; count: number; detail: string }>;
+  /** Vector: top symbol names for semantic neighbor lookup (deferred) */
+  vectorReady: boolean;
 }
 
 export interface GraphContext {
@@ -894,6 +900,25 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
             }
           }
           lines.push(`│  耦合健康度: ${eng.healthScore}/100`);
+
+          // ── LSP hotspots ──
+          if (eng.lspHotspots.length > 0) {
+            const fileHit = eng.lspHotspots.filter(h =>
+              h.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+              normFp.includes(h.file.replace(/\\/g, '/').toLowerCase())
+            );
+            if (fileHit.length > 0) {
+              lines.push(`│  LSP 调用热点:`);
+              for (const h of fileHit.slice(0, 3)) {
+                lines.push(`│  • ${h.symbol} — ~${h.callers} 调用者`);
+              }
+            }
+          }
+
+          // ── Synthesis alerts ──
+          if (eng.synthesisAlerts.length > 0) {
+            lines.push(`│  合成引擎: ${eng.synthesisAlerts.map(a => `${a.type}(${a.count})`).join(', ')}`);
+          }
         }
       }
 

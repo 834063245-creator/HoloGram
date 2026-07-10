@@ -912,11 +912,15 @@ export class Workspace {
 
 async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefresh = false): Promise<void> {
   try {
-    // Fragility ranking (top 15)
-    const fragileRaw = await invoke<string>('hologram_call', {
-      tool: 'fragile_modules',
-      args: { limit: 15 },
-    });
+    // Fire all four engine queries in parallel
+    const [fragileRaw, cycleRaw, healthRaw, blindspotsRaw] = await Promise.all([
+      invoke<string>('hologram_call', { tool: 'fragile_modules', args: { limit: 15 } }),
+      invoke<string>('hologram_call', { tool: 'detect_cycles', args: { mode: 'all' } }),
+      invoke<string>('hologram_call', { tool: 'project_health', args: { path: projectPath, days: 30 } }),
+      invoke<string>('hologram_call', { tool: 'arch_blindspots', args: { filter: 'all' } }).catch(() => '{"blindspots":[]}'),
+    ]);
+
+    // ── Fragility (分析引擎) ──
     const fragileData = JSON.parse(fragileRaw);
     const fragilityRanks: Array<{ file: string; score: number }> = [];
     if (fragileData.fragile_modules || fragileData.modules) {
@@ -929,34 +933,45 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
       }
     }
 
-    // Cycle count
-    const cycleRaw = await invoke<string>('hologram_call', {
-      tool: 'detect_cycles',
-      args: { mode: 'all' },
-    });
+    // ── Cycles (分析引擎) ──
     const cycleData = JSON.parse(cycleRaw);
     const cycleCount = cycleData.total_cycles || cycleData.cycles?.length || 0;
 
-    // Project health (coupling density)
-    const healthRaw = await invoke<string>('hologram_call', {
-      tool: 'project_health',
-      args: { path: projectPath, days: 30 },
-    });
+    // ── Health (分析引擎) ──
     const healthData = JSON.parse(healthRaw);
     const healthScore = healthData.coupling_density_score || healthData.score || 0;
 
-    // Build baseline from first call, compute drift on subsequent calls
+    // ── Synthesis alerts (合成引擎) ──
+    const blindspotsData = JSON.parse(blindspotsRaw);
+    const synthesisAlerts: Array<{ type: string; count: number; detail: string }> = [];
+    const rawBlindspots = blindspotsData.blindspots || blindspotsData.alerts || [];
+    const typeCounts = new Map<string, number>();
+    for (const b of rawBlindspots) {
+      const t = b.type || b.kind || 'unknown';
+      typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+    }
+    for (const [type, count] of typeCounts) {
+      synthesisAlerts.push({ type, count, detail: `${count} detected in project` });
+    }
+
+    // ── LSP hotspots: derive from fragility ranks (top-caller symbols) ──
+    const lspHotspots: Array<{ file: string; symbol: string; callers: number }> = [];
+    for (const r of fragilityRanks.slice(0, 5)) {
+      if (r.score > 100) {
+        lspHotspots.push({ file: r.file, symbol: r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '', callers: Math.round(r.score / 10) });
+      }
+    }
+
+    // ── Baseline / drift ──
     let baselineFragility: Map<string, number>;
     let sessionDrift = 0;
 
     if (!isRefresh && !ctx.engine) {
-      // Initial load: snapshot the baseline
       baselineFragility = new Map<string, number>();
       for (const r of fragilityRanks) {
         baselineFragility.set(r.file, r.score);
       }
     } else {
-      // Refresh: compare against existing baseline
       const prev = ctx.engine?.baselineFragility;
       if (prev && prev.size > 0) {
         let delta = 0;
@@ -975,6 +990,9 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
       healthScore,
       baselineFragility,
       sessionDrift,
+      lspHotspots,
+      synthesisAlerts,
+      vectorReady: false, // deferred until on-demand lookup
     };
   } catch (e) {
     console.warn('[loadEngineSnapshot] engine data unavailable, preflight runs in lightweight mode:', e);
