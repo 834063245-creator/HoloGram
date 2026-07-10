@@ -50,6 +50,8 @@ export interface AgentOptions {
   sessionId?: string;
   /** Called after each session save (fire-and-forget, never blocks the loop). */
   onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
+  /** Sub-agent nesting depth (0 = root, 1 = first fork). Auto-incremented. */
+  subagentDepth?: number;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -103,6 +105,10 @@ export class Agent {
   private compactRatio: number;
   private recentKeep: number;
   private compactStuck = false;
+
+  // Sub-agent depth tracking: 0 = root, 1 = first fork, 2 = grandchild, etc.
+  private _subagentDepth = 0;
+  private static readonly MAX_SUBAGENT_DEPTH = 3;
 
   // PreToolUse hooks — enrich tool results with graph context
   private hooks: HookRegistry | null = null;
@@ -159,6 +165,7 @@ export class Agent {
     this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
     this.sink = sink;
+    this._subagentDepth = opts.subagentDepth ?? 0;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this.sessionStore = sessionStore || null;
@@ -1383,12 +1390,12 @@ ${goal}
     description: string,
     prompt: string,
     onProgress?: (chunk: string) => void,
-    mode: 'fork' | 'fresh' = 'fresh',
-  ): Promise<{ text: string; err?: string }> {
-    // ponytail: fork recursion guard — fork children can't spawn more forks
-    if (mode === 'fork' && this.isInForkChild()) {
-      return { text: '', err: 'Fork children cannot spawn further forks' };
-    }
+          mode: 'fork' | 'fresh' = 'fresh',
+    ): Promise<{ text: string; err?: string }> {
+      // Depth-based recursion guard
+      if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
+        return { text: '', err: `Exceeded max subagent depth (${Agent.MAX_SUBAGENT_DEPTH})` };
+      }
 
     // Auto-isolation: create a git worktree for fork sub-agents so file mutations
     // are sandboxed and can be reviewed (diff) before merge. Falls back to direct
@@ -1462,7 +1469,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       this.prov,
       subTools,
       subSystem,
-      { temperature: 0.3 },
+      { temperature: 0.3, subagentDepth: this._subagentDepth + 1 },
       (ev) => {
         // Forward text chunks for progress display
         if (ev.kind === EventKind.Text && ev.text && onProgress) {

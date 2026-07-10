@@ -361,6 +361,8 @@ export class Workspace {
     this._unlisteners = [];
 
     // Clear agent & memory
+    // Stop all running sub-agents before clearing
+    this.subAgentPool.stopAll();
     this.agent = null;
     try { await auraShutdown(); } catch { /* ignore */ }
     this.memoryManager = null;
