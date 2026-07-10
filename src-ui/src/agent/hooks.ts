@@ -84,10 +84,27 @@ export class PreflightHookRegistry {
 
 // ── GraphContext —— 图数据查询接口 ──
 
+/** Engine-level snapshot loaded from hologram_call (fragile_modules + project_health).
+ *  Populated asynchronously after agent setup. Null until first fetch completes. */
+export interface EngineSnapshot {
+  /** Top fragile modules: [file, score] */
+  fragilityRanks: Array<{ file: string; score: number }>;
+  /** Total cycle count */
+  cycleCount: number;
+  /** Coupling density score 0-100 */
+  healthScore: number;
+  /** Session baseline — drift tracking */
+  baselineFragility: Map<string, number>;
+  /** Drift since session start: positive = degraded */
+  sessionDrift: number;
+}
+
 export interface GraphContext {
   getNodesInFile(filePath: string): NodeBrief[];
   getImpactSummary(filePath: string): string | null;
   getSearchContext(files: string[]): string | null;
+  /** Engine snapshot — null until async fetch completes. Read by preflight hook. */
+  engine: EngineSnapshot | null;
 }
 
 export interface NodeBrief {
@@ -687,6 +704,7 @@ export function createGraphContext(
   fileIndex: Map<string, NodeBrief[]>,
   fanIn: Map<string, number>,
   fanOut: Map<string, number>,
+  engine: EngineSnapshot | null = null,
 ): GraphContext {
   function norm(fp: string): string {
     return fp.replace(/\\/g, '/').toLowerCase();
@@ -755,7 +773,7 @@ export function createGraphContext(
     return summary;
   }
 
-  return { getNodesInFile, getImpactSummary, getSearchContext };
+  return { engine, getNodesInFile, getImpactSummary, getSearchContext };
 }
 
 // ── GraphPreflightHook —— 写操作前自动影响分析 ──
@@ -848,6 +866,35 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
       if (riskLevel.trim() !== 'LOW') {
         const topName = topSymbols[0].name;
         lines.push(`│  → ${verb}前建议调 trace_impact "${topName}" 查看完整波及范围`);
+      }
+
+      // ── Engine-layer data: fragility rank, cycles, session drift ──
+      if (ctx.engine) {
+        const eng = ctx.engine;
+        const normFp = fp.replace(/\\/g, '/').toLowerCase();
+        const rankEntry = eng.fragilityRanks.find(r =>
+          r.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+          normFp.includes(r.file.replace(/\\/g, '/').toLowerCase())
+        );
+        if (rankEntry || eng.cycleCount > 0 || eng.sessionDrift > 0) {
+          lines.push(`│`);
+          lines.push(`│  ── 引擎层数据 ──`);
+          if (rankEntry) {
+            lines.push(`│  脆弱度排名: #${eng.fragilityRanks.indexOf(rankEntry) + 1} (${rankEntry.score.toFixed(0)})`);
+          }
+          if (eng.cycleCount > 0) {
+            lines.push(`│  项目循环依赖: ${eng.cycleCount} 个`);
+          }
+          if (eng.sessionDrift > 0) {
+            const driftPct = (eng.sessionDrift * 100).toFixed(1);
+            lines.push(`│  会话累积退化: +${driftPct}%`);
+            if (eng.sessionDrift > 0.1) {
+              riskLevel = 'HIGH   ';
+              lines.push(`│  ⚠ 累积退化超过 10%，门禁升级为 HIGH`);
+            }
+          }
+          lines.push(`│  耦合健康度: ${eng.healthScore}/100`);
+        }
       }
 
       return lines.join('\n');
