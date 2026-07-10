@@ -4384,7 +4384,8 @@ export class ChatPanel {
   }
 
   private handleSubProgress(data: { parentToolId: string; text: string }): void {
-    const subEl = this.currentBubble?.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
+    // Search globally — sub-agent events arrive asynchronously, currentBubble may have changed
+    const subEl = this.msgList.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
     if (!subEl) return;
     const body = subEl.querySelector('.msg-sub-agent-body');
     if (body) {
@@ -4394,10 +4395,10 @@ export class ChatPanel {
   }
 
   private handleSubDone(data: { parentToolId: string; summary: any }): void {
-    const subEl = this.currentBubble?.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
+    // Search globally — sub-agent completes asynchronously
+    const subEl = this.msgList.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
     if (!subEl) return;
     const body = subEl.querySelector('.msg-sub-agent-body') as HTMLElement;
-    const header = subEl.querySelector('.msg-sub-agent-header') as HTMLElement;
     if (body) body.classList.remove('open');
     this._bumpPillBadge();
 
