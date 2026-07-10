@@ -282,7 +282,7 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
 
 /// Compute diff between previous graph and current engine graph for incremental update.
 /// Returns None if no previous graph or engine read fails.
-fn compute_watcher_diff(before: Option<&Graph>) -> Option<serde_json::Value> {
+pub(crate) fn compute_watcher_diff(before: Option<&Graph>) -> Option<serde_json::Value> {
     let before = before?;
     let after = engine_api::engine_read_graph(|g| g.clone()).ok()?;
     let d = before.diff(&after);
