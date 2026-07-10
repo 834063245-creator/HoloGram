@@ -307,8 +307,26 @@ export class ChatPanel {
     setTimeout(() => this.sendMessage(), 200);
   }
 
-  /** Render a permission request inline in the chat — no modal, no outside-click-to-deny. */
+  /** Render a permission request inline in the chat — no modal, no outside-click-to-deny.
+   *  ponytail: serialises concurrent Ask requests — only one card shown at a time.
+   *  Subsequent callers queue behind the active card, preventing card-stacking flicker
+   *  when parent + sub-agent both trigger permission dialogs simultaneously. */
+  private _permQueue: Promise<void> = Promise.resolve();
+
   showPermissionCard(
+    toolName: string,
+    reason: string,
+    subject: string,
+  ): Promise<{ allow: boolean; remember: boolean }> {
+    // Serialise: wait for any previous card to resolve before showing the next one
+    const prev = this._permQueue;
+    let resolveQueue: () => void;
+    this._permQueue = new Promise(r => { resolveQueue = r; });
+
+    return prev.then(() => this._showPermissionCardInner(toolName, reason, subject)).finally(() => resolveQueue!());
+  }
+
+  private _showPermissionCardInner(
     toolName: string,
     reason: string,
     subject: string,
