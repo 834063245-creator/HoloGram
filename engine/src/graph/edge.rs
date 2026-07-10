@@ -110,6 +110,10 @@ pub struct Edge {
     /// Resolved via LSP type analysis (vs. same-name heuristic)
     #[serde(default)]
     pub lsp_resolved: bool,
+
+    /// 合成边标记: {"synthesizedBy": "react-render", "provenance": "heuristic"}
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 
@@ -129,6 +133,19 @@ impl Edge {
             cross_file: false,
             temporal_delay_sec: None,
             lsp_resolved: false,
+            metadata: None,
+        }
+    }
+
+    pub fn synthesized(
+        id: impl Into<String>, source: impl Into<String>,
+        target: impl Into<String>, kind: EdgeKind, channel: &str,
+    ) -> Self {
+        Self {
+            id: id.into(), source: source.into(), target: target.into(), kind,
+            coupling_depth: 3, cross_file: true,
+            temporal_delay_sec: None, lsp_resolved: false,
+            metadata: Some(serde_json::json!({"synthesizedBy": channel, "provenance": "heuristic"})),
         }
     }
 }

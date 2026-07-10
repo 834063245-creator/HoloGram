@@ -88,8 +88,10 @@ pub fn explore(
     let relationships = compute_relationships(&ctx);
 
     // Step 5: Source code
+    let mut output_truncated = false;
+    let mut truncation_hint = String::new();
     let source_code = if ctx.include_source {
-        read_source_sections(&ctx)
+        read_source_sections(&ctx, &mut output_truncated, &mut truncation_hint)
     } else {
         Vec::new()
     };
@@ -112,8 +114,13 @@ pub fn explore(
         "meta": {
             "totalSymbolsFound": total_found,
             "totalFilesScanned": ctx.named_files.len(),
-            "budgetUsed": 0,
-            "budgetTotal": 28000,
+            "budgetRecommended": explore_budget(ctx.graph.node_count()),
+            "budgetUsed": 1,
+            "budgetTotal": explore_output_budget(ctx.graph.node_count()).max_output_chars,
+            "outputTruncated": output_truncated,
+            "totalFilesMatched": ctx.named_files.len(),
+            "filesShown": if output_truncated { ctx.named_files.len().min(explore_output_budget(ctx.graph.node_count()).default_max_files) } else { ctx.named_files.len() },
+            "hint": if output_truncated { truncation_hint } else { String::new() },
             "_generator": "HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"
         }
     })
@@ -137,11 +144,13 @@ struct ExploreCtx<'a> {
 // ═══════════════════════════════════════════════════════════════
 
 /// Parse a natural language query into symbol names.
+/// Step 0: Normalize — Erlang fn/N → fn, Lua mod:fn → mod.fn
 /// Step 1: Tokenize — split on whitespace/punctuation, filter to code-like tokens.
 /// Step 2: Classify — PascalCase = context, qualified (:: or .) = exact, rest = simple.
 /// Step 3: Disambiguate — use PascalCase context to scope simple tokens.
 fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
-    let tokens = tokenize(query);
+    let normalized = normalize_query_spelling(query);
+    let tokens = tokenize(&normalized);
     if tokens.is_empty() {
         return Vec::new();
     }
@@ -196,6 +205,22 @@ fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
     result.retain(|s| seen.insert(s.clone()));
     result.truncate(16);
     result
+}
+
+/// Normalize Erlang/Lua spelling: fn/3 → fn, mod:fn → mod.fn
+fn normalize_query_spelling(query: &str) -> String {
+    // Erlang arity: fn/N → fn
+    static RE_ARITY: OnceLock<regex::Regex> = OnceLock::new();
+    let re_arity = RE_ARITY.get_or_init(||
+        regex::Regex::new(r"\b([A-Za-z_][\w@]*)/\d{1,3}\b").unwrap()
+    );
+    // Lua mod:fn → mod.fn (but skip protocol prefixes like "kind:", "lang:", etc.)
+    static RE_COLON: OnceLock<regex::Regex> = OnceLock::new();
+    let re_colon = RE_COLON.get_or_init(||
+        regex::Regex::new(r"\b([a-z_][\w@]*):([A-Za-z_][\w@]*)\b").unwrap()
+    );
+    let s = re_arity.replace_all(query, "$1").to_string();
+    re_colon.replace_all(&s, "$1.$2").to_string()
 }
 
 /// Tokenize: split on whitespace/punctuation, keep code-like tokens only.
@@ -322,8 +347,69 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
                 "synthesizedHops": [],
             })
         }
-        None => json!(null),
+        None => {
+            // No static path found — scan for dynamic boundaries
+            let boundaries = scan_boundaries_at_breakpoints(ctx);
+            json!({
+                "path": [],
+                "synthesizedHops": [],
+                "boundaries": boundaries,
+            })
+        },
     }
+}
+
+/// When no static BFS path exists between named symbols, scan their source
+/// files for dynamic dispatch patterns (computed calls, reflection, event dispatch).
+fn scan_boundaries_at_breakpoints(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut seen_files = HashSet::new();
+
+    for node in &ctx.named_nodes {
+        let location = match &node.location {
+            Some(loc) => loc.clone(),
+            None => continue,
+        };
+        let (file_path, _) = parse_location(&Some(location));
+        if !seen_files.insert(file_path.clone()) {
+            continue;
+        }
+
+        let full_path = ctx.project_root.join(&file_path);
+        let content = match std::fs::read_to_string(&full_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let language = guess_language(&file_path);
+        let boundaries = crate::analysis::dynamic_boundaries::scan_dynamic_boundaries(
+            &content, &language, 1,
+        );
+
+        for bm in boundaries {
+            let candidates = if let Some(ref key) = bm.key {
+                crate::analysis::dynamic_boundaries::boundary_candidates(
+                    ctx.graph, key, bm.key_is_type,
+                )
+            } else {
+                Vec::new()
+            };
+
+            results.push(json!({
+                "form": bm.form,
+                "label": bm.label,
+                "snippet": bm.snippet,
+                "line": bm.line,
+                "file": file_path,
+                "key": bm.key,
+                "keyIsType": bm.key_is_type,
+                "moreSites": bm.more_sites,
+                "candidates": candidates,
+            }));
+        }
+    }
+
+    results
 }
 
 fn bfs_path(
@@ -521,23 +607,62 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Adaptive Explore Budget (tiered by project size)
+// ═══════════════════════════════════════════════════════════════
+
+/// Project file count → recommended explore_deps call count.
+pub fn explore_budget(file_count: usize) -> usize {
+    match file_count {
+        n if n < 500 => 1,
+        n if n < 5_000 => 2,
+        n if n < 15_000 => 3,
+        n if n < 25_000 => 4,
+        _ => 5,
+    }
+}
+
+pub struct ExploreOutputBudget {
+    pub max_output_chars: usize,
+    pub default_max_files: usize,
+    pub max_chars_per_file: usize,
+    pub gap_threshold: usize,
+}
+
+pub fn explore_output_budget(file_count: usize) -> ExploreOutputBudget {
+    match file_count {
+        n if n < 150 => ExploreOutputBudget {
+            max_output_chars: 13_000, default_max_files: 4,
+            max_chars_per_file: 3_800, gap_threshold: 7,
+        },
+        n if n < 500 => ExploreOutputBudget {
+            max_output_chars: 18_000, default_max_files: 5,
+            max_chars_per_file: 3_800, gap_threshold: 8,
+        },
+        n if n < 5_000 => ExploreOutputBudget {
+            max_output_chars: 24_000, default_max_files: 8,
+            max_chars_per_file: 6_500, gap_threshold: 12,
+        },
+        _ => ExploreOutputBudget {
+            max_output_chars: 24_000, default_max_files: 8,
+            max_chars_per_file: 7_000, gap_threshold: 15,
+        },
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Step 5: Source Code
 // ═══════════════════════════════════════════════════════════════
 
-const MAX_CHARS_PER_FILE_SMALL: usize = 6500;
-const MAX_CHARS_PER_FILE_LARGE: usize = 7000;
-const MAX_TOTAL_CHARS: usize = 28000;
-
-fn read_source_sections(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
-    let max_per_file = if ctx.graph.node_count() < 500 {
-        MAX_CHARS_PER_FILE_SMALL
-    } else {
-        MAX_CHARS_PER_FILE_LARGE
-    };
+fn read_source_sections(ctx: &ExploreCtx, truncated: &mut bool, hint: &mut String) -> Vec<serde_json::Value> {
+    let budget = explore_output_budget(ctx.graph.node_count());
+    let max_per_file = budget.max_chars_per_file;
+    let max_output = budget.max_output_chars;
+    let max_files = budget.default_max_files;
 
     let mut file_sections: Vec<SourceFileInfo> = Vec::new();
     let mut seen_files = HashSet::new();
     let mut total_chars = 0usize;
+    let mut total_files_matched = 0usize;
 
     // Collect files from named nodes, ordered by relevance (first = most relevant)
     for node in &ctx.named_nodes {
@@ -546,8 +671,10 @@ fn read_source_sections(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
             if !seen_files.insert(fk.clone()) {
                 continue;
             }
+            total_files_matched += 1;
             let (file_path, line_num) = parse_location(&Some(loc.clone()));
-            if total_chars >= MAX_TOTAL_CHARS {
+            if total_chars >= max_output || file_sections.len() >= max_files {
+                *truncated = true;
                 break;
             }
             if let Some(section) = read_file_section(ctx.project_root, &file_path, line_num, max_per_file, &mut total_chars) {
@@ -562,7 +689,8 @@ fn read_source_sections(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
     // Also try to read files from blast radius nodes (neighbors)
     for node in &ctx.named_nodes {
         for edge in ctx.graph.outgoing_edges(&node.id) {
-            if total_chars >= MAX_TOTAL_CHARS {
+            if total_chars >= max_output || file_sections.len() >= max_files {
+                *truncated = true;
                 break;
             }
             if let Some(target) = ctx.graph.get_node(&edge.target) {
@@ -571,6 +699,7 @@ fn read_source_sections(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
                     if !seen_files.insert(fk) {
                         continue;
                     }
+                    total_files_matched += 1;
                     let (file_path, line_num) = parse_location(&Some(loc.clone()));
                     if let Some(section) = read_file_section(ctx.project_root, &file_path, line_num, max_per_file, &mut total_chars) {
                         file_sections.push(SourceFileInfo {
@@ -581,6 +710,11 @@ fn read_source_sections(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
                 }
             }
         }
+    }
+
+    if *truncated {
+        *hint = format!("{} of {} matching files shown. Call explore_deps again with more specific symbols.",
+            file_sections.len(), total_files_matched);
     }
 
     file_sections.into_iter().map(|s| {

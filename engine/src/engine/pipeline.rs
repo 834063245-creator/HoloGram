@@ -13,6 +13,8 @@ use crate::analysis::di_reflection::{
     detect_cross_lang_calls, detect_di_reflection, detect_dynamic_imports, detect_eval,
 };
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
+use crate::analysis::dynamic_dispatch_react::synthesize_react_edges;
+use crate::analysis::dynamic_dispatch_vue::synthesize_vue_edges;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
 use crate::graph::resolver::CrossFileResolver;
@@ -129,6 +131,38 @@ impl Engine {
             name: "Dynamic Dispatch".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", syn_edges),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 5.1. React synthesis
+        set_progress("React合成", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let react_edges = synthesize_react_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        info!(count = react_edges, "[engine] React edges synthesized");
+        eprintln!("[engine] stage: react-synthesis done in {:.1}s ({} edges)",
+            stage_start.elapsed().as_secs_f64(), react_edges);
+        stage_timings.push(StageTiming {
+            name: "React Synthesis".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges", react_edges),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 5.2. Vue synthesis
+        set_progress("Vue合成", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let vue_edges = synthesize_vue_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        info!(count = vue_edges, "[engine] Vue edges synthesized");
+        eprintln!("[engine] stage: vue-synthesis done in {:.1}s ({} edges)",
+            stage_start.elapsed().as_secs_f64(), vue_edges);
+        stage_timings.push(StageTiming {
+            name: "Vue Synthesis".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges", vue_edges),
         });
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());

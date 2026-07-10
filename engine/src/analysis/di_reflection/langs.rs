@@ -74,6 +74,7 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                                         cross_file: false,
                                         temporal_delay_sec: None,
                                         lsp_resolved: false,
+                                        metadata: None,
                                     };
                                     graph.add_edge(edge);
                                     added += 1;
@@ -112,6 +113,7 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                                         cross_file: false,
                                         temporal_delay_sec: None,
                                         lsp_resolved: false,
+                                        metadata: None,
                                     };
                                     graph.add_edge(edge);
                                     added += 1;
@@ -275,6 +277,7 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
                                 cross_file: true,
                                 temporal_delay_sec: None,
                                 lsp_resolved: false,
+                                metadata: None,
                             };
                             graph.add_edge(edge);
                             added += 1;
@@ -319,6 +322,7 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
                                             cross_file: true,
                                             temporal_delay_sec: None,
                                             lsp_resolved: false,
+                                            metadata: None,
                                         };
                                         graph.add_edge(edge);
                                         added += 1;
@@ -477,6 +481,7 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
                                         cross_file: false,
                                         temporal_delay_sec: None,
                                         lsp_resolved: false,
+                                        metadata: None,
                                     });
                                     added += 1;
                                 }
@@ -559,6 +564,7 @@ pub(crate) fn extract_ts_constructor_deps_v2(
                                                 cross_file: true,
                                                 temporal_delay_sec: None,
                                                 lsp_resolved: false,
+                                                metadata: None,
                                             });
                                             added += 1;
                                         }
@@ -638,7 +644,7 @@ pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source
                         graph.add_edge(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
                             kind: EdgeKind::Calls, coupling_depth: 4,
-                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                         });
                         added += 1;
                     }
@@ -696,7 +702,7 @@ pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source:
                         graph.add_edge(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
                             kind: EdgeKind::Calls, coupling_depth: 4,
-                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                         });
                         added += 1;
                     }
@@ -747,7 +753,7 @@ pub(crate) fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) ->
                         graph.add_edge(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
                             kind: EdgeKind::Calls, coupling_depth: 4,
-                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                            cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                         });
                         added += 1;
                     }
@@ -797,7 +803,7 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
                             graph.add_edge(Edge {
                                 id: edge_id, source: src_id, target: tgt_id,
                                 kind: EdgeKind::Calls, coupling_depth: 4,
-                                cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                                cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                             });
                             added += 1;
                         }
@@ -820,7 +826,7 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
                             graph.add_edge(Edge {
                                 id: edge_id, source: src_id, target: tgt_id,
                                 kind: EdgeKind::Calls, coupling_depth: 4,
-                                cross_file: false, temporal_delay_sec: None, lsp_resolved: false,
+                                cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                             });
                             added += 1;
                         }
@@ -855,7 +861,7 @@ pub(crate) fn detect_cs_di(graph: &mut Graph, file: &str, source: &str) -> usize
             let tid = find_or_create_di_node(graph, &marker, file, line_idx + 1);
             let eid = format!("di_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -876,7 +882,7 @@ pub(crate) fn detect_cs_dynamic_import(graph: &mut Graph, file: &str, source: &s
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_csdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -897,7 +903,7 @@ pub(crate) fn detect_cs_eval(graph: &mut Graph, file: &str, source: &str) -> usi
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_csev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -915,7 +921,7 @@ pub(crate) fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) 
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_xlang_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -925,7 +931,7 @@ pub(crate) fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) 
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_xlang_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -951,7 +957,7 @@ pub(crate) fn detect_ruby_di(graph: &mut Graph, file: &str, source: &str) -> usi
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_rb_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -972,7 +978,7 @@ pub(crate) fn detect_ruby_dynamic_import(graph: &mut Graph, file: &str, source: 
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_rbdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -992,7 +998,7 @@ pub(crate) fn detect_ruby_eval(graph: &mut Graph, file: &str, source: &str) -> u
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_rbev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1014,7 +1020,7 @@ pub(crate) fn detect_ruby_cross_lang(graph: &mut Graph, file: &str, source: &str
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_xlang_rb_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1040,7 +1046,7 @@ pub(crate) fn detect_php_di(graph: &mut Graph, file: &str, source: &str) -> usiz
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_php_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1061,7 +1067,7 @@ pub(crate) fn detect_php_dynamic_import(graph: &mut Graph, file: &str, source: &
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_phpdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1079,7 +1085,7 @@ pub(crate) fn detect_php_eval(graph: &mut Graph, file: &str, source: &str) -> us
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_phpev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1101,7 +1107,7 @@ pub(crate) fn detect_php_cross_lang(graph: &mut Graph, file: &str, source: &str)
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_xlang_php_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1126,7 +1132,7 @@ pub(crate) fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_go_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1151,7 +1157,7 @@ pub(crate) fn detect_kotlin_di(graph: &mut Graph, file: &str, source: &str) -> u
             let tid = find_or_create_di_node(graph, &marker, file, li + 1);
             let eid = format!("di_kt_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1169,7 +1175,7 @@ pub(crate) fn detect_kotlin_cross_lang(graph: &mut Graph, file: &str, source: &s
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_xlang_kt_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1193,7 +1199,7 @@ pub(crate) fn detect_rust_eval(graph: &mut Graph, file: &str, source: &str) -> u
             let tid = find_or_create_di_node(graph, &m, file, li + 1);
             let eid = format!("di_rsev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
-                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false });
+                graph.add_edge(Edge { id: eid, source: sid, target: tid, kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, metadata: None });
                 added += 1;
             }
         }
@@ -1281,7 +1287,7 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                         graph.add_edge(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
                             kind: EdgeKind::Calls, coupling_depth: 4, // L4: cross-lang boundary
-                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                         });
                         added += 1;
                     }
@@ -1363,7 +1369,7 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                         graph.add_edge(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
                             kind: EdgeKind::Calls, coupling_depth: 4,
-                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                         });
                         added += 1;
                     }
@@ -1414,7 +1420,7 @@ pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str
                     graph.add_edge(Edge {
                         id: edge_id, source: src_id, target: tgt_id,
                         kind: EdgeKind::Calls, coupling_depth: 4,
-                        cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                        cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                     });
                     added += 1;
                 }
@@ -1463,7 +1469,7 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                         graph.add_edge(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
                             kind: EdgeKind::Calls, coupling_depth: 4,
-                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                            cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                         });
                         added += 1;
                     }
@@ -1482,7 +1488,7 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                             graph.add_edge(Edge {
                                 id: edge_id, source: src_id, target: tgt_id,
                                 kind: EdgeKind::Calls, coupling_depth: 4,
-                                cross_file: true, temporal_delay_sec: None, lsp_resolved: false,
+                                cross_file: true, temporal_delay_sec: None, lsp_resolved: false, metadata: None,
                             });
                             added += 1;
                         }
@@ -1497,4 +1503,3 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
 
     added
 }
-

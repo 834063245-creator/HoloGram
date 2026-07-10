@@ -37,6 +37,7 @@ interface GraphNode {
 interface GraphEdge {
   id: string; source: string; target: string; type?: string;
   properties?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 interface GraphJSON {
   nodes: GraphNode[] | Record<string, GraphNode>;

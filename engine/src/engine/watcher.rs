@@ -167,6 +167,17 @@ impl Engine {
         }
     }
 
+    /// Expose pending file changes from the watcher for staleness banners.
+    /// Returns list of (path, timestamp_ms, is_indexing).
+    pub fn get_pending_files(&self) -> Vec<(String, u64, bool)> {
+        self.pending_changes.lock().unwrap().clone()
+    }
+
+    /// Clear pending file changes (called after a successful re-index).
+    pub fn clear_pending_files(&self) {
+        self.pending_changes.lock().unwrap().clear();
+    }
+
     /// Handle file changes from the watcher. Tries incremental update first,
     /// falls back to full re-analysis. Static so it can be called from the
     /// watcher thread via global ENGINE functions.
