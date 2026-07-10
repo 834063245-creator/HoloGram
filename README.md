@@ -77,7 +77,7 @@ HoloGram 内置全功能编码 Agent——不是"接了个聊天框"。图和 Ag
 
 | 📦 序列化 | 🔌 MCP 长驻 | ✅ 测试 |
 |---|---|---|
-| JSON 通用交换 · MessagePack 二进制冷启秒开 · SQLite + FTS5。缓存优先：已有缓存即显，后台静默更新。 | JSON-RPC over stdio + TCP :9777 双模。崩溃 3 次/60s 自动降级。Tauri 启动时自动 spawn。 | 363 Rust `#[test]`：图模型、适配器、管线、耦合、社区发现、路由、存储引擎、MCP 协议全覆盖。 |
+| JSON 通用交换 · MessagePack 二进制冷启秒开 · SQLite + FTS5。缓存优先：已有缓存即显，后台静默更新。 | JSON-RPC over stdio（MCP 分发）。崩溃 3 次/60s 自动降级。127.0.0.1:9777 仅调试用，产品路径不开端口。 | 363 Rust `#[test]`：图模型、适配器、管线、耦合、社区发现、路由、存储引擎、MCP 协议全覆盖。 |
 
 ### 图数据模型
 
@@ -366,7 +366,7 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 │                                                     │ 审计日志 (JSONL)      │ │
 │                                                     └───────┬──────────────┘ │
 └─────────────────────────────────────────────────────────────┼────────────────┘
-                                                              │ TCP :9777 / MCP stdio
+                                                              │ MCP stdio（调试：127.0.0.1:9777）
             ┌─────────────────────────────────────────────────▼──────────────┐
             │ Rust 引擎 (engine/)                                             │
             │ 合并管线 v3/v4 · 全局边去重 (625×) · 30 图工具               │
@@ -376,7 +376,7 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
             └────────────────────────────────────────────────────────────────┘
 ```
 
-> 引擎自启动，Tauri 启动时自动 spawn。**自举验证：HoloGram 用自己的图 debug 自己。**
+> 引擎以 Rust 库直接链接进 Tauri 进程，不走子进程。MCP 用户通过 `engine.exe serve` stdio 通信。**自举验证：HoloGram 用自己的图 debug 自己。**
 
 ---
 

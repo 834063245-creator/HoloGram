@@ -403,6 +403,14 @@ async function init(): Promise<void> {
 
   setupIcons();
 
+  // ── Sandbox health check ──
+  invoke<string>('sandbox_status').then(raw => {
+    const s = JSON.parse(raw);
+    if (s.degraded) {
+      console.warn(`[sandbox] ⚠ DEGRADED: ${s.reason} — permission engine is the only barrier`);
+    }
+  }).catch(() => {});
+
   // Chat panel
   chatPanel = new ChatPanel(document.body);
   chatPanel.setStarGraph(starGraph);
