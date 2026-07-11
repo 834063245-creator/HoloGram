@@ -23,7 +23,7 @@ import { makeGlowPointMaterial, makeCoreFresnelMaterial, _GLSL_HSL2RGB } from '.
 import * as Scene from './graph-scene';
 import { buildLegend, buildFocusBanner } from './graph-ui';
 import { GraphFold, type FoldHost, type GalaxyMeta } from './graph-fold';
-import { buildStarfield as buildStarfieldFX, buildHoloGrid as buildHoloGridFX, positionGrid as positionGridFX, updateBloomByDistance } from './graph-fx';
+import { buildStarfield as buildStarfieldFX, buildHoloGrid as buildHoloGridFX, positionGrid as positionGridFX } from './graph-fx';
 import { GraphAnalysis, type AnalysisHost } from './graph-analysis';
 import { GraphTooltip, type TooltipHost } from './graph-tooltip';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
@@ -445,22 +445,6 @@ export class StarGraph {
     this.holoGridY = positionGridFX(this.holoGrid, pos);
   }
 
-  // ── Tooltip → graph-tooltip.ts ──────────────────────────
-
-  private setupTooltip(): void { this._tooltip.setupTooltip(); }
-
-  private updateTooltip(): void {
-    this._tooltip.updateTooltip(
-      this.hoveredIdx, this.hoveredGalaxyIdx, this.communities, this.nodeCommMap,
-      this._fold.foldMode, this._fold, this.container, this.camera,
-      this._nodeCount, this.graphNodes, this.deg, this.nodePositions,
-    );
-  }
-
-  // ── Detail Card → graph-tooltip.ts ──────────────────────
-
-  private setupDetailCard(): void { this._tooltip.setupDetailCard(); }
-
   private onClick(e: MouseEvent): void {
     if (this._nodeCount === 0) return;
     const rect = this.container.getBoundingClientRect();
@@ -505,8 +489,8 @@ export class StarGraph {
     const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
     const idx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
 
-    if (idx >= 0 && idx !== this._tooltip.selectedIdx) this.showDetail(idx);
-    else if (idx < 0) this.hideDetail();
+    if (idx >= 0 && idx !== this._tooltip.selectedIdx) this._tooltip.showDetail(idx, this.edgeDataList, this.deg, this.nodePositions, this.container, this.camera, this.graphNodes);
+    else if (idx < 0) this._tooltip.hideDetail();
 
     // Step 3: Emit graph:node-clicked (for external interaction handlers)
     if (idx >= 0 && idx < this._nodeCount) {
@@ -521,16 +505,6 @@ export class StarGraph {
     }
   }
 
-  private showDetail(idx: number): void {
-    this._tooltip.showDetail(idx, this.edgeDataList, this.deg, this.nodePositions, this.container, this.camera, this.graphNodes);
-  }
-
-  private hideDetail(): void { this._tooltip.hideDetail(); }
-
-  private positionDetailCard(idx: number): void {
-    this._tooltip.positionDetailCard(idx, this.nodePositions, this.container, this.camera);
-  }
-
   // ── Path finding — delegated to GraphAnalysis ──────────────
 
   // ── Step 3: Shift+click quick path mode — delegated to GraphAnalysis ──
@@ -542,41 +516,8 @@ export class StarGraph {
   // ── Step 3: Alt+drag rectangle selection → graph-tooltip.ts ──
 
 
+
   // ── Step 3: Shift+click quick path mode ──────────────────
-
-  /** Get node index from a pointer event, or -1 if no node hit. Checks ALL cores. */
-  private _hitNode(e: PointerEvent | MouseEvent): number {
-    if (this._nodeCount === 0) return -1;
-    const rect = this.container.getBoundingClientRect();
-    const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
-    const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
-    return hits.length > 0 ? hits.length > 0 ? (hits[0].instanceId ?? -1) : -1 : -1;
-  }
-
-
-  // ── Step 3: Alt+drag rectangle selection ─────────────────
-
-  private setupSelectRect(): void { this._tooltip.setupSelectRect(); }
-  private _showSelectRect(): void { this._tooltip._showSelectRect(); }
-  private _updateSelectRect(): void { this._tooltip._updateSelectRect(); }
-  private _hideSelectRect(): void { this._tooltip._hideSelectRect(); }
-  private _handleRegionSelect(): void {
-    this._tooltip._handleRegionSelect(
-      this._nodeCount, this.nodePositions, this.graphNodes,
-      this._coreScales, this.camera, this.container,
-      this.highlightNodeNames.bind(this),
-      this.clearAgentHighlight.bind(this),
-      { blastMode: this._analysis.blastMode, _pathSource: this._analysis._pathSource },
-      this._lensActive,
-    );
-  }
-
-  // ── Step 3: Floating prompt bar → graph-tooltip.ts ─────
-
-  private setupPromptBar(): void { this._tooltip.setupPromptBar(); }
-
   // ── Hover ────────────────────────────────────────────────
   // Hover raycaster uses ALL nodeCores regardless of .visible state.
   // This is intentional: .visible is a visual/rendering concern, and many
@@ -3210,7 +3151,11 @@ export class StarGraph {
     this.pulseTime += 0.03 * (isFull ? 1.5 : 1);
 
     if (!IDLE || this._idleCounter % 3 === 0) {
-      this.updateTooltip(); this.updateLabels(); this._fold._updateCommunityRingHover();
+      this._tooltip.updateTooltip(
+        this.hoveredIdx, this.hoveredGalaxyIdx, this.communities, this.nodeCommMap,
+        this._fold.foldMode, this._fold, this.container, this.camera,
+        this._nodeCount, this.graphNodes, this.deg, this.nodePositions,
+      ); this.updateLabels(); this._fold._updateCommunityRingHover();
     }
     this.controls.update();
     this.composer.render();

@@ -174,12 +174,24 @@ export class GraphTooltip {
       if (this.selectedIdx >= 0) {
         const node = this.host.graphNodes[this.selectedIdx];
         if (node.location) {
-          // Emit file path for file tree <-> graph linking
-          const filePath = node.location.indexOf(':') >= 0
-            ? node.location.substring(0, node.location.lastIndexOf(':'))
-            : node.location;
+          const loc = node.location;
+          const lastColon = loc.lastIndexOf(':');
+          const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
+          const lineStr = lastColon > 1 ? loc.substring(lastColon + 1) : '';
+          const line = parseInt(lineStr, 10);
+          shell.navigateToFile(filePath, isNaN(line) ? undefined : line);
           window.dispatchEvent(new CustomEvent('graph:node-selected', { detail: filePath }));
         }
+      }
+    });
+    // Ask Agent
+    this.detailCard.querySelector('.dc-agent-btn')!.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      if (this.selectedIdx >= 0) {
+        const node = this.host.graphNodes[this.selectedIdx];
+        const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
+        const question = `分析节点 "${node.name}" (${TYPE_LABELS[kind] || kind}, 度=${this.host.deg[this.selectedIdx]}, ${node.location || '未知位置'})。它和其他模块的关系如何？改它会有什么影响？`;
+        shell.queryAgent(question);
       }
     });
   }
