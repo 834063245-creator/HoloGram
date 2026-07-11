@@ -153,6 +153,44 @@ impl GraphStore {
         *old = new_idx;
     }
 
+    /// Rebuild the semantic vector index from current in-memory nodes.
+    /// Fire-and-forget background task — does not block the caller.
+    /// Called after incremental updates to keep vector search current.
+    pub fn reindex_vectors(&self) {
+        let idx = self.index.read();
+        let nodes: Vec<crate::graph::Node> = idx.nodes_iter().cloned().collect();
+        drop(idx);
+
+        let project_root = self.project_root.clone();
+        let vector_path = project_root.join(".hologram").join("vectors.usearch");
+
+        std::thread::spawn(move || {
+            let mut nodes = nodes;
+            // Extract snippets for nodes that are missing them (incrementally added)
+            for node in &mut nodes {
+                if node.snippet.is_some() { continue; }
+                if let Some(loc) = &node.location {
+                    if let Some((file_path, _line)) = loc.split_once(':') {
+                        let full_path = project_root.join(file_path);
+                        if let Ok(source) = std::fs::read_to_string(&full_path) {
+                            if let Some(snippet) = crate::vector::extract_snippet(
+                                &source, &node.name, &node.kind,
+                            ) {
+                                node.snippet = Some(snippet);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let vi = crate::vector::CodeVectorIndex::new(&vector_path);
+            match vi.build(&nodes) {
+                Ok(n) => tracing::info!("[vector] incremental rebuild: {} vectors", n),
+                Err(e) => tracing::warn!("[vector] incremental rebuild failed: {}", e),
+            }
+        });
+    }
+
     /// Get current loading progress (for engine_status).
     pub fn load_progress(&self) -> LoadProgress {
         let p = self.loading.read().clone();

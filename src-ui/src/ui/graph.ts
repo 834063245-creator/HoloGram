@@ -23,7 +23,9 @@ import { makeGlowPointMaterial, makeCoreFresnelMaterial, _GLSL_HSL2RGB } from '.
 import * as Scene from './graph-scene';
 import { buildLegend, buildFocusBanner } from './graph-ui';
 import { GraphFold, type FoldHost, type GalaxyMeta } from './graph-fold';
+import { buildStarfield as buildStarfieldFX, buildHoloGrid as buildHoloGridFX, positionGrid as positionGridFX, updateBloomByDistance } from './graph-fx';
 import { GraphAnalysis, type AnalysisHost } from './graph-analysis';
+import { GraphTooltip, type TooltipHost } from './graph-tooltip';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
@@ -141,10 +143,7 @@ export class StarGraph {
   private labelsContainer!: HTMLDivElement;
   private labelDivs: HTMLDivElement[] = [];
 
-  // Tooltip & Detail card
-  private tooltipEl!: HTMLDivElement;
-  private detailCard!: HTMLDivElement;
-  private selectedIdx = -1;
+  // Tooltip & Detail card → graph-tooltip.ts
 
   // Graph spatial scale — p95 radius from center, set after layout.
   // Used for camera zoom range only (no LOD).
@@ -208,6 +207,9 @@ export class StarGraph {
   private _fold: GraphFold;
   private communities: CommunityData[] = [];
   private nodeCommMap = new Map<number, string>();           // nodeIdx → communityId
+
+  // ── DOM 交互层（tooltip/detail card/select rect/prompt bar）─
+  private _tooltip: GraphTooltip;
 
   // Post-processing (full mode only)
   private composer!: EffectComposer;
@@ -281,6 +283,7 @@ export class StarGraph {
 
     this._fold = new GraphFold(this as unknown as FoldHost);
     this._analysis = new GraphAnalysis(this as unknown as AnalysisHost);
+    this._tooltip = new GraphTooltip(this as unknown as TooltipHost);
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
     this.galaxyGroup.add(this.nodeGroup);
@@ -290,10 +293,10 @@ export class StarGraph {
 
     this.raycaster = new THREE.Raycaster();
     this.setupHover();
-    this.setupTooltip();
-    this.setupDetailCard();
-    this.setupSelectRect();
-    this.setupPromptBar();
+    this._tooltip.setupTooltip();
+    this._tooltip.setupDetailCard();
+    this._tooltip.setupSelectRect();
+    this._tooltip.setupPromptBar();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
@@ -333,18 +336,18 @@ export class StarGraph {
       e.preventDefault();
       // Step 3: Alt+left-drag → rectangle selection
       if (e.altKey && e.button === 0) {
-        this._selecting = true;
-        this._selectStart.set(e.clientX, e.clientY);
-        this._selectEnd.set(e.clientX, e.clientY);
-        this._showSelectRect();
+        this._tooltip._selecting = true;
+        this._tooltip._selectStart.set(e.clientX, e.clientY);
+        this._tooltip._selectEnd.set(e.clientX, e.clientY);
+        this._tooltip._showSelectRect();
         this.controls.enabled = false;
         e.stopPropagation();
       }
     });
     canvas.addEventListener('pointermove', (e: PointerEvent) => {
-      if (this._selecting) {
-        this._selectEnd.set(e.clientX, e.clientY);
-        this._updateSelectRect();
+      if (this._tooltip._selecting) {
+        this._tooltip._selectEnd.set(e.clientX, e.clientY);
+        this._tooltip._updateSelectRect();
         return;
       }
       if (Math.abs(e.clientX - pointerDown.x) > 4 || Math.abs(e.clientY - pointerDown.y) > 4) {
@@ -353,11 +356,18 @@ export class StarGraph {
     });
     canvas.addEventListener('pointerup', (e: PointerEvent) => {
       // Step 3: Alt+drag selection complete
-      if (this._selecting) {
-        this._selecting = false;
-        this._hideSelectRect();
+      if (this._tooltip._selecting) {
+        this._tooltip._selecting = false;
+        this._tooltip._hideSelectRect();
         this.controls.enabled = true;
-        this._handleRegionSelect();
+        this._tooltip._handleRegionSelect(
+          this._nodeCount, this.nodePositions, this.graphNodes,
+          this._coreScales, this.camera, this.container,
+          this.highlightNodeNames.bind(this),
+          this.clearAgentHighlight.bind(this),
+          { blastMode: this._analysis.blastMode, _pathSource: this._analysis._pathSource },
+          this._lensActive,
+        );
         return;
       }
       if (pointerDragged) return;
@@ -373,8 +383,8 @@ export class StarGraph {
     this._onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return; }
-        if (this._promptBarEl?.style.display === 'flex') { this._hidePrompt(); return; }
-        if (this._selecting) { this._selecting = false; this._hideSelectRect(); this.controls.enabled = true; return; }
+        if (this._tooltip._promptBarEl?.style.display === 'flex') { this._tooltip._hidePrompt(); return; }
+        if (this._tooltip._selecting) { this._tooltip._selecting = false; this._tooltip._hideSelectRect(); this.controls.enabled = true; return; }
         if (this._analysis._shiftSourceIdx >= 0) { this._analysis._clearShiftPath(); return; }
         if (this._analysis._pathSource >= 0) { this._analysis.clearPath(); e.stopImmediatePropagation(); return; }
         if (this._fold.enteredSubCommunityId) { this._fold.exitSubCommunity(); return; }
@@ -386,7 +396,7 @@ export class StarGraph {
       if (e.key === 'b' || e.key === 'B') {
         if (this._analysis.blastMode) { this._analysis.exitBlastMode(); }
         else if (this.hoveredIdx >= 0) { this._analysis.startBlastMode(this.hoveredIdx); }
-        else if (this.selectedIdx >= 0) { this._analysis.startBlastMode(this.selectedIdx); }
+        else if (this._tooltip.selectedIdx >= 0) { this._analysis.startBlastMode(this._tooltip.selectedIdx); }
       }
     };
     window.addEventListener('keydown', this._onKeyDown);
@@ -418,40 +428,7 @@ export class StarGraph {
   }
 
   private buildStarfield(): void {
-    const isFull = true;
-    const count = isFull ? 4000 : 2200;
-    const posArr = new Float32Array(count * 3), colArr = new Float32Array(count * 3);
-    const layers = isFull ? [
-      { r: [600, 1400], n: 600, hue: [200, 240], sat: 0.5, l: [0.4, 0.7] },
-      { r: [300, 800], n: 1200, hue: [190, 220], sat: 0.35, l: [0.5, 0.85] },
-      { r: [80, 450], n: 1200, hue: [180, 210], sat: 0.25, l: [0.65, 1.0] },
-      { r: [15, 250], n: 1000, hue: [25, 55], sat: 0.55, l: [0.7, 1.0] },
-    ] : [
-      { r: [500, 1000], n: 300, hue: [210, 230], sat: 0.4, l: [0.5, 0.8] },
-      { r: [250, 600], n: 700, hue: [200, 220], sat: 0.3, l: [0.6, 0.9] },
-      { r: [60, 350], n: 700, hue: [190, 210], sat: 0.2, l: [0.7, 1.0] },
-      { r: [10, 180], n: 500, hue: [30, 50], sat: 0.5, l: [0.7, 0.95] },
-    ];
-    let idx = 0;
-    for (const L of layers) {
-      for (let i = 0; i < L.n && idx < count; i++) {
-        const theta = Math.random() * Math.PI * 2, phi = Math.acos(2 * Math.random() - 1);
-        const r = L.r[0] + Math.random() * (L.r[1] - L.r[0]);
-        posArr[idx * 3] = Math.cos(theta) * Math.sin(phi) * r;
-        posArr[idx * 3 + 1] = Math.sin(phi) * r; // spherical
-        posArr[idx * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
-        const hsl = new THREE.Color();
-        hsl.setHSL((L.hue[0] + Math.random() * (L.hue[1] - L.hue[0])) / 360, L.sat, L.l[0] + Math.random() * (L.l[1] - L.l[0]));
-        colArr[idx * 3] = hsl.r; colArr[idx * 3 + 1] = hsl.g; colArr[idx * 3 + 2] = hsl.b;
-        idx++;
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
-    const mat = new THREE.PointsMaterial({ size: 2.2, map: this.glowTex, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, transparent: true, opacity: 1.0 });
-    this.starfield = new THREE.Points(geo, mat);
-    this.scene.add(this.starfield);
+    this.starfield = buildStarfieldFX(this.scene, this.glowTex);
   }
 
   // ── Infinite holographic grid (shader-based) ──────────────
@@ -459,227 +436,30 @@ export class StarGraph {
   private holoGridY = -60;
 
   private buildHoloGrid(): void {
-    const gridSize = 60; // world-unit spacing of major grid lines
-
-    const vert = /* glsl */ `
-      varying vec3 vWorldPos;
-      void main() {
-        vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vWorldPos = worldPos.xyz;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `;
-
-    const frag = /* glsl */ `
-      varying vec3 vWorldPos;
-      uniform vec3 uCameraWorldPos;
-      uniform float uGridSize;
-      uniform float uFadeDist;
-
-      float gridLine(float coord, float size, float w) {
-        float d = abs(mod(coord + size * 0.5, size) - size * 0.5);
-        return 1.0 - smoothstep(0.0, w, d);
-      }
-
-      void main() {
-        float majorSize = uGridSize;
-        float minorSize = majorSize / 5.0;
-
-        // Major grid lines
-        float mx = gridLine(vWorldPos.x, majorSize, 0.5);
-        float mz = gridLine(vWorldPos.z, majorSize, 0.5);
-        float major = max(mx, mz);
-
-        // Minor grid lines (don't overlap majors)
-        float nx = gridLine(vWorldPos.x, minorSize, 0.25);
-        float nz = gridLine(vWorldPos.z, minorSize, 0.25);
-        float minor = max(nx, nz) * (1.0 - major);
-
-        // Fade with world-space distance from camera
-        float dist = length(vWorldPos.xz - uCameraWorldPos.xz);
-        float fade = 1.0 - smoothstep(uFadeDist * 0.4, uFadeDist, dist);
-
-        float alpha = (major * 0.15 + minor * 0.05) * fade;
-        gl_FragColor = vec4(0.15, 0.3, 0.5, alpha);
-      }
-    `;
-
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: vert,
-      fragmentShader: frag,
-      uniforms: {
-        uCameraWorldPos: { value: new THREE.Vector3() },
-        uGridSize: { value: gridSize },
-        uFadeDist: { value: 1800 },
-      },
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-
-    // Huge plane on XZ (rotated flat)
-    const geo = new THREE.PlaneGeometry(20000, 20000);
-    geo.rotateX(-Math.PI / 2);
-    this.holoGrid = new THREE.Mesh(geo, mat);
-    this.holoGrid.position.y = this.holoGridY;
-    this.holoGrid.renderOrder = 1;
-    this.scene.add(this.holoGrid);
+    const result = buildHoloGridFX(this.scene);
+    this.holoGrid = result.mesh;
+    this.holoGridY = result.gridY;
   }
 
   private positionGrid(pos: Float32Array): void {
-    if (!this.holoGrid) return;
-    let minY = Infinity;
-    for (let i = 0; i < pos.length / 3; i++) {
-      minY = Math.min(minY, pos[i * 3 + 1]);
-    }
-    this.holoGridY = minY - 40;
-    this.holoGrid.position.y = this.holoGridY;
+    this.holoGridY = positionGridFX(this.holoGrid, pos);
   }
 
-  // ── Tooltip ──────────────────────────────────────────────
+  // ── Tooltip → graph-tooltip.ts ──────────────────────────
 
-  private setupTooltip(): void {
-    this.tooltipEl = document.createElement('div');
-    this.tooltipEl.id = 'graph-tooltip';
-    this.tooltipEl.innerHTML = '<div class="tt-name"></div><div class="tt-meta"></div><div class="tt-loc"></div>';
-    this.container.appendChild(this.tooltipEl);
-  }
+  private setupTooltip(): void { this._tooltip.setupTooltip(); }
 
   private updateTooltip(): void {
-    // Galaxy hover takes priority — tooltip already set by updateHover()
-    if (this._fold.foldMode && this.hoveredGalaxyIdx >= 0) return;
-    if (this.hoveredIdx < 0 || this.hoveredIdx >= this._nodeCount) { this.tooltipEl.classList.remove('visible'); return; }
-    const node = this.graphNodes[this.hoveredIdx];
-    const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
-    this.tooltipEl.querySelector('.tt-name')!.textContent = node.name;
-    const metaEl = this.tooltipEl.querySelector('.tt-meta')!;
-    let metaText = `${TYPE_LABELS[kind] || kind.toUpperCase()} · 度 ${this.deg[this.hoveredIdx]}`;
-    // Show community context in all views when available
-    const cid = this.nodeCommMap.get(this.hoveredIdx);
-    if (cid) {
-      const comm = this.communities.find(c => c.id === cid);
-      const commLabel = comm ? comm.label.split('/')[0].replace(/_/g, ' ') : cid;
-      metaText += ` · 🌌 ${commLabel}`;
-    }
-    metaEl.textContent = metaText;
-    (metaEl as HTMLElement).dataset['kind'] = kind;
-    this.tooltipEl.querySelector('.tt-loc')!.textContent = node.location || '';
-    const i = this.hoveredIdx;
-    this.tmpVec3.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]);
-    this.tmpVec3.project(this.camera);
-    if (this.tmpVec3.z > 1) { this.tooltipEl.classList.remove('visible'); return; }
-    const x = (this.tmpVec3.x * 0.5 + 0.5) * this.container.clientWidth;
-    const y = (-this.tmpVec3.y * 0.5 + 0.5) * this.container.clientHeight;
-    this.tooltipEl.style.left = `${x + 18}px`; this.tooltipEl.style.top = `${y - 10}px`;
-    this.tooltipEl.classList.add('visible');
+    this._tooltip.updateTooltip(
+      this.hoveredIdx, this.hoveredGalaxyIdx, this.communities, this.nodeCommMap,
+      this._fold.foldMode, this._fold, this.container, this.camera,
+      this._nodeCount, this.graphNodes, this.deg, this.nodePositions,
+    );
   }
 
-  // ── Detail Card ──────────────────────────────────────────
+  // ── Detail Card → graph-tooltip.ts ──────────────────────
 
-  private setupDetailCard(): void {
-    this.detailCard = document.createElement('div');
-    this.detailCard.id = 'detail-card';
-    this.detailCard.innerHTML =
-      '<div class="dc-header">' +
-        '<div class="dc-name"></div>' +
-        `<button class="dc-close">${iconHtml('close', 14)}</button>` +
-      '</div>' +
-      '<div class="dc-meta"><span class="dc-kind"></span><span class="dc-degree"></span></div>' +
-      '<div class="dc-location"></div>' +
-      '<div class="dc-divider"></div>' +
-      '<div class="dc-section-title">耦合层级</div>' +
-      '<div class="dc-coupling"></div>' +
-      '<div class="dc-divider"></div>' +
-      '<div class="dc-actions">' +
-        `<button class="dc-open-btn">${iconHtml('file', 11)} 打开</button>` +
-        `<button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button>` +
-        `<button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button>` +
-        `<button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button>` +
-      '</div>' +
-      '<div class="dc-blast-filters">' +
-        '<div class="dc-filter-label">边类型过滤</div>' +
-        '<div class="dc-filter-btns">' +
-          '<button class="dc-filter-btn active" data-type="all">全部</button>' +
-          '<button class="dc-filter-btn" data-type="structural">结构</button>' +
-          '<button class="dc-filter-btn" data-type="data">数据</button>' +
-          '<button class="dc-filter-btn" data-type="temporal">时间</button>' +
-        '</div>' +
-        '<div class="dc-filter-label">方向过滤</div>' +
-        '<div class="dc-filter-btns">' +
-          '<button class="dc-filter-btn active" data-dir="both">双向</button>' +
-          '<button class="dc-filter-btn" data-dir="outbound">出向</button>' +
-          '<button class="dc-filter-btn" data-dir="inbound">入向</button>' +
-        '</div>' +
-      '</div>';
-    this.container.appendChild(this.detailCard);
-
-    // Close
-    this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => {
-      e.stopPropagation(); this.hideDetail();
-    });
-    // Focus subgraph
-    this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
-      e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) { const idx = this.selectedIdx; this.hideDetail(); this.enterFocusSubgraph(idx); }
-    });
-    // Blast radius
-    this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
-      e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) this._analysis.startBlastMode(this.selectedIdx);
-    });
-    this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('contextmenu', (e) => {
-      e.stopPropagation(); e.preventDefault();
-      const panel = this.detailCard.querySelector('.dc-blast-filters') as HTMLElement;
-      if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    });
-    // Open file
-    this.detailCard.querySelector('.dc-open-btn')!.addEventListener('pointerdown', (e) => {
-      e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) {
-        const node = this.graphNodes[this.selectedIdx];
-        if (node.location) {
-          const loc = node.location;
-          const lastColon = loc.lastIndexOf(':');
-          const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
-          const lineStr = lastColon > 1 ? loc.substring(lastColon + 1) : '';
-          const line = parseInt(lineStr, 10);
-          shell.navigateToFile(filePath, isNaN(line) ? undefined : line);
-        }
-      }
-    });
-    // Ask Agent
-    this.detailCard.querySelector('.dc-agent-btn')!.addEventListener('pointerdown', (e) => {
-      e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) {
-        const node = this.graphNodes[this.selectedIdx];
-        const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
-        const question = `分析节点 "${node.name}" (${TYPE_LABELS[kind] || kind}, 度=${this.deg[this.selectedIdx]}, ${node.location || '未知位置'})。它和其他模块的关系如何？改它会有什么影响？`;
-        shell.queryAgent(question);
-      }
-    });
-    // Blast filter: edge type
-    this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-type]').forEach(btn => {
-      btn.addEventListener('pointerdown', (e) => {
-        e.stopPropagation(); e.preventDefault();
-        this._analysis.blastEdgeType = (btn as HTMLElement).dataset.type || 'all';
-        this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-type]').forEach(b => {
-          b.classList.toggle('active', b === btn);
-        });
-        if (this._analysis.blastMode) { this._analysis.computeBlastDistances(); this._analysis.buildBlastEdges(); this._analysis.updateBlastNodeColors(); }
-      });
-    });
-    // Blast filter: direction
-    this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-dir]').forEach(btn => {
-      btn.addEventListener('pointerdown', (e) => {
-        e.stopPropagation(); e.preventDefault();
-        this._analysis.blastDirection = (btn as HTMLElement).dataset.dir || 'both';
-        this.detailCard.querySelectorAll('.dc-blast-filters .dc-filter-btn[data-dir]').forEach(b => {
-          b.classList.toggle('active', b === btn);
-        });
-        if (this._analysis.blastMode) { this._analysis.computeBlastDistances(); this._analysis.buildBlastEdges(); this._analysis.updateBlastNodeColors(); }
-      });
-    });
-  }
+  private setupDetailCard(): void { this._tooltip.setupDetailCard(); }
 
   private onClick(e: MouseEvent): void {
     if (this._nodeCount === 0) return;
@@ -725,8 +505,7 @@ export class StarGraph {
     const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
     const idx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
 
-    if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
-    else if (idx < 0) this.hideDetail();
+    if (idx >= 0 && idx !== this._tooltip.selectedIdx) this.showDetail(idx);
     else if (idx < 0) this.hideDetail();
 
     // Step 3: Emit graph:node-clicked (for external interaction handlers)
@@ -743,78 +522,13 @@ export class StarGraph {
   }
 
   private showDetail(idx: number): void {
-    this.selectedIdx = idx;
-    const node = this.graphNodes[idx];
-    // Emit file path for file tree <-> graph linking
-    if (node.location) {
-      const filePath = node.location.indexOf(':') >= 0
-        ? node.location.substring(0, node.location.lastIndexOf(':'))
-        : node.location;
-      window.dispatchEvent(new CustomEvent('graph:node-selected', { detail: filePath }));
-    }
-    const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
-    // Coupling distance counts
-    const dist = [0, 0, 0, 0, 0];
-    for (const e of this.edgeDataList) { if (e.s === idx || e.t === idx) dist[e.couplingDepth] = (dist[e.couplingDepth] || 0) + 1; }
-    const maxDist = Math.max(...dist, 1);
-
-    // Header: name
-    this.detailCard.querySelector('.dc-name')!.textContent = node.name;
-
-    // Meta: kind + degree
-    const kindColors: Record<string, string> = {
-      symbol: 'var(--signal)', function: 'var(--signal)', method: 'var(--signal)',
-      class: 'var(--signal)', module: 'var(--signal)', variable: 'var(--signal)',
-      interface: 'var(--signal)', constant: 'var(--signal)',
-      medium: 'var(--sol)', file: 'var(--sol)', database: 'var(--sol)',
-      cache: 'var(--sol)', queue: 'var(--sol)',
-      temporal: 'var(--nebula)', thread: 'var(--nebula)', timer: 'var(--nebula)', trigger: 'var(--nebula)',
-    };
-    const kindEl = this.detailCard.querySelector('.dc-kind') as HTMLElement;
-    kindEl.textContent = TYPE_LABELS[kind] || kind.toUpperCase();
-    kindEl.style.color = kindColors[kind] || 'var(--signal)';
-    const degEl = this.detailCard.querySelector('.dc-degree') as HTMLElement;
-    degEl.textContent = `度 ${this.deg[idx]}${this.deg[idx] >= 10 ? ' · Hub 节点' : ''}`;
-
-    // Location
-    this.detailCard.querySelector('.dc-location')!.textContent = node.location || '';
-
-    // Coupling bars — always show all 4
-    const bars = [
-      { label: 'L1 公开API', v: dist[1], cls: 'l1' },
-      { label: 'L2 内部导入', v: dist[2], cls: 'l2' },
-      { label: 'L3 共享数据', v: dist[3], cls: 'l3' },
-      { label: 'L4 封装穿透', v: dist[4], cls: 'l4' },
-    ];
-    this.detailCard.querySelector('.dc-coupling')!.innerHTML = bars.map(b => {
-      const pct = Math.round((b.v / maxDist) * 100);
-      const zero = b.v === 0 ? ' dc-zero' : '';
-      const warn = b.v > 0 && (b.cls === 'l3' || b.cls === 'l4')
-        ? ` <span class="dc-bar-warn">${iconHtml(b.cls === 'l3' ? 'alert' : 'block', 10)}</span>` : '';
-      return `<div class="dc-bar-row${zero}"><span class="dc-bar-label">${b.label}</span><span class="dc-bar-count">${b.v}</span><span class="dc-bar-track"><span class="dc-bar-fill ${b.cls}" style="width:${pct}%"></span></span>${warn}</div>`;
-    }).join('');
-
-    // Open button: hide if no location
-    const openBtn = this.detailCard.querySelector('.dc-open-btn') as HTMLButtonElement;
-    if (openBtn) openBtn.style.display = node.location ? '' : 'none';
-
-    this.positionDetailCard(idx);
-    this.detailCard.classList.add('visible');
+    this._tooltip.showDetail(idx, this.edgeDataList, this.deg, this.nodePositions, this.container, this.camera, this.graphNodes);
   }
 
-  private hideDetail(): void { this.selectedIdx = -1; this.detailCard.classList.remove('visible'); }
+  private hideDetail(): void { this._tooltip.hideDetail(); }
 
   private positionDetailCard(idx: number): void {
-    this.tmpVec3.set(this.nodePositions[idx * 3], this.nodePositions[idx * 3 + 1], this.nodePositions[idx * 3 + 2]);
-    this.tmpVec3.project(this.camera);
-    const x = (this.tmpVec3.x * 0.5 + 0.5) * this.container.clientWidth;
-    const y = (-this.tmpVec3.y * 0.5 + 0.5) * this.container.clientHeight;
-    let left = x + 24, top = y - 60;
-    if (left + 290 > this.container.clientWidth - 10) left = x - 310;
-    if (top < 10) top = 10;
-    if (top + 300 > this.container.clientHeight - 10) top = this.container.clientHeight - 310;
-    if (left < 10) left = 10;
-    this.detailCard.style.left = `${left}px`; this.detailCard.style.top = `${top}px`;
+    this._tooltip.positionDetailCard(idx, this.nodePositions, this.container, this.camera);
   }
 
   // ── Path finding — delegated to GraphAnalysis ──────────────
@@ -822,20 +536,10 @@ export class StarGraph {
   // ── Step 3: Shift+click quick path mode — delegated to GraphAnalysis ──
   private _onKeyDown?: (e: KeyboardEvent) => void;
 
-  // ── Step 3: Alt+drag rectangle selection ──────────────────
-  private _selecting = false;
-  private _selectStart = new THREE.Vector2();
-  private _selectEnd = new THREE.Vector2();
-  private _selectRectEl!: HTMLDivElement;
-
-  // ── Step 3: Floating prompt bar (confirmation before asking Agent) ──
-  private _promptBarEl!: HTMLDivElement;
-  private _promptTitleEl!: HTMLSpanElement;
-  private _promptBtnEl!: HTMLButtonElement;
-  private _promptQuestion = '';
-  private _promptTimer: ReturnType<typeof setTimeout> | null = null;
+  // ── i18n ──
   private _langHandler: ((data: { lang: string }) => void) | null = null;
-  private _showPromptBound: ((data: { title: string; question: string }) => void) | null = null;
+
+  // ── Step 3: Alt+drag rectangle selection → graph-tooltip.ts ──
 
 
   // ── Step 3: Shift+click quick path mode ──────────────────
@@ -854,167 +558,24 @@ export class StarGraph {
 
   // ── Step 3: Alt+drag rectangle selection ─────────────────
 
-  private setupSelectRect(): void {
-    this._selectRectEl = document.createElement('div');
-    this._selectRectEl.id = 'graph-select-rect';
-    this._selectRectEl.style.cssText =
-      'position:absolute;z-index:18;pointer-events:none;display:none;' +
-      'border:1px solid rgba(100,180,255,0.7);' +
-      'background:rgba(60,140,240,0.08);' +
-      'box-shadow:inset 0 0 20px rgba(80,160,255,0.15);';
-    this.container.appendChild(this._selectRectEl);
-  }
-
-  private _showSelectRect(): void {
-    this._selectRectEl.style.display = '';
-    this._updateSelectRect();
-  }
-
-  private _updateSelectRect(): void {
-    const rect = this.container.getBoundingClientRect();
-    const x1 = Math.min(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const y1 = Math.min(this._selectStart.y, this._selectEnd.y) - rect.top;
-    const x2 = Math.max(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const y2 = Math.max(this._selectStart.y, this._selectEnd.y) - rect.top;
-    this._selectRectEl.style.left = `${x1}px`;
-    this._selectRectEl.style.top = `${y1}px`;
-    this._selectRectEl.style.width = `${x2 - x1}px`;
-    this._selectRectEl.style.height = `${y2 - y1}px`;
-  }
-
-  private _hideSelectRect(): void {
-    this._selectRectEl.style.display = 'none';
-  }
-
+  private setupSelectRect(): void { this._tooltip.setupSelectRect(); }
+  private _showSelectRect(): void { this._tooltip._showSelectRect(); }
+  private _updateSelectRect(): void { this._tooltip._updateSelectRect(); }
+  private _hideSelectRect(): void { this._tooltip._hideSelectRect(); }
   private _handleRegionSelect(): void {
-    const rect = this.container.getBoundingClientRect();
-    // Compute screen-space rectangle bounds
-    const sx1 = Math.min(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const sy1 = Math.min(this._selectStart.y, this._selectEnd.y) - rect.top;
-    const sx2 = Math.max(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const sy2 = Math.max(this._selectStart.y, this._selectEnd.y) - rect.top;
-    const minDim = 8;
-    if (sx2 - sx1 < minDim || sy2 - sy1 < minDim) return; // too small
-
-    const halfW = rect.width * 0.5;
-    const halfH = rect.height * 0.5;
-    const nodeNames: string[] = [];
-
-    for (let i = 0; i < this._nodeCount; i++) {
-      if (!(this._coreScales[i] > 0)) continue;
-      // Project node position to screen space
-      this.tmpVec3.set(
-        this.nodePositions[i * 3],
-        this.nodePositions[i * 3 + 1],
-        this.nodePositions[i * 3 + 2],
-      );
-      this.tmpVec3.project(this.camera);
-      if (this.tmpVec3.z > 1) continue; // behind camera
-      const sx = this.tmpVec3.x * halfW + halfW;
-      const sy = -this.tmpVec3.y * halfH + halfH;
-      if (sx >= sx1 && sx <= sx2 && sy >= sy1 && sy <= sy2) {
-        nodeNames.push(this.graphNodes[i].name);
-      }
-    }
-
-    if (nodeNames.length === 0) return;
-
-    // Emit event
-    bus.emit('graph:region-selected', {
-      nodeNames,
-      nodeCount: nodeNames.length,
-    });
-
-    // Flash the selected nodes briefly
-    this.highlightNodeNames(nodeNames.slice(0, 30), '#60a0ff');
-    setTimeout(() => {
-      if (!this._analysis.blastMode && this._analysis._pathSource < 0 && !this._lensActive) {
-        this.clearAgentHighlight();
-      }
-    }, 2500);
+    this._tooltip._handleRegionSelect(
+      this._nodeCount, this.nodePositions, this.graphNodes,
+      this._coreScales, this.camera, this.container,
+      this.highlightNodeNames.bind(this),
+      this.clearAgentHighlight.bind(this),
+      { blastMode: this._analysis.blastMode, _pathSource: this._analysis._pathSource },
+      this._lensActive,
+    );
   }
 
-  // ── Step 3: Floating prompt bar ──────────────────────────
+  // ── Step 3: Floating prompt bar → graph-tooltip.ts ─────
 
-  private setupPromptBar(): void {
-    this._promptBarEl = document.createElement('div');
-    this._promptBarEl.id = 'graph-prompt-bar';
-    this._promptBarEl.style.cssText =
-      'position:absolute;z-index:19;top:12px;left:50%;transform:translateX(-50%);' +
-      'display:none;align-items:center;gap:10px;padding:8px 14px;' +
-      'background:var(--panel-bg,rgba(4,12,28,0.94));' +
-      'backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);' +
-      'border:1px solid rgba(60,100,180,0.3);' +
-      'border-radius:6px;' +
-      'box-shadow:0 0 0 1px rgba(60,100,180,0.05),0 12px 36px rgba(0,0,0,0.5);' +
-      'font-family:var(--font-mono);font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,#c3daf8);white-space:nowrap;' +
-      'opacity:0;transition:opacity 0.16s;';
-    this._promptTitleEl = document.createElement('span');
-    this._promptTitleEl.style.cssText = 'max-width:420px;overflow:hidden;text-overflow:ellipsis;';
-    this._promptBarEl.appendChild(this._promptTitleEl);
-    this._promptBtnEl = document.createElement('button');
-    this._promptBtnEl.textContent = 'Ask Agent';
-    // Mirror detail-card button template (dc-agent-btn)
-    this._promptBtnEl.style.cssText =
-      'font-family:var(--font-hud);font-size: calc(8px * var(--font-scale));font-weight:600;' +
-      'letter-spacing:0.5px;text-transform:uppercase;' +
-      'padding:3px 8px;border-radius:2px;cursor:pointer;' +
-      'transition:all var(--snap);' +
-      'border:1px solid rgba(140,100,200,0.25);' +
-      'background:rgba(12,22,36,0.6);color:var(--nebula,#a088e0);';
-    this._promptBtnEl.addEventListener('mouseenter', () => {
-      this._promptBtnEl.style.background = 'rgba(22,36,54,0.7)';
-      this._promptBtnEl.style.color = 'var(--starlight-dim,#c3daf8)';
-    });
-    this._promptBtnEl.addEventListener('mouseleave', () => {
-      this._promptBtnEl.style.background = 'rgba(12,22,36,0.6)';
-      this._promptBtnEl.style.color = 'var(--nebula,#a088e0)';
-    });
-    this._promptBtnEl.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (this._promptQuestion) {
-        shell.queryAgent(this._promptQuestion);
-      }
-      this._hidePrompt();
-    });
-    this._promptBarEl.appendChild(this._promptBtnEl);
-    // Dismiss button — mirrors dc-close
-    const dismissBtn = document.createElement('button');
-    dismissBtn.innerHTML = iconHtml('close', 11);
-    dismissBtn.style.cssText =
-      'padding:2px 4px;border:none;background:none;color:rgba(120,160,215,0.5);' +
-      'cursor:pointer;font-size: calc(11px * var(--font-scale));line-height:0;transition:color var(--snap);';
-    dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = 'var(--starlight-dim,#c3daf8)'; });
-    dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = 'rgba(120,160,215,0.5)'; });
-    dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); this._hidePrompt(); });
-    this._promptBarEl.appendChild(dismissBtn);
-    this.container.appendChild(this._promptBarEl);
-
-    // Subscribe to show-prompt events (from GraphInteraction)
-    this._showPromptBound = this._showPrompt; // arrow fn already bound
-    bus.on('graph:show-prompt', this._showPromptBound);
-  }
-
-  private _showPrompt = (data: { title: string; question: string }): void => {
-    if (this._promptTimer) clearTimeout(this._promptTimer);
-    this._promptTitleEl.textContent = data.title;
-    this._promptQuestion = data.question;
-    this._promptBarEl.style.display = 'flex';
-    this._promptBarEl.style.opacity = '1';
-    // Auto-hide after 8s if user doesn't click
-    this._promptTimer = setTimeout(() => this._hidePrompt(), 8000);
-  };
-
-  private _hidePrompt = (): void => {
-    if (this._promptTimer) { clearTimeout(this._promptTimer); this._promptTimer = null; }
-    this._promptBarEl.style.opacity = '0';
-    setTimeout(() => {
-      if (this._promptBarEl.style.opacity === '0') {
-        this._promptBarEl.style.display = 'none';
-        this._promptQuestion = '';
-      }
-    }, 200);
-  };
+  private setupPromptBar(): void { this._tooltip.setupPromptBar(); }
 
   // ── Hover ────────────────────────────────────────────────
   // Hover raycaster uses ALL nodeCores regardless of .visible state.
@@ -1065,21 +626,21 @@ export class StarGraph {
           const gm = this._fold.galaxyMeta[gIdx];
           const shortName = (gm.label || gm.id).split('/')[0].replace(/_/g, ' ');
           const isSub = !!this._fold.enteredGalaxyId;
-          this.tooltipEl.querySelector('.tt-name')!.textContent = `${isSub ? '📁' : '🌌'} ${shortName}`;
-          this.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
-          this.tooltipEl.querySelector('.tt-loc')!.textContent = isSub ? '点击钻入子社区' : '点击进入查看内部连线';
+          this._tooltip.tooltipEl.querySelector('.tt-name')!.textContent = `${isSub ? '📁' : '🌌'} ${shortName}`;
+          this._tooltip.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
+          this._tooltip.tooltipEl.querySelector('.tt-loc')!.textContent = isSub ? '点击钻入子社区' : '点击进入查看内部连线';
           this.tmpVec3.copy(gm.centroid);
           this.tmpVec3.project(this.camera);
           if (this.tmpVec3.z <= 1) {
             const x = (this.tmpVec3.x * 0.5 + 0.5) * this.container.clientWidth;
             const y = (-this.tmpVec3.y * 0.5 + 0.5) * this.container.clientHeight;
-            this.tooltipEl.style.left = `${x + 18}px`; this.tooltipEl.style.top = `${y - 10}px`;
-            this.tooltipEl.classList.add('visible');
+            this._tooltip.tooltipEl.style.left = `${x + 18}px`; this._tooltip.tooltipEl.style.top = `${y - 10}px`;
+            this._tooltip.tooltipEl.classList.add('visible');
           }
         }
       } else {
         this.container.style.cursor = '';
-        this.tooltipEl.classList.remove('visible');
+        this._tooltip.tooltipEl.classList.remove('visible');
         this.hoveredGalaxyIdx = -1;
       }
       return;
@@ -1156,7 +717,7 @@ export class StarGraph {
   private updateLabels(): void {
     const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
     const hoverI = this.hoveredIdx;
-    const selI = this.selectedIdx;
+    const selI = this._tooltip.selectedIdx;
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
       const i = this.nodeLabelIdx[k], div = this.labelDivs[k];
       if (!div) continue;
@@ -2385,7 +1946,7 @@ export class StarGraph {
 
     // 9. Clear stale interaction state pointing to dead nodes
     if (this.hoveredIdx >= 0 && this._deadIndices.has(this.hoveredIdx)) { this.hoveredIdx = -1; this.targetHoverScale = 0; }
-    if (this.selectedIdx >= 0 && this._deadIndices.has(this.selectedIdx)) this.selectedIdx = -1;
+    if (this._tooltip.selectedIdx >= 0 && this._deadIndices.has(this._tooltip.selectedIdx)) this._tooltip.selectedIdx = -1;
     if (this._analysis.blastSource >= 0 && this._deadIndices.has(this._analysis.blastSource)) { this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; }
     if (this.focusNodeIdx >= 0 && this._deadIndices.has(this.focusNodeIdx)) { this.focusActive = false; this.focusNodeIdx = -1; }
     if (this._analysis._pathSource >= 0 && this._deadIndices.has(this._analysis._pathSource)) { this._analysis._pathSource = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
@@ -2988,14 +2549,14 @@ export class StarGraph {
     this._fold._savedGalaxyMeta = null;
     this._fold.hideGalaxyTitle();
     this._analysis._pathSource = -1; this._analysis._pathTarget = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear();
-    this._analysis._shiftSourceIdx = -1; this._selecting = false;
-    this._hidePrompt();
+    this._analysis._shiftSourceIdx = -1; this._tooltip._selecting = false;
+    this._tooltip._hidePrompt();
     for (const d of this._fold.galaxyLabelDivs) d.remove();
     this._fold.galaxyLabelDivs = [];
     this.neighborMap = []; this.edgeIndexOf = [];
     this._deadIndices.clear();
     this.hoveredIdx = -1; this.targetHoverScale = 0;
-    this.focusActive = false; this.focusNodeIdx = -1; this.selectedIdx = -1;
+    this.focusActive = false; this.focusNodeIdx = -1; this._tooltip.selectedIdx = -1;
     this._edgeTypeFilter = null;
     this._nodeKindFilter = null;
     this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; this.l34Count = [];
@@ -3003,8 +2564,8 @@ export class StarGraph {
     if (this.legendEl) this.legendEl.style.display = 'none';
     this.focusSubgraphActive = false; this.focusSubgraphIdx = -1; this.focusSubgraphVisibleIndices.clear();
     if (this.focusSubgraphBanner) this.focusSubgraphBanner.style.display = 'none';
-    this.tooltipEl?.classList.remove('visible');
-    this.detailCard?.classList.remove('visible');
+    this._tooltip.tooltipEl?.classList.remove('visible');
+    this._tooltip.detailCard?.classList.remove('visible');
     // Step 2: Clear lens & trail state
     this._lensActive = false;
     this._trailActive = false;
@@ -3547,7 +3108,7 @@ export class StarGraph {
     const mouseOnCanvas = this.mouse.x > -999;
     const isActive = camMoved || mouseOnCanvas || this.hoveredIdx >= 0
                   || this.focusProgress > 0 || this._analysis.blastMode
-                  || (this._analysis._pathSource >= 0) || this._selecting;
+                  || (this._analysis._pathSource >= 0) || this._tooltip._selecting;
     if (isActive) { this._idleCounter = 0; } else { this._idleCounter++; }
     this._lastCamPos.copy(this.camera.position);
     this._lastCamTarget.copy(this.controls.target);
@@ -3682,13 +3243,13 @@ export class StarGraph {
     // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
     this._revealCancelled = true;
     // Clear prompt auto-hide timer (audit: prevent timeout after destroy)
-    if (this._promptTimer) { clearTimeout(this._promptTimer); this._promptTimer = null; }
+    if (this._tooltip._promptTimer) { clearTimeout(this._tooltip._promptTimer); this._tooltip._promptTimer = null; }
     window.removeEventListener('resize', this.onResize);
     // Remove window keydown listener (audit HIGH fix — prevent stale reference)
     if (this._onKeyDown) window.removeEventListener('keydown', this._onKeyDown);
     // Unsubscribe EventBus handlers (audit: prevent stale bus listeners)
     if (this._langHandler) { bus.off('lang:changed', this._langHandler); this._langHandler = null; }
-    if (this._showPromptBound) { bus.off('graph:show-prompt', this._showPromptBound); this._showPromptBound = null; }
+    if (this._tooltip._showPromptBound) { bus.off('graph:show-prompt', this._tooltip._showPromptBound); this._tooltip._showPromptBound = null; }
     // Dispose all GPU resources
     for (const cloud of this._fold.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
     for (const glow of this._fold.galaxyGlows) ((glow as THREE.Mesh).material as THREE.Material).dispose();
@@ -3703,9 +3264,9 @@ export class StarGraph {
     this.renderer.domElement.remove();
     this.glowTex.dispose(); this.sphereGeo.dispose();
     for (const d of this._fold.galaxyLabelDivs) d.remove(); this._fold.galaxyLabelDivs = [];
-    this._fold.galaxyTitleEl?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
-    this._selectRectEl?.remove();
-    this._promptBarEl?.remove();
+    this._fold.galaxyTitleEl?.remove(); this._tooltip.tooltipEl?.remove(); this.labelsContainer?.remove(); this._tooltip.detailCard?.remove();
+    this._tooltip._selectRectEl?.remove();
+    this._tooltip._promptBarEl?.remove();
   }
 }
 
