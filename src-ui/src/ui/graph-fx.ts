@@ -134,37 +134,3 @@ export function positionGrid(holoGrid: THREE.Mesh | null, pos: Float32Array): nu
   return gridY;
 }
 
-// ── Bloom distance control ───────────────────────────────────
-
-/**
- * Dynamically enable/disable bloom based on camera distance to scene center.
- * Far away → bloom off (prevents edge-dense fog). Close up → bloom on (hover glow).
- * Includes hysteresis to prevent rapid toggling.
- */
-export function updateBloomByDistance(
-  camera: THREE.Camera,
-  bloomPass: any, // UnrealBloomPass — imported type would add dep weight
-  _graphRadius: number,
-  _bloomFar: boolean,
-  _bloomHysteresis: number,
-): { bloomFar: boolean; bloomHysteresis: number } {
-  const camDist = camera.position.length();
-  const threshold = _graphRadius * 0.4;
-
-  if (camDist > threshold * 1.8) {
-    if (!_bloomFar) {
-      bloomPass.strength = 0;
-      _bloomFar = true;
-      _bloomHysteresis = 30;
-    }
-  } else if (camDist < threshold * 0.5) {
-    if (_bloomFar) {
-      bloomPass.strength = 0.35;
-      _bloomFar = false;
-      _bloomHysteresis = 30;
-    }
-  }
-
-  if (_bloomHysteresis > 0) _bloomHysteresis--;
-  return { bloomFar: _bloomFar, bloomHysteresis: _bloomHysteresis };
-}

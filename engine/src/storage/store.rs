@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::graph::Graph;
@@ -28,6 +28,8 @@ pub struct GraphStore {
     loading: RwLock<LoadProgress>,
     /// Timestamp when loading started (ms since epoch, for elapsed_ms calc).
     load_start_ms: AtomicU64,
+    /// Guard for fire-and-forget vector reindex — prevents overlapping rebuilds.
+    reindex_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl GraphStore {
@@ -53,6 +55,7 @@ impl GraphStore {
                 elapsed_ms: 0,
             }),
             load_start_ms: AtomicU64::new(load_start),
+            reindex_handle: Mutex::new(None),
         };
 
         // Try SQLite first
@@ -157,6 +160,14 @@ impl GraphStore {
     /// Fire-and-forget background task — does not block the caller.
     /// Called after incremental updates to keep vector search current.
     pub fn reindex_vectors(&self) {
+        // ponytail: 防并发 — 上一轮后台重建没跑完就跳过，下次增量更新时再触发
+        let mut guard = self.reindex_handle.lock();
+        if let Some(ref handle) = *guard {
+            if !handle.is_finished() {
+                return;
+            }
+        }
+
         let idx = self.index.read();
         let nodes: Vec<crate::graph::Node> = idx.nodes_iter().cloned().collect();
         drop(idx);
@@ -164,7 +175,7 @@ impl GraphStore {
         let project_root = self.project_root.clone();
         let vector_path = project_root.join(".hologram").join("vectors.usearch");
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let mut nodes = nodes;
             // Extract snippets for nodes that are missing them (incrementally added)
             for node in &mut nodes {
@@ -189,6 +200,8 @@ impl GraphStore {
                 Err(e) => tracing::warn!("[vector] incremental rebuild failed: {}", e),
             }
         });
+
+        *guard = Some(handle);
     }
 
     /// Get current loading progress (for engine_status).
