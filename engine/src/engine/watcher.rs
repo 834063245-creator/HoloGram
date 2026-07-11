@@ -213,6 +213,9 @@ impl Engine {
                 IncrementalUpdater::update(&paths, &store.index.read(), root, &store.db)?;
 
             store.swap_index(new_idx);
+            // ponytail: 增量更新后重建向量索引 — 全量分析时 pipeline 7.5 自动做，
+            // 增量路径没走 pipeline 所以缺这一步。
+            store.reindex_vectors();
             if errors > 0 {
                 info!("[engine watcher] incremental update with {} parse errors", errors);
             }
