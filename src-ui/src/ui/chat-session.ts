@@ -31,6 +31,8 @@ let sessions: ChatSession[] = [];
 let activeIdx = -1;
 const sessionMessages = new Map<number, HTMLElement[]>();
 const sessionMessageModels = new Map<number, ChatMessage[]>();
+/** Per-session token count — saved/restored on switch to prevent cross-session contamination. */
+const sessionTokens = new Map<number, number>();
 let turnPairs: Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> = [];
 let agentFactory: (() => Promise<ChatAgentHandle | null>) | null = null;
 let nextSessionId = 1;
@@ -42,6 +44,11 @@ export function getActiveIdx(): number { return activeIdx; }
 export function getActiveAgent(): ChatAgentHandle | null { return sessions[activeIdx]?.agent ?? null; }
 export function getNextSessionId(): number { return nextSessionId; }
 export function setNextSessionId(id: number): void { nextSessionId = id; }
+/** Sync the active session's token count into the per-session map. Call after direct totalTokensUsed mutations outside switchSession. */
+export function syncActiveSessionTokens(count: number): void {
+  const s = sessions[activeIdx];
+  if (s) sessionTokens.set(s.id, count);
+}
 export function getSessionMessages(): Map<number, HTMLElement[]> { return sessionMessages; }
 export function getSessionMessageModels(): Map<number, ChatMessage[]> { return sessionMessageModels; }
 export function getTurnPairs(): Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> { return turnPairs; }
@@ -52,6 +59,7 @@ export function setAgentFactory(fn: (() => Promise<ChatAgentHandle | null>) | nu
 /** Full reset — used by setAgent in ChatPanel when switching workspace. */
 export function resetSessionState(ag: ChatAgentHandle): void {
   sessionMessages.clear();
+  sessionTokens.clear();
   sessions = [{ id: nextSessionId++, label: `会话 1`, agent: ag }];
   activeIdx = 0;
   turnPairs = [];
@@ -181,9 +189,10 @@ export function renderSessionTabs(ctx: SessionContext): void {
 
 export function switchSession(ctx: SessionContext, idx: number): void {
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
-  // Save current messages to cache
+  // Save current messages + token count to cache
   if (activeIdx >= 0) {
     saveCurrentMessages(ctx);
+    sessionTokens.set(sessions[activeIdx].id, ctx.getTotalTokensUsed());
   }
   // Flush any in-progress streaming
   ctx.flushReasoning();
@@ -193,6 +202,8 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   activeIdx = idx;
   renderSessionTabs(ctx);
   restoreMessages(ctx);
+  // Restore target session's token count
+  ctx.setTotalTokensUsed(sessionTokens.get(sessions[idx].id) || 0);
   ctx.setLastUsageText('');
   ctx.updateFooter();
 }
@@ -207,6 +218,7 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   // Remove session — persist before mutating memory
   const s = sessions[idx];
   sessionMessages.delete(s.id);
+  sessionTokens.delete(s.id);
   // Persist deletion
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
@@ -265,6 +277,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.clearInputHistory();
   setTurnPairs([]);
   ctx.setTotalTokensUsed(0);
+  sessionTokens.set(s.id, 0);
   ctx.addNotice('新会话已创建 — 可以开始对话', 'info');
   ctx.setLastUsageText('');
   ctx.updateFooter();
@@ -366,11 +379,15 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
 
   saveCurrentMessages(ctx);
 
+  // Snapshot current token count before persisting
+  sessionTokens.set(s.id, ctx.getTotalTokensUsed());
+
   const data = {
     id: s.id,
     label: s.label,
     savedAt: new Date().toISOString(),
     messages: s.agent.getSession(),
+    tokensUsed: ctx.getTotalTokensUsed(),
   };
 
   // 1) Sync localStorage backup — survives beforeunload timeout / process kill
@@ -621,6 +638,14 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
 
   sessions.push({ id: data.id || sessionId, label, agent: newAgent });
   activeIdx = sessions.length - 1;
+  // Restore persisted token count
+  if (typeof data.tokensUsed === 'number') {
+    ctx.setTotalTokensUsed(data.tokensUsed);
+    sessionTokens.set(data.id || sessionId, data.tokensUsed);
+  } else {
+    ctx.setTotalTokensUsed(0);
+    sessionTokens.set(data.id || sessionId, 0);
+  }
   renderSessionTabs(ctx);
   renderRestoredSession(ctx);
   ctx.setLastUsageText('');

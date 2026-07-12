@@ -212,9 +212,6 @@ export function buildDOM(ctx: DomContext): void {
   title.className = 'chat-title';
   title.innerHTML = `${iconHtml('chat')} 全息对话`;
   const closeBtn = document.createElement('button');
-  closeBtn.className = 'chat-close-btn';
-  closeBtn.innerHTML = iconHtml('close', 16);
-  closeBtn.addEventListener('click', () => ctx.close());
   headerRow.append(title);
 
   // ── Panel tabs (Chat | Tools | Context) ──
@@ -235,14 +232,17 @@ export function buildDOM(ctx: DomContext): void {
   }
   headerRow.appendChild(tabBar);
 
-  // ── Action buttons ──
+  // ── Action buttons (right-aligned) ──
+  const headerRight = document.createElement('div');
+  headerRight.className = 'chat-header-right';
+
   // + new session
   const addBtn = document.createElement('button');
   addBtn.className = 'chat-session-add';
   addBtn.innerHTML = iconHtml('plus', 12);
   addBtn.title = '新建会话';
   addBtn.addEventListener('click', () => ctx.createNewSession());
-  headerRow.appendChild(addBtn);
+  headerRight.appendChild(addBtn);
 
   // History button
   const historyBtn = document.createElement('button');
@@ -250,9 +250,13 @@ export function buildDOM(ctx: DomContext): void {
   historyBtn.innerHTML = iconHtml('bookmark', 12);
   historyBtn.title = '历史记录';
   historyBtn.addEventListener('click', () => toggleHistory(ctx));
-  headerRow.appendChild(historyBtn);
+  headerRight.appendChild(historyBtn);
 
-  headerRow.appendChild(closeBtn);
+  closeBtn.className = 'chat-close-btn';
+  closeBtn.innerHTML = iconHtml('close', 16);
+  closeBtn.addEventListener('click', () => ctx.close());
+  headerRight.appendChild(closeBtn);
+  headerRow.appendChild(headerRight);
   headerEl.appendChild(headerRow);
 
   // ── Session tab bar — dedicated full-width row, hidden when ≤ 1 session ──

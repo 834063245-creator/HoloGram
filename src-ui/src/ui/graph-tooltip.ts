@@ -34,7 +34,6 @@ export interface TooltipHost {
   camera: THREE.PerspectiveCamera;
 
   // 详情卡按钮回调需要访问的方法
-  hideDetail(): void;
   enterFocusSubgraph(idx: number): void;
   clearAgentHighlight(): void;
   highlightNodeNames(names: string[], colorHex?: string): void;
@@ -151,12 +150,12 @@ export class GraphTooltip {
 
     // Close
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => {
-      e.stopPropagation(); this.host.hideDetail();
+      e.stopPropagation(); this.hideDetail();
     });
     // Focus subgraph
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) { const idx = this.selectedIdx; this.host.hideDetail(); this.host.enterFocusSubgraph(idx); }
+      if (this.selectedIdx >= 0) { const idx = this.selectedIdx; this.hideDetail(); this.host.enterFocusSubgraph(idx); }
     });
     // Blast radius
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
