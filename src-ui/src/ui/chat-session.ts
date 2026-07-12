@@ -86,6 +86,7 @@ export interface SessionContext {
   setStreamingAssistantId: (id: MessageId | null) => void;
 
   // ⚡ React handles rendering/scrolling
+  bumpMessages?: () => void;
 
   // Streaming helpers
   flushReasoning: () => void;
@@ -268,6 +269,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   renderSessionTabs(ctx);
   // Clear displayed messages for the new session
   ctx.setMessages([]);
+  ctx.bumpMessages?.();
   resetMsgIdCounter();
   ctx.setStreamingAssistantId(null);
   ctx.clearInputHistory();
@@ -296,7 +298,7 @@ function restoreMessages(ctx: SessionContext): void {
   const cachedMessages = sessionMessageModels.get(sid);
   if (cachedMessages) {
     ctx.setMessages(cachedMessages);
-
+    ctx.bumpMessages?.();
     return;
   }
 
@@ -305,7 +307,7 @@ function restoreMessages(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (agent) {
     _rebuildMessagesFromSession(ctx);
-    // ⚡ React renders from data model, node-link handler wiring is React's job
+    ctx.bumpMessages?.();
   }
 
 }
@@ -662,7 +664,7 @@ function renderRestoredSession(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
-  // ⚡ React renders via data model, DOM wiring is React's job
+  ctx.bumpMessages?.();
 
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
