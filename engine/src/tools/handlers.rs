@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use crate::analysis::*;
 use crate::community::detect_communities_from_index;
 use crate::engine;
-use crate::graph::{query, Edge, EdgeKind, Graph, Node, NodeKind};
+use crate::graph::{query, Edge, Graph, Node};
 use crate::routing::preflight::{load_baseline, run_full_check, save_baseline};
 use super::{get_str, get_usize, project_root, with_store};
 use super::{with_graph, resolve_in_index, resolve_in_graph};
@@ -367,95 +367,13 @@ pub(crate) fn handler_cycle(args: &Value) -> ToolResponse {
     }))
 }
 
-pub(crate) fn handler_thread_conflicts(args: &Value) -> ToolResponse {
-    let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let root = project_root();
-    ToolResponse::Success(with_store(|idx| {
-        let mut resources = serde_json::Map::new();
-        let files: Vec<PathBuf> = discover_source_files(&root, 500);
-        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-        let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-        let mut var_readers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-        for r in &df_results {
-            if let Ok(df) = &r.result {
-                for s in &df.scopes {
-                    for w in &s.writes {
-                        var_writers.entry(w.clone()).or_default().push(s.name.clone());
-                    }
-                    for rd in &s.reads {
-                        var_readers.entry(rd.clone()).or_default().push(s.name.clone());
-                    }
-                }
-                for sh in &df.shared {
-                    for w in &sh.writers {
-                        var_writers.entry(sh.var.clone()).or_default().push(w.clone());
-                    }
-                    for rd in &sh.readers {
-                        var_readers.entry(sh.var.clone()).or_default().push(rd.clone());
-                    }
-                }
-            }
-        }
-        for (var, writers) in &var_writers {
-            if writers.len() > 1 {
-                let readers = var_readers.get(var).cloned().unwrap_or_default();
-                let has_concurrent_write = writers.len() > 1;
-                resources.insert(var.clone(), json!({
-                    "medium_type": "variable",
-                    "threads": writers.iter().map(|w| json!({"name": w, "access": "W"})).collect::<Vec<_>>(),
-                    "thread_count": writers.len() + readers.len(),
-                    "has_concurrent_write": has_concurrent_write,
-                    "lock_detected": false,
-                    "lock_edges": Vec::<String>::new(),
-                }));
-            }
-        }
-        for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
-            if resources.contains_key(&medium.name) {
-                continue;
-            }
-            let incoming = idx.incoming(&medium.id, None);
-            let mut threads_info = Vec::new();
-            let mut has_write = false;
-            let mut lock_edges = Vec::new();
-            for (src_id, kind, _depth, _delay) in &incoming {
-                if let Some(src) = idx.get_node(src_id) {
-                    let access = if matches!(kind, EdgeKind::Writes) { "W" } else { "R" };
-                    if access == "W" {
-                        has_write = true;
-                    }
-                    threads_info.push(json!({"name": src.name, "location": src.location, "access": access}));
-                }
-                if kind.as_str().contains("lock") {
-                    lock_edges.push(format!("{}::{}::{}", src_id, medium.id, kind.as_str()));
-                }
-            }
-            if !threads_info.is_empty() {
-                resources.insert(medium.name.clone(), json!({
-                    "medium_type": "medium",
-                    "threads": threads_info,
-                    "thread_count": threads_info.len(),
-                    "has_concurrent_write": has_write,
-                    "lock_detected": !lock_edges.is_empty(),
-                    "lock_edges": lock_edges,
-                }));
-            }
-        }
-        let unlocked_keys: Vec<_> = resources
-            .iter()
-            .filter(|(_, v)| {
-                v["has_concurrent_write"].as_bool().unwrap_or(false)
-                    && !v["lock_detected"].as_bool().unwrap_or(true)
-            })
-            .map(|(k, _)| k.clone())
-            .collect();
-        json!({
-            "resources": resources,
-            "total_shared_resources": resources.len(),
-            "unlocked_concurrent_writes": unlocked_keys.len(),
-            "unlocked_resources": unlocked_keys,
-            "_note": "shared vars from dataflow engine + Medium nodes from graph",
-        })
+pub(crate) fn handler_thread_conflicts(_args: &Value) -> ToolResponse {
+    ToolResponse::Success(json!({
+        "resources": {},
+        "total_shared_resources": 0,
+        "unlocked_concurrent_writes": 0,
+        "unlocked_resources": [],
+        "_note": "Batch scan removed. Use trace_dataflow for per-variable concurrent access analysis.",
     }))
 }
 
@@ -534,43 +452,10 @@ pub(crate) fn handler_timeline(args: &Value) -> ToolResponse {
 
 pub(crate) fn handler_blindspots(args: &Value) -> ToolResponse {
     let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
-    let root = project_root();
     ToolResponse::Success(with_store(|idx| {
-        let files: Vec<PathBuf> = discover_source_files(&root, 500);
-        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-        let mut l4 = count_l4_from_index(idx);
-        let mut conflict_count = 0usize;
-        let mut var_writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-        for r in &df_results {
-            if let Ok(df) = &r.result {
-                for s in &df.scopes {
-                    l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
-                    for w in &s.writes {
-                        var_writers.entry(w.clone()).or_default().push(s.name.clone());
-                    }
-                }
-                for sh in &df.shared {
-                    for w in &sh.writers {
-                        var_writers.entry(sh.var.clone()).or_default().push(w.clone());
-                    }
-                }
-            }
-        }
-        for writers in var_writers.values() {
-            if writers.len() > 1 {
-                conflict_count += 1;
-            }
-        }
-        for medium in idx.nodes_iter().filter(|n| matches!(n.kind, NodeKind::Medium)) {
-            let incoming = idx.incoming(&medium.id, None);
-            let has_write = incoming.iter().any(|(_, kind, _, _)| matches!(kind, EdgeKind::Writes));
-            let has_lock = incoming.iter().any(|(_, kind, _, _)| kind.as_str().contains("lock"));
-            if has_write && !has_lock && incoming.len() > 1 {
-                conflict_count += 1;
-            }
-        }
+        let l4 = count_l4_from_index(idx);
         let cycles = detect_cycles_from_index(idx);
-        let blind = find_blindspots(l4, cycles.len(), conflict_count);
+        let blind = find_blindspots(l4, cycles.len(), 0);
         json!(blind)
     }))
 }

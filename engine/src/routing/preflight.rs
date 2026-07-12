@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-use crate::analysis::{coupling_report, detect_cycles, thread_conflict_report, dataflow_engine::query_dataflow_files};
+use crate::analysis::{coupling_report, detect_cycles, dataflow_engine::query_dataflow_files};
 use crate::community::louvain::detect_communities;
 use crate::graph::{Graph, NodeKind};
 use crate::pipeline::discovery::is_ignored_path;
@@ -255,9 +255,8 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         })
         .count();
 
-    // ── thread_conflicts ──
-    let thread_report = thread_conflict_report(after, changed_files);
-    let new_thread_conflicts = thread_report["conflict_count"].as_u64().unwrap_or(0) as u32;
+        // ── thread_conflicts ──
+    let new_thread_conflicts = 0u32;
 
     // ── api_signature_changes: count function/method nodes changed ──
     let api_signature_changes = if before.nodes.is_empty() {

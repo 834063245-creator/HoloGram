@@ -7,7 +7,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use hologram_engine::analysis::{fragile_nodes, detect_cycles, coupling_report, graph_summary, thread_conflict_report, find_blindspots};
+use hologram_engine::analysis::{fragile_nodes, detect_cycles, coupling_report, graph_summary, find_blindspots};
 use hologram_engine::community::{detect_communities, detect_hierarchical_communities};
 use hologram_engine::graph::{query, Graph, EdgeKind};
 use hologram_engine::logging;
@@ -164,28 +164,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let req = req_owned.clone();
                 tokio::task::spawn_blocking(move || handle_check(req.trim()))
                     .await.unwrap_or_else(|_| b"{\"error\":\"check panicked\"}".to_vec())
-            } else if req_owned.starts_with("thread") {
-                let arg = req_owned.trim().strip_prefix("thread:").unwrap_or("");
-                handle_simple("thread", arg, |g, severity| {
-                    let mut report = thread_conflict_report(g, &[]);
-                    if !severity.is_empty() {
-                        if let Some(obj) = report.as_object_mut() {
-                            obj.insert("severity_filter".into(), json!(severity));
-                        }
-                    }
-                    report
-                })
             } else if req_owned.starts_with("blindspots") {
                 let arg = req_owned.trim().strip_prefix("blindspots:").unwrap_or("");
                 let threshold: usize = arg.parse().unwrap_or(0);
                 handle_simple("blindspots", arg, move |g, _| {
                     let c = coupling_report(g, "");
                     let cycles = detect_cycles(g);
-                    let conflicts = thread_conflict_report(g, &[]);
                     find_blindspots(
                         if threshold > 0 { threshold } else { c["L4"].as_u64().unwrap_or(0) as usize },
                         cycles.len(),
-                        conflicts["conflict_count"].as_u64().unwrap_or(0) as usize,
+                        0,
                     )
                 })
             } else if req_owned.starts_with("timeline") {
