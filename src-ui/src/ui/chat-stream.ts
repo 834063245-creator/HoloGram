@@ -41,7 +41,6 @@ type TurnPair = {
 
 export interface StreamContext {
   // ── 核心 DOM ──
-  msgList: HTMLElement;
   inputArea: HTMLTextAreaElement;
 
   // ── 消息数组 ──

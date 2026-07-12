@@ -138,9 +138,6 @@ export interface SessionContext {
   addNotice: (text: string, level?: 'info' | 'warn' | 'error') => void;
   updateFooter: () => void;
 
-  // Handlers
-  reWireHandlers: () => void;
-
   // Token usage
   getTotalTokensUsed: () => number;
   setTotalTokensUsed: (n: number) => void;
