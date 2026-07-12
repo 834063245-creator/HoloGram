@@ -1181,6 +1181,7 @@ export type SubAgentSpawner = (
   onProgress?: (chunk: string) => void,
   mode?: 'fork' | 'fresh',
   toolAllowlist?: string[] | null,
+  signal?: AbortSignal, // ⚡ R4 fix: coordinator abort signal
 ) => Promise<{ text: string; err?: string }>;
 
 export function createSubAgentTool(
@@ -1229,11 +1230,12 @@ export function createSubAgentTool(
         // Emit spawn event for UI
         bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode, toolAllowlist });
 
-        // Register done callback: emit UI event + inject result as task-notification
+        // ⚡ R4 fix: capture coordinator abort signal so stopAll() actually stops sub-agents
+        let subSignal: AbortSignal | undefined;
         const spawnId = pool.spawn(
           description,
           async (onMsg) => {
-            const result = await spawner(description, prompt, onMsg, mode, toolAllowlist ?? null);
+            const result = await spawner(description, prompt, onMsg, mode, toolAllowlist ?? null, subSignal);
             return result;
           },
           (chunk) => {
@@ -1242,6 +1244,9 @@ export function createSubAgentTool(
           },
           callId,
         );
+        if (spawnId) {
+          subSignal = pool.getSubSignal(spawnId);
+        }
         if (!spawnId) {
           return `无法启动子Agent：已达到并发上限（${pool.runningCount} 个正在运行）。请等待已有子Agent完成后再试，或用 agent_stop_all 批量停止。`;
         }
