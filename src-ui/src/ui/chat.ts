@@ -53,6 +53,7 @@ import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-re
 import { SlashPanelController } from './react/SlashPanel';
 import { ChatMessagesPanel } from './react/ChatMessages';
 import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
+import { getChatMessages, setChatMessages, bumpChat } from './chat-store';
 
 // ── Constants ──
 
@@ -85,9 +86,9 @@ export class ChatPanel {
   // ⚡ running / abortCtrl migrated to ExecutionState — use execState.isRunning / execState.start()
 
   // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
-  // All chat messages are stored here. The renderer builds DOM from this array.
-  // Streaming updates mutate the last assistant message → then re-render only that one.
-  private messages: ChatMessage[] = [];
+  // ⚡ Zustand store-backed — getter/setter routes through chat-store.ts
+  private get messages(): ChatMessage[] { return getChatMessages(); }
+  private set messages(msgs: ChatMessage[]) { setChatMessages(msgs); }
   /** The ID of the assistant message currently being streamed (null = none). */
   private _streamingAssistantId: MessageId | null = null;
   /** User scrolled up during streaming — pause auto-scroll until they scroll back to bottom. */
@@ -188,7 +189,6 @@ export class ChatPanel {
     this.msgList.style.display = 'none';
     this.msgList.parentElement?.insertBefore(reactRoot, this.msgList);
     this._chatMessages = new ChatMessagesPanel(reactRoot);
-    this._chatMessages.messages = this.messages; // shared reference
     this._chatMessages.setCallbacks({
       onCopyText: (text) => navigator.clipboard.writeText(text).catch(() => {}),
       onNavigateToNode: (nodeName) => {
@@ -501,12 +501,11 @@ export class ChatPanel {
       tabBar: this.tabBar,
       getProjectPath: () => this.projectPath,
       agentFactory: Session.getAgentFactory(),
-      getMessages: () => this._chatMessages?.messages ?? this.messages,
-      setMessages: (msgs) => { this.messages = msgs; if (this._chatMessages) this._chatMessages.messages = msgs; },
+      getMessages: () => getChatMessages(),
+      setMessages: (msgs) => { setChatMessages(msgs); },
       getStreamingAssistantId: () => this._streamingAssistantId,
       setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
-      // ⚡ React handles scrolling internally
-      // ⚡ React handles via bumpMessages
+      // ⚡ Zustand store triggers React re-render on mutation
       flushReasoning: () => {},
       flushText: () => {},
       clearPendingToolCards: () => {},
@@ -666,8 +665,8 @@ export class ChatPanel {
     return {
       msgList: this.msgList,
       inputArea: this.inputArea,
-      getMessages: () => this._chatMessages?.messages ?? this.messages,
-      setMessages: (msgs) => { this.messages = msgs; if (this._chatMessages) this._chatMessages.messages = msgs; },
+      getMessages: () => getChatMessages(),
+      setMessages: (msgs) => { setChatMessages(msgs); },
       getStreamingAssistantId: () => this._streamingAssistantId,
       setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
       getUserScrolledUp: () => this._userScrolledUp,
@@ -699,7 +698,6 @@ export class ChatPanel {
       getAbortCtrl: () => execState.abortSignal ? { signal: execState.abortSignal } as AbortController : null,
       setAbortCtrl: (_c: any) => { /* managed by execState */ },
       getExpandedReasoning: () => this._expandedReasoning,
-      bumpMessages: () => this._chatMessages?.bump(),
     };
   }
 

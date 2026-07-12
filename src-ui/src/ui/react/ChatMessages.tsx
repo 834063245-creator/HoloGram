@@ -21,6 +21,7 @@ import {
   type TextPart,
   type NoticeMessage,
 } from '../message-model';
+import { useChatStore, bumpChat } from '../chat-store';
 
 // ── Constants ──
 
@@ -450,10 +451,11 @@ const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
 // ── Main component ──
 
 const ChatMessagesApp: React.FC<{
-  messages: ChatMessage[];
   callbacks: ChatMessagesCallbacks;
-  version: number;
-}> = ({ messages, callbacks, version }) => {
+}> = ({ callbacks }) => {
+  const messages = useChatStore((s) => s.messages);
+  const version = useChatStore((s) => s.version);
+
   const listRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const autoScrollRaf = useRef<number | null>(null);
@@ -565,11 +567,9 @@ const ChatMessagesApp: React.FC<{
 // ── Thin class wrapper ──
 
 export class ChatMessagesPanel {
-  messages: ChatMessage[] = [];
   private _root: Root;
   private _mount: HTMLElement;
   private _callbacks: ChatMessagesCallbacks = {};
-  private _version = 0;
 
   setCallbacks(cbs: ChatMessagesCallbacks): void { this._callbacks = cbs; }
 
@@ -580,25 +580,15 @@ export class ChatMessagesPanel {
     this._render();
   }
 
+  /** Trigger re-render — called by store-aware code instead of manual bump(). */
   bump(): void {
-    this._version++;
-    this._render();
+    bumpChat();
   }
 
   private _render(): void {
-    const snapshot = this.messages.map((m, i) => {
-      if (i === this.messages.length - 1 && m.role === 'assistant') {
-        const am = m as AssistantMessage;
-        return { ...am, parts: am.parts.map(p => ({ ...p })) };
-      }
-      return { ...m };
-    });
-
     this._root.render(
       React.createElement(ChatMessagesApp, {
-        messages: snapshot,
         callbacks: this._callbacks,
-        version: this._version,
       }),
     );
   }

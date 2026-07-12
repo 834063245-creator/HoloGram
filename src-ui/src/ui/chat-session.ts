@@ -15,6 +15,7 @@ import {
   createNoticeMessage,
 } from './message-model';
 import { invoke } from '../bridge';
+import { bumpChat } from './chat-store';
 import { loadSettings, CHAT_MODES } from '../settings';
 import type { Message } from '../provider/types';
 import { iconHtml } from './icons';
@@ -85,8 +86,7 @@ export interface SessionContext {
   getStreamingAssistantId: () => MessageId | null;
   setStreamingAssistantId: (id: MessageId | null) => void;
 
-  // ⚡ React handles rendering/scrolling
-  bumpMessages?: () => void;
+  // ⚡ Zustand store drives React re-render — no bump needed
 
   // Streaming helpers
   flushReasoning: () => void;
@@ -269,7 +269,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   renderSessionTabs(ctx);
   // Clear displayed messages for the new session
   ctx.setMessages([]);
-  ctx.bumpMessages?.();
+  bumpChat();
   resetMsgIdCounter();
   ctx.setStreamingAssistantId(null);
   ctx.clearInputHistory();
@@ -298,7 +298,7 @@ function restoreMessages(ctx: SessionContext): void {
   const cachedMessages = sessionMessageModels.get(sid);
   if (cachedMessages) {
     ctx.setMessages(cachedMessages);
-    ctx.bumpMessages?.();
+    bumpChat();
     return;
   }
 
@@ -307,7 +307,7 @@ function restoreMessages(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (agent) {
     _rebuildMessagesFromSession(ctx);
-    ctx.bumpMessages?.();
+    bumpChat();
   }
 
 }
@@ -664,7 +664,7 @@ function renderRestoredSession(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
-  ctx.bumpMessages?.();
+  bumpChat();
 
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
