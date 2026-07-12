@@ -9,6 +9,7 @@ import gsap from 'gsap';
 import { iconHtml } from './icons';
 import { shell } from './app-shell';
 import { cancelPendingApprovals } from '../agent/permission';
+import { execState } from '../agent/execution-state';
 
 // ── AnimContext — the bridge between standalone animation functions and ChatPanel state ──
 
@@ -247,7 +248,7 @@ export function expandToInput(ctx: AnimContext): void {
 /** Any state → Panel: summon the full conversation card */
 export function summonPanel(ctx: AnimContext): void {
   // If agent is running in background, restore to full panel
-  if (ctx.getRunning()) ctx.panel.classList.remove('chat-pill-running');
+  if (execState.isRunning) ctx.panel.classList.remove('chat-pill-running');
   ctx.resetPillBadge();
   morphToMode(ctx, 'panel', 'chat-open');
   ctx.scrollBottom();
@@ -299,13 +300,13 @@ export function collapseToInput(ctx: AnimContext): void {
     },
   });
 
-  if (ctx.getRunning()) ctx.panel.classList.add('chat-pill-running');
+  if (execState.isRunning) ctx.panel.classList.add('chat-pill-running');
   if (ctx.getProjectPath() && ctx.getActiveIdx() >= 0) {
     ctx.saveActiveSession(ctx.getProjectPath()).catch(() => {});
   }
   // ponytail: don't cancel pending permissions while agent is running —
   // sub-agents may be mid-write and the dialog is their only path through.
-  if (!ctx.getRunning()) cancelPendingApprovals();
+  if (!execState.isRunning) cancelPendingApprovals();
   ctx.closeHistory();
   ctx.hideSlashPanel();
   shell.notifyPanelChanged();
@@ -334,7 +335,7 @@ export function collapseToPill(ctx: AnimContext): void {
       ctx.setMode('pill');
       removeAllPanelClasses(ctx);
       ctx.panel.classList.add('chat-pill');
-      if (ctx.getRunning()) {
+      if (execState.isRunning) {
         ctx.panel.classList.add('chat-pill-running');
       }
       ctx.panel.style.maxHeight = '';
@@ -348,7 +349,7 @@ export function collapseToPill(ctx: AnimContext): void {
   if (ctx.getProjectPath() && ctx.getActiveIdx() >= 0) {
     ctx.saveActiveSession(ctx.getProjectPath()).catch(() => {});
   }
-  if (!ctx.getRunning()) cancelPendingApprovals();
+  if (!execState.isRunning) cancelPendingApprovals();
   ctx.closeHistory();
   ctx.hideSlashPanel();
   shell.notifyPanelChanged();
