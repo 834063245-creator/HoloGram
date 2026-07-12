@@ -44,6 +44,7 @@ interface ExecState {
   sessionVersion: number;
   permCardCount: number;
   subAgentCount: number;
+  subCompleted: SubAgentHandle[];
 }
 
 const MAX_COMPLETED = 20;
@@ -53,6 +54,7 @@ const store = createStore<ExecState>(() => ({
   sessionVersion: 0,
   permCardCount: 0,
   subAgentCount: 0,
+  subCompleted: [],
 }));
 
 // ── Module-level closures — non-serialisable mutable state ──
@@ -61,7 +63,6 @@ let _abortController: AbortController | null = null;
 let _permQueue: Promise<void> = Promise.resolve();
 let _permCards: PermCard[] = [];
 let _subAgents = new Map<string, SubAgentEntry>();
-let _subCompleted: SubAgentHandle[] = [];
 
 function _set(s: Partial<ExecState>): void {
   store.setState(s);
@@ -76,10 +77,10 @@ function _cancelAllPermissions(): void {
 }
 
 function _addCompleted(handle: SubAgentHandle): void {
-  _subCompleted.push(handle);
-  if (_subCompleted.length > MAX_COMPLETED) {
-    _subCompleted = _subCompleted.slice(-MAX_COMPLETED);
-  }
+  store.setState((s) => {
+    const next = [...s.subCompleted, handle];
+    return { subCompleted: next.length > MAX_COMPLETED ? next.slice(-MAX_COMPLETED) : next };
+  });
 }
 
 // ── Public API — identical to the old class-based interface ──
@@ -218,8 +219,8 @@ export const execState = {
   },
 
   pollCompleted(): SubAgentHandle[] {
-    const results = [..._subCompleted];
-    _subCompleted = [];
+    const results = [...store.getState().subCompleted];
+    store.setState({ subCompleted: [] });
     return results;
   },
 
