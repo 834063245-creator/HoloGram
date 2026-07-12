@@ -84,7 +84,6 @@ export class ChatPanel {
   private abortCtrl: AbortController | null = null;
   private running = false;
   private _permCardCount = 0; // live permission cards awaiting user decision
-  private _stopBtnPollId: ReturnType<typeof setInterval> | null = null;
 
   // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
   // All chat messages are stored here. The renderer builds DOM from this array.
@@ -303,6 +302,7 @@ export class ChatPanel {
           );
           if (idx >= 0) this.messages.splice(idx, 1);
           resolve(result);
+          this._updateStopButton();
           this._syncMessagesToDOM();
         };
         // Push permission message into model — renderer handles the rest
@@ -507,7 +507,6 @@ export class ChatPanel {
       getPanel: () => this.panel,
       getMsgList: () => this.msgList,
       getInputArea: () => this.inputArea,
-      getCurrentBubble: () => null,
       // Slash panel
       _slashPanel: this._slashPanel,
       _slashNavIdx: this._slashNavIdx,
@@ -592,38 +591,6 @@ export class ChatPanel {
       setUserScrolledUp: (v) => { this._userScrolledUp = v; },
       getSyncRafId: () => this._syncRafId,
       setSyncRafId: (id) => { this._syncRafId = id; },
-      getSyncPending: () => this._syncPending,
-      setSyncPending: (v) => { this._syncPending = v; },
-      // ── Old-stream stubs (removed — data-driven model renders everything) ──
-      getStreamTextBuf: () => '',
-      setStreamTextBuf: (_s) => {},
-      getStreamRenderScheduled: () => false,
-      setStreamRenderScheduled: (_v) => {},
-      getStreamStableLen: () => 0,
-      setStreamStableLen: (_n) => {},
-      getStreamStableEl: () => null,
-      setStreamStableEl: (_el) => {},
-      getStreamUnstableEl: () => null,
-      setStreamUnstableEl: (_el) => {},
-      getCurrentBubble: () => null,
-      setCurrentBubble: (_el) => {},
-      getCurrentTextEl: () => null,
-      setCurrentTextEl: (_el) => {},
-      getCurrentReasoning: () => null,
-      setCurrentReasoning: (_el) => {},
-      getCurrentReasoningContent: () => null,
-      setCurrentReasoningContent: (_el) => {},
-      getReasoningBlock: () => null,
-      setReasoningBlock: (_el) => {},
-      getReasoningBlockContent: () => null,
-      setReasoningBlockContent: (_el) => {},
-      getReasoningBlockToggle: () => null,
-      setReasoningBlockToggle: (_el) => {},
-      getPendingToolCards: () => new Map(),
-      getToolSummaryEl: () => null,
-      setToolSummaryEl: (_el) => {},
-      getCompletedToolCount: () => 0,
-      setCompletedToolCount: (_n) => {},
       getTurnPairs: () => Session.getTurnPairs(),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
@@ -1147,16 +1114,6 @@ export class ChatPanel {
     this.stopBtn.classList.toggle('hidden', !busy);
     if (!busy) {
       this.sendBtn.classList.remove('hidden');
-      if (this._stopBtnPollId) { clearInterval(this._stopBtnPollId); this._stopBtnPollId = null; }
-    } else if (!this._stopBtnPollId) {
-      // Poll while busy — catches sub-agent completion without explicit callback plumbing
-      this._stopBtnPollId = setInterval(() => {
-        if (!this._isBusy()) {
-          this.stopBtn.classList.add('hidden');
-          this.sendBtn.classList.remove('hidden');
-          if (this._stopBtnPollId) { clearInterval(this._stopBtnPollId); this._stopBtnPollId = null; }
-        }
-      }, 500);
     }
   }
 
@@ -1279,11 +1236,6 @@ export class ChatPanel {
   private _doSyncMessagesToDOM(): void { Stream._doSyncMessagesToDOM(this._streamCtx()); }
 
   // ── Throttled rAF sync — avoids O(n²) re-render on high-frequency streams ──
-  // ponytail: _scheduleSync is now a thin wrapper that reuses _syncMessagesToDOM's
-  // single rAF gate (_syncRafId). The old double-buffering (_syncPending → rAF →
-  // _syncMessagesToDOM → rAF → _doSyncMessagesToDOM) added 2-frame latency and
-  // left a gap where renders could be dropped by _finaliseStreamingAssistant.
-  private _syncPending = false;
   private _scheduleSync(): void { Stream._scheduleSync(this._streamCtx()); }
 
   // ── Event Sink — render Agent events to DOM (NEW data-driven path) ──
@@ -1936,6 +1888,7 @@ export class ChatPanel {
     const header = subEl.querySelector('.msg-sub-agent-header') as HTMLElement;
     if (body) body.classList.remove('open');
     this._bumpPillBadge();
+    this._updateStopButton(); // sub-agent done → may need to hide stop btn
 
     // Update status indicator + hover
     const icon = data.summary?.hasError ? '❌' : '✅';
