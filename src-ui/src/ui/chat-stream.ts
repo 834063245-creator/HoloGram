@@ -242,12 +242,6 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
   switch (ev.kind) {
     case EventKind.TurnStarted:
       _finaliseStreamingAssistant(ctx);
-      // Link assistant bubble to last turn pair before resetting
-      if (ctx.getTurnPairs().length > 0) {
-        const bubbles = ctx.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
-        const lastBubble = bubbles[bubbles.length - 1];
-        if (lastBubble) ctx.getTurnPairs()[ctx.getTurnPairs().length - 1].assistantBubble = lastBubble;
-      }
       ctx.getExpandedReasoning().clear();
       break;
 
@@ -272,7 +266,6 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         _finaliseTextPart(ctx);
       }
       ctx.bumpMessages?.();
-      ctx.linkifyNodeNames();
       break;
 
     case EventKind.ToolDispatch:

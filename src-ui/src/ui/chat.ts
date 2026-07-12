@@ -51,7 +51,6 @@ import {
   lastTextPart,
   findToolPart,
 } from './message-model';
-import { renderMessage, type RenderCallbacks } from './message-renderer';
 import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
 import { SlashPanelController } from './react/SlashPanel';
 import { ChatMessagesPanel } from './react/ChatMessages';
@@ -188,6 +187,10 @@ export class ChatPanel {
     this.msgList.parentElement?.insertBefore(reactRoot, this.msgList);
     this._chatMessages = new ChatMessagesPanel(reactRoot);
     this._chatMessages.messages = this.messages; // shared reference
+    this._chatMessages.setCallbacks({
+      onCopyText: (text) => navigator.clipboard.writeText(text).catch(() => {}),
+      // ⚡ TODO: wire retry/edit/resend/permission after input+shell React migration
+    });
     // ── Track user focus — file viewer / file tree / graph selection ──
     bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
     bus.on('navigate:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
@@ -447,7 +450,6 @@ export class ChatPanel {
   private _sessionCtx(): Session.SessionContext {
     return {
       panel: this.panel,
-      msgList: this.msgList,
       sessionTabs: this.sessionTabs,
       tabBar: this.tabBar,
       getProjectPath: () => this.projectPath,
