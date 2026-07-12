@@ -70,7 +70,6 @@ export function resetSessionState(ag: ChatAgentHandle): void {
 export interface SessionContext {
   // DOM elements
   panel: HTMLElement;
-  msgList: HTMLElement;
   sessionTabs: HTMLElement;
   tabBar: HTMLElement;
 
@@ -271,7 +270,6 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.setMessages([]);
   resetMsgIdCounter();
   ctx.setStreamingAssistantId(null);
-  ctx.msgList.innerHTML = '';
   ctx.clearInputHistory();
   setTurnPairs([]);
   ctx.setTotalTokensUsed(0);
@@ -286,14 +284,11 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
 function saveCurrentMessages(ctx: SessionContext): void {
   const sid = sessions[activeIdx]?.id;
   if (!sid) return;
-  const children = Array.from(ctx.msgList.children) as HTMLElement[];
-  sessionMessages.set(sid, children);
-  // Also save the message model so restoreMessages can use the new renderer
+  // ⚡ React renders from data model, DOM snapshots no longer needed
   sessionMessageModels.set(sid, [...ctx.getMessages()]);
 }
 
 function restoreMessages(ctx: SessionContext): void {
-  ctx.msgList.innerHTML = '';
   const sid = sessions[activeIdx]?.id;
   if (!sid) return;
 
@@ -310,19 +305,7 @@ function restoreMessages(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (agent) {
     _rebuildMessagesFromSession(ctx);
-
-    // Re-wire node-link click handlers
-    ctx.msgList.querySelectorAll('.node-link').forEach((link) => {
-      link.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const name = (link as HTMLElement).dataset['nodename'] || '';
-        const sg = ctx.getStarGraph();
-        if (name && sg) {
-          const found = sg.focusNode(name);
-          if (!found) ctx.addNotice(`未在图中找到 "${name}"`, 'info');
-        }
-      });
-    });
+    // ⚡ React renders from data model, node-link handler wiring is React's job
   }
 
 }
@@ -530,7 +513,6 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   sessions = [{ id: data.id, label, agent: newAgent }];
   activeIdx = 0;
   renderSessionTabs(ctx);
-  ctx.msgList.innerHTML = '';
 
   try { renderRestoredSession(ctx); } catch (e) {
     console.error('[chat] render 崩溃', e);
@@ -680,30 +662,7 @@ function renderRestoredSession(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
-  // ⚡ React renders via bumpMessages, no DOM sync needed
-  // Wire up turnPairs userBubble refs
-  let pairIdx = 0;
-  const userRows = ctx.msgList.querySelectorAll<HTMLElement>('.msg-user-row');
-  userRows.forEach((row) => {
-    if (pairIdx < turnPairs.length) {
-      turnPairs[pairIdx].userBubble = row;
-      pairIdx++;
-    }
-  });
-
-  // Re-wire node-link click handlers
-  ctx.msgList.querySelectorAll('.node-link').forEach((link) => {
-    link.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const name = (link as HTMLElement).dataset['nodename'] || '';
-      const sg = ctx.getStarGraph();
-      if (name && sg) {
-        const found = sg.focusNode(name);
-        if (!found) ctx.addNotice(`未在图中找到 "${name}"`, 'info');
-      }
-    });
-  });
-
+  // ⚡ React renders via data model, DOM wiring is React's job
 
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
@@ -812,9 +771,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
 export function retractTurn(ctx: SessionContext, idx: number): string | null {
   const pair = turnPairs[idx];
   if (!pair) return null;
-  // Remove user row + assistant bubble from DOM
-  if (pair.userBubble) pair.userBubble.remove();
-  if (pair.assistantBubble) pair.assistantBubble.remove();
+  // ⚡ React handles DOM removal, just clean the model
   // Remove from agent session — search by content if index is stale (inserted mid-run)
   let sessIdx = pair.sessionIndex;
   const agent = sessions[activeIdx]?.agent;
