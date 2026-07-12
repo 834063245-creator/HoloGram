@@ -179,14 +179,15 @@ const ChatMessagesApp: React.FC<{
   callbacks: ChatMessagesCallbacks;
 }> = ({ messages, callbacks }) => {
   const listRef = useRef<HTMLDivElement>(null);
-  const frameRef = useRef(0); // increments on each render to drive auto-scroll
-  frameRef.current++;
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedReasoning, setExpandedReasoning] = useState<Set<number>>(new Set());
   const lastMsgCount = useRef(0);
+  const userScrolledUpRef = useRef(false);
+  useEffect(() => { userScrolledUpRef.current = userScrolledUp; }, [userScrolledUp]);
 
-  // Auto-scroll + new-turn reset: trigger on version bump (every streaming frame)
+  // Auto-scroll: run on EVERY render (bump() triggers root.render() → component re-renders)
+  // Using useEffect with no deps = after every render. Gate: only scroll if not scrolled up.
   useEffect(() => {
     const list = listRef.current;
     if (!list || messages.length === 0) return;
@@ -197,11 +198,11 @@ const ChatMessagesApp: React.FC<{
     }
     lastMsgCount.current = messages.length;
 
-    // Auto-follow during streaming
-    if (!userScrolledUp) {
+    // Use ref for scroll check — avoids stale closure in effect-with-no-deps
+    if (!userScrolledUpRef.current) {
       list.scrollTop = list.scrollHeight;
     }
-  }, [frameRef.current, messages.length]);
+  });
 
   // Scroll tracking
   useEffect(() => {
