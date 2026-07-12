@@ -49,9 +49,16 @@ function svgIcon(name: string, size: number = 12): string {
 // ── Streaming text ──
 
 const StreamingText: React.FC<{ text: string; finalised: boolean }> = ({ text, finalised }) => {
+  const refCallback = useCallback((el: HTMLDivElement | null) => {
+    if (!el || !finalised) return;
+    el.querySelectorAll('pre code').forEach((block) => {
+      try { (window as any).hljs?.highlightElement(block as HTMLElement); } catch {}
+    });
+  }, [finalised, text]);
+
   if (finalised) {
     const html = marked.parse(text, { async: false }) as string;
-    return <div className="msg-text msg-markdown stable" dangerouslySetInnerHTML={{ __html: html }} />;
+    return <div ref={refCallback} className="msg-text msg-markdown stable" dangerouslySetInnerHTML={{ __html: html }} />;
   }
   return <div className="msg-text msg-markdown streaming">{text}<span className="streaming-typing">▊</span></div>;
 };
@@ -65,7 +72,9 @@ const ReasoningBlock: React.FC<{ text: string; blockIndex: number; expanded: boo
         <span dangerouslySetInnerHTML={{ __html: expanded ? svgIcon('chevron-down') : svgIcon('chevron-right') }} />
         {expanded ? '收起思考' : '查看思考'}
       </div>
-      {expanded && <div className="msg-reasoning-content msg-reasoning-open"><pre>{text}</pre></div>}
+      <div className={`msg-reasoning-content${expanded ? ' msg-reasoning-open' : ''}`}>
+        <pre>{text}</pre>
+      </div>
     </div>
   );
 
