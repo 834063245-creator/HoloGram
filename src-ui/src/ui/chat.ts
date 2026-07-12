@@ -227,6 +227,7 @@ export class ChatPanel {
     // agent to answer with "当前没有加载项目" after a project was loaded.
     Session.resetSessionState(agent);
     this.totalTokensUsed = 0;
+    Session.syncActiveSessionTokens(0);
     this.toolUsage.clear();
     this.toolHistory = [];
     this.renderSessionTabs();
@@ -264,12 +265,18 @@ export class ChatPanel {
 
   /** Programmatically ask the agent a question. Summons panel and sends. */
   ask(question: string): void {
-    this.summonPanel();
+    // Only summon if not already in panel/hud mode — avoids GSAP conflict with
+    // the DOM mutations from sendMessage (bubble render, tool cards, etc.)
+    const alreadyOpen = this.mode === 'panel' || this.mode === 'hud';
+    if (!alreadyOpen) {
+      this.summonPanel();
+    }
     this.inputArea.value = question;
     this.inputArea.style.height = 'auto';
     this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
     // Small delay to let panel animate open before sending
-    setTimeout(() => this.sendMessage(), 200);
+    const delay = alreadyOpen ? 0 : 200;
+    setTimeout(() => this.sendMessage(), delay);
   }
 
   /** Render a permission request inline in the chat — no modal, no outside-click-to-deny.
@@ -828,6 +835,7 @@ export class ChatPanel {
     this.draftText = '';
     Session.setTurnPairs([]);
     this.totalTokensUsed = 0;
+    Session.syncActiveSessionTokens(0);
     this.addNotice('已开启新会话 — 上下文已清空', 'info');
     this.finishTurn();
     this.updateFooter();

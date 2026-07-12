@@ -2356,7 +2356,11 @@ export class StarGraph {
     // Fix: container may have been display:none during constructor onResize().
     // Defer resize one frame to ensure CSS layout has settled.
     requestAnimationFrame(() => this.onResize());
-    this._renderInProgress = false;
+    // ponytail: _renderInProgress stays TRUE until progressive reveal completes.
+    // Animation loop skips rendering while InstancedMesh.count is still ramping up,
+    // otherwise glow Points render at full count while cores are partially hidden
+    // → ghost dots (reported as "鬼影").
+    // The flag is cleared by _startProgressiveReveal's completion callback.
   }
 
   // -- end of _renderImpl; render() wrapper is above --
@@ -2364,9 +2368,11 @@ export class StarGraph {
   // ── Progressive reveal: materialize nodes in batches ────────
   private _revealRevealed = true; // false during animation
   private _revealCancelled = false;
+  private _revealGeneration = 0; // ponytail: increment on each new reveal; old rAF callbacks discard themselves
 
   private _startProgressiveReveal(nodeCount: number): void {
     this._revealCancelled = false;
+    const myGen = ++this._revealGeneration; // ponytail: bump generation so old rAF callbacks from previous renders bail out
     const BATCH_SIZE = Math.max(50, Math.floor(nodeCount / 40));
     const totalNodes = this._nodeCount;
     const totalEdgeGroups = this.edgeLineGroups.length;
@@ -2399,7 +2405,14 @@ export class StarGraph {
     const edgeRevealBatch = Math.max(1, Math.ceil(totalEdgeGroups / 10));
 
     const revealFrame = () => {
-      if (this._revealCancelled) return;
+      // ponytail: bail out if a newer render has started — prevents old rAF
+      // callbacks from touching the new scene objects (ghost dots root cause).
+      // Don't touch _renderInProgress here — the new render owns the flag.
+      if (this._revealGeneration !== myGen) return;
+      if (this._revealCancelled) {
+        this._renderInProgress = false;
+        return;
+      }
       const nodeEnd = Math.min(revealedNodes + BATCH_SIZE, totalNodes);
       // Reveal cores via InstancedMesh.count
       this.nodeCoresInstanced.count = nodeEnd;
@@ -2432,6 +2445,10 @@ export class StarGraph {
         this.labelsContainer.style.transition = 'opacity 0.4s ease-in';
         this.labelsContainer.style.opacity = '1';
         setTimeout(() => { this.labelsContainer.style.transition = ''; }, 500);
+        // ponytail: unblock animation loop now that progressive reveal is done.
+        // _renderInProgress was kept true since _renderImpl to prevent the
+        // animation loop from rendering partial state (ghost dots).
+        this._renderInProgress = false;
         return;
       }
       requestAnimationFrame(revealFrame);
@@ -2441,6 +2458,7 @@ export class StarGraph {
 
   private clearGraph(): void {
     this._revealCancelled = true; // cancel any in-flight progressive reveal
+    ++this._revealGeneration; // ponytail: bump generation so old rAF callbacks bail silently
     // ── Explicit cleanup: each object type knows what to dispose.
     //     DO NOT use a blind disposeGroup walk — nodeCoresInstanced shares
     //     this.sphereGeo (created in constructor, reused across re-renders).
