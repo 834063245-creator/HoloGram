@@ -54,6 +54,7 @@ import {
 import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
 import { SlashPanelController } from './react/SlashPanel';
 import { ChatMessagesPanel } from './react/ChatMessages';
+import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
 
 // ── Constants ──
 
@@ -139,6 +140,9 @@ export class ChatPanel {
   // ── Messages (React-based) ──
   private _chatMessages: ChatMessagesPanel | null = null;
 
+  // ── Prompt shelf (React-based) — ask_user + permission cards ──
+  private _promptShelf: PromptShelfController | null = null;
+
 
 
 
@@ -189,7 +193,62 @@ export class ChatPanel {
     this._chatMessages.messages = this.messages; // shared reference
     this._chatMessages.setCallbacks({
       onCopyText: (text) => navigator.clipboard.writeText(text).catch(() => {}),
-      // ⚡ TODO: wire retry/edit/resend/permission after input+shell React migration
+      onNavigateToNode: (nodeName) => {
+        if (this.starGraph) this.starGraph.focusNode(nodeName);
+      },
+      onEditUserMessage: (msg) => {
+        if (execState.isRunning) { this.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
+        this.inputArea.value = msg.text;
+        this.inputArea.style.height = 'auto';
+        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+        this.inputArea.focus();
+        this.inputArea.selectionStart = this.inputArea.selectionEnd = msg.text.length;
+        this._retractUserMessage(msg);
+      },
+      onResendUserMessage: (msg) => {
+        if (execState.isRunning) { this.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
+        this.inputArea.value = msg.text;
+        this._retractUserMessage(msg);
+        this.sendMessage();
+      },
+      onRetryAssistant: (assistant) => {
+        if (execState.isRunning) { this.addNotice('Agent 正在运行，请先停止再重试', 'warn'); return; }
+        const userMsg = this.messages.find(m => m.role === 'user' && m._id === assistant.respondingTo);
+        const userText = (userMsg && 'text' in userMsg) ? (userMsg as any).text as string : '';
+        if (!userText) return;
+        this.inputArea.value = '';
+        const signal = execState.start();
+        Stream.addTurnSep(this._streamCtx());
+        const agent = this.agent;
+        if (!agent) return;
+        const sessIdx = agent.getSession().length;
+        Session.getTurnPairs().push({ userText, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+        agent.run(signal, userText)
+          .catch((err: any) => {
+            if (!err.message?.includes('aborted')) {
+              this.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
+            }
+          })
+          .finally(() => {
+            execState.done();
+            this.finishTurn();
+          });
+      },
+    });
+    // ── Prompt shelf: unified ask_user + permission cards (above input) ──
+    this._promptShelf = new PromptShelfController(this.panel);
+    // ── ask_user tool → prompt shelf ──
+    bus.on('prompt:ask', (data: {
+      id: string; question: string; header: string;
+      options: { label: string; description: string }[]; multiSelect: boolean;
+      callback: (answer: string[] | null) => void;
+    }) => {
+      if (!this._promptShelf) { data.callback(null); return; }
+      this._promptShelf.showAsk({
+        type: 'ask', id: data.id,
+        question: data.question, header: data.header,
+        options: data.options, multiSelect: data.multiSelect,
+      }).then(data.callback);
     });
     // ── Track user focus — file viewer / file tree / graph selection ──
     bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
@@ -222,6 +281,7 @@ export class ChatPanel {
         this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
         this.inputArea.focus();
         this._updateStatusBar('idle');
+        this._promptShelf?.dismiss(); // ⚡ dismiss ask/permission on stop
         if (this.progressBar) {
           this.progressBar.remove();
           this.progressBar = null;
@@ -335,24 +395,17 @@ export class ChatPanel {
       Anim.killPanelTweens(this._animCtx());
       Anim.summonPanel(this._animCtx());
     }
-    // ⚡ Serialise via execState queue — prevents stacking + properly resets on abort (R5 fix)
+    // ⚡ Use PromptShelf instead of inline message
+    if (!this._promptShelf) {
+      return Promise.resolve({ allow: false, remember: false });
+    }
     return execState.enqueuePerm(() =>
-      new Promise<{ allow: boolean; remember: boolean }>((resolve) => {
-        // Wrap resolve so we can clean up the message from the array
-        const wrappedResolve = (result: { allow: boolean; remember: boolean }) => {
-          // Remove the permission message from the array
-          const idx = this.messages.findIndex(
-            (m) => m.role === 'perm' && (m as PermissionMessage).toolName === toolName
-          );
-          if (idx >= 0) this.messages.splice(idx, 1);
-          resolve(result);
-          this._updateStopButton();
-          this._chatMessages?.bump();
-        };
-        // Push permission message into model — renderer handles the rest
-        this.messages.push(createPermissionMessage(toolName, reason, subject, wrappedResolve));
-        this._chatMessages?.bump();
-        this._userScrolledUp = false;
+      this._promptShelf!.showPermission({
+        type: 'permission',
+        id: `perm-${toolName}-${Date.now()}`,
+        toolName,
+        reason,
+        subject: subject || '',
       })
     );
   }

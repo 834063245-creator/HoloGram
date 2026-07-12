@@ -1,0 +1,130 @@
+    /* ═══════════════════════════════════════════════════════════════
+       PROMPT SHELF — ask_user + permission cards (above input)
+       ═══════════════════════════════════════════════════════════════ */
+    .prompt-shelf {
+      flex-shrink: 0;
+      border-top: 1px solid rgba(40, 60, 100, 0.18);
+      background: rgba(6, 14, 30, 0.72);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    }
+    .prompt-shelf__card {
+      padding: calc(12px * var(--font-scale)) calc(14px * var(--font-scale));
+    }
+    .prompt-shelf__head {
+      display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px;
+    }
+    .prompt-shelf__tag {
+      flex-shrink: 0; padding: 2px 8px;
+      font-family: var(--font-hud); font-size: calc(8px * var(--font-scale));
+      letter-spacing: 1.2px; text-transform: uppercase;
+      color: var(--signal); background: rgba(80, 140, 240, 0.08);
+      border: 1px solid rgba(80, 140, 240, 0.15);
+    }
+    .prompt-shelf__question {
+      flex: 1; font-size: calc(12px * var(--font-scale));
+      color: var(--starlight-dim); line-height: 1.5;
+    }
+    .prompt-shelf__dismiss {
+      flex-shrink: 0; width: 26px; height: 26px; padding: 0;
+      background: transparent; border: 1px solid rgba(255,255,255,0.06);
+      color: var(--text-faint); cursor: pointer; display: flex;
+      align-items: center; justify-content: center;
+      transition: all var(--snap);
+    }
+    .prompt-shelf__dismiss:hover { border-color: rgba(255,255,255,0.15); color: var(--starlight-dim); }
+
+    .prompt-shelf__options {
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .prompt-shelf__option {
+      display: flex; align-items: flex-start; gap: 8px; width: 100%;
+      padding: 8px 10px; text-align: left;
+      font-family: var(--font-body); font-size: calc(12px * var(--font-scale));
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.05);
+      color: var(--starlight-dim); cursor: pointer;
+      transition: all var(--snap);
+    }
+    .prompt-shelf__option:hover {
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.1);
+    }
+    .prompt-shelf__option--on {
+      background: rgba(80, 140, 240, 0.08);
+      border-color: var(--signal-glow);
+      color: var(--signal-bright);
+    }
+    .prompt-shelf__num {
+      flex-shrink: 0; width: 18px; text-align: center;
+      font-family: var(--font-mono); font-size: calc(9px * var(--font-scale));
+      color: var(--text-faint);
+    }
+    .prompt-shelf__opt-body { flex: 1; min-width: 0; }
+    .prompt-shelf__opt-label { display: block; }
+    .prompt-shelf__opt-desc {
+      display: block; margin-top: 2px;
+      font-size: calc(10px * var(--font-scale));
+      color: var(--text-muted);
+    }
+    .prompt-shelf__check {
+      flex-shrink: 0; color: var(--pass); margin-top: 1px;
+    }
+    .prompt-shelf__detail {
+      margin-top: 6px; padding: 5px 10px;
+      font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
+      color: var(--text-dim);
+      background: rgba(10, 20, 40, 0.4);
+      border-left: 2px solid rgba(80, 140, 240, 0.2);
+      line-height: 1.5;
+    }
+    .prompt-shelf__detail-label { color: var(--signal); margin-right: 8px; }
+    .prompt-shelf__detail-text { color: var(--text-dim); }
+    .prompt-shelf__actions {
+      margin-top: 8px; display: flex; gap: 6px;
+    }
+    .prompt-shelf__confirm {
+      flex: 1; padding: 8px; font-size: calc(12px * var(--font-scale)); font-weight: 600;
+      font-family: var(--font-body);
+      background: rgba(80, 140, 240, 0.12);
+      border: 1px solid var(--signal-glow);
+      color: var(--signal); cursor: pointer;
+      transition: all var(--snap);
+    }
+    .prompt-shelf__confirm:hover {
+      background: rgba(80, 140, 240, 0.22);
+      border-color: var(--signal);
+    }
+
+    /* Permission card inside shelf */
+    .prompt-shelf__perm-subject {
+      font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
+      color: rgba(160, 190, 220, 0.55); background: rgba(0,0,0,0.25);
+      padding: 3px 8px; margin-bottom: 8px; word-break: break-all;
+    }
+    .prompt-shelf__perm-reason {
+      font-size: calc(11px * var(--font-scale));
+      color: var(--text-muted); margin-bottom: 8px; line-height: 1.5;
+    }
+    .prompt-shelf__perm-btns {
+      display: flex; gap: 8px;
+    }
+    .prompt-shelf__perm-btn {
+      flex: 1; padding: 7px 12px;
+      font-size: calc(12px * var(--font-scale)); font-weight: 600;
+      font-family: var(--font-body);
+      border: 1px solid transparent; cursor: pointer;
+      transition: all var(--snap); backdrop-filter: blur(4px);
+    }
+    .prompt-shelf__perm-btn--session {
+      background: rgba(61, 165, 93, 0.12); border-color: rgba(61, 165, 93, 0.25); color: var(--pass);
+    }
+    .prompt-shelf__perm-btn--session:hover { background: rgba(61, 165, 93, 0.2); border-color: rgba(61, 165, 93, 0.4); }
+    .prompt-shelf__perm-btn--once {
+      background: rgba(80, 140, 240, 0.12); border-color: rgba(80, 140, 240, 0.2); color: var(--signal);
+    }
+    .prompt-shelf__perm-btn--once:hover { background: rgba(80, 140, 240, 0.2); border-color: rgba(80, 140, 240, 0.35); }
+    .prompt-shelf__perm-btn--deny {
+      background: rgba(217, 68, 68, 0.08); border-color: rgba(217, 68, 68, 0.15); color: var(--fail);
+    }
+    .prompt-shelf__perm-btn--deny:hover { background: rgba(217, 68, 68, 0.15); border-color: rgba(217, 68, 68, 0.3); }
+

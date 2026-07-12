@@ -5,6 +5,9 @@
 // 三模式星图：minimal / standard / full — 独立实例，切换即重建
 // v4.1: Workspace 抽象 — 所有工作区状态统一管理
 
+import './ui/react/base.css';
+import './ui/react/chat.css';
+import './ui/react/panels.css';
 import { invoke, listen, isMockMode } from './bridge';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
