@@ -117,6 +117,9 @@ FIX-*.md
 AGENT_MEMORY_SYSTEM.txt
 .mcp.json.bak
 
+# Plagiarism evidence — keep local, not public
+PLAGIARISM_EVIDENCE.md
+
 # Build log / debug output
 *_warnings.txt
 *_check.txt

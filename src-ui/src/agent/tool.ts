@@ -422,6 +422,10 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
             type: 'string',
             description: 'Full file content to write',
           },
+          _forceGate: {
+            type: 'boolean',
+            description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.',
+          },
         },
         required: ['filePath', 'content'],
       }),
@@ -451,6 +455,10 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
             type: 'boolean',
             description: 'Replace all occurrences instead of just the first (default: false). Use when the old_string appears multiple times.',
             default: false,
+          },
+          _forceGate: {
+            type: 'boolean',
+            description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.',
           },
         },
         required: ['filePath', 'oldString', 'newString'],
@@ -836,6 +844,7 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
             type: 'string',
             description: 'Commit message (conventional commits format recommended)',
           },
+          _forceGate: { type: 'boolean', description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.' },
         },
         required: ['path', 'message'],
       }),
@@ -910,6 +919,7 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute path to the file or directory to delete' },
+          _forceGate: { type: 'boolean', description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.' },
         },
         required: ['path'],
       }),
@@ -939,6 +949,7 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
         properties: {
           from: { type: 'string', description: 'Source path' },
           to: { type: 'string', description: 'Destination path' },
+          _forceGate: { type: 'boolean', description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.' },
         },
         required: ['from', 'to'],
       }),
@@ -954,6 +965,7 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
         properties: {
           path: { type: 'string', description: 'Absolute path to the file/directory to rename' },
           new_name: { type: 'string', description: 'New name (not path, just the name)' },
+          _forceGate: { type: 'boolean', description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.' },
         },
         required: ['path', 'new_name'],
       }),
@@ -983,6 +995,7 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
         properties: {
           path: { type: 'string', description: 'Absolute path to the git repository' },
           branch: { type: 'string', description: 'Branch name to switch to' },
+          _forceGate: { type: 'boolean', description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.' },
         },
         required: ['path', 'branch'],
       }),
@@ -1011,6 +1024,7 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
         properties: {
           path: { type: 'string', description: 'Absolute path to the git repository' },
           file: { type: 'string', description: 'File path to discard changes for (relative to repo root)' },
+          _forceGate: { type: 'boolean', description: 'Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.' },
         },
         required: ['path', 'file'],
       }),
