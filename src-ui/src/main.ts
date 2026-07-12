@@ -12,7 +12,7 @@ import { invoke, listen, isMockMode } from './bridge';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
-import { FileViewer } from './ui/file-viewer';
+
 import { TimelinePanel } from './ui/react/TimelinePanel';
 import { ConstraintsPanel } from './ui/constraints';
 import { HotspotsPanel } from './ui/hotspots';
@@ -29,6 +29,15 @@ import { AgentVisualizer } from './ui/agent-visualizer';
 import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
 import { Workspace, isSamePath } from './workspace';
+// Lazy FileViewer — avoids pulling Monaco (~5MB) into initial bundle
+let _FileViewer: any = null;
+async function loadFileViewer(): Promise<void> {
+  if (!_FileViewer) {
+    const mod = await import('./ui/file-viewer');
+    _FileViewer = mod.FileViewer;
+  }
+}
+function FV(): any { return _FileViewer; }
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 
 // ── Worker layout helper ──
@@ -229,7 +238,7 @@ async function switchWorkspace(
     ws.onLoadingChange = onLoadingChange;
 
     workspace = ws;
-    notifyAllPanels(ws);
+    await notifyAllPanels(ws);
 
     const nodeCount = Array.isArray(ws.graphData.nodes) ? ws.graphData.nodes.length : Object.keys(ws.graphData.nodes || {}).length;
     const genTime = ws.graphData.meta?.generated_at ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString() : '';
@@ -282,7 +291,7 @@ function clearCheckBadge(): void {
   if (existing) existing.remove();
 }
 
-function notifyAllPanels(ws: Workspace): void {
+async function notifyAllPanels(ws: Workspace): Promise<void> {
   tbPath.textContent = ws.path;
   welcome.classList.add('hidden');
   graphEl.classList.remove('hidden');
@@ -291,7 +300,8 @@ function notifyAllPanels(ws: Workspace): void {
   chatPanel.setProjectPath(ws.path);
   timelinePanel.setProjectPath(ws.path);
   hotspotsPanel.setProjectPath(ws.path);
-  FileViewer.get().setProjectPath(ws.path);
+  await loadFileViewer();
+  FV().get().setProjectPath(ws.path);
   if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().load(ws.path);
   window.dispatchEvent(new CustomEvent('workspace:switched'));
 }
@@ -349,8 +359,6 @@ async function init(): Promise<void> {
   starGraph.resize(); // CSS custom props changed → container shrunk → canvas must follow
 
   const { listen } = await import('@tauri-apps/api/event');
-  const { bus: eventBus } = await import('./ui/events');
-  const { FileViewer } = await import('./ui/file-viewer');
 
   await listen('unity-event', (event: any) => {
     const { event: evt, payload } = event.payload;
@@ -496,7 +504,7 @@ async function init(): Promise<void> {
   // Wire navigation / highlight / agent-query commands
   shell.wire({
     navigateToNode: (name) => starGraph.focusNode(name),
-    navigateToFile: (path, line) => FileViewer.get().open(path, { line }),
+    navigateToFile: async (path, line) => { await loadFileViewer(); FV().get().open(path, { line }); },
     highlightFile:   (path) => starGraph.highlightFile(path),
     highlightFolder: (path) => starGraph.highlightFolder(path),
     clearHighlight:  ()    => starGraph.clearFileHighlight(),
@@ -804,7 +812,7 @@ async function init(): Promise<void> {
       else if (hotspotsPanel.isOpen()) { hotspotsPanel.close(); updateTabs(); }
       else if (checkPanel.isOpen()) { checkPanel.close(); updateTabs(); }
       else if (chatPanel.isOpen()) { chatPanel.close(); updateTabs(); }
-      else if (FileViewer.get().isOpen) FileViewer.get().close();
+      else if (FV() && FV().get().isOpen) FV().get().close();
       else starGraph.clearAgentHighlight();
     }
   });

@@ -95,16 +95,7 @@ export interface NoticeMessage {
   level: 'info' | 'warn' | 'error';
 }
 
-export interface PermissionMessage {
-  role: 'perm';
-  _id: MessageId;
-  toolName: string;
-  reason: string;
-  subject: string;
-  resolve: (result: { allow: boolean; remember: boolean }) => void;
-}
-
-export type ChatMessage = UserMessage | AssistantMessage | NoticeMessage | PermissionMessage;
+export type ChatMessage = UserMessage | AssistantMessage | NoticeMessage;
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -140,16 +131,6 @@ export function createNoticeMessage(
   level: NoticeMessage['level'] = 'info',
 ): NoticeMessage {
   return { role: 'notice', _id: nextMsgId(), text, level };
-}
-
-/** Create a permission request message. */
-export function createPermissionMessage(
-  toolName: string,
-  reason: string,
-  subject: string,
-  resolve: (result: { allow: boolean; remember: boolean }) => void,
-): PermissionMessage {
-  return { role: 'perm', _id: nextMsgId(), toolName, reason, subject, resolve };
 }
 
 /** Get the last text part (if any) for streaming append. */

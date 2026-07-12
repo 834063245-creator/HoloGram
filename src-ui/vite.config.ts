@@ -13,6 +13,14 @@ export default defineConfig({
     target: 'es2021',
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          monaco: ['monaco-editor'],
+          three: ['three'],
+        },
+      },
+    },
   },
   server: {
     port: 1420,

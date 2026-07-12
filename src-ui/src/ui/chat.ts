@@ -41,13 +41,11 @@ import {
   type AssistantPart,
   type MessageId,
   type FileAttachment,
-  type PermissionMessage,
   nextMsgId,
   resetMsgIdCounter,
   createUserMessage,
   createAssistantMessage,
   createNoticeMessage,
-  createPermissionMessage,
   lastTextPart,
   findToolPart,
 } from './message-model';
@@ -379,11 +377,7 @@ export class ChatPanel {
     setTimeout(() => this.sendMessage(), delay);
   }
 
-  /** Render a permission request inline in the chat — no modal, no outside-click-to-deny.
-   *  ponytail: serialises concurrent Ask requests — only one card shown at a time.
-   *  Subsequent callers queue behind the active card, preventing card-stacking flicker
-   *  when parent + sub-agent both trigger permission dialogs simultaneously.
-   *  ⚡ Refactored: queue managed by ExecutionState.enqueuePerm() */
+  /** Render a permission request via PromptShelf (above input, not inline). */
 
   showPermissionCard(
     toolName: string,
