@@ -210,21 +210,17 @@ const ChatMessagesApp: React.FC<{
   const lastMessageCount = useRef(messages.length);
   const lastScrollHeight = useRef(0);
 
-  // Auto-scroll: scroll to bottom when new messages arrive, unless user scrolled up
+  // Force React to re-render on version bump (mutation-based streaming triggers this)
+  const [, setRenderTick] = useState(0);
+  useEffect(() => { setRenderTick(t => t + 1); }, [version]);
+
+  // Auto-scroll: follow content during streaming, unless user scrolled up
   useEffect(() => {
     const list = listRef.current;
     if (!list || messages.length === 0) return;
-
-    if (userScrolledUp) {
-      // Preserve scroll position - adjust for new content above
-      if (lastScrollHeight.current > 0) {
-        const offset = list.scrollHeight - lastScrollHeight.current;
-        list.scrollTop += offset;
-      }
-    } else {
+    if (!userScrolledUp) {
       list.scrollTop = list.scrollHeight;
     }
-    lastScrollHeight.current = list.scrollHeight;
   }, [version]);
 
   // Reset userScrolledUp when a new turn starts (new user message)
