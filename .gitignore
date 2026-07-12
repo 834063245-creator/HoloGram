@@ -120,6 +120,9 @@ AGENT_MEMORY_SYSTEM.txt
 # Plagiarism evidence — keep local, not public
 PLAGIARISM_EVIDENCE.md
 
+# Windows reserved device name — accidental creation by tools redirecting output
+nul
+
 # Build log / debug output
 *_warnings.txt
 *_check.txt

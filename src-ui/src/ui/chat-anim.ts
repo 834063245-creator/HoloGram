@@ -30,7 +30,7 @@ export interface AnimContext {
 
   // Callbacks to ChatPanel methods
   updateFooter: () => void;
-  scrollBottom: () => void;
+  // ⚡ React handles scrolling internally
   resetPillBadge: () => void;
   closeHistory: () => void;
   hideSlashPanel: () => void;
@@ -251,7 +251,6 @@ export function summonPanel(ctx: AnimContext): void {
   if (execState.isRunning) ctx.panel.classList.remove('chat-pill-running');
   ctx.resetPillBadge();
   morphToMode(ctx, 'panel', 'chat-open');
-  ctx.scrollBottom();
 }
 
 /** Panel/HUD → Input: collapse card to floating input bar */

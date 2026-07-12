@@ -86,9 +86,7 @@ export interface SessionContext {
   getStreamingAssistantId: () => MessageId | null;
   setStreamingAssistantId: (id: MessageId | null) => void;
 
-  // DOM sync & scroll
-  scrollBottom: () => void;
-  syncMessagesToDOM: () => void;
+  // ⚡ React handles rendering/scrolling
 
   // Streaming helpers
   flushReasoning: () => void;
@@ -303,7 +301,7 @@ function restoreMessages(ctx: SessionContext): void {
   const cachedMessages = sessionMessageModels.get(sid);
   if (cachedMessages) {
     ctx.setMessages(cachedMessages);
-    ctx.syncMessagesToDOM();
+
     return;
   }
 
@@ -312,7 +310,7 @@ function restoreMessages(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (agent) {
     _rebuildMessagesFromSession(ctx);
-    ctx.syncMessagesToDOM();
+
     // Re-wire node-link click handlers
     ctx.msgList.querySelectorAll('.node-link').forEach((link) => {
       link.addEventListener('click', (e) => {
@@ -326,7 +324,7 @@ function restoreMessages(ctx: SessionContext): void {
       });
     });
   }
-  ctx.scrollBottom();
+
 }
 
 // ── Session persistence — one file per session, localStorage backup ──
@@ -682,8 +680,7 @@ function renderRestoredSession(ctx: SessionContext): void {
   const agent = sessions[activeIdx]?.agent;
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
-  ctx.syncMessagesToDOM();
-
+  // ⚡ React renders via bumpMessages, no DOM sync needed
   // Wire up turnPairs userBubble refs
   let pairIdx = 0;
   const userRows = ctx.msgList.querySelectorAll<HTMLElement>('.msg-user-row');
@@ -707,7 +704,7 @@ function renderRestoredSession(ctx: SessionContext): void {
     });
   });
 
-  ctx.scrollBottom();
+
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
 
@@ -871,7 +868,6 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
   if (msg.sessionIndex >= 0) {
     sessions[activeIdx]?.agent?.retractTurnAt(msg.sessionIndex);
   }
-  ctx.syncMessagesToDOM();
 }
 
 // ── Conversation export ──

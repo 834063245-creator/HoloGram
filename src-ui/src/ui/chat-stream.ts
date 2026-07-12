@@ -10,10 +10,6 @@ import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { iconHtml } from './icons';
 import { execState } from '../agent/execution-state';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import hljs from 'highlight.js';
-import { escapeHtml, showCopiedFeedback } from './chat-utils';
 import type { StarGraph } from './graph';
 import type {
   ChatMessage,
@@ -31,7 +27,6 @@ import {
   lastTextPart,
   findToolPart,
 } from './message-model';
-import { renderMessage, type RenderCallbacks } from './message-renderer';
 
 // ── Turn pair type (shared with chat-session) ──
 type TurnPair = {
@@ -179,7 +174,6 @@ export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info
     ctx.getMessages().push(createNoticeMessage(text, level));
   }
   _scheduleSync(ctx);
-  scrollBottom(ctx);
 }
 
 // ── Public notice (thin wrapper) ──
@@ -218,212 +212,9 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
 }
 
 // ═══════════════════════════════════════════════════════════
-// _renderCallbacks
 // ═══════════════════════════════════════════════════════════
-
-/** Build the renderer callback bag — resolves user text, handles edit/resend. */
-export function _renderCallbacks(ctx: StreamContext): RenderCallbacks {
-  return {
-    isReasoningExpanded: (idx) => ctx.getExpandedReasoning().has(idx),
-    onToggleReasoning: (idx) => {
-      if (ctx.getExpandedReasoning().has(idx)) ctx.getExpandedReasoning().delete(idx);
-      else ctx.getExpandedReasoning().add(idx);
-    },
-    onEditUserMessage: (msg) => {
-      if (ctx.getRunning()) { ctx.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
-      ctx.inputArea.value = msg.text;
-      ctx.inputArea.style.height = 'auto';
-      ctx.inputArea.style.height = Math.min(ctx.inputArea.scrollHeight, 120) + 'px';
-      ctx.inputArea.focus();
-      ctx.inputArea.selectionStart = ctx.inputArea.selectionEnd = msg.text.length;
-      ctx._retractUserMessage(msg);
-    },
-    onResendUserMessage: (msg) => {
-      if (ctx.getRunning()) { ctx.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
-      ctx.inputArea.value = msg.text;
-      ctx._retractUserMessage(msg);
-      ctx.sendMessage();
-    },
-    onRetryAssistant: (assistant, _userText) => {
-      if (ctx.getRunning()) { ctx.addNotice('Agent 正在运行，请先停止再重试', 'warn'); return; }
-      const pair = ctx.getTurnPairs().find(
-        (tp) =>
-          tp.assistantBubble &&
-          tp.assistantBubble.dataset.messageId === assistant._id,
-      );
-      const userText = pair?.userText || '';
-      if (!userText) return;
-      ctx.inputArea.value = '';
-      const signal = execState.start();
-      addTurnSep(ctx);
-      const agent = ctx.getAgent();
-      if (!agent) return;
-      const sessIdx = agent.getSession().length;
-      ctx.getTurnPairs().push({
-        userText,
-        userBubble: null,
-        assistantBubble: null,
-        sessionIndex: sessIdx,
-      });
-      agent
-        .run(signal, userText)
-        .catch((err: any) => {
-          if (!err.message?.includes('aborted')) {
-            ctx.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
-          }
-        })
-        .finally(() => {
-          execState.done();
-          finishTurn(ctx);
-        });
-    },
-    onCopyText: (text, button) => {
-      navigator.clipboard.writeText(text).then(() => showCopiedFeedback(button, 12)).catch(() => {});
-    },
-    onToggleToolCard: (card) => {
-      card.classList.toggle('tool-expanded');
-    },
-  };
-}
-
+// _scheduleSync
 // ═══════════════════════════════════════════════════════════
-// _rerenderMessageAt
-// ═══════════════════════════════════════════════════════════
-
-/** Re-render a single message at the given index (in-place DOM replace). */
-export function _rerenderMessageAt(ctx: StreamContext, index: number): void {
-  const msg = ctx.getMessages()[index];
-  if (!msg) return;
-  const callbacks = _renderCallbacks(ctx);
-  const el = renderMessage(msg, callbacks);
-  el.dataset.messageId = msg._id;
-  const children = ctx.msgList.children;
-  if (index < children.length) {
-    children[index].replaceWith(el);
-  } else {
-    ctx.msgList.appendChild(el);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// _syncMessagesToDOM / _doSyncMessagesToDOM / _scheduleSync
-// ═══════════════════════════════════════════════════════════
-
-/** Full sync: rebuild DOM from messages[]. Efficient for streaming (only last changes). */
-export function _syncMessagesToDOM(ctx: StreamContext): void {
-  if (ctx.getStreamingAssistantId()) {
-    if (ctx.getSyncRafId() !== null) return;
-    ctx.setSyncRafId(requestAnimationFrame(() => {
-      ctx.setSyncRafId(null);
-    ctx.bumpMessages?.();
-    }));
-    return;
-  }
-  _doSyncMessagesToDOM(ctx);
-}
-
-/** Actual DOM sync — skipped when React handles rendering via bumpMessages. */
-export function _doSyncMessagesToDOM(ctx: StreamContext): void {
-  if (ctx.bumpMessages) return; // ⚡ React renders via bumpMessages
-  const callbacks = _renderCallbacks(ctx);
-  const msgs = ctx.getMessages();
-  const msgCount = msgs.length;
-
-  // Count non-injected children (task notifications are injected, rest is messages)
-  let msgChildCount = 0;
-  for (const child of ctx.msgList.children) {
-    if (!(child instanceof Element && child.classList.contains('task-notification'))) {
-      msgChildCount++;
-    }
-  }
-
-  const sid = ctx.getStreamingAssistantId();
-
-  // If only the last message changed (streaming), re-render just that
-  if (
-    msgCount === msgChildCount &&
-    msgCount > 0 &&
-    sid
-  ) {
-    const lastIdx = msgCount - 1;
-    const lastMsg = msgs[lastIdx];
-    if (lastMsg.role === 'assistant' && lastMsg._id === sid) {
-      const domIdx = ctx.msgList.children.length - 1;
-      if (domIdx >= 0) {
-        const oldEl = ctx.msgList.children[domIdx] as HTMLElement;
-        const el = renderMessage(lastMsg, callbacks);
-        el.dataset.messageId = lastMsg._id;
-        // Keep reasoning blocks open if they were open before
-        const wasOpen = oldEl.querySelector('.msg-reasoning-open');
-        if (wasOpen) {
-          for (const block of el.querySelectorAll('.msg-reasoning')) {
-            block.querySelector('.msg-reasoning-content')?.classList.add('msg-reasoning-open');
-            const tgl = block.querySelector('.msg-reasoning-toggle');
-            if (tgl) tgl.innerHTML = `${iconHtml('chevron-down')} 收起思考`;
-          }
-        }
-        oldEl.replaceWith(el);
-        scrollBottom(ctx);
-        return;
-      }
-    }
-  }
-
-  // Snapshot scroll position before rebuild
-  const savedScrollTop = ctx.msgList.scrollTop;
-  const savedScrollHeight = ctx.msgList.scrollHeight;
-  const wasAtBottom = (savedScrollHeight - savedScrollTop - ctx.msgList.clientHeight) <= 40;
-
-  // Full rebuild — preserve injected siblings (task notifications only;
-  // permission cards are now first-class messages in the model, not injects)
-  const existing = Array.from(ctx.msgList.children);
-
-  const injects: { el: Element; afterIdx: number }[] = [];
-  for (let i = 0; i < existing.length; i++) {
-    const el = existing[i];
-    if (el.classList.contains('task-notification')) {
-      injects.push({ el, afterIdx: i - 1 });
-      existing.splice(i, 1);
-      i--;
-    }
-  }
-
-  for (let i = 0; i < msgCount; i++) {
-    const msg = msgs[i];
-    const el = renderMessage(msg, callbacks);
-    el.dataset.messageId = msg._id;
-    if (i < existing.length) {
-      existing[i].replaceWith(el);
-      existing[i] = el;
-    } else {
-      ctx.msgList.appendChild(el);
-    }
-  }
-
-  // Remove excess children (skip injects: task notifications)
-  while (ctx.msgList.children.length > msgCount) {
-    const last = ctx.msgList.lastChild;
-    if (last instanceof Element && last.classList.contains('task-notification')) {
-      break;
-    }
-    last?.remove();
-  }
-
-  // Re-insert preserved injects
-  for (const { el, afterIdx } of injects) {
-    const ref = ctx.msgList.children[afterIdx + 1] || null;
-    ctx.msgList.insertBefore(el, ref);
-  }
-
-  // Restore scroll position
-  if (wasAtBottom || !ctx.getUserScrolledUp()) {
-    scrollBottom(ctx);
-  } else {
-    const newHeight = ctx.msgList.scrollHeight;
-    const offset = newHeight - savedScrollHeight;
-    ctx.msgList.scrollTop = Math.max(0, savedScrollTop + offset);
-  }
-}
 
 /** rAF-throttled sync — avoids O(n²) re-render on high-frequency streams. */
 export function _scheduleSync(ctx: StreamContext): void {
@@ -463,26 +254,24 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
     case EventKind.Reasoning:
       if (ev.text) {
         const isFirst = !ctx.getStreamingAssistantId();
-        _appendReasoningPart(ctx, ev.text);
-        if (isFirst) _syncMessagesToDOM(ctx);
-        else _scheduleSync(ctx);
-      }
+                  _appendReasoningPart(ctx, ev.text);
+          ctx.bumpMessages?.();
+        }
       break;
 
     case EventKind.Text:
       if (ev.text) {
         const isFirst = !ctx.getStreamingAssistantId();
-        _appendTextPart(ctx, ev.text);
-        if (isFirst) _syncMessagesToDOM(ctx);
-        else _scheduleSync(ctx);
-      }
+                  _appendTextPart(ctx, ev.text);
+          ctx.bumpMessages?.();
+        }
       break;
 
     case EventKind.Message:
       if (ev.text) {
         _finaliseTextPart(ctx);
       }
-      _syncMessagesToDOM(ctx);
+      ctx.bumpMessages?.();
       ctx.linkifyNodeNames();
       break;
 
@@ -496,7 +285,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
           t.read_only ?? false,
           t.partial ? 'pending' : 'running',
         );
-        _syncMessagesToDOM(ctx);
+        ctx.bumpMessages?.();
       }
       break;
 
@@ -524,7 +313,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
           t.err,
           t.truncated,
         );
-        _syncMessagesToDOM(ctx);
+        ctx.bumpMessages?.();
       }
       break;
 
@@ -544,7 +333,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         // Note: totalTokensUsed updated by _updateTokens callback internally
         ctx.setLastUsageText(label);
         ctx.updateFooter();
-        _syncMessagesToDOM(ctx);
+        ctx.bumpMessages?.();
       }
       break;
 
@@ -553,7 +342,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       break;
 
     case EventKind.SessionChanged:
-      _syncMessagesToDOM(ctx);
+      ctx.bumpMessages?.();
       break;
 
     default:
@@ -583,13 +372,7 @@ export function appendUserBubble(
   const pair = ctx.getTurnPairs()[ctx.getTurnPairs().length - 1];
   if (pair) pair.userBubble = null;
 
-  _syncMessagesToDOM(ctx);
-
-  const rows = ctx.msgList.querySelectorAll('.msg-user-row');
-  const row = rows[rows.length - 1] as HTMLElement | undefined;
-  if (row && pair) pair.userBubble = row;
-
-  if (row && !ctx.bumpMessages) ctx.animateBubbleIn(row.querySelector('.msg-bubble.user') as HTMLElement);
+  ctx.bumpMessages?.();
 }
 
 export function addTurnSep(_ctx: StreamContext): void {
@@ -604,13 +387,7 @@ export function addTurnSep(_ctx: StreamContext): void {
 /** Finalize current assistant bubble — link to latest turnPair, reset streaming state. */
 export function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
-  _syncMessagesToDOM(ctx);
-  if (ctx.bumpMessages) return; // ⚡ React: no DOM queries needed
-  if (ctx.getTurnPairs().length > 0) {
-    const bubbles = ctx.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
-    const lastBubble = bubbles[bubbles.length - 1];
-    if (lastBubble) ctx.getTurnPairs()[ctx.getTurnPairs().length - 1].assistantBubble = lastBubble;
-  }
+  ctx.bumpMessages?.();
 }
 
 export function finishTurn(ctx: StreamContext): void {
@@ -619,17 +396,4 @@ export function finishTurn(ctx: StreamContext): void {
   if (pp) {
     ctx.saveActiveSession(pp).catch(() => {});
   }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Scroll
-// ═══════════════════════════════════════════════════════════
-
-export function scrollBottom(ctx: StreamContext): void {
-  if (ctx.bumpMessages) return; // ⚡ React handles scrolling internally
-  if (ctx.getUserScrolledUp()) return;
-  requestAnimationFrame(() => {
-    if (ctx.getUserScrolledUp()) return;
-    ctx.msgList.scrollTop = ctx.msgList.scrollHeight;
-  });
 }
