@@ -21,6 +21,7 @@ import { SessionStore } from './session-store';
 import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats, maybeTune, type CompactionConfig } from './compaction-model';
 import { invoke } from '../bridge';
 import { StreamingToolExecutor } from './streaming-executor';
+import { execState } from './execution-state';
 
 // Shared types — also used internally by this file
 import {
@@ -196,7 +197,7 @@ export class Agent {
 
   setSession(msgs: Message[]): void {
     this.session = msgs;
-    ++this.sessionGen;
+    execState.bumpVersion();
   }
 
   /** Fire-and-forget session save — never blocks the agent loop. */
@@ -328,7 +329,7 @@ export class Agent {
       end++;
     }
     this.session.splice(sessionIndex, end - sessionIndex);
-    ++this.sessionGen;
+    execState.bumpVersion();
     bus.emit('agent:event', { kind: EventKind.SessionChanged });
   }
 
@@ -416,7 +417,7 @@ export class Agent {
       ? this.session[0]
       : null;
     this.session = sys ? [sys] : [];
-    ++this.sessionGen;
+    execState.bumpVersion();
     this.cacheHitTotal = 0;
     this.cacheMissTotal = 0;
     this.lastUsage = undefined;
@@ -565,14 +566,12 @@ ${goal}
    *  whose session already ends with the fork directive. */
   private async runLoop(signal: AbortSignal): Promise<void> {
     const turnStart = performance.now();
-    const genAtStart = this.sessionGen;
     log.info('agent', 'turn started', { model: this.prov.name() });
     bus.emit('agent:event', { kind: EventKind.TurnStarted });
 
     for (let step = 0; ; step++) {
-      // 每轮循环前检查中止信号与会话替换
+      // Abort check — signal covers user stop + session replacement (via execState.stop)
       if (signal.aborted) throw new Error('aborted');
-      if (this.sessionGen !== genAtStart) throw new Error('aborted');
 
       // Apply pending user inserts at the safe boundary (after tool results committed)
       this._applyPendingInserts();
@@ -1082,7 +1081,7 @@ ${goal}
   // ---- Context window management ----
 
   private compactRunning = false;
-  private sessionGen = 0;
+  // ⚡ sessionGen migrated to ExecutionState.sessionVersion
 
   /** Estimate token count from message character count.
    *  ponytail: ~3.5 chars/token is conservative for CJK+code mix.
@@ -1141,7 +1140,7 @@ ${goal}
           ...msgs.slice(Math.max(head, msgs.length - tailCount)),
         ];
         this.session = truncated;
-        ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
         this.recordCompactionEvent({
           ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
           summaryInputTokens: 0, summaryOutputTokens: 0,
@@ -1168,7 +1167,7 @@ ${goal}
           ...msgs.slice(Math.max(head, msgs.length - tailCount)),
         ];
         this.session = truncated;
-        ++this.sessionGen; this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
         this.recordCompactionEvent({
           ts: Date.now(), regionMsgCount: region.length, regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
           summaryInputTokens: 0, summaryOutputTokens: 0,
@@ -1187,7 +1186,7 @@ ${goal}
         ...msgs.slice(start),
       ];
       this.session = compacted;
-      ++this.sessionGen;
+      execState.bumpVersion();
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
@@ -1249,7 +1248,7 @@ ${goal}
 
     // Run compaction asynchronously (non-blocking for the turn)
     const msgs = this.session;
-    const genAtStart = ++this.sessionGen;
+    const genAtStart = execState.bumpVersion();
     const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
     const tailCount = Math.max(4, this.recentKeep);
     const start = Math.max(head + 4, msgs.length - tailCount);
@@ -1273,7 +1272,7 @@ ${goal}
     const region = msgs.slice(head, start);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region).then((summary) => {
-      if (genAtStart !== this.sessionGen) { this.compactRunning = false; return; } // session replaced, discard
+      if (genAtStart !== execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
       if (!summary) { this.compactRunning = false; return; }
       const compacted: Message[] = [
         ...msgs.slice(0, head),
@@ -1281,7 +1280,7 @@ ${goal}
         ...msgs.slice(start),
       ];
       this.session = compacted;
-      ++this.sessionGen;
+      execState.bumpVersion();
       this.stormSig = '';
       this.stormCount = 0;
 
@@ -1321,7 +1320,7 @@ ${goal}
         text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
       });
     }).catch(() => {
-      if (genAtStart !== this.sessionGen) { this.compactRunning = false; return; } // session replaced, discard
+      if (genAtStart !== execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
       this.compactStuck = true;
       this.compactRunning = false;
       bus.emit('agent:event', {
