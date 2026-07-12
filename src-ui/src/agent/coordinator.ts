@@ -33,6 +33,7 @@ interface PendingAgent {
   onMessage?: MessageCallback;
   callId?: string; // tool call ID for event correlation
   finished?: boolean; // guard against double-finish (timeout + promise race)
+  abortController: AbortController; // ⚡ R4 fix: allows stopAll() to abort the actual runFn
 }
 
 export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
@@ -109,8 +110,9 @@ export class SubAgentPool {
       startedAt: Date.now(),
     };
 
+    const abortController = new AbortController(); // ⚡ R4 fix
     const promise = new Promise<string>((resolve) => {
-      this.agents.set(id, { handle, resolve, onMessage, callId });
+      this.agents.set(id, { handle, resolve, onMessage, callId, abortController });
     });
 
     const cleanup = () => {
@@ -143,6 +145,7 @@ export class SubAgentPool {
     // Timeout
     const ms = timeoutMs ?? this.defaultTimeoutMs;
     this.timeouts.set(id, setTimeout(() => {
+      abortController.abort(); // ⚡ R4: abort runFn on timeout too
       finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`);
     }, ms));
 
@@ -177,6 +180,8 @@ export class SubAgentPool {
     if (!pending) return false;
     const t = this.timeouts.get(id);
     if (t) { clearTimeout(t); this.timeouts.delete(id); }
+    // ⚡ R4 fix: abort the actual runFn before resolving
+    pending.abortController.abort();
     pending.handle.status = SubAgentStatus.Stopped;
     pending.handle.error = 'stopped by user';
     this._addCompleted(pending.handle);
@@ -192,6 +197,8 @@ export class SubAgentPool {
     for (const [id, pending] of this.agents) {
       const t = this.timeouts.get(id);
       if (t) { clearTimeout(t); this.timeouts.delete(id); }
+      // ⚡ R4 fix: abort the actual runFn before resolving
+      pending.abortController.abort();
       pending.handle.status = SubAgentStatus.Stopped;
       pending.handle.error = 'stopped by user';
       this._addCompleted(pending.handle);
@@ -223,6 +230,12 @@ export class SubAgentPool {
 
   get runningCount(): number {
     return this.agents.size;
+  }
+
+  /** ⚡ R4 fix: get the AbortSignal for a running sub-agent.
+   *  Caller merges this with their own signal via AbortSignal.any(). */
+  getSubSignal(id: string): AbortSignal | undefined {
+    return this.agents.get(id)?.abortController.signal;
   }
 
   /** Wait for all running agents to complete.

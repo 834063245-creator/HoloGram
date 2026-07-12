@@ -663,12 +663,12 @@ export class Workspace {
       // Wire pool reference into Agent for cascade abort / stopAll
       agentRef.setSubAgentPool(pool);
 
-      registry.register(createSubAgentTool(
-        async (description, prompt, onProgress, mode) =>
-          agentRef.spawnSubAgent(
-            this._agentAbort?.signal ?? new AbortController().signal,
-            description, prompt, onProgress, mode,
-          ),
+            registry.register(createSubAgentTool(
+        async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
+          const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
+          const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
+          return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
+        },
         pool,
       ));
       // Register batch stop tool
@@ -812,8 +812,11 @@ export class Workspace {
         {
           const agentRef = newAgent;
           r.register(createSubAgentTool(
-            async (description, prompt, onProgress, mode) =>
-              agentRef.spawnSubAgent(new AbortController().signal, description, prompt, onProgress, mode),
+            async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
+              const parentSig = new AbortController().signal;
+              const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
+              return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
+            },
           ));
         }
         // Compaction stats tool
