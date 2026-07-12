@@ -13,6 +13,7 @@ import { iconHtml } from './icons';
 import { bus } from './events';
 import { shell } from './app-shell';
 import { cancelPendingApprovals } from '../agent/permission';
+import { execState } from '../agent/execution-state';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { invoke } from '../bridge';
 import type { ToolSchema } from '../provider/types';
@@ -83,7 +84,7 @@ export class ChatPanel {
   private starGraph: StarGraph | null = null;
   private abortCtrl: AbortController | null = null;
   private running = false;
-  private _permCardCount = 0; // live permission cards awaiting user decision
+  // ⚡ _permCardCount migrated to ExecutionState — use execState.permCardCount
 
   // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
   // All chat messages are stored here. The renderer builds DOM from this array.
@@ -189,6 +190,8 @@ export class ChatPanel {
         this.refreshHint();
       }
     });
+    // ⚡ ExecutionState → UI sync: auto-update stop button when state changes
+    execState.onChange(() => this._updateStopButton());
     // ── Detect graph interaction to auto-dismiss the panel ──
     // ── Receive Agent events via bus (decoupled from Agent class) ──
     bus.on('agent:event', (ev: AgentEvent) => this.renderEvent(ev));
@@ -282,8 +285,8 @@ export class ChatPanel {
   /** Render a permission request inline in the chat — no modal, no outside-click-to-deny.
    *  ponytail: serialises concurrent Ask requests — only one card shown at a time.
    *  Subsequent callers queue behind the active card, preventing card-stacking flicker
-   *  when parent + sub-agent both trigger permission dialogs simultaneously. */
-  private _permQueue: Promise<void> = Promise.resolve();
+   *  when parent + sub-agent both trigger permission dialogs simultaneously.
+   *  ⚡ Refactored: queue managed by ExecutionState.enqueuePerm() */
 
   showPermissionCard(
     toolName: string,
@@ -295,14 +298,11 @@ export class ChatPanel {
       Anim.killPanelTweens(this._animCtx());
       Anim.summonPanel(this._animCtx());
     }
-    // Serialise via queue to prevent stacked cards
-    const prev = this._permQueue;
-    return prev.then(() =>
+    // ⚡ Serialise via execState queue — prevents stacking + properly resets on abort (R5 fix)
+    return execState.enqueuePerm(() =>
       new Promise<{ allow: boolean; remember: boolean }>((resolve) => {
-        this._permCardCount++;
         // Wrap resolve so we can clean up the message from the array
         const wrappedResolve = (result: { allow: boolean; remember: boolean }) => {
-          this._permCardCount = Math.max(0, this._permCardCount - 1);
           // Remove the permission message from the array
           const idx = this.messages.findIndex(
             (m) => m.role === 'perm' && (m as PermissionMessage).toolName === toolName
@@ -318,7 +318,7 @@ export class ChatPanel {
         this._userScrolledUp = false;
         this.scrollBottom();
       })
-    ).finally(() => { /* queue advances via .then chain */ });
+    );
   }
 
   close(): void {
@@ -1076,44 +1076,38 @@ export class ChatPanel {
   }
 
   private abort(): void {
-    if (this.abortCtrl) {
-      this.abortCtrl.abort();
-      // 级联中止所有子Agent
-      this.agent?.cascadeAbort();
-      // 解散所有待审批弹窗（防止权限门死锁）
-      cancelPendingApprovals();
-      this._permCardCount = 0;
-      // 立即视觉反馈 — 不等 .finally()，防止卡死时 UI 无响应
-      this.inputArea.disabled = false;
-      this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
-      this.addNotice('正在中止…', 'info');
-      // 安全超时：3 秒内若 Agent 没响应，强制复位
-      const safety = setTimeout(() => {
-        if (this.running) {
-          this.running = false;
-          this.abortCtrl = null;
-          this._updateStopButton();
-          this.finishTurn();
-          this.addNotice('已强制中止（超时）', 'warn');
-        }
-      }, 3000);
-      // 如果 Agent 正常响应了，取消安全超时
-      const poll = setInterval(() => {
-        if (!this._isBusy()) {
-          clearTimeout(safety);
-          clearInterval(poll);
-        }
-      }, 200);
-      this.abortCtrl = null;
-      this._updateStopButton();
-    }
+    if (!execState.isRunning) return;
+    
+    // ⚡ 统一状态管理：停止主Agent + 级联子Agent + 清权限队列
+    execState.stop();
+    this.agent?.cascadeAbort(); // agent-specific cleanup (isolation worktrees, etc.)
+    
+    // DOM-specific cleanup (execState doesn't own UI)
+    this.inputArea.disabled = false;
+    this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
+    this.addNotice('正在中止…', 'info');
+    
+    // 安全超时：3 秒内若 Agent 没响应，强制复位
+    const safety = setTimeout(() => {
+      if (execState.isRunning) {
+        execState.forceReset();
+        this.finishTurn();
+        this.addNotice('已强制中止（超时）', 'warn');
+      }
+    }, 3000);
+    // 如果 Agent 正常响应了，取消安全超时
+    const poll = setInterval(() => {
+      if (!execState.isBusy) {
+        clearTimeout(safety);
+        clearInterval(poll);
+      }
+    }, 200);
+    this._updateStopButton();
   }
 
-  /** Is ANY agent (main or sub) currently working? Single source of truth. */
+  /** Is ANY agent (main or sub) currently working? Delegates to ExecutionState. */
   private _isBusy(): boolean {
-    return this.running
-      || (this.agent?.runningSubAgentCount?.() ?? 0) > 0
-      || this._permCardCount > 0;
+    return execState.isBusy;
   }
 
   /** Sync stop button visibility to _isBusy() truth — call whenever state may have changed. */
