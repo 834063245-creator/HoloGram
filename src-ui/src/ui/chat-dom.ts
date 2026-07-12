@@ -109,7 +109,7 @@ export interface DomContext {
 
   // Tool
   _toolSchemas: ToolSchema[];
-  toolUsage: Map<string, number>;
+  toolUsage: Record<string, number>;
   toolHistory: Array<{ name: string; args: string; ts: number }>;
 
   // 输入历史
@@ -614,13 +614,13 @@ export function renderToolsView(ctx: DomContext): void {
     ? ctx._toolSchemas.map(t => ({ name: t.name, desc: (t.description||'').split('\n')[0].slice(0,60), cat: ctx.toolCategory(t.name) }))
     : [];
 
-  const maxUsage = Math.max(1, ...Array.from(ctx.toolUsage.values()));
+  const maxUsage = Math.max(1, ...Object.values(ctx.toolUsage));
 
   let html = '<div class="chat-tools-view">';
   html += '<div class="chat-tools-section-title">工具清单</div>';
   html += '<div class="chat-tools-grid">';
   for (const t of tools) {
-    const count = ctx.toolUsage.get(t.name) || 0;
+    const count = ctx.toolUsage[t.name] || 0;
     const pct = (count / maxUsage) * 100;
     html += `<div class="chat-tool-card tool-cat-${t.cat}" title="${t.name} — ${t.desc}">
       <div class="chat-tool-card-name">${t.name}</div>
@@ -696,7 +696,7 @@ export function renderContextView(ctx: DomContext): void {
   html += '<div class="chat-context-section-label">会话统计</div>';
   const msgCount = agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
   const turnCount = Session.getTurnPairs().length;
-  const toolTotal = Array.from(ctx.toolUsage.values()).reduce((a, b) => a + b, 0);
+  const toolTotal = Object.values(ctx.toolUsage).reduce((a, b) => a + b, 0);
   html += `<div style="font-family:var(--font-mono);font-size: calc(11px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
     <span>${msgCount} 条消息</span>
     <span>${turnCount} 轮对话</span>
