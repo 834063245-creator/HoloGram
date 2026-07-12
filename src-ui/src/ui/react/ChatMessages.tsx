@@ -273,15 +273,12 @@ const ChatMessagesApp: React.FC<{
   return (
     <div className="chat-messages" ref={listRef}>
       {messages.map(msg => {
-        const key = (msg.role === 'assistant' && (msg as AssistantMessage).status === 'streaming')
-          ? `${msg._id}-${version}`
-          : msg._id;
         switch (msg.role) {
           case 'user':
-            return <UserBubble key={key} msg={msg} onEdit={callbacks.onEditUserMessage} onResend={callbacks.onResendUserMessage} />;
+            return <UserBubble key={msg._id} msg={msg} onEdit={callbacks.onEditUserMessage} onResend={callbacks.onResendUserMessage} />;
           case 'assistant':
             return (
-              <AssistantBubble key={key} msg={msg}
+              <AssistantBubble key={msg._id} msg={msg}
                 expandedTools={expandedTools} expandedReasoning={expandedReasoning}
                 onToggleTool={toggleTool} onToggleReasoning={toggleReasoning}
                 onCopy={callbacks.onCopyText ? () => callbacks.onCopyText!(msg.parts.filter(p => p.type === 'text').map(p => (p as TextPart).text).join('\n')) : undefined}

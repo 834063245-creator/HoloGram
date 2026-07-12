@@ -181,8 +181,13 @@ export class ChatPanel {
     this.container = container;
     this.buildDOM();
 
-    // ⚡ React-based message list — new array ref each render to force React diff
-    this._chatMessages = new ChatMessagesPanel(this.msgList, () => [...this.messages]);
+    // ⚡ React-based message list — own container, old msgList hidden
+    const reactRoot = document.createElement('div');
+    reactRoot.className = 'chat-messages';
+    this.msgList.style.display = 'none';
+    this.msgList.parentElement?.insertBefore(reactRoot, this.msgList);
+    // Deep copy: React needs new object refs on each render to detect streaming mutations
+    this._chatMessages = new ChatMessagesPanel(reactRoot, () => JSON.parse(JSON.stringify(this.messages)));
     // ── Track user focus — file viewer / file tree / graph selection ──
     bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
     bus.on('navigate:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });

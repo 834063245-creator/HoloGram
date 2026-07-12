@@ -322,8 +322,9 @@ export function _syncMessagesToDOM(ctx: StreamContext): void {
   _doSyncMessagesToDOM(ctx);
 }
 
-/** Actual DOM sync — incremental during streaming, full rebuild otherwise. */
+/** Actual DOM sync — skipped when React handles rendering via bumpMessages. */
 export function _doSyncMessagesToDOM(ctx: StreamContext): void {
+  if (ctx.bumpMessages) return; // ⚡ React renders via bumpMessages
   const callbacks = _renderCallbacks(ctx);
   const msgs = ctx.getMessages();
   const msgCount = msgs.length;
@@ -588,7 +589,7 @@ export function appendUserBubble(
   const row = rows[rows.length - 1] as HTMLElement | undefined;
   if (row && pair) pair.userBubble = row;
 
-  if (row) ctx.animateBubbleIn(row.querySelector('.msg-bubble.user') as HTMLElement);
+  if (row && !ctx.bumpMessages) ctx.animateBubbleIn(row.querySelector('.msg-bubble.user') as HTMLElement);
 }
 
 export function addTurnSep(_ctx: StreamContext): void {
@@ -604,6 +605,7 @@ export function addTurnSep(_ctx: StreamContext): void {
 export function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
   _syncMessagesToDOM(ctx);
+  if (ctx.bumpMessages) return; // ⚡ React: no DOM queries needed
   if (ctx.getTurnPairs().length > 0) {
     const bubbles = ctx.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
     const lastBubble = bubbles[bubbles.length - 1];
@@ -624,6 +626,7 @@ export function finishTurn(ctx: StreamContext): void {
 // ═══════════════════════════════════════════════════════════
 
 export function scrollBottom(ctx: StreamContext): void {
+  if (ctx.bumpMessages) return; // ⚡ React handles scrolling internally
   if (ctx.getUserScrolledUp()) return;
   requestAnimationFrame(() => {
     if (ctx.getUserScrolledUp()) return;
