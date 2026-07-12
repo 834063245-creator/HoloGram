@@ -140,7 +140,7 @@ const MarkdownContent: React.FC<{
   text: string;
   streaming: boolean;
   onNavigateToNode?: (name: string) => void;
-}> = ({ text, streaming, onNavigateToNode }) => {
+}> = React.memo(({ text, streaming, onNavigateToNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Linkify node names after render (on finalised content)
@@ -166,7 +166,7 @@ const MarkdownContent: React.FC<{
       {streaming && <span className="streaming-typing">▊</span>}
     </div>
   );
-};
+});
 
 // ── Reasoning block ──
 // Auto-expand while streaming; auto-collapse when done (respects user manual toggle).
@@ -175,7 +175,7 @@ const ReasoningBlock: React.FC<{
   text: string;
   streaming: boolean;
   reasoningComplete: boolean;
-}> = ({ text, streaming, reasoningComplete }) => {
+}> = React.memo(({ text, streaming, reasoningComplete }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [open, setOpen] = useState(streaming);
@@ -209,11 +209,11 @@ const ReasoningBlock: React.FC<{
       </div>
     </div>
   );
-};
+});
 
 // ── Tool card ──
 
-const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> =
+const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = React.memo(
   ({ part, expanded, onToggle }) => {
     const icon = part.status === 'running' ? svgIcon('dot')
       : part.status === 'done' ? svgIcon('check-circle')
@@ -250,7 +250,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         )}
       </div>
     );
-  };
+  });
 
 // ── Tool summary ──
 
@@ -281,7 +281,7 @@ const UserBubble: React.FC<{
   msg: UserMessage;
   onEdit?: (m: UserMessage) => void;
   onResend?: (m: UserMessage) => void;
-}> = ({ msg, onEdit, onResend }) => (
+}> = React.memo(({ msg, onEdit, onResend }) => (
   <div className="msg-user-row" data-message-id={msg._id}>
     <div className="msg-bubble user">
       <div className="msg-text">{msg.text}</div>
@@ -308,7 +308,7 @@ const UserBubble: React.FC<{
       )}
     </span>
   </div>
-);
+));
 
 // ── Assistant message ──
 

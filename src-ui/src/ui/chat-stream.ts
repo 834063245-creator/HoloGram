@@ -245,18 +245,16 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
 
     case EventKind.Reasoning:
       if (ev.text) {
-        const isFirst = !ctx.getStreamingAssistantId();
-                  _appendReasoningPart(ctx, ev.text);
-          bumpChat();
-        }
+        _appendReasoningPart(ctx, ev.text);
+        bumpChat();
+      }
       break;
 
     case EventKind.Text:
       if (ev.text) {
-        const isFirst = !ctx.getStreamingAssistantId();
-                  _appendTextPart(ctx, ev.text);
-          bumpChat();
-        }
+        _appendTextPart(ctx, ev.text);
+        bumpChat();
+      }
       break;
 
     case EventKind.Message:
