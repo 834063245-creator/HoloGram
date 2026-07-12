@@ -845,8 +845,8 @@ export class ChatPanel {
    *  @param text The instruction sent to the agent
    *  @param displayLabel If set, shows this as a user bubble (for slash commands) */
   private sendAgentText(text: string, displayLabel?: string): void {
-    if (!this.agent || this.running) return;
-    this.setRunning(true);
+    if (!this.agent || execState.isRunning) return;
+    const signal = execState.start();
 
     // Reset auto-scroll for this new turn
     this._userScrolledUp = false;
@@ -860,8 +860,7 @@ export class ChatPanel {
     }
     this.scrollBottom();
 
-    this.abortCtrl = new AbortController();
-    this.agent.run(this.abortCtrl.signal, text).then(() => {
+    this.agent.run(signal, text).then(() => {
       // Success
     }).catch((err: any) => {
       if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
@@ -872,8 +871,7 @@ export class ChatPanel {
         this.addNotice(`错误: ${err.message || err}`, 'error');
       }
     }).finally(() => {
-      this.setRunning(false);
-      this.abortCtrl = null;
+      execState.done();
       this.finishTurn();
       bus.emit('chat:turn-done', {});
     });
@@ -882,8 +880,8 @@ export class ChatPanel {
   /** Run a goal autonomously — Agent keeps going until done or failed.
    *  ponytail: same UI scaffolding as sendAgentText, but calls runGoal instead of run. */
   private runGoal(goal: string): void {
-    if (!this.agent || this.running) return;
-    this.setRunning(true);
+    if (!this.agent || execState.isRunning) return;
+    const signal = execState.start();
     this._userScrolledUp = false;
 
     const hint = this.msgList.querySelector('.chat-hint');
@@ -893,9 +891,8 @@ export class ChatPanel {
     this.appendUserBubble(`🎯 ${goal}`);
 
     this.scrollBottom();
-    this.abortCtrl = new AbortController();
 
-    this.agent.runGoal(this.abortCtrl.signal, goal).then((result) => {
+    this.agent.runGoal(signal, goal).then((result) => {
       this.addNotice(
         result.status === 'completed' ? `✅ 目标达成: ${result.summary.slice(0, 120)}` :
         result.status === 'failed' ? `❌ 目标失败: ${result.summary.slice(0, 120)}` :
@@ -909,8 +906,7 @@ export class ChatPanel {
         this.addNotice(`目标错误: ${err.message || err}`, 'error');
       }
     }).finally(() => {
-      this.setRunning(false);
-      this.abortCtrl = null;
+      execState.done();
       this.finishTurn();
       bus.emit('chat:turn-done', {});
     });
@@ -1012,7 +1008,7 @@ export class ChatPanel {
 
     this.inputArea.value = '';
     this.inputArea.style.height = 'auto';
-    this.setRunning(true);
+    const signal = execState.start();
 
     // Remove hint if present
     const hint = this.msgList.querySelector('.chat-hint');
@@ -1055,9 +1051,8 @@ export class ChatPanel {
     }
 
     // Run agent
-    this.abortCtrl = new AbortController();
     try {
-      await this.agent.run(this.abortCtrl.signal, focusPrefix + text);
+      await this.agent.run(signal, focusPrefix + text);
     } catch (err: any) {
       if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
         this.addNotice('已中止', 'info');
@@ -1067,8 +1062,7 @@ export class ChatPanel {
         this.addNotice(`错误: ${err.message || String(err)}。发送任意消息重试，或输入 /compact 压缩上下文，或输入 /new 新建会话`, 'error');
       }
     } finally {
-      this.setRunning(false);
-      this.abortCtrl = null;
+      execState.done();
       this.finishTurn();
     }
     // Signal main.ts to persist sessions
