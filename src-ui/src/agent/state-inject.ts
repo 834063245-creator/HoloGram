@@ -14,65 +14,49 @@
 import { invoke } from '../bridge';
 import { getDiagnosticsForFile } from '../ui/lsp-client';
 import type { LspDiagnostic } from '../ui/lsp-client';
+import {
+  cacheStore,
+  getGitCache, setGitCache, getGitCacheTs,
+  getBlameCache, setBlameEntry, hasBlameEntry,
+  getCheckCache, setCheckCache,
+  getBuildResultCache, setBuildResultCache,
+  getTimelineCache, setTimelineCache, getTimelineCacheTs,
+} from './cache-store';
 
 // Re-export for consumers
 export type { LspDiagnostic };
-
-// ── Types ──
-
-export interface GitStatusSummary {
-  branch: string;
-  ahead: number;
-  behind: number;
-  dirtyCount: number;
-  dirtyFiles: Array<{ file: string; status: string }>;
-}
-
-export interface CheckStatusSummary {
-  passed: boolean;
-  violationCount: number;
-  newCount: number;
-  resolvedCount: number;
-  persistentCount: number;
-}
+export type { GitStatusSummary, CheckStatusSummary, BuildResult, TimelineEvent } from './cache-store';
 
 // ── Git status cache ──
 
-let gitCache: GitStatusSummary | null = null;
-let gitCacheTs = 0;
 const GIT_CACHE_MS = 5000;
 
 /** Fire-and-forget refresh. Call from onSessionPersisted or turn-start. */
 export async function refreshGitStatus(projectPath: string): Promise<void> {
   const now = Date.now();
-  if (gitCache && (now - gitCacheTs) < GIT_CACHE_MS) return;
+  const cached = getGitCache();
+  if (cached && (now - getGitCacheTs()) < GIT_CACHE_MS) return;
   try {
     const json = await invoke<string>('git_status', { path: projectPath });
     const raw = JSON.parse(json);
-    gitCache = {
+    setGitCache({
       branch: raw.branch || '',
       ahead: raw.ahead || 0,
       behind: raw.behind || 0,
       dirtyCount: (raw.files || []).length,
       dirtyFiles: (raw.files || []).slice(0, 15),
-    };
-    gitCacheTs = now;
+    }, now);
   } catch { /* silent */ }
 }
 
 /** Sync read for hooks. */
-export function getGitStatusCached(): GitStatusSummary | null {
-  return gitCache;
-}
+export function getGitStatusCached() { return getGitCache(); }
 
 // ── Git blame cache ──
 
-const blameCache = new Map<string, string>();
-
 /** Fire-and-forget refresh for a specific file. Call before agent reads it. */
 export async function refreshGitBlame(projectPath: string, filePath: string): Promise<void> {
-  if (blameCache.has(filePath)) return;
-  // Only source files
+  if (hasBlameEntry(filePath)) return;
   if (!filePath.match(/\.(ts|tsx|js|jsx|rs|py|go|java|rb|cs|kt|swift|php|lua|css|html)$/)) return;
   try {
     const raw = await invoke<string>('git_blame', { path: projectPath, file: filePath });
@@ -86,84 +70,63 @@ export async function refreshGitBlame(projectPath: string, filePath: string): Pr
     }
     if (latestAuthor) {
       const ago = latestTime ? timeAgo(parseInt(latestTime) * 1000) : '';
-      blameCache.set(filePath, `${latestAuthor}${ago ? ', ' + ago : ''}${authors.size > 1 ? ` (+${authors.size - 1} others)` : ''}`);
+      setBlameEntry(filePath, `${latestAuthor}${ago ? ', ' + ago : ''}${authors.size > 1 ? ` (+${authors.size - 1} others)` : ''}`);
     }
   } catch { /* silent */ }
 }
 
 /** Sync read for hooks. */
 export function getGitBlameCached(filePath: string): string | null {
-  return blameCache.get(filePath) ?? null;
+  return getBlameCache()[filePath] ?? null;
 }
 
 // ── Check status cache ──
 
-let checkCache: CheckStatusSummary | null = null;
-
 /** Called by CheckPanel.update() when a new check result arrives. */
-export function cacheCheckResult(result: CheckStatusSummary): void {
-  checkCache = result;
+export function cacheCheckResult(result: ReturnType<typeof getCheckCache> & {}): void {
+  setCheckCache(result as any);
 }
 
 /** Sync read for hooks. */
-export function getCheckStatusCached(): CheckStatusSummary | null {
-  return checkCache;
-}
+export function getCheckStatusCached() { return getCheckCache(); }
 
 // ── Build/test result cache ──
 
-interface BuildResult {
-  command: string;       // "cargo build" or "npm test"
-  outcome: 'pass' | 'fail';
-  summary: string;       // "3 errors" or "12 passed"
-  ts: number;
-}
-
-let buildResultCache: BuildResult | null = null;
-
 /** Called by run_shell hook when a test/build command finishes. */
-export function cacheBuildResult(result: BuildResult): void {
-  buildResultCache = result;
+export function cacheBuildResult(result: ReturnType<typeof getBuildResultCache> & {}): void {
+  setBuildResultCache(result as any);
 }
 
 /** Format cached build/test result for turn-start. Consumed on read. */
 export function formatBuildResult(): string | null {
-  const r = buildResultCache;
+  const r = getBuildResultCache();
   if (!r) return null;
-  buildResultCache = null; // consume — only inject once
+  setBuildResultCache(null); // consume — only inject once
   const icon = r.outcome === 'pass' ? '✅' : '❌';
   return `[构建] ${icon} ${r.command}: ${r.summary}`;
 }
 
 // ── Timeline cache ──
 
-interface TimelineEvent {
-  event_type: string;
-  file?: string;
-  summary?: string;
-  timestamp: string;
-}
-
-let timelineCache: TimelineEvent[] = [];
-let timelineCacheTs = 0;
 const TIMELINE_CACHE_MS = 10000;
 
 /** Fire-and-forget refresh. */
 export async function refreshTimeline(projectPath: string): Promise<void> {
   const now = Date.now();
-  if (timelineCache.length > 0 && (now - timelineCacheTs) < TIMELINE_CACHE_MS) return;
+  const cached = getTimelineCache();
+  if (cached.length > 0 && (now - getTimelineCacheTs()) < TIMELINE_CACHE_MS) return;
   try {
     const json = await invoke<string>('hologram_call', { tool: 'project_timeline', args: { path: projectPath, limit: 8 } });
     const raw = JSON.parse(json);
-    timelineCache = (raw.events || []).slice(0, 8);
-    timelineCacheTs = now;
+    setTimelineCache((raw.events || []).slice(0, 8), now);
   } catch { /* silent */ }
 }
 
 /** Format recent timeline events for turn-start. Only show user-facing events. */
 export function formatTimeline(): string | null {
-  if (timelineCache.length === 0) return null;
-  const recent = timelineCache.slice(0, 5);
+  const cached = getTimelineCache();
+  if (cached.length === 0) return null;
+  const recent = cached.slice(0, 5);
   const labels = recent.map(e => {
     const fname = e.file ? e.file.replace(/\\/g, '/').split('/').pop() : '';
     const label = eventLabel(e.event_type);
@@ -191,7 +154,7 @@ function eventLabel(type: string): string {
 
 /** Format git status for turn-start injection. */
 export function formatGitStatus(): string | null {
-  const git = gitCache;
+  const git = getGitCache();
   if (!git || git.dirtyCount === 0) return null;
   const fileList = git.dirtyFiles.map(f => `${f.file.replace(/\\/g, '/').split('/').pop()}(${f.status[0].toUpperCase()})`).join(', ');
   return `[Git] ${git.branch}${git.ahead > 0 ? ` ↑${git.ahead}` : ''}${git.behind > 0 ? ` ↓${git.behind}` : ''} | ${git.dirtyCount} 脏: ${fileList}`;
@@ -199,7 +162,7 @@ export function formatGitStatus(): string | null {
 
 /** Format check status for turn-start injection. */
 export function formatCheckStatus(): string | null {
-  const r = checkCache;
+  const r = getCheckCache();
   if (!r) return null;
   const parts: string[] = [];
   if (r.passed) { parts.push('✅ 通过'); }

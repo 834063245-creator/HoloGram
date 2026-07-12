@@ -39,6 +39,7 @@ interface ChatStore {
   sessionTokens: Record<number, number>;
   sessionMessageModels: Record<number, ChatMessage[]>;
   nextSessionId: number;
+  msgIdSeq: number;
 
   // ── Panel chrome ──
   panelMode: PanelMode;
@@ -108,6 +109,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   sessionTokens: {},
   sessionMessageModels: {},
   nextSessionId: 1,
+  msgIdSeq: 0,
 
   panelMode: 'pill',
   activeTab: 'chat',

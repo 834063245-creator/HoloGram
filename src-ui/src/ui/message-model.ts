@@ -9,14 +9,18 @@
 
 export type MessageId = string;
 
-let _idSeq = 0;
+// ⚡ _idSeq → chat-store.ts
+import { useChatStore } from './chat-store';
+
 export function nextMsgId(): MessageId {
-  return `m${++_idSeq}`;
+  const id = useChatStore.getState().msgIdSeq + 1;
+  useChatStore.setState({ msgIdSeq: id });
+  return `m${id}`;
 }
 
 /** Resets the global message id counter (for test isolation or /clear). */
 export function resetMsgIdCounter(): void {
-  _idSeq = 0;
+  useChatStore.setState({ msgIdSeq: 0 });
 }
 
 // ── Attachments ──────────────────────────────────────────
