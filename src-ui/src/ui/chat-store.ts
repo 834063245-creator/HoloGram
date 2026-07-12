@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: MIT
 
 // Chat Zustand store — single source of truth for chat state.
-// Holds: messages, version (auto-scroll), sessions, activeIdx, session tokens,
-// and per-session message model cache.
 //
-// Non-serializable state (agent handles, DOM refs, callbacks) stays
-// in module-level Maps/vars in chat-session.ts — only pure data lives here.
+// Holds three categories:
+//   1. Messages (React rendering) — messages[], version
+//   2. Sessions (lifecycle) — sessions[], activeIdx, tokens, models, nextId
+//   3. Panel state (UI chrome) — mode, tabs, streaming, metrics, focus
+//
+// Non-serializable state (agent handles, DOM refs, callbacks, rAF handles,
+// AbortControllers) stays in chat.ts / chat-session.ts.
 
 import { create } from 'zustand';
-import type { ChatMessage, AssistantMessage } from './message-model';
+import type { ChatMessage, AssistantMessage, MessageId } from './message-model';
+import type { ToolSchema } from '../provider/types';
 
 // ── Session descriptor (serializable subset) ──
 
@@ -18,24 +22,51 @@ export interface ChatSessionMeta {
   label: string;
 }
 
+export type PanelMode = 'pill' | 'input' | 'panel' | 'hud';
+export type AgentTab = 'chat' | 'tools' | 'context';
+export type AgentState = 'idle' | 'thinking' | 'running' | 'error';
+
+interface ToolHistoryEntry { name: string; args: string; ts: number }
+
 interface ChatStore {
-  // ── Messages (current session) ──
+  // ── Messages ──
   messages: ChatMessage[];
-  /** Monotonic version — bumped on every mutation so auto-scroll can react. */
   version: number;
 
   // ── Sessions ──
   sessions: ChatSessionMeta[];
   activeIdx: number;
-  /** Per-session token count — keyed by session id. */
   sessionTokens: Record<number, number>;
-  /** Per-session message model cache — keyed by session id. */
   sessionMessageModels: Record<number, ChatMessage[]>;
   nextSessionId: number;
 
+  // ── Panel chrome ──
+  panelMode: PanelMode;
+  activeTab: AgentTab;
+  projectPath: string;
+  toolSchemas: ToolSchema[];
+
+  // ── Streaming ──
+  streamingAssistantId: MessageId | null;
+  userScrolledUp: boolean;
+  /** Reasoning block indices that are manually expanded (kept as number[] — Set is non-serializable). */
+  expandedReasoning: number[];
+
+  // ── Metrics / counters ──
+  totalTokensUsed: number;
+  toolUsage: Record<string, number>;
+  toolHistory: ToolHistoryEntry[];
+  pillEventCount: number;
+  lastAgentState: AgentState;
+  lastUsageText: string;
+  lastAgentDiag: string;
+
+  // ── User context (injected into agent hooks) ──
+  userFocusFile: string | null;
+  userFocusNode: { name: string; location?: string } | null;
+
   // ── Actions ──
   setMessages: (msgs: ChatMessage[]) => void;
-  /** Call after in-place mutations (push to array, part append) to trigger re-render. */
   bump: () => void;
 
   setSessions: (sessions: ChatSessionMeta[]) => void;
@@ -43,6 +74,30 @@ interface ChatStore {
   setSessionTokens: (id: number, count: number) => void;
   setSessionMessageModels: (id: number, models: ChatMessage[]) => void;
   removeSession: (id: number) => void;
+
+  setPanelMode: (mode: PanelMode) => void;
+  setActiveTab: (tab: AgentTab) => void;
+  setProjectPath: (path: string) => void;
+  setToolSchemas: (schemas: ToolSchema[]) => void;
+
+  setStreamingAssistantId: (id: MessageId | null) => void;
+  setUserScrolledUp: (v: boolean) => void;
+  addExpandedReasoning: (idx: number) => void;
+  deleteExpandedReasoning: (idx: number) => void;
+  clearExpandedReasoning: () => void;
+
+  setTotalTokensUsed: (n: number) => void;
+  addToolUsage: (name: string, args: string) => void;
+  clearToolUsage: () => void;
+  clearToolHistory: () => void;
+  setPillEventCount: (n: number) => void;
+  bumpPillEventCount: () => void;
+  setLastAgentState: (state: AgentState) => void;
+  setLastUsageText: (s: string) => void;
+  setLastAgentDiag: (s: string) => void;
+
+  setUserFocusFile: (file: string | null) => void;
+  setUserFocusNode: (node: { name: string; location?: string } | null) => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -53,6 +108,26 @@ export const useChatStore = create<ChatStore>((set) => ({
   sessionTokens: {},
   sessionMessageModels: {},
   nextSessionId: 1,
+
+  panelMode: 'pill',
+  activeTab: 'chat',
+  projectPath: '',
+  toolSchemas: [],
+
+  streamingAssistantId: null,
+  userScrolledUp: false,
+  expandedReasoning: [],
+
+  totalTokensUsed: 0,
+  toolUsage: {},
+  toolHistory: [],
+  pillEventCount: 0,
+  lastAgentState: 'idle',
+  lastUsageText: '',
+  lastAgentDiag: '',
+
+  userFocusFile: null,
+  userFocusNode: null,
 
   setMessages: (msgs) => set({ messages: msgs, version: Date.now() }),
   bump: () => set((s) => ({ version: s.version + 1 })),
@@ -69,23 +144,54 @@ export const useChatStore = create<ChatStore>((set) => ({
       const { [id]: __, ...restModels } = s.sessionMessageModels;
       return { sessionTokens: restTokens, sessionMessageModels: restModels };
     }),
+
+  setPanelMode: (panelMode) => set({ panelMode }),
+  setActiveTab: (activeTab) => set({ activeTab }),
+  setProjectPath: (projectPath) => set({ projectPath }),
+  setToolSchemas: (toolSchemas) => set({ toolSchemas }),
+
+  setStreamingAssistantId: (streamingAssistantId) => set({ streamingAssistantId }),
+  setUserScrolledUp: (userScrolledUp) => set({ userScrolledUp }),
+  addExpandedReasoning: (idx) =>
+    set((s) => {
+      if (s.expandedReasoning.includes(idx)) return s;
+      return { expandedReasoning: [...s.expandedReasoning, idx] };
+    }),
+  deleteExpandedReasoning: (idx) =>
+    set((s) => ({ expandedReasoning: s.expandedReasoning.filter(i => i !== idx) })),
+  clearExpandedReasoning: () => set({ expandedReasoning: [] }),
+
+  setTotalTokensUsed: (totalTokensUsed) => set({ totalTokensUsed }),
+  addToolUsage: (name, args) =>
+    set((s) => {
+      const next = { ...s.toolUsage };
+      next[name] = (next[name] || 0) + 1;
+      const hist = [...s.toolHistory, { name, args, ts: Date.now() }].slice(-50);
+      return { toolUsage: next, toolHistory: hist };
+    }),
+  clearToolUsage: () => set({ toolUsage: {} }),
+  clearToolHistory: () => set({ toolHistory: [] }),
+  setPillEventCount: (pillEventCount) => set({ pillEventCount }),
+  bumpPillEventCount: () => set((s) => ({ pillEventCount: s.pillEventCount + 1 })),
+  setLastAgentState: (lastAgentState) => set({ lastAgentState }),
+  setLastUsageText: (lastUsageText) => set({ lastUsageText }),
+  setLastAgentDiag: (lastAgentDiag) => set({ lastAgentDiag }),
+
+  setUserFocusFile: (userFocusFile) => set({ userFocusFile }),
+  setUserFocusNode: (userFocusNode) => set({ userFocusNode }),
 }));
 
-// ── Non-reactive accessors (for chat-session, chat.ts) ──
+// ── Non-reactive accessors ──
 
 export function getChatMessages(): ChatMessage[] {
   return useChatStore.getState().messages;
 }
-
 export function setChatMessages(msgs: ChatMessage[]): void {
   useChatStore.getState().setMessages(msgs);
 }
-
 export function bumpChat(): void {
   useChatStore.getState().bump();
 }
-
-/** Find the currently streaming assistant message (if any). */
 export function findStreamingAssistant(): { msg: AssistantMessage; idx: number } | null {
   const msgs = useChatStore.getState().messages;
   for (let i = msgs.length - 1; i >= 0; i--) {
@@ -99,22 +205,26 @@ export function findStreamingAssistant(): { msg: AssistantMessage; idx: number }
 
 // ── Session accessors ──
 
-export function getSessions(): ChatSessionMeta[] {
-  return useChatStore.getState().sessions;
-}
-export function getActiveIdx(): number {
-  return useChatStore.getState().activeIdx;
-}
+export function getSessions(): ChatSessionMeta[] { return useChatStore.getState().sessions; }
+export function getActiveIdx(): number { return useChatStore.getState().activeIdx; }
 export function getActiveSessionId(): number | null {
   const { sessions, activeIdx } = useChatStore.getState();
   return sessions[activeIdx]?.id ?? null;
 }
-export function getSessionTokens(): Record<number, number> {
-  return useChatStore.getState().sessionTokens;
-}
-export function getSessionMessageModels(): Record<number, ChatMessage[]> {
-  return useChatStore.getState().sessionMessageModels;
-}
-export function getNextSessionId(): number {
-  return useChatStore.getState().nextSessionId;
+export function getSessionTokens(): Record<number, number> { return useChatStore.getState().sessionTokens; }
+export function getSessionMessageModels(): Record<number, ChatMessage[]> { return useChatStore.getState().sessionMessageModels; }
+export function getNextSessionId(): number { return useChatStore.getState().nextSessionId; }
+
+// ── Panel chrome accessors ──
+
+export function getPanelMode(): PanelMode { return useChatStore.getState().panelMode; }
+export function getActiveTab(): AgentTab { return useChatStore.getState().activeTab; }
+export function getProjectPath(): string { return useChatStore.getState().projectPath; }
+
+// ── Streaming accessors ──
+
+export function getStreamingAssistantId(): MessageId | null { return useChatStore.getState().streamingAssistantId; }
+export function getUserScrolledUp(): boolean { return useChatStore.getState().userScrolledUp; }
+export function getExpandedReasoningSet(): Set<number> {
+  return new Set(useChatStore.getState().expandedReasoning);
 }

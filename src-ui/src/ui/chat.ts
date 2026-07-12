@@ -53,7 +53,11 @@ import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-re
 import { SlashPanelController } from './react/SlashPanel';
 import { ChatMessagesPanel } from './react/ChatMessages';
 import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
-import { getChatMessages, setChatMessages, bumpChat } from './chat-store';
+import {
+  useChatStore,
+  getChatMessages, setChatMessages, bumpChat,
+  getStreamingAssistantId, getUserScrolledUp, getExpandedReasoningSet,
+} from './chat-store';
 
 // ── Constants ──
 
@@ -77,9 +81,7 @@ export class ChatPanel {
   // Session state (managed by chat-session.ts)
   // Access via Session.getSessions(), Session.getActiveIdx(), etc.
 
-  // User focus tracking — so the Agent knows what file/node the user is looking at
-  private _userFocusFile: string | null = null;
-  private _userFocusNode: { name: string; location?: string } | null = null;
+  // ⚡ userFocusFile / userFocusNode → chat-store.ts
 
   // Streaming state
   private starGraph: StarGraph | null = null;
@@ -89,28 +91,22 @@ export class ChatPanel {
   // ⚡ Zustand store-backed — getter/setter routes through chat-store.ts
   private get messages(): ChatMessage[] { return getChatMessages(); }
   private set messages(msgs: ChatMessage[]) { setChatMessages(msgs); }
-  /** The ID of the assistant message currently being streamed (null = none). */
-  private _streamingAssistantId: MessageId | null = null;
-  /** User scrolled up during streaming — pause auto-scroll until they scroll back to bottom. */
-  private _userScrolledUp = false;
+  // ⚡ streamingAssistantId / userScrolledUp → chat-store.ts
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
   // File attachments (dragged/selected files)
   private attachedFiles: { path: string; name: string; size: number }[] = [];
   private attachPillsEl: HTMLElement | null = null;
 
-  // Panel mode: pill (44px circle) → panel (summoned) → hud (faded) → input (collapsed bar)
-  // All states are CSS classes on the SAME element — one morphing container, zero jump.
-  private mode: 'pill' | 'input' | 'panel' | 'hud' = 'pill';
+  // ⚡ panelMode → chat-store.ts
   private graphClickCleanup: (() => void) | null = null;
 
-  private lastUsageText = '';
-  private projectPath = '';
+  // ⚡ lastUsageText / projectPath / lastAgentDiag → chat-store.ts
   private onOpenSettings: (() => void) | null = null;
   private _onModeChange: (() => void) | null = null;
   private _onTrailToggle: (() => void) | null = null;
   private footerClickCleanup: (() => void) | null = null;
-  private lastAgentDiag = '';
+  // ⚡ lastAgentDiag → chat-store.ts
 
   // ── New: input history navigation (item 1) ──
   private inputHistory: string[] = [];
@@ -125,13 +121,10 @@ export class ChatPanel {
   private atFileCache: { data: string; ts: number } | null = null;
   private atIdx = 0;
 
-  // ── New: token accumulation (item 12) ──
-  private totalTokensUsed = 0;
+  // ⚡ totalTokensUsed → chat-store.ts
 
-  // ── Pill badge — agent event counter when collapsed ──
-  private pillEventCount = 0;
+  // ⚡ pillEventCount / lastAgentState → chat-store.ts
   private pillBadge!: HTMLElement;
-  private _lastAgentState: 'idle' | 'thinking' | 'running' | 'error' = 'idle';
 
   // ── Slash panel (React-based) ──
   private _slashController: SlashPanelController | null = null;
@@ -146,7 +139,7 @@ export class ChatPanel {
 
 
   // ── New: agent panel tabs + status bar ──
-  private _activeTab: 'chat' | 'tools' | 'context' = 'chat';
+  // ⚡ activeTab → chat-store.ts
   private tabBar!: HTMLElement;
   private tabContent!: HTMLElement;
   private chatPanel!: HTMLElement;
@@ -156,15 +149,13 @@ export class ChatPanel {
   private statusDot!: HTMLElement;
   private statusText!: HTMLElement;
   private statusTokens!: HTMLElement;
-  private toolUsage: Map<string, number> = new Map();
-  private toolHistory: Array<{ name: string; args: string; ts: number }> = [];
-  private _toolSchemas: ToolSchema[] = [];
+  // ⚡ toolUsage / toolHistory / toolSchemas → chat-store.ts
 
-  setToolSchemas(schemas: ToolSchema[]): void { this._toolSchemas = schemas; }
+  setToolSchemas(schemas: ToolSchema[]): void { useChatStore.getState().setToolSchemas(schemas); }
 
   private hintText(): string {
     const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
-    return this.lastAgentDiag ? `${base}\n\n诊断: ${this.lastAgentDiag}` : base;
+    return useChatStore.getState().lastAgentDiag ? `${base}\n\n诊断: ${useChatStore.getState().lastAgentDiag}` : base;
   }
 
   private refreshHint(): void {
@@ -249,15 +240,15 @@ export class ChatPanel {
       }).then(data.callback);
     });
     // ── Track user focus — file viewer / file tree / graph selection ──
-    bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
-    bus.on('navigate:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
+    bus.on('highlight:file', (filePath: string) => { useChatStore.getState().userFocusFile = filePath; useChatStore.getState().userFocusNode = null; });
+    bus.on('navigate:file', (filePath: string) => { useChatStore.getState().userFocusFile = filePath; useChatStore.getState().userFocusNode = null; });
     bus.on('graph:node-clicked', (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
-      this._userFocusNode = { name: data.nodeName, location: data.location || undefined };
-      this._userFocusFile = null;
+      useChatStore.getState().userFocusNode = { name: data.nodeName, location: data.location || undefined };
+      useChatStore.getState().userFocusFile = null;
     });
     // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
-      this.lastAgentDiag = d.text;
+      useChatStore.getState().lastAgentDiag = d.text;
       if (!d.ready && this.isOpen()) {
         this.refreshHint();
       }
@@ -324,14 +315,14 @@ export class ChatPanel {
     // switch always lands on the fresh agent. Old stale sessions caused the
     // agent to answer with "当前没有加载项目" after a project was loaded.
     Session.resetSessionState(agent);
-    this.totalTokensUsed = 0;
+    useChatStore.getState().setTotalTokensUsed(0);
     Session.syncActiveSessionTokens(0);
-    this.toolUsage.clear();
-    this.toolHistory = [];
+    useChatStore.getState().clearToolUsage();
+    useChatStore.getState().clearToolHistory();
     this.renderSessionTabs();
     this.messages = [];
     resetMsgIdCounter();
-    this._streamingAssistantId = null;
+    useChatStore.getState().setStreamingAssistantId(null);
     this.msgList.innerHTML = '';
     this.addNotice('已连接到当前项目', 'info');
   }
@@ -341,15 +332,15 @@ export class ChatPanel {
   setProjectPath(p: string): void {
     // ponytail: clear user focus when project changes — stale node/file refs
     // from the old workspace would misdirect the agent's tool calls.
-    if (p && p !== this.projectPath) {
-      this._userFocusFile = null;
-      this._userFocusNode = null;
+    if (p && p !== useChatStore.getState().projectPath) {
+      useChatStore.getState().userFocusFile = null;
+      useChatStore.getState().userFocusNode = null;
     }
-    this.projectPath = p;
+    useChatStore.getState().projectPath = p;
   }
 
   toggle(): void {
-    switch (this.mode) {
+    switch (useChatStore.getState().panelMode) {
       case 'pill':  this.summonPanel(); break;
       case 'input': this.summonPanel(); break;
       case 'panel': this.collapseToInput(); break;
@@ -365,7 +356,7 @@ export class ChatPanel {
   ask(question: string): void {
     // Only summon if not already in panel/hud mode — avoids GSAP conflict with
     // the DOM mutations from sendMessage (bubble render, tool cards, etc.)
-    const alreadyOpen = this.mode === 'panel' || this.mode === 'hud';
+    const alreadyOpen = useChatStore.getState().panelMode== 'panel' || useChatStore.getState().panelMode== 'hud';
     if (!alreadyOpen) {
       this.summonPanel();
     }
@@ -385,7 +376,7 @@ export class ChatPanel {
     subject: string,
   ): Promise<{ allow: boolean; remember: boolean }> {
     // Ensure panel is open
-    if (this.mode !== 'panel') {
+    if (useChatStore.getState().panelMode !== 'panel') {
       Anim.killPanelTweens(this._animCtx());
       Anim.summonPanel(this._animCtx());
     }
@@ -406,14 +397,14 @@ export class ChatPanel {
 
   close(): void {
     // Panel/HUD → input; input → pill
-    if (this.mode === 'panel' || this.mode === 'hud') {
+    if (useChatStore.getState().panelMode== 'panel' || useChatStore.getState().panelMode== 'hud') {
       this.collapseToInput();
-    } else if (this.mode === 'input') {
+    } else if (useChatStore.getState().panelMode== 'input') {
       this.collapseToPill();
     }
   }
 
-  isOpen(): boolean { return this.mode === 'panel' || this.mode === 'hud'; }
+  isOpen(): boolean { return useChatStore.getState().panelMode== 'panel' || useChatStore.getState().panelMode== 'hud'; }
 
   // ── Tab switching ──
 
@@ -430,13 +421,12 @@ export class ChatPanel {
   // ── Tool usage tracking ──
 
   private _recordToolUsage(toolName: string, args: string): void {
-    this.toolUsage.set(toolName, (this.toolUsage.get(toolName) || 0) + 1);
-    this.toolHistory.unshift({ name: toolName, args, ts: Date.now() });
-    if (this.toolHistory.length > 50) this.toolHistory.length = 50;
+    useChatStore.getState().addToolUsage(toolName, args);
     // Update badge on tools tab
     const toolsTab = this.tabBar.querySelector('[data-tab="tools"]') as HTMLElement;
     if (toolsTab) {
-      const total = Array.from(this.toolUsage.values()).reduce((a, b) => a + b, 0);
+      const usage = useChatStore.getState().toolUsage;
+      const total = Object.values(usage).reduce((a, b) => a + b, 0);
       let badge = toolsTab.querySelector('.tab-badge') as HTMLElement;
       if (total > 0) {
         if (!badge) {
@@ -499,12 +489,12 @@ export class ChatPanel {
       panel: this.panel,
       sessionTabs: this.sessionTabs,
       tabBar: this.tabBar,
-      getProjectPath: () => this.projectPath,
+      getProjectPath: () => useChatStore.getState().projectPath,
       agentFactory: Session.getAgentFactory(),
       getMessages: () => getChatMessages(),
       setMessages: (msgs) => { setChatMessages(msgs); },
-      getStreamingAssistantId: () => this._streamingAssistantId,
-      setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
+      getStreamingAssistantId: () => useChatStore.getState().streamingAssistantId,
+      setStreamingAssistantId: (id) => { useChatStore.getState().setStreamingAssistantId(id); },
       // ⚡ Zustand store triggers React re-render on mutation
       flushReasoning: () => {},
       flushText: () => {},
@@ -514,13 +504,13 @@ export class ChatPanel {
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       updateFooter: () => this.updateFooter(),
       reWireHandlers: () => this._reWireHandlers(),
-      getTotalTokensUsed: () => this.totalTokensUsed,
-      setTotalTokensUsed: (n) => { this.totalTokensUsed = n; },
-      clearToolUsage: () => { this.toolUsage.clear(); },
-      clearToolHistory: () => { this.toolHistory = []; },
-      getLastUsageText: () => this.lastUsageText,
-      setLastUsageText: (s) => { this.lastUsageText = s; },
-      getLastAgentDiag: () => this.lastAgentDiag,
+      getTotalTokensUsed: () => useChatStore.getState().totalTokensUsed,
+      setTotalTokensUsed: (n) => { useChatStore.getState().setTotalTokensUsed(n); },
+      clearToolUsage: () => { useChatStore.getState().clearToolUsage(); },
+      clearToolHistory: () => { useChatStore.getState().clearToolHistory(); },
+      getLastUsageText: () => useChatStore.getState().lastUsageText,
+      setLastUsageText: (s) => { useChatStore.getState().lastUsageText = s; },
+      getLastAgentDiag: () => useChatStore.getState().lastAgentDiag,
       clearInputHistory: () => { this.inputHistory = []; this.historyIdx = 0; this.draftText = ''; },
       getStarGraph: () => this.starGraph,
     };
@@ -532,10 +522,10 @@ export class ChatPanel {
       panel: this.panel,
       msgList: this.msgList,
       inputArea: this.inputArea,
-      getMode: () => this.mode,
-      setMode: (m) => { this.mode = m; },
+      getMode: () => useChatStore.getState().panelMode,
+      setMode: (m) => { useChatStore.getState().setPanelMode(m); },
       getRunning: () => execState.isRunning,
-      getProjectPath: () => this.projectPath,
+      getProjectPath: () => useChatStore.getState().projectPath,
       getActiveIdx: () => Session.getActiveIdx(),
       updateFooter: () => this.updateFooter(),
       // ⚡ React handles scrolling internally
@@ -550,11 +540,11 @@ export class ChatPanel {
   private _domCtx(): Dom.DomContext {
     return {
       container: this.container,
-      getMode: () => this.mode,
+      getMode: () => useChatStore.getState().panelMode,
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
       getMessages: () => this.messages,
-      getProjectPath: () => this.projectPath,
+      getProjectPath: () => useChatStore.getState().projectPath,
       sendMessage: () => this.sendMessage(),
       abort: () => this.abort(),
       summonPanel: () => this.summonPanel(),
@@ -608,9 +598,9 @@ export class ChatPanel {
       _onModeChange: this._onModeChange,
       _onTrailToggle: this._onTrailToggle,
       // Tool
-      _toolSchemas: this._toolSchemas,
-      toolUsage: this.toolUsage,
-      toolHistory: this.toolHistory,
+      _toolSchemas: useChatStore.getState().toolSchemas,
+      toolUsage: useChatStore.getState().toolUsage,
+      toolHistory: useChatStore.getState().toolHistory,
       // Input history
       inputHistory: this.inputHistory,
       setInputHistory: (h) => { this.inputHistory = h; },
@@ -634,18 +624,18 @@ export class ChatPanel {
       toggleToolCard: (card) => this.toggleToolCard(card),
       killPanelTweens: () => this.killPanelTweens(),
       setupResize: (handle) => this.setupResize(handle),
-      getUserScrolledUp: () => this._userScrolledUp,
-      setUserScrolledUp: (v) => { this._userScrolledUp = v; },
+      getUserScrolledUp: () => useChatStore.getState().userScrolledUp,
+      setUserScrolledUp: (v) => { useChatStore.getState().userScrolledUp = v; },
       // ⚡ React handles scrolling internally
       hintText: () => this.hintText(),
       refreshHint: () => this.refreshHint(),
-      getLastAgentDiag: () => this.lastAgentDiag,
+      getLastAgentDiag: () => useChatStore.getState().lastAgentDiag,
       // State
-      _lastAgentState: this._lastAgentState,
-      lastUsageText: this.lastUsageText,
-      totalTokensUsed: this.totalTokensUsed,
-      _expandedReasoning: this._expandedReasoning,
-      _activeTab: this._activeTab,
+      _lastAgentState: useChatStore.getState().lastAgentState,
+      lastUsageText: useChatStore.getState().lastUsageText,
+      totalTokensUsed: useChatStore.getState().totalTokensUsed,
+      _expandedReasoning: new Set(useChatStore.getState().expandedReasoning),
+      _activeTab: useChatStore.getState().activeTab,
       attachedFiles: this.attachedFiles,
       historyPanel: this.historyPanel,
       setHistoryPanel: (el) => { this.historyPanel = el; },
@@ -667,37 +657,37 @@ export class ChatPanel {
       inputArea: this.inputArea,
       getMessages: () => getChatMessages(),
       setMessages: (msgs) => { setChatMessages(msgs); },
-      getStreamingAssistantId: () => this._streamingAssistantId,
-      setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
-      getUserScrolledUp: () => this._userScrolledUp,
-      setUserScrolledUp: (v) => { this._userScrolledUp = v; },
+      getStreamingAssistantId: () => getStreamingAssistantId(),
+      setStreamingAssistantId: (id) => { useChatStore.getState().setStreamingAssistantId(id); },
+      getUserScrolledUp: () => getUserScrolledUp(),
+      setUserScrolledUp: (v) => { useChatStore.getState().setUserScrolledUp(v); },
       getSyncRafId: () => this._syncRafId,
       setSyncRafId: (id) => { this._syncRafId = id; },
       getTurnPairs: () => Session.getTurnPairs(),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
       updateFooter: () => this.updateFooter(),
-      setLastUsageText: (s) => { this.lastUsageText = s; },
+      setLastUsageText: (s) => { useChatStore.getState().setLastUsageText(s); },
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
-      bumpPillBadge: () => this._bumpPillBadge(),
+      bumpPillBadge: () => { useChatStore.getState().bumpPillEventCount(); },
       injectCodeBlockButtons: (b) => this.injectCodeBlockButtons(b),
       animateBubbleIn: (el, delay) => this.animateBubbleIn(el, delay),
       linkifyNodeNames: () => this.linkifyNodeNames(),
       setRunning: (_r: boolean) => { /* migrated to execState */ },
       abort: () => this.abort(),
       _updateStatusBar: (s, d) => this._updateStatusBar(s, d),
-      _recordToolUsage: (n, a) => this._recordToolUsage(n, a),
+      _recordToolUsage: (n, a) => { useChatStore.getState().addToolUsage(n, a); },
       _retractUserMessage: (m) => this._retractUserMessage(m),
       retractTurn: (i) => this.retractTurn(i),
       sendMessage: () => this.sendMessage(),
       _upsertToolPart: (...args) => this._upsertToolPart(...args),
-      _updateTokens: (n) => this._updateTokens(n),
-      getProjectPath: () => this.projectPath,
+      _updateTokens: (n) => { useChatStore.getState().setTotalTokensUsed(n); },
+      getProjectPath: () => useChatStore.getState().projectPath,
       getRunning: () => execState.isRunning,
       getAbortCtrl: () => execState.abortSignal ? { signal: execState.abortSignal } as AbortController : null,
       setAbortCtrl: (_c: any) => { /* managed by execState */ },
-      getExpandedReasoning: () => this._expandedReasoning,
+      getExpandedReasoning: () => getExpandedReasoningSet(),
     };
   }
 
@@ -903,13 +893,13 @@ export class ChatPanel {
     this.agent.newSession(); // 递增 sessionGen，旧 run 检测到 gen 变化自动丢弃
     this.messages = [];
     resetMsgIdCounter();
-    this._streamingAssistantId = null;
+    useChatStore.getState().setStreamingAssistantId(null);
     this.msgList.innerHTML = '';
     this.inputHistory = [];
     this.historyIdx = 0;
     this.draftText = '';
     Session.setTurnPairs([]);
-    this.totalTokensUsed = 0;
+    useChatStore.getState().totalTokensUsed = 0;
     Session.syncActiveSessionTokens(0);
     this.addNotice('已开启新会话 — 上下文已清空', 'info');
     this.finishTurn();
@@ -924,7 +914,7 @@ export class ChatPanel {
     const signal = execState.start();
 
     // Reset auto-scroll for this new turn
-    this._userScrolledUp = false;
+    useChatStore.getState().userScrolledUp = false;
 
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
@@ -956,7 +946,7 @@ export class ChatPanel {
   private runGoal(goal: string): void {
     if (!this.agent || execState.isRunning) return;
     const signal = execState.start();
-    this._userScrolledUp = false;
+    useChatStore.getState().userScrolledUp = false;
 
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
@@ -987,14 +977,14 @@ export class ChatPanel {
 
   private async sendMessage(): Promise<void> {
     // Reset auto-scroll for this new turn
-    this._userScrolledUp = false;
+    useChatStore.getState().userScrolledUp = false;
 
     const text = this.inputArea.value.trim();
     if (!text) return;
 
     if (!this.agent) {
-      const detail = this.lastAgentDiag
-        ? `${this.lastAgentDiag} (factory:${Session.getAgentFactory() ? 'yes' : 'NO'})`
+      const detail = useChatStore.getState().lastAgentDiag
+        ? `${useChatStore.getState().lastAgentDiag} (factory:${Session.getAgentFactory() ? 'yes' : 'NO'})`
         : '请先配置 API Key 或等待项目加载';
       this.addNotice(`Agent 未就绪 — ${detail}`, 'error');
       return;
@@ -1050,7 +1040,7 @@ export class ChatPanel {
       this.historyIdx = this.inputHistory.length;
       this.draftText = '';
       // Show panel if collapsed
-      if (this.mode === 'input') this.summonPanel();
+      if (useChatStore.getState().panelMode== 'input') this.summonPanel();
       const hint = this.msgList.querySelector('.chat-hint');
       if (hint) hint.remove();
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
@@ -1069,7 +1059,7 @@ export class ChatPanel {
     }
 
     // If we're in the floating input bar, summon the full panel before sending
-    if (this.mode === 'input') {
+    if (useChatStore.getState().panelMode== 'input') {
       this.summonPanel();
     }
 
@@ -1096,14 +1086,15 @@ export class ChatPanel {
 
     // Build focus context prefix — tells Agent what the user is looking at
     let focusPrefix = '';
-    if (this._userFocusNode) {
-      focusPrefix = `[用户当前选中了图中的节点 "${this._userFocusNode.name}"`;
-      if (this._userFocusNode.location) {
-        focusPrefix += ` (位于 ${this._userFocusNode.location})`;
+    const focusNode = useChatStore.getState().userFocusNode;
+    if (focusNode) {
+      focusPrefix = `[用户当前选中了图中的节点 "${focusNode.name}"`;
+      if (focusNode.location) {
+        focusPrefix += ` (位于 ${focusNode.location})`;
       }
       focusPrefix += ']\n\n';
-    } else if (this._userFocusFile) {
-      focusPrefix = `[用户当前正在查看文件 "${this._userFocusFile}"]\n\n`;
+    } else if (useChatStore.getState().userFocusFile) {
+      focusPrefix = `[用户当前正在查看文件 "${useChatStore.getState().userFocusFile}"]\n\n`;
     }
 
     // Attached files — expose paths so Agent can read them
@@ -1192,9 +1183,9 @@ export class ChatPanel {
 
   /** Get the assistant message currently being streamed, or create one. */
   private _streamingAssistant(): AssistantMessage {
-    if (this._streamingAssistantId) {
+    if (useChatStore.getState().streamingAssistantId) {
       const found = this.messages.find(
-        (m) => m.role === 'assistant' && m._id === this._streamingAssistantId,
+        (m) => m.role === 'assistant' && m._id === useChatStore.getState().streamingAssistantId,
       );
       if (found) return found as AssistantMessage;
     }
@@ -1202,7 +1193,7 @@ export class ChatPanel {
     const lastUser = [...this.messages].reverse().find((m) => m.role === 'user');
     const assistant = createAssistantMessage(lastUser?._id ?? '');
     this.messages.push(assistant);
-    this._streamingAssistantId = assistant._id;
+    useChatStore.getState().setStreamingAssistantId(assistant._id);
     return assistant;
   }
 
@@ -1246,7 +1237,7 @@ export class ChatPanel {
 
   /** Update token usage on the current assistant. */
   private _updateTokens(tokensUsed: number): void {
-    this.totalTokensUsed += tokensUsed;
+    useChatStore.getState().totalTokensUsed += tokensUsed;
     const assistant = this._streamingAssistant();
     assistant.tokensUsed = (assistant.tokensUsed || 0) + tokensUsed;
   }
@@ -1308,18 +1299,18 @@ export class ChatPanel {
     if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '…';
 
     const thinking = active?.thinking ? ' · 思考' : '';
-    const usageStr = this.lastUsageText ? ` · ${this.lastUsageText}` : '';
+    const usageStr = useChatStore.getState().lastUsageText ? ` · ${useChatStore.getState().lastUsageText}` : '';
     const mode = CHAT_MODES.find(m => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
 
     // Token bar (item 12)
     let tokenBarHtml = '';
     const ctxWin = settings.agent?.contextWindow || 0;
-    if (ctxWin > 0 && this.totalTokensUsed > 0) {
-      const pct = Math.min((this.totalTokensUsed / ctxWin) * 100, 100);
+    if (ctxWin > 0 && useChatStore.getState().totalTokensUsed > 0) {
+      const pct = Math.min((useChatStore.getState().totalTokensUsed / ctxWin) * 100, 100);
       let cls = '';
       if (pct >= 90) cls = 'danger';
       else if (pct >= 80) cls = 'warn';
-      const labelK = `${(this.totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k`;
+      const labelK = `${(useChatStore.getState().totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k`;
       tokenBarHtml = `<div class="chat-token-bar-wrap" title="上下文窗口用量">
         <span>${labelK}</span>
         <div class="chat-token-bar"><div class="chat-token-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
@@ -1606,7 +1597,7 @@ export class ChatPanel {
       try {
         const data = await invoke<string>('glob', {
           pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',
-          path: this.projectPath || '.',
+          path: useChatStore.getState().projectPath || '.',
         });
         this.atFileCache = { data, ts: Date.now() };
       } catch {
@@ -1721,7 +1712,7 @@ export class ChatPanel {
       this.agent.compactNow(ctrl.signal).then(() => {
         this.messages = [];
         resetMsgIdCounter();
-        this._streamingAssistantId = null;
+        useChatStore.getState().setStreamingAssistantId(null);
         this.msgList.innerHTML = '';
         Session._rebuildMessagesFromSession(this._sessionCtx());
         this._chatMessages?.bump();
@@ -1813,14 +1804,14 @@ export class ChatPanel {
 
   /** Bump the pill badge count. Call from event handlers when pill-mode streaming. */
   private _bumpPillBadge(): void {
-    if (this.mode !== 'pill') return;
-    this.pillEventCount++;
-    this.pillBadge.textContent = String(this.pillEventCount > 99 ? '99+' : this.pillEventCount);
+    if (useChatStore.getState().panelMode !== 'pill') return;
+    useChatStore.getState().pillEventCount++;
+    this.pillBadge.textContent = String(useChatStore.getState().pillEventCount > 99 ? '99+' : useChatStore.getState().pillEventCount);
     this.pillBadge.classList.add('show');
   }
 
   private _resetPillBadge(): void {
-    this.pillEventCount = 0;
+    useChatStore.getState().pillEventCount = 0;
     this.pillBadge.textContent = '';
     this.pillBadge.classList.remove('show');
   }
