@@ -54,6 +54,7 @@ import {
 import { renderMessage, type RenderCallbacks } from './message-renderer';
 import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
 import { SlashPanelController } from './react/SlashPanel';
+import { ChatMessagesPanel } from './react/ChatMessages';
 
 // ── Constants ──
 
@@ -136,6 +137,9 @@ export class ChatPanel {
   // ── Slash panel (React-based) ──
   private _slashController: SlashPanelController | null = null;
 
+  // ── Messages (React-based) ──
+  private _chatMessages: ChatMessagesPanel | null = null;
+
   // ── New: agent panel tabs + status bar ──
   private _activeTab: 'chat' | 'tools' | 'context' = 'chat';
   private tabBar!: HTMLElement;
@@ -173,6 +177,9 @@ export class ChatPanel {
   constructor(container: HTMLElement) {
     this.container = container;
     this.buildDOM();
+
+    // ⚡ React-based message list — replaces old msgList DOM manipulation
+    this._chatMessages = new ChatMessagesPanel(this.msgList, () => this.messages);
     // ── Track user focus — file viewer / file tree / graph selection ──
     bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
     bus.on('navigate:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
@@ -636,6 +643,7 @@ export class ChatPanel {
       getAbortCtrl: () => execState.abortSignal ? { signal: execState.abortSignal } as AbortController : null,
       setAbortCtrl: (_c: any) => { /* managed by execState */ },
       getExpandedReasoning: () => this._expandedReasoning,
+      bumpMessages: () => this._chatMessages?.bump(),
     };
   }
 
