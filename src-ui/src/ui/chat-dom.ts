@@ -91,13 +91,8 @@ export interface DomContext {
   getMsgList: () => HTMLElement;
   getInputArea: () => HTMLTextAreaElement;
 
-  // Slash panel
-  _slashPanel: HTMLElement | null;
-  _slashNavIdx: number;
-  _slashVisibleCmds: CommandDef[];
-  setSlashPanel: (el: HTMLElement | null) => void;
-  setSlashNavIdx: (n: number) => void;
-  setSlashVisibleCmds: (cmds: CommandDef[]) => void;
+  // Slash panel — migrated to React SlashPanelController
+  _slashController: { show(query?: string): void; hide(): void; navigate(delta: number): boolean; select(): CommandDef | null; visible: boolean } | null;
 
   // @ autocomplete
   atPopup: HTMLElement | null;
@@ -415,7 +410,7 @@ export function buildDOM(ctx: DomContext): void {
       }
     }
     // ── / slash panel keyboard nav ──
-    if (ctx._slashPanel?.classList.contains('open')) {
+    if (ctx._slashController?.visible) {
       if (e.key === 'ArrowDown') { e.preventDefault(); ctx.navigateSlashPanel(1); return; }
       if (e.key === 'ArrowUp')   { e.preventDefault(); ctx.navigateSlashPanel(-1); return; }
       if (e.key === 'Enter')     { e.preventDefault(); ctx.selectSlashItem(); return; }
@@ -461,7 +456,7 @@ export function buildDOM(ctx: DomContext): void {
     }
     if (e.key === 'Escape') {
       // Close popups first
-      if (ctx._slashPanel?.classList.contains('open')) {
+      if (ctx._slashController?.visible) {
         ctx.hideSlashPanel();
         return;
       }

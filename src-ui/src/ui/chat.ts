@@ -53,6 +53,7 @@ import {
 } from './message-model';
 import { renderMessage, type RenderCallbacks } from './message-renderer';
 import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
+import { SlashPanelController } from './react/SlashPanel';
 
 // ── Constants ──
 
@@ -132,10 +133,8 @@ export class ChatPanel {
   private pillBadge!: HTMLElement;
   private _lastAgentState: 'idle' | 'thinking' | 'running' | 'error' = 'idle';
 
-  // ── Slash inline panel (command palette, registry-driven) ──
-  private _slashPanel: HTMLElement | null = null;
-  private _slashNavIdx = 0;
-  private _slashVisibleCmds: CommandDef[] = [];
+  // ── Slash panel (React-based) ──
+  private _slashController: SlashPanelController | null = null;
 
   // ── New: agent panel tabs + status bar ──
   private _activeTab: 'chat' | 'tools' | 'context' = 'chat';
@@ -534,14 +533,8 @@ export class ChatPanel {
       getPanel: () => this.panel,
       getMsgList: () => this.msgList,
       getInputArea: () => this.inputArea,
-      // Slash panel
-      _slashPanel: this._slashPanel,
-      _slashNavIdx: this._slashNavIdx,
-      _slashVisibleCmds: this._slashVisibleCmds,
-      setSlashPanel: (el) => { this._slashPanel = el; },
-      setSlashNavIdx: (n) => { this._slashNavIdx = n; },
-      setSlashVisibleCmds: (cmds) => { this._slashVisibleCmds = cmds; },
-      // @ autocomplete
+      // Slash panel — migrated to React
+      _slashController: this._slashController,      // @ autocomplete
       atPopup: this.atPopup,
       setAtPopup: (el) => { this.atPopup = el; },
       atIdx: this.atIdx,
@@ -1307,12 +1300,15 @@ export class ChatPanel {
 
     this._buildModePopup(mode);
 
-    // ── Slash panel: create once, outside footerEl so innerHTML can't kill it ──
-    this._setupSlashPanel();
-    // Harden: force-hide panel during footer rebuild to prevent ghost artifacts
-    // from leftover state when the panel was open during a mode transition.
-    this._hideSlashPanel();
-    const panel = this._slashPanel!;
+    // ── Slash panel: React-based, mounted outside footerEl so rebuilds don't touch it ──
+    if (!this._slashController) {
+      this._slashController = new SlashPanelController(
+        this.panel,
+        CommandRegistry.instance.getAll(),
+        (cmd) => this._executeCommand(cmd),
+      );
+    }
+    this._slashController.hide();
 
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
@@ -1340,8 +1336,8 @@ export class ChatPanel {
       document.removeEventListener('click', this.footerClickCleanup as unknown as EventListener);
     }
     const handler = (e: MouseEvent) => {
-      if (!panel.contains(e.target as Node) && e.target !== trigger && !this.inputArea.contains(e.target as Node)) {
-        this._hideSlashPanel();
+      if (this._slashController?.visible && e.target !== trigger && !this.inputArea.contains(e.target as Node)) {
+        this._slashController.hide();
       }
     };
     document.addEventListener('click', handler);
@@ -1650,23 +1646,10 @@ export class ChatPanel {
   /** Create slash panel once, outside footerEl so updateFooter's innerHTML wipe
    *  doesn't destroy it. Anchored to panel (position:fixed), floats above footer. */
   private _setupSlashPanel(): void {
-    if (this._slashPanel) return;
-    const panel = document.createElement('div');
-    panel.className = 'chat-slash-panel';
-    this._slashPanel = panel;
-    this.panel.appendChild(panel);
-
+    // ⚡ React-based — SlashPanelController handles all rendering.
+    // Command registry + local handlers still wired here for ChatPanel context.
     CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
     this._wireCommandHandlers();
-
-    panel.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      const item = (e.target as HTMLElement).closest('.sp-item') as HTMLElement;
-      if (!item) return;
-      const cmdId = item.dataset['cmdId'] || '';
-      const cmd = this._slashVisibleCmds.find(c => c.id === cmdId);
-      if (cmd) this._executeCommand(cmd);
-    });
   }
 
   /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */
@@ -1730,57 +1713,24 @@ export class ChatPanel {
     }
   }
 
-  /** Show the slash panel with optional query filter. */
+  /** Show the slash panel with optional query filter. Delegate to React. */
   private _showSlashPanel(query?: string): void {
-    if (!this._slashPanel) return;
-    const cmds = query ? CommandRegistry.instance.filter(query) : CommandRegistry.instance.getAll();
-    this._slashVisibleCmds = cmds;
-    this._slashNavIdx = 0;
-    this._slashPanel.innerHTML = CommandRegistry.instance.renderPanel(cmds, query);
-    this._slashPanel.classList.add('open');
-    this._slashPanel.style.display = '';
-    // Highlight first item
-    this._highlightSlashItem(0);
+    this._slashController?.show(query);
   }
 
-  /** Hide the slash panel — aggressive cleanup: clear DOM + force layout removal.
-   *  Using style.display (not just CSS class) because CSS cascade can be unreliable
-   *  when multiple rules fight over visibility during streaming/panel morph transitions. */
+  /** Hide the slash panel. Delegate to React — no CSS hack needed. */
   private _hideSlashPanel(): void {
-    if (!this._slashPanel) return;
-    this._slashPanel.classList.remove('open');
-    this._slashPanel.style.display = 'none';
-    this._slashPanel.innerHTML = '';
-    this._slashVisibleCmds = [];
-    this._slashNavIdx = 0;
-  }
-
-  /** Highlight the nth visible item in the slash panel. */
-  private _highlightSlashItem(idx: number): void {
-    if (!this._slashPanel) return;
-    const items = this._slashPanel.querySelectorAll('.sp-item');
-    items.forEach((el, i) => {
-      el.classList.toggle('sp-active', i === idx);
-      if (i === idx) (el as HTMLElement).scrollIntoView?.({ block: 'nearest' });
-    });
-    this._slashNavIdx = idx;
-  }
-
-  /** Execute the currently highlighted slash command. */
-  private _selectSlashItem(): void {
-    if (!this._slashPanel?.classList.contains('open')) return;
-    const cmd = this._slashVisibleCmds[this._slashNavIdx];
-    if (cmd) this._executeCommand(cmd);
+    this._slashController?.hide();
   }
 
   /** Navigate slash panel items with arrow keys. Returns true if handled. */
   private _navigateSlashPanel(delta: number): boolean {
-    if (!this._slashPanel?.classList.contains('open')) return false;
-    const max = this._slashVisibleCmds.length;
-    if (max === 0) return false;
-    const next = (this._slashNavIdx + delta + max) % max;
-    this._highlightSlashItem(next);
-    return true;
+    return this._slashController?.navigate(delta) ?? false;
+  }
+
+  /** Execute the currently highlighted slash command. */
+  private _selectSlashItem(): void {
+    this._slashController?.select();
   }
 
   private handleSlashInput(): void {
