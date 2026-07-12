@@ -92,6 +92,9 @@ export interface StreamContext {
   ) => void;
   _updateTokens: (tokensUsed: number) => void;
 
+  // ⚡ React: 消息数组变更后通知重渲染（替代全量 DOM 重建）
+  bumpMessages?: () => void;
+
   // ── 项目路径 ──
   getProjectPath: () => string;
 
@@ -209,7 +212,7 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
   // Always run one final render while _streamingAssistantId is still set
   if (sid) {
-    _doSyncMessagesToDOM(ctx);
+  ctx.bumpMessages?.();
   }
   ctx.setStreamingAssistantId(null);
 }
@@ -312,7 +315,7 @@ export function _syncMessagesToDOM(ctx: StreamContext): void {
     if (ctx.getSyncRafId() !== null) return;
     ctx.setSyncRafId(requestAnimationFrame(() => {
       ctx.setSyncRafId(null);
-      _doSyncMessagesToDOM(ctx);
+    ctx.bumpMessages?.();
     }));
     return;
   }
@@ -428,14 +431,14 @@ export function _scheduleSync(ctx: StreamContext): void {
   const rafId = requestAnimationFrame(() => {
     if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     ctx.setSyncRafId(null);
-    _doSyncMessagesToDOM(ctx);
+  ctx.bumpMessages?.();
   });
   ctx.setSyncRafId(rafId);
   // Safety net: if rAF is lost (tab hidden / OS suspend), force render after 500ms.
   timeoutId = setTimeout(() => {
     if (timeoutId !== null) { timeoutId = null; }
     ctx.setSyncRafId(null);
-    _doSyncMessagesToDOM(ctx);
+  ctx.bumpMessages?.();
   }, 500);
 }
 
