@@ -10,7 +10,7 @@ import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { FileViewer } from './ui/file-viewer';
-import { TimelinePanel } from './ui/timeline';
+import { TimelinePanel } from './ui/react/TimelinePanel';
 import { ConstraintsPanel } from './ui/constraints';
 import { HotspotsPanel } from './ui/hotspots';
 import { DataflowPanel } from './ui/dataflow-panel';
