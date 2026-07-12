@@ -141,7 +141,9 @@ export function stripLineNumbers(text: string): string {
 export function renderSessionTabs(ctx: SessionContext): void {
   ctx.sessionTabs.innerHTML = '';
   const multi = sessions.length > 1;
-  ctx.sessionTabs.style.display = multi ? '' : 'none';
+  // Toggle the entire session bar row — hidden when ≤ 1 session
+  const bar = ctx.sessionTabs.parentElement;
+  if (bar) bar.style.display = multi ? '' : 'none';
 
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i];
