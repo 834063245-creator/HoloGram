@@ -9,6 +9,7 @@ import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { iconHtml } from './icons';
+import { execState } from '../agent/execution-state';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
@@ -250,7 +251,7 @@ export function _renderCallbacks(ctx: StreamContext): RenderCallbacks {
       const userText = pair?.userText || '';
       if (!userText) return;
       ctx.inputArea.value = '';
-      ctx.setRunning(true);
+      const signal = execState.start();
       addTurnSep(ctx);
       const agent = ctx.getAgent();
       if (!agent) return;
@@ -261,17 +262,15 @@ export function _renderCallbacks(ctx: StreamContext): RenderCallbacks {
         assistantBubble: null,
         sessionIndex: sessIdx,
       });
-      ctx.setAbortCtrl(new AbortController());
       agent
-        .run(ctx.getAbortCtrl()!.signal, userText)
+        .run(signal, userText)
         .catch((err: any) => {
           if (!err.message?.includes('aborted')) {
             ctx.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
           }
         })
         .finally(() => {
-          ctx.setRunning(false);
-          ctx.setAbortCtrl(null);
+          execState.done();
           finishTurn(ctx);
         });
     },
