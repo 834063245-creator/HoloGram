@@ -248,7 +248,6 @@ pub(crate) fn handler_delayed(args: &Value) -> ToolResponse {
 
 pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
     let limit = get_usize(args, "limit", 5).max(1);
-    let root = project_root();
     ToolResponse::Success(with_store(|idx| {
         // ── Step 1: Aggregate graph structure scores per file ──
         // Walk all nodes, group by file (from location), sum fan + coupling penalty.
@@ -274,69 +273,25 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
                 .or_insert((node_score, 1));
         }
 
-        // ── Step 2: Query dataflow engine for per-file L3/L4 ──
-        let files: Vec<PathBuf> = discover_source_files(&root, 500);
-        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-        let mut file_l3l4: std::collections::HashMap<String, (u32, u32)> = std::collections::HashMap::new();
-        for r in &df_results {
-            if let Ok(df) = &r.result {
-                let mut l3 = 0u32;
-                let mut l4 = 0u32;
-                for s in &df.scopes {
-                    l3 += (s.reads.len() + s.writes.len()) as u32;
-                    l4 += (s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len()) as u32;
-                }
-                l3 += df.shared.len() as u32;
-                let key = r.file.replace('\\', "/");
-                file_l3l4.entry(key).and_modify(|(e3, e4)| { *e3 += l3; *e4 += l4; }).or_insert((l3, l4));
-            }
-        }
-
-        // ── Step 3: Merge structure + dataflow into per-file fragility ──
-        let mut scored: Vec<(f64, String, u32, u32, usize)> = Vec::new();
+        // ── Step 2: Score and format (structure only; L3/L4 via trace_dataflow on demand) ──
+        let mut scored: Vec<(f64, String, usize)> = Vec::new();
         for (file, (struct_score, node_count)) in &file_scores {
-            // Normalize structure score by node count (average fragility per node)
             let avg_struct = struct_score / (*node_count as f64).max(1.0);
-            // Match L3/L4 by file path (try both directions)
-            let mut l3 = 0u32;
-            let mut l4 = 0u32;
-            for (df_file, (d3, d4)) in &file_l3l4 {
-                if file.ends_with(df_file.as_str()) || df_file.ends_with(file.as_str()) || file == df_file {
-                    l3 = *d3;
-                    l4 = *d4;
-                    break;
-                }
-            }
-            // Final score: structure foundation + dataflow penalty
-            // Structure is the base; L4 weighs 4x, L3 weighs 3x (same ratio as coupling_report)
-            let df_penalty = (l4 as f64) * 4.0 + (l3 as f64) * 3.0;
-            let total = avg_struct + df_penalty;
-            scored.push((total, file.clone(), l3, l4, *node_count));
+            scored.push((avg_struct, file.clone(), *node_count));
         }
-
-        // Also include files that have dataflow but no graph nodes (rare but possible)
-        for (df_file, (l3, l4)) in &file_l3l4 {
-            let already = scored.iter().any(|(_, f, _, _, _)| f == df_file || df_file.ends_with(f.as_str()) || f.ends_with(df_file.as_str()));
-            if !already && (*l3 > 0 || *l4 > 0) {
-                let df_penalty = (*l4 as f64) * 4.0 + (*l3 as f64) * 3.0;
-                scored.push((df_penalty, df_file.clone(), *l3, *l4, 0));
-            }
-        }
-
-        // ── Step 4: Sort and format ──
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
 
-        let result: Vec<serde_json::Value> = scored.iter().map(|(score, file, l3, l4, nodes)| {
+        let result: Vec<serde_json::Value> = scored.iter().map(|(score, file, nodes)| {
             let short_name = file.rsplit('/').next().unwrap_or(file).to_string();
             json!({
                 "module": short_name,
                 "file": file,
                 "fragility_score": format!("{:.1}", score),
-                "l3_edges": l3,
-                "l4_edges": l4,
+                "l3_edges": 0,
+                "l4_edges": 0,
                 "node_count": nodes,
-                "_score_breakdown": format!("struct={:.1} + L3×3={} + L4×4={}", score - (*l4 as f64) * 4.0 - (*l3 as f64) * 3.0, l3, l4),
+                "_score_breakdown": format!("struct={:.1}", score),
             })
         }).collect();
 
@@ -890,20 +845,6 @@ pub(crate) fn handler_run_health(args: &Value) -> ToolResponse {
             details: json!({}),
         };
     }
-    let root = project_root();
-    let dataflow_l4: usize = {
-        let files: Vec<PathBuf> = discover_source_files(&root, 500);
-        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&files);
-        let mut l4 = 0usize;
-        for r in &df_results {
-            if let Ok(df) = &r.result {
-                for s in &df.scopes {
-                    l4 += s.triggers.len() + s.awaits_callbacks.len() + s.sequence_calls.len();
-                }
-            }
-        }
-        l4
-    };
     ToolResponse::Success(with_store(|idx| {
         let summary = graph_summary_from_index(idx);
         let n = idx.node_count().max(1) as f64;
@@ -914,7 +855,7 @@ pub(crate) fn handler_run_health(args: &Value) -> ToolResponse {
         let fragile = fragile_nodes_from_index(idx, 20);
         let fragile_count = fragile.len().min(20) as f64;
         let fragile_score = (1.0 - fragile_count / 20.0).max(0.0) * 20.0;
-        let l4_count = dataflow_l4.max(count_l4_from_index(idx)) as f64;
+        let l4_count = count_l4_from_index(idx) as f64;
         let coupling_ratio = if e > 0.0 { l4_count / e } else { 0.0 };
         let coupling_score = (1.0 - coupling_ratio).max(0.0) * 30.0;
         let score = ((density + coupling_score + fragile_score + cycle_score) as u32).min(100);
