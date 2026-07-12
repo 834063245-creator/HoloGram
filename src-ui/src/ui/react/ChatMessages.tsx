@@ -179,36 +179,29 @@ const ChatMessagesApp: React.FC<{
   callbacks: ChatMessagesCallbacks;
 }> = ({ messages, callbacks }) => {
   const listRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef(0); // increments on each render to drive auto-scroll
+  frameRef.current++;
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedReasoning, setExpandedReasoning] = useState<Set<number>>(new Set());
   const lastMsgCount = useRef(0);
 
-  // Auto-scroll on new messages
+  // Auto-scroll + new-turn reset: trigger on version bump (every streaming frame)
   useEffect(() => {
     const list = listRef.current;
     if (!list || messages.length === 0) return;
 
+    // Reset auto-follow when a new user message appears
     if (messages.length > lastMsgCount.current && messages[messages.length - 1]?.role === 'user') {
       setUserScrolledUp(false);
     }
     lastMsgCount.current = messages.length;
 
+    // Auto-follow during streaming
     if (!userScrolledUp) {
       list.scrollTop = list.scrollHeight;
     }
-  }, [messages.length, userScrolledUp]);
-
-  // Streaming auto-scroll (timer-based, since messages.length doesn't change during stream)
-  const isStreaming = messages.some(m => m.role === 'assistant' && (m as AssistantMessage).status === 'streaming');
-  useEffect(() => {
-    if (!isStreaming) return;
-    const iv = setInterval(() => {
-      const list = listRef.current;
-      if (list && !userScrolledUp) list.scrollTop = list.scrollHeight;
-    }, 150);
-    return () => clearInterval(iv);
-  }, [isStreaming, userScrolledUp]);
+  }, [frameRef.current, messages.length]);
 
   // Scroll tracking
   useEffect(() => {
@@ -217,7 +210,7 @@ const ChatMessagesApp: React.FC<{
     const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) setUserScrolledUp(true); };
     const onScroll = () => {
       const dist = list.scrollHeight - list.scrollTop - list.clientHeight;
-      if (dist <= 40) setUserScrolledUp(false);
+      setUserScrolledUp(dist > 40);
     };
     list.addEventListener('wheel', onWheel);
     list.addEventListener('scroll', onScroll);
