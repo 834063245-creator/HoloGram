@@ -460,7 +460,6 @@ const ChatMessagesApp: React.FC<{
   const stickRef = useRef(true);
   const autoScrollRaf = useRef<number | null>(null);
   const lastMsgCount = useRef(0);
-  const [userScrolledUp, setUserScrolledUp] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   // Auto-scroll: coalesce into single pending rAF
@@ -470,7 +469,6 @@ const ChatMessagesApp: React.FC<{
 
     if (messages.length > lastMsgCount.current && messages[messages.length - 1]?.role === 'user') {
       stickRef.current = true;
-      setUserScrolledUp(false);
     }
     lastMsgCount.current = messages.length;
 
@@ -491,21 +489,29 @@ const ChatMessagesApp: React.FC<{
   }, []);
 
   // Scroll tracking: capture phase wheel + scroll event
+  // ponytail: direction-aware — only re-enable auto-scroll when user actively
+  // scrolls DOWN to the bottom. A scroll-up near the bottom won't re-engage it,
+  // fixing the "can't scroll up during streaming" bug.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
 
+    let lastScrollTop = list.scrollTop;
+
     const onWheelCapture = (e: WheelEvent) => {
-      if (!list || list.scrollHeight - list.clientHeight <= 1) return;
+      // Ignore ctrl+wheel (zoom), horizontal scroll, scroll-down
       if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY >= 0) return;
       stickRef.current = false;
-      setUserScrolledUp(true);
     };
 
     const onScroll = () => {
-      const atBottom = isNearBottom(list);
-      stickRef.current = atBottom;
-      setUserScrolledUp(!atBottom);
+      const currentTop = list.scrollTop;
+      const scrollingDown = currentTop > lastScrollTop;
+      lastScrollTop = currentTop;
+
+      if (scrollingDown && isNearBottom(list)) {
+        stickRef.current = true;
+      }
     };
 
     list.addEventListener('wheel', onWheelCapture, true);
