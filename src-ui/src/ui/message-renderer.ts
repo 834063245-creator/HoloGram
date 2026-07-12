@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   FileAttachment,
   MessageId,
+  PermissionMessage,
   ReasonPart,
   TextPart,
   ToolCallPart,
@@ -500,6 +501,54 @@ function renderNoticeMessage(msg: ChatMessage & { role: 'notice' }): HTMLElement
   return el;
 }
 
+// ── Permission card ───────────────────────────────────────
+
+function renderPermissionCard(msg: PermissionMessage): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'perm-inline-card';
+  card.dataset['permId'] = msg._id;
+
+  const header = document.createElement('div');
+  header.className = 'perm-inline-header';
+  header.innerHTML = `${iconHtml('shield', 14)} <span>授权请求</span>`;
+
+  const toolEl = document.createElement('div');
+  toolEl.className = 'perm-inline-tool';
+  toolEl.textContent = msg.toolName;
+
+  const descEl = document.createElement('div');
+  descEl.className = 'perm-inline-desc';
+  descEl.textContent = msg.reason.length > 200 ? msg.reason.slice(0, 197) + '...' : msg.reason;
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'msg-perm-btns';
+
+  const makeBtn = (label: string, cssClass: string, result: { allow: boolean; remember: boolean }) => {
+    const btn = document.createElement('button');
+    btn.className = `msg-perm-btn ${cssClass}`;
+    btn.textContent = label;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); msg.resolve(result); });
+    return btn;
+  };
+
+  btnRow.appendChild(makeBtn('本次会话允许', 'perm-always', { allow: true, remember: true }));
+  btnRow.appendChild(makeBtn('允许', 'perm-once', { allow: true, remember: false }));
+  btnRow.appendChild(makeBtn('拒绝', 'perm-deny', { allow: false, remember: false }));
+
+  card.appendChild(header);
+  if (msg.subject) {
+    const subEl = document.createElement('div');
+    subEl.className = 'perm-inline-subject';
+    subEl.textContent = msg.subject.length > 120 ? msg.subject.slice(0, 117) + '...' : msg.subject;
+    card.appendChild(subEl);
+  }
+  card.appendChild(toolEl);
+  card.appendChild(descEl);
+  card.appendChild(btnRow);
+
+  return card;
+}
+
 // ── Top-level dispatcher ─────────────────────────────────
 
 export function renderMessage(
@@ -513,6 +562,8 @@ export function renderMessage(
       return renderAssistantMessage(msg as AssistantMessage, callbacks);
     case 'notice':
       return renderNoticeMessage(msg as any);
+    case 'perm':
+      return renderPermissionCard(msg as PermissionMessage);
     default:
       return document.createElement('div');
   }

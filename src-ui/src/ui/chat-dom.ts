@@ -11,7 +11,6 @@ import type { CommandDef } from './command-registry';
 import type { ChatMessage, MessageId } from './message-model';
 import type { ToolSchema } from '../provider/types';
 import { iconHtml } from './icons';
-import { registerPendingCard } from '../agent/permission';
 import { loadSettings } from '../settings';
 import DOMPurify from 'dompurify';
 import * as Session from './chat-session';
@@ -61,7 +60,6 @@ export interface DomContext {
   closeHistory: () => void;
 
   // 权限
-  _permCardCount: number;
   running: boolean;
 
   // ── DOM element references (set by buildDOM, read by other methods) ──
@@ -166,10 +164,6 @@ export interface DomContext {
 
   // ── 文件附件 ──
   attachedFiles: { path: string; name: string; size: number }[];
-
-  // ── 权限队列 ──
-  _permQueue: Promise<void>;
-  setPermQueue: (p: Promise<void>) => void;
 
   // 历史面板状态
   historyPanel: HTMLElement | null;
@@ -710,124 +704,6 @@ export function renderContextView(ctx: DomContext): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// C. 权限卡片
-// ═══════════════════════════════════════════════════════════════════
-
-export function showPermissionCard(
-  ctx: DomContext,
-  toolName: string,
-  reason: string,
-  subject: string,
-): Promise<{ allow: boolean; remember: boolean }> {
-  // Serialise: wait for any previous card to resolve before showing the next one
-  const prev = ctx._permQueue;
-  let resolveQueue: () => void;
-  ctx.setPermQueue(new Promise(r => { resolveQueue = r; }));
-
-  return prev.then(() => _showPermissionCardInner(ctx, toolName, reason, subject)).finally(() => resolveQueue!());
-}
-
-export function _showPermissionCardInner(
-  ctx: DomContext,
-  toolName: string,
-  reason: string,
-  subject: string,
-): Promise<{ allow: boolean; remember: boolean }> {
-  if (ctx.getMode() !== 'panel') {
-    ctx.killPanelTweens();
-    ctx.summonPanel();
-  }
-  return new Promise((resolve) => {
-    ctx._permCardCount++;
-    const card = document.createElement('div');
-    card.className = 'perm-inline-card';
-
-    const header = document.createElement('div');
-    header.className = 'perm-inline-header';
-    header.innerHTML = `${iconHtml('shield', 14)} <span>授权请求</span>`;
-
-    const toolEl = document.createElement('div');
-    toolEl.className = 'perm-inline-tool';
-    toolEl.textContent = toolName;
-
-    const descEl = document.createElement('div');
-    descEl.className = 'perm-inline-desc';
-    descEl.textContent = reason.length > 200 ? reason.slice(0, 197) + '...' : reason;
-
-    const btnRow = document.createElement('div');
-    btnRow.className = 'msg-perm-btns';
-
-    const cleanupCard = () => {
-      document.removeEventListener('keydown', onKey);
-      card.style.transition = 'all 0.25s ease';
-      card.style.maxHeight = card.scrollHeight + 'px';
-      requestAnimationFrame(() => {
-        const resultLabel = resultRef.allow
-          ? (resultRef.remember ? '本次会话已允许' : '已允许')
-          : '已拒绝';
-        const icon = resultRef.allow ? 'check-circle' : 'close';
-        const color = resultRef.allow ? 'var(--pass, #48cc68)' : 'var(--fail, #d94444)';
-        card.innerHTML = `<span style="font-size:calc(11px*var(--font-scale));color:${color};display:flex;align-items:center;gap:6px;padding:4px 0">${iconHtml(icon, 12)} ${toolName} — ${resultLabel}</span>`;
-        card.className = 'msg-notice ' + (resultRef.allow ? 'msg-notice-info' : 'msg-notice-warn');
-        card.style.maxHeight = '40px';
-      });
-    };
-
-    let resultRef: { allow: boolean; remember: boolean } = { allow: false, remember: false };
-    const resolveAndClose = (result: { allow: boolean; remember: boolean }) => {
-      ctx._permCardCount = Math.max(0, ctx._permCardCount - 1);
-      resultRef = result;
-      cleanupCard();
-      resolve(result);
-    };
-    registerPendingCard(resolve, cleanupCard);
-
-    const makeBtn = (label: string, cssClass: string, result: { allow: boolean; remember: boolean }) => {
-      const btn = document.createElement('button');
-      btn.className = `msg-perm-btn ${cssClass}`;
-      btn.textContent = label;
-      btn.addEventListener('click', (e) => { e.stopPropagation(); resolveAndClose(result); });
-      return btn;
-    };
-
-    btnRow.appendChild(makeBtn('本次会话允许', 'perm-always', { allow: true, remember: true }));
-    btnRow.appendChild(makeBtn('允许', 'perm-once', { allow: true, remember: false }));
-    btnRow.appendChild(makeBtn('拒绝', 'perm-deny', { allow: false, remember: false }));
-
-    card.appendChild(header);
-    if (subject) {
-      const subEl = document.createElement('div');
-      subEl.className = 'perm-inline-subject';
-      subEl.textContent = subject.length > 120 ? subject.slice(0, 117) + '...' : subject;
-      card.appendChild(subEl);
-    }
-    card.appendChild(toolEl);
-    card.appendChild(descEl);
-    card.appendChild(btnRow);
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') { e.preventDefault(); resolveAndClose({ allow: true, remember: false }); }
-      else if (e.key === 'Escape') { e.preventDefault(); resolveAndClose({ allow: false, remember: false }); }
-      else if (e.key === 'y' && e.ctrlKey) { e.preventDefault(); resolveAndClose({ allow: true, remember: true }); }
-    };
-    document.addEventListener('keydown', onKey);
-
-    // Force-reset scroll suppression
-    ctx.setUserScrolledUp(false);
-
-    // Insert directly into msgList
-    const currentBubble = ctx.getCurrentBubble();
-    const msgList = ctx.getMsgList();
-    if (currentBubble && currentBubble.parentNode) {
-      currentBubble.parentNode.insertBefore(card, currentBubble.nextSibling);
-    } else {
-      msgList.appendChild(card);
-    }
-    ctx.scrollBottom();
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // D. 历史面板
 // ═══════════════════════════════════════════════════════════════════
 
@@ -882,7 +758,13 @@ export function openHistory(ctx: DomContext): void {
     loading.textContent = '加载中…';
     list.appendChild(loading);
 
-    ctx.listSavedSessions(projectPath).then(sessions => {
+    // ── 双重超时保护：listSavedSessions 内部有 10s 超时，这里 15s 兜底 ──
+    const SESSION_LOAD_TIMEOUT = 15_000;
+    const timeoutP = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('history list timeout')), SESSION_LOAD_TIMEOUT),
+    );
+
+    Promise.race([ctx.listSavedSessions(projectPath), timeoutP]).then(sessions => {
       if (!ctx.historyOpen) return; // panel closed while loading
       loading.remove();
       if (sessions.length === 0) {
@@ -912,7 +794,7 @@ export function openHistory(ctx: DomContext): void {
         );
         if (ctx.historyOpen) list.appendChild(entry);
       }
-    }).catch(() => { if (ctx.historyOpen) loading.textContent = '加载失败'; });
+    }).catch(() => { if (ctx.historyOpen) loading.textContent = '加载超时，请重试'; });
   }
 
   panel.appendChild(list);
