@@ -704,69 +704,88 @@ export function renderContextView(ctx: DomContext): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// D. 历史面板
+// D. 历史面板 — 挂在 document.body，完全脱离聊天面板的 CSS transform 容器
 // ═══════════════════════════════════════════════════════════════════
 
+let _historyBackdrop: HTMLElement | null = null;
+let _historyPanel: HTMLElement | null = null;
+let _historyCloseTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function toggleHistory(ctx: DomContext): void {
-  if (ctx.historyOpen) { closeHistory(ctx); return; }
+  if (_historyPanel) { closeHistory(ctx); return; }
   openHistory(ctx);
 }
 
 export function openHistory(ctx: DomContext): void {
-  if (ctx.historyPanel) ctx.historyPanel.remove();
+  closeHistory(ctx); // ensure clean state
 
+  // ── Backdrop — full viewport, closes on click ──
+  const backdrop = document.createElement('div');
+  backdrop.className = 'chat-history-backdrop';
+  backdrop.addEventListener('click', () => closeHistory(ctx));
+  document.body.appendChild(backdrop);
+  _historyBackdrop = backdrop;
+
+  // ── Panel — centered floating card ──
   const panel = document.createElement('div');
   panel.className = 'chat-history-panel';
+  panel.addEventListener('click', (e) => e.stopPropagation()); // don't close when clicking inside
 
-  const title = document.createElement('div');
-  title.className = 'chat-history-title';
-  title.textContent = '历史会话';
-  panel.appendChild(title);
+  const header = document.createElement('div');
+  header.className = 'chat-history-panel-header';
+  header.innerHTML = `<span class="chat-history-panel-title">历史会话</span>`;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'chat-history-panel-close';
+  closeBtn.innerHTML = '×';
+  closeBtn.title = '关闭';
+  closeBtn.addEventListener('click', () => closeHistory(ctx));
+  header.appendChild(closeBtn);
+
+  panel.appendChild(header);
 
   const list = document.createElement('div');
-  list.className = 'chat-history-list';
+  list.className = 'chat-history-panel-list';
 
-  // In-memory sessions
-  if (Session.getSessions().length > 0) {
-    const hdr = document.createElement('div');
-    hdr.className = 'chat-history-section';
-    hdr.textContent = `当前打开 (${Session.getSessions().length})`;
-    list.appendChild(hdr);
-
-    for (let i = 0; i < Session.getSessions().length; i++) {
-      const s = Session.getSessions()[i];
-      const entry = buildHistoryEntry(
-        s.label,
-        `消息: ${s.agent.getSession().filter(m => m.role !== 'system').length}`,
-        () => { if (i !== Session.getActiveIdx()) ctx.switchSession(i); closeHistory(ctx); },
-        i === Session.getActiveIdx(),
-      );
-      list.appendChild(entry);
-    }
+  // ── Section: 当前打开 ──
+  const memorySessions = Session.getSessions();
+  if (memorySessions.length > 0) {
+    renderSection(list, `当前打开 (${memorySessions.length})`, memorySessions.map((s, i) => {
+      const msgCount = s.agent.getSession().filter(m => m.role !== 'system').length;
+      return {
+        label: s.label,
+        subtitle: `消息: ${msgCount}`,
+        active: i === Session.getActiveIdx(),
+        onClick: () => {
+          if (i !== Session.getActiveIdx()) ctx.switchSession(i);
+          closeHistory(ctx);
+        },
+      };
+    }));
   }
 
-  // Disk sessions — scanned from .hologram/sessions/
+  // ── Section: 磁盘存档 ──
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
-    const hdr = document.createElement('div');
-    hdr.className = 'chat-history-section';
-    hdr.textContent = '磁盘存档';
-    list.appendChild(hdr);
+    const diskSection = document.createElement('div');
+    diskSection.className = 'chat-history-section';
+    diskSection.textContent = '磁盘存档';
+    list.appendChild(diskSection);
 
     const loading = document.createElement('div');
     loading.className = 'chat-history-entry';
     loading.textContent = '加载中…';
     list.appendChild(loading);
 
-    // ── 双重超时保护：listSavedSessions 内部有 10s 超时，这里 15s 兜底 ──
     const SESSION_LOAD_TIMEOUT = 15_000;
     const timeoutP = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('history list timeout')), SESSION_LOAD_TIMEOUT),
     );
 
     Promise.race([ctx.listSavedSessions(projectPath), timeoutP]).then(sessions => {
-      if (!ctx.historyOpen) return; // panel closed while loading
+      if (!_historyPanel) return;
       loading.remove();
+
       if (sessions.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'chat-history-entry';
@@ -774,8 +793,9 @@ export function openHistory(ctx: DomContext): void {
         list.appendChild(empty);
         return;
       }
-      for (const s of sessions) {
-        const already = Session.getSessions().findIndex(t => t.id === s.id);
+
+      sessions.forEach(s => {
+        const already = memorySessions.findIndex(t => t.id === s.id);
         const entry = buildHistoryEntry(
           s.label,
           `${s.msgCount} 条消息${s.savedAt ? ' · ' + new Date(s.savedAt).toLocaleString('zh-CN') : ''}`,
@@ -792,26 +812,36 @@ export function openHistory(ctx: DomContext): void {
             }
           },
         );
-        if (ctx.historyOpen) list.appendChild(entry);
-      }
-    }).catch(() => { if (ctx.historyOpen) loading.textContent = '加载超时，请重试'; });
+        list.appendChild(entry);
+      });
+    }).catch(() => { if (_historyPanel) loading.textContent = '加载超时，请重试'; });
   }
 
   panel.appendChild(list);
-
-  const overlay = document.createElement('div');
-  overlay.className = 'chat-history-overlay';
-  overlay.addEventListener('click', () => closeHistory(ctx));
-  panel.appendChild(overlay);
-
-  ctx.getPanel().appendChild(panel);
-  ctx.setHistoryPanel(panel);
-  ctx.setHistoryOpen(true);
+  document.body.appendChild(panel);
+  _historyPanel = panel;
 }
 
 export function closeHistory(ctx: DomContext): void {
-  if (ctx.historyPanel) { ctx.historyPanel.remove(); ctx.setHistoryPanel(null); }
+  if (_historyBackdrop) { _historyBackdrop.remove(); _historyBackdrop = null; }
+  if (_historyPanel) { _historyPanel.remove(); _historyPanel = null; }
+  if (_historyCloseTimer) { clearTimeout(_historyCloseTimer); _historyCloseTimer = null; }
   ctx.setHistoryOpen(false);
+}
+
+/** Tiny helper: render a section of entries into the list. */
+function renderSection(
+  list: HTMLElement,
+  heading: string,
+  entries: Array<{ label: string; subtitle: string; active: boolean; onClick: () => void }>,
+): void {
+  const hdr = document.createElement('div');
+  hdr.className = 'chat-history-section';
+  hdr.textContent = heading;
+  list.appendChild(hdr);
+  entries.forEach(e => {
+    list.appendChild(buildHistoryEntry(e.label, e.subtitle, e.onClick, e.active));
+  });
 }
 
 export function buildHistoryEntry(
@@ -837,17 +867,8 @@ export function buildHistoryEntry(
     delBtn.className = 'chat-history-del';
     delBtn.innerHTML = '×';
     delBtn.title = '删除此会话';
-    Object.assign(delBtn.style, {
-      position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
-      width: '20px', height: '20px', padding: '0', fontSize: 'calc(14px * var(--font-scale))',
-      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', borderRadius: '0', lineHeight: '1',
-    });
-    delBtn.addEventListener('mouseenter', () => { delBtn.style.color = '#e53e3e'; delBtn.style.background = 'rgba(229,62,62,0.1)'; });
-    delBtn.addEventListener('mouseleave', () => { delBtn.style.color = 'var(--text-muted)'; delBtn.style.background = 'none'; });
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
     entry.appendChild(delBtn);
-    entry.style.position = 'relative';
   }
 
   return entry;
