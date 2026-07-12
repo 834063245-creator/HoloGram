@@ -25,7 +25,8 @@
     "highlight.js": "^11.11.1",
     "marked": "^18.0.5",
     "monaco-editor": "^0.55.1",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.70",
