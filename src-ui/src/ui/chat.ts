@@ -494,7 +494,6 @@ export class ChatPanel {
       abort: () => this.abort(),
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       updateFooter: () => this.updateFooter(),
-      reWireHandlers: () => this._reWireHandlers(),
       getTotalTokensUsed: () => useChatStore.getState().totalTokensUsed,
       setTotalTokensUsed: (n) => { useChatStore.getState().setTotalTokensUsed(n); },
       clearToolUsage: () => { useChatStore.getState().clearToolUsage(); },
@@ -572,7 +571,6 @@ export class ChatPanel {
       setFooterClickCleanup: (fn) => { this.footerClickCleanup = fn; },
       // DOM getters
       getPanel: () => this.panel,
-      getMsgList: () => this.msgList,
       getInputArea: () => this.inputArea,
       // Slash panel — migrated to React
       _slashController: this._slashController,      // @ autocomplete
@@ -613,9 +611,6 @@ export class ChatPanel {
       toggleToolCard: (card) => this.toggleToolCard(card),
       killPanelTweens: () => this.killPanelTweens(),
       setupResize: (handle) => this.setupResize(handle),
-      getUserScrolledUp: () => useChatStore.getState().userScrolledUp,
-      setUserScrolledUp: (v) => { useChatStore.getState().userScrolledUp = v; },
-      // ⚡ React handles scrolling internally
       hintText: () => this.hintText(),
       refreshHint: () => this.refreshHint(),
       getLastAgentDiag: () => useChatStore.getState().lastAgentDiag,
@@ -631,7 +626,6 @@ export class ChatPanel {
       historyOpen: this.historyOpen,
       setHistoryOpen: (v) => { this.historyOpen = v; },
       toolCategory: (name) => ChatPanel.toolCategory(name),
-      reWireHandlers: () => this._reWireHandlers(),
       // Session persistence callbacks
       listSavedSessions: (p) => this.listSavedSessions(p),
       loadSessionFromDisk: (p, id) => this.loadSessionFromDisk(p, id),
@@ -642,7 +636,6 @@ export class ChatPanel {
   /** Build StreamContext bridge for extracted stream rendering functions. */
   private _streamCtx(): Stream.StreamContext {
     return {
-      msgList: this.msgList,
       inputArea: this.inputArea,
       getMessages: () => getChatMessages(),
       setMessages: (msgs) => { setChatMessages(msgs); },
@@ -775,12 +768,6 @@ export class ChatPanel {
   private switchSession(idx: number): void { Session.switchSession(this._sessionCtx(), idx); }
   private closeSession(idx: number): void { Session.closeSession(this._sessionCtx(), idx); }
   private async createNewSession(): Promise<void> { return Session.createNewSession(this._sessionCtx()); }
-
-  // ── DOM event re-wiring (delegated to chat-dom.ts) ──
-
-  private _reWireHandlers(): void {
-    Dom._reWireHandlers(this._domCtx());
-  }
 
   // ── Session persistence (delegated to chat-session.ts) ──
 

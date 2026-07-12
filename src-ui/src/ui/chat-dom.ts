@@ -14,7 +14,7 @@ import { iconHtml } from './icons';
 import { loadSettings } from '../settings';
 import DOMPurify from 'dompurify';
 import * as Session from './chat-session';
-import { escapeHtml, showCopiedFeedback } from './chat-utils';
+import { escapeHtml } from './chat-utils';
 
 // ── Constants ──
 
@@ -88,7 +88,6 @@ export interface DomContext {
 
   // DOM getters (for reading back elements set by buildDOM)
   getPanel: () => HTMLElement;
-  getMsgList: () => HTMLElement;
   getInputArea: () => HTMLTextAreaElement;
 
   // Slash panel — migrated to React SlashPanelController
@@ -136,8 +135,6 @@ export interface DomContext {
   toggleToolCard: (card: HTMLElement) => void;
   killPanelTweens: () => void;
   setupResize: (handle: HTMLElement) => void;
-  getUserScrolledUp: () => boolean;
-  setUserScrolledUp: (v: boolean) => void;
 
   // 滚动
   // 滚动 — React handles internally
@@ -167,9 +164,6 @@ export interface DomContext {
 
   // 静态方法需要
   toolCategory: (name: string) => 'read' | 'write' | 'exec' | 'holo';
-
-  // _reWireHandlers
-  reWireHandlers: () => void;
 
   // Session persistence callbacks (for openHistory)
   listSavedSessions: (projectPath: string) => Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>>;
@@ -292,49 +286,6 @@ export function buildDOM(ctx: DomContext): void {
   const msgList = document.createElement('div');
   msgList.className = 'chat-messages';
   chatPanel.appendChild(msgList);
-
-  // Delegated click: reasoning toggle survives replaceWith during streaming.
-  msgList.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement;
-    const toggle = target.closest('.msg-reasoning-toggle') as HTMLElement | null;
-    if (!toggle) return;
-    const block = toggle.closest('.msg-reasoning') as HTMLElement | null;
-    if (!block) return;
-    const content = block.querySelector('.msg-reasoning-content') as HTMLElement | null;
-    if (!content) return;
-    // Find blockIndex so _expandedReasoning survives DOM replacement
-    const bubble = block.closest('.msg-bubble');
-    if (bubble) {
-      const blocks = Array.from(bubble.querySelectorAll(':scope > .msg-reasoning'));
-      const idx = blocks.indexOf(block);
-      if (idx >= 0) {
-        if (ctx._expandedReasoning.has(idx)) ctx._expandedReasoning.delete(idx);
-        else ctx._expandedReasoning.add(idx);
-      }
-    }
-    ctx.toggleReasoning(toggle, content);
-  });
-
-  // Scroll tracking
-  msgList.addEventListener('wheel', (e) => {
-    if (e.deltaY < 0) ctx.setUserScrolledUp(true);
-  });
-  msgList.addEventListener('touchstart', () => {
-    setTimeout(() => {
-      const dist = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight;
-      if (dist > 40) ctx.setUserScrolledUp(true);
-    }, 150);
-  });
-  msgList.addEventListener('scrollend', () => {
-    const dist = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight;
-    if (dist > 40) ctx.setUserScrolledUp(true);
-    else ctx.setUserScrolledUp(false);
-  });
-  msgList.addEventListener('scroll', () => {
-    if (!ctx.getUserScrolledUp()) return;
-    const dist = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight;
-    if (dist <= 40) ctx.setUserScrolledUp(false);
-  });
 
   // Welcome hint
   const hint = document.createElement('div');
@@ -977,42 +928,4 @@ export function setupGraphClickHandler(ctx: DomContext): void {
   ctx.setGraphClickCleanup(() => graphEl.removeEventListener('click', handler));
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// G. _reWireHandlers — 重新绑定 DOM 事件
-// ═══════════════════════════════════════════════════════════════════
 
-export function _reWireHandlers(ctx: DomContext): void {
-  const msgList = ctx.getMsgList();
-  const starGraph = ctx.getStarGraph();
-
-  // Node links
-  msgList.querySelectorAll('.node-link').forEach((link) => {
-    link.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const name = (link as HTMLElement).dataset['nodename'] || '';
-      if (name && starGraph) {
-        let found = starGraph.focusNode(name);
-        if (!found) {
-          const alt = name.split('.').pop() || '';
-          if (alt && alt !== name) found = starGraph.focusNode(alt);
-        }
-        if (!found) ctx.addNotice(`未在图中找到 "${name}"`, 'info');
-      }
-    });
-  });
-  // Tool card expand/collapse (GSAP)
-  msgList.querySelectorAll('.msg-tool-header').forEach((header) => {
-    const card = header.parentElement;
-    if (card) header.addEventListener('click', () => ctx.toggleToolCard(card));
-  });
-  // Copy buttons
-  msgList.querySelectorAll('.msg-action-btn').forEach((el) => {
-    const btn = el as HTMLElement;
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const bubble = btn.closest('.msg-bubble');
-      const txt = (bubble as HTMLElement).innerText || '';
-      navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(btn, 12)).catch(() => {});
-    });
-  });
-}
