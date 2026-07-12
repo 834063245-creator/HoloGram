@@ -16,7 +16,6 @@ import { execState } from '../agent/execution-state';
 export interface AnimContext {
   // DOM elements
   panel: HTMLElement;
-  msgList: HTMLElement;
   inputArea: HTMLTextAreaElement;
 
   // Mutable mode state
