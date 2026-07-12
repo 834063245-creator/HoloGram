@@ -204,9 +204,11 @@ export function buildDOM(ctx: DomContext): void {
   panel.appendChild(resize);
   ctx.setupResize(resize);
 
-  // Header
+  // ── Header — two-tier: row for nav/actions, row for session tabs ──
   const headerEl = document.createElement('div');
   headerEl.className = 'chat-header';
+  const headerRow = document.createElement('div');
+  headerRow.className = 'chat-header-row';
   const title = document.createElement('span');
   title.className = 'chat-title';
   title.innerHTML = `${iconHtml('chat')} 全息对话`;
@@ -214,7 +216,7 @@ export function buildDOM(ctx: DomContext): void {
   closeBtn.className = 'chat-close-btn';
   closeBtn.innerHTML = iconHtml('close', 16);
   closeBtn.addEventListener('click', () => ctx.close());
-  headerEl.append(title);
+  headerRow.append(title);
 
   // ── Panel tabs (Chat | Tools | Context) ──
   const tabBar = document.createElement('div');
@@ -232,30 +234,35 @@ export function buildDOM(ctx: DomContext): void {
     btn.addEventListener('click', () => switchTab(ctx, t.id));
     tabBar.appendChild(btn);
   }
-  headerEl.appendChild(tabBar);
+  headerRow.appendChild(tabBar);
 
-  // Session tabs
-  const sessionTabs = document.createElement('div');
-  sessionTabs.className = 'chat-session-tabs';
-  headerEl.appendChild(sessionTabs);
-
-  // + new session button
+  // ── Action buttons ──
+  // + new session
   const addBtn = document.createElement('button');
   addBtn.className = 'chat-session-add';
   addBtn.innerHTML = iconHtml('plus', 12);
   addBtn.title = '新建会话';
   addBtn.addEventListener('click', () => ctx.createNewSession());
-  headerEl.appendChild(addBtn);
+  headerRow.appendChild(addBtn);
 
-  // History button — browse saved conversations
+  // History button
   const historyBtn = document.createElement('button');
   historyBtn.className = 'chat-session-add';
   historyBtn.innerHTML = iconHtml('bookmark', 12);
   historyBtn.title = '历史记录';
   historyBtn.addEventListener('click', () => toggleHistory(ctx));
-  headerEl.appendChild(historyBtn);
+  headerRow.appendChild(historyBtn);
 
-  headerEl.appendChild(closeBtn);
+  headerRow.appendChild(closeBtn);
+  headerEl.appendChild(headerRow);
+
+  // ── Session tab bar — dedicated full-width row, hidden when ≤ 1 session ──
+  const sessionBar = document.createElement('div');
+  sessionBar.className = 'chat-session-bar';
+  const sessionTabs = document.createElement('div');
+  sessionTabs.className = 'chat-session-tabs';
+  sessionBar.appendChild(sessionTabs);
+  headerEl.appendChild(sessionBar);
   panel.appendChild(headerEl);
 
   // ── Agent status bar ──
@@ -717,6 +724,8 @@ export function toggleHistory(ctx: DomContext): void {
 }
 
 export function openHistory(ctx: DomContext): void {
+  // ponytail: HMR resets module vars but leaves DOM orphans — sweep first
+  document.body.querySelectorAll('.chat-history-backdrop, .chat-history-panel').forEach(el => el.remove());
   closeHistory(ctx); // ensure clean state
 
   // ── Backdrop — full viewport, closes on click ──
