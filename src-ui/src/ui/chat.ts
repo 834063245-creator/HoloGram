@@ -628,6 +628,7 @@ export class ChatPanel {
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
       updateFooter: () => this.updateFooter(),
+      setLastUsageText: (s) => { this.lastUsageText = s; },
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
       bumpPillBadge: () => this._bumpPillBadge(),

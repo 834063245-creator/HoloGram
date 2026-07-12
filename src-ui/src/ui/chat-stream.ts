@@ -109,6 +109,7 @@ export interface StreamContext {
 
   // ── 回调（ChatPanel methods not extracted）──
   updateFooter: () => void;
+  setLastUsageText: (s: string) => void;
   addNotice: (text: string, level?: string) => void;
   saveActiveSession: (path: string) => Promise<void>;
   bumpPillBadge: () => void;
@@ -571,7 +572,8 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         label += ' tok';
         if (cached > 0) label += ` · ${cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached} cache`;
         if (cached > 0) label += ` · ${hitRate.toFixed(0)}% 命中`;
-        // Note: lastUsageText and totalTokensUsed updated by _updateTokens callback internally
+        // Note: totalTokensUsed updated by _updateTokens callback internally
+        ctx.setLastUsageText(label);
         ctx.updateFooter();
         _syncMessagesToDOM(ctx);
       }
