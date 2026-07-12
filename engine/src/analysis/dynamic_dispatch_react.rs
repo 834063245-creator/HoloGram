@@ -54,6 +54,14 @@ pub fn synthesize_react_edges(
         if source.contains("useGet") && source.contains("Query(") {
             added += synthesize_rtk_query(graph, file, &source);
         }
+        // Channel E: Next.js data-fetch methods
+        if source.contains("getServerSideProps") || source.contains("getStaticProps") || source.contains("getStaticPaths") {
+            added += synthesize_nextjs_data_fetch(graph, file, &source);
+        }
+        // Channel F: Zustand store creation — only if create( + zustand|set( on same line
+        if source.contains("create(") && (source.to_lowercase().contains("zustand") || source.contains("set(")) {
+            added += synthesize_zustand_store(graph, file, &source);
+        }
     }
 
     added
@@ -193,7 +201,105 @@ fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
     added
 }
 
+/// Channel E: Next.js data-fetch methods (`getServerSideProps`, `getStaticProps`,
+/// `getStaticPaths`). Creates Calls edges from the page File node to each function.
+fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    let re = regex::Regex::new(r"\b(getServerSideProps|getStaticProps|getStaticPaths)\b").unwrap();
+
+    let file_id = find_file_node(graph, file);
+    if file_id.is_none() { return 0; }
+    let file_id = file_id.unwrap();
+
+    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for caps in re.captures_iter(source) {
+        if added >= 30 { break; }
+        let func_name = caps.get(1).unwrap().as_str().to_string();
+        if seen.contains(&func_name) { continue; }
+        seen.insert(func_name.clone());
+
+        for nid in &node_ids {
+            if let Some(node) = graph.nodes.get(nid) {
+                if node.name == func_name && node.kind == NodeKind::Function {
+                    if let Some(ref loc) = node.location {
+                        if loc.starts_with(file) {
+                            graph.add_edge(Edge::synthesized(
+                                format!("nextjs_{}_{}", file_id, nid),
+                                &file_id, nid, EdgeKind::Calls, "nextjs-data-fetch",
+                            ));
+                            added += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    added
+}
+
+/// Channel F: Zustand store creation (`create(` calls). Disambiguates from
+/// `createSlice` / `Object.create` by requiring `zustand` or `set(` on the same line.
+fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usize {
+    let mut added = 0usize;
+    let re = regex::Regex::new(r"\bcreate\s*\(").unwrap();
+
+    let file_id = find_file_node(graph, file);
+    if file_id.is_none() { return 0; }
+    let file_id = file_id.unwrap();
+
+    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let mut seen_create_target: HashSet<String> = HashSet::new();
+
+    for caps in re.captures_iter(source) {
+        if added >= 20 { break; }
+        let matched = caps.get(0).unwrap();
+        let line_start = source[..matched.start()].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = source[matched.end()..].find('\n').map_or(source.len(), |i| matched.end() + i);
+        let line = &source[line_start..line_end];
+
+        // Disambiguation: must mention zustand or call set( on the same line
+        if !line.to_lowercase().contains("zustand") && !line.contains("set(") {
+            continue;
+        }
+
+        for nid in &node_ids {
+            if let Some(node) = graph.nodes.get(nid) {
+                if node.name == "create" && node.kind == NodeKind::Function {
+                    if seen_create_target.contains(nid) { continue; }
+                    seen_create_target.insert(nid.clone());
+                    graph.add_edge(Edge::synthesized(
+                        format!("zustand_{}_{}", file_id, nid),
+                        &file_id, nid, EdgeKind::Calls, "zustand-store",
+                    ));
+                    added += 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    added
+}
+
 // ── helpers ──
+
+/// Find the File node for the given file path.
+fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
+    for (_id, node) in &graph.nodes {
+        if node.kind == NodeKind::File {
+            if let Some(ref loc) = node.location {
+                if loc.starts_with(file) {
+                    return Some(node.id.clone());
+                }
+            }
+        }
+    }
+    None
+}
 
 fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
     for (_id, node) in &graph.nodes {
