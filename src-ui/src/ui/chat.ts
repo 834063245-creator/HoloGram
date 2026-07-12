@@ -344,13 +344,12 @@ export class ChatPanel {
           if (idx >= 0) this.messages.splice(idx, 1);
           resolve(result);
           this._updateStopButton();
-          this._syncMessagesToDOM();
+          this._chatMessages?.bump();
         };
         // Push permission message into model — renderer handles the rest
         this.messages.push(createPermissionMessage(toolName, reason, subject, wrappedResolve));
-        this._syncMessagesToDOM();
+        this._chatMessages?.bump();
         this._userScrolledUp = false;
-        this.scrollBottom();
       })
     );
   }
@@ -457,8 +456,8 @@ export class ChatPanel {
       setMessages: (msgs) => { this.messages = msgs; if (this._chatMessages) this._chatMessages.messages = msgs; },
       getStreamingAssistantId: () => this._streamingAssistantId,
       setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
-      scrollBottom: () => this.scrollBottom(),
-      syncMessagesToDOM: () => this._syncMessagesToDOM(),
+      // ⚡ React handles scrolling internally
+      // ⚡ React handles via bumpMessages
       flushReasoning: () => {},
       flushText: () => {},
       clearPendingToolCards: () => {},
@@ -491,7 +490,7 @@ export class ChatPanel {
       getProjectPath: () => this.projectPath,
       getActiveIdx: () => Session.getActiveIdx(),
       updateFooter: () => this.updateFooter(),
-      scrollBottom: () => this.scrollBottom(),
+      // ⚡ React handles scrolling internally
       resetPillBadge: () => this._resetPillBadge(),
       closeHistory: () => this.closeHistory(),
       hideSlashPanel: () => this._hideSlashPanel(),
@@ -589,7 +588,7 @@ export class ChatPanel {
       setupResize: (handle) => this.setupResize(handle),
       getUserScrolledUp: () => this._userScrolledUp,
       setUserScrolledUp: (v) => { this._userScrolledUp = v; },
-      scrollBottom: () => this.scrollBottom(),
+      // ⚡ React handles scrolling internally
       hintText: () => this.hintText(),
       refreshHint: () => this.refreshHint(),
       getLastAgentDiag: () => this.lastAgentDiag,
@@ -887,7 +886,6 @@ export class ChatPanel {
       Session.getTurnPairs().push({ userText: displayLabel, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
       this.appendUserBubble(displayLabel);
     }
-    this.scrollBottom();
 
     this.agent.run(signal, text).then(() => {
       // Success
@@ -919,7 +917,6 @@ export class ChatPanel {
     Session.getTurnPairs().push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
     this.appendUserBubble(`🎯 ${goal}`);
 
-    this.scrollBottom();
 
     this.agent.runGoal(signal, goal).then((result) => {
       this.addNotice(
@@ -1012,8 +1009,7 @@ export class ChatPanel {
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
       Session.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
       this.appendUserBubble(text);
-      this.scrollBottom();
-      return;
+        return;
     }
 
     // Auto-label session on first user message
@@ -1050,7 +1046,6 @@ export class ChatPanel {
     // User bubble (original text, focus context is for Agent eyes only)
     const filesSnapshot = [...this.attachedFiles];
     this.appendUserBubble(text, filesSnapshot);
-    this.scrollBottom();
 
     // Build focus context prefix — tells Agent what the user is looking at
     let focusPrefix = '';
@@ -1223,19 +1218,8 @@ export class ChatPanel {
   // ── Expanded reasoning blocks (survives DOM replacement during streaming) ──
   private _expandedReasoning = new Set<number>();
 
-  /** Build the renderer callback bag — resolves user text, handles edit/resend. */
-  private _renderCallbacks(): RenderCallbacks { return Stream._renderCallbacks(this._streamCtx()); }
-
-  /** Re-render a single message at the given index (in-place DOM replace). */
-  private _rerenderMessageAt(index: number): void { Stream._rerenderMessageAt(this._streamCtx(), index); }
-
-  /** Full sync: rebuild DOM from messages[]. Efficient for streaming (only last changes). */
-  private _syncMessagesToDOM(): void { Stream._syncMessagesToDOM(this._streamCtx()); }
-
-  private _doSyncMessagesToDOM(): void { Stream._doSyncMessagesToDOM(this._streamCtx()); }
-
-  // ── Throttled rAF sync — avoids O(n²) re-render on high-frequency streams ──
-  private _scheduleSync(): void { Stream._scheduleSync(this._streamCtx()); }
+  // ⚡ React handles scrolling internally
+  // ⚡ React handles scrolling internally
 
   // ── Event Sink — render Agent events to DOM (NEW data-driven path) ──
 
@@ -1469,7 +1453,7 @@ export class ChatPanel {
 
   private finishTurn(): void { Stream.finishTurn(this._streamCtx()); }
 
-  private scrollBottom(): void { Stream.scrollBottom(this._streamCtx()); }
+  // ⚡ React handles scrolling internally
 
   // ── Node name linking ──
 
@@ -1685,8 +1669,7 @@ export class ChatPanel {
       this.inputArea.style.height = 'auto';
       if (!this.agent) return;
       this.appendUserBubble('/compact');
-      this.scrollBottom();
-      this.addNotice('正在压缩上下文…', 'info');
+        this.addNotice('正在压缩上下文…', 'info');
       const ctrl = new AbortController();
       this.agent.compactNow(ctrl.signal).then(() => {
         this.messages = [];
@@ -1694,7 +1677,7 @@ export class ChatPanel {
         this._streamingAssistantId = null;
         this.msgList.innerHTML = '';
         Session._rebuildMessagesFromSession(this._sessionCtx());
-        this._syncMessagesToDOM();
+        this._chatMessages?.bump();
       }).catch((err) => {
         this.addNotice(`压缩失败: ${err.message}`, 'error');
       });
@@ -1814,7 +1797,6 @@ export class ChatPanel {
       </div>
       <div class="msg-sub-agent-body open"></div>`;
     this.msgList.appendChild(subEl);
-    this.scrollBottom();
   }
 
   private handleSubProgress(data: { parentToolId: string; text: string }): void {

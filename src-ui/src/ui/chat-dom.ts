@@ -140,7 +140,7 @@ export interface DomContext {
   setUserScrolledUp: (v: boolean) => void;
 
   // 滚动
-  scrollBottom: () => void;
+  // 滚动 — React handles internally
 
   // 提示
   hintText: () => string;
