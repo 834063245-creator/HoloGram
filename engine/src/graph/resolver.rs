@@ -105,7 +105,7 @@ fn resolve_name(
     // Try short name match
     let short = short_name(name);
     if let Some(candidates) = name_index.get(&short) {
-        if candidates.len() == 1 {
+                if candidates.len() == 1 && !name.contains('.') {
             return Some(candidates[0].clone());
         }
         // Multiple candidates — pick the most qualified (longest) match
