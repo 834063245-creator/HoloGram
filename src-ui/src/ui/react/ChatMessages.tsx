@@ -204,7 +204,7 @@ const ReasoningBlock: React.FC<{
         {open ? '收起思考' : '查看思考'}
       </div>
       <div ref={bodyRef} className={`msg-reasoning-content${open ? ' msg-reasoning-open' : ''}`}>
-        {open && <pre>{displayText}</pre>}
+        <pre>{displayText}</pre>
       </div>
     </div>
   );
@@ -253,13 +253,20 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
 
 // ── Tool summary ──
 
-const ToolSummary: React.FC<{ tools: ToolCallPart[]; onExpandAll: () => void }> =
-  ({ tools, onExpandAll }) => {
+const ToolSummary: React.FC<{
+  tools: ToolCallPart[];
+  expandedTools: Set<string>;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+}> = ({ tools, expandedTools, onExpandAll, onCollapseAll }) => {
     const doneTools = tools.filter(t => t.status === 'done' || t.status === 'error');
     const names = doneTools.map(t => t.label || t.name);
     const unique = [...new Set(names)];
+    const allExpanded = doneTools.every(t => expandedTools.has(t.toolId));
     return (
-      <div className="msg-tool-summary" onClick={onExpandAll} title="点击展开所有工具">
+      <div className="msg-tool-summary"
+        onClick={allExpanded ? onCollapseAll : onExpandAll}
+        title={allExpanded ? '点击折叠所有工具' : '点击展开所有工具'}>
         <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} />
         {' '}已执行 {doneTools.length} 个工具：
         <span>{unique.slice(0, 3).join(', ')}{unique.length > 3 ? ` 等 ${unique.length} 个` : ''}</span>
@@ -309,28 +316,28 @@ const AssistantBubble: React.FC<{
   expandedTools: Set<string>;
   onToggleTool: (id: string) => void;
   onExpandAllTools: (ids: string[]) => void;
+  onCollapseAllTools: (ids: string[]) => void;
   onCopy?: () => void;
   onRetry?: () => void;
   onNavigateToNode?: (name: string) => void;
 }> = ({
   msg, expandedTools,
-  onToggleTool, onExpandAllTools,
+  onToggleTool, onExpandAllTools, onCollapseAllTools,
   onCopy, onRetry, onNavigateToNode,
 }) => {
   const streaming = msg.status === 'streaming';
 
-  // Collect reasoning text + determine if reasoning is complete
-  let reasoningText = '';
-  let reasoningComplete = !streaming; // done messages: reasoning was complete
-  for (const p of msg.parts) {
-    if (p.type === 'reasoning') reasoningText += p.text;
-    if (p.type === 'text' && (p as TextPart).finalised) reasoningComplete = true;
-  }
+  // Count reasoning blocks so we know which one is "last" (still streaming)
+  let reasoningTotal = 0;
+  for (const p of msg.parts) { if (p.type === 'reasoning') reasoningTotal++; }
+  let reasoningSeen = 0;
 
-  // Group consecutive tool parts
+  // Build flat render groups — reasoning blocks are NOT pulled out to top;
+  // they render inline, interspersed with tool groups and text.
   const groups: Array<
     { kind: 'tool'; tools: ToolCallPart[] } |
-    { kind: 'part'; part: typeof msg.parts[number] }
+    { kind: 'reasoning'; text: string; idx: number } |
+    { kind: 'text'; text: string; finalised: boolean; idx: number }
   > = [];
   let i = 0;
   while (i < msg.parts.length) {
@@ -343,48 +350,75 @@ const AssistantBubble: React.FC<{
         i++;
       }
       groups.push({ kind: 'tool', tools: run });
+    } else if (p.type === 'reasoning') {
+      reasoningSeen++;
+      groups.push({ kind: 'reasoning', text: p.text, idx: reasoningSeen });
+      i++;
+    } else if (p.type === 'text') {
+      const tp = p as TextPart;
+      groups.push({ kind: 'text', text: tp.text, finalised: tp.finalised, idx: i });
+      i++;
     } else {
-      groups.push({ kind: 'part', part: p });
       i++;
     }
   }
 
   return (
     <div className="msg-bubble assistant" data-message-id={msg._id}>
-      {reasoningText && (
-        <ReasoningBlock text={reasoningText} streaming={streaming} reasoningComplete={reasoningComplete} />
-      )}
       {groups.map((g, gi) => {
         if (g.kind === 'tool') {
           const tools = g.tools;
           const doneCount = tools.filter(t => t.status === 'done' || t.status === 'error').length;
           const allDone = doneCount === tools.length && tools.length >= 3;
+          const doneTools = tools.filter(t => t.status === 'done' || t.status === 'error');
+          const groupExpanded = tools.some(t => expandedTools.has(t.toolId));
+          // ponytail: when collapsed, show summary ONLY; when expanded, show cards + summary as toggle
+          const collapsed = allDone && !groupExpanded;
           return (
             <div key={gi} className="msg-tool-wrapper">
-              {allDone && (
+              {collapsed ? (
                 <ToolSummary
-                  tools={tools.filter(t => t.status === 'done' || t.status === 'error')}
+                  tools={doneTools} expandedTools={expandedTools}
                   onExpandAll={() => onExpandAllTools(tools.map(t => t.toolId))}
+                  onCollapseAll={() => {}}
                 />
+              ) : (
+                <>
+                  {allDone && (
+                    <ToolSummary
+                      tools={doneTools} expandedTools={expandedTools}
+                      onExpandAll={() => onExpandAllTools(tools.map(t => t.toolId))}
+                      onCollapseAll={() => onCollapseAllTools(tools.map(t => t.toolId))}
+                    />
+                  )}
+                  {tools.map(t => (
+                    <ToolCard key={t.toolId} part={t}
+                      expanded={expandedTools.has(t.toolId)}
+                      onToggle={() => onToggleTool(t.toolId)}
+                    />
+                  ))}
+                </>
               )}
-              {tools.map(t => (
-                <ToolCard key={t.toolId} part={t}
-                  expanded={expandedTools.has(t.toolId)}
-                  onToggle={() => onToggleTool(t.toolId)}
-                />
-              ))}
             </div>
           );
         }
 
-        const part = g.part;
-        if (part.type === 'reasoning') return null; // already rendered above
-        if (part.type === 'text') {
-          const tp = part as TextPart;
+        if (g.kind === 'reasoning') {
+          const isLast = g.idx === reasoningTotal;
+          return (
+            <ReasoningBlock key={gi}
+              text={g.text}
+              streaming={streaming && isLast}
+              reasoningComplete={!streaming || !isLast}
+            />
+          );
+        }
+
+        if (g.kind === 'text') {
           return (
             <MarkdownContent key={gi}
-              text={tp.text}
-              streaming={streaming && !tp.finalised}
+              text={g.text}
+              streaming={streaming && !g.finalised}
               onNavigateToNode={onNavigateToNode}
             />
           );
@@ -486,6 +520,9 @@ const ChatMessagesApp: React.FC<{
   const expandAllTools = useCallback((ids: string[]) => {
     setExpandedTools(prev => { const n = new Set(prev); for (const id of ids) n.add(id); return n; });
   }, []);
+  const collapseAllTools = useCallback((ids: string[]) => {
+    setExpandedTools(prev => { const n = new Set(prev); for (const id of ids) n.delete(id); return n; });
+  }, []);
 
   return (
     <div className="chat-messages" ref={listRef}>
@@ -504,6 +541,7 @@ const ChatMessagesApp: React.FC<{
                 expandedTools={expandedTools}
                 onToggleTool={toggleTool}
                 onExpandAllTools={expandAllTools}
+                onCollapseAllTools={collapseAllTools}
                 onCopy={callbacks.onCopyText ? () => {
                   const text = msg.parts
                     .filter((p): p is TextPart => p.type === 'text')
