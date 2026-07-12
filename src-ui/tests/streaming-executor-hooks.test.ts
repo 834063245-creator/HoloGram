@@ -128,7 +128,7 @@ describe('StreamingToolExecutor — hook integration', () => {
     const preflightHook: PreflightHook = {
       name: 'graph-preflight',
       shouldCheck: () => true,
-      check: () => '⚠️ [自动影响分析] 即将修改 `foo.ts`\n│  风险等级: HIGH',
+      check: () => '⚠️ [自动影响分析] 即将修改 `foo.ts`\n│  风险等级: MEDIUM',
     };
     const preflight = new PreflightHookRegistry();
     preflight.register(preflightHook);

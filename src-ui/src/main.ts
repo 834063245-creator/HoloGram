@@ -645,19 +645,27 @@ async function init(): Promise<void> {
 
   // Settings
   const settingsPanel = SettingsPanel.get();
-  settingsPanel.setOnSave(async () => {
+    settingsPanel.setOnSave(async () => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph.resize();
-    if (workspace) await workspace.setupAgent(chatPanel, checkPanel);
-    if (workspace?.path && workspace?.agent) {
-      chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[settings] autoRestoreLastSession failed:', e));
+    if (workspace) {
+      // Save current conversation BEFORE re-initializing agent — avoids data loss
+      await chatPanel.saveActiveSession(workspace.path).catch(() => {});
+      await workspace.setupAgent(chatPanel, checkPanel);
+      if (workspace?.agent) {
+        await chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[settings] autoRestoreLastSession failed:', e));
+      }
     }
   });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
   chatPanel.setOnModeChange(async () => {
-    if (workspace) await workspace.setupAgent(chatPanel, checkPanel);
-    if (workspace?.path && workspace?.agent) {
-      chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[mode-change] autoRestoreLastSession failed:', e));
+    if (workspace) {
+      // Save current conversation BEFORE re-initializing agent — avoids data loss
+      await chatPanel.saveActiveSession(workspace.path).catch(() => {});
+      await workspace.setupAgent(chatPanel, checkPanel);
+      if (workspace?.agent) {
+        await chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[mode-change] autoRestoreLastSession failed:', e));
+      }
     }
   });
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;

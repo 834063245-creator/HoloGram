@@ -339,7 +339,7 @@ function trackerFile(projectPath: string): string {
 }
 
 /** Scan sessions directory for the highest numeric session ID. Returns 0 if no sessions found. */
-async function scanMaxSessionId(projectPath: string): Promise<number> {
+export async function scanMaxSessionId(projectPath: string): Promise<number> {
   try {
     const entries = await invoke<any[]>('list_directory', { path: sessionsDir(projectPath) });
     if (!Array.isArray(entries)) return 0;
@@ -539,25 +539,39 @@ export async function listSavedSessions(ctx: SessionContext, projectPath: string
     return [];
   }
 
-  const result: Array<{ id: number; label: string; msgCount: number; savedAt: string }> = [];
-  for (const e of entries) {
-    if (e.is_dir || !e.name.endsWith('.json') || e.name === '_active.json') continue;
-    const sid = parseInt(e.name.replace('.json', ''), 10);
-    if (isNaN(sid)) continue;
+  // Filter valid JSON session files (skip dirs, _active.json, non-json)
+  const targets = entries.filter(e =>
+    !e.is_dir && e.name.endsWith('.json') && e.name !== '_active.json' && !isNaN(parseInt(e.name.replace('.json', ''), 10)),
+  );
 
+  // ── Read all session files in parallel with a 10s timeout ──
+  const TIMEOUT_MS = 10_000;
+  type SessionEntry = { id: number; label: string; msgCount: number; savedAt: string };
+  const readPromises: Promise<SessionEntry | null>[] = targets.map(async (e) => {
     try {
       const d = await readSessionJSON(e.path);
-      if (d.deleted) continue;
-      result.push({
+      if (d.deleted) return null;
+      const sid = parseInt(e.name.replace('.json', ''), 10);
+      return {
         id: d.id || sid,
         label: d.label || `会话 ${sid}`,
         msgCount: (d.messages as any[])?.filter((m: any) => m.role !== 'system').length || 0,
         savedAt: d.savedAt || '',
-      });
+      };
     } catch (err) {
       console.error(`[chat] listSavedSessions: failed to read ${e.name}`, err);
+      return null;
     }
-  }
+  });
+
+  const timeout: Promise<null[]> = new Promise((resolve) =>
+    setTimeout(() => { console.warn('[chat] listSavedSessions: timed out after 10s'); resolve([]); }, TIMEOUT_MS),
+  );
+
+  const results = await Promise.race([Promise.all(readPromises), timeout]);
+  if (!Array.isArray(results)) return [];
+
+  const result = results.filter(r => r !== null) as SessionEntry[];
   result.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
   return result;
 }

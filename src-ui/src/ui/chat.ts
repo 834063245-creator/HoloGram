@@ -40,11 +40,13 @@ import {
   type AssistantPart,
   type MessageId,
   type FileAttachment,
+  type PermissionMessage,
   nextMsgId,
   resetMsgIdCounter,
   createUserMessage,
   createAssistantMessage,
   createNoticeMessage,
+  createPermissionMessage,
   lastTextPart,
   findToolPart,
 } from './message-model';
@@ -94,15 +96,6 @@ export class ChatPanel {
   private _userScrolledUp = false;
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
-  // Legacy fields — kept for backward compat during migration, will be removed
-  private currentBubble: HTMLElement | null = null;
-  private currentReasoning: HTMLElement | null = null;
-  private currentReasoningContent: HTMLElement | null = null;
-  private currentTextEl: HTMLElement | null = null;
-  private pendingToolCards = new Map<string, HTMLElement>(); // id → card element
-  private completedToolCount = 0; // ponytail: group completed tools into summary
-  private toolSummaryEl: HTMLElement | null = null; // "已执行 N 个工具" line
-
   // File attachments (dragged/selected files)
   private attachedFiles: { path: string; name: string; size: number }[] = [];
   private attachPillsEl: HTMLElement | null = null;
@@ -291,15 +284,34 @@ export class ChatPanel {
     reason: string,
     subject: string,
   ): Promise<{ allow: boolean; remember: boolean }> {
-    return Dom.showPermissionCard(this._domCtx(), toolName, reason, subject);
-  }
-
-  private _showPermissionCardInner(
-    toolName: string,
-    reason: string,
-    subject: string,
-  ): Promise<{ allow: boolean; remember: boolean }> {
-    return Dom._showPermissionCardInner(this._domCtx(), toolName, reason, subject);
+    // Ensure panel is open
+    if (this.mode !== 'panel') {
+      Anim.killPanelTweens(this._animCtx());
+      Anim.summonPanel(this._animCtx());
+    }
+    // Serialise via queue to prevent stacked cards
+    const prev = this._permQueue;
+    return prev.then(() =>
+      new Promise<{ allow: boolean; remember: boolean }>((resolve) => {
+        this._permCardCount++;
+        // Wrap resolve so we can clean up the message from the array
+        const wrappedResolve = (result: { allow: boolean; remember: boolean }) => {
+          this._permCardCount = Math.max(0, this._permCardCount - 1);
+          // Remove the permission message from the array
+          const idx = this.messages.findIndex(
+            (m) => m.role === 'perm' && (m as PermissionMessage).toolName === toolName
+          );
+          if (idx >= 0) this.messages.splice(idx, 1);
+          resolve(result);
+          this._syncMessagesToDOM();
+        };
+        // Push permission message into model — renderer handles the rest
+        this.messages.push(createPermissionMessage(toolName, reason, subject, wrappedResolve));
+        this._syncMessagesToDOM();
+        this._userScrolledUp = false;
+        this.scrollBottom();
+      })
+    ).finally(() => { /* queue advances via .then chain */ });
   }
 
   close(): void {
@@ -406,9 +418,9 @@ export class ChatPanel {
       setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
       scrollBottom: () => this.scrollBottom(),
       syncMessagesToDOM: () => this._syncMessagesToDOM(),
-      flushReasoning: () => this.flushReasoning(),
-      flushText: () => this.flushText(),
-      clearPendingToolCards: () => { this.pendingToolCards.clear(); },
+      flushReasoning: () => {},
+      flushText: () => {},
+      clearPendingToolCards: () => {},
       getRunning: () => this.running,
       abort: () => this.abort(),
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
@@ -467,7 +479,6 @@ export class ChatPanel {
       closeSession: (idx) => this.closeSession(idx),
       toggleHistory: () => this.toggleHistory(),
       closeHistory: () => this.closeHistory(),
-      _permCardCount: this._permCardCount,
       running: this.running,
       // DOM element setters
       setPanel: (el) => { this.panel = el; },
@@ -496,7 +507,7 @@ export class ChatPanel {
       getPanel: () => this.panel,
       getMsgList: () => this.msgList,
       getInputArea: () => this.inputArea,
-      getCurrentBubble: () => this.currentBubble,
+      getCurrentBubble: () => null,
       // Slash panel
       _slashPanel: this._slashPanel,
       _slashNavIdx: this._slashNavIdx,
@@ -555,8 +566,6 @@ export class ChatPanel {
       _expandedReasoning: this._expandedReasoning,
       _activeTab: this._activeTab,
       attachedFiles: this.attachedFiles,
-      _permQueue: this._permQueue,
-      setPermQueue: (p) => { this._permQueue = p; },
       historyPanel: this.historyPanel,
       setHistoryPanel: (el) => { this.historyPanel = el; },
       historyOpen: this.historyOpen,
@@ -585,35 +594,36 @@ export class ChatPanel {
       setSyncRafId: (id) => { this._syncRafId = id; },
       getSyncPending: () => this._syncPending,
       setSyncPending: (v) => { this._syncPending = v; },
-      getStreamTextBuf: () => this._streamTextBuf,
-      setStreamTextBuf: (s) => { this._streamTextBuf = s; },
-      getStreamRenderScheduled: () => this._streamRenderScheduled,
-      setStreamRenderScheduled: (v) => { this._streamRenderScheduled = v; },
-      getStreamStableLen: () => this._streamStableLen,
-      setStreamStableLen: (n) => { this._streamStableLen = n; },
-      getStreamStableEl: () => this._streamStableEl,
-      setStreamStableEl: (el) => { this._streamStableEl = el; },
-      getStreamUnstableEl: () => this._streamUnstableEl,
-      setStreamUnstableEl: (el) => { this._streamUnstableEl = el; },
-      getCurrentBubble: () => this.currentBubble,
-      setCurrentBubble: (el) => { this.currentBubble = el; },
-      getCurrentTextEl: () => this.currentTextEl,
-      setCurrentTextEl: (el) => { this.currentTextEl = el; },
-      getCurrentReasoning: () => this.currentReasoning,
-      setCurrentReasoning: (el) => { this.currentReasoning = el; },
-      getCurrentReasoningContent: () => this.currentReasoningContent,
-      setCurrentReasoningContent: (el) => { this.currentReasoningContent = el; },
-      getReasoningBlock: () => this.reasoningBlock,
-      setReasoningBlock: (el) => { this.reasoningBlock = el; },
-      getReasoningBlockContent: () => this.reasoningBlockContent,
-      setReasoningBlockContent: (el) => { this.reasoningBlockContent = el; },
-      getReasoningBlockToggle: () => this.reasoningBlockToggle,
-      setReasoningBlockToggle: (el) => { this.reasoningBlockToggle = el; },
-      getPendingToolCards: () => this.pendingToolCards,
-      getToolSummaryEl: () => this.toolSummaryEl,
-      setToolSummaryEl: (el) => { this.toolSummaryEl = el; },
-      getCompletedToolCount: () => this.completedToolCount,
-      setCompletedToolCount: (n) => { this.completedToolCount = n; },
+      // ── Old-stream stubs (removed — data-driven model renders everything) ──
+      getStreamTextBuf: () => '',
+      setStreamTextBuf: (_s) => {},
+      getStreamRenderScheduled: () => false,
+      setStreamRenderScheduled: (_v) => {},
+      getStreamStableLen: () => 0,
+      setStreamStableLen: (_n) => {},
+      getStreamStableEl: () => null,
+      setStreamStableEl: (_el) => {},
+      getStreamUnstableEl: () => null,
+      setStreamUnstableEl: (_el) => {},
+      getCurrentBubble: () => null,
+      setCurrentBubble: (_el) => {},
+      getCurrentTextEl: () => null,
+      setCurrentTextEl: (_el) => {},
+      getCurrentReasoning: () => null,
+      setCurrentReasoning: (_el) => {},
+      getCurrentReasoningContent: () => null,
+      setCurrentReasoningContent: (_el) => {},
+      getReasoningBlock: () => null,
+      setReasoningBlock: (_el) => {},
+      getReasoningBlockContent: () => null,
+      setReasoningBlockContent: (_el) => {},
+      getReasoningBlockToggle: () => null,
+      setReasoningBlockToggle: (_el) => {},
+      getPendingToolCards: () => new Map(),
+      getToolSummaryEl: () => null,
+      setToolSummaryEl: (_el) => {},
+      getCompletedToolCount: () => 0,
+      setCompletedToolCount: (_n) => {},
       getTurnPairs: () => Session.getTurnPairs(),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
@@ -868,7 +878,6 @@ export class ChatPanel {
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
 
-    this.addTurnSep();
     if (displayLabel) {
       Session.getTurnPairs().push({ userText: displayLabel, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
       this.appendUserBubble(displayLabel);
@@ -904,7 +913,6 @@ export class ChatPanel {
     const hint = this.msgList.querySelector('.chat-hint');
     if (hint) hint.remove();
 
-    this.addTurnSep();
     Session.getTurnPairs().push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
     this.appendUserBubble(`🎯 ${goal}`);
 
@@ -1002,7 +1010,6 @@ export class ChatPanel {
       if (hint) hint.remove();
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
       Session.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
-      this.addTurnSep();
       this.appendUserBubble(text);
       this.scrollBottom();
       return;
@@ -1070,9 +1077,6 @@ export class ChatPanel {
       this.attachedFiles = [];
       this.renderAttachments();
     }
-
-    // Start turn separator
-    this.addTurnSep();
 
     // Run agent
     this.abortCtrl = new AbortController();
@@ -1285,285 +1289,9 @@ export class ChatPanel {
 
   private renderEvent(ev: AgentEvent): void { Stream.renderEvent(this._streamCtx(), ev); }
 
-  // ── Reasoning (collapsible) ──
+  // ── Text (streaming via data-driven message model) ──
 
-  // ponytail: accumulate all reasoning in a turn into ONE collapsible block.
-  // The toggle is created once; subsequent reasoning blocks append to the same content.
-  private reasoningBlock: HTMLElement | null = null;
-  private reasoningBlockContent: HTMLElement | null = null;
-  private reasoningBlockToggle: HTMLElement | null = null;
-
-  private appendReasoning(text: string): void { Stream.appendReasoning(this._streamCtx(), text); }
-
-  private flushReasoning(): void { Stream.flushReasoning(this._streamCtx()); }
-
-  private resetReasoningBlock(): void { Stream.resetReasoningBlock(this._streamCtx()); }
-
-  // ── Text (streaming → assistant bubble) ──
-  // ponytail: stable-prefix incremental markdown — only the trailing incomplete
-  // block is re-rendered each frame. Completed blocks are moved to a stable
-  // child div and rendered once via marked.parse(). This avoids O(n) full-text
-  // re-parse + DOM reflow on every frame, the root cause of streaming jitter.
-  // Reference: Claude Code's StreamingMarkdown stable-prefix algorithm.
-
-  private _streamTextBuf = '';
-  private _streamRenderScheduled = false;
-  private _streamStableLen = 0;       // char offset of stable prefix already rendered
-  private _streamStableEl: HTMLElement | null = null;
-  private _streamUnstableEl: HTMLElement | null = null;
-
-  private appendText(text: string, _isFinal: boolean): void { Stream.appendText(this._streamCtx(), text, _isFinal); }
-
-  private _renderStreamingMarkdown(): void { /* extracted to chat-stream.ts — called via Stream.appendText */ }
-
-  private flushText(): void { Stream.flushText(this._streamCtx()); }
-
-  // ── Markdown rendering (final only, via EventKind.Message) ──
-
-  private renderMarkdownText(text: string): void { Stream.renderMarkdownText(this._streamCtx(), text); }
-
-  // ── Message actions (copy button) ──
-
-  /** actionHost is where the actions div gets appended. Defaults to bubble.
-   *  For user bubbles, actionHost is the row wrapper so buttons sit outside. */
-  private addMessageActions(bubble: HTMLElement, actionHost?: HTMLElement): void {
-    Stream.addMessageActions(this._streamCtx(), bubble, actionHost);
-  }
-
-  // ── Tool cards ──
-
-  private handleToolDispatch(tool: AgentEvent['tool']): void {
-    if (!tool) return;
-
-    // Track usage
-    this._recordToolUsage(tool.name, tool.args || '');
-    this._updateStatusBar('running', `执行 ${tool.name}`);
-
-    // Update existing card (partial → complete args)
-    if (this.pendingToolCards.has(tool.id)) {
-      const card = this.pendingToolCards.get(tool.id)!;
-      const argsEl = card.querySelector('.tool-args') as HTMLElement;
-      if (argsEl && tool.args && tool.args.length > 60) {
-        argsEl.textContent = truncateArgs(tool.args);
-        argsEl.title = tool.args;
-      }
-      return;
-    }
-
-    this.ensureAssistantBubble();
-
-    const card = document.createElement('div');
-    card.className = 'msg-tool-card';
-    card.dataset['toolId'] = tool.id;
-
-    const cat = ChatPanel.toolCategory(tool.name);
-    card.classList.add(`tool-cat-${cat}`);
-
-    // ponytail: compact header — icon + name + status only, no args column
-    const header = document.createElement('div');
-    header.className = 'msg-tool-header';
-
-    const icon = tool.read_only
-      ? iconHtml('search', 12)
-      : iconHtml('code', 12);
-    const nameEl = document.createElement('span');
-    nameEl.className = 'tool-name';
-    nameEl.innerHTML = `${icon} ${tool.name}`;
-
-    // Show command subtitle for run_shell / bash_output
-    let subCmd = '';
-    if (tool.name === 'run_shell' || tool.name === 'bash_output') {
-      try {
-        const a = JSON.parse(tool.args || '{}');
-        subCmd = (a.command || '').slice(0, 80);
-        if ((a.command || '').length > 80) subCmd += '…';
-      } catch { /* ignore */ }
-    }
-
-    const nameWrap = document.createElement('div');
-    nameWrap.className = 'tool-name-wrap';
-    nameWrap.appendChild(nameEl);
-    if (subCmd) {
-      const sub = document.createElement('div');
-      sub.className = 'tool-name-sub';
-      sub.textContent = subCmd;
-      nameWrap.appendChild(sub);
-    }
-
-    const status = document.createElement('span');
-    status.className = 'tool-status tool-status-running';
-    status.innerHTML = iconHtml('dot', 10);
-
-    header.append(nameWrap, status);
-    header.addEventListener('click', () => this.toggleToolCard(card));
-
-    const resultEl = document.createElement('div');
-    resultEl.className = 'msg-tool-result';
-
-    card.append(header, resultEl);
-    this.currentBubble!.appendChild(card);
-    this.pendingToolCards.set(tool.id, card);
-    this.scrollBottom();
-  }
-
-  private handleToolProgress(tool: AgentEvent['tool']): void {
-    if (!tool) return;
-    const card = this.pendingToolCards.get(tool.id);
-    if (!card) return;
-
-    const resultEl = card.querySelector('.msg-tool-result') as HTMLElement;
-    if (resultEl && tool.output) {
-      resultEl.textContent += tool.output;
-      // Auto-expand so user sees the streaming output
-      card.classList.add('tool-expanded');
-    }
-    this.scrollBottom();
-  }
-
-  private handleToolResult(tool: AgentEvent['tool']): void {
-    if (!tool) return;
-    const card = this.pendingToolCards.get(tool.id);
-    if (!card) return;
-
-    this.pendingToolCards.delete(tool.id);
-    this.completedToolCount++;
-
-    const status = card.querySelector('.tool-status') as HTMLElement;
-    if (status) {
-      status.innerHTML = tool.err ? iconHtml('close', 12) : iconHtml('check-circle', 12);
-      status.className = `tool-status ${tool.err ? 'tool-err' : 'tool-ok'}`;
-      status.style.opacity = '0.6';
-    }
-
-    // Collapse header to minimal height
-    card.classList.add('tool-done');
-    const header = card.querySelector('.msg-tool-header') as HTMLElement;
-    if (header) header.style.padding = '2px 8px';
-
-    const resultEl = card.querySelector('.msg-tool-result') as HTMLElement;
-    if (resultEl) {
-      const text = tool.err || tool.output || '';
-      resultEl.innerHTML = formatToolResult(tool.name, text, !!tool.truncated, tool.args);
-      resultEl.querySelectorAll('pre code').forEach((block) => {
-        hljs.highlightElement(block as HTMLElement);
-      });
-    }
-
-    if (tool.err) {
-      card.classList.add('tool-expanded');
-    }
-
-    // ponytail: group completed tools behind a summary when we have 3+
-    this.updateToolSummary();
-  }
-
-  /** Collapse completed tool cards into a compact summary line.
-   *  Accumulates across rounds — existing collapsed cards stay hidden and
-   *  are counted into the total. New cards are folded and added to the count. */
-  private updateToolSummary(): void {
-    if (!this.currentBubble) return;
-
-    // Only fold cards that haven't been collapsed yet
-    const freshCards = this.currentBubble.querySelectorAll('.msg-tool-card.tool-done:not([data-collapsed])');
-    if (freshCards.length === 0) return;
-
-    // Count already-collapsed cards from previous rounds
-    const prevCollapsed = this.currentBubble.querySelectorAll('.msg-tool-card.tool-done[data-collapsed]');
-    const prevCount = prevCollapsed.length;
-
-    // Fold fresh cards
-    const names: string[] = [];
-    freshCards.forEach((c) => {
-      const nameEl = c.querySelector('.tool-name');
-      if (nameEl) names.push(nameEl.textContent?.trim() || '');
-      (c as HTMLElement).style.display = 'none';
-      (c as HTMLElement).dataset['collapsed'] = '1';
-    });
-
-    const total = prevCount + freshCards.length;
-    if (total < 3) {
-      // Un-hide everything if total is too low for a summary
-      freshCards.forEach((c) => {
-        (c as HTMLElement).style.display = '';
-        delete (c as HTMLElement).dataset['collapsed'];
-      });
-      if (prevCollapsed.length > 0) {
-        prevCollapsed.forEach((c) => {
-          (c as HTMLElement).style.display = '';
-          delete (c as HTMLElement).dataset['collapsed'];
-        });
-        if (this.toolSummaryEl) { this.toolSummaryEl.remove(); this.toolSummaryEl = null; }
-      }
-      return;
-    }
-
-    // Update or create summary
-    const unique = [...new Set(names)].slice(0, 3);
-    const label = unique.join(', ') + (names.length > 3 ? ` 等 ${names.length} 个` : '');
-
-    if (this.toolSummaryEl) {
-      // Update existing summary — increment count
-      const countSpan = this.toolSummaryEl.querySelector('.tool-summary-count');
-      if (countSpan) countSpan.textContent = String(total);
-      this.toolSummaryEl.innerHTML = `${iconHtml('check-circle', 12)} 已执行 <span class="tool-summary-count">${total}</span> 个工具`;
-    } else {
-      // Create new summary
-      this.toolSummaryEl = document.createElement('div');
-      this.toolSummaryEl.className = 'msg-tool-summary';
-      this.toolSummaryEl.innerHTML = `${iconHtml('check-circle', 12)} 已执行 <span class="tool-summary-count">${total}</span> 个工具`;
-      this.toolSummaryEl.style.cursor = 'pointer';
-      this.toolSummaryEl.title = '点击展开所有工具';
-
-      // Insert before the first tool card (collapsed or not)
-      const firstCard = this.currentBubble.querySelector('.msg-tool-card');
-      if (firstCard) {
-        firstCard.parentNode?.insertBefore(this.toolSummaryEl, firstCard);
-      } else {
-        this.currentBubble.appendChild(this.toolSummaryEl);
-      }
-    }
-
-    this.toolSummaryEl.addEventListener('click', () => {
-      const allCollapsed = this.currentBubble!.querySelectorAll('.msg-tool-card.tool-done[data-collapsed]');
-      allCollapsed.forEach((c) => {
-        (c as HTMLElement).style.display = '';
-        delete (c as HTMLElement).dataset['collapsed'];
-      });
-      this.toolSummaryEl?.remove();
-      this.toolSummaryEl = null;
-    });
-  }
-
-  // ── Usage ──
-
-  private addUsage(ev: AgentEvent): void {
-    this.ensureAssistantBubble();
-    const pill = document.createElement('div');
-    pill.className = 'msg-usage';
-
-        const u = ev.usage;
-    const total = u ? (u.total_tokens ?? 0) : 0;
-    const cached = u ? (u.cache_hit_tokens ?? 0) : 0;
-    const missTokens = u ? (u.cache_miss_tokens ?? 0) : 0;
-    const inputTokens = cached + missTokens;
-    const hitRate = inputTokens > 0 ? (cached / inputTokens * 100) : 0;
-
-    let label = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
-    label += ' tok';
-    if (cached > 0) label += ` · ${cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached} cache`;
-    if (cached > 0) label += ` · ${hitRate.toFixed(0)}% 命中`;
-
-    this.lastUsageText = label;
-    pill.textContent = label;
-    this.currentBubble!.appendChild(pill);
-    // Replace (not accumulate) — each API response's total_tokens already includes
-    // the full prompt+completion for that request, so it IS the current context size.
-    this.totalTokensUsed = total;
-    this.scrollBottom();
-    this.updateFooter();
-  }
-
-  // ── Notice ──
+  // ── Inline permission cards ──
 
   // ponytail: single entry point — all notices go through the message model
   // so _syncMessagesToDOM() never wipes them.
@@ -1775,13 +1503,9 @@ export class ChatPanel {
 
   // ── Helpers ──
 
-  private ensureAssistantBubble(): void { Stream.ensureAssistantBubble(this._streamCtx()); }
-
   private appendUserBubble(text: string, files?: { path: string; name: string; size: number }[], skipActions?: boolean): void {
     Stream.appendUserBubble(this._streamCtx(), text, files, skipActions);
   }
-
-  private addTurnSep(): void { Stream.addTurnSep(this._streamCtx()); }
 
   /** Finalize current assistant bubble — link to latest turnPair, reset streaming state.
    *  Called at TurnStarted boundaries (including mid-run inserts) and at run end. */
@@ -2017,7 +1741,6 @@ export class ChatPanel {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
       if (!this.agent) return;
-      this.addTurnSep();
       this.appendUserBubble('/compact');
       this.scrollBottom();
       this.addNotice('正在压缩上下文…', 'info');
@@ -2165,10 +1888,6 @@ export class ChatPanel {
   // ── Sub-agent event handlers (item 10) ──
 
   private handleSubSpawn(data: { id: string; description: string; prompt: string; mode: string }): void {
-    // Find the pending agent_spawn tool card and add sub-agent wrapper
-    this.flushReasoning();
-    this.flushText();
-    this.ensureAssistantBubble();
     this._bumpPillBadge();
 
     const subEl = document.createElement('div');
@@ -2184,7 +1903,7 @@ export class ChatPanel {
         <span class="sub-agent-status">⚡ 运行中</span>
       </div>
       <div class="msg-sub-agent-body open"></div>`;
-    this.currentBubble!.appendChild(subEl);
+    this.msgList.appendChild(subEl);
     this.scrollBottom();
   }
 

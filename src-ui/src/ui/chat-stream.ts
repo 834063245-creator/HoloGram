@@ -366,10 +366,10 @@ export function _doSyncMessagesToDOM(ctx: StreamContext): void {
   const msgs = ctx.getMessages();
   const msgCount = msgs.length;
 
-  // Count non-injected children (skip perm cards + task notifications)
+  // Count non-injected children (task notifications are injected, rest is messages)
   let msgChildCount = 0;
   for (const child of ctx.msgList.children) {
-    if (!(child instanceof Element && (child.classList.contains('perm-inline-card') || child.classList.contains('task-notification')))) {
+    if (!(child instanceof Element && child.classList.contains('task-notification'))) {
       msgChildCount++;
     }
   }
@@ -385,10 +385,7 @@ export function _doSyncMessagesToDOM(ctx: StreamContext): void {
     const lastIdx = msgCount - 1;
     const lastMsg = msgs[lastIdx];
     if (lastMsg.role === 'assistant' && lastMsg._id === sid) {
-      let domIdx = ctx.msgList.children.length - 1;
-      while (domIdx >= 0 && (ctx.msgList.children[domIdx] as Element).classList?.contains('perm-inline-card')) {
-        domIdx--;
-      }
+      const domIdx = ctx.msgList.children.length - 1;
       if (domIdx >= 0) {
         const oldEl = ctx.msgList.children[domIdx] as HTMLElement;
         const el = renderMessage(lastMsg, callbacks);
@@ -414,13 +411,14 @@ export function _doSyncMessagesToDOM(ctx: StreamContext): void {
   const savedScrollHeight = ctx.msgList.scrollHeight;
   const wasAtBottom = (savedScrollHeight - savedScrollTop - ctx.msgList.clientHeight) <= 40;
 
-  // Full rebuild — preserve injected siblings (permission cards)
+  // Full rebuild — preserve injected siblings (task notifications only;
+  // permission cards are now first-class messages in the model, not injects)
   const existing = Array.from(ctx.msgList.children);
 
   const injects: { el: Element; afterIdx: number }[] = [];
   for (let i = 0; i < existing.length; i++) {
     const el = existing[i];
-    if (el.classList.contains('perm-inline-card') || el.classList.contains('task-notification')) {
+    if (el.classList.contains('task-notification')) {
       injects.push({ el, afterIdx: i - 1 });
       existing.splice(i, 1);
       i--;
@@ -439,10 +437,10 @@ export function _doSyncMessagesToDOM(ctx: StreamContext): void {
     }
   }
 
-  // Remove excess children (skip injects)
+  // Remove excess children (skip injects: task notifications)
   while (ctx.msgList.children.length > msgCount) {
     const last = ctx.msgList.lastChild;
-    if (last instanceof Element && (last.classList.contains('perm-inline-card') || last.classList.contains('task-notification'))) {
+    if (last instanceof Element && last.classList.contains('task-notification')) {
       break;
     }
     last?.remove();
@@ -489,18 +487,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         const lastBubble = bubbles[bubbles.length - 1];
         if (lastBubble) ctx.getTurnPairs()[ctx.getTurnPairs().length - 1].assistantBubble = lastBubble;
       }
-      ctx.getPendingToolCards().clear();
-      resetReasoningBlock(ctx);
-      ctx.setCompletedToolCount(0);
-      const tse = ctx.getToolSummaryEl();
-      if (tse) { tse.remove(); ctx.setToolSummaryEl(null); }
       ctx.getExpandedReasoning().clear();
-      ctx.setCurrentBubble(null);
-      ctx.setCurrentTextEl(null);
-      ctx.setStreamTextBuf('');
-      ctx.setStreamStableLen(0);
-      ctx.setStreamStableEl(null);
-      ctx.setStreamUnstableEl(null);
       break;
 
     case EventKind.Reasoning:
@@ -605,348 +592,8 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Reasoning (old DOM path — collapsible block)
+// Bubble helpers (data-driven model)
 // ═══════════════════════════════════════════════════════════
-
-export function appendReasoning(ctx: StreamContext, text: string): void {
-  ensureAssistantBubble(ctx);
-
-  if (!ctx.getReasoningBlock()) {
-    const block = document.createElement('div');
-    block.className = 'msg-reasoning';
-
-    const content = document.createElement('div');
-    content.className = 'msg-reasoning-content';
-
-    const toggle = document.createElement('button');
-    toggle.className = 'msg-reasoning-toggle';
-    toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
-    const capturedToggle = toggle;
-    const capturedContent = content;
-    // ponytail: toggleReasoning is in chat-anim.ts, accessed via ctx
-    // For simplicity we inline the toggle behavior here (simple class toggle)
-    capturedToggle.addEventListener('click', () => {
-      capturedContent.classList.toggle('msg-reasoning-open');
-      const isOpen = capturedContent.classList.contains('msg-reasoning-open');
-      capturedToggle.innerHTML = isOpen
-        ? `${iconHtml('chevron-down')} 收起思考`
-        : `${iconHtml('chevron-right')} 思考过程`;
-    });
-
-    block.append(toggle, content);
-    ctx.getCurrentBubble()!.appendChild(block);
-
-    ctx.setReasoningBlock(block);
-    ctx.setReasoningBlockContent(content);
-    ctx.setReasoningBlockToggle(toggle);
-  }
-  ctx.getReasoningBlockContent()!.textContent += text;
-}
-
-export function flushReasoning(ctx: StreamContext): void {
-  resetReasoningBlock(ctx);
-}
-
-export function resetReasoningBlock(ctx: StreamContext): void {
-  ctx.setReasoningBlock(null);
-  ctx.setReasoningBlockContent(null);
-  ctx.setReasoningBlockToggle(null);
-}
-
-// ═══════════════════════════════════════════════════════════
-// Text streaming (old DOM path — stable-prefix markdown)
-// ═══════════════════════════════════════════════════════════
-
-export function appendText(ctx: StreamContext, text: string, _isFinal: boolean): void {
-  ensureAssistantBubble(ctx);
-  ctx.setStreamTextBuf(ctx.getStreamTextBuf() + text);
-
-  if (!ctx.getCurrentTextEl()) {
-    const textEl = document.createElement('div');
-    textEl.className = 'msg-text msg-markdown streaming';
-
-    const stableEl = document.createElement('div');
-    stableEl.className = 'msg-markdown-stable';
-    const unstableEl = document.createElement('div');
-    unstableEl.className = 'msg-markdown-unstable';
-    textEl.appendChild(stableEl);
-    textEl.appendChild(unstableEl);
-
-    ctx.getCurrentBubble()!.appendChild(textEl);
-    ctx.setCurrentTextEl(textEl);
-    ctx.setStreamStableEl(stableEl);
-    ctx.setStreamUnstableEl(unstableEl);
-    ctx.setStreamStableLen(0);
-  }
-
-  if (!ctx.getStreamRenderScheduled()) {
-    ctx.setStreamRenderScheduled(true);
-    requestAnimationFrame(() => {
-      ctx.setStreamRenderScheduled(false);
-      _renderStreamingMarkdown(ctx);
-    });
-  }
-  scrollBottom(ctx);
-}
-
-function _renderStreamingMarkdown(ctx: StreamContext): void {
-  const textEl = ctx.getCurrentTextEl();
-  const stableEl = ctx.getStreamStableEl();
-  const unstableEl = ctx.getStreamUnstableEl();
-  const raw = ctx.getStreamTextBuf();
-  if (!textEl || !stableEl || !unstableEl || !raw) return;
-
-  const lastNL = raw.lastIndexOf('\n');
-  const visible = lastNL >= 0 ? raw.substring(0, lastNL + 1) : '';
-  const trailingLine = lastNL >= 0 ? raw.substring(lastNL + 1) : raw;
-
-  let stableText = '';
-  let unstableText = '';
-
-  if (visible) {
-    try {
-      const tokens = marked.lexer(visible);
-      let lastNonSpace = -1;
-      for (let i = tokens.length - 1; i >= 0; i--) {
-        const t = tokens[i] as { raw?: string };
-        if (t.raw && t.raw.trim()) { lastNonSpace = i; break; }
-      }
-
-      if (lastNonSpace >= 0) {
-        let cut = 0;
-        for (let i = 0; i < lastNonSpace; i++) {
-          cut += (tokens[i] as { raw?: string }).raw?.length || 0;
-        }
-        stableText = visible.substring(0, cut);
-        unstableText = visible.substring(cut);
-      } else {
-        unstableText = visible;
-      }
-    } catch {
-      unstableText = visible;
-    }
-  }
-
-  if (stableText.length > ctx.getStreamStableLen()) {
-    ctx.setStreamStableLen(stableText.length);
-    if (stableText) {
-      stableEl.innerHTML = DOMPurify.sanitize(marked.parse(stableText) as string);
-    }
-  }
-
-  let unstableHtml = '';
-  if (unstableText) {
-    unstableHtml += `<span class="streaming-pending">${escapeHtml(unstableText)}</span>`;
-  }
-  if (trailingLine) {
-    unstableHtml += `<span class="streaming-typing">${escapeHtml(trailingLine)}</span>`;
-  }
-  unstableEl.innerHTML = unstableHtml;
-}
-
-export function flushText(ctx: StreamContext): void {
-  const textEl = ctx.getCurrentTextEl();
-  const raw = ctx.getStreamTextBuf();
-  if (textEl && raw) {
-    textEl.classList.remove('streaming');
-    const html = DOMPurify.sanitize(marked.parse(raw) as string);
-    textEl.innerHTML = html;
-    textEl.dataset.rawMarkdown = raw;
-    textEl.querySelectorAll('pre code').forEach((block) => {
-      hljs.highlightElement(block as HTMLElement);
-    });
-    const bubble = ctx.getCurrentBubble();
-    if (bubble) {
-      addMessageActions(ctx, bubble);
-      ctx.injectCodeBlockButtons(bubble);
-    }
-  }
-  ctx.setStreamTextBuf('');
-  ctx.setStreamStableLen(0);
-  ctx.setStreamStableEl(null);
-  ctx.setStreamUnstableEl(null);
-  ctx.setCurrentTextEl(null);
-}
-
-// ═══════════════════════════════════════════════════════════
-// Markdown rendering (final only, via EventKind.Message)
-// ═══════════════════════════════════════════════════════════
-
-export function renderMarkdownText(ctx: StreamContext, text: string): void {
-  ensureAssistantBubble(ctx);
-  const textEl = ctx.getCurrentTextEl();
-  if (textEl && text === ctx.getStreamTextBuf()) {
-    textEl.classList.remove('streaming');
-    const html = DOMPurify.sanitize(marked.parse(text) as string);
-    textEl.innerHTML = html;
-    textEl.dataset.rawMarkdown = text;
-    textEl.querySelectorAll('pre code').forEach((block) => {
-      hljs.highlightElement(block as HTMLElement);
-    });
-    const bubble = ctx.getCurrentBubble();
-    if (bubble) {
-      addMessageActions(ctx, bubble);
-      ctx.injectCodeBlockButtons(bubble);
-    }
-    ctx.setStreamTextBuf('');
-    ctx.setStreamStableLen(0);
-    ctx.setStreamStableEl(null);
-    ctx.setStreamUnstableEl(null);
-    ctx.setCurrentTextEl(null);
-    scrollBottom(ctx);
-    return;
-  }
-  if (textEl) {
-    textEl.remove();
-  }
-  const el = document.createElement('div');
-  el.className = 'msg-text msg-markdown';
-  const html = DOMPurify.sanitize(marked.parse(text) as string);
-  el.innerHTML = html;
-  el.dataset.rawMarkdown = text;
-  el.querySelectorAll('pre code').forEach((block) => {
-    hljs.highlightElement(block as HTMLElement);
-  });
-  ctx.getCurrentBubble()!.appendChild(el);
-  ctx.setStreamTextBuf('');
-  ctx.setStreamStableLen(0);
-  ctx.setStreamStableEl(null);
-  ctx.setStreamUnstableEl(null);
-  ctx.setCurrentTextEl(null);
-  const bubble = ctx.getCurrentBubble();
-  if (bubble) {
-    addMessageActions(ctx, bubble);
-    ctx.injectCodeBlockButtons(bubble);
-  }
-  scrollBottom(ctx);
-}
-
-// ═══════════════════════════════════════════════════════════
-// Message actions (copy, retry, edit, resend)
-// ═══════════════════════════════════════════════════════════
-
-export function addMessageActions(ctx: StreamContext, bubble: HTMLElement, actionHost?: HTMLElement): void {
-  const host = actionHost || bubble;
-  if (host.querySelector('.msg-actions')) return;
-  const textEl = bubble.querySelector('.msg-text');
-  if (!textEl) return;
-
-  const actions = document.createElement('div');
-  actions.className = 'msg-actions';
-
-  if (bubble.classList.contains('assistant')) {
-    // Copy button
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'msg-action-btn';
-    copyBtn.innerHTML = iconHtml('copy', 12);
-    copyBtn.title = '复制回复';
-    copyBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const txt = (textEl as HTMLElement).dataset?.rawMarkdown || textEl.textContent || '';
-      navigator.clipboard.writeText(txt).then(() => showCopiedFeedback(copyBtn, 12)).catch(() => {});
-    });
-    actions.append(copyBtn);
-
-    // Retry button
-    for (let i = ctx.getTurnPairs().length - 1; i >= 0; i--) {
-      if (ctx.getTurnPairs()[i].assistantBubble === bubble) {
-        const pairIdx = i;
-        const retryBtn = document.createElement('button');
-        retryBtn.className = 'msg-action-btn';
-        retryBtn.innerHTML = iconHtml('refresh', 12);
-        retryBtn.title = '重试此回复';
-        retryBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (ctx.getRunning()) { ctx.addNotice('Agent 正在运行，请先停止再重试', 'warn'); return; }
-          const agent = ctx.getAgent();
-          if (!agent) return;
-          const text = ctx.getTurnPairs()[pairIdx]?.userText;
-          if (!text) return;
-          ctx.retractTurn(pairIdx);
-          ctx.inputArea.value = '';
-          ctx.setRunning(true);
-          addTurnSep(ctx);
-          const sessIdx = agent.getSession().length;
-          ctx.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
-          ctx.setAbortCtrl(new AbortController());
-          agent.run(ctx.getAbortCtrl()!.signal, text)
-            .catch((err: any) => {
-              if (!err.message?.includes('aborted')) {
-                ctx.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
-              }
-            })
-            .finally(() => {
-              ctx.setRunning(false);
-              ctx.setAbortCtrl(null);
-              finishTurn(ctx);
-            });
-        });
-        actions.append(retryBtn);
-        break;
-      }
-    }
-  }
-
-  if (bubble.classList.contains('user')) {
-    let pairIdx = -1;
-    for (let i = ctx.getTurnPairs().length - 1; i >= 0; i--) {
-      if (ctx.getTurnPairs()[i].userBubble === host) { pairIdx = i; break; }
-    }
-
-    // Edit button
-    const editBtn = document.createElement('button');
-    editBtn.className = 'msg-action-btn';
-    editBtn.innerHTML = iconHtml('edit', 12);
-    editBtn.title = '编辑消息';
-    editBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (ctx.getRunning()) { ctx.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
-      if (pairIdx < 0) return;
-      const txt = ctx.retractTurn(pairIdx);
-      if (txt == null) return;
-      ctx.inputArea.value = txt;
-      ctx.inputArea.style.height = 'auto';
-      ctx.inputArea.style.height = Math.min(ctx.inputArea.scrollHeight, 120) + 'px';
-      ctx.inputArea.focus();
-      ctx.inputArea.selectionStart = ctx.inputArea.selectionEnd = txt.length;
-    });
-    actions.append(editBtn);
-
-    // Resend button
-    const resendBtn = document.createElement('button');
-    resendBtn.className = 'msg-action-btn';
-    resendBtn.innerHTML = iconHtml('refresh', 12);
-    resendBtn.title = '重新发送';
-    resendBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (ctx.getRunning()) { ctx.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
-      if (pairIdx < 0) return;
-      const txt = ctx.retractTurn(pairIdx);
-      if (txt == null) return;
-      ctx.inputArea.value = txt;
-      ctx.sendMessage();
-    });
-    actions.append(resendBtn);
-  }
-
-  if (actions.children.length > 0) {
-    host.appendChild(actions);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Bubble helpers
-// ═══════════════════════════════════════════════════════════
-
-export function ensureAssistantBubble(ctx: StreamContext): void {
-  if (ctx.getCurrentBubble()) return;
-  const bubble = document.createElement('div');
-  bubble.className = 'msg-bubble assistant';
-  ctx.msgList.appendChild(bubble);
-  ctx.setCurrentBubble(bubble);
-  ctx.animateBubbleIn(bubble);
-  ctx.bumpPillBadge();
-}
 
 export function appendUserBubble(
   ctx: StreamContext,
@@ -986,25 +633,12 @@ export function addTurnSep(_ctx: StreamContext): void {
 /** Finalize current assistant bubble — link to latest turnPair, reset streaming state. */
 export function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
-  flushReasoning(ctx);
-  flushText(ctx);
   _syncMessagesToDOM(ctx);
   if (ctx.getTurnPairs().length > 0) {
     const bubbles = ctx.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
     const lastBubble = bubbles[bubbles.length - 1];
     if (lastBubble) ctx.getTurnPairs()[ctx.getTurnPairs().length - 1].assistantBubble = lastBubble;
   }
-  ctx.getPendingToolCards().clear();
-  resetReasoningBlock(ctx);
-  ctx.setCompletedToolCount(0);
-  const tse = ctx.getToolSummaryEl();
-  if (tse) { tse.remove(); ctx.setToolSummaryEl(null); }
-  ctx.setCurrentBubble(null);
-  ctx.setCurrentTextEl(null);
-  ctx.setStreamTextBuf('');
-  ctx.setStreamStableLen(0);
-  ctx.setStreamStableEl(null);
-  ctx.setStreamUnstableEl(null);
 }
 
 export function finishTurn(ctx: StreamContext): void {

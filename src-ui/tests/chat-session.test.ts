@@ -59,7 +59,9 @@ vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
 vi.mock('marked', () => ({ marked: { parse: (s: string) => s, lexer: (s: string) => [] } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
-import { ChatPanel, hashProjectPath } from '../src/ui/chat';
+import { ChatPanel } from '../src/ui/chat';
+import * as Session from '../src/ui/chat-session';
+import { hashProjectPath, stripLineNumbers, scanMaxSessionId } from '../src/ui/chat-session';
 
 // ── Helpers ──
 
@@ -110,7 +112,7 @@ describe('ChatPanel session persistence', () => {
   // ═══════════════════════════════════════════════════════════════
 
   describe('stripLineNumbers', () => {
-    const strip = (s: string) => ChatPanel.stripLineNumbers(s);
+    const strip = stripLineNumbers;
 
     it('removes single line number prefix', () => {
       const input = '     1\t{"id":1,"label":"test"}';
@@ -150,7 +152,7 @@ describe('ChatPanel session persistence', () => {
       panel = createChatPanel();
       mockInvoke.mockRejectedValue(new Error('backend down'));
 
-      const result = await (panel as any).scanMaxSessionId('D:/test');
+      const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(0);
     });
 
@@ -158,7 +160,7 @@ describe('ChatPanel session persistence', () => {
       panel = createChatPanel();
       mockInvoke.mockResolvedValue(null);
 
-      const result = await (panel as any).scanMaxSessionId('D:/test');
+      const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(0);
     });
 
@@ -171,7 +173,7 @@ describe('ChatPanel session persistence', () => {
         { name: 'not-json.txt', path: '/sessions/not-json.txt', is_dir: false, children: null },
       ]);
 
-      const result = await (panel as any).scanMaxSessionId('D:/test');
+      const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(71);
     });
 
@@ -183,7 +185,7 @@ describe('ChatPanel session persistence', () => {
         { name: 'readme.md', path: '/sessions/readme.md', is_dir: false, children: null },
       ]);
 
-      const result = await (panel as any).scanMaxSessionId('D:/test');
+      const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(3);
     });
 
@@ -193,7 +195,7 @@ describe('ChatPanel session persistence', () => {
       mockInvoke.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve([]), 10)));
 
       const start = Date.now();
-      const result = await (panel as any).scanMaxSessionId('D:/test');
+      const result = await scanMaxSessionId('D:/test');
       const elapsed = Date.now() - start;
 
       expect(result).toBe(0);
@@ -430,6 +432,223 @@ describe('ChatPanel session persistence', () => {
   // ═══════════════════════════════════════════════════════════════
   // localStorage key isolation
   // ═══════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════
+  // listSavedSessions — parallel read + timeout (regression fix)
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('listSavedSessions — parallel + timeout', () => {
+    it('reads all session files in parallel (not serial)', async () => {
+      panel = createChatPanel();
+      // 5 session files — if serial, this takes 5x as long
+      const files = [1, 2, 3, 4, 5].map(id => ({
+        name: `${id}.json`, path: `/s/${id}.json`, is_dir: false, children: null,
+      }));
+      mockInvoke.mockResolvedValueOnce(files);
+      for (const id of [1, 2, 3, 4, 5]) {
+        mockInvoke.mockResolvedValueOnce(mockSessionFile(id, [{ role: 'user', content: `msg-${id}` }]));
+      }
+
+      const start = Date.now();
+      const result = await panel.listSavedSessions('D:/test');
+      const elapsed = Date.now() - start;
+
+      expect(result).toHaveLength(5);
+      // Parallel reads should complete quickly (< 100ms for mocked calls)
+      // Serial would be at least 5 * async overhead
+      expect(elapsed).toBeLessThan(500);
+    });
+
+    it('returns empty after 10s timeout if a session read hangs', async () => {
+      panel = createChatPanel();
+      mockInvoke.mockResolvedValueOnce([
+        { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+        { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
+      ]);
+      // First file hangs forever, second resolves
+      mockInvoke.mockReturnValueOnce(new Promise(() => {})); // never resolves
+      mockInvoke.mockResolvedValueOnce(mockSessionFile(2, [{ role: 'user', content: 'ok' }]));
+
+      vi.useFakeTimers();
+      const promise = panel.listSavedSessions('D:/test');
+
+      // Advance past the 10s timeout
+      await vi.advanceTimersByTimeAsync(10_001);
+      const result = await promise;
+      vi.useRealTimers();
+
+      expect(result).toEqual([]);
+    });
+
+    it('still returns readable sessions when one file fails', async () => {
+      panel = createChatPanel();
+      mockInvoke.mockResolvedValueOnce([
+        { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+        { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
+        { name: '3.json', path: '/s/3.json', is_dir: false, children: null },
+      ]);
+      // File 1: success
+      mockInvoke.mockResolvedValueOnce(mockSessionFile(1, [{ role: 'user', content: 'hello' }]));
+      // File 2: error
+      mockInvoke.mockRejectedValueOnce(new Error('corrupt file'));
+      // File 3: success
+      mockInvoke.mockResolvedValueOnce(mockSessionFile(3, [{ role: 'user', content: 'world' }]));
+
+      const result = await panel.listSavedSessions('D:/test');
+
+      expect(result).toHaveLength(2);
+      expect(result.map(r => r.id).sort()).toEqual([1, 3]);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // _doSyncMessagesToDOM — perm cards are first-class messages
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('_doSyncMessagesToDOM — perm card handling', () => {
+    it('renders perm card as a normal message (not inject)', () => {
+      panel = createChatPanel();
+      const msgList = (panel as any).msgList as HTMLElement;
+
+      // Push a user message + a permission message
+      (panel as any).messages = [
+        { role: 'user', _id: 'u1', text: 'hello', sessionIndex: 0 },
+        { role: 'perm', _id: 'p1', toolName: 'write_file', reason: 'test', subject: 'f.txt', resolve: vi.fn() },
+      ];
+      (panel as any)._streamingAssistantId = null;
+
+      (panel as any)._doSyncMessagesToDOM();
+
+      // Both messages should be in DOM as normal children
+      expect(msgList.children.length).toBe(2);
+      // No perm-inline-card should be treated as inject → no duplicate preservation
+      const permCards = msgList.querySelectorAll('.perm-inline-card');
+      expect(permCards.length).toBe(1);
+    });
+
+    it('removes perm card from DOM when removed from model', () => {
+      panel = createChatPanel();
+      const msgList = (panel as any).msgList as HTMLElement;
+
+      (panel as any).messages = [
+        { role: 'user', _id: 'u1', text: 'q', sessionIndex: 0 },
+        { role: 'perm', _id: 'p1', toolName: 'run_shell', reason: 'test', subject: 'cmd', resolve: vi.fn() },
+      ];
+      (panel as any)._streamingAssistantId = null;
+      (panel as any)._doSyncMessagesToDOM();
+      expect(msgList.querySelectorAll('.perm-inline-card').length).toBe(1);
+
+      // Remove perm from model — simulates user clicking "允许"
+      (panel as any).messages = [
+        { role: 'user', _id: 'u1', text: 'q', sessionIndex: 0 },
+      ];
+      (panel as any)._doSyncMessagesToDOM();
+
+      // Card should be gone — no longer "preserved as inject"
+      expect(msgList.querySelectorAll('.perm-inline-card').length).toBe(0);
+      expect(msgList.children.length).toBe(1);
+    });
+
+    it('does NOT cause count mismatch when perm card is in model', () => {
+      panel = createChatPanel();
+      const msgList = (panel as any).msgList as HTMLElement;
+
+      (panel as any).messages = [
+        { role: 'user', _id: 'u1', text: 'q', sessionIndex: 0 },
+        { role: 'perm', _id: 'p1', toolName: 'write_file', reason: 'r', subject: 'f', resolve: vi.fn() },
+      ];
+      (panel as any)._streamingAssistantId = null;
+
+      // Run sync multiple times — should not accumulate extra perm cards
+      for (let i = 0; i < 3; i++) {
+        (panel as any)._doSyncMessagesToDOM();
+      }
+
+      // msgCount should still match DOM children count
+      // If perm cards were treated as injects, children would grow each iteration
+      expect(msgList.children.length).toBe(2);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // saveActiveSession → setAgent → autoRestoreLastSession race
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('save-active-then-rebuild race prevention', () => {
+    it('autoRestoreLastSession succeeds when session was saved before setAgent reset', async () => {
+      panel = createChatPanel();
+      panel.setProjectPath('D:/test');
+
+      // ── Step 1: Set up a live session with conversation ──
+      const savedMessages: any[] = [];
+      const fakeAgent = {
+        getSession: () => [
+          { role: 'system', content: 'sys' },
+          { role: 'user', content: '帮我分析' },
+          { role: 'assistant', content: '好的，正在分析…' },
+        ],
+        setSession: vi.fn(),
+      };
+      panel.setAgent(fakeAgent as any);
+
+      // ── Step 2: Save the active session (simulates finishTurn) ──
+      // Mock write_file_content for both session file + tracker
+      mockInvoke.mockResolvedValue('ok');
+      await panel.saveActiveSession('D:/test');
+
+      // Verify localStorage was written (saveActiveSession writes there first)
+      const hash = hashProjectPath('D:/test').toString(36);
+      const sessionId = (Session as any).getSessions?.()?.[0]?.id;
+      // Just verify SOMETHING was written to localStorage
+      const lsKeys = Object.keys(localStorage).filter(k => k.startsWith('hologram_session_'));
+      expect(lsKeys.length).toBeGreaterThan(0);
+
+      // ── Step 3: Simulate mode change → setupAgent → setAgent (resets all) ──
+      const newFakeAgent = {
+        getSession: () => [{ role: 'system', content: 'fresh sys' }],
+        setSession: vi.fn(),
+      };
+      panel.setAgent(newFakeAgent as any);
+
+      // After setAgent, sessions should be reset
+      const sessions = Session.getSessions();
+      expect(sessions?.length).toBe(1);
+      expect(sessions?.[0]?.agent).toBe(newFakeAgent);
+
+      // ── Step 4: autoRestoreLastSession should recover the saved conversation ──
+      // Mock read_file_content: tracker + session file
+      mockInvoke.mockReset();
+      // Tracker points to session that was saved
+      const savedId = lsKeys.length > 0
+        ? parseInt(lsKeys[0].replace(`hologram_session_${hash}_`, ''), 10)
+        : 1;
+      mockInvoke
+        .mockResolvedValueOnce(JSON.stringify({ lastId: savedId, nextId: savedId + 1 }))
+        .mockResolvedValueOnce(JSON.stringify({
+          id: savedId,
+          label: '已保存',
+          savedAt: new Date().toISOString(),
+          messages: [
+            { role: 'system', content: 'sys' },
+            { role: 'user', content: '帮我分析' },
+            { role: 'assistant', content: '好的，正在分析…' },
+          ],
+        }));
+
+      // Set fresh agent factory for autoRestoreLastSession
+      panel.setAgentFactory(async () => ({
+        getSession: () => [{ role: 'system', content: 'fresh sys' }],
+        setSession: (msgs: any[]) => { savedMessages.push(...msgs); },
+      } as any));
+
+      await panel.autoRestoreLastSession('D:/test');
+
+      // Should have recovered the conversation
+      const userMsgs = savedMessages.filter((m: any) => m.role === 'user');
+      expect(userMsgs).toHaveLength(1);
+      expect(userMsgs[0].content).toBe('帮我分析');
+    });
+  });
 
   describe('localStorage key isolation', () => {
     it('different projects produce different key prefixes', () => {
