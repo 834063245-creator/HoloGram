@@ -1,12 +1,12 @@
 {
   "productName": "全息观测站",
   "identifier": "com.hologram.hg",
-  "version": "6.1.2",
+  "version": "7.0.0",
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "npm --prefix ../src-ui run dev",
-    "beforeBuildCommand": ""
+    "beforeBuildCommand": "npm --prefix ../src-ui run build"
   },
   "app": {
     "windows": [
