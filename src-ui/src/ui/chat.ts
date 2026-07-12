@@ -181,13 +181,13 @@ export class ChatPanel {
     this.container = container;
     this.buildDOM();
 
-    // ⚡ React-based message list — own container, old msgList hidden
+    // ⚡ React-based message list — own container, shared messages array
     const reactRoot = document.createElement('div');
     reactRoot.className = 'chat-messages';
     this.msgList.style.display = 'none';
     this.msgList.parentElement?.insertBefore(reactRoot, this.msgList);
-    // Deep copy: React needs new object refs on each render to detect streaming mutations
-    this._chatMessages = new ChatMessagesPanel(reactRoot, () => JSON.parse(JSON.stringify(this.messages)));
+    this._chatMessages = new ChatMessagesPanel(reactRoot);
+    this._chatMessages.messages = this.messages; // shared reference
     // ── Track user focus — file viewer / file tree / graph selection ──
     bus.on('highlight:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
     bus.on('navigate:file', (filePath: string) => { this._userFocusFile = filePath; this._userFocusNode = null; });
@@ -453,8 +453,8 @@ export class ChatPanel {
       tabBar: this.tabBar,
       getProjectPath: () => this.projectPath,
       agentFactory: Session.getAgentFactory(),
-      getMessages: () => this.messages,
-      setMessages: (msgs) => { this.messages = msgs; },
+      getMessages: () => this._chatMessages?.messages ?? this.messages,
+      setMessages: (msgs) => { this.messages = msgs; if (this._chatMessages) this._chatMessages.messages = msgs; },
       getStreamingAssistantId: () => this._streamingAssistantId,
       setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
       scrollBottom: () => this.scrollBottom(),
@@ -618,8 +618,8 @@ export class ChatPanel {
     return {
       msgList: this.msgList,
       inputArea: this.inputArea,
-      getMessages: () => this.messages,
-      setMessages: (msgs) => { this.messages = msgs; },
+      getMessages: () => this._chatMessages?.messages ?? this.messages,
+      setMessages: (msgs) => { this.messages = msgs; if (this._chatMessages) this._chatMessages.messages = msgs; },
       getStreamingAssistantId: () => this._streamingAssistantId,
       setStreamingAssistantId: (id) => { this._streamingAssistantId = id; },
       getUserScrolledUp: () => this._userScrolledUp,
