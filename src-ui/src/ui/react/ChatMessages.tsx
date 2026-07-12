@@ -1,15 +1,18 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ChatMessages — React 重写消息列表渲染
-// 替代 chat-stream.ts 的 _doSyncMessagesToDOM + renderMessage 全量 DOM 替换。
-// 修复：流式输出时自由滚动（不再被 replaceChildren 强制拉回底部）
+// ChatMessages — React 消息列表渲染
 //
-// 策略：messages 数组与旧管道共享（同一引用），bump() 时 root.render() 强制重建。
+// 渲染引擎：react-markdown（替代 marked + dangerouslySetInnerHTML）
+// 滚动管理：wheel capture phase rAF 合并（参考 Reasonix useScrollManager）
+// 推理块：流式时展开，流结束自动折叠（用户手动 toggle 后尊重用户选择）
+// 流式截断：推理文本只保留末尾 12,000 字符 / 240 行
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { marked } from 'marked';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import hljs from 'highlight.js';
 import {
   type ChatMessage,
   type UserMessage,
@@ -17,8 +20,34 @@ import {
   type ToolCallPart,
   type TextPart,
   type NoticeMessage,
-  type PermissionMessage,
 } from '../message-model';
+
+// ── Constants ──
+
+const BOTTOM_THRESHOLD = 80;
+const REASONING_TAIL_CHARS = 12_000;
+const REASONING_TAIL_LINES = 240;
+
+function isNearBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD;
+}
+
+function truncateReasoning(text: string): string {
+  let out = text;
+  let truncated = false;
+  if (REASONING_TAIL_CHARS > 0 && out.length > REASONING_TAIL_CHARS) {
+    out = out.slice(-REASONING_TAIL_CHARS);
+    truncated = true;
+  }
+  if (REASONING_TAIL_LINES > 0) {
+    const lines = out.split('\n');
+    if (lines.length > REASONING_TAIL_LINES) {
+      out = lines.slice(-REASONING_TAIL_LINES).join('\n');
+      truncated = true;
+    }
+  }
+  return truncated ? '…\n' + out : out;
+}
 
 // ── Callbacks ──
 
@@ -27,7 +56,7 @@ export interface ChatMessagesCallbacks {
   onResendUserMessage?: (msg: UserMessage) => void;
   onRetryAssistant?: (msg: AssistantMessage) => void;
   onCopyText?: (text: string) => void;
-  onResolvePermission?: (msg: PermissionMessage, result: { allow: boolean; remember: boolean }) => void;
+  onNavigateToNode?: (nodeName: string) => void;
 }
 
 // ── Icons ──
@@ -46,107 +75,331 @@ function svgIcon(name: string, size: number = 12): string {
   return icons[name] || '';
 }
 
-// ── Streaming text ──
+// ── Node name linkification ──
 
-const StreamingText: React.FC<{ text: string; finalised: boolean }> = ({ text, finalised }) => {
-  const refCallback = useCallback((el: HTMLDivElement | null) => {
-    if (!el || !finalised) return;
-    el.querySelectorAll('pre code').forEach((block) => {
-      try { (window as any).hljs?.highlightElement(block as HTMLElement); } catch {}
-    });
-  }, [finalised, text]);
-
-  if (finalised) {
-    const html = marked.parse(text, { async: false }) as string;
-    return <div ref={refCallback} className="msg-text msg-markdown stable" dangerouslySetInnerHTML={{ __html: html }} />;
+function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) => void): void {
+  if (!onNavigate) return;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const replacements: Array<{ node: Text; frag: DocumentFragment }> = [];
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) {
+    const text = node.textContent || '';
+    if (!text.includes('`')) continue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    const re = /`([^`]+)`/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const span = document.createElement('span');
+      span.className = 'node-link';
+      span.textContent = m[1];
+      span.addEventListener('click', (e) => { e.stopPropagation(); onNavigate(m![1]); });
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (last > 0) {
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      replacements.push({ node, frag });
+    }
   }
-  return <div className="msg-text msg-markdown streaming">{text}<span className="streaming-typing">▊</span></div>;
+  for (const { node: n, frag } of replacements) {
+    n.parentNode?.replaceChild(frag, n);
+  }
+}
+
+// ── react-markdown code component (hljs highlighting) ──
+
+function MarkdownCode({ className, children }: { className?: string; children?: React.ReactNode }) {
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    el.querySelectorAll('pre code').forEach((block) => {
+      try { hljs.highlightElement(block as HTMLElement); } catch { /* noop */ }
+    });
+  }, []);
+
+  const text = String(children ?? '').replace(/\n$/, '');
+  const match = /language-([\w-]+)/.exec(className ?? '');
+  const lang = match?.[1];
+  const isBlock = match !== null || text.includes('\n');
+
+  if (isBlock) {
+    return (
+      <div ref={ref}>
+        <pre><code className={className}>{text}</code></pre>
+      </div>
+    );
+  }
+  return <code className="md-code">{children}</code>;
+}
+
+// ── Markdown content (streaming-aware) ──
+
+const MarkdownContent: React.FC<{
+  text: string;
+  streaming: boolean;
+  onNavigateToNode?: (name: string) => void;
+}> = ({ text, streaming, onNavigateToNode }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Linkify node names after render (on finalised content)
+  useEffect(() => {
+    if (streaming || !onNavigateToNode) return;
+    const el = containerRef.current;
+    if (el) linkifyNodeNames(el, onNavigateToNode);
+  }, [text, streaming, onNavigateToNode]);
+
+  // During streaming, use a stable wrapper so React reconciliation is efficient
+  // react-markdown re-renders from scratch each time, but that's fine at rAF rate
+  return (
+    <div ref={containerRef} className={`msg-text msg-markdown${streaming ? ' streaming' : ''}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: MarkdownCode,
+          pre: ({ children }) => <>{children}</>,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+      {streaming && <span className="streaming-typing">▊</span>}
+    </div>
+  );
 };
 
 // ── Reasoning block ──
+// Auto-expand while streaming; auto-collapse when done (respects user manual toggle).
 
-const ReasoningBlock: React.FC<{ text: string; blockIndex: number; expanded: boolean; onToggle: (i: number) => void }> =
-  ({ text, blockIndex, expanded, onToggle }) => (
-    <div className={`msg-reasoning${expanded ? ' msg-reasoning-open' : ''}`}>
-      <div className="msg-reasoning-toggle" onClick={() => onToggle(blockIndex)}>
-        <span dangerouslySetInnerHTML={{ __html: expanded ? svgIcon('chevron-down') : svgIcon('chevron-right') }} />
-        {expanded ? '收起思考' : '查看思考'}
+const ReasoningBlock: React.FC<{
+  text: string;
+  streaming: boolean;
+  reasoningComplete: boolean;
+}> = ({ text, streaming, reasoningComplete }) => {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const userOverridden = useRef(false);
+  const [open, setOpen] = useState(streaming);
+
+  // Auto open/close on streaming state transitions
+  useEffect(() => {
+    if (streaming) {
+      if (!userOverridden.current) setOpen(true);
+    } else if (reasoningComplete && !userOverridden.current) {
+      setOpen(false);
+    }
+  }, [streaming, reasoningComplete]);
+
+  const toggle = () => {
+    userOverridden.current = true;
+    setOpen(v => !v);
+  };
+
+  const displayText = streaming ? truncateReasoning(text) : text;
+
+  return (
+    <div className={`msg-reasoning${open ? ' msg-reasoning-open' : ''}`}>
+      <div className="msg-reasoning-toggle" onClick={toggle}>
+        <span dangerouslySetInnerHTML={{
+          __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+        }} />
+        {open ? '收起思考' : '查看思考'}
       </div>
-      <div className={`msg-reasoning-content${expanded ? ' msg-reasoning-open' : ''}`}>
-        <pre>{text}</pre>
+      <div ref={bodyRef} className={`msg-reasoning-content${open ? ' msg-reasoning-open' : ''}`}>
+        {open && <pre>{displayText}</pre>}
       </div>
     </div>
   );
+};
 
 // ── Tool card ──
 
 const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> =
   ({ part, expanded, onToggle }) => {
-    const icon = svgIcon(part.status === 'running' ? 'dot' : part.status === 'done' ? 'check-circle' : 'close');
+    const icon = part.status === 'running' ? svgIcon('dot')
+      : part.status === 'done' ? svgIcon('check-circle')
+      : part.status === 'error' ? svgIcon('close')
+      : svgIcon('dot');
+    const toolDone = part.status === 'done' || part.status === 'error';
+    const badgeLabel = part.status === 'running' ? '执行中'
+      : part.status === 'done' ? '完成'
+      : part.status === 'error' ? '失败'
+      : '等待中';
+    const badgeCls = part.status === 'done' ? 'badge-ok'
+      : part.status === 'error' ? 'badge-fail'
+      : 'badge-running';
+
     return (
-      <div className={`msg-tool-card msg-tool-wrapper${expanded ? ' tool-expanded' : ''}`}>
+      <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${expanded ? ' tool-expanded' : ''}`}>
         <div className="msg-tool-header" onClick={onToggle}>
           <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
-          <span className="msg-tool-name">{part.name}</span>
-          <span className="msg-tool-args">{part.args?.length > 60 ? part.args.slice(0, 57) + '…' : (part.args || '')}</span>
-          <span className={`msg-tool-badge ${part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running'}`}>
-            {part.status === 'running' ? '执行中' : part.status === 'done' ? '完成' : part.status === 'error' ? '失败' : '等待中'}
+          <span className="tool-name">{part.name}</span>
+          <span className="tool-args">
+            {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : (part.args || '')}
           </span>
+          <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
         </div>
-        {expanded && part.output && <div className="msg-tool-result"><pre><code>{part.output.slice(0, 2000)}{part.output.length > 2000 ? '\n…(截断)' : ''}</code></pre></div>}
-        {expanded && part.err && <div className="msg-tool-result msg-tool-err"><pre><code>{part.err}</code></pre></div>}
+        {expanded && part.output && (
+          <div className="msg-tool-result">
+            <pre><code>{part.output.slice(0, 2000)}{part.output.length > 2000 ? '\n…(截断)' : ''}</code></pre>
+          </div>
+        )}
+        {expanded && part.err && (
+          <div className="msg-tool-result msg-tool-err">
+            <pre><code>{part.err}</code></pre>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+// ── Tool summary ──
+
+const ToolSummary: React.FC<{ tools: ToolCallPart[]; onExpandAll: () => void }> =
+  ({ tools, onExpandAll }) => {
+    const doneTools = tools.filter(t => t.status === 'done' || t.status === 'error');
+    const names = doneTools.map(t => t.label || t.name);
+    const unique = [...new Set(names)];
+    return (
+      <div className="msg-tool-summary" onClick={onExpandAll} title="点击展开所有工具">
+        <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} />
+        {' '}已执行 {doneTools.length} 个工具：
+        <span>{unique.slice(0, 3).join(', ')}{unique.length > 3 ? ` 等 ${unique.length} 个` : ''}</span>
       </div>
     );
   };
 
 // ── User message ──
 
-const UserBubble: React.FC<{ msg: UserMessage; onEdit?: (m: UserMessage) => void; onResend?: (m: UserMessage) => void }> =
-  ({ msg, onEdit, onResend }) => (
-    <div className="msg-bubble user" data-message-id={msg._id}>
-      <div className="msg-user-row">
-        <span className="msg-user-text">{msg.text}</span>
-        <span className="msg-actions">
-          {onEdit && <span className="msg-action-btn" onClick={() => onEdit(msg)} title="编辑" dangerouslySetInnerHTML={{ __html: svgIcon('edit') }} />}
-          {onResend && <span className="msg-action-btn" onClick={() => onResend(msg)} title="重发" dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }} />}
-        </span>
-      </div>
+const UserBubble: React.FC<{
+  msg: UserMessage;
+  onEdit?: (m: UserMessage) => void;
+  onResend?: (m: UserMessage) => void;
+}> = ({ msg, onEdit, onResend }) => (
+  <div className="msg-user-row" data-message-id={msg._id}>
+    <div className="msg-bubble user">
+      <div className="msg-text">{msg.text}</div>
       {msg.files && msg.files.length > 0 && (
         <div className="msg-attach-pills">
           {msg.files.map((f, i) => (
-            <span key={i} className="attach-pill">{f.name} <span className="attach-pill-size">({f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`})</span></span>
+            <span key={i} className="msg-attach-pill">
+              {f.name} <span className="attach-pill-size">
+                ({f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`})
+              </span>
+            </span>
           ))}
         </div>
       )}
     </div>
-  );
+    <span className="msg-actions">
+      {onEdit && (
+        <span className="msg-action-btn" onClick={() => onEdit(msg)} title="编辑"
+          dangerouslySetInnerHTML={{ __html: svgIcon('edit') }} />
+      )}
+      {onResend && (
+        <span className="msg-action-btn" onClick={() => onResend(msg)} title="重发"
+          dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }} />
+      )}
+    </span>
+  </div>
+);
 
 // ── Assistant message ──
 
 const AssistantBubble: React.FC<{
   msg: AssistantMessage;
   expandedTools: Set<string>;
-  expandedReasoning: Set<number>;
   onToggleTool: (id: string) => void;
-  onToggleReasoning: (idx: number) => void;
+  onExpandAllTools: (ids: string[]) => void;
   onCopy?: () => void;
   onRetry?: () => void;
-}> = ({ msg, expandedTools, expandedReasoning, onToggleTool, onToggleReasoning, onCopy, onRetry }) => {
-  let reasonIdx = -1;
-  const toolCount = msg.parts.filter((p): p is ToolCallPart => p.type === 'tool').length;
+  onNavigateToNode?: (name: string) => void;
+}> = ({
+  msg, expandedTools,
+  onToggleTool, onExpandAllTools,
+  onCopy, onRetry, onNavigateToNode,
+}) => {
+  const streaming = msg.status === 'streaming';
+
+  // Collect reasoning text + determine if reasoning is complete
+  let reasoningText = '';
+  let reasoningComplete = !streaming; // done messages: reasoning was complete
+  for (const p of msg.parts) {
+    if (p.type === 'reasoning') reasoningText += p.text;
+    if (p.type === 'text' && (p as TextPart).finalised) reasoningComplete = true;
+  }
+
+  // Group consecutive tool parts
+  const groups: Array<
+    { kind: 'tool'; tools: ToolCallPart[] } |
+    { kind: 'part'; part: typeof msg.parts[number] }
+  > = [];
+  let i = 0;
+  while (i < msg.parts.length) {
+    const p = msg.parts[i];
+    if (p.type === 'tool') {
+      const run: ToolCallPart[] = [p as ToolCallPart];
+      i++;
+      while (i < msg.parts.length && msg.parts[i].type === 'tool') {
+        run.push(msg.parts[i] as ToolCallPart);
+        i++;
+      }
+      groups.push({ kind: 'tool', tools: run });
+    } else {
+      groups.push({ kind: 'part', part: p });
+      i++;
+    }
+  }
 
   return (
     <div className="msg-bubble assistant" data-message-id={msg._id}>
-      {msg.parts.map((part, i) => {
-        if (part.type === 'reasoning') { reasonIdx++; return <ReasoningBlock key={i} text={part.text} blockIndex={reasonIdx} expanded={expandedReasoning.has(reasonIdx)} onToggle={onToggleReasoning} />; }
-        if (part.type === 'text') return <StreamingText key={i} text={part.text} finalised={(part as TextPart).finalised} />;
-        if (part.type === 'tool') return <ToolCard key={i} part={part as ToolCallPart} expanded={expandedTools.has((part as ToolCallPart).toolId)} onToggle={() => onToggleTool((part as ToolCallPart).toolId)} />;
+      {reasoningText && (
+        <ReasoningBlock text={reasoningText} streaming={streaming} reasoningComplete={reasoningComplete} />
+      )}
+      {groups.map((g, gi) => {
+        if (g.kind === 'tool') {
+          const tools = g.tools;
+          const doneCount = tools.filter(t => t.status === 'done' || t.status === 'error').length;
+          const allDone = doneCount === tools.length && tools.length >= 3;
+          return (
+            <div key={gi} className="msg-tool-wrapper">
+              {allDone && (
+                <ToolSummary
+                  tools={tools.filter(t => t.status === 'done' || t.status === 'error')}
+                  onExpandAll={() => onExpandAllTools(tools.map(t => t.toolId))}
+                />
+              )}
+              {tools.map(t => (
+                <ToolCard key={t.toolId} part={t}
+                  expanded={expandedTools.has(t.toolId)}
+                  onToggle={() => onToggleTool(t.toolId)}
+                />
+              ))}
+            </div>
+          );
+        }
+
+        const part = g.part;
+        if (part.type === 'reasoning') return null; // already rendered above
+        if (part.type === 'text') {
+          const tp = part as TextPart;
+          return (
+            <MarkdownContent key={gi}
+              text={tp.text}
+              streaming={streaming && !tp.finalised}
+              onNavigateToNode={onNavigateToNode}
+            />
+          );
+        }
         return null;
       })}
-      {toolCount > 0 && <div className="msg-tool-summary">已执行 {toolCount} 个工具</div>}
       <span className="msg-actions">
-        {onCopy && <span className="msg-action-btn" onClick={onCopy} title="复制" dangerouslySetInnerHTML={{ __html: svgIcon('copy') }} />}
-        {onRetry && msg.status === 'done' && <span className="msg-action-btn" onClick={onRetry} title="重试" dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }} />}
+        {onCopy && (
+          <span className="msg-action-btn" onClick={onCopy} title="复制"
+            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }} />
+        )}
+        {onRetry && msg.status === 'done' && (
+          <span className="msg-action-btn" onClick={onRetry} title="重试"
+            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }} />
+        )}
       </span>
     </div>
   );
@@ -160,69 +413,78 @@ const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
 
 // ── Permission card ──
 
-const PermissionCard: React.FC<{ msg: PermissionMessage; onResolve: (r: { allow: boolean; remember: boolean }) => void }> =
-  ({ msg, onResolve }) => (
-    <div className="perm-inline-card">
-      <div className="perm-inline-header"><span className="perm-inline-tool">🔐 {msg.toolName}</span></div>
-      <div className="msg-perm-btns">
-        <button className="perm-inline-allow" onClick={() => onResolve({ allow: true, remember: false })}>允许</button>
-        <button className="perm-inline-allow-session" onClick={() => onResolve({ allow: true, remember: true })}>本次会话允许</button>
-        <button className="perm-inline-deny" onClick={() => onResolve({ allow: false, remember: false })}>拒绝</button>
-      </div>
-    </div>
-  );
-
 // ── Main component ──
 
 const ChatMessagesApp: React.FC<{
   messages: ChatMessage[];
   callbacks: ChatMessagesCallbacks;
-}> = ({ messages, callbacks }) => {
+  version: number;
+}> = ({ messages, callbacks, version }) => {
   const listRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+  const autoScrollRaf = useRef<number | null>(null);
+  const lastMsgCount = useRef(0);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
-  const [expandedReasoning, setExpandedReasoning] = useState<Set<number>>(new Set());
-  const lastMsgCount = useRef(0);
-  const userScrolledUpRef = useRef(false);
-  useEffect(() => { userScrolledUpRef.current = userScrolledUp; }, [userScrolledUp]);
 
-  // Auto-scroll: run on EVERY render (bump() triggers root.render() → component re-renders)
-  // Using useEffect with no deps = after every render. Gate: only scroll if not scrolled up.
+  // Auto-scroll: coalesce into single pending rAF
   useEffect(() => {
-    const list = listRef.current;
-    if (!list || messages.length === 0) return;
+    if (messages.length === 0) return;
+    if (autoScrollRaf.current !== null) return;
 
-    // Reset auto-follow when a new user message appears
     if (messages.length > lastMsgCount.current && messages[messages.length - 1]?.role === 'user') {
+      stickRef.current = true;
       setUserScrolledUp(false);
     }
     lastMsgCount.current = messages.length;
 
-    // Use ref for scroll check — avoids stale closure in effect-with-no-deps
-    if (!userScrolledUpRef.current) {
-      list.scrollTop = list.scrollHeight;
-    }
-  });
+    if (!stickRef.current) return;
 
-  // Scroll tracking
+    autoScrollRaf.current = requestAnimationFrame(() => {
+      autoScrollRaf.current = null;
+      if (!stickRef.current) return;
+      const el = listRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => {
+      if (autoScrollRaf.current !== null) cancelAnimationFrame(autoScrollRaf.current);
+    };
+  }, []);
+
+  // Scroll tracking: capture phase wheel + scroll event
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) setUserScrolledUp(true); };
-    const onScroll = () => {
-      const dist = list.scrollHeight - list.scrollTop - list.clientHeight;
-      setUserScrolledUp(dist > 40);
+
+    const onWheelCapture = (e: WheelEvent) => {
+      if (!list || list.scrollHeight - list.clientHeight <= 1) return;
+      if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY >= 0) return;
+      stickRef.current = false;
+      setUserScrolledUp(true);
     };
-    list.addEventListener('wheel', onWheel);
+
+    const onScroll = () => {
+      const atBottom = isNearBottom(list);
+      stickRef.current = atBottom;
+      setUserScrolledUp(!atBottom);
+    };
+
+    list.addEventListener('wheel', onWheelCapture, true);
     list.addEventListener('scroll', onScroll);
-    return () => { list.removeEventListener('wheel', onWheel); list.removeEventListener('scroll', onScroll); };
+    return () => {
+      list.removeEventListener('wheel', onWheelCapture, true);
+      list.removeEventListener('scroll', onScroll);
+    };
   }, []);
 
   const toggleTool = useCallback((id: string) => {
     setExpandedTools(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }, []);
-  const toggleReasoning = useCallback((idx: number) => {
-    setExpandedReasoning(prev => { const n = new Set(prev); n.has(idx) ? n.delete(idx) : n.add(idx); return n; });
+  const expandAllTools = useCallback((ids: string[]) => {
+    setExpandedTools(prev => { const n = new Set(prev); for (const id of ids) n.add(id); return n; });
   }, []);
 
   return (
@@ -230,23 +492,32 @@ const ChatMessagesApp: React.FC<{
       {messages.map(msg => {
         switch (msg.role) {
           case 'user':
-            return <UserBubble key={msg._id} msg={msg} onEdit={callbacks.onEditUserMessage} onResend={callbacks.onResendUserMessage} />;
+            return (
+              <UserBubble key={msg._id} msg={msg}
+                onEdit={callbacks.onEditUserMessage}
+                onResend={callbacks.onResendUserMessage}
+              />
+            );
           case 'assistant':
             return (
               <AssistantBubble key={msg._id} msg={msg}
-                expandedTools={expandedTools} expandedReasoning={expandedReasoning}
-                onToggleTool={toggleTool} onToggleReasoning={toggleReasoning}
+                expandedTools={expandedTools}
+                onToggleTool={toggleTool}
+                onExpandAllTools={expandAllTools}
                 onCopy={callbacks.onCopyText ? () => {
-                  const text = msg.parts.filter(p => p.type === 'text').map(p => (p as TextPart).text).join('\n');
+                  const text = msg.parts
+                    .filter((p): p is TextPart => p.type === 'text')
+                    .map(p => p.text).join('\n');
                   callbacks.onCopyText?.(text);
                 } : undefined}
-                onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant!(msg) : undefined}
+                onRetry={callbacks.onRetryAssistant
+                  ? () => callbacks.onRetryAssistant!(msg)
+                  : undefined}
+                onNavigateToNode={callbacks.onNavigateToNode}
               />
             );
           case 'notice':
             return <NoticeBubble key={msg._id} msg={msg} />;
-          case 'perm':
-            return <PermissionCard key={msg._id} msg={msg} onResolve={r => callbacks.onResolvePermission?.(msg, r)} />;
         }
       })}
     </div>
@@ -260,6 +531,7 @@ export class ChatMessagesPanel {
   private _root: Root;
   private _mount: HTMLElement;
   private _callbacks: ChatMessagesCallbacks = {};
+  private _version = 0;
 
   setCallbacks(cbs: ChatMessagesCallbacks): void { this._callbacks = cbs; }
 
@@ -270,15 +542,14 @@ export class ChatMessagesPanel {
     this._render();
   }
 
-  /** Force React re-render with current messages array. */
   bump(): void {
+    this._version++;
     this._render();
   }
 
   private _render(): void {
-    // Shallow-clone each message: React needs new object refs to detect changes
-    const snapshot = this.messages.map(m => {
-      if (m.role === 'assistant') {
+    const snapshot = this.messages.map((m, i) => {
+      if (i === this.messages.length - 1 && m.role === 'assistant') {
         const am = m as AssistantMessage;
         return { ...am, parts: am.parts.map(p => ({ ...p })) };
       }
@@ -289,6 +560,7 @@ export class ChatMessagesPanel {
       React.createElement(ChatMessagesApp, {
         messages: snapshot,
         callbacks: this._callbacks,
+        version: this._version,
       }),
     );
   }
