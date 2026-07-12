@@ -90,7 +90,6 @@ export interface DomContext {
   getPanel: () => HTMLElement;
   getMsgList: () => HTMLElement;
   getInputArea: () => HTMLTextAreaElement;
-  getCurrentBubble: () => HTMLElement | null;
 
   // Slash panel
   _slashPanel: HTMLElement | null;

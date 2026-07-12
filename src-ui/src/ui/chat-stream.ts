@@ -58,45 +58,6 @@ export interface StreamContext {
   setUserScrolledUp: (v: boolean) => void;
   getSyncRafId: () => number | null;
   setSyncRafId: (id: number | null) => void;
-  getSyncPending: () => boolean;
-  setSyncPending: (v: boolean) => void;
-
-  // ── StreamTextBuf (old path) ──
-  getStreamTextBuf: () => string;
-  setStreamTextBuf: (s: string) => void;
-  getStreamRenderScheduled: () => boolean;
-  setStreamRenderScheduled: (v: boolean) => void;
-  getStreamStableLen: () => number;
-  setStreamStableLen: (n: number) => void;
-  getStreamStableEl: () => HTMLElement | null;
-  setStreamStableEl: (el: HTMLElement | null) => void;
-  getStreamUnstableEl: () => HTMLElement | null;
-  setStreamUnstableEl: (el: HTMLElement | null) => void;
-
-  // ── 旧路径状态 ──
-  getCurrentBubble: () => HTMLElement | null;
-  setCurrentBubble: (el: HTMLElement | null) => void;
-  getCurrentTextEl: () => HTMLElement | null;
-  setCurrentTextEl: (el: HTMLElement | null) => void;
-  getCurrentReasoning: () => HTMLElement | null;
-  setCurrentReasoning: (el: HTMLElement | null) => void;
-  getCurrentReasoningContent: () => HTMLElement | null;
-  setCurrentReasoningContent: (el: HTMLElement | null) => void;
-
-  // ── Reasoning ──
-  getReasoningBlock: () => HTMLElement | null;
-  setReasoningBlock: (el: HTMLElement | null) => void;
-  getReasoningBlockContent: () => HTMLElement | null;
-  setReasoningBlockContent: (el: HTMLElement | null) => void;
-  getReasoningBlockToggle: () => HTMLElement | null;
-  setReasoningBlockToggle: (el: HTMLElement | null) => void;
-
-  // ── Tool ──
-  getPendingToolCards: () => Map<string, HTMLElement>;
-  getToolSummaryEl: () => HTMLElement | null;
-  setToolSummaryEl: (el: HTMLElement | null) => void;
-  getCompletedToolCount: () => number;
-  setCompletedToolCount: (n: number) => void;
 
   // ── turnPairs ──
   getTurnPairs: () => TurnPair[];
@@ -245,13 +206,11 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
     cancelAnimationFrame(rafId);
     ctx.setSyncRafId(null);
   }
-  ctx.setSyncPending(false);
   // Always run one final render while _streamingAssistantId is still set
   if (sid) {
     _doSyncMessagesToDOM(ctx);
   }
   ctx.setStreamingAssistantId(null);
-  ctx.setStreamTextBuf('');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -351,7 +310,7 @@ export function _rerenderMessageAt(ctx: StreamContext, index: number): void {
 /** Full sync: rebuild DOM from messages[]. Efficient for streaming (only last changes). */
 export function _syncMessagesToDOM(ctx: StreamContext): void {
   if (ctx.getStreamingAssistantId()) {
-    if (ctx.getSyncRafId() !== null || ctx.getSyncPending()) return;
+    if (ctx.getSyncRafId() !== null) return;
     ctx.setSyncRafId(requestAnimationFrame(() => {
       ctx.setSyncRafId(null);
       _doSyncMessagesToDOM(ctx);
@@ -465,13 +424,20 @@ export function _doSyncMessagesToDOM(ctx: StreamContext): void {
 
 /** rAF-throttled sync — avoids O(n²) re-render on high-frequency streams. */
 export function _scheduleSync(ctx: StreamContext): void {
-  if (ctx.getSyncPending() || ctx.getSyncRafId() !== null) return;
-  ctx.setSyncPending(true);
-  ctx.setSyncRafId(requestAnimationFrame(() => {
+  if (ctx.getSyncRafId() !== null) return;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const rafId = requestAnimationFrame(() => {
+    if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     ctx.setSyncRafId(null);
-    ctx.setSyncPending(false);
     _doSyncMessagesToDOM(ctx);
-  }));
+  });
+  ctx.setSyncRafId(rafId);
+  // Safety net: if rAF is lost (tab hidden / OS suspend), force render after 500ms.
+  timeoutId = setTimeout(() => {
+    if (timeoutId !== null) { timeoutId = null; }
+    ctx.setSyncRafId(null);
+    _doSyncMessagesToDOM(ctx);
+  }, 500);
 }
 
 // ═══════════════════════════════════════════════════════════
