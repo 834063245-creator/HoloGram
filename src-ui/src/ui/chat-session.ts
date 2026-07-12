@@ -15,12 +15,21 @@ import {
   createNoticeMessage,
 } from './message-model';
 import { invoke } from '../bridge';
-import { bumpChat } from './chat-store';
+import {
+  useChatStore,
+  bumpChat,
+  getChatMessages,
+  setChatMessages,
+} from './chat-store';
+import type { ChatSessionMeta } from './chat-store';
 import { loadSettings, CHAT_MODES } from '../settings';
 import type { Message } from '../provider/types';
 import { iconHtml } from './icons';
 
 // ── Module-level session state ──
+//
+// Pure data lives in chat-store.ts (sessions list, activeIdx, tokens, nextId).
+// Non-serializable handles (agent instances, DOM refs, callbacks) stay here.
 
 export interface ChatSession {
   id: number;
@@ -28,30 +37,50 @@ export interface ChatSession {
   agent: ChatAgentHandle;
 }
 
-let sessions: ChatSession[] = [];
-let activeIdx = -1;
+/** Agent handles keyed by session id — non-serializable, stays module-level. */
+const agentHandles = new Map<number, ChatAgentHandle>();
+
+/** DOM elements for legacy session rendering — stays module-level. */
 const sessionMessages = new Map<number, HTMLElement[]>();
-const sessionMessageModels = new Map<number, ChatMessage[]>();
-/** Per-session token count — saved/restored on switch to prevent cross-session contamination. */
-const sessionTokens = new Map<number, number>();
+
+/** Turn pairs for retract/resend — HTMLElement refs prevent Zustand serialization. */
 let turnPairs: Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> = [];
+
+/** Agent factory function — set once by ChatPanel. */
 let agentFactory: (() => Promise<ChatAgentHandle | null>) | null = null;
-let nextSessionId = 1;
+
+// ── Helpers: bridge store sessions to ChatSession (with agent handles) ──
+
+function storeSessionsWithAgents(): ChatSession[] {
+  const { sessions, activeIdx } = useChatStore.getState();
+  return sessions.map(s => ({ ...s, agent: agentHandles.get(s.id)! }));
+}
 
 // ── Accessors (used by ChatPanel to bridge module state) ──
 
-export function getSessions(): ChatSession[] { return sessions; }
-export function getActiveIdx(): number { return activeIdx; }
-export function getActiveAgent(): ChatAgentHandle | null { return sessions[activeIdx]?.agent ?? null; }
-export function getNextSessionId(): number { return nextSessionId; }
-export function setNextSessionId(id: number): void { nextSessionId = id; }
-/** Sync the active session's token count into the per-session map. Call after direct totalTokensUsed mutations outside switchSession. */
-export function syncActiveSessionTokens(count: number): void {
+export function getSessions(): ChatSession[] { return storeSessionsWithAgents(); }
+export function getActiveIdx(): number { return useChatStore.getState().activeIdx; }
+export function getActiveAgent(): ChatAgentHandle | null {
+  const { sessions, activeIdx } = useChatStore.getState();
   const s = sessions[activeIdx];
-  if (s) sessionTokens.set(s.id, count);
+  return s ? agentHandles.get(s.id) ?? null : null;
+}
+export function getNextSessionId(): number { return useChatStore.getState().nextSessionId; }
+export function setNextSessionId(id: number): void {
+  useChatStore.setState({ nextSessionId: id });
+}
+/** Sync the active session's token count into the per-session map. */
+export function syncActiveSessionTokens(count: number): void {
+  const { sessions, activeIdx } = useChatStore.getState();
+  const s = sessions[activeIdx];
+  if (s) useChatStore.getState().setSessionTokens(s.id, count);
 }
 export function getSessionMessages(): Map<number, HTMLElement[]> { return sessionMessages; }
-export function getSessionMessageModels(): Map<number, ChatMessage[]> { return sessionMessageModels; }
+export function getSessionMessageModels(): Map<number, ChatMessage[]> {
+  // ponytail: adapter — callers expect Map, store uses Record
+  const models = useChatStore.getState().sessionMessageModels;
+  return new Map(Object.entries(models).map(([k, v]) => [Number(k), v]));
+}
 export function getTurnPairs(): Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> { return turnPairs; }
 export function setTurnPairs(pairs: Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }>): void { turnPairs = pairs; }
 export function getAgentFactory(): (() => Promise<ChatAgentHandle | null>) | null { return agentFactory; }
@@ -60,9 +89,17 @@ export function setAgentFactory(fn: (() => Promise<ChatAgentHandle | null>) | nu
 /** Full reset — used by setAgent in ChatPanel when switching workspace. */
 export function resetSessionState(ag: ChatAgentHandle): void {
   sessionMessages.clear();
-  sessionTokens.clear();
-  sessions = [{ id: nextSessionId++, label: `会话 1`, agent: ag }];
-  activeIdx = 0;
+  const id = useChatStore.getState().nextSessionId;
+  const label = '会话 1';
+  agentHandles.clear();
+  agentHandles.set(id, ag);
+  useChatStore.setState({
+    sessions: [{ id, label }],
+    activeIdx: 0,
+    sessionTokens: {},
+    sessionMessageModels: {},
+    nextSessionId: id + 1,
+  });
   turnPairs = [];
 }
 
@@ -145,9 +182,9 @@ export function stripLineNumbers(text: string): string {
 // ── Session CRUD ──
 
 export function renderSessionTabs(ctx: SessionContext): void {
+  const { sessions, activeIdx } = useChatStore.getState();
   ctx.sessionTabs.innerHTML = '';
   const multi = sessions.length > 1;
-  // Toggle the entire session bar row — hidden when ≤ 1 session
   const bar = ctx.sessionTabs.parentElement;
   if (bar) bar.style.display = multi ? '' : 'none';
 
@@ -175,7 +212,6 @@ export function renderSessionTabs(ctx: SessionContext): void {
     ctx.sessionTabs.appendChild(tab);
   }
 
-  // When multiple sessions: "对话" tab shows active session name
   const chatTab = ctx.tabBar.querySelector<HTMLElement>('.chat-panel-tab[data-tab="chat"]');
   if (chatTab) {
     const activeSess = sessions[activeIdx];
@@ -186,44 +222,47 @@ export function renderSessionTabs(ctx: SessionContext): void {
 }
 
 export function switchSession(ctx: SessionContext, idx: number): void {
+  const { sessions, activeIdx } = useChatStore.getState();
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
   // Save current messages + token count to cache
   if (activeIdx >= 0) {
     saveCurrentMessages(ctx);
-    sessionTokens.set(sessions[activeIdx].id, ctx.getTotalTokensUsed());
+    useChatStore.getState().setSessionTokens(sessions[activeIdx].id, ctx.getTotalTokensUsed());
   }
-  // Flush any in-progress streaming
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
   // Switch
-  activeIdx = idx;
+  useChatStore.setState({ activeIdx: idx });
   renderSessionTabs(ctx);
   restoreMessages(ctx);
   // Restore target session's token count
-  ctx.setTotalTokensUsed(sessionTokens.get(sessions[idx].id) || 0);
+  ctx.setTotalTokensUsed(useChatStore.getState().sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
   ctx.updateFooter();
 }
 
 export function closeSession(ctx: SessionContext, idx: number): void {
-  if (sessions.length <= 1) {
+  const st = useChatStore.getState();
+  if (st.sessions.length <= 1) {
     ctx.addNotice('至少保留一个会话', 'info');
     return;
   }
-  // Abort if closing active running session
-  if (idx === activeIdx && ctx.getRunning()) ctx.abort();
-  // Remove session — persist before mutating memory
-  const s = sessions[idx];
+  if (idx === st.activeIdx && ctx.getRunning()) ctx.abort();
+  const s = st.sessions[idx];
   sessionMessages.delete(s.id);
-  sessionTokens.delete(s.id);
-  // Persist deletion
+  agentHandles.delete(s.id);
+  st.removeSession(s.id);
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
     saveActiveSession(ctx, projectPath).then(() => {
-      sessions.splice(idx, 1);
-      if (activeIdx >= sessions.length) activeIdx = sessions.length - 1;
-      if (activeIdx < 0) activeIdx = 0;
+      const st2 = useChatStore.getState();
+      const newSessions = [...st2.sessions];
+      newSessions.splice(idx, 1);
+      let newIdx = st2.activeIdx;
+      if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
+      if (newIdx < 0) newIdx = 0;
+      useChatStore.setState({ sessions: newSessions, activeIdx: newIdx });
       renderSessionTabs(ctx);
       restoreMessages(ctx);
       ctx.updateFooter();
@@ -233,9 +272,12 @@ export function closeSession(ctx: SessionContext, idx: number): void {
       ctx.addNotice('关闭会话失败', 'error');
     });
   } else {
-    sessions.splice(idx, 1);
-    if (activeIdx >= sessions.length) activeIdx = sessions.length - 1;
-    if (activeIdx < 0) activeIdx = 0;
+    const newSessions = [...st.sessions];
+    newSessions.splice(idx, 1);
+    let newIdx = st.activeIdx;
+    if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
+    if (newIdx < 0) newIdx = 0;
+    useChatStore.setState({ sessions: newSessions, activeIdx: newIdx });
     renderSessionTabs(ctx);
     restoreMessages(ctx);
     ctx.updateFooter();
@@ -253,21 +295,20 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
     ctx.addNotice('无法创建会话: Agent 工厂返回空', 'error');
     return;
   }
-  // Save current messages
-  if (activeIdx >= 0) saveCurrentMessages(ctx);
+  const st = useChatStore.getState();
+  if (st.activeIdx >= 0) saveCurrentMessages(ctx);
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
-  // Add new session
-  const s: ChatSession = {
-    id: nextSessionId++,
-    label: `会话 ${sessions.length + 1}`,
-    agent: newAgent,
-  };
-  sessions.push(s);
-  activeIdx = sessions.length - 1;
+  const id = st.nextSessionId;
+  const label = `会话 ${st.sessions.length + 1}`;
+  agentHandles.set(id, newAgent);
+  useChatStore.setState({
+    sessions: [...st.sessions, { id, label }],
+    activeIdx: st.sessions.length,
+    nextSessionId: id + 1,
+  });
   renderSessionTabs(ctx);
-  // Clear displayed messages for the new session
   ctx.setMessages([]);
   bumpChat();
   resetMsgIdCounter();
@@ -275,7 +316,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.clearInputHistory();
   setTurnPairs([]);
   ctx.setTotalTokensUsed(0);
-  sessionTokens.set(s.id, 0);
+  useChatStore.getState().setSessionTokens(id, 0);
   ctx.addNotice('新会话已创建 — 可以开始对话', 'info');
   ctx.setLastUsageText('');
   ctx.updateFooter();
@@ -284,32 +325,29 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
 // ── Session message cache ──
 
 function saveCurrentMessages(ctx: SessionContext): void {
+  const { sessions, activeIdx } = useChatStore.getState();
   const sid = sessions[activeIdx]?.id;
   if (!sid) return;
-  // ⚡ React renders from data model, DOM snapshots no longer needed
-  sessionMessageModels.set(sid, [...ctx.getMessages()]);
+  useChatStore.getState().setSessionMessageModels(sid, [...ctx.getMessages()]);
 }
 
 function restoreMessages(ctx: SessionContext): void {
+  const { sessions, activeIdx, sessionMessageModels } = useChatStore.getState();
   const sid = sessions[activeIdx]?.id;
   if (!sid) return;
 
-  // Try to restore from message model cache first
-  const cachedMessages = sessionMessageModels.get(sid);
-  if (cachedMessages) {
+  const cachedMessages = sessionMessageModels[sid];
+  if (cachedMessages && cachedMessages.length > 0) {
     ctx.setMessages(cachedMessages);
     bumpChat();
     return;
   }
 
-  // Fall back: rebuild from agent session (no DOM cloning — that bypassed
-  // the model and got wiped by the next _syncMessagesToDOM).
-  const agent = sessions[activeIdx]?.agent;
+  const agent = agentHandles.get(sid);
   if (agent) {
     _rebuildMessagesFromSession(ctx);
     bumpChat();
   }
-
 }
 
 // ── Session persistence — one file per session, localStorage backup ──
@@ -356,20 +394,21 @@ export async function scanMaxSessionId(projectPath: string): Promise<number> {
 /** Save the active session to its own file. Updates _active.json tracker.
  *  Also writes a sync localStorage backup so the session survives app crash / force-close. */
 export async function saveActiveSession(ctx: SessionContext, projectPath: string): Promise<void> {
+  const { sessions, activeIdx } = useChatStore.getState();
   if (!projectPath || activeIdx < 0) return;
-  const s = sessions[activeIdx];
-  if (!s) return;
+  const sMeta = sessions[activeIdx];
+  if (!sMeta) return;
+  const agent = agentHandles.get(sMeta.id);
+  if (!agent) return;
 
   saveCurrentMessages(ctx);
-
-  // Snapshot current token count before persisting
-  sessionTokens.set(s.id, ctx.getTotalTokensUsed());
+  useChatStore.getState().setSessionTokens(sMeta.id, ctx.getTotalTokensUsed());
 
   const data = {
-    id: s.id,
-    label: s.label,
+    id: sMeta.id,
+    label: sMeta.label,
     savedAt: new Date().toISOString(),
-    messages: s.agent.getSession(),
+    messages: agent.getSession(),
     tokensUsed: ctx.getTotalTokensUsed(),
   };
 
@@ -377,14 +416,14 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   const json = JSON.stringify(data);
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(lsKey(projectPath, s.id), json);
+      localStorage.setItem(lsKey(projectPath, sMeta.id), json);
     }
   } catch { /* quota exceeded — disk write is the fallback */ }
 
   // 2) Async disk write (atomic: tmp → rename)
   try {
     await invoke('write_file_content', {
-      filePath: sessionFile(projectPath, s.id),
+      filePath: sessionFile(projectPath, sMeta.id),
       content: json,
     });
   } catch (e) {
@@ -394,7 +433,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   try {
     await invoke('write_file_content', {
       filePath: trackerFile(projectPath),
-      content: JSON.stringify({ lastId: s.id, nextId: nextSessionId }),
+      content: JSON.stringify({ lastId: sMeta.id, nextId: useChatStore.getState().nextSessionId }),
     });
   } catch { /* non-critical */ }
 }
@@ -404,21 +443,20 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
 export async function autoRestoreLastSession(ctx: SessionContext, projectPath: string): Promise<void> {
   if (!ctx.agentFactory || !projectPath) return;
 
+  let curNextId = useChatStore.getState().nextSessionId;
+
   // ── Resolve last session id ──
   let lastId = 0;
   // 1) Tracker file
   try {
     const t = await readSessionJSON(trackerFile(projectPath));
     lastId = t.lastId || 0;
-    // ponytail: never let tracker push nextSessionId backwards — it causes ID collisions
-    // when the tracker was saved with a stale value (e.g. after workspace switch)
     const trackerNextId = t.nextId || (lastId + 1) || 1;
-    nextSessionId = Math.max(nextSessionId, trackerNextId);
+    curNextId = Math.max(curNextId, trackerNextId);
   } catch { /* tracker missing — try localStorage scan below */ }
 
   // 2) If tracker missing, scan localStorage for newest session IN THIS WORKSPACE
   if (!lastId && typeof localStorage !== 'undefined') {
-    // Compute workspace prefix so we don't pick up sessions from other projects
     const wsPrefix = lsKey(projectPath, 0).replace(/_0$/, '_');
     let newestTs = '';
     for (let i = 0; i < localStorage.length; i++) {
@@ -432,11 +470,10 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
         }
       } catch { /* skip corrupt entry */ }
     }
-    if (lastId) nextSessionId = lastId + 1;
+    if (lastId) curNextId = lastId + 1;
   }
   if (!lastId) {
-    // Fresh workspace — reset session ID counter to avoid carry-over from previous project
-    nextSessionId = 1;
+    useChatStore.setState({ nextSessionId: 1 });
     ctx.addNotice('未找到历史会话，已创建新会话', 'info');
     return;
   }
@@ -504,7 +541,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
   newAgent.setSession([...freshSys, ...conv]);
 
-  if (activeIdx >= 0) saveCurrentMessages(ctx);
+  const curSt = useChatStore.getState();
+  if (curSt.activeIdx >= 0) saveCurrentMessages(ctx);
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
@@ -512,8 +550,13 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   const label = data.label && !data.label.startsWith('会话 ') ? data.label : '已恢复的会话';
   // Replace ALL sessions — switch workspace = fresh start
   sessionMessages.clear();
-  sessions = [{ id: data.id, label, agent: newAgent }];
-  activeIdx = 0;
+  agentHandles.clear();
+  agentHandles.set(data.id, newAgent);
+  useChatStore.setState({
+    sessions: [{ id: data.id, label }],
+    activeIdx: 0,
+    nextSessionId: Math.max(curNextId, curSt.nextSessionId),
+  });
   renderSessionTabs(ctx);
 
   try { renderRestoredSession(ctx); } catch (e) {
@@ -611,22 +654,26 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   newAgent.setSession([...freshSys, ...conv]);
 
   const firstUser = conv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
+  const st1 = useChatStore.getState();
   const label = (data.label && !data.label.startsWith('会话 '))
     ? data.label
-    : firstUser ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '') : `会话 ${sessions.length + 1}`;
+    : firstUser ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '') : `会话 ${st1.sessions.length + 1}`;
 
-  if (activeIdx >= 0) saveCurrentMessages(ctx);
+  if (st1.activeIdx >= 0) saveCurrentMessages(ctx);
   ctx.flushReasoning(); ctx.flushText(); ctx.clearPendingToolCards();
 
-  sessions.push({ id: data.id || sessionId, label, agent: newAgent });
-  activeIdx = sessions.length - 1;
-  // Restore persisted token count
+  const sid = data.id || sessionId;
+  agentHandles.set(sid, newAgent);
+  useChatStore.setState({
+    sessions: [...st1.sessions, { id: sid, label }],
+    activeIdx: st1.sessions.length,
+  });
   if (typeof data.tokensUsed === 'number') {
     ctx.setTotalTokensUsed(data.tokensUsed);
-    sessionTokens.set(data.id || sessionId, data.tokensUsed);
+    useChatStore.getState().setSessionTokens(sid, data.tokensUsed);
   } else {
     ctx.setTotalTokensUsed(0);
-    sessionTokens.set(data.id || sessionId, 0);
+    useChatStore.getState().setSessionTokens(sid, 0);
   }
   renderSessionTabs(ctx);
   renderRestoredSession(ctx);
@@ -653,7 +700,7 @@ export async function deleteSessionFile(ctx: SessionContext, projectPath: string
     if (typeof localStorage !== 'undefined') localStorage.removeItem(lsKey(projectPath, sessionId));
   } catch { /* ignore */ }
   // If this session is open in a tab, close that tab
-  const idx = sessions.findIndex(s => s.id === sessionId);
+  const idx = useChatStore.getState().sessions.findIndex(s => s.id === sessionId);
   if (idx >= 0) closeSession(ctx, idx);
 }
 
@@ -661,18 +708,19 @@ export async function deleteSessionFile(ctx: SessionContext, projectPath: string
 
 /** Walk through active agent's session array and build ChatMessage[] + turnPairs. */
 function renderRestoredSession(ctx: SessionContext): void {
-  const agent = sessions[activeIdx]?.agent;
+  const { sessions, activeIdx } = useChatStore.getState();
+  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
   bumpChat();
-
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
 
 /** Populate ctx.getMessages()[] + turnPairs from active agent's getSession().
  *  Pure data rebuild — no DOM sync, no notices. */
 export function _rebuildMessagesFromSession(ctx: SessionContext): void {
-  const agent = sessions[activeIdx]?.agent;
+  const { sessions, activeIdx } = useChatStore.getState();
+  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
   if (!agent) return;
 
   const msgs = agent.getSession();
@@ -776,7 +824,8 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
   // ⚡ React handles DOM removal, just clean the model
   // Remove from agent session — search by content if index is stale (inserted mid-run)
   let sessIdx = pair.sessionIndex;
-  const agent = sessions[activeIdx]?.agent;
+  const { sessions, activeIdx } = useChatStore.getState();
+  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
   if (sessIdx < 0 && agent) {
     const agentSession = agent.getSession();
     for (let i = 0; i < agentSession.length; i++) {
@@ -825,14 +874,16 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
   }
   // Also retract from agent session
   if (msg.sessionIndex >= 0) {
-    sessions[activeIdx]?.agent?.retractTurnAt(msg.sessionIndex);
+    const { sessions, activeIdx } = useChatStore.getState();
+    agentHandles.get(sessions[activeIdx]?.id ?? -1)?.retractTurnAt(msg.sessionIndex);
   }
 }
 
 // ── Conversation export ──
 
 export async function exportSession(ctx: SessionContext): Promise<void> {
-  const agent = sessions[activeIdx]?.agent;
+  const { sessions, activeIdx } = useChatStore.getState();
+  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
   if (!agent) { ctx.addNotice('没有可导出的会话', 'info'); return; }
 
   const msgs = agent.getSession();
