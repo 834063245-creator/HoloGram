@@ -82,9 +82,7 @@ export class ChatPanel {
 
   // Streaming state
   private starGraph: StarGraph | null = null;
-  private abortCtrl: AbortController | null = null;
-  private running = false;
-  // ⚡ _permCardCount migrated to ExecutionState — use execState.permCardCount
+  // ⚡ running / abortCtrl migrated to ExecutionState — use execState.isRunning / execState.start()
 
   // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
   // All chat messages are stored here. The renderer builds DOM from this array.
@@ -190,15 +188,37 @@ export class ChatPanel {
         this.refreshHint();
       }
     });
-    // ⚡ ExecutionState → UI sync: auto-update stop button when state changes
-    execState.onChange(() => this._updateStopButton());
+    // ⚡ ExecutionState → UI sync: full state → DOM binding
+    execState.onChange(() => {
+      this._updateStopButton();
+      if (execState.isRunning) {
+        this.inputArea.placeholder = 'Agent 思考中… 可直接输入消息插入对话';
+        this._updateStatusBar('thinking', '分析中…');
+        if (!this.progressBar) {
+          this.progressBar = document.createElement('div');
+          this.progressBar.className = 'chat-progress';
+          this.progressBar.innerHTML =
+            '<span class="chat-progress-label">准备中…</span><div class="chat-progress-bar"><div class="chat-progress-fill"></div></div>';
+          this.headerEl.after(this.progressBar);
+        }
+      } else {
+        this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
+        this.inputArea.focus();
+        this._updateStatusBar('idle');
+        if (this.progressBar) {
+          this.progressBar.remove();
+          this.progressBar = null;
+        }
+        this.panel.classList.remove('chat-pill-running');
+      }
+    });
     // ── Detect graph interaction to auto-dismiss the panel ──
     // ── Receive Agent events via bus (decoupled from Agent class) ──
     bus.on('agent:event', (ev: AgentEvent) => this.renderEvent(ev));
     this.setupGraphClickHandler();
     // ── Agent progress feedback (item 3) ──
         bus.on('agent:progress', (data: { step: number; toolName: string }) => {
-      if (!this.progressBar || !this.running) return;
+      if (!this.progressBar || !execState.isRunning) return;
       const label = this.progressBar.querySelector('.chat-progress-label');
       if (label) label.textContent = data.step > 0
         ? `步骤 ${data.step}  ·  ${data.toolName}`
@@ -486,7 +506,7 @@ export class ChatPanel {
       closeSession: (idx) => this.closeSession(idx),
       toggleHistory: () => this.toggleHistory(),
       closeHistory: () => this.closeHistory(),
-      running: this.running,
+      running: execState.isRunning,
       // DOM element setters
       setPanel: (el) => { this.panel = el; },
       setMsgList: (el) => { this.msgList = el; },
@@ -609,7 +629,7 @@ export class ChatPanel {
       injectCodeBlockButtons: (b) => this.injectCodeBlockButtons(b),
       animateBubbleIn: (el, delay) => this.animateBubbleIn(el, delay),
       linkifyNodeNames: () => this.linkifyNodeNames(),
-      setRunning: (r) => this.setRunning(r),
+      setRunning: (_r: boolean) => { /* migrated to execState */ },
       abort: () => this.abort(),
       _updateStatusBar: (s, d) => this._updateStatusBar(s, d),
       _recordToolUsage: (n, a) => this._recordToolUsage(n, a),
@@ -821,7 +841,7 @@ export class ChatPanel {
     if (!this.agent) return;
     // 先中止当前运行 — abort() 已包含安全超时，不强制 running=false
     // （强制设 false 会导致旧 run 还在执行时新消息就能发送，污染会话）
-    if (this.running) {
+    if (execState.isRunning) {
       this.abort();
     }
     // Clear message list UI and accumulated state
@@ -967,7 +987,7 @@ export class ChatPanel {
     }
 
     // ── Insert path: Agent is running, inject message into session ──
-    if (this.running) {
+    if (execState.isRunning) {
       const sessIdx = this.agent.nextInsertIndex;
       this.agent.insertMessage(text);
       this.inputArea.value = '';
@@ -1113,33 +1133,7 @@ export class ChatPanel {
     }
   }
 
-  private setRunning(r: boolean): void {
-    this.running = r;
-    this._updateStopButton();
-    if (r) {
-      this.inputArea.placeholder = 'Agent 思考中… 可直接输入消息插入对话';
-      this._updateStatusBar('thinking', '分析中…');
-      // Insert progress bar (item 3)
-      if (!this.progressBar) {
-        this.progressBar = document.createElement('div');
-        this.progressBar.className = 'chat-progress';
-        this.progressBar.innerHTML =
-          '<span class="chat-progress-label">准备中…</span><div class="chat-progress-bar"><div class="chat-progress-fill"></div></div>';
-        this.headerEl.after(this.progressBar);
-      }
-    } else {
-      this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
-      this.inputArea.focus();
-      this._updateStatusBar('idle');
-      // Remove progress bar
-      if (this.progressBar) {
-        this.progressBar.remove();
-        this.progressBar = null;
-      }
-      // Clear background-running pill indicator
-      this.panel.classList.remove('chat-pill-running');
-    }
-  }
+  // ⚡ migrated to ExecutionState.onChange callback in constructor
 
   // ═══════════════════════════════════════════════════════
   // Data-driven message model — replaces manual DOM append
