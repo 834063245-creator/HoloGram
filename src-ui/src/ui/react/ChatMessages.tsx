@@ -452,7 +452,8 @@ const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
 
 const ChatMessagesApp: React.FC<{
   callbacks: ChatMessagesCallbacks;
-}> = ({ callbacks }) => {
+  scrollContainer?: HTMLElement;
+}> = ({ callbacks, scrollContainer }) => {
   const messages = useChatStore((s) => s.messages);
   const version = useChatStore((s) => s.version);
 
@@ -461,6 +462,9 @@ const ChatMessagesApp: React.FC<{
   const autoScrollRaf = useRef<number | null>(null);
   const lastMsgCount = useRef(0);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+
+  // Resolve the actual scrollable element (outer reactRoot, not the inner React div)
+  const scrollEl = scrollContainer ?? listRef.current;
 
   // Auto-scroll: coalesce into single pending rAF
   useEffect(() => {
@@ -477,8 +481,10 @@ const ChatMessagesApp: React.FC<{
     autoScrollRaf.current = requestAnimationFrame(() => {
       autoScrollRaf.current = null;
       if (!stickRef.current) return;
-      const el = listRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (scrollEl) {
+        scrollEl.style.scrollBehavior = 'auto';
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
     });
   }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -490,13 +496,12 @@ const ChatMessagesApp: React.FC<{
 
   // Scroll tracking: capture phase wheel + scroll event
   // ponytail: direction-aware — only re-enable auto-scroll when user actively
-  // scrolls DOWN to the bottom. A scroll-up near the bottom won't re-engage it,
-  // fixing the "can't scroll up during streaming" bug.
+  // scrolls DOWN to the bottom. A scroll-up near the bottom won't re-engage it.
   useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
+    const el = scrollEl;
+    if (!el) return;
 
-    let lastScrollTop = list.scrollTop;
+    let lastScrollTop = el.scrollTop;
 
     const onWheelCapture = (e: WheelEvent) => {
       // Ignore ctrl+wheel (zoom), horizontal scroll, scroll-down
@@ -505,22 +510,22 @@ const ChatMessagesApp: React.FC<{
     };
 
     const onScroll = () => {
-      const currentTop = list.scrollTop;
+      const currentTop = el.scrollTop;
       const scrollingDown = currentTop > lastScrollTop;
       lastScrollTop = currentTop;
 
-      if (scrollingDown && isNearBottom(list)) {
+      if (scrollingDown && isNearBottom(el)) {
         stickRef.current = true;
       }
     };
 
-    list.addEventListener('wheel', onWheelCapture, true);
-    list.addEventListener('scroll', onScroll);
+    el.addEventListener('wheel', onWheelCapture, true);
+    el.addEventListener('scroll', onScroll);
     return () => {
-      list.removeEventListener('wheel', onWheelCapture, true);
-      list.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onWheelCapture, true);
+      el.removeEventListener('scroll', onScroll);
     };
-  }, []);
+  }, [scrollEl]);
 
   const toggleTool = useCallback((id: string) => {
     setExpandedTools(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -575,11 +580,13 @@ const ChatMessagesApp: React.FC<{
 export class ChatMessagesPanel {
   private _root: Root;
   private _mount: HTMLElement;
+  private _scrollContainer: HTMLElement;
   private _callbacks: ChatMessagesCallbacks = {};
 
   setCallbacks(cbs: ChatMessagesCallbacks): void { this._callbacks = cbs; }
 
   constructor(container: HTMLElement) {
+    this._scrollContainer = container;
     this._mount = document.createElement('div');
     container.appendChild(this._mount);
     this._root = createRoot(this._mount);
@@ -595,6 +602,7 @@ export class ChatMessagesPanel {
     this._root.render(
       React.createElement(ChatMessagesApp, {
         callbacks: this._callbacks,
+        scrollContainer: this._scrollContainer,
       }),
     );
   }
