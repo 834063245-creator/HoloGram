@@ -402,4 +402,6 @@ build/           构建脚本
 
 ## 许可证
 
-[MIT](LICENSE) · © 2026 Wenbing Jing
+HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)
+
+本项目使用了多个第三方开源组件（AuraSDK、tree-sitter 语法库、SQLite、mimalloc、USearch 等）。完整版权声明和许可证文本见 **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**。
