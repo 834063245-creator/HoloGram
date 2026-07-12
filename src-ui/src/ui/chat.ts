@@ -1301,6 +1301,7 @@ export class ChatPanel {
     this._buildModePopup(mode);
 
     // ── Slash panel: React-based, mounted outside footerEl so rebuilds don't touch it ──
+    this._setupSlashPanel(); // registers commands + wires local handlers
     if (!this._slashController) {
       this._slashController = new SlashPanelController(
         this.panel,
