@@ -92,6 +92,9 @@ export interface StreamContext {
   ) => void;
   _updateTokens: (tokensUsed: number) => void;
 
+  // ⚡ React: bump messages panel on array mutation (instead of DOM rebuild)
+  bumpMessages?: () => void;
+
   // ── 项目路径 ──
   getProjectPath: () => string;
 
@@ -176,7 +179,6 @@ export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info
     ctx.getMessages().push(createNoticeMessage(text, level));
   }
   _scheduleSync(ctx);
-  scrollBottom(ctx);
 }
 
 // ── Public notice (thin wrapper) ──
@@ -209,7 +211,7 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
   // Always run one final render while _streamingAssistantId is still set
   if (sid) {
-    _doSyncMessagesToDOM(ctx);
+  ctx.bumpMessages?.();
   }
   ctx.setStreamingAssistantId(null);
 }
@@ -312,7 +314,7 @@ export function _syncMessagesToDOM(ctx: StreamContext): void {
     if (ctx.getSyncRafId() !== null) return;
     ctx.setSyncRafId(requestAnimationFrame(() => {
       ctx.setSyncRafId(null);
-      _doSyncMessagesToDOM(ctx);
+    ctx.bumpMessages?.();
     }));
     return;
   }
@@ -359,7 +361,6 @@ export function _doSyncMessagesToDOM(ctx: StreamContext): void {
           }
         }
         oldEl.replaceWith(el);
-        scrollBottom(ctx);
         return;
       }
     }
@@ -428,14 +429,14 @@ export function _scheduleSync(ctx: StreamContext): void {
   const rafId = requestAnimationFrame(() => {
     if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     ctx.setSyncRafId(null);
-    _doSyncMessagesToDOM(ctx);
+  ctx.bumpMessages?.();
   });
   ctx.setSyncRafId(rafId);
   // Safety net: if rAF is lost (tab hidden / OS suspend), force render after 500ms.
   timeoutId = setTimeout(() => {
     if (timeoutId !== null) { timeoutId = null; }
     ctx.setSyncRafId(null);
-    _doSyncMessagesToDOM(ctx);
+  ctx.bumpMessages?.();
   }, 500);
 }
 
