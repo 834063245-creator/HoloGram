@@ -10,6 +10,7 @@ import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { iconHtml } from './icons';
 import { execState } from '../agent/execution-state';
+import { bumpChat } from './chat-store';
 import type { StarGraph } from './graph';
 import type {
   ChatMessage,
@@ -86,9 +87,6 @@ export interface StreamContext {
     output?: string, err?: string, truncated?: boolean,
   ) => void;
   _updateTokens: (tokensUsed: number) => void;
-
-  // ⚡ React: 消息数组变更后通知重渲染（替代全量 DOM 重建）
-  bumpMessages?: () => void;
 
   // ── 项目路径 ──
   getProjectPath: () => string;
@@ -206,7 +204,7 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
   // Always run one final render while _streamingAssistantId is still set
   if (sid) {
-  ctx.bumpMessages?.();
+  bumpChat();
   }
   ctx.setStreamingAssistantId(null);
 }
@@ -223,14 +221,14 @@ export function _scheduleSync(ctx: StreamContext): void {
   const rafId = requestAnimationFrame(() => {
     if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     ctx.setSyncRafId(null);
-  ctx.bumpMessages?.();
+  bumpChat();
   });
   ctx.setSyncRafId(rafId);
   // Safety net: if rAF is lost (tab hidden / OS suspend), force render after 500ms.
   timeoutId = setTimeout(() => {
     if (timeoutId !== null) { timeoutId = null; }
     ctx.setSyncRafId(null);
-  ctx.bumpMessages?.();
+  bumpChat();
   }, 500);
 }
 
@@ -249,7 +247,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       if (ev.text) {
         const isFirst = !ctx.getStreamingAssistantId();
                   _appendReasoningPart(ctx, ev.text);
-          ctx.bumpMessages?.();
+          bumpChat();
         }
       break;
 
@@ -257,7 +255,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       if (ev.text) {
         const isFirst = !ctx.getStreamingAssistantId();
                   _appendTextPart(ctx, ev.text);
-          ctx.bumpMessages?.();
+          bumpChat();
         }
       break;
 
@@ -265,7 +263,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       if (ev.text) {
         _finaliseTextPart(ctx);
       }
-      ctx.bumpMessages?.();
+      bumpChat();
       break;
 
     case EventKind.ToolDispatch:
@@ -278,7 +276,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
           t.read_only ?? false,
           t.partial ? 'pending' : 'running',
         );
-        ctx.bumpMessages?.();
+        bumpChat();
       }
       break;
 
@@ -306,7 +304,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
           t.err,
           t.truncated,
         );
-        ctx.bumpMessages?.();
+        bumpChat();
       }
       break;
 
@@ -326,7 +324,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         // Note: totalTokensUsed updated by _updateTokens callback internally
         ctx.setLastUsageText(label);
         ctx.updateFooter();
-        ctx.bumpMessages?.();
+        bumpChat();
       }
       break;
 
@@ -335,7 +333,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       break;
 
     case EventKind.SessionChanged:
-      ctx.bumpMessages?.();
+      bumpChat();
       break;
 
     default:
@@ -365,7 +363,7 @@ export function appendUserBubble(
   const pair = ctx.getTurnPairs()[ctx.getTurnPairs().length - 1];
   if (pair) pair.userBubble = null;
 
-  ctx.bumpMessages?.();
+  bumpChat();
 }
 
 export function addTurnSep(_ctx: StreamContext): void {
@@ -380,7 +378,7 @@ export function addTurnSep(_ctx: StreamContext): void {
 /** Finalize current assistant bubble — link to latest turnPair, reset streaming state. */
 export function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
-  ctx.bumpMessages?.();
+  bumpChat();
 }
 
 export function finishTurn(ctx: StreamContext): void {
