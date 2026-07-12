@@ -71,9 +71,7 @@ export interface StreamContext {
   addNotice: (text: string, level?: string) => void;
   saveActiveSession: (path: string) => Promise<void>;
   bumpPillBadge: () => void;
-  injectCodeBlockButtons: (bubble: HTMLElement) => void;
   animateBubbleIn: (el: HTMLElement, delay?: number) => any;
-  linkifyNodeNames: () => void;
   setRunning: (r: boolean) => void;
   abort: () => void;
   _updateStatusBar: (state: 'idle' | 'thinking' | 'running' | 'error', detail?: string) => void;

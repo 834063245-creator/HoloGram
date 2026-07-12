@@ -11,7 +11,7 @@ import { EventKind } from '../agent/agent-types';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
-import { shell } from './app-shell';
+
 import { cancelPendingApprovals } from '../agent/permission';
 import { execState } from '../agent/execution-state';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
@@ -31,7 +31,7 @@ import * as Dom from './chat-dom';
 // ── Extracted stream rendering (Agent events → DOM messages) ──
 import * as Stream from './chat-stream';
 // ── Extracted static utility functions ──
-import { escapeHtml, showCopiedFeedback, truncateArgs, formatToolResult, extractCodeTokens, linkifyTextNode } from './chat-utils';
+import { escapeHtml } from './chat-utils';
 
 // ── New message model (data-driven render) ──
 import {
@@ -290,16 +290,7 @@ export class ChatPanel {
         ? `步骤 ${data.step}  ·  ${data.toolName}`
         : `正在执行 ${data.toolName}`;
     });
-    // ── Sub-agent events (item 10) ──
-    bus.on('agent:sub-spawn', (data: { id: string; description: string; prompt: string; mode: string }) => {
-      this.handleSubSpawn(data);
-    });
-    bus.on('agent:sub-progress', (data: { parentToolId: string; text: string }) => {
-      this.handleSubProgress(data);
-    });
-    bus.on('agent:sub-done', (data: { parentToolId: string; summary: any }) => {
-      this.handleSubDone(data);
-    });
+    // ⚡ Sub-agent UI handled by SubAgentPanel (subagent-panel.ts)
   }
 
   // ── Public API ──
@@ -520,7 +511,6 @@ export class ChatPanel {
   private _animCtx(): Anim.AnimContext {
     return {
       panel: this.panel,
-      msgList: this.msgList,
       inputArea: this.inputArea,
       getMode: () => useChatStore.getState().panelMode,
       setMode: (m) => { useChatStore.getState().setPanelMode(m); },
@@ -528,7 +518,6 @@ export class ChatPanel {
       getProjectPath: () => useChatStore.getState().projectPath,
       getActiveIdx: () => Session.getActiveIdx(),
       updateFooter: () => this.updateFooter(),
-      // ⚡ React handles scrolling internally
       resetPillBadge: () => this._resetPillBadge(),
       closeHistory: () => this.closeHistory(),
       hideSlashPanel: () => this._hideSlashPanel(),
@@ -671,9 +660,7 @@ export class ChatPanel {
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
       bumpPillBadge: () => { useChatStore.getState().bumpPillEventCount(); },
-      injectCodeBlockButtons: (b) => this.injectCodeBlockButtons(b),
       animateBubbleIn: (el, delay) => this.animateBubbleIn(el, delay),
-      linkifyNodeNames: () => this.linkifyNodeNames(),
       setRunning: (_r: boolean) => { /* migrated to execState */ },
       abort: () => this.abort(),
       _updateStatusBar: (s, d) => this._updateStatusBar(s, d),
@@ -916,7 +903,7 @@ export class ChatPanel {
     // Reset auto-scroll for this new turn
     useChatStore.getState().userScrolledUp = false;
 
-    const hint = this.msgList.querySelector('.chat-hint');
+    const hint = document.getElementById('chat-hint');
     if (hint) hint.remove();
 
     if (displayLabel) {
@@ -948,7 +935,7 @@ export class ChatPanel {
     const signal = execState.start();
     useChatStore.getState().userScrolledUp = false;
 
-    const hint = this.msgList.querySelector('.chat-hint');
+    const hint = document.getElementById('chat-hint');
     if (hint) hint.remove();
 
     Session.getTurnPairs().push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
@@ -1041,7 +1028,7 @@ export class ChatPanel {
       this.draftText = '';
       // Show panel if collapsed
       if (useChatStore.getState().panelMode== 'input') this.summonPanel();
-      const hint = this.msgList.querySelector('.chat-hint');
+      const hint = document.getElementById('chat-hint');
       if (hint) hint.remove();
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
       Session.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
@@ -1073,7 +1060,7 @@ export class ChatPanel {
     const signal = execState.start();
 
     // Remove hint if present
-    const hint = this.msgList.querySelector('.chat-hint');
+    const hint = document.getElementById('chat-hint');
     if (hint) hint.remove();
 
     // Turn pair for retry (item 4) — sessionIndex is where user msg will land
@@ -1491,71 +1478,6 @@ export class ChatPanel {
 
   private finishTurn(): void { Stream.finishTurn(this._streamCtx()); }
 
-  // ⚡ React handles scrolling internally
-
-  // ── Node name linking ──
-
-  private linkifyNodeNames(): void {
-    if (!this.starGraph) return;
-    // Find the last assistant bubble in the DOM
-    const bubbles = this.msgList.querySelectorAll<HTMLElement>('.msg-bubble.assistant');
-    const target = bubbles[bubbles.length - 1];
-    if (!target) return;
-    const texts = target.querySelectorAll('.msg-text');
-    for (const el of texts) {
-      this.autoLink(el as HTMLElement);
-    }
-  }
-
-  private autoLink(el: HTMLElement): void {
-    // Already linkified
-    if (el.querySelector('.node-link')) return;
-
-    const graph = this.starGraph;
-    if (!graph) return;
-
-    // Use TreeWalker to only touch text nodes — safe for markdown HTML
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const textNodes: Text[] = [];
-    while (walker.nextNode()) {
-      textNodes.push(walker.currentNode as Text);
-    }
-
-    for (const node of textNodes) {
-      const text = node.textContent || '';
-      const tokens = extractCodeTokens(text);
-      if (tokens.length === 0) continue;
-
-      const fragment = linkifyTextNode(text, tokens, (token) => {
-        const span = document.createElement('span');
-        span.className = 'node-link';
-        span.dataset['nodename'] = token;
-        span.title = `点击定位: ${token}`;
-        span.textContent = token;
-        span.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (graph) {
-            // Try exact match, then prefix, then contains (case-insensitive)
-            let found = graph.focusNode(token);
-            if (!found) {
-              // Try alternative forms: last segment of dotted name, lowercase
-              const alt = token.split('.').pop() || '';
-              if (alt && alt !== token) found = graph.focusNode(alt);
-            }
-            if (!found) {
-              this.addNotice(`未在图中找到 "${token}"`, 'info');
-            }
-          }
-        });
-        return span;
-      });
-
-      if (fragment) {
-        node.parentNode!.replaceChild(fragment, node);
-      }
-    }
-  }
-
   // ── @ file reference autocomplete (item 5) ──
 
   private async handleAtInput(): Promise<void> {
@@ -1814,134 +1736,6 @@ export class ChatPanel {
     useChatStore.getState().pillEventCount = 0;
     this.pillBadge.textContent = '';
     this.pillBadge.classList.remove('show');
-  }
-
-  // ── Sub-agent event handlers (item 10) ──
-
-  private handleSubSpawn(data: { id: string; description: string; prompt: string; mode: string }): void {
-    this._bumpPillBadge();
-
-    const subEl = document.createElement('div');
-    subEl.className = 'msg-sub-agent';
-    subEl.dataset['subId'] = data.id;
-    subEl.dataset['startedAt'] = String(Date.now());
-    subEl.dataset['mode'] = data.mode;
-    subEl.title = `${data.description} · ${data.mode === 'fork' ? '继承上下文' : '独立'} · 运行中…`;
-    subEl.innerHTML = `
-      <div class="msg-sub-agent-header">
-        ${iconHtml('puzzle', 12)} 子 Agent: ${escapeHtml(data.description)}
-        <span class="sub-agent-mode">${data.mode === 'fork' ? '继承上下文' : '独立'}</span>
-        <span class="sub-agent-status">⚡ 运行中</span>
-      </div>
-      <div class="msg-sub-agent-body open"></div>`;
-    this.msgList.appendChild(subEl);
-  }
-
-  private handleSubProgress(data: { parentToolId: string; text: string }): void {
-    // Search globally — sub-agent events arrive asynchronously, currentBubble may have changed
-    const subEl = this.msgList.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
-    if (!subEl) return;
-    const body = subEl.querySelector('.msg-sub-agent-body');
-    if (body) {
-      body.textContent += data.text;
-      body.scrollTop = body.scrollHeight;
-    }
-    // Update status hover
-    const status = subEl.querySelector('.sub-agent-status') as HTMLElement;
-    if (status) {
-      const lines = (body?.textContent || '').split('\n').filter(l => l.trim()).length;
-      const started = Number(subEl.dataset['startedAt']) || Date.now();
-      const elapsed = Math.round((Date.now() - started) / 1000);
-      subEl.title = `${subEl.dataset['mode'] || 'fork'} · ${lines} 行输出 · ${elapsed}s`;
-    }
-  }
-
-  private handleSubDone(data: { parentToolId: string; summary: any }): void {
-    // Search globally — sub-agent completes asynchronously
-    const subEl = this.msgList.querySelector(`[data-sub-id="${data.parentToolId}"]`) as HTMLElement;
-    if (!subEl) return;
-    const body = subEl.querySelector('.msg-sub-agent-body') as HTMLElement;
-    const status = subEl.querySelector('.sub-agent-status') as HTMLElement;
-    const header = subEl.querySelector('.msg-sub-agent-header') as HTMLElement;
-    if (body) body.classList.remove('open');
-    this._bumpPillBadge();
-    this._updateStopButton(); // sub-agent done → may need to hide stop btn
-
-    // Update status indicator + hover
-    const icon = data.summary?.hasError ? '❌' : '✅';
-    const elapsed = data.summary?.elapsedMs
-      ? (data.summary.elapsedMs / 1000).toFixed(1) + 's'
-      : '';
-    if (status) status.innerHTML = `${icon} 完成 · ${elapsed}`;
-    if (body) {
-      const lines = (body.textContent || '').split('\n').filter(l => l.trim()).length;
-      subEl.title = `${data.summary?.description || ''} · ${icon} · ${lines} 行输出 · ${elapsed}`;
-    }
-
-    // Prepend summary bar WITHOUT destroying body (preserves body reference for toggle)
-    const summaryBar = document.createElement('div');
-    summaryBar.className = 'msg-sub-agent-summary';
-    summaryBar.innerHTML =
-      `${iconHtml('puzzle', 12)} 子 Agent 完成 · ${data.summary?.steps || '?'} 步 · ${elapsed}` +
-      `${data.summary?.hasError ? ` · ${iconHtml('alert', 10)} 有错误` : ''}` +
-      ` · <button class="pre-code-btn" style="display:inline">${body?.style.display === 'none' ? '展开输出' : '收起输出'}</button>`;
-
-    // Toggle: show/hide body, flip button text
-    const toggleBtn = summaryBar.querySelector('button');
-    toggleBtn?.addEventListener('click', () => {
-      if (!body) return;
-      const hidden = body.style.display === 'none';
-      body.style.display = hidden ? '' : 'none';
-      (toggleBtn as HTMLElement).textContent = hidden ? '收起输出' : '展开输出';
-    });
-
-    // Insert summary before body
-    subEl.insertBefore(summaryBar, body);
-  }
-
-  // ── Code block action buttons (item 6) ──
-
-  /** Inject copy + view-file buttons into code blocks. Called from flushText/renderMarkdownText. */
-  private injectCodeBlockButtons(bubble: HTMLElement): void {
-    bubble.querySelectorAll('.msg-markdown pre').forEach((pre) => {
-      // Already injected
-      if (pre.querySelector('.pre-code-actions')) return;
-
-      const codeEl = pre.querySelector('code');
-      if (!codeEl) return;
-
-      const actions = document.createElement('div');
-      actions.className = 'pre-code-actions';
-
-      // Copy button
-      const copyBtn = document.createElement('button');
-      copyBtn.className = 'pre-code-btn';
-      copyBtn.innerHTML = iconHtml('copy', 10);
-      copyBtn.title = '复制代码';
-      copyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const code = codeEl.textContent || '';
-        navigator.clipboard.writeText(code).then(() => showCopiedFeedback(copyBtn, 10)).catch(() => {});
-      });
-      actions.appendChild(copyBtn);
-
-      // View file button — only if first line looks like a file path
-      const firstLine = codeEl.textContent?.split('\n')[0]?.trim() || '';
-      const isFilePath = /^[\w./\\-]+\.[\w]+(?::\d+)?$/.test(firstLine) && firstLine.includes('/');
-      if (isFilePath) {
-        const viewBtn = document.createElement('button');
-        viewBtn.className = 'pre-code-btn';
-        viewBtn.innerHTML = iconHtml('folder-open', 10);
-        viewBtn.title = `打开: ${firstLine}`;
-        viewBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          shell.navigateToFile(firstLine);
-        });
-        actions.appendChild(viewBtn);
-      }
-
-      pre.appendChild(actions);
-    });
   }
 
   // ── Sink getter (used by main.ts to wire Agent) ──
