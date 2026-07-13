@@ -12,11 +12,11 @@ import type { Lang } from '../i18n';
 import { iconHtml } from './icons';
 import { bus } from './events';
 import { shell } from './app-shell';
+import { invoke } from '../bridge';
 
 const PANEL_ID = 'settings-panel';
 
-// ponytail: permissions tab removed — rules now managed via .hologram/permissions.json (Rust backend)
-type Tab = 'provider' | 'agent' | 'display';
+type Tab = 'provider' | 'agent' | 'display' | 'languages';
 
 export class SettingsPanel {
   private overlay!: HTMLElement;
@@ -120,6 +120,9 @@ export class SettingsPanel {
         <button class="sp-tab ${this.activeTab === 'display' ? 'active' : ''}" data-tab="display">
           ${iconHtml('mode-standard', 11)} 显示
         </button>
+        <button class="sp-tab ${this.activeTab === 'languages' ? 'active' : ''}" data-tab="languages">
+          ${iconHtml('code', 11)} 语言依赖
+        </button>
       </div>
 
       <!-- Content -->
@@ -127,6 +130,7 @@ export class SettingsPanel {
         ${this.renderProviderTab(active)}
         ${this.renderAgentTab(s.agent)}
         ${this.renderDisplayTab(s.display.language, s.display.fontScale)}
+        ${this.renderLanguagesTab()}
       </div>
 
       <!-- Footer -->
@@ -314,6 +318,90 @@ export class SettingsPanel {
           缩放所有界面文字。更改后保存即生效（Terminal / 编辑器需重新打开文件）。
         </div>
       </div>`;
+  }
+
+  // ── LSP status ──
+
+  private lspStatus: { available: string[]; missing: string[]; servers: Array<{ command: string; language_id: string; extensions: string[]; available: boolean; error?: string }> } | null = null;
+  private lspLoading = false;
+
+  private async loadLspStatus(): Promise<void> {
+    this.lspLoading = true;
+    this.render();
+    try {
+      const raw = await invoke<string>('hologram_call', { tool: 'engine_status', args: {} });
+      const parsed = JSON.parse(raw);
+      if (parsed?.lsp?.servers) {
+        this.lspStatus = parsed.lsp;
+      }
+    } catch {
+      // engine not available — leave lspStatus null
+    }
+    this.lspLoading = false;
+    this.render();
+  }
+
+  private renderLanguagesTab(): string {
+    const hidden = this.activeTab === 'languages' ? '' : 'display:none';
+    if (!this.lspStatus && !this.lspLoading) {
+      // Auto-load on first open
+      if (this.activeTab === 'languages') {
+        setTimeout(() => this.loadLspStatus(), 0);
+      }
+    }
+
+    let body = '';
+    if (this.lspLoading) {
+      body = '<div class="sp-hint" style="padding:24px;text-align:center">检测中...</div>';
+    } else if (!this.lspStatus) {
+      body = '<div class="sp-hint" style="padding:24px;text-align:center">无法获取语言依赖状态<br><small>请先打开项目并等待索引完成</small></div>';
+    } else {
+      // Server rows
+      let rows = '';
+      for (const srv of this.lspStatus.servers) {
+        const icon = srv.available
+          ? '<span style="color:var(--green)">' + iconHtml('check', 11) + '</span>'
+          : '<span style="color:var(--text-muted)">' + iconHtml('close', 10) + '</span>';
+        const exts = srv.extensions.join(', ');
+        const err = (!srv.available && srv.error)
+          ? `<br><small style="color:var(--text-muted)">${srv.error}</small>`
+          : '';
+        rows += `<div class="sp-lsp-row" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-subtle)">
+          ${icon}
+          <span style="font-family:var(--font-mono);font-size:11px;min-width:80px">${srv.language_id}</span>
+          <span style="font-size:10px;color:var(--text-muted);min-width:80px">.${exts}</span>
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${srv.command}</span>
+          ${err}
+        </div>`;
+      }
+
+      const summary = this.lspStatus.available.length > 0
+        ? `${this.lspStatus.available.length} 就绪, ${this.lspStatus.missing.length} 缺失`
+        : '没有检测到已安装的语言服务器';
+
+      body = `
+        <div class="sp-section">
+          <div class="sp-section-title">语言服务器状态</div>
+          <div class="sp-hint" style="margin:4px 0 12px">${summary}</div>
+          ${rows}
+        </div>
+        <div class="sp-section" style="margin-top:18px">
+          <div class="sp-section-title">安装指南</div>
+          <div class="sp-hint">
+            <b>Python:</b> <code>npm install -g pyright</code><br>
+            <b>TypeScript:</b> <code>npm install -g typescript-language-server typescript</code><br>
+            <b>Rust:</b> <code>rustup component add rust-analyzer</code><br>
+            <b>Go:</b> <code>go install golang.org/x/tools/gopls@latest</code><br>
+            <b>C/C++:</b> <code>scoop install clangd</code> or <code>apt install clangd</code><br>
+            <b>Java:</b> <code>scoop install jdtls</code><br>
+            <b>C#:</b> <code>dotnet tool install --global OmniSharp</code><br>
+            <b>PHP:</b> <code>npm install -g intelephense</code><br>
+            <b>Kotlin:</b> <code>scoop install kotlin-language-server</code>
+          </div>
+        </div>`;
+    }
+
+    return `<div class="sp-tab-content" data-tab="languages" style="${hidden}">${body}</div>`;
   }
 
   // ponytail: renderPermissionsTab removed — rules managed via .hologram/permissions.json
