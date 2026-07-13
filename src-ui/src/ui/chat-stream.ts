@@ -40,9 +40,6 @@ type TurnPair = {
 // ── StreamContext ──────────────────────────────────────────
 
 export interface StreamContext {
-  // ── 核心 DOM ──
-  inputArea: HTMLTextAreaElement;
-
   // ── 消息数组 ──
   getMessages: () => ChatMessage[];
   setMessages: (msgs: ChatMessage[]) => void;
