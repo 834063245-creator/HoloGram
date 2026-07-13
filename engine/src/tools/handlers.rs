@@ -302,7 +302,11 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
             })
         }).collect();
 
-        json!({"fragile_modules": result, "limit": limit})
+        json!({
+            "fragile_modules": result,
+            "limit": limit,
+            "_note": "L3 (shared data) and L4 (temporal) edges are available on-demand via trace_dataflow — they are not precomputed here.",
+        })
     }))
 }
 
@@ -335,7 +339,7 @@ pub(crate) fn handler_thread_conflicts(_args: &Value) -> ToolResponse {
         "total_shared_resources": 0,
         "unlocked_concurrent_writes": 0,
         "unlocked_resources": [],
-        "_note": "Batch scan removed. Use trace_dataflow for per-variable concurrent access analysis.",
+        "_note": "Global concurrent-access scan is not precomputed. Use trace_dataflow on specific files to get per-variable concurrency analysis with exact read/write tracking.",
     }))
 }
 

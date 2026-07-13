@@ -277,11 +277,11 @@ impl Engine {
         let community_count = communities.len();
         let hc_count = hierarchical.iter().filter(|c| c.level > 0).count();
         let leiden_elapsed = stage_start.elapsed().as_secs_f64();
-        info!(count = community_count, super_levels = hc_count, "[engine] Leiden communities detected");
+        info!(count = community_count, super_levels = hc_count, "[engine] Louvain communities detected");
         eprintln!("[engine] stage: community done in {:.1}s ({} communities, {} super)",
             leiden_elapsed, community_count, hc_count);
         stage_timings.push(StageTiming {
-            name: "Community (Leiden)".into(),
+            name: "Community (Louvain)".into(),
             elapsed_secs: leiden_elapsed,
             detail: format!("{} communities, {} super", community_count, hc_count),
         });
