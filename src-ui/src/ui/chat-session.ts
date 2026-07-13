@@ -545,7 +545,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   ctx.flushText();
   ctx.clearPendingToolCards();
 
-  const label = data.label && !data.label.startsWith('会话 ') ? data.label : '已恢复的会话';
+  const label = data.label || '已恢复的会话';
   // Replace ALL sessions — switch workspace = fresh start
   sessionMessages.clear();
   agentHandles.clear();
@@ -654,7 +654,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
 
   const firstUser = conv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
   const st1 = useChatStore.getState();
-  const label = (data.label && !data.label.startsWith('会话 '))
+    const label = (data.label && !data.label.startsWith('会话 ') && data.label !== '已恢复的会话')
     ? data.label
     : firstUser ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '') : `会话 ${st1.sessions.length + 1}`;
 
