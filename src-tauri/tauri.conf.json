@@ -23,7 +23,8 @@
   "bundle": {
     "active": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
-    "resources": ["../engine/target/release/hologram-engine.exe", "../grammars/*.dll", "../grammars/aura.dll"],
+    "resources": ["../grammars/*.dll", "../grammars/aura.dll"],
+    "externalBin": ["binaries/hologram-engine"],
     "windows": {
       "wix": {
         "language": "zh-CN",
