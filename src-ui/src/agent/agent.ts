@@ -970,13 +970,29 @@ ${goal}
       // 中止信号优先检查
       if (signal.aborted) throw new Error('aborted');
 
-      // ── Preflight hooks: warn before destructive writes ──
+            // ── Preflight hooks: warn before destructive writes ──
       let preflightWarning: string | null = null;
       if (this.preflightHooks) {
         try {
           preflightWarning = this.preflightHooks.check(call.name, args);
         } catch (e: any) {
           log.warn('agent', 'preflight hook failed', { tool: call.name, error: firstLine(e?.message || String(e)) });
+        }
+      }
+
+      // ── Architecture gate: HIGH risk → return blocked, don't execute ──
+      if (preflightWarning && preflightWarning.includes('风险等级: HIGH')) {
+        const forceGate = args['_forceGate'] === true || args['_forceGate'] === 'true';
+        if (!forceGate) {
+          const blocked = preflightWarning + '\n\n' +
+            '🚫 架构门禁已阻止此操作。\n' +
+            '使用 trace_impact 查看完整波及范围。\n' +
+            '确认安全后，带 _forceGate: true 重试同一工具调用。';
+          this._sink({
+            kind: EventKind.ToolResult,
+            tool: { id: call.id, name: call.name, args: call.arguments, output: blocked, read_only: t?.readOnly() ?? false },
+          });
+          return { output: blocked, blocked: true, truncated: false };
         }
       }
 
