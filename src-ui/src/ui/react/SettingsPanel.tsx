@@ -5,7 +5,7 @@
 // Provider | Agent | Display | Languages 四个标签页。
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化。
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import {
   loadSettings, saveSettings, persistSecrets,
@@ -72,8 +72,12 @@ const SettingsPanelApp: React.FC<{
   const isAnthropic = active?.kind === 'anthropic';
 
   // ── Load LSP status when Languages tab opens ──
+  // ponytail: useRef gate prevents re-entry when invoke fails (lspLoading flips
+  // back to false → effect would fire again → infinite loop).
+  const lspLoaded = useRef(false);
   useEffect(() => {
-    if (activeTab !== 'languages' || lspStatus || lspLoading) return;
+    if (activeTab !== 'languages' || lspLoaded.current) return;
+    lspLoaded.current = true;
     setLspLoading(true);
     invoke<string>('hologram_call', { tool: 'engine_status', args: {} })
       .then(raw => {
@@ -82,7 +86,7 @@ const SettingsPanelApp: React.FC<{
       })
       .catch(() => {})
       .finally(() => setLspLoading(false));
-  }, [activeTab, lspStatus, lspLoading]);
+  }, [activeTab]);
 
   // ── Handlers ──
 
