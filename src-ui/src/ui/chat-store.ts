@@ -66,6 +66,22 @@ interface ChatStore {
   userFocusFile: string | null;
   userFocusNode: { name: string; location?: string } | null;
 
+  // ── Input state (ChatInput React component will own these) ──
+  inputText: string;
+  attachedFiles: Array<{ path: string; name: string; size: number }>;
+
+  // ── Input history (up/down arrow navigation) ──
+  inputHistory: string[];
+  inputHistoryIdx: number;
+  draftText: string;
+
+  // ── Panel visibility ──
+  historyOpen: boolean;
+
+  // ── Tool / Context filter ──
+  toolFilter: string;
+  contextFilter: string;
+
   // ── Actions ──
   setMessages: (msgs: ChatMessage[]) => void;
   bump: () => void;
@@ -99,6 +115,19 @@ interface ChatStore {
 
   setUserFocusFile: (file: string | null) => void;
   setUserFocusNode: (node: { name: string; location?: string } | null) => void;
+
+  setInputText: (text: string) => void;
+  setAttachedFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
+  addAttachedFile: (file: { path: string; name: string; size: number }) => void;
+  removeAttachedFile: (idx: number) => void;
+  clearAttachedFiles: () => void;
+  pushInputHistory: (text: string) => void;
+  setInputHistory: (history: string[]) => void;
+  setInputHistoryIdx: (idx: number) => void;
+  setDraftText: (text: string) => void;
+  setHistoryOpen: (open: boolean) => void;
+  setToolFilter: (filter: string) => void;
+  setContextFilter: (filter: string) => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -130,6 +159,18 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   userFocusFile: null,
   userFocusNode: null,
+
+  inputText: '',
+  attachedFiles: [],
+
+  inputHistory: [],
+  inputHistoryIdx: -1,
+  draftText: '',
+
+  historyOpen: false,
+
+  toolFilter: '',
+  contextFilter: '',
 
   setMessages: (msgs) => set({ messages: msgs, version: Date.now() }),
   bump: () => set((s) => ({ version: s.version + 1 })),
@@ -181,6 +222,24 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setUserFocusFile: (userFocusFile) => set({ userFocusFile }),
   setUserFocusNode: (userFocusNode) => set({ userFocusNode }),
+
+  setInputText: (inputText) => set({ inputText }),
+  setAttachedFiles: (attachedFiles) => set({ attachedFiles }),
+  addAttachedFile: (file) => set((s) => ({ attachedFiles: [...s.attachedFiles, file] })),
+  removeAttachedFile: (idx) => set((s) => ({ attachedFiles: s.attachedFiles.filter((_, i) => i !== idx) })),
+  clearAttachedFiles: () => set({ attachedFiles: [] }),
+  pushInputHistory: (text) =>
+    set((s) => {
+      const filtered = s.inputHistory.filter((t) => t !== text);
+      if (filtered.length >= 50) filtered.shift();
+      return { inputHistory: [...filtered, text] };
+    }),
+  setInputHistory: (inputHistory) => set({ inputHistory }),
+  setInputHistoryIdx: (inputHistoryIdx) => set({ inputHistoryIdx }),
+  setDraftText: (draftText) => set({ draftText }),
+  setHistoryOpen: (historyOpen) => set({ historyOpen }),
+  setToolFilter: (toolFilter) => set({ toolFilter }),
+  setContextFilter: (contextFilter) => set({ contextFilter }),
 }));
 
 // ── Non-reactive accessors ──
@@ -230,3 +289,16 @@ export function getUserScrolledUp(): boolean { return useChatStore.getState().us
 export function getExpandedReasoningSet(): Set<number> {
   return new Set(useChatStore.getState().expandedReasoning);
 }
+
+// ── Input state accessors ──
+
+export function getInputText(): string { return useChatStore.getState().inputText; }
+export function getAttachedFiles(): Array<{ path: string; name: string; size: number }> {
+  return useChatStore.getState().attachedFiles;
+}
+export function getInputHistory(): string[] { return useChatStore.getState().inputHistory; }
+export function getInputHistoryIdx(): number { return useChatStore.getState().inputHistoryIdx; }
+export function getDraftText(): string { return useChatStore.getState().draftText; }
+export function isHistoryOpen(): boolean { return useChatStore.getState().historyOpen; }
+export function getToolFilter(): string { return useChatStore.getState().toolFilter; }
+export function getContextFilter(): string { return useChatStore.getState().contextFilter; }

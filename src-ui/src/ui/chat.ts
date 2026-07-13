@@ -53,6 +53,7 @@ import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-re
 import { SlashPanelController } from './react/SlashPanel';
 import { ChatMessagesPanel } from './react/ChatMessages';
 import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
+import { ChatInputPanel } from './react/ChatInput';
 import {
   useChatStore,
   getChatMessages, setChatMessages, bumpChat,
@@ -94,8 +95,13 @@ export class ChatPanel {
   // ⚡ streamingAssistantId / userScrolledUp → chat-store.ts
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
-  // File attachments (dragged/selected files)
-  private attachedFiles: { path: string; name: string; size: number }[] = [];
+
+  /** Set input text — updates both store (→ React) and hidden DOM textarea for legacy consumers. */
+  private _setInput(val: string): void {
+    this._setInput(val);
+    useChatStore.getState().setInputText(val);
+  }
+  // File attachments (dragged/selected files) → chat-store.ts
   private attachPillsEl: HTMLElement | null = null;
 
   // ⚡ panelMode → chat-store.ts
@@ -108,10 +114,7 @@ export class ChatPanel {
   private footerClickCleanup: (() => void) | null = null;
   // ⚡ lastAgentDiag → chat-store.ts
 
-  // ── New: input history navigation (item 1) ──
-  private inputHistory: string[] = [];
-  private historyIdx = 0;
-  private draftText = '';
+  // ── New: input history navigation → chat-store.ts (item 1) ──
 
   // ── New: progress bar (item 3) ──
   private progressBar: HTMLElement | null = null;
@@ -134,6 +137,9 @@ export class ChatPanel {
 
   // ── Prompt shelf (React-based) — ask_user + permission cards ──
   private _promptShelf: PromptShelfController | null = null;
+
+  // ── Input (React-based) — textarea + attachments + send/stop ──
+  private _chatInput: ChatInputPanel | null = null;
 
 
 
@@ -187,16 +193,13 @@ export class ChatPanel {
       },
       onEditUserMessage: (msg) => {
         if (execState.isRunning) { this.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
-        this.inputArea.value = msg.text;
-        this.inputArea.style.height = 'auto';
-        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
-        this.inputArea.focus();
-        this.inputArea.selectionStart = this.inputArea.selectionEnd = msg.text.length;
+        useChatStore.getState().setInputText(msg.text);
+        this._chatInput?.focus();
         this._retractUserMessage(msg);
       },
       onResendUserMessage: (msg) => {
         if (execState.isRunning) { this.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
-        this.inputArea.value = msg.text;
+        useChatStore.getState().setInputText(msg.text);
         this._retractUserMessage(msg);
         this.sendMessage();
       },
@@ -205,7 +208,7 @@ export class ChatPanel {
         const userMsg = this.messages.find(m => m.role === 'user' && m._id === assistant.respondingTo);
         const userText = (userMsg && 'text' in userMsg) ? (userMsg as any).text as string : '';
         if (!userText) return;
-        this.inputArea.value = '';
+        useChatStore.getState().setInputText('');
         const signal = execState.start();
         Stream.addTurnSep(this._streamCtx());
         const agent = this.agent;
@@ -226,6 +229,9 @@ export class ChatPanel {
     });
     // ── Prompt shelf: unified ask_user + permission cards (above input) ──
     this._promptShelf = new PromptShelfController(this.panel);
+
+    // ⚡ React-based input — replaces vanilla textarea + send/stop in chat-dom.ts
+    this._mountChatInput();
     // ── ask_user tool → prompt shelf ──
     bus.on('prompt:ask', (data: {
       id: string; question: string; header: string;
@@ -350,7 +356,7 @@ export class ChatPanel {
     if (!alreadyOpen) {
       this.summonPanel();
     }
-    this.inputArea.value = question;
+    this._setInput(question);
     this.inputArea.style.height = 'auto';
     this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
     // Small delay to let panel animate open before sending
@@ -500,7 +506,11 @@ export class ChatPanel {
       getLastUsageText: () => useChatStore.getState().lastUsageText,
       setLastUsageText: (s) => { useChatStore.getState().lastUsageText = s; },
       getLastAgentDiag: () => useChatStore.getState().lastAgentDiag,
-      clearInputHistory: () => { this.inputHistory = []; this.historyIdx = 0; this.draftText = ''; },
+      clearInputHistory: () => {
+        useChatStore.getState().setInputHistory([]);
+        useChatStore.getState().setInputHistoryIdx(-1);
+        useChatStore.getState().setDraftText('');
+      },
       getStarGraph: () => this.starGraph,
     };
   }
@@ -587,13 +597,13 @@ export class ChatPanel {
       _toolSchemas: useChatStore.getState().toolSchemas,
       toolUsage: useChatStore.getState().toolUsage,
       toolHistory: useChatStore.getState().toolHistory,
-      // Input history
-      inputHistory: this.inputHistory,
-      setInputHistory: (h) => { this.inputHistory = h; },
-      historyIdx: this.historyIdx,
-      setHistoryIdx: (n) => { this.historyIdx = n; },
-      draftText: this.draftText,
-      setDraftText: (s) => { this.draftText = s; },
+      // Input history → chat-store.ts
+      get inputHistory() { return useChatStore.getState().inputHistory; },
+      setInputHistory: (h: string[]) => { useChatStore.getState().setInputHistory(h); },
+      get historyIdx() { return useChatStore.getState().inputHistoryIdx; },
+      setHistoryIdx: (n: number) => { useChatStore.getState().setInputHistoryIdx(n); },
+      get draftText() { return useChatStore.getState().draftText; },
+      setDraftText: (s: string) => { useChatStore.getState().setDraftText(s); },
       // Callbacks
       handleAtInput: () => this.handleAtInput(),
       handleSlashInput: () => this.handleSlashInput(),
@@ -619,7 +629,7 @@ export class ChatPanel {
       totalTokensUsed: useChatStore.getState().totalTokensUsed,
       _expandedReasoning: new Set(useChatStore.getState().expandedReasoning),
       _activeTab: useChatStore.getState().activeTab,
-      attachedFiles: this.attachedFiles,
+      get attachedFiles() { return useChatStore.getState().attachedFiles; },
       historyPanel: this.historyPanel,
       setHistoryPanel: (el) => { this.historyPanel = el; },
       historyOpen: this.historyOpen,
@@ -814,6 +824,37 @@ export class ChatPanel {
 
   // ── Build DOM ──
 
+  /** Mount React ChatInput — hides old vanilla input-wrap. */
+  private _mountChatInput(): void {
+    // Find the old input-wrap (created by chat-dom.ts buildDOM) and hide it
+    const oldWrap = this.panel.querySelector('.chat-input-area') as HTMLElement;
+    if (oldWrap) oldWrap.style.display = 'none';
+
+    // Also hide attachment pills — React renders its own
+    const oldPills = this.panel.querySelector('.attach-pills') as HTMLElement;
+    if (oldPills) oldPills.style.display = 'none';
+
+    // Mount React ChatInput before the old input-wrap
+    const mount = document.createElement('div');
+    oldWrap?.parentElement?.insertBefore(mount, oldWrap);
+    this._chatInput = new ChatInputPanel(mount);
+    this._chatInput.setCallbacks({
+      onSend: () => this.sendMessage(),
+      onStop: () => { execState.done(); },
+      onModeChange: (mode) => {
+        if (mode === 'pill') {
+          useChatStore.getState().setPanelMode('pill');
+          this.panel.classList.add('chat-pill');
+          this.panel.classList.remove('chat-input', 'chat-panel');
+        }
+      },
+      onInputChange: (text, cursorPos) => {
+        this.handleAtInput();
+        this.handleSlashInput();
+      },
+    });
+  }
+
   private buildDOM(): void {
     Dom.buildDOM(this._domCtx());
   }
@@ -868,9 +909,9 @@ export class ChatPanel {
     resetMsgIdCounter();
     useChatStore.getState().setStreamingAssistantId(null);
     this.msgList.innerHTML = '';
-    this.inputHistory = [];
-    this.historyIdx = 0;
-    this.draftText = '';
+    useChatStore.getState().setInputHistory([]);
+    useChatStore.getState().setInputHistoryIdx(-1);
+    useChatStore.getState().setDraftText('');
     Session.setTurnPairs([]);
     useChatStore.getState().totalTokensUsed = 0;
     Session.syncActiveSessionTokens(0);
@@ -952,7 +993,7 @@ export class ChatPanel {
     // Reset auto-scroll for this new turn
     useChatStore.getState().userScrolledUp = false;
 
-    const text = this.inputArea.value.trim();
+    const text = useChatStore.getState().inputText.trim();
     if (!text) return;
 
     if (!this.agent) {
@@ -968,7 +1009,7 @@ export class ChatPanel {
       // Parameterized commands — need special handling
       if (text.startsWith('/remember ')) {
         const fact = text.slice('/remember '.length).trim();
-        this.inputArea.value = '';
+        this._setInput('');
         this.inputArea.style.height = 'auto';
         if (!fact) { this.addNotice('用法: /remember 要记住的内容', 'info'); return; }
         import('../agent/memory.js').then(m => m.authorizeFactSave());
@@ -980,7 +1021,7 @@ export class ChatPanel {
       }
       if (text.startsWith('/goal ')) {
         const goal = text.slice('/goal '.length).trim();
-        this.inputArea.value = '';
+        this._setInput('');
         this.inputArea.style.height = 'auto';
         if (!goal) { this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info'); return; }
         this.runGoal(goal);
@@ -995,7 +1036,7 @@ export class ChatPanel {
       // Unknown slash command — route to Skill tool
       if (!text.includes(' ')) {
         const skillName = text.slice(1);
-        this.inputArea.value = '';
+        this._setInput('');
         this.inputArea.style.height = 'auto';
         this.sendAgentText(`Execute skill: ${skillName}`, text);
         return;
@@ -1006,12 +1047,14 @@ export class ChatPanel {
     if (execState.isRunning) {
       const sessIdx = this.agent.nextInsertIndex;
       this.agent.insertMessage(text);
-      this.inputArea.value = '';
+      this._setInput('');
       this.inputArea.style.height = 'auto';
       // Push input history
-      this.inputHistory.push(text);
-      this.historyIdx = this.inputHistory.length;
-      this.draftText = '';
+      useChatStore.getState().pushInputHistory(text);
+      useChatStore.getState().setInputHistoryIdx(
+        useChatStore.getState().inputHistory.length,
+      );
+      useChatStore.getState().setDraftText('');
       // Show panel if collapsed
       if (useChatStore.getState().panelMode== 'input') this.summonPanel();
       const hint = document.getElementById('chat-hint');
@@ -1037,11 +1080,13 @@ export class ChatPanel {
     }
 
     // Push input history (item 1)
-    this.inputHistory.push(text);
-    this.historyIdx = this.inputHistory.length;
-    this.draftText = '';
+    useChatStore.getState().pushInputHistory(text);
+    useChatStore.getState().setInputHistoryIdx(
+      useChatStore.getState().inputHistory.length,
+    );
+    useChatStore.getState().setDraftText('');
 
-    this.inputArea.value = '';
+    this._setInput('');
     this.inputArea.style.height = 'auto';
     const signal = execState.start();
 
@@ -1054,7 +1099,7 @@ export class ChatPanel {
     Session.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
 
     // User bubble (original text, focus context is for Agent eyes only)
-    const filesSnapshot = [...this.attachedFiles];
+    const filesSnapshot = [...useChatStore.getState().attachedFiles];
     this.appendUserBubble(text, filesSnapshot);
 
     // Build focus context prefix — tells Agent what the user is looking at
@@ -1071,9 +1116,10 @@ export class ChatPanel {
     }
 
     // Attached files — expose paths so Agent can read them
-    if (this.attachedFiles.length > 0) {
+    const attached = useChatStore.getState().attachedFiles;
+    if (attached.length > 0) {
       focusPrefix += '用户附加了以下文件：\n';
-      for (const f of this.attachedFiles) {
+      for (const f of attached) {
         const sizeStr = f.size < 1024 ? `${f.size} B` :
           f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
           `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
@@ -1081,7 +1127,7 @@ export class ChatPanel {
       }
       focusPrefix += '你可以用 read_file 读取这些文件。\n\n';
       // Clear attachments after sending
-      this.attachedFiles = [];
+      useChatStore.getState().clearAttachedFiles();
       this.renderAttachments();
     }
 
@@ -1335,7 +1381,7 @@ export class ChatPanel {
       const val = this.inputArea.value;
       const pos = this.inputArea.selectionStart || 0;
       if (!val || pos === val.length) {
-        this.inputArea.value = val + '/';
+        this._setInput(val + '/');
         this.inputArea.setSelectionRange((val + '/').length, (val + '/').length);
       }
       this.inputArea.style.height = 'auto';
@@ -1583,7 +1629,7 @@ export class ChatPanel {
     if (atIdx < 0) return;
 
     const token = kind === '节点' ? `\`${name}\`` : `[@${name.split('/').pop()?.replace(/\.\w+$/, '') || name}](${name})`;
-    this.inputArea.value = val.slice(0, atIdx) + token + val.slice(cursorPos);
+    this._setInput(val.slice(0, atIdx) + token + val.slice(cursorPos));
     this.atPopup.classList.remove('open');
     this.inputArea.focus();
   }
@@ -1609,9 +1655,9 @@ export class ChatPanel {
         (DEFAULT_COMMANDS[idx].action as any).handler = handler;
       }
     };
-    override('new', () => { this.inputArea.value = ''; this.inputArea.style.height = 'auto'; this.newSession(); });
+    override('new', () => { this._setInput(''); this.inputArea.style.height = 'auto'; this.newSession(); });
     override('compact', () => {
-      this.inputArea.value = '';
+      this._setInput('');
       this.inputArea.style.height = 'auto';
       if (!this.agent) return;
       this.appendUserBubble('/compact');
@@ -1644,7 +1690,7 @@ export class ChatPanel {
         this.sendAgentText(action.text, action.displayLabel);
         break;
       case 'fill':
-        this.inputArea.value = action.text;
+        this._setInput(action.text);
         this.inputArea.style.height = 'auto';
         this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
         this.inputArea.focus();

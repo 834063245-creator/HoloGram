@@ -47,11 +47,13 @@
 - [x] `chat-session.ts` module-level Map 不动（DOM 引用 + agent handle，不可序列化）
 - **产出**：`chat-store.ts` +16 字段 +15 action
 
-### Step 1 — ChatInput
-- [ ] 新建 `ChatInput.tsx`：textarea + 附件 pills + 发送/停止按钮 + 模式切换
-- [ ] `chat-dom.ts` input/attach 段 → React
-- [ ] chat.ts 回调节到 store（`sendMessage` 读 `inputText` + `attachedFiles`）
-- **产出**：`chat-dom.ts` -40 行
+### ✅ Step 1 — ChatInput
+- [x] 新建 `ChatInput.tsx`：textarea + 附件 pills + 发送/停止 + 模式切换 + 输入历史导航
+- [x] 旧 `chat-dom.ts` input-wrap + attach-pills 隐藏，React ChatInput 挂载替代
+- [x] chat.ts `sendMessage()` 读 store，`_setInput()` helper 同步 DOM + store
+- [x] onEditUserMessage / onResendUserMessage / onRetryAssistant 回调切到 store
+- [x] `this.inputArea.value =` 全部替换为 `this._setInput()`
+- **产出**：`ChatInput.tsx` +190 行，`chat-dom.ts` 旧代码隐藏（Step 5 删除）
 
 ### Step 2 — ChatHeader
 - [ ] 新建 `ChatHeader.tsx`：标题栏 + panel tabs（对话/工具/上下文）+ 新建/历史按钮
@@ -120,7 +122,7 @@
 | 步骤 | 状态 | 删除 vanilla 行数 |
 |------|------|-------------------|
 | Step 0 | ✅ | 0（只加 store 字段） |
-| Step 1 | ⬜ | ~40 |
+| Step 1 | ✅ | ~40（旧 DOM 隐藏） |
 | Step 2 | ⬜ | ~50 |
 | Step 3 | ⬜ | ~30 |
 | Step 4 | ⬜ | ~50 |
