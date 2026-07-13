@@ -636,6 +636,30 @@ impl LspManager {
     pub fn warm_errors() -> HashMap<String, String> {
         Self::global().last_warm_errors.read().unwrap().clone()
     }
+
+    /// Full LSP status for the settings panel / engine_status.
+    /// Returns per-server availability + install hints.
+    pub fn lsp_status() -> Vec<Value> {
+        let mgr = Self::global();
+        let errors = mgr.last_warm_errors.read().unwrap().clone();
+        let pool = mgr.pool.read().unwrap();
+        SERVER_CONFIGS
+            .iter()
+            .map(|cfg| {
+                let available = pool.get(cfg.command)
+                    .and_then(|arc| arc.lock().ok().map(|g| g.is_some()))
+                    .unwrap_or(false);
+                let error = errors.get(cfg.command).cloned();
+                json!({
+                    "command": cfg.command,
+                    "language_id": cfg.language_id,
+                    "extensions": cfg.extensions,
+                    "available": available,
+                    "error": error,
+                })
+            })
+            .collect()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
