@@ -518,9 +518,7 @@ impl Engine {
 mod grammar;
 mod pipeline;
 mod watcher;
-mod lsp;
 pub use grammar::GRAMMAR_LOADER;
-pub use lsp::reparse_source_lsp;
 
 /// Global engine instance.
 ///
@@ -682,9 +680,6 @@ pub fn engine_try_incremental(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::lsp::reparse_for_lsp;
-    use crate::pipeline::runner::analyze_project;
-
     #[test]
     fn test_engine_new_uninitialized() {
         let engine = Engine::new();
@@ -903,175 +898,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Integration test: verify LSP type-resolved call edges appear in
-    /// the graph after full analysis of a real-world-shaped Python project.
+    /// [removed] test_lsp_type_resolved_edges_in_graph — this test was coupled to
+    /// the now-removed handwritten python_lsp adapter. LSP resolution is now
+    /// on-demand via LspManager; graph edges are short-name only during indexing.
     #[test]
-    fn test_lsp_type_resolved_edges_in_graph() {
-        let tmp = std::env::temp_dir().join("hologram_test_lsp_e2e");
-        let _ = std::fs::remove_dir_all(&tmp);
-        let test_dir = tmp.join("lsp_project");
-        std::fs::create_dir_all(&test_dir).unwrap();
-
-        // Simulate a Django-style project structure
-        std::fs::create_dir_all(test_dir.join("app")).unwrap();
-
-        // models.py: defines a User class with a handle method
-        std::fs::write(
-            test_dir.join("app").join("models.py"),
-            r#"
-class User:
-    def handle(self, request):
-        return "ok"
-
-class Order:
-    def process(self):
-        pass
-"#,
-        )
-        .unwrap();
-
-        // views.py: calls User().handle() and Order().process()
-        std::fs::write(
-            test_dir.join("app").join("views.py"),
-            r#"
-from app.models import User, Order
-
-def my_view(request):
-    user = User()
-    user.handle(request)
-
-def order_view():
-    order = Order()
-    order.process()
-"#,
-        )
-        .unwrap();
-
-        // Run full analysis pipeline
-        let result = analyze_project(&test_dir);
-        let mut graph = result.graph;
-
-        // Build registry + run LSP pass
-        use crate::adapter::type_registry::TypeRegistry;
-        let registry = TypeRegistry::from_graph(&graph);
-
-        // Build name index for edge rewriting (mirrors resolve_calls_lsp)
-        let mut name_index: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        for (nid, node) in &graph.nodes {
-            let short = node.name.rsplit('.').next().unwrap_or(&node.name).to_string();
-            name_index.entry(short).or_default().push(nid.clone());
-        }
-
-        let mut total_resolved = 0usize;
-
-        for (abs_path, (source, _tree_opt)) in &result.parse_cache {
-            if !abs_path.ends_with(".py") {
-                continue;
-            }
-            // ponytail: parse_cache stores source only (streaming LSP), re-parse here
-            let tree_opt = reparse_for_lsp(source, "py");
-            if let Some(ref tree) = tree_opt {
-                let rel = abs_path
-                    .strip_prefix(&format!("{}", test_dir.display()))
-                    .unwrap_or(abs_path)
-                    .trim_start_matches('/')
-                    .trim_start_matches('\\');
-                let module_qn = rel.replace(['/', '\\'], ".").trim_end_matches(".py").to_string();
-                let resolved_calls =
-                    crate::adapter::python_lsp::run_py_lsp(source, tree, &module_qn, &registry);
-
-                for rc in &resolved_calls {
-                    let short =
-                        rc.callee_qn.rsplit('.').next().unwrap_or(&rc.callee_qn).to_string();
-                    let callee_id = if graph.nodes.contains_key(&rc.callee_qn) {
-                        Some(rc.callee_qn.clone())
-                    } else if let Some(candidates) = name_index.get(&short) {
-                        candidates
-                            .iter()
-                            .find(|c| rc.callee_qn.ends_with(c.as_str()) || c.ends_with(&short))
-                            .or_else(|| candidates.first())
-                            .cloned()
-                    } else {
-                        None
-                    };
-
-                    if let Some(ref cid) = callee_id {
-                        for edge in graph.edges.values_mut() {
-                            if edge.kind != crate::graph::EdgeKind::Calls {
-                                continue;
-                            }
-                            if edge.source != rc.caller_qn {
-                                continue;
-                            }
-                            let tgt_short = edge.target.rsplit('.').next().unwrap_or(&edge.target);
-                            if tgt_short == short {
-                                edge.target = cid.clone();
-                                edge.lsp_resolved = true;
-                                total_resolved += 1;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Verify: should have resolved at least 2 calls
-        // (user.handle() and order.process())
-        assert!(
-            total_resolved >= 2,
-            "LSP should resolve at least 2 cross-file calls, got {} resolved edges.\n\
-             Graph has {} nodes and {} edges.",
-            total_resolved,
-            graph.node_count(),
-            graph.edge_count()
-        );
-
-        // Verify: at least one edge has lsp_resolved = true
-        let lsp_edges: Vec<&crate::graph::Edge> = graph
-            .edges
-            .values()
-            .filter(|e| e.lsp_resolved)
-            .collect();
-        assert!(
-            !lsp_edges.is_empty(),
-            "Expected at least one lsp_resolved edge in the graph"
-        );
-
-        // Verify: a resolved edge points to a precise QN, not a short name
-        for e in &lsp_edges {
-            assert!(
-                e.target.contains('.'),
-                "LSP-resolved edge target should be a qualified name (contain '.'), got: {}",
-                e.target
-            );
-        }
-
-        // Verify specific call resolution: user.handle() should resolve to User.handle
-        let has_user_handle = lsp_edges.iter().any(|e| {
-            e.target.contains("User.handle") || e.target.contains("User")
-        });
-        assert!(
-            has_user_handle,
-            "Expected LSP-resolved edge targeting User.handle or User, got edges:\n{:#?}",
-            lsp_edges.iter().map(|e| format!("{} → {} ({})", e.source, e.target, e.lsp_resolved)).collect::<Vec<_>>()
-        );
-
-        // Print verification summary
-        let lsp_edge_summary: Vec<String> = lsp_edges
-            .iter()
-            .map(|e| format!("  {}  →  {}  [lsp_resolved]", e.source, e.target))
-            .collect();
-        // Use a test-friendly assertion that always shows the summary
-        assert!(
-            !lsp_edge_summary.is_empty(),
-            "LSP-resolved edges found:\n{}",
-            lsp_edge_summary.join("\n")
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
+    fn test_lsp_stub_placeholder() {
+        // Placeholder: keep the test slot for future native-LSP E2E tests.
     }
+
 
     /// ponytail: graph_from_index lost edge metadata (cross_file in particular)
     /// because MemoryIndex CSR doesn't store those fields. The fix re-derives

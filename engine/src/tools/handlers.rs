@@ -1143,8 +1143,8 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     }))
 }
 
-/// On-demand type-aware call resolution. Tries real LSP server first,
-/// falls back to handwritten adapters transparently.
+/// On-demand type-aware call resolution via native LSP.
+/// Degrades gracefully when the LSP server is not installed.
 pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
     let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let func_name = args.get("function").and_then(|v| v.as_str()).unwrap_or("");
@@ -1208,78 +1208,15 @@ pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
         }
     }
 
-    // ── Path 2: Handwritten adapter (always available) ──
-    let Some(tree) = engine::reparse_source_lsp(&source, &ext) else {
-        return ToolResponse::Degraded {
-            guidance: format!("parse failed or unsupported extension: {}", ext),
-            fallback: "Use a supported file extension or native LSP".into(),
-            details: json!({}),
-        };
-    };
-    let module_qn = path_str.trim_end_matches(&format!(".{}", ext)).replace(['/', '\\'], ".");
-    let registry = match engine::engine_read_graph(|g| {
-        crate::adapter::type_registry::TypeRegistry::from_graph(g)
-    }) {
-        Ok(r) => r,
-        Err(e) => return ToolResponse::Degraded {
-            guidance: format!("cannot access graph: {}", e),
-            fallback: "Ensure the project has been analyzed first".into(),
-            details: json!({}),
-        },
-    };
-
-    use crate::adapter::*;
-    use crate::adapter::ResolvedCall;
-    let raw_calls: Vec<ResolvedCall> = match ext.as_str() {
-        "py" | "pyi" => python_lsp::run_py_lsp(&source, &tree, &module_qn, &registry),
-        "go" => go_lsp::run_go_lsp(&source, &tree, &module_qn, &registry),
-        "java" => java_lsp::run_java_lsp(&source, &tree, &module_qn, &registry),
-        "cs" => cs_lsp::run_cs_lsp(&source, &tree, &module_qn, &registry),
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
-            ts_lsp::run_ts_lsp(&source, &tree, &module_qn, &registry).0
-        }
-        "c" | "h" | "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" =>
-            c_lsp::run_c_lsp(&source, &tree, &module_qn, &registry),
-        "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry),
-        "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry),
-        "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry),
-        _ => return ToolResponse::Degraded {
-            guidance: format!("unsupported extension: .{}", ext),
-            fallback: "Use a supported language extension".into(),
-            details: json!({}),
-        },
-    };
-
-    let call_values: Vec<Value> = raw_calls
-        .into_iter()
-        .map(|rc| json!({
-            "caller": rc.caller_qn, "callee": rc.callee_qn,
-            "strategy": rc.strategy, "confidence": rc.confidence,
-        }))
-        .collect();
-
-    let filtered: Vec<&Value> = if func_name.is_empty() {
-        call_values.iter().collect()
-    } else {
-        call_values
-            .iter()
-            .filter(|c| {
-                c.get("caller")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.contains(func_name))
-                    .unwrap_or(false)
-            })
-            .collect()
-    };
-
-    ToolResponse::Success(json!({
-        "file": path_str,
-        "function": func_name,
-        "backend": if lsp_result.is_some() { "hybrid" } else { "handwritten" },
-        "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
-        "resolved_calls": filtered,
-        "total": filtered.len(),
-    }))
+    // ── Path 2: No native LSP available → degraded ──
+    ToolResponse::Degraded {
+        guidance: format!("Native LSP unavailable for .{} — call resolution skipped.", ext),
+        fallback: format!("Install an LSP server for .{} to enable precise call resolution. Check engine_status for details.", ext),
+        details: json!({
+            "missing_lsp": crate::lsp_manager::LspManager::warm_errors(),
+            "note": "Handwritten adapters removed in v8. Use real LSP servers (pyright, gopls, rust-analyzer, etc.)"
+        }),
+    }
 }
 
 /// Resolve the type of a symbol at a specific position.
@@ -1310,59 +1247,15 @@ pub(crate) fn handler_resolve_type(args: &Value) -> ToolResponse {
         _ => {}
     }
 
-    // Fallback: handwritten type inference via eval_expr_type on the adapter
-    let Some(tree) = engine::reparse_source_lsp(&source, &ext) else {
-        return ToolResponse::Degraded {
-            guidance: format!("parse failed for .{}", ext),
-            fallback: "Use a supported language extension".into(),
-            details: json!({}),
-        };
-    };
-    // ponytail: walk to the node at (line, column) in the parse tree and eval its type
-    // For now return what the adapter can do at file level
-    let module_qn = path_str.trim_end_matches(&format!(".{}", ext)).replace(['/', '\\'], ".");
-    let registry = match engine::engine_read_graph(|g| {
-        crate::adapter::type_registry::TypeRegistry::from_graph(g)
-    }) {
-        Ok(r) => r,
-        Err(e) => return ToolResponse::Degraded {
-            guidance: format!("cannot access graph: {}", e),
-            fallback: "Ensure the project has been analyzed first".into(),
-            details: json!({}),
-        },
-    };
-
-    use crate::adapter::*;
-    let calls: Vec<Value> = match ext.as_str() {
-        "py" | "pyi" => python_lsp::run_py_lsp(&source, &tree, &module_qn, &registry),
-        "go" => go_lsp::run_go_lsp(&source, &tree, &module_qn, &registry),
-        "java" => java_lsp::run_java_lsp(&source, &tree, &module_qn, &registry),
-        "cs" => cs_lsp::run_cs_lsp(&source, &tree, &module_qn, &registry),
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => {
-            ts_lsp::run_ts_lsp(&source, &tree, &module_qn, &registry).0
-        }
-        "c" | "h" | "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" =>
-            c_lsp::run_c_lsp(&source, &tree, &module_qn, &registry),
-        "php" => php_lsp::run_php_lsp(&source, &tree, &module_qn, &registry),
-        "kt" | "kts" => kotlin_lsp::run_kotlin_lsp(&source, &tree, &module_qn, &registry),
-        "rs" => rust_lsp::run_rust_lsp(&source, &tree, &module_qn, &registry),
-        _ => return ToolResponse::Degraded {
-            guidance: format!("unsupported extension: .{}", ext),
-            fallback: "Use a supported language extension".into(),
-            details: json!({}),
-        },
+    // ── Path 2: No native LSP available → degraded ──
+    ToolResponse::Degraded {
+        guidance: format!("Native LSP unavailable for .{} — type resolution skipped.", ext),
+        fallback: format!("Install an LSP server for .{} to enable precise type resolution. Check engine_status for details.", ext),
+        details: json!({
+            "missing_lsp": crate::lsp_manager::LspManager::warm_errors(),
+            "note": "Handwritten adapters removed in v8. Use real LSP servers."
+        }),
     }
-    .into_iter()
-    .map(|rc| json!({"caller": rc.caller_qn, "callee": rc.callee_qn, "strategy": rc.strategy, "confidence": rc.confidence}))
-    .collect();
-
-    ToolResponse::Success(json!({
-        "file": path_str, "line": line, "column": column,
-        "backend": "handwritten",
-        "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
-        "note": "Type resolution via call targets — use native LSP (rust-analyzer/gopls/pyright) for precise type info",
-        "resolved_calls": calls,
-    }))
 }
 
 /// Find all implementations of an interface/trait at a specific position.
@@ -1398,31 +1291,14 @@ pub(crate) fn handler_find_implementations(args: &Value) -> ToolResponse {
         _ => {}
     }
 
-    // Fallback: use registry to find types
-    match engine::engine_read_graph(|g| {
-        crate::adapter::type_registry::TypeRegistry::from_graph(g)
-    }) {
-        Ok(registry) => {
-            // ponytail: without a specific position, return all non-interface types
-            let impls: Vec<Value> = registry.types_by_qn.iter()
-                .filter(|(_, rt)| !rt.is_interface && rt.alias_of.is_none())
-                .take(50)
-                .map(|(qn, _)| json!({"qualified_name": qn}))
-                .collect();
-            ToolResponse::Success(json!({
-                "file": path_str, "line": line, "column": column,
-                "backend": "registry",
-                "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
-                "note": "Registry-based fallback — use native LSP for precise interface implementations",
-                "implementations": impls,
-                "count": impls.len(),
-            }))
-        }
-        Err(e) => ToolResponse::Degraded {
-            guidance: format!("cannot access graph: {}", e),
-            fallback: "Ensure the project has been analyzed first".into(),
-            details: json!({}),
-        },
+    // Fallback: no native LSP → degraded
+    ToolResponse::Degraded {
+        guidance: format!("Native LSP unavailable for .{} — implementation search skipped.", ext),
+        fallback: format!("Install an LSP server for .{} to enable interface implementation search.", ext),
+        details: json!({
+            "missing_lsp": crate::lsp_manager::LspManager::warm_errors(),
+            "note": "Handwritten adapters removed in v8. Use real LSP servers."
+        }),
     }
 }
 
