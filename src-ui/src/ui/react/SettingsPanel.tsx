@@ -500,7 +500,7 @@ const SettingsPanelApp: React.FC<{
 export class SettingsPanelController {
   private _overlay: HTMLElement;
   private _panel: HTMLElement;
-  private _root: Root;
+  private _root: Root | null = null;
   private _open = false;
   private _onSave: (() => void) | null = null;
 
@@ -513,8 +513,6 @@ export class SettingsPanelController {
 
     document.body.appendChild(this._overlay);
     document.body.appendChild(this._panel);
-
-    this._root = createRoot(this._panel);
   }
 
   setOnSave(fn: () => void): void { this._onSave = fn; }
@@ -523,10 +521,17 @@ export class SettingsPanelController {
 
   open(): void {
     this._open = true;
-    this._render();
+    // Fresh mount — re-reads localStorage etc.
+    if (!this._root) this._root = createRoot(this._panel);
+    this._root.render(
+      React.createElement(SettingsPanelApp, {
+        key: Date.now(),
+        onClose: () => this.close(),
+        onSave: this._onSave,
+      }),
+    );
     this._overlay.classList.add('sp-open');
     this._panel.classList.add('sp-open');
-    // Dynamically import shell (avoids circular dep at module level)
     import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
   }
 
@@ -534,23 +539,16 @@ export class SettingsPanelController {
     this._open = false;
     this._overlay.classList.remove('sp-open');
     this._panel.classList.remove('sp-open');
+    // Unmount so next open loads fresh data from localStorage
+    if (this._root) { this._root.unmount(); this._root = null; }
   }
 
   toggle(): void {
     this._open ? this.close() : this.open();
   }
 
-  private _render(): void {
-    this._root.render(
-      React.createElement(SettingsPanelApp, {
-        onClose: () => this.close(),
-        onSave: this._onSave,
-      }),
-    );
-  }
-
   destroy(): void {
-    this._root.unmount();
+    if (this._root) this._root.unmount();
     this._overlay.remove();
     this._panel.remove();
   }

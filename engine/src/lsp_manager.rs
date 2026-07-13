@@ -637,8 +637,31 @@ impl LspManager {
         Self::global().last_warm_errors.read().unwrap().clone()
     }
 
+    /// Check whether a command exists on PATH without spawning it.
+    /// Always works — no warm() required. Used by lsp_status() to
+    /// distinguish "not started" from "not installed".
+    fn find_on_path(cmd: &str) -> bool {
+        if let Ok(paths) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                if dir.join(cmd).exists() {
+                    return true;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    for ext in ["exe", "cmd", "bat"] {
+                        if dir.join(cmd).with_extension(ext).exists() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Full LSP status for the settings panel / engine_status.
     /// Returns per-server availability + install hints.
+    /// `installed` is checked via PATH — works even when warm() hasn't run.
     pub fn lsp_status() -> Vec<Value> {
         let mgr = Self::global();
         let errors = mgr.last_warm_errors.read().unwrap().clone();
@@ -650,11 +673,14 @@ impl LspManager {
                     .and_then(|arc| arc.lock().ok().map(|g| g.is_some()))
                     .unwrap_or(false);
                 let error = errors.get(cfg.command).cloned();
+                // Always check PATH — independent of warm state
+                let installed = available || Self::find_on_path(cfg.command);
                 json!({
                     "command": cfg.command,
                     "language_id": cfg.language_id,
                     "extensions": cfg.extensions,
                     "available": available,
+                    "installed": installed,
                     "error": error,
                 })
             })

@@ -1,5 +1,0 @@
-src-tauri/target
-engine/target
-src-ui/node_modules
-src-ui/dist
-.hologram
