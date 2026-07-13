@@ -33,6 +33,19 @@ describe('createSubAgentSink', () => {
     expect(bump).toHaveBeenCalledTimes(1);
   });
 
+  it('reasoning → merges chunks into one reasoning block', () => {
+    const part = freshPart();
+    const bump = vi.fn();
+    const sink = createSubAgentSink({ subPart: part, bump });
+
+    sink({ kind: EventKind.Reasoning, text: 'I need to ' });
+    sink({ kind: EventKind.Reasoning, text: 'think about this.' });
+
+    expect(part.parts).toHaveLength(1);
+    expect(part.parts[0]).toMatchObject({ type: 'reasoning', text: 'I need to think about this.' });
+    expect(bump).toHaveBeenCalledTimes(2);
+  });
+
   it('ignores reasoning with empty text', () => {
     const part = freshPart();
     const bump = vi.fn();

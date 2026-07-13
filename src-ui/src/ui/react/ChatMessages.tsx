@@ -21,6 +21,7 @@ import {
   type TextPart,
   type NoticeMessage,
   type SubAgentPart,
+  type AssistantPart,
 } from '../message-model';
 import { useChatStore, bumpChat } from '../chat-store';
 
@@ -276,6 +277,39 @@ const ToolSummary: React.FC<{
     );
   };
 
+// ── Sub-agent reasoning (collapsed except last) ──
+
+const SubReasoningBlock: React.FC<{
+  part: { type: 'reasoning'; text: string };
+  parts: AssistantPart[];
+  index: number;
+}> = React.memo(({ part, parts, index }) => {
+  // Find index of the LAST reasoning part — only that one renders expanded
+  let lastIdx = -1;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].type === 'reasoning') { lastIdx = i; break; }
+  }
+  const isLast = index === lastIdx;
+  const displayText = isLast ? truncateReasoning(part.text) : part.text;
+
+  return (
+    <div className="msg-reasoning">
+      <div className="msg-reasoning-toggle" onClick={(e) => {
+        const content = (e.target as HTMLElement).closest('.msg-reasoning')?.querySelector('.msg-reasoning-content');
+        if (content) content.classList.toggle('msg-reasoning-open');
+      }}>
+        <span dangerouslySetInnerHTML={{
+          __html: isLast ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+        }} />
+        {isLast ? '收起思考' : `思考 (${(part.text.length / 1000).toFixed(0)}k)`}
+      </div>
+      <div className={`msg-reasoning-content${isLast ? ' msg-reasoning-open' : ''}`}>
+        <pre>{displayText}</pre>
+      </div>
+    </div>
+  );
+});
+
 // ── Sub-agent block ──
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
@@ -316,15 +350,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
         {part.parts.map((p, pi) => {
           if (p.type === 'reasoning') {
             return (
-              <div key={pi} className="msg-reasoning msg-reasoning-open">
-                <div className="msg-reasoning-toggle">
-                  <span dangerouslySetInnerHTML={{ __html: svgIcon('chevron-down') }} />
-                  收起思考
-                </div>
-                <div className="msg-reasoning-content msg-reasoning-open">
-                  <pre>{p.text}</pre>
-                </div>
-              </div>
+              <SubReasoningBlock key={pi} part={p} parts={part.parts} index={pi} />
             );
           }
           if (p.type === 'text') {

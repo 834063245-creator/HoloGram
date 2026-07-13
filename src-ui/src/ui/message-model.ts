@@ -157,6 +157,14 @@ export function lastTextPart(parts: AssistantPart[]): TextPart | undefined {
   return undefined;
 }
 
+/** Find the last reasoning part in a parts array. */
+export function lastReasoningPart(parts: AssistantPart[]): ReasonPart | undefined {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].type === 'reasoning') return parts[i] as ReasonPart;
+  }
+  return undefined;
+}
+
 /** Find a tool part by toolId. */
 export function findToolPart(
   parts: AssistantPart[],
