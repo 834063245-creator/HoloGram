@@ -553,33 +553,6 @@ impl LspManager {
         process.definition(&uri, line, column)
     }
 
-    /// Find references to the symbol at (file, line, column).
-    pub fn resolve_references(
-        file_path: &str,
-        source: &str,
-        line: u32,
-        column: u32,
-        ext: &str,
-    ) -> Result<Vec<LspLocation>, String> {
-        let mgr = Self::global();
-        if !*mgr.initialized.read().unwrap() {
-            return Err("LSP pool not initialized".into());
-        }
-        let server_arc = Self::get_or_warm_server(ext)?;
-        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
-        let process = guard.as_mut().ok_or("server not running")?;
-
-        let uri = format!("file:///{}", file_path.replace('\\', "/"));
-        let lang_id = SERVER_CONFIGS
-            .iter()
-            .find(|c| c.extensions.contains(&ext))
-            .map(|c| c.language_id)
-            .unwrap_or(ext);
-
-        let _ = process.open_file(&uri, source, lang_id);
-        process.references(&uri, line, column)
-    }
-
     /// Resolve the type at (file, line, column) via hover.
     pub fn resolve_type(
         file_path: &str,
