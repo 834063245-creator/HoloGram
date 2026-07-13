@@ -82,8 +82,10 @@ pub struct MemoryIndex {
     file_index: HashMap<String, Vec<u32>>,
     /// total edge count (cached; edges are stored in adjacency lists)
     edge_count: usize,
-    /// whether name_index and file_index are built (may be skipped on OOM)
+        /// whether name_index and file_index are built (may be skipped on OOM)
     has_aux_indexes: bool,
+    /// 合成边索引: (source_handle, target_handle) — 结构工具遍历时跳过
+    synthesized_edges: HashSet<(u32, u32)>,
 }
 
 impl MemoryIndex {
@@ -354,6 +356,7 @@ impl MemoryIndex {
             file_index: HashMap::new(),
             edge_count: 0,
             has_aux_indexes: true,
+            synthesized_edges: HashSet::new(),
         }
     }
 
@@ -370,6 +373,19 @@ impl MemoryIndex {
     /// Get handle for an already-interned string (no mutation).
     fn handle_of(&self, s: &str) -> Option<u32> {
         self.arena.get_handle(s)
+    }
+
+    /// Check whether an edge is synthesized (by string IDs).
+    pub fn is_edge_synthesized(&self, source: &str, target: &str) -> bool {
+        let src = match self.handle_of(source) { Some(h) => h, None => return false };
+        let tgt = match self.handle_of(target) { Some(h) => h, None => return false };
+        self.synthesized_edges.contains(&(src, tgt))
+    }
+
+    /// Check whether an edge is synthesized (by u32 handles — internal fast path).
+    #[inline]
+    fn is_edge_synthesized_by_handle(&self, src: u32, tgt: u32) -> bool {
+        self.synthesized_edges.contains(&(src, tgt))
     }
 
     /// Recompute in_degree/out_degree for each node from the deduped bucket lengths.
@@ -423,6 +439,10 @@ impl MemoryIndex {
             let tgt = idx.intern(&edge.target);
             if !idx.nodes.contains_key(&src) || !idx.nodes.contains_key(&tgt) {
                 continue;
+            }
+            // Track synthesized edges for structural tool filtering
+            if edge.is_synthesized {
+                idx.synthesized_edges.insert((src, tgt));
             }
             let kind_u8 = edge.kind.to_u8();
             let delay_f64 = pack_delay(edge.temporal_delay_sec);
@@ -840,11 +860,12 @@ impl MemoryIndex {
             }
             layers[depth].1.push(self.get_str(cur_handle).to_string());
 
-            // CSR edges
+            // CSR edges — skip synthesized edges
             if let Some(cur_idx) = self.node_idx(cur_handle) {
                 let (s, e) = self.out_range(cur_idx);
                 for i in s..e {
                     let tgt = self.out_targets[i];
+                    if self.is_edge_synthesized_by_handle(cur_handle, tgt) { continue; }
                     if has_pending {
                         let kind = EdgeKind::from_u8(self.out_kinds[i]);
                         if self.pending_removes.contains(&(cur_handle, tgt, kind)) { continue; }
@@ -856,6 +877,7 @@ impl MemoryIndex {
                 let (s, e) = self.in_range(cur_idx);
                 for i in s..e {
                     let src = self.in_targets[i];
+                    if self.is_edge_synthesized_by_handle(src, cur_handle) { continue; }
                     if has_pending {
                         let kind = EdgeKind::from_u8(self.in_kinds[i]);
                         if self.pending_removes.contains(&(src, cur_handle, kind)) { continue; }

@@ -111,7 +111,11 @@ pub struct Edge {
     #[serde(default)]
     pub lsp_resolved: bool,
 
-    /// 合成边标记: {"synthesizedBy": "react-render", "provenance": "heuristic"}
+        /// 合成边标记 — 由启发式通道生成（非源码直接解析）
+    #[serde(default)]
+    pub is_synthesized: bool,
+
+    /// 合成边元数据: {"synthesizedBy": "react-render", "provenance": "heuristic"}
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
 }
@@ -133,6 +137,7 @@ impl Edge {
             cross_file: false,
             temporal_delay_sec: None,
             lsp_resolved: false,
+            is_synthesized: false,
             metadata: None,
         }
     }
@@ -145,6 +150,7 @@ impl Edge {
             id: id.into(), source: source.into(), target: target.into(), kind,
             coupling_depth: 3, cross_file: true,
             temporal_delay_sec: None, lsp_resolved: false,
+            is_synthesized: true,
             metadata: Some(serde_json::json!({"synthesizedBy": channel, "provenance": "heuristic"})),
         }
     }
@@ -216,6 +222,17 @@ mod tests {
         let mut e = Edge::new("e1", "a", "b", EdgeKind::Triggers);
         e.temporal_delay_sec = Some(0.5);
         assert_eq!(e.temporal_delay_sec, Some(0.5));
+    }
+
+    #[test]
+    fn test_edge_is_synthesized() {
+        let e = Edge::new("e1", "a", "b", EdgeKind::Calls);
+        assert!(!e.is_synthesized, "Edge::new should default is_synthesized=false");
+
+        let se = Edge::synthesized("e2", "a", "b", EdgeKind::Calls, "react-render");
+        assert!(se.is_synthesized, "Edge::synthesized should set is_synthesized=true");
+        assert_eq!(se.coupling_depth, 3);
+        assert!(se.cross_file);
     }
 
     #[test]
