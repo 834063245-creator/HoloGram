@@ -325,6 +325,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usiz
             cross_file: false,
                         temporal_delay_sec: None,
             lsp_resolved: false,
+            is_synthesized: false,
             metadata: None,
         };
 

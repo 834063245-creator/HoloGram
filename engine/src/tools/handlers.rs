@@ -259,8 +259,15 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
             };
             let file_path = loc.rsplit_once(':').map(|(f, _)| f.to_string()).unwrap_or(loc);
 
-            let out = idx.outgoing(&node.id, None);
-            let incoming = idx.incoming(&node.id, None);
+            let out_raw = idx.outgoing(&node.id, None);
+            let incoming_raw = idx.incoming(&node.id, None);
+            // Skip synthesized edges (heuristic channels) for structural scoring
+            let out: Vec<_> = out_raw.into_iter()
+                .filter(|(tgt, _, _, _)| !idx.is_edge_synthesized(&node.id, tgt))
+                .collect();
+            let incoming: Vec<_> = incoming_raw.into_iter()
+                .filter(|(src, _, _, _)| !idx.is_edge_synthesized(src, &node.id))
+                .collect();
             let fan = (out.len() + incoming.len()) as f64;
             let coupling_penalty: f64 = out.iter()
                 .map(|(_, _, depth, _)| (*depth as f64).powi(2))
