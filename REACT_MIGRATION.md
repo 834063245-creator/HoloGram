@@ -76,9 +76,13 @@
 - [ ] 清理由此产生的 dead code
 - **产出**：chat 系统全部 React 化
 
-### Step 6 — SettingsPanel
-- [ ] `settings-panel.ts` → React（4 个 tab：Provider / Agent / 显示 / 语言依赖）
-- **产出**：~700 行 vanilla → React
+### ✅ Step 6 — SettingsPanel
+- [x] 全量 React 重写：727 行 innerHTML 模板 → 557 行 React 组件 + 31 行 wrapper
+- [x] 4 个 tab 全部保留：Provider / Agent / 显示 / 语言依赖
+- [x] 受控组件 + useState，关闭 unmount 确保重开读最新 localStorage
+- [x] LSP 状态在切到语言依赖 tab 时自动加载
+- [x] API 保持兼容：`SettingsPanel.get().open()/.close()/.toggle()/.isOpen()/.setOnSave()`
+- **产出**：`settings-panel.ts` 691 行删除 → 31 行 wrapper，零 vanilla DOM
 
 ### Step 7 — CheckPanel
 - [ ] `check.ts` → React
@@ -124,7 +128,7 @@
 | Step 3 | ⬜ | ~30 |
 | Step 4 | ⬜ | ~50 |
 | Step 5 | ⬜ | ~931 (chat-dom.ts 全删) |
-| Step 6 | ⬜ | ~700 |
+| Step 6 | ✅ | 727 → 0 |
 | Step 7 | ⬜ | ~650 |
 | Step 8 | ⬜ | ~440 |
 | Step 9 | ⬜ | ~230 |
