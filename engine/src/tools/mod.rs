@@ -388,7 +388,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         // ── Community ──
         ToolSchema {
             name: "get_community",
-            description: "Which group does this module belong to? Returns the node's community (Louvain clustering), parent community, and sibling nodes. Use when asked \"this module is in which group?\" or to find closely-related modules. For global community structure, use cluster_report.",
+            description: "Which group does this module belong to? Returns the node's community (Leiden clustering), parent community, and sibling nodes. Use when asked \"this module is in which group?\" or to find closely-related modules. For global community structure, use cluster_report.",
             params: &[p!("nodeId", "string", "The node ID")],
             required: &["nodeId"],
             read_only: true,
@@ -396,7 +396,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         },
         ToolSchema {
             name: "cluster_report",
-            description: "Global community/cluster map — which modules naturally group together (Louvain algorithm). Sorted by size with member lists. Use for high-level architecture understanding. For a single node's community, use get_community instead.",
+            description: "Global community/cluster map — which modules naturally group together (Leiden algorithm). Sorted by size with member lists. Use for high-level architecture understanding. For a single node's community, use get_community instead.",
             params: &[p!("min_size", "integer", "Minimum community size to report (default 3)"), p!("max_nodes", "integer", "Max node IDs per community in output (default 20, max 200)")],
             required: &[],
             read_only: true,

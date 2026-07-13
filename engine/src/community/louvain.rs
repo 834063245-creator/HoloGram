@@ -400,15 +400,226 @@ fn detect_hierarchical_from_base(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Leiden refinement (Phase 2)
+// ═══════════════════════════════════════════════════════════════
+
+/// Run Leiden Phase 2 refinement on the Louvain partition.
+///
+/// Algorithm:
+///   1. For each community C from Phase 1, run local-moving within C's
+///      induced subgraph to split C into well-separated sub-communities.
+///   2. After all communities are split, try merging each sub-community
+///      into a neighboring Phase-1 community if it improves modularity.
+///
+/// Returns refined communities. The result may have more communities
+/// than the input, but they are better separated.
+fn leiden_refinement(
+    node_ids: &[String],
+    n: usize,
+    adj: &[Vec<(usize, f64)>],
+    degrees: &[f64],
+    m: f64,
+    rng: &mut rand::rngs::StdRng,
+    p1_comms: &[Vec<usize>],  // Phase 1: community → node indices
+) -> Vec<Community> {
+    // ── Step 1: Build node→community mapping from Phase 1 ──
+    let mut node_to_p1: Vec<usize> = vec![0; n];
+    for (ci, comm) in p1_comms.iter().enumerate() {
+        for &v in comm {
+            node_to_p1[v] = ci;
+        }
+    }
+
+    // ── Step 2: Split each P1 community internally ──
+    // sub_comms: flat list of all sub-communities, each is Vec<usize>
+    // sub_parent: for each sub-community, which P1 community it came from
+    let mut sub_comms: Vec<Vec<usize>> = Vec::new();
+    let mut sub_parent: Vec<usize> = Vec::new();
+    let mut node_to_sub: Vec<usize> = vec![usize::MAX; n];
+
+    for (p1_idx, comm) in p1_comms.iter().enumerate() {
+        if comm.len() <= 2 {
+            // Too small to split — keep as-is
+            let mut members = comm.clone();
+            members.sort();
+            sub_comms.push(members);
+            sub_parent.push(p1_idx);
+            for &v in comm {
+                node_to_sub[v] = sub_comms.len() - 1;
+            }
+            continue;
+        }
+
+        // Build induced subgraph for this community
+        let k = comm.len();
+        let old_to_new: HashMap<usize, usize> = comm.iter().enumerate()
+            .map(|(new, &old)| (old, new))
+            .collect();
+        let mut sub_adj: Vec<Vec<(usize, f64)>> = vec![vec![]; k];
+        let mut sub_deg = vec![0.0f64; k];
+        let mut sub_m = 0.0f64;
+        for &v in comm {
+            let vi = old_to_new[&v];
+            for &(nb, w) in &adj[v] {
+                if let Some(&nbi) = old_to_new.get(&nb) {
+                    sub_adj[vi].push((nbi, w));
+                    sub_deg[vi] += w;
+                    sub_m += w;
+                }
+            }
+        }
+        sub_m /= 2.0;
+        if sub_m == 0.0 {
+            let mut members = comm.clone();
+            members.sort();
+            sub_comms.push(members);
+            sub_parent.push(p1_idx);
+            for &v in comm {
+                node_to_sub[v] = sub_comms.len() - 1;
+            }
+            continue;
+        }
+
+        // Run local-moving within this community's subgraph
+        let (split_nodes, _split_map) = local_moving_core(k, &sub_adj, &sub_deg, sub_m, rng);
+
+        // Convert sub-indices back to global indices
+        for split in &split_nodes {
+            if split.is_empty() { continue; }
+            let mut members: Vec<usize> = split.iter().map(|&si| comm[si]).collect();
+            members.sort();
+            let sub_idx = sub_comms.len();
+            for &v in &members {
+                node_to_sub[v] = sub_idx;
+            }
+            sub_comms.push(members);
+            sub_parent.push(p1_idx);
+        }
+    }
+
+    // ── Step 3: Merge sub-communities ──
+    // Each sub-community can stay with its parent P1 community, or switch
+    // to a neighboring P1 community if that improves modularity.
+    let tc = 2.0 * m * m;
+    let p1_count = p1_comms.len();
+    let mut p1_sigma: Vec<f64> = vec![0.0; p1_count]; // total degree in each P1 community
+    for (ci, comm) in p1_comms.iter().enumerate() {
+        p1_sigma[ci] = comm.iter().map(|&v| degrees[v]).sum();
+    }
+
+    let sub_count = sub_comms.len();
+    if sub_count == 0 {
+        return vec![];
+    }
+    // Each sub-community starts assigned to its parent P1 community
+    let mut sub_comm: Vec<usize> = sub_parent.clone();
+    let mut sub_sigma: Vec<f64> = sub_comms.iter()
+        .map(|sc| sc.iter().map(|&v| degrees[v]).sum())
+        .collect();
+
+    // For each sub-community, try moving to a neighboring P1 community
+    let mut improved = true;
+    let mut iter = 0;
+    while improved && iter < 10 {
+        improved = false;
+        iter += 1;
+        for si in 0..sub_count {
+            let old_p1 = sub_comm[si];
+            // Accumulate edge weight from this sub-community to each P1 community
+            let mut p1_weight: Vec<f64> = vec![0.0; p1_count];
+            let mut touched: Vec<usize> = Vec::new();
+            for &v in &sub_comms[si] {
+                for &(nb, w) in &adj[v] {
+                    let p1 = node_to_p1[nb];
+                    if p1_weight[p1] == 0.0 {
+                        touched.push(p1);
+                    }
+                    p1_weight[p1] += w;
+                }
+            }
+
+            let sigma_sub = sub_sigma[si];
+            let sigma_old = p1_sigma[old_p1];
+            let ki_in_old = p1_weight[old_p1];
+
+            let mut best_p1 = old_p1;
+            let mut best_gain = 0.0f64;
+
+            for &p1 in &touched {
+                if p1 == old_p1 { continue; }
+                let ki_in = p1_weight[p1];
+                let sigma_new = p1_sigma[p1];
+                let gain = (ki_in - ki_in_old) / m
+                    - sigma_sub * (sigma_new - (sigma_old - sigma_sub)) / tc;
+                if gain > best_gain {
+                    best_gain = gain;
+                    best_p1 = p1;
+                }
+            }
+
+            if best_p1 != old_p1 && best_gain > 0.0 {
+                sub_comm[si] = best_p1;
+                p1_sigma[old_p1] -= sigma_sub;
+                p1_sigma[best_p1] += sigma_sub;
+                improved = true;
+            }
+        }
+    }
+
+    // ── Step 4: Assemble final communities ──
+    let mut final_comms: Vec<Vec<usize>> = vec![vec![]; p1_count];
+    for si in 0..sub_count {
+        let p1 = sub_comm[si];
+        final_comms[p1].extend(sub_comms[si].iter().cloned());
+    }
+    for fc in final_comms.iter_mut() {
+        fc.sort();
+        fc.dedup();
+    }
+
+    let mut result: Vec<Community> = final_comms.iter()
+        .filter(|c| !c.is_empty())
+        .map(|nodes| nodes.iter().map(|&idx| node_ids[idx].clone()).collect())
+        .collect();
+    result.sort_by_key(|c| -(c.len() as i64));
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Public API
 // ═══════════════════════════════════════════════════════════════
 
 /// Run Leiden community detection on the graph (flat, single-level).
-/// ponytail: uses plain Louvain (local-moving only) instead of full Leiden.
-/// Refinement was tested (0.2s overhead) but produced 2.4x more communities,
-/// which blew up hierarchical condensation from 173s → 658s.
-/// For code dependency graphs, Louvain communities are well-connected enough.
+///
+/// Full Leiden algorithm: Phase 1 local-moving + Phase 2 refinement.
+/// The refinement step splits communities to improve modularity, then
+/// merges sub-communities that are well-connected within their parent.
+/// This produces better-separated communities than plain Louvain.
+///
+/// NOTE: hierarchical condensation uses plain Louvain for its base
+/// (see detect_communities_louvain) because refinement produces too many
+/// base communities for the O(K²) condensation step to handle efficiently.
 pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let Some((owned_ids, adj, degrees, m)) = build_adjacency(graph) else {
+        return vec![];
+    };
+    let n = owned_ids.len();
+    if m == 0.0 {
+        let mut ids = owned_ids;
+        ids.sort();
+        return ids.into_iter().map(|id| vec![id]).collect();
+    }
+    // Phase 1: Louvain local-moving
+    let (comm_nodes, _) = local_moving_core(n, &adj, &degrees, m, &rng);
+    let p1_comms: Vec<Vec<usize>> = comm_nodes.into_iter().filter(|c| !c.is_empty()).collect();
+    // Phase 2: Leiden refinement
+    leiden_refinement(&owned_ids, n, &adj, &degrees, m, &mut rng, &p1_comms)
+}
+
+/// Plain Louvain (no refinement) — used internally by hierarchical condensation
+/// where refinement's extra communities would blow up the O(K²) super-graph step.
+fn detect_communities_louvain(graph: &Graph, seed: u64) -> Vec<Community> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let Some((owned_ids, adj, degrees, m)) = build_adjacency(graph) else {
         return vec![];
@@ -422,8 +633,23 @@ pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
     run_louvain(&owned_ids, n, &adj, &degrees, m, &mut rng)
 }
 
-/// Detect communities from MemoryIndex.
+/// Detect communities from MemoryIndex (Leiden).
 pub fn detect_communities_from_index(idx: &MemoryIndex, seed: u64) -> Vec<Community> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let Some((owned_ids, adj, degrees, m)) = build_adjacency_from_index(idx) else {
+        return vec![];
+    };
+    let n = owned_ids.len();
+    if m == 0.0 {
+        return owned_ids.into_iter().map(|id| vec![id]).collect();
+    }
+    let (comm_nodes, _) = local_moving_core(n, &adj, &degrees, m, &rng);
+    let p1_comms: Vec<Vec<usize>> = comm_nodes.into_iter().filter(|c| !c.is_empty()).collect();
+    leiden_refinement(&owned_ids, n, &adj, &degrees, m, &mut rng, &p1_comms)
+}
+
+/// Plain Louvain from MemoryIndex — used by hierarchical condensation path.
+fn detect_communities_from_index_louvain(idx: &MemoryIndex, seed: u64) -> Vec<Community> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let Some((owned_ids, adj, degrees, m)) = build_adjacency_from_index(idx) else {
         return vec![];
@@ -437,10 +663,11 @@ pub fn detect_communities_from_index(idx: &MemoryIndex, seed: u64) -> Vec<Commun
 
 // ── Hierarchical ──────────────────────────────────────────────
 
-/// Hierarchical Leiden community detection.
-/// L0 = Leiden (refined), L1+ = Louvain condensation.
+/// Hierarchical Louvain community detection.
+/// L0 uses plain Louvain (no refinement) for efficient condensation.
+/// For Leiden-refined flat communities, use detect_communities() instead.
 pub fn detect_hierarchical_communities(graph: &Graph, seed: u64) -> Vec<HierarchicalCommunity> {
-    let base = detect_communities(graph, seed);
+    let base = detect_communities_louvain(graph, seed);
     let leaf_edges: Vec<(String, String)> = graph.edges.values()
         .map(|e| (e.source.clone(), e.target.clone()))
         .collect();
@@ -459,12 +686,12 @@ pub fn detect_hierarchical_communities_with_base(
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
-/// Hierarchical Leiden from MemoryIndex.
+/// Hierarchical Louvain from MemoryIndex.
 pub fn detect_hierarchical_communities_from_index(
     idx: &MemoryIndex,
     seed: u64,
 ) -> Vec<HierarchicalCommunity> {
-    let base = detect_communities_from_index(idx, seed);
+    let base = detect_communities_from_index_louvain(idx, seed);
     let leaf_edges: Vec<(String, String)> = idx.edges_iter()
         .into_iter()
         .flat_map(|(src, targets)| {
@@ -475,18 +702,21 @@ pub fn detect_hierarchical_communities_from_index(
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
-/// Run both flat and hierarchical Louvain community detection in one pass.
+/// Run both flat (Leiden-refined) and hierarchical (Louvain) in one pass.
 ///
-/// Uses plain Louvain (local-moving only). No Leiden refinement step.
+/// Flat communities use full Leiden (local-moving + refinement).
+/// Hierarchical condensation uses plain Louvain for efficiency —
+/// refinement's extra communities would blow up the O(K²) super-graph step.
 pub fn detect_communities_and_hierarchy(
     graph: &Graph,
     seed: u64,
 ) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
-    let base = detect_communities(graph, seed);
+    let base = detect_communities(graph, seed);  // Leiden-refined flat
+    let hier_base = detect_communities_louvain(graph, seed);  // Louvain for hierarchy
     let leaf_edges: Vec<(String, String)> = graph.edges.values()
         .map(|e| (e.source.clone(), e.target.clone()))
         .collect();
-    let hierarchical = detect_hierarchical_from_base(&base, seed, &leaf_edges);
+    let hierarchical = detect_hierarchical_from_base(&hier_base, seed, &leaf_edges);
     (base, hierarchical)
 }
 

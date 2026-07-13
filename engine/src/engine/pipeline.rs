@@ -270,18 +270,18 @@ impl Engine {
         result.parse_cache.clear();
         result.parse_cache.shrink_to_fit();
 
-        // 7. Community detection (Leiden)
+        // 7. Community detection (Leiden flat + Louvain hierarchical)
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let (communities, hierarchical) = detect_communities_and_hierarchy(&result.graph, 42);
         let community_count = communities.len();
         let hc_count = hierarchical.iter().filter(|c| c.level > 0).count();
         let leiden_elapsed = stage_start.elapsed().as_secs_f64();
-        info!(count = community_count, super_levels = hc_count, "[engine] Louvain communities detected");
+        info!(count = community_count, super_levels = hc_count, "[engine] Leiden communities detected");
         eprintln!("[engine] stage: community done in {:.1}s ({} communities, {} super)",
             leiden_elapsed, community_count, hc_count);
         stage_timings.push(StageTiming {
-            name: "Community (Louvain)".into(),
+            name: "Community (Leiden)".into(),
             elapsed_secs: leiden_elapsed,
             detail: format!("{} communities, {} super", community_count, hc_count),
         });
