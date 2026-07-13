@@ -290,7 +290,6 @@ export class ChatPanel {
         ? `步骤 ${data.step}  ·  ${data.toolName}`
         : `正在执行 ${data.toolName}`;
     });
-    // ⚡ Sub-agent UI handled by SubAgentPanel (subagent-panel.ts)
   }
 
   // ── Public API ──

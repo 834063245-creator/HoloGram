@@ -6,7 +6,6 @@
 
 import type { Message } from '../provider/types';
 import type { Agent } from './agent';
-import { bus } from '../ui/events';
 
 export enum SubAgentStatus {
   Running = 'running',
@@ -56,15 +55,6 @@ export class SubAgentPool {
   constructor(maxConcurrent = DEFAULT_MAX_CONCURRENT, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
     this.maxConcurrent = maxConcurrent;
     this.defaultTimeoutMs = defaultTimeoutMs;
-  }
-
-  private _emitCount(): void {
-    bus.emit('agent:sub-pool-update', {
-      running: this.agents.size,
-      completed: this.completed.length,
-      maxConcurrent: this.maxConcurrent,
-      ids: [...this.agents.keys()],
-    });
   }
 
   /** Add to completed list, capped to prevent unbounded memory growth. */
@@ -137,7 +127,6 @@ export class SubAgentPool {
         this._addCompleted(pending.handle);
         pending.resolve(text);
         this.agents.delete(id);
-        this._emitCount();
         if (this.onDone) this.onDone(pending.handle, pending.callId);
       }
     };
@@ -155,7 +144,6 @@ export class SubAgentPool {
       (err) => finish('', String(err?.message || err)),
     );
 
-    this._emitCount();
     return id;
   }
 
@@ -187,7 +175,6 @@ export class SubAgentPool {
     this._addCompleted(pending.handle);
     pending.resolve('');
     this.agents.delete(id);
-    this._emitCount();
     return true;
   }
 
@@ -206,7 +193,6 @@ export class SubAgentPool {
       stopped.push(id);
     }
     this.agents.clear();
-    this._emitCount();
     return stopped;
   }
 
