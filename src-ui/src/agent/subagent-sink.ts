@@ -10,7 +10,7 @@
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { SubAgentPart } from '../ui/message-model';
-import { lastTextPart, findToolPart } from '../ui/message-model';
+import { lastTextPart, lastReasoningPart, findToolPart } from '../ui/message-model';
 
 export interface SubAgentSinkOpts {
   subPart: SubAgentPart;
@@ -32,7 +32,12 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
   return (ev: AgentEvent) => {
     switch (ev.kind) {
       case EventKind.Reasoning:
-        if (ev.text) { subPart.parts.push({ type: 'reasoning', text: ev.text }); tick(); }
+        if (ev.text) {
+          const last = lastReasoningPart(subPart.parts);
+          if (last) { last.text += ev.text; }
+          else { subPart.parts.push({ type: 'reasoning', text: ev.text }); }
+          tick();
+        }
         break;
 
       case EventKind.Text:
