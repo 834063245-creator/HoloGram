@@ -25,6 +25,7 @@ pub fn detect_cycles_from_index(idx: &MemoryIndex) -> Vec<serde_json::Value> {
     if n == 0 { return vec![]; }
     let id_to_idx: HashMap<&str, usize> = node_ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
     let mut adj = vec![vec![]; n];
+    let mut skipped = 0usize;
     for (source, targets) in idx.edges_iter() {
         if let Some(&s) = id_to_idx.get(source.as_str()) {
             for (target, _, _, _) in targets {
@@ -34,9 +35,14 @@ pub fn detect_cycles_from_index(idx: &MemoryIndex) -> Vec<serde_json::Value> {
                 }
                 if let Some(&t) = id_to_idx.get(target.as_str()) {
                     adj[s].push(t);
+                } else {
+                    skipped += 1;
                 }
             }
         }
+    }
+    if skipped > 0 {
+        tracing::debug!(skipped, total_nodes = n, "cycles: {} edge targets unresolved (likely external/stdlib deps)", skipped);
     }
     let node_refs: Vec<&String> = node_ids.iter().collect();
     run_tarjan(&node_refs, &adj)

@@ -371,6 +371,8 @@ pub struct LspManager {
     pool: RwLock<PoolMap>,
     project_root: RwLock<Option<String>>,
     initialized: RwLock<bool>,
+    /// Last warm error, keyed by command name. Queryable for diagnostics.
+    last_warm_errors: RwLock<HashMap<String, String>>,
 }
 
 impl LspManager {
@@ -385,12 +387,14 @@ impl LspManager {
             pool: RwLock::new(HashMap::new()),
             project_root: RwLock::new(None),
             initialized: RwLock::new(false),
+            last_warm_errors: RwLock::new(HashMap::new()),
         }
     }
 
     /// Warm the pool — spawn all available LSP servers for the project.
-    /// Call after index completes. Best-effort: servers that fail to start
-    /// are silently skipped (handwritten fallback covers them).
+    /// Call after index completes. Failures are stored in last_warm_errors
+    /// and surfaced at error level — they are NOT silently swallowed.
+    /// Individual servers can be re-tried via try_warm_one() on demand.
     pub fn warm(project_root: &str) {
         let mgr = Self::global();
         *mgr.project_root.write().unwrap() = Some(project_root.to_string());
@@ -407,8 +411,48 @@ impl LspManager {
                         .insert(cmd, Arc::new(Mutex::new(Some(process))));
                 }
                 Err(e) => {
-                    tracing::warn!(cmd, err = %e, "[lsp_manager] server unavailable — will use handwritten fallback");
+                    let err_msg = format!("spawn+init {}: {}", cmd, e);
+                    tracing::error!(cmd, err = %e, "[lsp_manager] server unavailable — LSP resolution will fall back to handwritten adapters for this language");
+                    mgr.last_warm_errors
+                        .write()
+                        .unwrap()
+                        .insert(cmd.to_string(), err_msg);
                 }
+            }
+        }
+    }
+
+    /// Try to warm a single LSP server by extension. Used as a lazy retry
+    /// when resolve_definition finds no server in the pool.
+    fn try_warm_one(ext: &str) -> bool {
+        let cfg = match SERVER_CONFIGS.iter().find(|c| c.extensions.contains(&ext)) {
+            Some(c) => c,
+            None => return false,
+        };
+        let mgr = Self::global();
+        let root = match mgr.project_root.read().unwrap().as_ref() {
+            Some(r) => r.clone(),
+            None => return false,
+        };
+        let cmd = cfg.command;
+        match Self::spawn_server(cfg, &root) {
+            Ok(process) => {
+                tracing::info!(cmd, ext, "[lsp_manager] lazy warm succeeded");
+                mgr.pool
+                    .write()
+                    .unwrap()
+                    .insert(cmd, Arc::new(Mutex::new(Some(process))));
+                mgr.last_warm_errors.write().unwrap().remove(cmd);
+                true
+            }
+            Err(e) => {
+                let err_msg = format!("lazy-spawn+init {}: {}", cmd, e);
+                tracing::error!(cmd, ext, err = %e, "[lsp_manager] lazy warm failed — retry exhausted");
+                mgr.last_warm_errors
+                    .write()
+                    .unwrap()
+                    .insert(cmd.to_string(), err_msg);
+                false
             }
         }
     }
@@ -457,6 +501,19 @@ impl LspManager {
         None
     }
 
+    /// Get server, with a lazy warm retry if it's missing from the pool.
+    /// Returns Ok(server_arc) or Err(reason).
+    fn get_or_warm_server(ext: &str) -> Result<Arc<Mutex<Option<LspProcess>>>, String> {
+        if let Some(arc) = Self::get_server(ext) {
+            return Ok(arc);
+        }
+        tracing::info!(ext, "[lsp_manager] server not in pool, attempting lazy warm");
+        if !Self::try_warm_one(ext) {
+            return Err(format!("no server for .{} (lazy warm failed)", ext));
+        }
+        Self::get_server(ext).ok_or_else(|| format!("no server for .{} after warm", ext))
+    }
+
     /// Resolve a call at (file, line, column) using an LSP server.
     /// Returns the definition location, or Err if no server available.
     pub fn resolve_definition(
@@ -470,7 +527,9 @@ impl LspManager {
         if !*mgr.initialized.read().unwrap() {
             return Err("LSP pool not initialized".into());
         }
-        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+
+        let server_arc = Self::get_or_warm_server(ext)?;
+
         let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
         let process = guard.as_mut().ok_or("server not running")?;
 
@@ -506,7 +565,7 @@ impl LspManager {
         if !*mgr.initialized.read().unwrap() {
             return Err("LSP pool not initialized".into());
         }
-        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let server_arc = Self::get_or_warm_server(ext)?;
         let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
         let process = guard.as_mut().ok_or("server not running")?;
 
@@ -530,7 +589,7 @@ impl LspManager {
         ext: &str,
     ) -> Result<String, String> {
         let (uri, lang_id) = Self::prepare(file_path, ext)?;
-        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let server_arc = Self::get_or_warm_server(ext)?;
         let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
         let process = guard.as_mut().ok_or("server not running")?;
         let _ = process.open_file(&uri, source, &lang_id);
@@ -546,7 +605,7 @@ impl LspManager {
         ext: &str,
     ) -> Result<Vec<LspLocation>, String> {
         let (uri, lang_id) = Self::prepare(file_path, ext)?;
-        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let server_arc = Self::get_or_warm_server(ext)?;
         let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
         let process = guard.as_mut().ok_or("server not running")?;
         let _ = process.open_file(&uri, source, &lang_id);
@@ -562,7 +621,7 @@ impl LspManager {
         ext: &str,
     ) -> Result<Vec<LspLocation>, String> {
         let (uri, lang_id) = Self::prepare(file_path, ext)?;
-        let server_arc = Self::get_server(ext).ok_or_else(|| format!("no server for .{}", ext))?;
+        let server_arc = Self::get_or_warm_server(ext)?;
         let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
         let process = guard.as_mut().ok_or("server not running")?;
         let _ = process.open_file(&uri, source, &lang_id);
@@ -590,8 +649,19 @@ impl LspManager {
     }
 
     /// Check if LSP is available for a given file extension.
+    /// Returns true only if a server process is actually running in the pool.
     pub fn is_available(ext: &str) -> bool {
-        Self::get_server(ext).is_some()
+        Self::get_server(ext)
+            .and_then(|arc| {
+                arc.lock().ok().map(|guard| guard.is_some())
+            })
+            .unwrap_or(false)
+    }
+
+    /// Return last warm errors for diagnostic display.
+    /// Returns a map of command name → error message.
+    pub fn warm_errors() -> HashMap<String, String> {
+        Self::global().last_warm_errors.read().unwrap().clone()
     }
 }
 
