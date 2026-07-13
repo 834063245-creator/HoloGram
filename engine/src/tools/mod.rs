@@ -172,8 +172,8 @@ impl ToolRegistry {
 // ═══════════════════════════════════════════════════════════════
 
 
-mod handlers;
-mod response;
+pub(crate) mod handlers;
+pub(crate) mod response;
 pub(crate) use response::ToolResponse;
 pub mod staleness;
 pub(crate) fn get_str(args: &Value, keys: &[&str]) -> String {

@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 /// Three-state response for all hologram_* tool handlers.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum ToolResponse {
     /// Normal success — full data returned.
     Success(Value),
