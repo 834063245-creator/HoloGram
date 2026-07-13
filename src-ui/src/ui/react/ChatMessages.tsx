@@ -280,7 +280,7 @@ const ToolSummary: React.FC<{
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
 
-const SubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(({ part }) => {
+const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [expanded, setExpanded] = useState(part.status === 'running');
@@ -365,7 +365,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(({ part }) =>
       </div>
     </div>
   );
-});
+};
 
 // ── User message ──
 

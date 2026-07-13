@@ -22,7 +22,8 @@ import { CompactionTracker, type CompactionEvent, estimateTokens, type Compactio
 import { invoke } from '../bridge';
 import { StreamingToolExecutor } from './streaming-executor';
 import { execState } from './execution-state';
-import { type SubAgentPart, lastTextPart, findToolPart } from '../ui/message-model';
+import { createSubAgentSink } from './subagent-sink';
+import type { SubAgentPart } from '../ui/message-model';
 import { bumpChat, useChatStore } from '../ui/chat-store';
 
 // Shared types — also used internally by this file
@@ -1532,57 +1533,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     }
     bumpChat();
 
-    // Build eventSink: converts AgentEvent → SubAgentPart.parts mutations
-    const subSink = (ev: AgentEvent) => {
-      switch (ev.kind) {
-        case EventKind.Reasoning:
-          if (ev.text) { subPart.parts.push({ type: 'reasoning', text: ev.text }); bumpChat(); }
-          break;
-        case EventKind.Text:
-          if (ev.text) {
-            const last = lastTextPart(subPart.parts);
-            if (last && !last.finalised) { last.text += ev.text; }
-            else { subPart.parts.push({ type: 'text', text: ev.text, finalised: false }); }
-            bumpChat();
-          }
-          break;
-        case EventKind.Message:
-          { const lt = lastTextPart(subPart.parts); if (lt) lt.finalised = true; bumpChat(); }
-          break;
-        case EventKind.ToolDispatch:
-          if (ev.tool) {
-            subPart.parts.push({
-              type: 'tool', toolId: ev.tool.id, name: ev.tool.name,
-              args: ev.tool.args || '', label: ev.tool.name,
-              readOnly: ev.tool.read_only ?? false,
-              status: ev.tool.partial ? 'pending' : 'running',
-            });
-            bumpChat();
-            if (onProgress) onProgress(`🔧 ${ev.tool.name}\n`);
-          }
-          break;
-        case EventKind.ToolProgress:
-          if (ev.tool) {
-            const tp = findToolPart(subPart.parts, ev.tool.id);
-            if (tp) { tp.status = 'running'; if (ev.tool.output) tp.output = (tp.output || '') + ev.tool.output; }
-            bumpChat();
-          }
-          break;
-        case EventKind.ToolResult:
-          if (ev.tool) {
-            const tr = findToolPart(subPart.parts, ev.tool.id);
-            if (tr) {
-              tr.status = ev.tool.err ? 'error' : 'done';
-              if (!ev.tool.err) tr.output = ev.tool.output;
-              if (ev.tool.err) tr.err = ev.tool.err;
-              tr.truncated = ev.tool.truncated;
-            }
-            bumpChat();
-          }
-          break;
-        // TurnStarted, Usage, SessionChanged, Notice — ignore for sub-agent rendering
-      }
-    };
+    const subSink = createSubAgentSink({ subPart, bump: bumpChat, onProgress });
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(
