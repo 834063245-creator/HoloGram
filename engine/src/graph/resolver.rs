@@ -8,6 +8,10 @@ use super::{Edge, Graph};
 /// Common source-code file extensions (lowercase).
 /// Used to distinguish file-extension segments from symbol-name segments
 /// when building short-name and stem indexes.
+///
+/// Synced manually with engine/src/adapter/tree_sitter.rs extensions +
+/// GRAMMAR_LOADER.supported_extensions(). If a new language grammar is added,
+/// add its extension here as well.
 const CODE_EXTENSIONS: &[&str] = &[
     "rs", "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
     "go", "java", "kt", "kts", "cs", "cpp", "hpp", "cc", "hh", "cxx", "hxx",
@@ -144,19 +148,27 @@ impl CrossFileResolver {
             graph.remove_edge(eid);
         }
 
-        if unresolved_count > 0 {
-            tracing::warn!(
-                resolved,
-                unresolved = unresolved_count,
-                orphans = orphan_edges.len(),
-                "cross-file resolver: {} edges unresolved, {} orphans cleaned",
-                unresolved_count,
-                orphan_edges.len()
-            );
+        if unresolved_count > 0 || !orphan_edges.is_empty() {
+            if unresolved_count > 0 {
+                tracing::warn!(
+                    resolved,
+                    unresolved = unresolved_count,
+                    orphans = orphan_edges.len(),
+                    "cross-file resolver: {} edges unresolved, {} orphans cleaned",
+                    unresolved_count,
+                    orphan_edges.len()
+                );
+            } else {
+                tracing::debug!(
+                    resolved,
+                    orphans = orphan_edges.len(),
+                    "cross-file resolver: {} orphans cleaned (stale edges from prior runs)",
+                    orphan_edges.len()
+                );
+            }
         }
 
-        resolved += orphan_edges.len(); // count cleaned edges too
-        resolved
+        resolved // NOTE: orphans are NOT counted as resolved — they're just stale cleanup
     }
 }
 
@@ -394,9 +406,9 @@ mod tests {
         g.add_edge(Edge::new("e1", "a", "nonexistent", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // Orphan edge should be cleaned
+        // Orphan edge should be cleaned, but NOT counted as resolved
         assert!(g.get_edge("e1").is_none(), "orphan edge should be removed");
-        assert!(resolved > 0, "orphan cleanup counts as resolution");
+        assert_eq!(resolved, 0, "orphan cleanup does not count as resolved");
     }
 
     #[test]
@@ -409,7 +421,7 @@ mod tests {
         let resolved = CrossFileResolver::resolve(&mut g);
         // Should be cleaned as orphan
         assert!(g.get_edge("e1").is_none());
-        assert!(resolved > 0);
+        assert_eq!(resolved, 0, "unresolved edge → orphan, not resolved");
     }
 
     // ── NEW: file-stem resolution for import edges ──
@@ -558,6 +570,6 @@ mod tests {
         // Edge should be cleaned as orphan (can't resolve stdlib)
         assert!(g.get_edge("e1").is_none());
         assert!(g.get_edge("e1_resolved").is_none());
-        assert!(resolved > 0, "orphan cleanup counts");
+        assert_eq!(resolved, 0, "stdlib import not resolved → orphan, not counted");
     }
 }
