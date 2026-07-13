@@ -254,7 +254,6 @@ impl PermissionContext {
     }
 
     /// Log an audit entry for an allow decision.
-    #[allow(dead_code)]
     pub fn audit_allow(&self, tool_name: &str, target: &str) {
         self.audit_logger.log(&crate::audit::AuditEntry {
             timestamp: crate::audit::now_iso(),
@@ -338,6 +337,8 @@ pub fn has_permission_to_use_tool(
             // Tool self-determined this is safe (e.g. project-internal read
             // after all deny/safety/ask checks passed). Allow immediately
             // — don't fall through to default Ask.
+            let target = tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            ctx.audit_allow(tool_name, &target);
             return PermissionDecision::Allow;
         }
         PermissionResult::Passthrough => {
@@ -352,12 +353,16 @@ pub fn has_permission_to_use_tool(
     {
         let rules = ctx.rules.read().unwrap();
         if rules.find_allow(tool_name, None).is_some() {
+            let target = tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            ctx.audit_allow(tool_name, &target);
             return PermissionDecision::Allow;
         }
     }
 
     // ⑥ No rule matched, tool has no opinion (Passthrough) → Allow
     // ponytail: Passthrough means "I checked, it's fine." Don't ask.
+    let target = tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    ctx.audit_allow(tool_name, &target);
     PermissionDecision::Allow
 }
 

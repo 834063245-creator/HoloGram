@@ -1,8 +1,102 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
+use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::Path;
 
+/// Root of hologram.constraints.yaml.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ConstraintsFile {
+    #[serde(default)]
+    constraints: ConstraintsBlock,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ConstraintsBlock {
+    #[serde(default)]
+    routing: RoutingBlock,
+    #[serde(default)]
+    thresholds: ThresholdsBlock,
+    #[serde(default)]
+    allowlist: AllowlistBlock,
+    #[serde(default)]
+    denylist: DenylistBlock,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+struct RoutingBlock {
+    #[serde(default = "default_true")]
+    l5_irreversible: bool,
+    #[serde(default = "default_true")]
+    l4_silent: bool,
+    #[serde(default = "default_true")]
+    l3_delayed: bool,
+    #[serde(default = "default_true")]
+    l2_blast: bool,
+    #[serde(default)]
+    l1_visible: bool,
+}
+
+impl Default for RoutingBlock {
+    fn default() -> Self {
+        Self {
+            l5_irreversible: true,
+            l4_silent: true,
+            l3_delayed: true,
+            l2_blast: true,
+            l1_visible: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+struct ThresholdsBlock {
+    #[serde(default = "default_blast_radius")]
+    blast_radius_max: usize,
+    #[serde(default)]
+    cross_community_tolerance: usize,
+    #[serde(default)]
+    api_signature_tolerance: usize,
+    #[serde(default)]
+    l4_penetration_tolerance: usize,
+    #[serde(default)]
+    l4_threshold_change_tolerance: usize,
+}
+
+impl Default for ThresholdsBlock {
+    fn default() -> Self {
+        Self {
+            blast_radius_max: 50,
+            cross_community_tolerance: 0,
+            api_signature_tolerance: 0,
+            l4_penetration_tolerance: 0,
+            l4_threshold_change_tolerance: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[allow(dead_code)]
+struct AllowlistBlock {
+    #[serde(default)]
+    modules: Vec<String>,
+    #[serde(default)]
+    files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct DenylistBlock {
+    #[serde(default)]
+    keywords: Vec<String>,
+}
+
+fn default_true() -> bool { true }
+fn default_blast_radius() -> usize { 50 }
+
+/// Runtime constraint config — flattened from the YAML structure.
 pub struct ConstraintConfig {
     pub routing_l4: bool,
     pub routing_l3: bool,
@@ -19,6 +113,60 @@ impl ConstraintConfig {
             blast_radius_max: 50,
             allowlist_files: vec![],
             denylist_keywords: vec!["DROP ".into(), "DELETE ".into(), "rm -rf".into(), "shutdown".into()],
+        }
+    }
+
+    /// Load from a hologram.constraints.yaml file.
+    /// Falls back to defaults() if the file is missing or malformed.
+    pub fn from_yaml_file(project_root: &Path) -> Self {
+        let yaml_path = project_root.join("hologram.constraints.yaml");
+        match std::fs::read_to_string(&yaml_path) {
+            Ok(contents) => {
+                match serde_yaml::from_str::<ConstraintsFile>(&contents) {
+                    Ok(f) => Self::from_parsed(&f),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %yaml_path.display(),
+                            err = %e,
+                            "[constraints] yaml parse failed — using defaults"
+                        );
+                        Self::defaults()
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::debug!(
+                    "[constraints] no {} found — using defaults",
+                    yaml_path.display()
+                );
+                Self::defaults()
+            }
+        }
+    }
+
+    fn from_parsed(f: &ConstraintsFile) -> Self {
+        let allowlist_files: Vec<String> = f.constraints
+            .allowlist
+            .files
+            .iter()
+            .map(|g| format!("file:{}", g))
+            .collect();
+
+        let mut denylist = f.constraints.denylist.keywords.clone();
+        // Always keep the built-in dangerous keywords
+        for kw in &["DROP ", "DELETE ", "rm -rf", "shutdown"] {
+            if !denylist.iter().any(|d| d.contains(kw)) {
+                denylist.push(kw.to_string());
+            }
+        }
+
+        Self {
+            routing_l4: f.constraints.routing.l4_silent,
+            routing_l3: f.constraints.routing.l3_delayed,
+            routing_l2: f.constraints.routing.l2_blast,
+            blast_radius_max: f.constraints.thresholds.blast_radius_max,
+            allowlist_files,
+            denylist_keywords: denylist,
         }
     }
 
@@ -149,5 +297,53 @@ mod tests {
         ];
         let r = check_constraints(&signals, &c);
         assert_eq!(r["violation_count"], 1, "denylist keyword should override level toggle");
+    }
+
+    #[test]
+    fn test_from_yaml_parses_real_config() {
+        // Simulate the real hologram.constraints.yaml structure
+        let yaml = r#"
+constraints:
+  routing:
+    l4_silent: true
+    l3_delayed: false
+    l2_blast: true
+  thresholds:
+    blast_radius_max: 20
+  allowlist:
+    files:
+      - "docs/*.md"
+      - "tests/*.py"
+  denylist:
+    keywords:
+      - "password"
+      - "secret"
+      - "token"
+"#;
+        let f: ConstraintsFile = serde_yaml::from_str(yaml).unwrap();
+        let c = ConstraintConfig::from_parsed(&f);
+        assert!(c.routing_l4);
+        assert!(!c.routing_l3);
+        assert!(c.routing_l2);
+        assert_eq!(c.blast_radius_max, 20);
+        assert_eq!(c.allowlist_files, vec!["file:docs/*.md", "file:tests/*.py"]);
+        assert!(c.denylist_keywords.contains(&"password".to_string()));
+        assert!(c.denylist_keywords.contains(&"secret".to_string()));
+        // Built-in dangerous keywords always appended
+        assert!(c.denylist_keywords.contains(&"rm -rf".to_string()));
+    }
+
+    #[test]
+    fn test_from_yaml_empty_defaults() {
+        let yaml = "constraints: {}";
+        let f: ConstraintsFile = serde_yaml::from_str(yaml).unwrap();
+        let c = ConstraintConfig::from_parsed(&f);
+        // Should have all defaults
+        assert!(c.routing_l4);
+        assert!(c.routing_l3);
+        assert!(c.routing_l2);
+        assert_eq!(c.blast_radius_max, 50);
+        assert!(c.allowlist_files.is_empty());
+        assert!(!c.denylist_keywords.is_empty()); // built-in keywords
     }
 }

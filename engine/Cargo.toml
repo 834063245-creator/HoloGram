@@ -51,6 +51,7 @@ tree-sitter-erlang = "0.19"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+serde_yaml = "0.9"
 notify = "6"
 mimalloc = "0.1"
 usearch = "2"
