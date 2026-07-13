@@ -20,6 +20,7 @@ import {
   type ToolCallPart,
   type TextPart,
   type NoticeMessage,
+  type SubAgentPart,
 } from '../message-model';
 import { useChatStore, bumpChat } from '../chat-store';
 
@@ -275,6 +276,97 @@ const ToolSummary: React.FC<{
     );
   };
 
+// ── Sub-agent block ──
+// Renders a nested collapsible group for sub-agent output inside an assistant message.
+// Auto-expands while running; auto-collapses on done (respects user manual toggle).
+
+const SubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(({ part }) => {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const userOverridden = useRef(false);
+  const [expanded, setExpanded] = useState(part.status === 'running');
+
+  useEffect(() => {
+    if (part.status === 'running' && !userOverridden.current) setExpanded(true);
+    else if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
+  }, [part.status]);
+
+  const toggle = () => { userOverridden.current = true; setExpanded(v => !v); };
+
+  const statusIcon = part.status === 'running' ? svgIcon('dot')
+    : part.status === 'done' ? svgIcon('check-circle')
+    : svgIcon('close');
+  const statusLabel = part.status === 'running' ? '执行中'
+    : part.status === 'done' ? '完成'
+    : '失败';
+  const statusCls = part.status === 'done' ? 'badge-ok'
+    : part.status === 'error' ? 'badge-fail'
+    : 'badge-running';
+
+  return (
+    <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
+      <div className="msg-sub-agent-header" onClick={toggle}>
+        <span dangerouslySetInnerHTML={{
+          __html: expanded ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+        }} />
+        <span className="msg-sub-agent-icon" dangerouslySetInnerHTML={{ __html: statusIcon }} />
+        <span className="msg-sub-agent-desc">{part.description}</span>
+        <span className={`msg-tool-badge ${statusCls}`}>{statusLabel}</span>
+      </div>
+      <div ref={bodyRef} className={`msg-sub-agent-body${expanded ? ' open' : ''}`}>
+        {part.parts.map((p, pi) => {
+          if (p.type === 'reasoning') {
+            return (
+              <div key={pi} className="msg-reasoning msg-reasoning-open">
+                <div className="msg-reasoning-toggle">
+                  <span dangerouslySetInnerHTML={{ __html: svgIcon('chevron-down') }} />
+                  收起思考
+                </div>
+                <div className="msg-reasoning-content msg-reasoning-open">
+                  <pre>{p.text}</pre>
+                </div>
+              </div>
+            );
+          }
+          if (p.type === 'text') {
+            return (
+              <div key={pi} className="msg-text msg-markdown">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    code: MarkdownCode,
+                    pre: ({ children }) => <>{children}</>,
+                  }}
+                >
+                  {p.text}
+                </ReactMarkdown>
+              </div>
+            );
+          }
+          if (p.type === 'tool') {
+            const icon = p.status === 'running' ? svgIcon('dot')
+              : p.status === 'done' ? svgIcon('check-circle')
+              : p.status === 'error' ? svgIcon('close')
+              : svgIcon('dot');
+            return (
+              <div key={pi} className="msg-tool-card tool-done" style={{ margin: '4px 0', padding: '4px 8px', fontSize: 'calc(11px*var(--font-scale))' }}>
+                <span dangerouslySetInnerHTML={{ __html: icon }} style={{ marginRight: 4 }} />
+                <span className="tool-name" style={{ color: 'var(--text-dim)' }}>{p.name}</span>
+              </div>
+            );
+          }
+          return null;
+        })}
+        {part.parts.length === 0 && part.status === 'running' && (
+          <div className="msg-text" style={{ color: 'var(--text-faint)', padding: '8px 0' }}>分析中…</div>
+        )}
+        {part.parts.length === 0 && part.status === 'error' && (
+          <div className="msg-text" style={{ color: 'var(--anomaly-red)', padding: '8px 0' }}>执行失败</div>
+        )}
+      </div>
+    </div>
+  );
+});
+
 // ── User message ──
 
 const UserBubble: React.FC<{
@@ -338,7 +430,8 @@ const AssistantBubble: React.FC<{
   const groups: Array<
     { kind: 'tool'; tools: ToolCallPart[] } |
     { kind: 'reasoning'; text: string; idx: number } |
-    { kind: 'text'; text: string; finalised: boolean; idx: number }
+    { kind: 'text'; text: string; finalised: boolean; idx: number } |
+    { kind: 'subagent'; part: SubAgentPart }
   > = [];
   let i = 0;
   while (i < msg.parts.length) {
@@ -358,6 +451,9 @@ const AssistantBubble: React.FC<{
     } else if (p.type === 'text') {
       const tp = p as TextPart;
       groups.push({ kind: 'text', text: tp.text, finalised: tp.finalised, idx: i });
+      i++;
+    } else if (p.type === 'subagent') {
+      groups.push({ kind: 'subagent', part: p as SubAgentPart });
       i++;
     } else {
       i++;
@@ -424,6 +520,11 @@ const AssistantBubble: React.FC<{
             />
           );
         }
+
+        if (g.kind === 'subagent') {
+          return <SubAgentBlock key={gi} part={g.part} />;
+        }
+
         return null;
       })}
       <span className="msg-actions">

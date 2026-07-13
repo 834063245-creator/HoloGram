@@ -64,7 +64,17 @@ export interface ToolCallPart {
   truncated?: boolean;
 }
 
-export type AssistantPart = ReasonPart | TextPart | ToolCallPart;
+/** Sub-agent nested block — rendered as a collapsible group inside an assistant message. */
+export interface SubAgentPart {
+  type: 'subagent';
+  agentId: string;
+  description: string;
+  status: 'running' | 'done' | 'error';
+  /** Ordered parts produced by this sub-agent. */
+  parts: AssistantPart[];
+}
+
+export type AssistantPart = ReasonPart | TextPart | ToolCallPart | SubAgentPart;
 
 // ── Messages ─────────────────────────────────────────────
 

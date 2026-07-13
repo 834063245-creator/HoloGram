@@ -1086,9 +1086,6 @@ export function createSubAgentTool(
 
             // G2: async spawn via pool — fire-and-forget, parent doesn't block
       if (pool) {
-        // Emit spawn event for UI
-        bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode, toolAllowlist });
-
         // ⚡ R4 fix: capture coordinator abort signal so stopAll() actually stops sub-agents
         let subSignal: AbortSignal | undefined;
         const spawnId = pool.spawn(
@@ -1099,7 +1096,6 @@ export function createSubAgentTool(
           },
           (chunk) => {
             onProgress?.(chunk);
-            bus.emit('agent:sub-progress', { parentToolId: callId, text: chunk });
           },
           callId,
         );
@@ -1113,28 +1109,7 @@ export function createSubAgentTool(
       }
 
       // Fallback: synchronous spawn (legacy behavior, no pool)
-      const startTime = performance.now();
-      let stepCount = 0;
-      bus.emit('agent:sub-spawn', { id: callId, description, prompt, mode, toolAllowlist });
-
-      const wrappedProgress = (chunk: string) => {
-        stepCount++;
-        onProgress?.(chunk);
-        bus.emit('agent:sub-progress', { parentToolId: callId, text: chunk });
-      };
-
-      const result = await spawner(description, prompt, wrappedProgress, mode, toolAllowlist ?? null);
-      const elapsed = Math.round(performance.now() - startTime);
-
-      bus.emit('agent:sub-done', {
-        parentToolId: callId,
-        summary: {
-          description,
-          steps: stepCount,
-          elapsedMs: elapsed,
-          hasError: !!result.err,
-        },
-      });
+      const result = await spawner(description, prompt, onProgress, mode, toolAllowlist ?? null);
 
       if (result.err) return `[子 Agent 错误] ${result.err}`;
       return result.text;

@@ -642,17 +642,6 @@ export class Workspace {
 
       // Wire pool completion → UI events + task-notification injection
       pool.setOnDone((handle: SubAgentHandle, callId?: string) => {
-        // Emit UI done event
-        bus.emit('agent:sub-done', {
-          parentToolId: callId || handle.id,
-          summary: {
-            description: handle.description,
-            steps: 0,
-            elapsedMs: Date.now() - handle.startedAt,
-            hasError: handle.status === 'failed',
-          },
-        });
-
         // Inject result back into parent as task-notification
         const resultText = handle.status === 'failed'
           ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
