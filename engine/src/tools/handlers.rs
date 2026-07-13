@@ -252,6 +252,8 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
         // ── Step 1: Aggregate graph structure scores per file ──
         // Walk all nodes, group by file (from location), sum fan + coupling penalty.
         let mut file_scores: std::collections::HashMap<String, (f64, usize)> = std::collections::HashMap::new();
+        let mut file_l3: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut file_l4: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for node in idx.nodes_iter() {
             let loc = match node.location.as_ref() {
                 Some(l) => l.replace('\\', "/"),
@@ -268,6 +270,19 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
             let incoming: Vec<_> = incoming_raw.into_iter()
                 .filter(|(src, _, _, _)| !idx.is_edge_synthesized(src, &node.id))
                 .collect();
+
+            // Count L3/L4 edges for this node
+            let l3 = out.iter().filter(|(_, _, d, _)| *d == 3).count()
+                   + incoming.iter().filter(|(_, _, d, _)| *d == 3).count();
+            let l4 = out.iter().filter(|(_, _, d, _)| *d == 4).count()
+                   + incoming.iter().filter(|(_, _, d, _)| *d == 4).count();
+            if l3 > 0 {
+                *file_l3.entry(file_path.clone()).or_default() += l3;
+            }
+            if l4 > 0 {
+                *file_l4.entry(file_path.clone()).or_default() += l4;
+            }
+
             let fan = (out.len() + incoming.len()) as f64;
             let coupling_penalty: f64 = out.iter()
                 .map(|(_, _, depth, _)| (*depth as f64).powi(2))
@@ -280,7 +295,7 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
                 .or_insert((node_score, 1));
         }
 
-        // ── Step 2: Score and format (structure only; L3/L4 via trace_dataflow on demand) ──
+        // ── Step 2: Score and format ──
         let mut scored: Vec<(f64, String, usize)> = Vec::new();
         for (file, (struct_score, node_count)) in &file_scores {
             let avg_struct = struct_score / (*node_count as f64).max(1.0);
@@ -291,22 +306,20 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
 
         let result: Vec<serde_json::Value> = scored.iter().map(|(score, file, nodes)| {
             let short_name = file.rsplit('/').next().unwrap_or(file).to_string();
+            let l3 = file_l3.get(file).copied().unwrap_or(0);
+            let l4 = file_l4.get(file).copied().unwrap_or(0);
             json!({
                 "module": short_name,
                 "file": file,
                 "fragility_score": format!("{:.1}", score),
-                "l3_edges": 0,
-                "l4_edges": 0,
+                "l3_edges": l3,
+                "l4_edges": l4,
                 "node_count": nodes,
-                "_score_breakdown": format!("struct={:.1}", score),
+                "_score_breakdown": format!("struct={:.1} l3={} l4={}", score, l3, l4),
             })
         }).collect();
 
-        json!({
-            "fragile_modules": result,
-            "limit": limit,
-            "_note": "L3 (shared data) and L4 (temporal) edges are available on-demand via trace_dataflow — they are not precomputed here.",
-        })
+        json!({"fragile_modules": result, "limit": limit})
     }))
 }
 
@@ -334,12 +347,45 @@ pub(crate) fn handler_cycle(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_thread_conflicts(_args: &Value) -> ToolResponse {
-    ToolResponse::Success(json!({
-        "resources": {},
-        "total_shared_resources": 0,
-        "unlocked_concurrent_writes": 0,
-        "unlocked_resources": [],
-        "_note": "Global concurrent-access scan is not precomputed. Use trace_dataflow on specific files to get per-variable concurrency analysis with exact read/write tracking.",
+    ToolResponse::Success(with_store(|idx| {
+        use crate::graph::EdgeKind;
+        // Scan all Writes / Shares edges for shared resources with multiple writers.
+        // A "resource" is any graph node that has ≥2 distinct sources writing/shares-ing it.
+        let mut writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for (source, targets) in idx.edges_iter() {
+            for (target, kind, _, _) in targets {
+                if matches!(kind, EdgeKind::Writes | EdgeKind::Shares) {
+                    writers.entry(target)
+                        .or_default()
+                        .push(source.clone());
+                }
+            }
+        }
+
+        let mut resources: Vec<serde_json::Value> = Vec::new();
+        let mut total_unlocked = 0usize;
+        for (resource, sources) in &writers {
+            // Dedup sources (same function may write multiple times)
+            let mut unique: Vec<&str> = sources.iter().map(|s| s.as_str()).collect();
+            unique.sort();
+            unique.dedup();
+            if unique.len() >= 2 {
+                total_unlocked += 1;
+                resources.push(json!({
+                    "resource": resource,
+                    "writers": unique,
+                    "writer_count": unique.len(),
+                }));
+            }
+        }
+        resources.sort_by(|a, b| b["writer_count"].as_u64().cmp(&a["writer_count"].as_u64()));
+
+        json!({
+            "total_shared_resources": writers.len(),
+            "unlocked_concurrent_writes": total_unlocked,
+            "unlocked_resources": resources,
+            "_note": "Scans Writes/Shares edges for resources accessed by ≥2 functions. For per-variable temporal analysis use trace_dataflow.",
+        })
     }))
 }
 
