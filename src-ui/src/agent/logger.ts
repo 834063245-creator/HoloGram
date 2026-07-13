@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // HoloGram UI logger — structured NDJSON to .hologram/logs/ui.log
-// Zero external dependencies. Writes via Tauri invoke('log_append').
+// Zero external dependencies. Writes via rpc('log_append').
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

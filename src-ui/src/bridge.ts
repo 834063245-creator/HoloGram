@@ -82,7 +82,9 @@ export async function rpc<T = any>(method: string, params?: Record<string, unkno
   const normalized: Record<string, unknown> = {};
   if (params) {
     for (const [key, value] of Object.entries(params)) {
-      const snakeKey = key.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+      // ponytail: only insert _ between lowercase→uppercase transitions.
+      // Avoids breaking acronyms (URI → uri, not u_r_i).
+      const snakeKey = key.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
       normalized[snakeKey] = value;
     }
   }
