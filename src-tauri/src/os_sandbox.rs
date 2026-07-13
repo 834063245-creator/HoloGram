@@ -145,29 +145,30 @@ pub fn status() -> SandboxStatus {
     { SandboxStatus::Unavailable }
 }
 
-/// Spawn a shell command in the sandbox. Handles shell selection and applies
-/// all active sandbox layers (Windows: JobObject+AppContainer; macOS: sandbox-exec;
-/// Linux: bubblewrap). Falls back to plain spawn when OS sandbox is unavailable
-/// (spec §6.7 — permission engine is the hard floor).
-pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
-    #[cfg(windows)]
-    {
-        let shell = imp::detect_shell();
-        // If bash is cached, try it first; fall back to Cmd on spawn failure.
-        if let imp::Shell::Bash(ref bash_path) = shell {
-            let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
-            match imp::spawn_job_only(&cmdline, cwd, true) {
-                Ok(child) => return Ok(child),
-                Err(e) => {
-                    eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
-                    // Fall through to Cmd path below
+    /// Spawn a shell command in the sandbox. Handles shell selection and applies
+    /// all active sandbox layers (Windows: JobObject + AppContainer when available;
+    /// macOS: sandbox-exec; Linux: bubblewrap). Falls back to JobObject-only when
+    /// AppContainer SID cannot be initialised (spec §6.7 — permission engine is
+    /// the hard floor).
+    pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
+        #[cfg(windows)]
+        {
+            let shell = imp::detect_shell();
+            // If bash is cached, try it first; fall back to Cmd on spawn failure.
+            if let imp::Shell::Bash(ref bash_path) = shell {
+                let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
+                match imp::spawn_sandboxed(&cmdline, cwd, true) {
+                    Ok(child) => return Ok(child),
+                    Err(e) => {
+                        eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
+                        // Fall through to Cmd path below
+                    }
                 }
             }
+            // Cmd path
+            let cmdline = format!("cmd /s /c \"{}\"", command);
+            imp::spawn_sandboxed(&cmdline, cwd, true)
         }
-        // Cmd path
-        let cmdline = format!("cmd /s /c \"{}\"", command);
-        imp::spawn_job_only(&cmdline, cwd, true)
-    }
     #[cfg(target_os = "macos")]
     {
         match mac::spawn(command, cwd) {
@@ -512,8 +513,7 @@ pub mod imp {
     /// hangs, or returns non-zero exit code — we fall back to Cmd.
     /// ponytail: this catches broken Git Bash installs where bash.exe exists
     /// on disk but msys-2.0.dll or other deps fail to init.
-    /// Uses spawn_job_only (Job Object, no AppContainer) — reflects the actual
-    /// execution environment used by spawn_shell.
+    /// Uses spawn_job_only — smoke test doesn't need AppContainer isolation.
     fn smoke_test_bash(bash_path: &str) -> bool {
         let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
         match spawn_job_only(&cmdline, ".", false) {

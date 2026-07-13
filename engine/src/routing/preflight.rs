@@ -184,7 +184,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         .unwrap_or(l4_count);
 
     let signals = SignalGenerator::new().generate(before, after, changed_files, effective_l4, cycle_count, df_counts.as_ref());
-    let config = ConstraintConfig::defaults();
+    let config = ConstraintConfig::from_yaml_file(&PathBuf::from(_project_root));
     let constraint_result = check_constraints(&signals, &config);
     let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();
     let summary = generate_summary(changed_files, &violations, l4_count, cycle_count);
