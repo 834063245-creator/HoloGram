@@ -72,3 +72,19 @@ export async function listen<T = any>(
 export function isMockMode(): boolean {
   return !IS_TAURI;
 }
+
+/**
+ * RPC — single entry point for all application commands.
+ * Replaces individual invoke('cmd_name', params) calls.
+ * Auto-converts camelCase param keys to snake_case for the Rust backend.
+ */
+export async function rpc<T = any>(method: string, params?: Record<string, unknown>): Promise<T> {
+  const normalized: Record<string, unknown> = {};
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      const snakeKey = key.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+      normalized[snakeKey] = value;
+    }
+  }
+  return invoke('rpc', { method, params: normalized });
+}

@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { invoke } from '../../bridge';
+import { rpc } from '../../bridge';
 import { bus } from '../events';
 import { shell } from '../app-shell';
 import { iconHtml } from '../icons';
@@ -71,7 +71,7 @@ function TimelineApp({ projectPath, toggleRef }: { projectPath: string | null; t
     setLoading(true);
     try {
       const json = await Promise.race([
-        invoke<string>('hologram_call', { tool: 'project_timeline', args: { limit: 60 } }),
+        rpc<string>('hologram_call', { tool: 'project_timeline', args: { limit: 60 } }),
         new Promise<string>((_, r) => setTimeout(() => r(new Error('timeout')), 8000)),
       ]);
       setEvents((JSON.parse(json) as TimelineData).events || []);

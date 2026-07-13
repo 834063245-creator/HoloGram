@@ -4,7 +4,7 @@
 // File Translator — LLM-powered code-to-human translation panel
 // Integrated into FileViewer. Caches results in .hologram/translations/
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { loadSettings, getActiveProvider, type ProviderSettings } from '../settings';
 import { createAnthropicProvider } from '../provider/anthropic';
 import { createOpenAIProvider } from '../provider/openai';
@@ -373,7 +373,7 @@ export class FileTranslator {
     // 4. Check cache
     const cachePath = `.hologram/translations/${hash}.json`;
     try {
-      const raw = await invoke<string>('read_file_content', { filePath: cachePath });
+      const raw = await rpc<string>('read_file_content', { filePath: cachePath });
       const cached: CacheData = JSON.parse(raw);
       if (cached.lines && Array.isArray(cached.lines)) {
         const aligned = this.alignLines(cached.lines, codeLines);
@@ -413,7 +413,7 @@ export class FileTranslator {
         lines: aligned,
       };
       try {
-        await invoke('write_file_content', {
+        await rpc('write_file_content', {
           filePath: cachePath,
           content: JSON.stringify(cacheData),
         });

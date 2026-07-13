@@ -3,7 +3,7 @@
 // DataflowPanel — trace browser. Agent produces traces → dataflow_save → panel renders.
 // Quick explore (engine-powered) available as secondary fallback.
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
 
@@ -137,7 +137,7 @@ export class DataflowPanel {
 
   private async loadTraceList(): Promise<void> {
     try {
-      const raw = await invoke<string>('dataflow_query', { list: true });
+      const raw = await rpc<string>('dataflow_query', { list: true });
       const data = JSON.parse(raw);
       this.traces = data.traces || [];
       this.tracesLoaded = true;
@@ -229,7 +229,7 @@ export class DataflowPanel {
 
   private async deleteTrace(traceId: string): Promise<void> {
     try {
-      await invoke<string>('dataflow_delete', { traceId });
+      await rpc<string>('dataflow_delete', { traceId });
       // Remove from local cache
       this.traces = this.traces.filter(t => t.traceId !== traceId);
       if (this.selectedTraceId === traceId) {
@@ -252,7 +252,7 @@ export class DataflowPanel {
     this.renderTraceList();
 
     try {
-      const raw = await invoke<string>('dataflow_query', { traceId });
+      const raw = await rpc<string>('dataflow_query', { traceId });
       this.selectedTrace = JSON.parse(raw);
       this.renderTraceContent(this.selectedTrace);
     } catch (e: any) {
@@ -524,14 +524,14 @@ export class DataflowPanel {
     this.right.innerHTML = `<div class="df-loading">探索中…</div>`;
 
     try {
-      let raw = await invoke<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols: [], includeSource: true } });
+      let raw = await rpc<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols: [], includeSource: true } });
       let explore = JSON.parse(raw);
 
       if ((explore.meta?.totalSymbolsFound || 0) === 0 && this.onParseQuery) {
         try {
           const symbols = await this.onParseQuery(query);
           if (symbols.length > 0) {
-            raw = await invoke<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols, includeSource: true } });
+            raw = await rpc<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols, includeSource: true } });
             explore = JSON.parse(raw);
           }
         } catch { /* Agent unavailable */ }
@@ -546,7 +546,7 @@ export class DataflowPanel {
       const files = Array.from(fileSet);
       if (files.length > 0) {
         try {
-          const dfRaw = await invoke<string>('hologram_call', { tool: 'trace_dataflow', args: { files } });
+          const dfRaw = await rpc<string>('hologram_call', { tool: 'trace_dataflow', args: { files } });
           dfResult = JSON.parse(dfRaw);
         } catch { /* optional */ }
       }

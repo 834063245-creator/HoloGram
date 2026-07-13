@@ -4,7 +4,7 @@
 // Hotspots Panel — 复发热点检测（P6）
 // 同一文件多次触发 L4 警报 → 星图着色升级
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
@@ -100,7 +100,7 @@ export class HotspotsPanel {
     this.loading = true;
 
     try {
-      const json = await invoke<string>('hologram_hotspots', {
+      const json = await rpc<string>('hologram_hotspots', {
         days: 30,
         min_count: 2,
       });

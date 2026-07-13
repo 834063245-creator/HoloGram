@@ -15,7 +15,7 @@ import { bus } from './events';
 import { cancelPendingApprovals } from '../agent/permission';
 import { execState } from '../agent/execution-state';
 import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import type { ToolSchema } from '../provider/types';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
@@ -1503,7 +1503,7 @@ export class ChatPanel {
     const CACHE_TTL = 30000;
     if (!this.atFileCache || Date.now() - this.atFileCache.ts > CACHE_TTL) {
       try {
-        const data = await invoke<string>('glob', {
+        const data = await rpc<string>('glob', {
           pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',
           path: useChatStore.getState().projectPath || '.',
         });

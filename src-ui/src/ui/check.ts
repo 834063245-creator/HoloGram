@@ -123,8 +123,8 @@ export class CheckPanel {
 
   private async loadHistory(): Promise<void> {
     try {
-      const { invoke } = await import('../bridge');
-      const json = await invoke<string>('hologram_call', {
+      const { rpc } = await import('../bridge');
+      const json = await rpc<string>('hologram_call', {
         tool: 'project_timeline',
         args: { limit: 80 },
       });
@@ -541,8 +541,8 @@ export class CheckPanel {
 
   async loadAndRenderGate(path: string): Promise<void> {
     try {
-      const { invoke } = await import('../bridge');
-      const json = await invoke<string>('hologram_gate_check', { path, moduleFile: null });
+      const { rpc } = await import('../bridge');
+      const json = await rpc<string>('hologram_gate_check', { path, moduleFile: null });
       const data = JSON.parse(json) as GateData;
       this.renderGate(data);
     } catch (err) {

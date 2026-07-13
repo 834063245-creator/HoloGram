@@ -5,7 +5,7 @@
 // CC ref: utils/sessionStorage.ts
 
 import type { Message } from '../provider/types';
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 
 export interface SessionMeta {
   id: string;
@@ -30,7 +30,7 @@ export class SessionStore {
   /** Ensure the sessions directory exists. */
   async ensureDir(): Promise<void> {
     try {
-      await invoke('create_directory', { path: this.baseDir });
+      await rpc('create_directory', { path: this.baseDir });
     } catch {
       // Directory may already exist — safe to continue
     }
@@ -54,7 +54,7 @@ export class SessionStore {
     }
     const content = lines.join('\n') + '\n';
     try {
-      await invoke('write_file_content', {
+      await rpc('write_file_content', {
         filePath: this.filePath(sessionId),
         content,
       });
@@ -66,7 +66,7 @@ export class SessionStore {
   /** Load session messages from JSONL file. */
   async load(sessionId: string): Promise<Message[]> {
     try {
-      const raw = await invoke<string>('read_file_content', {
+      const raw = await rpc<string>('read_file_content', {
         filePath: this.filePath(sessionId),
       });
       const messages: Message[] = [];
@@ -96,7 +96,7 @@ export class SessionStore {
   async listSessions(): Promise<SessionMeta[]> {
     await this.ensureDir();
     try {
-      const files = await invoke<string[]>('list_directory_flat', { path: this.baseDir });
+      const files = await rpc<string[]>('list_directory_flat', { path: this.baseDir });
       const metas: SessionMeta[] = [];
       for (const file of (files || [])) {
         if (!file.endsWith('.jsonl')) continue;
@@ -127,7 +127,7 @@ export class SessionStore {
   /** Delete a session file. */
   async delete(sessionId: string): Promise<void> {
     try {
-      await invoke('delete_file_or_dir', { filePath: this.filePath(sessionId) });
+      await rpc('delete_file_or_dir', { filePath: this.filePath(sessionId) });
     } catch {
       // Best-effort
     }

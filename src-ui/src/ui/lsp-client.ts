@@ -10,7 +10,7 @@
 //   Notifications (didOpen/didChange) → fire-and-forget.
 //   Server-push notifications (publishDiagnostics) → lsp-message event.
 
-import { invoke, listen } from '../bridge';
+import { rpc, listen } from '../bridge';
 import type { editor, languages, IRange, IDisposable } from 'monaco-editor';
 
 let lspSessions = new Map<string, number>(); // language -> session_id
@@ -125,7 +125,7 @@ const lspWarned = new Set<string>();
 export async function startLsp(language: string, rootUri: string): Promise<number | null> {
   if (lspSessions.has(language)) return lspSessions.get(language)!;
   try {
-    const sid = await invoke<number>('lsp_start', { language, rootUri });
+    const sid = await rpc<number>('lsp_start', { language, rootUri });
     lspSessions.set(language, sid);
     return sid;
   } catch {
@@ -139,7 +139,7 @@ export async function startLsp(language: string, rootUri: string): Promise<numbe
 
 /** Notify LSP that a document is open. Call when opening a file in Monaco. */
 export function didOpen(sessionId: number, uri: string, language: string, text: string): void {
-  invoke('lsp_request', {
+  rpc('lsp_request', {
     sessionId,
     method: 'textDocument/didOpen',
     params: {
@@ -150,7 +150,7 @@ export function didOpen(sessionId: number, uri: string, language: string, text: 
 
 /** Notify LSP that a document changed. Call from model.onDidChangeContent. */
 export function didChange(sessionId: number, uri: string, text: string): void {
-  invoke('lsp_request', {
+  rpc('lsp_request', {
     sessionId,
     method: 'textDocument/didChange',
     params: {
@@ -162,7 +162,7 @@ export function didChange(sessionId: number, uri: string, text: string): void {
 
 /** Notify LSP that a document is closed. Call when tab is closed. */
 export function didClose(sessionId: number, uri: string): void {
-  invoke('lsp_request', {
+  rpc('lsp_request', {
     sessionId,
     method: 'textDocument/didClose',
     params: { textDocument: { uri } },
@@ -180,7 +180,7 @@ export async function stopAllLsp(): Promise<void> {
   definitionProviders = [];
   referenceProviders = [];
   for (const [language, sid] of lspSessions) {
-    await invoke('lsp_stop', { sessionId: sid }).catch(() => {});
+    await rpc('lsp_stop', { sessionId: sid }).catch(() => {});
   }
   lspSessions.clear();
 }
@@ -195,7 +195,7 @@ export function registerCompletionProvider(
     triggerCharacters: ['.', ':', '"', '\'', '/', ' '],
     provideCompletionItems: async (model, position) => {
       try {
-        const result = await invoke<any>('lsp_request', {
+        const result = await rpc<any>('lsp_request', {
           sessionId,
           method: 'textDocument/completion',
           params: {
@@ -231,7 +231,7 @@ export function registerHoverProvider(
   const provider = monaco.languages.registerHoverProvider(lang, {
     provideHover: async (model, position) => {
       try {
-        const result = await invoke<any>('lsp_request', {
+        const result = await rpc<any>('lsp_request', {
           sessionId,
           method: 'textDocument/hover',
           params: {
@@ -278,7 +278,7 @@ export function registerDefinitionProvider(
   const provider = monaco.languages.registerDefinitionProvider(lang, {
     provideDefinition: async (model, position) => {
       try {
-        const result = await invoke<any>('lsp_request', {
+        const result = await rpc<any>('lsp_request', {
           sessionId,
           method: 'textDocument/definition',
           params: {
@@ -321,7 +321,7 @@ export function registerReferencesProvider(
   const provider = monaco.languages.registerReferenceProvider(lang, {
     provideReferences: async (model, position, _context) => {
       try {
-        const result = await invoke<any>('lsp_request', {
+        const result = await rpc<any>('lsp_request', {
           sessionId,
           method: 'textDocument/references',
           params: {

@@ -110,12 +110,12 @@ export function saveSettings(s: AppSettings): void {
 /** 将 API Key 持久化到系统加密存储（DPAPI on Windows），防止 localStorage 被清丢 Key。 */
 export async function persistSecrets(s: AppSettings): Promise<void> {
   try {
-    const { invoke } = await import('./bridge');
+    const { rpc } = await import('./bridge');
     for (const p of s.providers) {
       const key = (p.apiKey || '').trim();
       if (key) {
         try {
-          await invoke('credential_store', { provider: p.name, key });
+          await rpc('credential_store', { provider: p.name, key });
         } catch { /* non-critical — localStorage still has the key */ }
       }
     }
@@ -125,20 +125,20 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
 /** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。removeProvider 时调用。 */
 export async function removeSecret(providerName: string): Promise<void> {
   try {
-    const { invoke } = await import('./bridge');
-    await invoke('credential_delete', { provider: providerName });
+    const { rpc } = await import('./bridge');
+    await rpc('credential_delete', { provider: providerName });
   } catch { /* no encrypted store or key not found — non-critical */ }
 }
 
 /** 从系统加密存储恢复 API Key（仅填充 apiKey 为空的 provider）。loadSettings 后用。 */
 export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
   try {
-    const { invoke } = await import('./bridge');
+    const { rpc } = await import('./bridge');
     let changed = false;
     for (const p of s.providers) {
       if (!p.apiKey || p.apiKey.trim() === '') {
         try {
-          const stored: string | null = await invoke('credential_get', { provider: p.name });
+          const stored: string | null = await rpc('credential_get', { provider: p.name });
           if (stored && stored.trim()) {
             p.apiKey = stored.trim();
             changed = true;
