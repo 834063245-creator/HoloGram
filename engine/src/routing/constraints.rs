@@ -79,7 +79,6 @@ impl Default for ThresholdsBlock {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-#[allow(dead_code)]
 struct AllowlistBlock {
     #[serde(default)]
     modules: Vec<String>,
@@ -145,10 +144,13 @@ impl ConstraintConfig {
     }
 
     fn from_parsed(f: &ConstraintsFile) -> Self {
-        let allowlist_files: Vec<String> = f.constraints
+        // Merge modules and files from allowlist into a single patterns list.
+        // Both use substring matching in check_constraints.
+        let mut allowlist_files: Vec<String> = f.constraints
             .allowlist
             .files
             .clone();
+        allowlist_files.extend(f.constraints.allowlist.modules.iter().cloned());
 
         let mut denylist = f.constraints.denylist.keywords.clone();
         // Always keep the built-in dangerous keywords
