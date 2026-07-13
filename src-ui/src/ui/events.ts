@@ -8,20 +8,66 @@ import { dbg } from './debug';
 //          Future: detail card → Agent (agent:send)
 //          Future: graph → check (graph:selection-changed)
 
+// ponytail: event map — add new events here. The overloads on emit/on
+// will enforce the argument types at compile time. String literals outside
+// this map still work but produce any-typed args.
+
+// ── Known event signatures ──
+
+export interface BusEvents {
+  'agent:event':        [ev: import('../agent/agent-types').AgentEvent];
+  'agent:diag':         [d: { text: string; ready: boolean }];
+  'agent:progress':     [data: { step: number; toolName: string }];
+  'agent:tool-started': [data: { toolName: string; args: Record<string, unknown> }];
+  'agent:tool-done':    [data: { toolName: string; args: Record<string, unknown>; output: string }];
+  'agent:thinking':     [data: { text?: string }];
+  'agent:focus-changed':[data: { nodeNames: string[]; toolName: string }];
+  'agent:permission-request': [data: { id: string; toolName: string; description: string; args: Record<string, unknown> }];
+  'agent:permission-response': [data: { id: string; allow: boolean; remember: boolean }];
+  'agent:shell-output': [data: { sessionId?: number; output: string; done?: boolean }];
+
+  'graph:node-clicked': [data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }];
+  'graph:path-selected': [data: { from: { name: string; id: string; type: string }; to: { name: string; id: string; type: string }; pathLength: number; pathNames: string[] }];
+  'graph:region-selected': [data: { nodeNames: string[]; nodeCount: number }];
+  'graph:show-prompt':  [data: { title: string; question: string }];
+
+  'chat:turn-done':     [];
+
+  'prompt:ask':         [data: { id: string; question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean; callback: (answer: string[] | null) => void }];
+
+  'check:result':       [data: { passed: boolean; violations: number }];
+  'check:history':      [data: { checkData: any; timestamp: string }];
+
+  'highlight:file':     [filePath: string];
+  'highlight:folder':   [filePath: string];
+  'highlight:clear':    [];
+  'navigate:file':      [filePath: string];
+
+  'timeline:refresh':   [];
+  'lang:changed':       [data: { lang: string }];
+
+  'git:committed':      [data: { message: string; output: string }];
+  'git:pushed':         [];
+  'git:pulled':         [];
+}
+
 type Handler = (...args: any[]) => void;
 
 class EventBus {
   private handlers = new Map<string, Handler[]>();
 
+  // ── Typed overloads for known events ──
+  on<E extends keyof BusEvents>(event: E, handler: (...args: BusEvents[E]) => void): void;
+  // ── Fallback for string literals not in the map ──
+  on(event: string, handler: Handler): void;
   on(event: string, handler: Handler): void {
     const list = this.handlers.get(event);
-    if (list) {
-      list.push(handler);
-    } else {
-      this.handlers.set(event, [handler]);
-    }
+    if (list) { list.push(handler); }
+    else { this.handlers.set(event, [handler]); }
   }
 
+  off<E extends keyof BusEvents>(event: E, handler: (...args: BusEvents[E]) => void): void;
+  off(event: string, handler: Handler): void;
   off(event: string, handler: Handler): void {
     const list = this.handlers.get(event);
     if (list) {
@@ -30,6 +76,8 @@ class EventBus {
     }
   }
 
+  emit<E extends keyof BusEvents>(event: E, ...args: BusEvents[E]): void;
+  emit(event: string, ...args: any[]): void;
   emit(event: string, ...args: any[]): void {
     dbg('EventBus.emit', event, ...args);
     const list = this.handlers.get(event);
@@ -40,42 +88,18 @@ class EventBus {
     }
   }
 
-  /** Remove all handlers for a given event (or all events if no arg). */
   clear(event?: string): void {
-    if (event) {
-      this.handlers.delete(event);
-    } else {
-      this.handlers.clear();
-    }
+    if (event) { this.handlers.delete(event); }
+    else { this.handlers.clear(); }
   }
 }
 
 export const bus = new EventBus();
 
-// Known event names (bus — 纯通知，不改变状态):
-//   agent:tool-started ({ toolName: string, args: Record<string, unknown> }) — agent started a tool call
-//   agent:tool-done ({ toolName: string, args: Record<string, unknown>, output: string }) — agent tool call completed
-//   agent:thinking ({ text?: string }) — agent is reasoning / thinking
-//   agent:focus-changed ({ nodeNames: string[], toolName: string }) — agent's focus nodes changed
-//   agent:diag ({ text: string, ready: boolean }) — agent diagnostic info
-//   agent:shell-output ({ sessionId?: number; output: string; done?: boolean }) — terminal shell output
-//   agent:permission-request ({ id: string, toolName: string, description: string, args: Record<string, unknown> }) — Agent 工具需要用户批准
-//   agent:permission-response ({ id: string, allow: boolean, remember: boolean }) — 用户对权限请求的回应
-//   graph:node-clicked ({ nodeName: string, nodeType: string, nodeId: string, degree: number, location: string }) — 点击节点
-//   graph:path-selected ({ from: {name,id,type}, to: {name,id,type}, pathLength: number, pathNames: string[] }) — Shift+点击路径
-//   graph:region-selected ({ nodeNames: string[], nodeCount: number }) — 拖拽框选区域
-//   graph:show-prompt ({ title: string, question: string }) — 图交互完成，弹出确认条
-//   chat:turn-done ({}) — Agent 对话轮次完成
-//   check:history ({ checkData: CheckResult, timestamp: string }) — 简报历史回看请求
-//   timeline:refresh () — 时间线需要刷新
-//   git:committed ({ message: string, output: string }) / git:pushed / git:pulled — Git 操作结果
-//   lang:changed ({ lang: string }) — 界面语言变更
+// ponytail: event registry moved to BusEvents interface above —
+// single source of truth, enforced by emit/on overloads.
 //
-// 已迁移到 AppShell（命令式，非 bus）:
-//   shell.notifyPanelChanged()    ← 原 bus.emit('panel:toggle')
-//   shell.navigateToNode(name)    ← 原 bus.emit('navigate:node', name)
-//   shell.navigateToFile(path)    ← 原 bus.emit('navigate:file', path)
-//   shell.highlightFile(path)     ← 原 bus.emit('highlight:file', path)
-//   shell.highlightFolder(path)   ← 原 bus.emit('highlight:folder', path)
-//   shell.clearHighlight()        ← 原 bus.emit('highlight:clear')
-//   shell.queryAgent(question)    ← 原 bus.emit('agent:query', question)
+// AppShell commands (not bus):
+//   shell.notifyPanelChanged() / navigateToNode() / navigateToFile()
+//   shell.highlightFile() / highlightFolder() / clearHighlight()
+//   shell.queryAgent()

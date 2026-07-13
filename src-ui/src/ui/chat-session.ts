@@ -40,11 +40,8 @@ export interface ChatSession {
 /** Agent handles keyed by session id — non-serializable, stays module-level. */
 const agentHandles = new Map<number, ChatAgentHandle>();
 
-/** DOM elements for legacy session rendering — stays module-level. */
-const sessionMessages = new Map<number, HTMLElement[]>();
-
-/** Turn pairs for retract/resend — HTMLElement refs prevent Zustand serialization. */
-let turnPairs: Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> = [];
+/** Turn pairs for retract/resend — userBubble/assistantBubble always null now (React renders messages). */
+let turnPairs: Array<{ userText: string; userBubble: null; assistantBubble: null; sessionIndex: number }> = [];
 
 /** Agent factory function — set once by ChatPanel. */
 let agentFactory: (() => Promise<ChatAgentHandle | null>) | null = null;
@@ -75,21 +72,19 @@ export function syncActiveSessionTokens(count: number): void {
   const s = sessions[activeIdx];
   if (s) useChatStore.getState().setSessionTokens(s.id, count);
 }
-export function getSessionMessages(): Map<number, HTMLElement[]> { return sessionMessages; }
 export function getSessionMessageModels(): Map<number, ChatMessage[]> {
   // ponytail: adapter — callers expect Map, store uses Record
   const models = useChatStore.getState().sessionMessageModels;
   return new Map(Object.entries(models).map(([k, v]) => [Number(k), v]));
 }
-export function getTurnPairs(): Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }> { return turnPairs; }
-export function setTurnPairs(pairs: Array<{ userText: string; userBubble: HTMLElement | null; assistantBubble: HTMLElement | null; sessionIndex: number }>): void { turnPairs = pairs; }
+export function getTurnPairs(): typeof turnPairs { return turnPairs; }
+export function setTurnPairs(pairs: typeof turnPairs): void { turnPairs = pairs; }
 export function getAgentFactory(): (() => Promise<ChatAgentHandle | null>) | null { return agentFactory; }
 export function setAgentFactory(fn: (() => Promise<ChatAgentHandle | null>) | null): void { agentFactory = fn; }
 
 /** Full reset — used by setAgent in ChatPanel when switching workspace. */
 export function resetSessionState(ag: ChatAgentHandle): void {
-  sessionMessages.clear();
-  const id = useChatStore.getState().nextSessionId;
+const id = useChatStore.getState().nextSessionId;
   const label = '会话 1';
   agentHandles.clear();
   agentHandles.set(id, ag);
@@ -247,8 +242,7 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   }
   if (idx === st.activeIdx && ctx.getRunning()) ctx.abort();
   const s = st.sessions[idx];
-  sessionMessages.delete(s.id);
-  agentHandles.delete(s.id);
+agentHandles.delete(s.id);
   st.removeSession(s.id);
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
@@ -265,8 +259,7 @@ export function closeSession(ctx: SessionContext, idx: number): void {
       ctx.updateFooter();
     }).catch((e: unknown) => {
       console.error('[chat] closeSession save failed:', e);
-      sessionMessages.set(s.id, []); // restore
-      ctx.addNotice('关闭会话失败', 'error');
+ctx.addNotice('关闭会话失败', 'error');
     });
   } else {
     const newSessions = [...st.sessions];
@@ -547,8 +540,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
 
   const label = data.label || '已恢复的会话';
   // Replace ALL sessions — switch workspace = fresh start
-  sessionMessages.clear();
-  agentHandles.clear();
+agentHandles.clear();
   agentHandles.set(data.id, newAgent);
   useChatStore.setState({
     sessions: [{ id: data.id, label }],

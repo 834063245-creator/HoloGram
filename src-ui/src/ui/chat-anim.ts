@@ -16,7 +16,7 @@ import { execState } from '../agent/execution-state';
 export interface AnimContext {
   // DOM elements
   panel: HTMLElement;
-  inputArea: HTMLTextAreaElement;
+  requestFocus: () => void;
 
   // Mutable mode state
   getMode: () => 'pill' | 'input' | 'panel' | 'hud';
@@ -235,7 +235,7 @@ export function morphToMode(ctx: AnimContext, mode: 'input' | 'panel', cls: stri
     });
   }
 
-  setTimeout(() => ctx.inputArea.focus(), 380);
+  setTimeout(() => ctx.requestFocus(), 380);
   shell.notifyPanelChanged();
 }
 
@@ -393,5 +393,5 @@ export function restoreFromHud(ctx: AnimContext): void {
     },
   });
   crossfadeContent(ctx, fromOpacities, 0.3);
-  setTimeout(() => ctx.inputArea.focus(), 150);
+  setTimeout(() => ctx.requestFocus(), 150);
 }
