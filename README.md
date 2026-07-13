@@ -488,5 +488,5 @@ HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)
 
 <p align="center">
   <br/>
-  <em>Built with ❤️ and Rust. One person, ~35,000 lines of code, 215+ source files, 26 languages, 400+ tests.</em>
+  <em>Built with ❤️ and Rust. One person, ~76,000 lines of code, 215 source files, 26 languages, 400+ tests.</em>
 </p>
