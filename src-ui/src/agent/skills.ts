@@ -6,7 +6,7 @@
 // Hot-loading: skills are reloaded on every Skill tool call — install a skill
 // mid-session and it's immediately available, no restart needed.
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import type { Tool } from './tool';
 
 export interface SkillDef {
@@ -44,7 +44,7 @@ async function loadSkills(projectPath: string): Promise<SkillDef[]> {
   const dir = `${root}/.hologram/skills`;
   let entries: Array<{ name: string; type: string; path: string }>;
   try {
-    entries = await invoke<Array<{ name: string; type: string; path: string }>>(
+    entries = await rpc<Array<{ name: string; type: string; path: string }>>(
       'list_directory_flat', { path: dir, isAgent: false },
     );
   } catch {
@@ -56,7 +56,7 @@ async function loadSkills(projectPath: string): Promise<SkillDef[]> {
     if (e.type !== 'dir') continue;
     const fp = `${e.path.replace(/\\/g, '/')}/SKILL.md`;
     try {
-      const raw = await invoke<string>('read_file_content', { filePath: fp, isAgent: false });
+      const raw = await rpc<string>('read_file_content', { filePath: fp, isAgent: false });
       const { meta, body } = parseSkillMd(raw);
       if (!body) continue;
       skills.push({

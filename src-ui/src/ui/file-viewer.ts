@@ -5,7 +5,7 @@
 // 可从简报/详情卡片/聊天/时间轴中点击文件名呼出
 // 支持拖拽移动、调整大小、多标签页、Ctrl+S 保存
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { iconHtml, iconSvg } from './icons';
 import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
@@ -770,7 +770,7 @@ export class FileViewer {
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
 
     try {
-      const raw = await invoke<string>('read_file_content', { filePath: filePath });
+      const raw = await rpc<string>('read_file_content', { filePath: filePath });
       // ponytail: read_file_content returns cat -n format. Strip before passing to Monaco/LSP.
       const content = stripLineNumbers(raw);
 
@@ -864,9 +864,9 @@ export class FileViewer {
 
     const content = tab.model.getValue();
     try {
-      await invoke('write_file_content', { filePath: tab.filePath, content });
+      await rpc('write_file_content', { filePath: tab.filePath, content });
       // Record timeline event (fire-and-forget)
-      invoke('hologram_record_event', {
+      rpc('hologram_record_event', {
         eventType: 'file_changed',
         file: tab.filePath,
         summary: `保存: ${tab.fileName}`,
@@ -1036,7 +1036,7 @@ export class FileViewer {
   private async renderImagePreview(filePath: string): Promise<void> {
     this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">加载中...</div>`;
     try {
-      const b64 = await invoke<string>('read_file_base64', { filePath });
+      const b64 = await rpc<string>('read_file_base64', { filePath });
       const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
       const mimeMap: Record<string, string> = {
         jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',

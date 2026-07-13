@@ -8,7 +8,7 @@
 import './ui/react/base.css';
 import './ui/react/chat.css';
 import './ui/react/panels.css';
-import { invoke, listen, isMockMode } from './bridge';
+import { rpc, listen, isMockMode } from './bridge';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
@@ -252,7 +252,7 @@ async function switchWorkspace(
     chatPanel.setProjectPath(folder);
     chatPanel.autoRestoreLastSession(folder).catch(() => {});
     ws.runCheck(checkPanel);
-    await invoke('workspace_start_watcher').catch(() => {});
+    await rpc('workspace_start_watcher').catch(() => {});
   } finally {
     _switching = false;
   }
@@ -343,7 +343,7 @@ async function setupPlaceholderAgent(): Promise<void> {
   if (workspace) return;
   // Clear backend workspace binding — prevents stale PermissionContext from
   // previous project leaking into the placeholder's read_file / list_directory calls.
-  await invoke('workspace_activate', { path: '' }).catch(() => {});
+  await rpc('workspace_activate', { path: '' }).catch(() => {});
   const ws = Workspace.placeholder();
   ws.onStatusChange = (msg) => { pushStatus(msg); };
   try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
@@ -384,7 +384,7 @@ async function init(): Promise<void> {
       suggestions: Array<{ rule: string; behavior: string }>;
     };
     chatPanel.showPermissionCard(p.tool, p.reason, p.path).then((result) => {
-      invoke('permission_ask_response', {
+      rpc('permission_ask_response', {
         requestId: p.requestId,
         allow: result.allow,
         remember: result.remember || undefined,
@@ -431,7 +431,7 @@ async function init(): Promise<void> {
   setupIcons();
 
   // ── Sandbox health check ──
-  invoke<string>('sandbox_status').then(raw => {
+  rpc<string>('sandbox_status').then(raw => {
     const s = JSON.parse(raw);
     if (s.degraded) {
       console.warn(`[sandbox] ⚠ DEGRADED: ${s.reason} — permission engine is the only barrier`);
@@ -612,7 +612,7 @@ async function init(): Promise<void> {
       if (!workspace?.path) { statusText.textContent = '请先打开项目'; return; }
       try {
         const beforePath = `${workspace.path}/hologram_before.json`;
-        const diffJson = await invoke<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
+        const diffJson = await rpc<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
         const diff = JSON.parse(diffJson);
         if (diff.is_empty) {
           statusText.textContent = '已创建变更基线 · 再次分析后即可比较差异';
@@ -757,7 +757,7 @@ async function init(): Promise<void> {
     statusText.textContent = '重新分析中…';
     try {
       console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
-      const raw = await invoke<string>('analyze_and_load', { path: ws.path, force: true });
+      const raw = await rpc<string>('analyze_and_load', { path: ws.path, force: true });
       console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
       // Guard against workspace switch during the long await.
       if (workspace !== ws) {
@@ -841,7 +841,7 @@ async function init(): Promise<void> {
   try {
     let graph: any;
     try {
-      const json = await invoke<string>('load_graph_json');
+      const json = await rpc<string>('load_graph_json');
       graph = JSON.parse(json);
     } catch {
       // No cached graph

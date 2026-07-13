@@ -441,6 +441,14 @@ nebula/  package.json  tsconfig.json  README.md`,
 
 // ── Mock invoke dispatcher ──
 export function mockInvoke(cmd: string, args?: Record<string, unknown>): string {
+  // RPC — all commands now route through invoke("rpc", {method, params}).
+  // Extract method + params and dispatch to existing handlers.
+  if (cmd === 'rpc') {
+    const method = args?.method as string;
+    const params = args?.params as Record<string, unknown>;
+    return mockInvoke(method, params);
+  }
+
   // Commands that return the full graph
   if (cmd === 'analyze_and_load' || cmd === 'load_graph_json') {
     return JSON.stringify(buildMockGraph());

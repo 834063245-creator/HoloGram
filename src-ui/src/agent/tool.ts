@@ -6,7 +6,7 @@
 import type { Provider, ToolSchema } from '../provider/types';
 import { ChunkType } from '../provider/types';
 import { bus } from '../ui/events';
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 
 // ---- Tool 接口 ----
 
@@ -111,7 +111,7 @@ export type ToolExecutor = (toolName: string, args: Record<string, unknown>, onP
  *  旧名 `_agent` 因 Tauri 默认 camelCase 重命名永远匹配不上 → is_agent 恒 false
  *  → agent 文件操作被沙箱静默硬拒且不弹 Ask（见 tests/agent-exec.test.ts 守护）。 */
 export async function agentInvoke<T = string>(name: string, args: Record<string, unknown>): Promise<T> {
-  return invoke<T>(name, { ...args, isAgent: true });
+  return rpc<T>(name, { ...args, isAgent: true });
 }
 
 // ═══════════════════════════════════════════════════════

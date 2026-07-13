@@ -40,8 +40,8 @@ function buildEntry(
 
 async function appendToFile(path: string, content: string): Promise<void> {
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('log_append', { path, content });
+    const { rpc } = await import('../bridge');
+    await rpc('log_append', { path, content });
   } catch {
     // Log write failure is silently ignored — logging must not break the app
   }

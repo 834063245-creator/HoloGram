@@ -11,7 +11,7 @@
 //
 // All calls degrade gracefully — if data is unavailable, nothing is injected.
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { getDiagnosticsForFile } from '../ui/lsp-client';
 import type { LspDiagnostic } from '../ui/lsp-client';
 import {
@@ -37,7 +37,7 @@ export async function refreshGitStatus(projectPath: string): Promise<void> {
   const cached = getGitCache();
   if (cached && (now - getGitCacheTs()) < GIT_CACHE_MS) return;
   try {
-    const json = await invoke<string>('git_status', { path: projectPath });
+    const json = await rpc<string>('git_status', { path: projectPath });
     const raw = JSON.parse(json);
     setGitCache({
       branch: raw.branch || '',
@@ -59,7 +59,7 @@ export async function refreshGitBlame(projectPath: string, filePath: string): Pr
   if (hasBlameEntry(filePath)) return;
   if (!filePath.match(/\.(ts|tsx|js|jsx|rs|py|go|java|rb|cs|kt|swift|php|lua|css|html)$/)) return;
   try {
-    const raw = await invoke<string>('git_blame', { path: projectPath, file: filePath });
+    const raw = await rpc<string>('git_blame', { path: projectPath, file: filePath });
     const lines = raw.split('\n');
     const authors = new Set<string>();
     let latestAuthor = '';
@@ -116,7 +116,7 @@ export async function refreshTimeline(projectPath: string): Promise<void> {
   const cached = getTimelineCache();
   if (cached.length > 0 && (now - getTimelineCacheTs()) < TIMELINE_CACHE_MS) return;
   try {
-    const json = await invoke<string>('hologram_call', { tool: 'project_timeline', args: { path: projectPath, limit: 8 } });
+    const json = await rpc<string>('hologram_call', { tool: 'project_timeline', args: { path: projectPath, limit: 8 } });
     const raw = JSON.parse(json);
     setTimelineCache((raw.events || []).slice(0, 8), now);
   } catch { /* silent */ }

@@ -14,7 +14,7 @@ import {
   createAssistantMessage,
   createNoticeMessage,
 } from './message-model';
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import {
   useChatStore,
   bumpChat,
@@ -351,7 +351,7 @@ function restoreMessages(ctx: SessionContext): void {
 
 /** Read a session file and parse as JSON. Handles read_file_content's line numbers. */
 async function readSessionJSON(filePath: string): Promise<any> {
-  const raw = await invoke<string>('read_file_content', { filePath });
+  const raw = await rpc<string>('read_file_content', { filePath });
   return JSON.parse(stripLineNumbers(raw));
 }
 
@@ -374,7 +374,7 @@ function trackerFile(projectPath: string): string {
 /** Scan sessions directory for the highest numeric session ID. Returns 0 if no sessions found. */
 export async function scanMaxSessionId(projectPath: string): Promise<number> {
   try {
-    const entries = await invoke<any[]>('list_directory', { path: sessionsDir(projectPath) });
+    const entries = await rpc<any[]>('list_directory', { path: sessionsDir(projectPath) });
     if (!Array.isArray(entries)) return 0;
     let maxId = 0;
     for (const e of entries) {
@@ -419,7 +419,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
 
   // 2) Async disk write (atomic: tmp → rename)
   try {
-    await invoke('write_file_content', {
+    await rpc('write_file_content', {
       filePath: sessionFile(projectPath, sMeta.id),
       content: json,
     });
@@ -428,7 +428,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   }
 
   try {
-    await invoke('write_file_content', {
+    await rpc('write_file_content', {
       filePath: trackerFile(projectPath),
       content: JSON.stringify({ lastId: sMeta.id, nextId: useChatStore.getState().nextSessionId }),
     });
@@ -569,7 +569,7 @@ export async function listSavedSessions(ctx: SessionContext, projectPath: string
   const dirPath = sessionsDir(projectPath);
   let entries: any[];
   try {
-    entries = await invoke<any[]>('list_directory', { path: dirPath });
+    entries = await rpc<any[]>('list_directory', { path: dirPath });
   } catch (e) {
     console.error('[chat] listSavedSessions: list_directory failed', e);
     return [];
@@ -683,7 +683,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
 export async function deleteSessionFile(ctx: SessionContext, projectPath: string, sessionId: number): Promise<void> {
   // Overwrite with deleted marker — listSavedSessions filters these out
   try {
-    await invoke('write_file_content', {
+    await rpc('write_file_content', {
       filePath: sessionFile(projectPath, sessionId),
       content: JSON.stringify({ id: sessionId, deleted: true, label: '', messages: [], savedAt: '' }),
     });
@@ -922,7 +922,7 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     });
     if (filePath) {
-      await invoke('write_file_content', { path: filePath, content: md });
+      await rpc('write_file_content', { path: filePath, content: md });
       ctx.addNotice(`会话已导出: ${filePath}`, 'info');
     }
   } catch {

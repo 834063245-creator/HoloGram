@@ -27,6 +27,7 @@ mod workspace;
 mod utils;
 mod commands;
 mod confined_fs;
+mod rpc;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -80,11 +81,11 @@ fn main() {
                     jobs.clear();
                 }
                 // Stop MCP server
-                if let Ok(mut mgr) = commands::tools::MCP_MANAGER.try_lock() {
+                if let Ok(mut mgr) = commands::external::MCP_MANAGER.try_lock() {
                     mgr.stop();
                 }
                 // Stop Unity
-                let _ = commands::tools::UNITY_MANAGER.stop();
+                let _ = commands::external::UNITY_MANAGER.stop();
                 // Remove AppContainer ACEs from project directories
                 os_sandbox::cleanup_acls();
                 // Hard exit to ensure no zombie processes
@@ -92,127 +93,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            // ── Hologram dispatch — ALL engine tools route through hologram_call ──
-            commands::tools::hologram_tools_list,
-            commands::tools::hologram_call,
-            // ── Legacy commands (custom logic not yet in engine ToolRegistry) ──
-            commands::hologram::hologram_run_check,
-            commands::hologram::hologram_hotspots,
-            commands::hologram::hologram_record_event,
-            commands::hologram::hologram_gate_check,
-            // ── Dataflow commands ──
-            commands::dataflow::dataflow_save,
-            commands::dataflow::dataflow_query,
-            commands::dataflow::dataflow_delete,
-            commands::hologram::get_full_graph,
-            // ── Workspace commands ──
-            commands::workspace::workspace_activate,
-            commands::workspace::workspace_deactivate,
-            commands::workspace::workspace_start_watcher,
-            // ── Agent isolation ──
-            commands::tools::agent_isolation_create,
-            commands::tools::agent_isolation_diff,
-            commands::tools::agent_isolation_merge,
-            commands::tools::agent_isolation_discard,
-            commands::tools::agent_isolation_status,
-            commands::tools::agent_isolation_prune,
-            // ── File operations ──
-            commands::tools::list_directory,
-            commands::tools::list_directory_flat,
-            commands::tools::read_file_content,
-            commands::tools::read_memory_batch,
-            commands::tools::read_file_base64,
-            commands::tools::write_file_content,
-            commands::tools::log_append,
-            commands::tools::create_directory,
-            commands::tools::delete_file_or_dir,
-            commands::tools::rename_file_or_dir,
-            commands::tools::move_file,
-            commands::tools::open_in_explorer,
-            commands::tools::read_constraints,
-            commands::tools::write_constraints,
-            commands::tools::get_global_memory_dir,
-            // ── Search & editing ──
-            commands::tools::search_code,
-            commands::tools::search_content,
-            commands::tools::glob,
-            commands::tools::edit_file,
-            // ── Web ──
-            commands::tools::web_fetch,
-            commands::tools::web_search,
-            // ── Terminal ──
-            commands::tools::exec_command,
-            commands::tools::bash_output,
-            commands::tools::bash_kill,
-            // ── Git commands ──
-            commands::tools::git_tree_status,
-            commands::tools::git_status,
-            commands::tools::git_diff_unstaged,
-            commands::tools::git_diff_staged,
-            commands::tools::git_stage,
-            commands::tools::git_unstage,
-            commands::tools::git_stage_all,
-            commands::tools::git_commit,
-            commands::tools::git_push,
-            commands::tools::git_pull,
-            commands::tools::git_fetch,
-            commands::tools::git_log,
-            commands::tools::git_init,
-            commands::tools::git_list_branches,
-            commands::tools::git_checkout,
-            commands::tools::git_create_branch,
-            commands::tools::git_stash_push,
-            commands::tools::git_stash_pop,
-            commands::tools::git_stash_list,
-            commands::tools::git_discard,
-            commands::tools::git_blame,
-            commands::tools::git_file_at_head,
-            commands::tools::git_show,
-            // ── Graph loading ──
-            commands::tools::load_graph_json,
-            commands::tools::load_binary_graph,
-            commands::tools::analyze_and_load,
-            commands::tools::analyze_in_background,
-            // ── MCP ──
-            commands::tools::start_mcp_server,
-            commands::tools::stop_mcp_server,
-            // ── Unity ──
-            commands::tools::start_unity,
-            commands::tools::stop_unity,
-            commands::tools::unity_status,
-            // ── Sandbox ──
-            commands::tools::sandbox_status,
-            // ── Engine IPC ──
-            commands::tools::engine_get_graph,
-            commands::tools::engine_neighbors,
-            commands::tools::engine_path,
-            commands::tools::engine_search,
-            commands::tools::engine_impact,
-            // ── Credential ──
-            commands::tools::credential_store,
-            commands::tools::credential_get,
-            commands::tools::credential_delete,
-            commands::tools::credential_clear,
-            // ── AuraSDK memory ──
-            aura_memory::aura_init,
-            aura_memory::aura_recall,
-            aura_memory::aura_recall_text,
-            aura_memory::aura_store,
-            aura_memory::aura_count,
-            aura_memory::aura_maintenance,
-            aura_memory::aura_shutdown,
-            // ── PTY ──
-            pty_manager::pty_spawn,
-            pty_manager::pty_write,
-            pty_manager::pty_resize,
-            pty_manager::pty_kill,
-            // ── LSP ──
-            lsp_manager::lsp_start,
-            lsp_manager::lsp_request,
-            lsp_manager::lsp_stop,
-            // ── Permission ──
-            commands::tools::permission_ask_response,
-            // ── Root-level stubs ──
+            rpc::rpc,
             set_active_project,
             get_active_project,
         ])
@@ -229,7 +110,7 @@ fn main() {
                 eprintln!("[hologram] ⚠ SANDBOX DEGRADED: {reason} — permission engine is the only barrier");
             }
             // v4 Phase 4: server for Unity events
-            commands::tools::start_unity_event_server(app.handle().clone());
+            commands::external::start_unity_event_server(app.handle().clone());
             // Memory Bundle: spawn if exe found next to hologram
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_path.parent() {

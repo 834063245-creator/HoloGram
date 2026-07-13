@@ -4,7 +4,7 @@
 // AuraSDK TypeScript bindings — SDR semantic recall via Tauri FFI bridge.
 // Underlying engine: aura.dll (https://github.com/teolex2020/AuraSDK, MIT)
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 
 // ── Types ──
 
@@ -23,19 +23,19 @@ export interface AuraRecord {
 
 /** Initialize the Aura brain. Call once at app startup. */
 export async function auraInit(brainPath: string): Promise<{ status: string; path: string; record_count: number }> {
-  const raw = await invoke<string>('aura_init', { brainPath });
+  const raw = await rpc<string>('aura_init', { brainPath });
   return JSON.parse(raw);
 }
 
 /** Recall relevant memories as structured JSON. */
 export async function auraRecall(query: string, topK: number = 20): Promise<AuraRecord[]> {
-  const raw = await invoke<string>('aura_recall', { query, topK });
+  const raw = await rpc<string>('aura_recall', { query, topK });
   return JSON.parse(raw || '[]');
 }
 
 /** Recall as a formatted text block (for LLM prompt injection). */
 export async function auraRecallText(query: string, tokenBudget: number = 0): Promise<string> {
-  return await invoke<string>('aura_recall_text', { query, tokenBudget });
+  return await rpc<string>('aura_recall_text', { query, tokenBudget });
 }
 
 /** Store a memory. Returns the record ID. */
@@ -45,7 +45,7 @@ export async function auraStore(
   tags: string[] = [],
   namespace: string = '',
 ): Promise<string> {
-  return await invoke<string>('aura_store', {
+  return await rpc<string>('aura_store', {
     content,
     level,
     tags: tags.length > 0 ? JSON.stringify(tags) : '',
@@ -55,15 +55,15 @@ export async function auraStore(
 
 /** Get record count. */
 export async function auraCount(): Promise<number> {
-  return await invoke<number>('aura_count');
+  return await rpc<number>('aura_count');
 }
 
 /** Run a maintenance cycle. */
 export async function auraMaintenance(): Promise<void> {
-  await invoke('aura_maintenance');
+  await rpc('aura_maintenance');
 }
 
 /** Shut down and flush. Call on app exit. */
 export async function auraShutdown(): Promise<void> {
-  await invoke('aura_shutdown');
+  await rpc('aura_shutdown');
 }

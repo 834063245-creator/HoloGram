@@ -19,7 +19,7 @@ import { log } from './logger';
 import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
 import { SessionStore } from './session-store';
 import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats, maybeTune, type CompactionConfig } from './compaction-model';
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { StreamingToolExecutor } from './streaming-executor';
 import { execState } from './execution-state';
 import { createSubAgentSink } from './subagent-sink';
@@ -279,7 +279,7 @@ export class Agent {
   async loadCompactionConfig(): Promise<CompactionConfig | null> {
     if (!this._compactionConfigPath) return null;
     try {
-      const raw = await invoke<string>('read_file_content', { filePath: this._compactionConfigPath });
+      const raw = await rpc<string>('read_file_content', { filePath: this._compactionConfigPath });
       // Strip cat -n line numbers
       const stripped = raw.replace(/^\s*\d+\t/gm, '');
       return JSON.parse(stripped);
@@ -327,7 +327,7 @@ export class Agent {
     // Persist for next session
     if (this._compactionConfigPath) {
       try {
-        await invoke('write_file_content', {
+        await rpc('write_file_content', {
           filePath: this._compactionConfigPath,
           content: JSON.stringify(config, null, 2),
         });
@@ -981,7 +981,7 @@ ${goal}
       }
 
       // ponytail: permission check moved to Rust has_permission_to_use_tool()
-      // Agent calls invoke() → Tauri command → check_permission() → execute or deny
+      // Agent calls rpc() → Tauri command → check_permission() → execute or deny
       bus.emit('agent:tool-started', { toolName: call.name, args });
       bus.emit('agent:progress', {
         step: 0, // tool execution phase — step=0 means "in tool"

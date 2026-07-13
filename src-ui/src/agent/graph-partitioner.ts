@@ -6,7 +6,7 @@
 //
 // This is what CC can't do — precise partitioning based on actual dependency data.
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 
 export interface WorkPartition {
   label: string;
@@ -23,7 +23,7 @@ export async function partitionByGraph(
 ): Promise<WorkPartition[]> {
   try {
     // Step 1: Get community clusters from hologram
-    const clustersRaw = await invoke<string>('hologram_call', {
+    const clustersRaw = await rpc<string>('hologram_call', {
       tool: 'cluster_report',
       args: { maxClusters: maxPartitions },
     });

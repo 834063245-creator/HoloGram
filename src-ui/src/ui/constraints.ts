@@ -4,7 +4,7 @@
 // Constraints Panel — 约束配置 UI
 // 编辑 hologram.constraints.yaml 的图形界面
 
-import { invoke } from '../bridge';
+import { rpc } from '../bridge';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import { bus } from './events';
@@ -136,7 +136,7 @@ export class ConstraintsPanel {
     this.path = projectPath;
     this.dirty = false;
     try {
-      this.rawYaml = await invoke<string>('read_constraints', { projectPath: projectPath });
+      this.rawYaml = await rpc<string>('read_constraints', { projectPath: projectPath });
       this.data = this.parseYamlSimple(this.rawYaml);
       this.renderForm();
     } catch (err) {
@@ -388,7 +388,7 @@ export class ConstraintsPanel {
     this.readFormIntoData();
     const yaml = this.dataToYaml(this.data);
     try {
-      await invoke('write_constraints', { projectPath: this.path, content: yaml });
+      await rpc('write_constraints', { projectPath: this.path, content: yaml });
       this.rawYaml = yaml;
       this.dirty = false;
       // Flash save button green
