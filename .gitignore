@@ -82,6 +82,11 @@ prototype.html
 prototype-permission.html
 prototype/
 
+# Developer local chat panel residuals — DO NOT commit
+*_old_chat.*
+*hologramtmp*
+D:*
+
 # Demo / prototype files
 *demo*.html
 *prototype*.html

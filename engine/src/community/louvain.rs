@@ -255,14 +255,13 @@ fn build_community_result(node_ids: &[String], comm_nodes: &[Vec<usize>]) -> Vec
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Hierarchical Leiden (Leiden at each condensation level)
+// Hierarchical Louvain (plain Louvain at each condensation level)
 // ═══════════════════════════════════════════════════════════════
 
-/// Build Level 0 (Leiden) then iterative condensation (Louvain) for higher levels.
+/// Build Level 0 (Louvain) then iterative condensation for higher levels.
 ///
-/// L0 uses full Leiden (local-moving + refinement) for well-connected base communities.
-/// L1+ uses plain Louvain (local-moving only) — refinement is less critical at
-/// higher levels since super-communities are aggregates of already-refined bases.
+/// Uses plain Louvain (local-moving only) — no Leiden refinement.
+/// L1+ uses the same algorithm on condensed super-graphs.
 fn detect_hierarchical_from_base(
     base: &[Community],
     seed: u64,
@@ -476,11 +475,9 @@ pub fn detect_hierarchical_communities_from_index(
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
-/// Run both flat (Leiden-refined) and hierarchical in one pass.
+/// Run both flat and hierarchical Louvain community detection in one pass.
 ///
-/// L0 uses full Leiden (local-moving + refinement) for well-connected base communities.
-/// L1+ uses iterative Louvain condensation — refinement at higher levels is less
-/// critical since super-communities are aggregates of refined bases.
+/// Uses plain Louvain (local-moving only). No Leiden refinement step.
 pub fn detect_communities_and_hierarchy(
     graph: &Graph,
     seed: u64,

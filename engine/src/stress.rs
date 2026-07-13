@@ -688,7 +688,7 @@ mod tests {
         assert!(!report.stages.is_empty(), "should have stage timings");
         let stage_names: Vec<&str> = report.stages.iter().map(|s| s.name.as_str()).collect();
         assert!(stage_names.contains(&"Core Parse"), "should have Core Parse stage, got: {:?}", stage_names);
-        assert!(stage_names.contains(&"Community (Leiden)"), "should have Community (Leiden) stage");
+        assert!(stage_names.contains(&"Community (Louvain)"), "should have Community (Louvain) stage");
     }
 
     #[test]
