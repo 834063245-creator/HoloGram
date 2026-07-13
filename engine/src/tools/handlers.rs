@@ -1024,6 +1024,15 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             let vi_count = if vi_exists {
                 crate::vector::CodeVectorIndex::new(&vi_path).load().unwrap_or(0)
             } else { 0 };
+            let lsp = crate::lsp_manager::LspManager::lsp_status();
+            let lsp_available: Vec<&str> = lsp.iter()
+                .filter(|s| s["available"].as_bool().unwrap_or(false))
+                .map(|s| s["language_id"].as_str().unwrap_or(""))
+                .collect();
+            let lsp_missing: Vec<&str> = lsp.iter()
+                .filter(|s| !s["available"].as_bool().unwrap_or(false))
+                .map(|s| s["language_id"].as_str().unwrap_or(""))
+                .collect();
             ToolResponse::Success(json!({
                 "phase": phase,
                 "store": "MemoryIndex",
@@ -1032,6 +1041,11 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
                 "has_aux_indexes": has_aux,
                 "is_watching": is_watching,
                 "vector_index": { "exists": vi_exists, "vectors": vi_count },
+                "lsp": {
+                    "available": lsp_available,
+                    "missing": lsp_missing,
+                    "servers": lsp,
+                },
             }))
         }
         Err(_) => ToolResponse::Success(json!({"phase": "empty", "store": "none", "nodes": 0, "edges": 0})),
