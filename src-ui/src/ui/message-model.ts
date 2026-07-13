@@ -72,6 +72,8 @@ export interface SubAgentPart {
   status: 'running' | 'done' | 'error';
   /** Ordered parts produced by this sub-agent. */
   parts: AssistantPart[];
+  /** Incremented on every mutation so React can subscribe without a global bump. */
+  version: number;
 }
 
 export type AssistantPart = ReasonPart | TextPart | ToolCallPart | SubAgentPart;

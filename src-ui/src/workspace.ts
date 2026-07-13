@@ -16,6 +16,8 @@ import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { stripLineNumbers } from './ui/chat-session';
+import { bumpChat, useChatStore } from './ui/chat-store';
+import type { SubAgentPart } from './ui/message-model';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { ToolRegistry, createCodingTools, createSubAgentTool, createAgentStopAllTool, createAgentMessageTool, agentInvoke, type ToolExecutor } from './agent/tool';
@@ -610,6 +612,17 @@ export class Workspace {
     this.prov = prov;
     this.registry = registry;
     this.agent = new Agent(prov, registry, systemPrompt, {
+      onSubAgentSpawn: (part: SubAgentPart) => {
+        const msgs = useChatStore.getState().messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.role === 'assistant' && (m as any).status === 'streaming') {
+            (m as any).parts.push(part);
+            break;
+          }
+        }
+        bumpChat();
+      },
       onSessionPersisted: (_sid: string, messages: Array<{role: string; content: unknown}>) => {
         // Fire-and-forget: ingest session into memory bundle
         // If bundle is unreachable, this silently fails — nothing is blocked.
@@ -779,6 +792,17 @@ export class Workspace {
         }
         const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
         const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
+          onSubAgentSpawn: (part: SubAgentPart) => {
+            const msgs = useChatStore.getState().messages;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (m.role === 'assistant' && (m as any).status === 'streaming') {
+                (m as any).parts.push(part);
+                break;
+              }
+            }
+            bumpChat();
+          },
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,

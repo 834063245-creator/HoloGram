@@ -14,21 +14,25 @@ import { lastTextPart, findToolPart } from '../ui/message-model';
 
 export interface SubAgentSinkOpts {
   subPart: SubAgentPart;
-  /** Called after each mutation to trigger React re-render. */
+  /** Called after each mutation to trigger React re-render (typically bumpChat). */
   bump: () => void;
   /** Optional: forward tool dispatch names for parent tool-card progress. */
   onProgress?: (chunk: string) => void;
 }
 
 /** Create an AgentEvent sink that writes events into a SubAgentPart.
- *  Returns the sink function — pass it as AgentOptions.eventSink. */
+ *  Mutations are in-place; the `bump` callback triggers Zustand → React.
+ *  subPart.version is also bumped on every change for potential fine-grained
+ *  subscriptions in the future. */
 export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => void {
   const { subPart, bump, onProgress } = opts;
+
+  const tick = () => { subPart.version++; bump(); };
 
   return (ev: AgentEvent) => {
     switch (ev.kind) {
       case EventKind.Reasoning:
-        if (ev.text) { subPart.parts.push({ type: 'reasoning', text: ev.text }); bump(); }
+        if (ev.text) { subPart.parts.push({ type: 'reasoning', text: ev.text }); tick(); }
         break;
 
       case EventKind.Text:
@@ -36,12 +40,12 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
           const last = lastTextPart(subPart.parts);
           if (last && !last.finalised) { last.text += ev.text; }
           else { subPart.parts.push({ type: 'text', text: ev.text, finalised: false }); }
-          bump();
+          tick();
         }
         break;
 
       case EventKind.Message:
-        { const lt = lastTextPart(subPart.parts); if (lt) lt.finalised = true; bump(); }
+        { const lt = lastTextPart(subPart.parts); if (lt) lt.finalised = true; tick(); }
         break;
 
       case EventKind.ToolDispatch:
@@ -52,7 +56,7 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
             readOnly: ev.tool.read_only ?? false,
             status: ev.tool.partial ? 'pending' : 'running',
           });
-          bump();
+          tick();
           if (onProgress) onProgress(`🔧 ${ev.tool.name}\n`);
         }
         break;
@@ -60,8 +64,7 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
       case EventKind.ToolProgress:
         if (ev.tool) {
           const tp = findToolPart(subPart.parts, ev.tool.id);
-          if (tp) { tp.status = 'running'; if (ev.tool.output) tp.output = (tp.output || '') + ev.tool.output; }
-          bump();
+          if (tp) { tp.status = 'running'; if (ev.tool.output) tp.output = (tp.output || '') + ev.tool.output; tick(); }
         }
         break;
 
@@ -73,8 +76,8 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
             if (!ev.tool.err) tr.output = ev.tool.output;
             if (ev.tool.err) tr.err = ev.tool.err;
             tr.truncated = ev.tool.truncated;
+            tick();
           }
-          bump();
         }
         break;
 

@@ -15,6 +15,7 @@ function freshPart(overrides?: Partial<SubAgentPart>): SubAgentPart {
     description: '测试子Agent',
     status: 'running',
     parts: [],
+    version: 0,
     ...overrides,
   };
 }
@@ -154,7 +155,7 @@ describe('createSubAgentSink', () => {
     expect(bump).toHaveBeenCalledTimes(1);
   });
 
-  it('ToolProgress → accumulates multiple chunks', () => {
+  it('ToolProgress → accumulates multiple chunks (one bump per event)', () => {
     const part = freshPart();
     part.parts.push({
       type: 'tool', toolId: 't1', name: 'read_file', args: '{}',
@@ -164,11 +165,13 @@ describe('createSubAgentSink', () => {
     const sink = createSubAgentSink({ subPart: part, bump });
 
     sink({ kind: EventKind.ToolProgress, tool: { id: 't1', name: 'read_file', output: 'b', read_only: true } });
+    sink({ kind: EventKind.ToolProgress, tool: { id: 't1', name: 'read_file', output: 'c', read_only: true } });
 
-    expect(part.parts[0]).toMatchObject({ output: 'ab' });
+    expect(part.parts[0]).toMatchObject({ output: 'abc' });
+    expect(bump).toHaveBeenCalledTimes(2);
   });
 
-  it('ToolProgress → no-op when tool not found', () => {
+  it('ToolProgress → no-op when tool not found (no bump)', () => {
     const part = freshPart();
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
@@ -176,7 +179,7 @@ describe('createSubAgentSink', () => {
     sink({ kind: EventKind.ToolProgress, tool: { id: 'nonexistent', name: 'x', output: 'x', read_only: true } });
 
     expect(part.parts).toHaveLength(0);
-    // bump is NOT called when tool part isn't found
+    expect(bump).not.toHaveBeenCalled();
   });
 
   it('ToolResult → marks tool done and sets output', () => {
@@ -265,9 +268,7 @@ describe('createSubAgentSink', () => {
       kind: EventKind.ToolResult,
       tool: { id: 't1', name: 'read_file', output: 'export const x = 1;', read_only: true },
     });
-    // ponytail: this second Text merges into the first text part (both unfinalised).
-    // Model output: "I will read the file." [tool call] " File reads:" — the two
-    // text chunks are part of the same pre-tool/intra-tool thought block.
+    // ponytail: second Text merges into the first (both unfinalised, same thought block)
     sink({ kind: EventKind.Text, text: ' File reads:' });
     sink({ kind: EventKind.Message });
 
@@ -275,11 +276,11 @@ describe('createSubAgentSink', () => {
     expect(part.parts).toHaveLength(3);
     expect(part.parts[0]).toMatchObject({ type: 'reasoning' });
     expect(part.parts[1]).toMatchObject({
-      type: 'text',
-      text: 'I will read the file. File reads:',
-      finalised: true,
+      type: 'text', text: 'I will read the file. File reads:', finalised: true,
     });
     expect(part.parts[2]).toMatchObject({ type: 'tool', name: 'read_file', status: 'done' });
     expect(bump).toHaveBeenCalledTimes(7); // one per event
+    // version tracks total mutations
+    expect(part.version).toBe(7);
   });
 });
