@@ -58,9 +58,11 @@ export interface AgentOptions {
   /** Custom event sink. When set, Agent emits here instead of the global bus.
    *  Used by sub-agents to capture output into SubAgentPart. */
   eventSink?: (ev: AgentEvent) => void;
-  /** Called when a sub-agent spawn creates a SubAgentPart. The callback
-   *  should inject it into the chat messages and trigger a re-render. */
+  /** Called once when a sub-agent spawn creates a SubAgentPart.
+   *  Should inject it into chat messages and trigger initial render. */
   onSubAgentSpawn?: (part: SubAgentPart) => void;
+  /** Called (rAF-throttled) after each sub-agent event mutation to re-render. */
+  onSubAgentBump?: () => void;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -1530,7 +1532,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     // Wire into chat via callback (set by workspace, avoids agent → chat-store import)
     this._agentOpts.onSubAgentSpawn?.(subPart);
 
-    const subSink = createSubAgentSink({ subPart, bump: () => this._agentOpts.onSubAgentSpawn?.(subPart), onProgress });
+    const subSink = createSubAgentSink({ subPart, bump: () => this._agentOpts.onSubAgentBump?.(), onProgress });
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(
@@ -1553,7 +1555,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       return { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
       subPart.status = subAgentSucceeded ? 'done' : 'error';
-      this._agentOpts.onSubAgentSpawn?.(subPart);
+      this._agentOpts.onSubAgentBump?.();
       // Auto-diff + merge/discard based on success
       if (isolationId) {
         const diffT = this.tools.get('agent_isolation_diff');

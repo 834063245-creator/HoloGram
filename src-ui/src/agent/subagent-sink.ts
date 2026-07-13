@@ -14,20 +14,25 @@ import { lastTextPart, lastReasoningPart, findToolPart } from '../ui/message-mod
 
 export interface SubAgentSinkOpts {
   subPart: SubAgentPart;
-  /** Called after each mutation to trigger React re-render (typically bumpChat). */
+  /** Called to trigger React re-render (typically bumpChat). rAF-throttled
+   *  so that 5000 streaming tokens don't cause 5000 full message-list renders. */
   bump: () => void;
   /** Optional: forward tool dispatch names for parent tool-card progress. */
   onProgress?: (chunk: string) => void;
 }
 
 /** Create an AgentEvent sink that writes events into a SubAgentPart.
- *  Mutations are in-place; the `bump` callback triggers Zustand → React.
- *  subPart.version is also bumped on every change for potential fine-grained
- *  subscriptions in the future. */
+ *  Mutations are in-place; bump is rAF-throttled to at most one per frame.
+ *  subPart.version counts total mutations for potential fine-grained subscriptions. */
 export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => void {
   const { subPart, bump, onProgress } = opts;
 
-  const tick = () => { subPart.version++; bump(); };
+  let rafId: number | null = null;
+  const tick = () => {
+    subPart.version++;
+    if (rafId !== null) return; // already pending this frame
+    rafId = requestAnimationFrame(() => { rafId = null; bump(); });
+  };
 
   return (ev: AgentEvent) => {
     switch (ev.kind) {
