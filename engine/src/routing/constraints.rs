@@ -148,9 +148,7 @@ impl ConstraintConfig {
         let allowlist_files: Vec<String> = f.constraints
             .allowlist
             .files
-            .iter()
-            .map(|g| format!("file:{}", g))
-            .collect();
+            .clone();
 
         let mut denylist = f.constraints.denylist.keywords.clone();
         // Always keep the built-in dangerous keywords
@@ -326,7 +324,7 @@ constraints:
         assert!(!c.routing_l3);
         assert!(c.routing_l2);
         assert_eq!(c.blast_radius_max, 20);
-        assert_eq!(c.allowlist_files, vec!["file:docs/*.md", "file:tests/*.py"]);
+        assert_eq!(c.allowlist_files, vec!["docs/*.md", "tests/*.py"]);
         assert!(c.denylist_keywords.contains(&"password".to_string()));
         assert!(c.denylist_keywords.contains(&"secret".to_string()));
         // Built-in dangerous keywords always appended

@@ -11,10 +11,16 @@ pub fn detect_cycles(graph: &Graph) -> Vec<serde_json::Value> {
     let node_ids: Vec<&String> = graph.nodes.keys().collect();
     let id_to_idx: HashMap<&String, usize> = node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
     let mut adj = vec![vec![]; n];
+    let mut skipped = 0usize;
     for e in graph.edges.values() {
         if let (Some(&s), Some(&t)) = (id_to_idx.get(&e.source), id_to_idx.get(&e.target)) {
             adj[s].push(t);
+        } else {
+            skipped += 1;
         }
+    }
+    if skipped > 0 {
+        tracing::debug!(skipped, total_nodes = n, "cycles(direct): {} edge targets unresolved (should be resolved by CrossFileResolver)", skipped);
     }
     run_tarjan(&node_ids, &adj)
 }
