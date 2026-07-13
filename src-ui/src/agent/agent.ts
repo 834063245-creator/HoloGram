@@ -24,7 +24,6 @@ import { StreamingToolExecutor } from './streaming-executor';
 import { execState } from './execution-state';
 import { createSubAgentSink } from './subagent-sink';
 import type { SubAgentPart } from '../ui/message-model';
-import { bumpChat, useChatStore } from '../ui/chat-store';
 
 // Shared types — also used internally by this file
 import {
@@ -59,6 +58,9 @@ export interface AgentOptions {
   /** Custom event sink. When set, Agent emits here instead of the global bus.
    *  Used by sub-agents to capture output into SubAgentPart. */
   eventSink?: (ev: AgentEvent) => void;
+  /** Called when a sub-agent spawn creates a SubAgentPart. The callback
+   *  should inject it into the chat messages and trigger a re-render. */
+  onSubAgentSpawn?: (part: SubAgentPart) => void;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -136,6 +138,7 @@ export class Agent {
 
   // Event sink — parent agents use the global bus; sub-agents get a custom one
   private _sink: (ev: AgentEvent) => void;
+  private _agentOpts: AgentOptions;
 
   // Last usage for status display
   private lastUsage: Usage | undefined;
@@ -164,7 +167,8 @@ export class Agent {
   ) {
     this.prov = prov;
     this.tools = tools;
-    this._sink = opts.eventSink ?? ((ev: AgentEvent) => this._sink(ev));
+    this._sink = opts.eventSink ?? ((ev: AgentEvent) => bus.emit('agent:event', ev));
+    this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxTokens = opts.maxTokens ?? 0;
@@ -1521,19 +1525,12 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       description,
       status: 'running',
       parts: [],
+      version: 0,
     };
-    // Inject sub-part into parent's streaming assistant message
-    const msgs = useChatStore.getState().messages;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m.role === 'assistant' && (m as any).status === 'streaming') {
-        (m as any).parts.push(subPart);
-        break;
-      }
-    }
-    bumpChat();
+    // Wire into chat via callback (set by workspace, avoids agent → chat-store import)
+    this._agentOpts.onSubAgentSpawn?.(subPart);
 
-    const subSink = createSubAgentSink({ subPart, bump: bumpChat, onProgress });
+    const subSink = createSubAgentSink({ subPart, bump: () => this._agentOpts.onSubAgentSpawn?.(subPart), onProgress });
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(
@@ -1556,7 +1553,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       return { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
       subPart.status = subAgentSucceeded ? 'done' : 'error';
-      bumpChat();
+      this._agentOpts.onSubAgentSpawn?.(subPart);
       // Auto-diff + merge/discard based on success
       if (isolationId) {
         const diffT = this.tools.get('agent_isolation_diff');
