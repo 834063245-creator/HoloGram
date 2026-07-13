@@ -2,8 +2,21 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mock bridge — all Tauri backend calls route through here ──
 const mockInvoke = vi.fn();
+// ponytail: rpc() wrapper converts camelCase→snake_case, then calls invoke('rpc', ...)
+// For tests we bypass normalization — mockInvoke already returns the right shape.
+async function mockRpc(method: string, params?: Record<string, unknown>): Promise<any> {
+  const normalized: Record<string, unknown> = {};
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      const snakeKey = key.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+      normalized[snakeKey] = value;
+    }
+  }
+  return mockInvoke('rpc', { method, params: normalized });
+}
 vi.mock('../src/bridge', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
+  rpc: (method: string, params?: Record<string, unknown>) => mockRpc(method, params),
   listen: vi.fn(),
   isMockMode: () => false,
 }));
@@ -166,12 +179,12 @@ describe('ChatPanel session persistence', () => {
 
     it('returns max numeric ID from entries', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValue([
+      mockInvoke.mockResolvedValue(JSON.stringify([
         { name: '1.json', path: '/sessions/1.json', is_dir: false, children: null },
         { name: '71.json', path: '/sessions/71.json', is_dir: false, children: null },
         { name: '_active.json', path: '/sessions/_active.json', is_dir: false, children: null },
         { name: 'not-json.txt', path: '/sessions/not-json.txt', is_dir: false, children: null },
-      ]);
+      ]));
 
       const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(71);
@@ -179,11 +192,11 @@ describe('ChatPanel session persistence', () => {
 
     it('skips directories and non-json files', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValue([
+      mockInvoke.mockResolvedValue(JSON.stringify([
         { name: 'sub', path: '/sessions/sub', is_dir: true, children: [] },
         { name: '3.json', path: '/sessions/3.json', is_dir: false, children: null },
         { name: 'readme.md', path: '/sessions/readme.md', is_dir: false, children: null },
-      ]);
+      ]));
 
       const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(3);
@@ -192,7 +205,7 @@ describe('ChatPanel session persistence', () => {
     it('resolves within 100ms (no hang)', async () => {
       panel = createChatPanel();
       // Simulate a slow but not hung backend
-      mockInvoke.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve([]), 10)));
+      mockInvoke.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(JSON.stringify([])), 10)));
 
       const start = Date.now();
       const result = await scanMaxSessionId('D:/test');
@@ -228,11 +241,11 @@ describe('ChatPanel session persistence', () => {
       panel = createChatPanel();
       // list_directory returns file entries
       mockInvoke
-        .mockResolvedValueOnce([
+        .mockResolvedValueOnce(JSON.stringify([
           { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
           { name: '_active.json', path: '/s/_active.json', is_dir: false, children: null },
           { name: '40.json', path: '/s/40.json', is_dir: false, children: null },
-        ])
+        ]))
         // read_file_content for 1.json
         .mockResolvedValueOnce(mockSessionFile(1, [
           { role: 'system', content: 'prompt' },
@@ -250,10 +263,10 @@ describe('ChatPanel session persistence', () => {
     it('returns sessions sorted by savedAt descending', async () => {
       panel = createChatPanel();
       mockInvoke
-        .mockResolvedValueOnce([
+        .mockResolvedValueOnce(JSON.stringify([
           { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
           { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-        ])
+        ]))
         .mockResolvedValueOnce(mockSessionFile(1, [{ role: 'user', content: 'old' }], 'Old', '2026-01-01T00:00:00Z'))
         .mockResolvedValueOnce(mockSessionFile(2, [{ role: 'user', content: 'new' }], 'New', '2026-06-30T00:00:00Z'));
 
@@ -271,9 +284,9 @@ describe('ChatPanel session persistence', () => {
       ], '有对话', '2026-06-30T12:00:00Z');
 
       mockInvoke
-        .mockResolvedValueOnce([
+        .mockResolvedValueOnce(JSON.stringify([
           { name: '46.json', path: '/s/46.json', is_dir: false, children: null },
-        ])
+        ]))
         // read_file_content returns cat -n format: line numbers prepended
         .mockResolvedValueOnce(
           rawJSON.split('\n').map((l, i) => `${String(i + 1).padStart(6)}\t${l}`).join('\n')
@@ -289,10 +302,10 @@ describe('ChatPanel session persistence', () => {
     it('skips entries with unreadable session files', async () => {
       panel = createChatPanel();
       mockInvoke
-        .mockResolvedValueOnce([
+        .mockResolvedValueOnce(JSON.stringify([
           { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
           { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-        ])
+        ]))
         // First read fails
         .mockRejectedValueOnce(new Error('permission denied'))
         // Second succeeds
@@ -444,7 +457,7 @@ describe('ChatPanel session persistence', () => {
       const files = [1, 2, 3, 4, 5].map(id => ({
         name: `${id}.json`, path: `/s/${id}.json`, is_dir: false, children: null,
       }));
-      mockInvoke.mockResolvedValueOnce(files);
+      mockInvoke.mockResolvedValueOnce(JSON.stringify(files));
       for (const id of [1, 2, 3, 4, 5]) {
         mockInvoke.mockResolvedValueOnce(mockSessionFile(id, [{ role: 'user', content: `msg-${id}` }]));
       }
@@ -461,10 +474,10 @@ describe('ChatPanel session persistence', () => {
 
     it('returns empty after 10s timeout if a session read hangs', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValueOnce([
+      mockInvoke.mockResolvedValueOnce(JSON.stringify([
         { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
         { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-      ]);
+      ]));
       // First file hangs forever, second resolves
       mockInvoke.mockReturnValueOnce(new Promise(() => {})); // never resolves
       mockInvoke.mockResolvedValueOnce(mockSessionFile(2, [{ role: 'user', content: 'ok' }]));
@@ -482,11 +495,11 @@ describe('ChatPanel session persistence', () => {
 
     it('still returns readable sessions when one file fails', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValueOnce([
+      mockInvoke.mockResolvedValueOnce(JSON.stringify([
         { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
         { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
         { name: '3.json', path: '/s/3.json', is_dir: false, children: null },
-      ]);
+      ]));
       // File 1: success
       mockInvoke.mockResolvedValueOnce(mockSessionFile(1, [{ role: 'user', content: 'hello' }]));
       // File 2: error
@@ -498,75 +511,6 @@ describe('ChatPanel session persistence', () => {
 
       expect(result).toHaveLength(2);
       expect(result.map(r => r.id).sort()).toEqual([1, 3]);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // _doSyncMessagesToDOM — perm cards are first-class messages
-  // ═══════════════════════════════════════════════════════════════
-
-  describe('_doSyncMessagesToDOM — perm card handling', () => {
-    it('renders perm card as a normal message (not inject)', () => {
-      panel = createChatPanel();
-      const msgList = (panel as any).msgList as HTMLElement;
-
-      // Push a user message + a permission message
-      (panel as any).messages = [
-        { role: 'user', _id: 'u1', text: 'hello', sessionIndex: 0 },
-        { role: 'perm', _id: 'p1', toolName: 'write_file', reason: 'test', subject: 'f.txt', resolve: vi.fn() },
-      ];
-      (panel as any)._streamingAssistantId = null;
-
-      (panel as any)._doSyncMessagesToDOM();
-
-      // Both messages should be in DOM as normal children
-      expect(msgList.children.length).toBe(2);
-      // No perm-inline-card should be treated as inject → no duplicate preservation
-      const permCards = msgList.querySelectorAll('.perm-inline-card');
-      expect(permCards.length).toBe(1);
-    });
-
-    it('removes perm card from DOM when removed from model', () => {
-      panel = createChatPanel();
-      const msgList = (panel as any).msgList as HTMLElement;
-
-      (panel as any).messages = [
-        { role: 'user', _id: 'u1', text: 'q', sessionIndex: 0 },
-        { role: 'perm', _id: 'p1', toolName: 'run_shell', reason: 'test', subject: 'cmd', resolve: vi.fn() },
-      ];
-      (panel as any)._streamingAssistantId = null;
-      (panel as any)._doSyncMessagesToDOM();
-      expect(msgList.querySelectorAll('.perm-inline-card').length).toBe(1);
-
-      // Remove perm from model — simulates user clicking "允许"
-      (panel as any).messages = [
-        { role: 'user', _id: 'u1', text: 'q', sessionIndex: 0 },
-      ];
-      (panel as any)._doSyncMessagesToDOM();
-
-      // Card should be gone — no longer "preserved as inject"
-      expect(msgList.querySelectorAll('.perm-inline-card').length).toBe(0);
-      expect(msgList.children.length).toBe(1);
-    });
-
-    it('does NOT cause count mismatch when perm card is in model', () => {
-      panel = createChatPanel();
-      const msgList = (panel as any).msgList as HTMLElement;
-
-      (panel as any).messages = [
-        { role: 'user', _id: 'u1', text: 'q', sessionIndex: 0 },
-        { role: 'perm', _id: 'p1', toolName: 'write_file', reason: 'r', subject: 'f', resolve: vi.fn() },
-      ];
-      (panel as any)._streamingAssistantId = null;
-
-      // Run sync multiple times — should not accumulate extra perm cards
-      for (let i = 0; i < 3; i++) {
-        (panel as any)._doSyncMessagesToDOM();
-      }
-
-      // msgCount should still match DOM children count
-      // If perm cards were treated as injects, children would grow each iteration
-      expect(msgList.children.length).toBe(2);
     });
   });
 

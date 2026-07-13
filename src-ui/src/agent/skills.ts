@@ -44,9 +44,10 @@ async function loadSkills(projectPath: string): Promise<SkillDef[]> {
   const dir = `${root}/.hologram/skills`;
   let entries: Array<{ name: string; type: string; path: string }>;
   try {
-    entries = await rpc<Array<{ name: string; type: string; path: string }>>(
+    const raw = await rpc<string>(
       'list_directory_flat', { path: dir, isAgent: false },
     );
+    entries = JSON.parse(raw);
   } catch {
     return [];
   }

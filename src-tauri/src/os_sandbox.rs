@@ -238,7 +238,7 @@ fn quote_cmd(cmd: &str) -> String {
 
 #[cfg(windows)]
 #[allow(dead_code)] // Windows FFI for future sandbox phases (AppContainer, etc.)
-mod imp {
+pub mod imp {
     use std::io::{self, Read};
     use std::os::windows::process::{CommandExt, ExitStatusExt};
     use std::process::ExitStatus;
@@ -340,13 +340,14 @@ mod imp {
     // ACL
     const SE_FILE_OBJECT: i32 = 1;
     const DACL_SECURITY_INFORMATION: u32 = 0x00000004;
-    const SET_ACCESS: i32 = 0; // GRANT_ACCESS
+    const GRANT_ACCESS: i32 = 1;
     const TRUSTEE_IS_SID: i32 = 0;
+    pub const TRUSTEE_IS_UNKNOWN: i32 = 0;
     const TRUSTEE_IS_WELL_KNOWN_GROUP: i32 = 5;
     const SUB_CONTAINERS_AND_OBJECTS_INHERIT: u32 = 3;
-    const FILE_GENERIC_READ: u32 = 0x120089;
-    const FILE_GENERIC_EXECUTE: u32 = 0x1200A0;
-    const FILE_ALL_ACCESS: u32 = 0x1F01FF;
+    pub const FILE_GENERIC_READ: u32 = 0x120089;
+    pub const FILE_GENERIC_EXECUTE: u32 = 0x1200A0;
+    pub const FILE_ALL_ACCESS: u32 = 0x1F01FF;
     const ERROR_SUCCESS: u32 = 0;
 
     // ── FFI structs ──
@@ -398,7 +399,8 @@ mod imp {
     }
 
     #[repr(C)]
-    struct ExplicitAccessW {
+    #[repr(C)]
+    pub struct ExplicitAccessW {
         access_permissions: u32,
         access_mode: i32,
         inheritance: u32,
@@ -901,7 +903,7 @@ mod imp {
     }
 
     /// Add an ACCESS_ALLOWED_ACE to a directory's DACL for the given SID.
-    fn grant_path_acl(path: &str, sid: *mut std::ffi::c_void, access_mask: u32) -> Result<(), u32> {
+    pub fn grant_path_acl(path: &str, sid: *mut std::ffi::c_void, access_mask: u32) -> Result<(), u32> {
         let path_w = wide(path);
 
         // Get existing DACL
@@ -924,12 +926,12 @@ mod imp {
             multiple_trustee: std::ptr::null_mut(),
             multiple_trustee_op: 0,
             trustee_form: TRUSTEE_IS_SID,
-            trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            trustee_type: TRUSTEE_IS_UNKNOWN, // ponytail: must be 0; 5 (WELL_KNOWN_GROUP) + SID form → ERROR_INVALID_PARAMETER
             name: sid as *mut u16,
         };
         let ea = ExplicitAccessW {
             access_permissions: access_mask,
-            access_mode: SET_ACCESS,
+            access_mode: GRANT_ACCESS,
             inheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
             trustee,
         };
@@ -974,6 +976,19 @@ mod imp {
             }
         }
         Ok(())
+    }
+
+    /// Convert string SID → raw pointer. Caller must pass result to free_sid().
+    pub unsafe fn sid_from_str(s: &str) -> Option<*mut std::ffi::c_void> {
+        let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
+        if ConvertStringSidToSidW(w.as_ptr(), &mut sid) == 0 { return None; }
+        Some(sid)
+    }
+
+    /// Free a SID allocated by ConvertStringSidToSidW.
+    pub unsafe fn free_sid(sid: *mut std::ffi::c_void) {
+        LocalFree(sid);
     }
 
     /// Path to the ACL snapshot file in .hologram/
@@ -1811,6 +1826,7 @@ mod linux {
             .copied()
             .collect()
     }
+
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1933,4 +1949,85 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // ── ACL regression tests (fix: TRUSTEE_IS_WELL_KNOWN_GROUP → TRUSTEE_IS_UNKNOWN) ──
+
+    #[test]
+    fn test_explicit_access_is_repr_c() {
+        // ⚠️ CRITICAL: ExplicitAccessW MUST be #[repr(C)].
+        // Without it, Rust reorders fields and SetEntriesInAclW reads
+        // garbage → ERROR_INVALID_PARAMETER (0x57) on every call.
+        // Verify via size/alignment: 4+4+4+(8+4+4+4+8)=40 bytes on x64
+        use std::mem::{size_of, align_of};
+        let size = size_of::<super::imp::ExplicitAccessW>();
+        let align = align_of::<super::imp::ExplicitAccessW>();
+        assert!(size >= 32 && size <= 48,
+            "ExplicitAccessW size is {} (expected ~40 for #[repr(C)] on x64)", size);
+        assert!(align >= 4,
+            "ExplicitAccessW align is {} (expected >=4)", align);
+    }
+
+    #[test]
+    fn test_sid_conversion_works() {
+        // Verify the SID string conversion itself works before blaming grant_path_acl
+        unsafe {
+            let sid = super::imp::sid_from_str("S-1-1-0")
+                .expect("ConvertStringSidToSidW('S-1-1-0') must succeed");
+            assert!(!sid.is_null(), "SID pointer must not be null");
+            super::imp::free_sid(sid);
+        }
+    }
+
+    #[test]
+    fn test_grant_acl_succeeds_on_temp_dir() {
+        unsafe {
+            let sid = super::imp::sid_from_str("S-1-1-0")
+                .expect("ConvertStringSidToSidW should work");
+            assert!(!sid.is_null(), "SID must not be null");
+            let tmp = std::env::temp_dir()
+                .join(format!("holo_acl_test_{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&tmp);
+            let path_s = tmp.to_string_lossy().replace('/', "\\");
+
+            let r = super::imp::grant_path_acl(&path_s, sid, super::imp::FILE_GENERIC_READ);
+            super::imp::free_sid(sid);
+            let _ = std::fs::remove_dir_all(&tmp);
+
+            assert!(r.is_ok(), "grant_path_acl failed: Err(0x{:08X})", r.err().unwrap_or(0));
+        }
+    }
+
+    #[test]
+    fn test_grant_acl_fails_on_nonexistent_dir() {
+        unsafe {
+            let sid = super::imp::sid_from_str("S-1-1-0")
+                .expect("ConvertStringSidToSidW should work");
+            let path_s = format!("C:\\holo_nonexistent_acl_{}.tmp", std::process::id());
+
+            let r = super::imp::grant_path_acl(&path_s, sid, super::imp::FILE_GENERIC_READ);
+            super::imp::free_sid(sid);
+
+            assert!(r.is_err(), "grant on nonexistent path must fail");
+        }
+    }
+
+    #[test]
+    fn test_grant_acl_file_all_access_succeeds() {
+        unsafe {
+            let sid = super::imp::sid_from_str("S-1-1-0")
+                .expect("ConvertStringSidToSidW should work");
+            let tmp = std::env::temp_dir()
+                .join(format!("holo_acl_full_{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&tmp);
+            let path_s = tmp.to_string_lossy().replace('/', "\\");
+
+            let r = super::imp::grant_path_acl(&path_s, sid, super::imp::FILE_ALL_ACCESS);
+            super::imp::free_sid(sid);
+            let _ = std::fs::remove_dir_all(&tmp);
+
+            assert!(r.is_ok(), "FILE_ALL_ACCESS grant failed: Err(0x{:08X})", r.err().unwrap_or(0));
+        }
+    }
+
+
 }

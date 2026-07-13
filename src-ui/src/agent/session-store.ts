@@ -96,7 +96,8 @@ export class SessionStore {
   async listSessions(): Promise<SessionMeta[]> {
     await this.ensureDir();
     try {
-      const files = await rpc<string[]>('list_directory_flat', { path: this.baseDir });
+      const raw = await rpc<string>('list_directory_flat', { path: this.baseDir });
+      const files: string[] = JSON.parse(raw);
       const metas: SessionMeta[] = [];
       for (const file of (files || [])) {
         if (!file.endsWith('.jsonl')) continue;
