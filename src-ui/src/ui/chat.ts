@@ -1025,7 +1025,7 @@ export class ChatPanel {
     // Auto-label session on first user message
     if (Session.getActiveIdx() >= 0) {
       const session = Session.getSessions()[Session.getActiveIdx()];
-      if (session && session.label.startsWith('会话 ')) {
+      if (session && (session.label.startsWith('会话 ') || session.label === '已恢复的会话')) {
         session.label = text.length > 28 ? text.slice(0, 27) + '…' : text;
         this.renderSessionTabs();
       }
