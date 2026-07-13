@@ -513,7 +513,7 @@ fn leiden_refinement(
     }
     // Each sub-community starts assigned to its parent P1 community
     let mut sub_comm: Vec<usize> = sub_parent.clone();
-    let mut sub_sigma: Vec<f64> = sub_comms.iter()
+    let sub_sigma: Vec<f64> = sub_comms.iter()
         .map(|sc| sc.iter().map(|&v| degrees[v]).sum())
         .collect();
 
