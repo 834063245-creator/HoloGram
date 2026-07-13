@@ -283,32 +283,36 @@ const SubReasoningBlock: React.FC<{
   part: { type: 'reasoning'; text: string };
   parts: AssistantPart[];
   index: number;
-}> = React.memo(({ part, parts, index }) => {
+}> = ({ part, parts, index }) => {
   // Find index of the LAST reasoning part — only that one renders expanded
   let lastIdx = -1;
   for (let i = parts.length - 1; i >= 0; i--) {
     if (parts[i].type === 'reasoning') { lastIdx = i; break; }
   }
   const isLast = index === lastIdx;
-  const displayText = isLast ? truncateReasoning(part.text) : part.text;
+  const [open, setOpen] = useState(isLast);
+
+  // Sync open state when a NEW part becomes the last (streaming progress)
+  useEffect(() => { if (isLast) setOpen(true); }, [isLast]);
+
+  const displayText = open ? (isLast ? truncateReasoning(part.text) : part.text) : '';
 
   return (
     <div className="msg-reasoning">
-      <div className="msg-reasoning-toggle" onClick={(e) => {
-        const content = (e.target as HTMLElement).closest('.msg-reasoning')?.querySelector('.msg-reasoning-content');
-        if (content) content.classList.toggle('msg-reasoning-open');
-      }}>
+      <div className="msg-reasoning-toggle" onClick={() => setOpen(v => !v)}>
         <span dangerouslySetInnerHTML={{
-          __html: isLast ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
         }} />
-        {isLast ? '收起思考' : `思考 (${(part.text.length / 1000).toFixed(0)}k)`}
+        {open ? '收起思考' : `思考 (${(part.text.length / 1000).toFixed(0)}k)`}
       </div>
-      <div className={`msg-reasoning-content${isLast ? ' msg-reasoning-open' : ''}`}>
-        <pre>{displayText}</pre>
-      </div>
+      {open && (
+        <div className="msg-reasoning-content msg-reasoning-open">
+          <pre>{displayText}</pre>
+        </div>
+      )}
     </div>
   );
-});
+};
 
 // ── Sub-agent block ──
 // Renders a nested collapsible group for sub-agent output inside an assistant message.

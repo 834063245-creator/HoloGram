@@ -623,6 +623,7 @@ export class Workspace {
         }
         bumpChat();
       },
+      onSubAgentBump: () => bumpChat(),
       onSessionPersisted: (_sid: string, messages: Array<{role: string; content: unknown}>) => {
         // Fire-and-forget: ingest session into memory bundle
         // If bundle is unreachable, this silently fails — nothing is blocked.
@@ -803,6 +804,7 @@ export class Workspace {
             }
             bumpChat();
           },
+          onSubAgentBump: () => bumpChat(),
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,
