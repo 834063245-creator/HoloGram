@@ -322,6 +322,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [expanded, setExpanded] = useState(part.status === 'running');
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (part.status === 'running' && !userOverridden.current) setExpanded(true);
@@ -329,6 +330,9 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   }, [part.status]);
 
   const toggle = () => { userOverridden.current = true; setExpanded(v => !v); };
+  const toggleTool = useCallback((id: string) => {
+    setExpandedTools(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }, []);
 
   const statusIcon = part.status === 'running' ? svgIcon('dot')
     : part.status === 'done' ? svgIcon('check-circle')
@@ -339,6 +343,9 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   const statusCls = part.status === 'done' ? 'badge-ok'
     : part.status === 'error' ? 'badge-fail'
     : 'badge-running';
+
+  // Render parts interleaved: reasoning → text → tool — same order as parent bubble
+  const streaming = part.status === 'running';
 
   return (
     <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
@@ -359,29 +366,18 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
           }
           if (p.type === 'text') {
             return (
-              <div key={pi} className="msg-text msg-markdown">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    code: MarkdownCode,
-                    pre: ({ children }) => <>{children}</>,
-                  }}
-                >
-                  {p.text}
-                </ReactMarkdown>
-              </div>
+              <MarkdownContent key={pi}
+                text={p.text}
+                streaming={streaming && !p.finalised}
+              />
             );
           }
           if (p.type === 'tool') {
-            const icon = p.status === 'running' ? svgIcon('dot')
-              : p.status === 'done' ? svgIcon('check-circle')
-              : p.status === 'error' ? svgIcon('close')
-              : svgIcon('dot');
             return (
-              <div key={pi} className="msg-tool-card tool-done" style={{ margin: '4px 0', padding: '4px 8px', fontSize: 'calc(11px*var(--font-scale))' }}>
-                <span dangerouslySetInnerHTML={{ __html: icon }} style={{ marginRight: 4 }} />
-                <span className="tool-name" style={{ color: 'var(--text-dim)' }}>{p.name}</span>
-              </div>
+              <ToolCard key={p.toolId} part={p}
+                expanded={expandedTools.has(p.toolId)}
+                onToggle={() => toggleTool(p.toolId)}
+              />
             );
           }
           return null;
