@@ -16,7 +16,7 @@ import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { stripLineNumbers } from './ui/chat-session';
-import { bumpChat, useChatStore } from './ui/chat-store';
+import { bumpChat, getChatStore } from './ui/chat-store';
 import type { SubAgentPart } from './ui/message-model';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
@@ -117,6 +117,9 @@ export class Workspace {
   // ── Sub-agent pool ──
   subAgentPool = new SubAgentPool();
   private _agentAbort: AbortController | null = null;
+
+  // ── Store routing (per-panel isolation) ──
+  _storeId: string = '__default__';
 
   // ── Check state ──
   checkRunning: boolean = false;
@@ -421,6 +424,7 @@ export class Workspace {
   }
 
   private async _setupAgentInner(chatPanel: ChatPanel, _checkPanel: CheckPanel): Promise<void> {
+    this._storeId = chatPanel.panelId;
     let settings = loadSettings();
     settings = await restoreSecrets(settings);
     const active = getActiveProvider(settings);
@@ -543,7 +547,7 @@ export class Workspace {
       });
     }
 
-    // Coding tools
+        // Coding tools
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
       if (name === 'run_shell' && args['runInBackground']) {
         const taskId = await agentInvoke<string>('run_shell', args);
@@ -557,6 +561,37 @@ export class Workspace {
           } catch { done = true; return '(后台任务已结束)'; }
         }
         return '';
+      }
+      // ── Streaming shell: real-time output via Tauri events ──
+      if (name === 'exec_command' && onProgress && !args['runInBackground']) {
+        const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        return new Promise<string>((resolve) => {
+          let fullOutput = '';
+          let unsubOutput: (() => void) | null = null;
+          let unsubDone: (() => void) | null = null;
+          listen<{ streamId: string; chunk: string }>('shell:output', (event) => {
+            if (event.payload.streamId !== streamId) return;
+            fullOutput += event.payload.chunk;
+            onProgress(event.payload.chunk);
+          }).then(fn => { unsubOutput = fn; });
+          listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (event) => {
+            if (event.payload.streamId !== streamId) return;
+            unsubOutput?.();
+            unsubDone?.();
+            if (event.payload.error) {
+              resolve(`[exit code: ${event.payload.exitCode}]\n${event.payload.error}`);
+            } else if (event.payload.exitCode !== 0) {
+              resolve(`[exit code: ${event.payload.exitCode}]\n${fullOutput}`);
+            } else {
+              resolve(fullOutput || '(无输出)');
+            }
+          }).then(fn => { unsubDone = fn; });
+          agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }).catch(e => {
+            unsubOutput?.();
+            unsubDone?.();
+            resolve(`错误: ${e}`);
+          });
+        });
       }
       const result = await agentInvoke<string>(name, args);
       return typeof result === 'string' ? result : JSON.stringify(result);
@@ -613,7 +648,7 @@ export class Workspace {
     this.registry = registry;
     this.agent = new Agent(prov, registry, systemPrompt, {
       onSubAgentSpawn: (part: SubAgentPart) => {
-        const msgs = useChatStore.getState().messages;
+        const msgs = getChatStore(this._storeId).getState().messages;
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
           if (m.role === 'assistant' && (m as any).status === 'streaming') {
@@ -621,9 +656,10 @@ export class Workspace {
             break;
           }
         }
-        bumpChat();
+        bumpChat(this._storeId);
       },
-      onSubAgentBump: () => bumpChat(),
+      onSubAgentBump: () => bumpChat(this._storeId),
+      execState: chatPanel['_exec'],
       onSessionPersisted: (_sid: string, messages: Array<{role: string; content: unknown}>) => {
         // Fire-and-forget: ingest session into memory bundle
         // If bundle is unreachable, this silently fails — nothing is blocked.
@@ -794,7 +830,7 @@ export class Workspace {
         const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
         const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
           onSubAgentSpawn: (part: SubAgentPart) => {
-            const msgs = useChatStore.getState().messages;
+            const msgs = getChatStore(this._storeId).getState().messages;
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i];
               if (m.role === 'assistant' && (m as any).status === 'streaming') {
@@ -802,9 +838,9 @@ export class Workspace {
                 break;
               }
             }
-            bumpChat();
+            bumpChat(this._storeId);
           },
-          onSubAgentBump: () => bumpChat(),
+          onSubAgentBump: () => bumpChat(this._storeId),
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,

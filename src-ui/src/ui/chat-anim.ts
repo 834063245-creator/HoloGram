@@ -8,8 +8,7 @@
 import gsap from 'gsap';
 import { iconHtml } from './icons';
 import { shell } from './app-shell';
-import { cancelPendingApprovals } from '../agent/permission';
-import { execState } from '../agent/execution-state';
+import type { ExecStateInstance } from '../agent/execution-state';
 
 // ── AnimContext — the bridge between standalone animation functions and ChatPanel state ──
 
@@ -26,6 +25,9 @@ export interface AnimContext {
   getRunning: () => boolean;
   getProjectPath: () => string;
   getActiveIdx: () => number;
+
+  // Execution state — per-panel (phase 1 of multi-window)
+  execState: ExecStateInstance;
 
   // Callbacks to ChatPanel methods
   updateFooter: () => void;
@@ -247,7 +249,7 @@ export function expandToInput(ctx: AnimContext): void {
 /** Any state → Panel: summon the full conversation card */
 export function summonPanel(ctx: AnimContext): void {
   // If agent is running in background, restore to full panel
-  if (execState.isRunning) ctx.panel.classList.remove('chat-pill-running');
+  if (ctx.execState.isRunning) ctx.panel.classList.remove('chat-pill-running');
   ctx.resetPillBadge();
   morphToMode(ctx, 'panel', 'chat-open');
 }
@@ -298,13 +300,13 @@ export function collapseToInput(ctx: AnimContext): void {
     },
   });
 
-  if (execState.isRunning) ctx.panel.classList.add('chat-pill-running');
+  if (ctx.execState.isRunning) ctx.panel.classList.add('chat-pill-running');
   if (ctx.getProjectPath() && ctx.getActiveIdx() >= 0) {
     ctx.saveActiveSession(ctx.getProjectPath()).catch(() => {});
   }
   // ponytail: don't cancel pending permissions while agent is running —
   // sub-agents may be mid-write and the dialog is their only path through.
-  if (!execState.isRunning) cancelPendingApprovals();
+  if (!ctx.execState.isRunning) ctx.execState.resetPermQueue();
   ctx.closeHistory();
   ctx.hideSlashPanel();
   shell.notifyPanelChanged();
@@ -333,7 +335,7 @@ export function collapseToPill(ctx: AnimContext): void {
       ctx.setMode('pill');
       removeAllPanelClasses(ctx);
       ctx.panel.classList.add('chat-pill');
-      if (execState.isRunning) {
+      if (ctx.execState.isRunning) {
         ctx.panel.classList.add('chat-pill-running');
       }
       ctx.panel.style.maxHeight = '';
@@ -347,7 +349,7 @@ export function collapseToPill(ctx: AnimContext): void {
   if (ctx.getProjectPath() && ctx.getActiveIdx() >= 0) {
     ctx.saveActiveSession(ctx.getProjectPath()).catch(() => {});
   }
-  if (!execState.isRunning) cancelPendingApprovals();
+  if (!ctx.execState.isRunning) ctx.execState.resetPermQueue();
   ctx.closeHistory();
   ctx.hideSlashPanel();
   shell.notifyPanelChanged();

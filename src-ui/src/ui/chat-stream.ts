@@ -9,8 +9,8 @@ import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { iconHtml } from './icons';
-import { execState } from '../agent/execution-state';
 import { bumpChat } from './chat-store';
+import { autoTitleSessionIfDefault } from './chat-session';
 import type { StarGraph } from './graph';
 import type {
   ChatMessage,
@@ -40,6 +40,9 @@ type TurnPair = {
 // ── StreamContext ──────────────────────────────────────────
 
 export interface StreamContext {
+  /** Store ID for panel-scoped state isolation. */
+  storeId: string;
+
   // ── 消息数组 ──
   getMessages: () => ChatMessage[];
   setMessages: (msgs: ChatMessage[]) => void;
@@ -198,7 +201,7 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
   // Always run one final render while _streamingAssistantId is still set
   if (sid) {
-  bumpChat();
+  bumpChat(ctx.storeId);
   }
   ctx.setStreamingAssistantId(null);
 }
@@ -215,14 +218,14 @@ export function _scheduleSync(ctx: StreamContext): void {
   const rafId = requestAnimationFrame(() => {
     if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     ctx.setSyncRafId(null);
-  bumpChat();
+  bumpChat(ctx.storeId);
   });
   ctx.setSyncRafId(rafId);
   // Safety net: if rAF is lost (tab hidden / OS suspend), force render after 500ms.
   timeoutId = setTimeout(() => {
     if (timeoutId !== null) { timeoutId = null; }
     ctx.setSyncRafId(null);
-  bumpChat();
+  bumpChat(ctx.storeId);
   }, 500);
 }
 
@@ -240,14 +243,14 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
     case EventKind.Reasoning:
       if (ev.text) {
         _appendReasoningPart(ctx, ev.text);
-        bumpChat();
+        bumpChat(ctx.storeId);
       }
       break;
 
     case EventKind.Text:
       if (ev.text) {
         _appendTextPart(ctx, ev.text);
-        bumpChat();
+        bumpChat(ctx.storeId);
       }
       break;
 
@@ -255,7 +258,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       if (ev.text) {
         _finaliseTextPart(ctx);
       }
-      bumpChat();
+      bumpChat(ctx.storeId);
       break;
 
     case EventKind.ToolDispatch:
@@ -268,7 +271,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
           t.read_only ?? false,
           t.partial ? 'pending' : 'running',
         );
-        bumpChat();
+        bumpChat(ctx.storeId);
       }
       break;
 
@@ -296,7 +299,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
           t.err,
           t.truncated,
         );
-        bumpChat();
+        bumpChat(ctx.storeId);
       }
       break;
 
@@ -316,7 +319,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         // Note: totalTokensUsed updated by _updateTokens callback internally
         ctx.setLastUsageText(label);
         ctx.updateFooter();
-        bumpChat();
+        bumpChat(ctx.storeId);
       }
       break;
 
@@ -325,7 +328,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       break;
 
     case EventKind.SessionChanged:
-      bumpChat();
+      bumpChat(ctx.storeId);
       break;
 
     default:
@@ -355,7 +358,7 @@ export function appendUserBubble(
   const pair = ctx.getTurnPairs()[ctx.getTurnPairs().length - 1];
   if (pair) pair.userBubble = null;
 
-  bumpChat();
+  bumpChat(ctx.storeId);
 }
 
 export function addTurnSep(_ctx: StreamContext): void {
@@ -370,11 +373,12 @@ export function addTurnSep(_ctx: StreamContext): void {
 /** Finalize current assistant bubble — link to latest turnPair, reset streaming state. */
 export function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
-  bumpChat();
+  bumpChat(ctx.storeId);
 }
 
 export function finishTurn(ctx: StreamContext): void {
   finishCurrentTurn(ctx);
+  autoTitleSessionIfDefault(ctx.storeId);
   const pp = ctx.getProjectPath();
   if (pp) {
     ctx.saveActiveSession(pp).catch(() => {});

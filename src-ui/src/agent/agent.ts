@@ -21,7 +21,7 @@ import { SessionStore } from './session-store';
 import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats, maybeTune, type CompactionConfig } from './compaction-model';
 import { rpc } from '../bridge';
 import { StreamingToolExecutor } from './streaming-executor';
-import { execState } from './execution-state';
+import { execState, type ExecStateInstance } from './execution-state';
 import { createSubAgentSink } from './subagent-sink';
 import type { SubAgentPart } from '../ui/message-model';
 
@@ -63,6 +63,8 @@ export interface AgentOptions {
   onSubAgentSpawn?: (part: SubAgentPart) => void;
   /** Called (rAF-throttled) after each sub-agent event mutation to re-render. */
   onSubAgentBump?: () => void;
+  /** Execution state instance. Falls back to global execState if not provided. */
+  execState?: ExecStateInstance;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -149,6 +151,9 @@ export class Agent {
   // Last usage for status display
   private lastUsage: Usage | undefined;
 
+  // Execution state — per-Agent instance (phase 1 of multi-window)
+  private _execState: ExecStateInstance;
+
   // Pending user message inserts (queued during tool execution, applied at safe boundary)
   private _pendingInserts: string[] = [];
 
@@ -185,6 +190,7 @@ export class Agent {
     this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
     this._subagentDepth = opts.subagentDepth ?? 0;
+    this._execState = opts.execState ?? execState;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this.sessionStore = sessionStore || null;
@@ -217,7 +223,7 @@ export class Agent {
 
   setSession(msgs: Message[]): void {
     this.session = msgs;
-    execState.bumpVersion();
+    this._execState.bumpVersion();
   }
 
   /** Fire-and-forget session save — never blocks the agent loop. */
@@ -349,7 +355,7 @@ export class Agent {
       end++;
     }
     this.session.splice(sessionIndex, end - sessionIndex);
-    execState.bumpVersion();
+    this._execState.bumpVersion();
     this._sink({ kind: EventKind.SessionChanged });
   }
 
@@ -435,7 +441,7 @@ export class Agent {
       ? this.session[0]
       : null;
     this.session = sys ? [sys] : [];
-    execState.bumpVersion();
+    this._execState.bumpVersion();
     this.cacheHitTotal = 0;
     this.cacheMissTotal = 0;
     this.lastUsage = undefined;
@@ -588,7 +594,7 @@ ${goal}
     this._sink({ kind: EventKind.TurnStarted });
 
     for (let step = 0; ; step++) {
-      // Abort check — signal covers user stop + session replacement (via execState.stop)
+      // Abort check — signal covers user stop + session replacement (via this._execState.stop)
       if (signal.aborted) throw new Error('aborted');
 
       // Apply pending user inserts at the safe boundary (after tool results committed)
@@ -692,7 +698,7 @@ ${goal}
           || (r.err && (r.err.includes('权限') || r.err.includes('permission')));
       });
       if (permDenied) {
-        execState.stop();
+        this._execState.stop();
         this._sink({ kind: EventKind.Notice, level: 'warn', text: '权限被拒绝，Agent 已停止' });
         this._saveSession();
         return;
@@ -984,7 +990,7 @@ ${goal}
           ...msgs.slice(Math.max(head, msgs.length - tailCount)),
         ];
         this.session = truncated;
-        execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this._execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
         this.recordCompactionEvent({
           ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
           summaryInputTokens: 0, summaryOutputTokens: 0,
@@ -1011,7 +1017,7 @@ ${goal}
           ...msgs.slice(Math.max(head, msgs.length - tailCount)),
         ];
         this.session = truncated;
-        execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this._execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
         this.recordCompactionEvent({
           ts: Date.now(), regionMsgCount: region.length, regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
           summaryInputTokens: 0, summaryOutputTokens: 0,
@@ -1030,7 +1036,7 @@ ${goal}
         ...msgs.slice(start),
       ];
       this.session = compacted;
-      execState.bumpVersion();
+      this._execState.bumpVersion();
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
@@ -1092,7 +1098,7 @@ ${goal}
 
     // Run compaction asynchronously (non-blocking for the turn)
     const msgs = this.session;
-    const genAtStart = execState.bumpVersion();
+    const genAtStart = this._execState.bumpVersion();
     const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
     const tailCount = Math.max(4, this.recentKeep);
     const start = Math.max(head + 4, msgs.length - tailCount);
@@ -1116,7 +1122,7 @@ ${goal}
     const region = msgs.slice(head, start);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region).then((summary) => {
-      if (genAtStart !== execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
+      if (genAtStart !== this._execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
       if (!summary) { this.compactRunning = false; return; }
       const compacted: Message[] = [
         ...msgs.slice(0, head),
@@ -1124,7 +1130,7 @@ ${goal}
         ...msgs.slice(start),
       ];
       this.session = compacted;
-      execState.bumpVersion();
+      this._execState.bumpVersion();
       this.stormSig = '';
       this.stormCount = 0;
 
@@ -1164,7 +1170,7 @@ ${goal}
         text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
       });
     }).catch(() => {
-      if (genAtStart !== execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
+      if (genAtStart !== this._execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
       this.compactStuck = true;
       this.compactRunning = false;
       this._sink({

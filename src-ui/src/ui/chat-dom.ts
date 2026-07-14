@@ -18,11 +18,14 @@ import { escapeHtml } from './chat-utils';
 
 // ── Constants ──
 
-const PANEL_ID = 'chat-panel';
+// Panel ID now dynamic — see DomContext.panelId
 
 // ── DomContext — the bridge between standalone DOM functions and ChatPanel state ──
 
 export interface DomContext {
+  /** Unique panel ID for DOM ID scoping. */
+  panelId: string;
+
   // 容器
   container: HTMLElement;
 
@@ -178,7 +181,7 @@ export interface DomContext {
 export function buildDOM(ctx: DomContext): void {
   // Panel root
   const panel = document.createElement('div');
-  panel.id = PANEL_ID;
+  panel.id = `chat-panel-${ctx.panelId}`;
 
   // Corner brackets
   const brackets = document.createElement('div');
@@ -267,7 +270,7 @@ export function buildDOM(ctx: DomContext): void {
   statusText.textContent = '就绪';
   const statusModel = document.createElement('span');
   statusModel.className = 'chat-status-model';
-  statusModel.id = 'chat-status-model';
+  statusModel.id = `chat-status-model-${ctx.panelId}`;
   const statusTokens = document.createElement('span');
   statusTokens.className = 'chat-status-tokens';
   statusBar.append(statusDot, statusText, statusTokens, statusModel);
@@ -290,7 +293,7 @@ export function buildDOM(ctx: DomContext): void {
   // Welcome hint
   const hint = document.createElement('div');
   hint.className = 'chat-hint';
-  hint.id = 'chat-hint';
+  hint.id = `chat-hint-${ctx.panelId}`;
   hint.textContent = ctx.getAgent()
     ? '向我提问代码库的问题，或直接聊天'
     : ctx.hintText();
@@ -548,7 +551,7 @@ export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | '
   // Update model in status
   const settings = loadSettings();
   const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
-  const modelEl = panel.querySelector('#chat-status-model') as HTMLElement;
+  const modelEl = panel.querySelector(`#chat-status-model-${ctx.panelId}`) as HTMLElement;
   if (modelEl && active) {
     let ml = active.model || '';
     if (ml.length > 20) ml = ml.slice(0, 19) + '…';
@@ -706,16 +709,16 @@ export function openHistory(ctx: DomContext): void {
   list.className = 'chat-history-panel-list';
 
   // ── Section: 当前打开 ──
-  const memorySessions = Session.getSessions();
+  const memorySessions = Session.getSessions(ctx.panelId);
   if (memorySessions.length > 0) {
     renderSection(list, `当前打开 (${memorySessions.length})`, memorySessions.map((s, i) => {
       const msgCount = s.agent.getSession().filter(m => m.role !== 'system').length;
       return {
         label: s.label,
         subtitle: `消息: ${msgCount}`,
-        active: i === Session.getActiveIdx(),
+        active: i === Session.getActiveIdx(ctx.panelId),
         onClick: () => {
-          if (i !== Session.getActiveIdx()) ctx.switchSession(i);
+          if (i !== Session.getActiveIdx(ctx.panelId)) ctx.switchSession(i);
           closeHistory(ctx);
         },
       };
@@ -762,7 +765,7 @@ export function openHistory(ctx: DomContext): void {
             if (already >= 0) { ctx.switchSession(already); }
             else { ctx.loadSessionFromDisk(projectPath, s.id); }
           },
-          already >= 0 && already === Session.getActiveIdx(),
+          already >= 0 && already === Session.getActiveIdx(ctx.panelId),
           () => {
             if (confirm(`删除会话 "${s.label}"？`)) {
               ctx.deleteSessionFile(projectPath, s.id);
@@ -927,5 +930,3 @@ export function setupGraphClickHandler(ctx: DomContext): void {
   graphEl.addEventListener('click', handler);
   ctx.setGraphClickCleanup(() => graphEl.removeEventListener('click', handler));
 }
-
-

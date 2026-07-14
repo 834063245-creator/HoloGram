@@ -55,21 +55,45 @@ type Handler = (...args: any[]) => void;
 
 class EventBus {
   private handlers = new Map<string, Handler[]>();
+  private _prefix: string;
+  private _parent: EventBus | null;
+
+  constructor(prefix = '', parent: EventBus | null = null) {
+    this._prefix = prefix;
+    this._parent = parent;
+  }
+
+  /** Create a child bus that prefixes all events. Delegates to parent's emit/on. */
+  withPrefix(prefix: string): EventBus {
+    return new EventBus(prefix + ':', this._parent ?? this);
+  }
+
+  private _resolve(): EventBus {
+    return this._parent ?? this;
+  }
+
+  private _key(event: string): string {
+    return this._prefix ? this._prefix + event : event;
+  }
 
   // ── Typed overloads for known events ──
   on<E extends keyof BusEvents>(event: E, handler: (...args: BusEvents[E]) => void): void;
   // ── Fallback for string literals not in the map ──
   on(event: string, handler: Handler): void;
   on(event: string, handler: Handler): void {
-    const list = this.handlers.get(event);
+    const bus = this._resolve();
+    const key = this._key(event);
+    const list = bus.handlers.get(key);
     if (list) { list.push(handler); }
-    else { this.handlers.set(event, [handler]); }
+    else { bus.handlers.set(key, [handler]); }
   }
 
   off<E extends keyof BusEvents>(event: E, handler: (...args: BusEvents[E]) => void): void;
   off(event: string, handler: Handler): void;
   off(event: string, handler: Handler): void {
-    const list = this.handlers.get(event);
+    const bus = this._resolve();
+    const key = this._key(event);
+    const list = bus.handlers.get(key);
     if (list) {
       const idx = list.indexOf(handler);
       if (idx >= 0) list.splice(idx, 1);
@@ -79,18 +103,24 @@ class EventBus {
   emit<E extends keyof BusEvents>(event: E, ...args: BusEvents[E]): void;
   emit(event: string, ...args: any[]): void;
   emit(event: string, ...args: any[]): void {
-    dbg('EventBus.emit', event, ...args);
-    const list = this.handlers.get(event);
+    const bus = this._resolve();
+    const key = this._key(event);
+    dbg('EventBus.emit', key, ...args);
+    const list = bus.handlers.get(key);
     if (list) {
       for (const h of list) {
-        try { h(...args); } catch (e) { console.error(`[EventBus] ${event} handler error:`, e); }
+        try { h(...args); } catch (e) { console.error(`[EventBus] ${key} handler error:`, e); }
       }
     }
   }
 
   clear(event?: string): void {
-    if (event) { this.handlers.delete(event); }
-    else { this.handlers.clear(); }
+    const bus = this._resolve();
+    if (event) {
+      const key = this._key(event);
+      bus.handlers.delete(key);
+    }
+    else { bus.handlers.clear(); }
   }
 }
 

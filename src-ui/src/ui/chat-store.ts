@@ -10,6 +10,8 @@
 //
 // Non-serializable state (agent handles, DOM refs, callbacks, rAF handles,
 // AbortControllers) stays in chat.ts / chat-session.ts.
+//
+// ⚡ 多窗口重构：单例 → 工厂模式。getChatStore(storeId?) 按面板分片。
 
 import { create } from 'zustand';
 import type { ChatMessage, AssistantMessage, MessageId } from './message-model';
@@ -130,131 +132,163 @@ interface ChatStore {
   setContextFilter: (filter: string) => void;
 }
 
-export const useChatStore = create<ChatStore>((set) => ({
-  messages: [],
-  version: 0,
-  sessions: [],
-  activeIdx: -1,
-  sessionTokens: {},
-  sessionMessageModels: {},
-  nextSessionId: 1,
-  msgIdSeq: 0,
+// ── Zustand store type (the hook + getState/setState) ──
 
-  panelMode: 'pill',
-  activeTab: 'chat',
-  projectPath: '',
-  toolSchemas: [],
+export type ChatStoreApi = ReturnType<typeof createChatStoreImpl>;
 
-  streamingAssistantId: null,
-  userScrolledUp: false,
-  expandedReasoning: [],
+// ── Store factory ──
 
-  totalTokensUsed: 0,
-  toolUsage: {},
-  toolHistory: [],
-  pillEventCount: 0,
-  lastAgentState: 'idle',
-  lastUsageText: '',
-  lastAgentDiag: '',
+function createChatStoreImpl() {
+  return create<ChatStore>((set) => ({
+    messages: [],
+    version: 0,
+    sessions: [],
+    activeIdx: -1,
+    sessionTokens: {},
+    sessionMessageModels: {},
+    nextSessionId: 1,
+    msgIdSeq: 0,
 
-  userFocusFile: null,
-  userFocusNode: null,
+    panelMode: 'pill',
+    activeTab: 'chat',
+    projectPath: '',
+    toolSchemas: [],
 
-  inputText: '',
-  attachedFiles: [],
+    streamingAssistantId: null,
+    userScrolledUp: false,
+    expandedReasoning: [],
 
-  inputHistory: [],
-  inputHistoryIdx: -1,
-  draftText: '',
+    totalTokensUsed: 0,
+    toolUsage: {},
+    toolHistory: [],
+    pillEventCount: 0,
+    lastAgentState: 'idle',
+    lastUsageText: '',
+    lastAgentDiag: '',
 
-  historyOpen: false,
+    userFocusFile: null,
+    userFocusNode: null,
 
-  toolFilter: '',
-  contextFilter: '',
+    inputText: '',
+    attachedFiles: [],
 
-  setMessages: (msgs) => set({ messages: msgs, version: Date.now() }),
-  bump: () => set((s) => ({ version: s.version + 1 })),
+    inputHistory: [],
+    inputHistoryIdx: -1,
+    draftText: '',
 
-  setSessions: (sessions) => set({ sessions }),
-  setActiveIdx: (activeIdx) => set({ activeIdx }),
-  setSessionTokens: (id, count) =>
-    set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
-  setSessionMessageModels: (id, models) =>
-    set((s) => ({ sessionMessageModels: { ...s.sessionMessageModels, [id]: models } })),
-  removeSession: (id) =>
-    set((s) => {
-      const { [id]: _, ...restTokens } = s.sessionTokens;
-      const { [id]: __, ...restModels } = s.sessionMessageModels;
-      return { sessionTokens: restTokens, sessionMessageModels: restModels };
-    }),
+    historyOpen: false,
 
-  setPanelMode: (panelMode) => set({ panelMode }),
-  setActiveTab: (activeTab) => set({ activeTab }),
-  setProjectPath: (projectPath) => set({ projectPath }),
-  setToolSchemas: (toolSchemas) => set({ toolSchemas }),
+    toolFilter: '',
+    contextFilter: '',
 
-  setStreamingAssistantId: (streamingAssistantId) => set({ streamingAssistantId }),
-  setUserScrolledUp: (userScrolledUp) => set({ userScrolledUp }),
-  addExpandedReasoning: (idx) =>
-    set((s) => {
-      if (s.expandedReasoning.includes(idx)) return s;
-      return { expandedReasoning: [...s.expandedReasoning, idx] };
-    }),
-  deleteExpandedReasoning: (idx) =>
-    set((s) => ({ expandedReasoning: s.expandedReasoning.filter(i => i !== idx) })),
-  clearExpandedReasoning: () => set({ expandedReasoning: [] }),
+    setMessages: (msgs) => set({ messages: msgs, version: Date.now() }),
+    bump: () => set((s) => ({ version: s.version + 1 })),
 
-  setTotalTokensUsed: (totalTokensUsed) => set({ totalTokensUsed }),
-  addToolUsage: (name, args) =>
-    set((s) => {
-      const next = { ...s.toolUsage };
-      next[name] = (next[name] || 0) + 1;
-      const hist = [...s.toolHistory, { name, args, ts: Date.now() }].slice(-50);
-      return { toolUsage: next, toolHistory: hist };
-    }),
-  clearToolUsage: () => set({ toolUsage: {} }),
-  clearToolHistory: () => set({ toolHistory: [] }),
-  setPillEventCount: (pillEventCount) => set({ pillEventCount }),
-  bumpPillEventCount: () => set((s) => ({ pillEventCount: s.pillEventCount + 1 })),
-  setLastAgentState: (lastAgentState) => set({ lastAgentState }),
-  setLastUsageText: (lastUsageText) => set({ lastUsageText }),
-  setLastAgentDiag: (lastAgentDiag) => set({ lastAgentDiag }),
+    setSessions: (sessions) => set({ sessions }),
+    setActiveIdx: (activeIdx) => set({ activeIdx }),
+    setSessionTokens: (id, count) =>
+      set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
+    setSessionMessageModels: (id, models) =>
+      set((s) => ({ sessionMessageModels: { ...s.sessionMessageModels, [id]: models } })),
+    removeSession: (id) =>
+      set((s) => {
+        const { [id]: _, ...restTokens } = s.sessionTokens;
+        const { [id]: __, ...restModels } = s.sessionMessageModels;
+        return { sessionTokens: restTokens, sessionMessageModels: restModels };
+      }),
 
-  setUserFocusFile: (userFocusFile) => set({ userFocusFile }),
-  setUserFocusNode: (userFocusNode) => set({ userFocusNode }),
+    setPanelMode: (panelMode) => set({ panelMode }),
+    setActiveTab: (activeTab) => set({ activeTab }),
+    setProjectPath: (projectPath) => set({ projectPath }),
+    setToolSchemas: (toolSchemas) => set({ toolSchemas }),
 
-  setInputText: (inputText) => set({ inputText }),
-  setAttachedFiles: (attachedFiles) => set({ attachedFiles }),
-  addAttachedFile: (file) => set((s) => ({ attachedFiles: [...s.attachedFiles, file] })),
-  removeAttachedFile: (idx) => set((s) => ({ attachedFiles: s.attachedFiles.filter((_, i) => i !== idx) })),
-  clearAttachedFiles: () => set({ attachedFiles: [] }),
-  pushInputHistory: (text) =>
-    set((s) => {
-      const filtered = s.inputHistory.filter((t) => t !== text);
-      if (filtered.length >= 50) filtered.shift();
-      return { inputHistory: [...filtered, text] };
-    }),
-  setInputHistory: (inputHistory) => set({ inputHistory }),
-  setInputHistoryIdx: (inputHistoryIdx) => set({ inputHistoryIdx }),
-  setDraftText: (draftText) => set({ draftText }),
-  setHistoryOpen: (historyOpen) => set({ historyOpen }),
-  setToolFilter: (toolFilter) => set({ toolFilter }),
-  setContextFilter: (contextFilter) => set({ contextFilter }),
-}));
+    setStreamingAssistantId: (streamingAssistantId) => set({ streamingAssistantId }),
+    setUserScrolledUp: (userScrolledUp) => set({ userScrolledUp }),
+    addExpandedReasoning: (idx) =>
+      set((s) => {
+        if (s.expandedReasoning.includes(idx)) return s;
+        return { expandedReasoning: [...s.expandedReasoning, idx] };
+      }),
+    deleteExpandedReasoning: (idx) =>
+      set((s) => ({ expandedReasoning: s.expandedReasoning.filter(i => i !== idx) })),
+    clearExpandedReasoning: () => set({ expandedReasoning: [] }),
 
-// ── Non-reactive accessors ──
+    setTotalTokensUsed: (totalTokensUsed) => set({ totalTokensUsed }),
+    addToolUsage: (name, args) =>
+      set((s) => {
+        const next = { ...s.toolUsage };
+        next[name] = (next[name] || 0) + 1;
+        const hist = [...s.toolHistory, { name, args, ts: Date.now() }].slice(-50);
+        return { toolUsage: next, toolHistory: hist };
+      }),
+    clearToolUsage: () => set({ toolUsage: {} }),
+    clearToolHistory: () => set({ toolHistory: [] }),
+    setPillEventCount: (pillEventCount) => set({ pillEventCount }),
+    bumpPillEventCount: () => set((s) => ({ pillEventCount: s.pillEventCount + 1 })),
+    setLastAgentState: (lastAgentState) => set({ lastAgentState }),
+    setLastUsageText: (lastUsageText) => set({ lastUsageText }),
+    setLastAgentDiag: (lastAgentDiag) => set({ lastAgentDiag }),
 
-export function getChatMessages(): ChatMessage[] {
-  return useChatStore.getState().messages;
+    setUserFocusFile: (userFocusFile) => set({ userFocusFile }),
+    setUserFocusNode: (userFocusNode) => set({ userFocusNode }),
+
+    setInputText: (inputText) => set({ inputText }),
+    setAttachedFiles: (attachedFiles) => set({ attachedFiles }),
+    addAttachedFile: (file) => set((s) => ({ attachedFiles: [...s.attachedFiles, file] })),
+    removeAttachedFile: (idx) => set((s) => ({ attachedFiles: s.attachedFiles.filter((_, i) => i !== idx) })),
+    clearAttachedFiles: () => set({ attachedFiles: [] }),
+    pushInputHistory: (text) =>
+      set((s) => {
+        const filtered = s.inputHistory.filter((t) => t !== text);
+        if (filtered.length >= 50) filtered.shift();
+        return { inputHistory: [...filtered, text] };
+      }),
+    setInputHistory: (inputHistory) => set({ inputHistory }),
+    setInputHistoryIdx: (inputHistoryIdx) => set({ inputHistoryIdx }),
+    setDraftText: (draftText) => set({ draftText }),
+    setHistoryOpen: (historyOpen) => set({ historyOpen }),
+    setToolFilter: (toolFilter) => set({ toolFilter }),
+    setContextFilter: (contextFilter) => set({ contextFilter }),
+  }));
 }
-export function setChatMessages(msgs: ChatMessage[]): void {
-  useChatStore.getState().setMessages(msgs);
+
+// ── Per-panel store registry ──
+
+const stores = new Map<string, ChatStoreApi>();
+
+/** Default store — backward compatible, used when no storeId is specified. */
+const DEFAULT_ID = '__default__';
+stores.set(DEFAULT_ID, createChatStoreImpl());
+
+/** Get or create a chat store by panel/store ID. When omitted, returns the default store. */
+export function getChatStore(storeId?: string): ChatStoreApi {
+  const id = storeId || DEFAULT_ID;
+  let s = stores.get(id);
+  if (!s) {
+    s = createChatStoreImpl();
+    stores.set(id, s);
+  }
+  return s;
 }
-export function bumpChat(): void {
-  useChatStore.getState().bump();
+
+/** The default Zustand store hook — backward compatible. */
+export const useChatStore = getChatStore();
+
+// ── Non-reactive accessors (all accept optional storeId) ──
+
+function _store(storeId?: string) { return getChatStore(storeId).getState(); }
+
+export function getChatMessages(storeId?: string): ChatMessage[] {
+  return _store(storeId).messages;
 }
-export function findStreamingAssistant(): { msg: AssistantMessage; idx: number } | null {
-  const msgs = useChatStore.getState().messages;
+export function setChatMessages(msgs: ChatMessage[], storeId?: string): void {
+  getChatStore(storeId).getState().setMessages(msgs);
+}
+export function bumpChat(storeId?: string): void {
+  getChatStore(storeId).getState().bump();
+}
+export function findStreamingAssistant(storeId?: string): { msg: AssistantMessage; idx: number } | null {
+  const msgs = _store(storeId).messages;
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
     if (m.role === 'assistant' && (m as AssistantMessage).status === 'streaming') {
@@ -266,39 +300,39 @@ export function findStreamingAssistant(): { msg: AssistantMessage; idx: number }
 
 // ── Session accessors ──
 
-export function getSessions(): ChatSessionMeta[] { return useChatStore.getState().sessions; }
-export function getActiveIdx(): number { return useChatStore.getState().activeIdx; }
-export function getActiveSessionId(): number | null {
-  const { sessions, activeIdx } = useChatStore.getState();
+export function getSessions(storeId?: string): ChatSessionMeta[] { return _store(storeId).sessions; }
+export function getActiveIdx(storeId?: string): number { return _store(storeId).activeIdx; }
+export function getActiveSessionId(storeId?: string): number | null {
+  const { sessions, activeIdx } = _store(storeId);
   return sessions[activeIdx]?.id ?? null;
 }
-export function getSessionTokens(): Record<number, number> { return useChatStore.getState().sessionTokens; }
-export function getSessionMessageModels(): Record<number, ChatMessage[]> { return useChatStore.getState().sessionMessageModels; }
-export function getNextSessionId(): number { return useChatStore.getState().nextSessionId; }
+export function getSessionTokens(storeId?: string): Record<number, number> { return _store(storeId).sessionTokens; }
+export function getSessionMessageModels(storeId?: string): Record<number, ChatMessage[]> { return _store(storeId).sessionMessageModels; }
+export function getNextSessionId(storeId?: string): number { return _store(storeId).nextSessionId; }
 
 // ── Panel chrome accessors ──
 
-export function getPanelMode(): PanelMode { return useChatStore.getState().panelMode; }
-export function getActiveTab(): AgentTab { return useChatStore.getState().activeTab; }
-export function getProjectPath(): string { return useChatStore.getState().projectPath; }
+export function getPanelMode(storeId?: string): PanelMode { return _store(storeId).panelMode; }
+export function getActiveTab(storeId?: string): AgentTab { return _store(storeId).activeTab; }
+export function getProjectPath(storeId?: string): string { return _store(storeId).projectPath; }
 
 // ── Streaming accessors ──
 
-export function getStreamingAssistantId(): MessageId | null { return useChatStore.getState().streamingAssistantId; }
-export function getUserScrolledUp(): boolean { return useChatStore.getState().userScrolledUp; }
-export function getExpandedReasoningSet(): Set<number> {
-  return new Set(useChatStore.getState().expandedReasoning);
+export function getStreamingAssistantId(storeId?: string): MessageId | null { return _store(storeId).streamingAssistantId; }
+export function getUserScrolledUp(storeId?: string): boolean { return _store(storeId).userScrolledUp; }
+export function getExpandedReasoningSet(storeId?: string): Set<number> {
+  return new Set(_store(storeId).expandedReasoning);
 }
 
 // ── Input state accessors ──
 
-export function getInputText(): string { return useChatStore.getState().inputText; }
-export function getAttachedFiles(): Array<{ path: string; name: string; size: number }> {
-  return useChatStore.getState().attachedFiles;
+export function getInputText(storeId?: string): string { return _store(storeId).inputText; }
+export function getAttachedFiles(storeId?: string): Array<{ path: string; name: string; size: number }> {
+  return _store(storeId).attachedFiles;
 }
-export function getInputHistory(): string[] { return useChatStore.getState().inputHistory; }
-export function getInputHistoryIdx(): number { return useChatStore.getState().inputHistoryIdx; }
-export function getDraftText(): string { return useChatStore.getState().draftText; }
-export function isHistoryOpen(): boolean { return useChatStore.getState().historyOpen; }
-export function getToolFilter(): string { return useChatStore.getState().toolFilter; }
-export function getContextFilter(): string { return useChatStore.getState().contextFilter; }
+export function getInputHistory(storeId?: string): string[] { return _store(storeId).inputHistory; }
+export function getInputHistoryIdx(storeId?: string): number { return _store(storeId).inputHistoryIdx; }
+export function getDraftText(storeId?: string): string { return _store(storeId).draftText; }
+export function isHistoryOpen(storeId?: string): boolean { return _store(storeId).historyOpen; }
+export function getToolFilter(storeId?: string): string { return _store(storeId).toolFilter; }
+export function getContextFilter(storeId?: string): string { return _store(storeId).contextFilter; }

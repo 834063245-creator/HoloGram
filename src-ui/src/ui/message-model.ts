@@ -10,17 +10,18 @@
 export type MessageId = string;
 
 // ⚡ _idSeq → chat-store.ts
-import { useChatStore } from './chat-store';
+import { getChatStore } from './chat-store';
 
-export function nextMsgId(): MessageId {
-  const id = useChatStore.getState().msgIdSeq + 1;
-  useChatStore.setState({ msgIdSeq: id });
+export function nextMsgId(storeId?: string): MessageId {
+  const store = getChatStore(storeId).getState();
+  const id = store.msgIdSeq + 1;
+  getChatStore(storeId).setState({ msgIdSeq: id });
   return `m${id}`;
 }
 
 /** Resets the global message id counter (for test isolation or /clear). */
-export function resetMsgIdCounter(): void {
-  useChatStore.setState({ msgIdSeq: 0 });
+export function resetMsgIdCounter(storeId?: string): void {
+  getChatStore(storeId).setState({ msgIdSeq: 0 });
 }
 
 // ── Attachments ──────────────────────────────────────────
