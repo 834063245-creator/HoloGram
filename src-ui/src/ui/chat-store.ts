@@ -1,338 +1,255 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Chat Zustand store — single source of truth for chat state.
+// Chat store — backward-compatible shim over 4 domain stores.
 //
-// Holds three categories:
-//   1. Messages (React rendering) — messages[], version
-//   2. Sessions (lifecycle) — sessions[], activeIdx, tokens, models, nextId
-//   3. Panel state (UI chrome) — mode, tabs, streaming, metrics, focus
+// State is split across:
+//   messages-store.ts — messages[], version, streamingAssistantId, expandedReasoning
+//   session-store.ts  — sessions[], activeIdx, sessionTokens, sessionMessageModels, nextId, msgIdSeq
+//   panel-store.ts    — panelMode, activeTab, projectPath, tool schemas, metrics, focus, filters
+//   input-store.ts    — inputText, attachedFiles, inputHistory, inputHistoryIdx, draftText
 //
-// Non-serializable state (agent handles, DOM refs, callbacks, rAF handles,
-// AbortControllers) stays in chat.ts / chat-session.ts.
-//
-// ⚡ 多窗口重构：单例 → 工厂模式。getChatStore(storeId?) 按面板分片。
+// This file merges them into a combined getState()/setState()/subscribe() interface
+// so that all existing consumers work unchanged. New code should import directly
+// from the domain store it needs.
 
-import { create } from 'zustand';
+import { useStore } from 'zustand';
 import type { ChatMessage, AssistantMessage, MessageId } from './message-model';
 import type { ToolSchema } from '../provider/types';
 
-// ── Session descriptor (serializable subset) ──
+import {
+  getMessagesStore,
+  useMessagesStore,
+  getMessages,
+  setMessages,
+  bumpMessages,
+  getStreamingAssistantId as _msg_streamingId,
+  getUserScrolledUp as _msg_scrolledUp,
+  getExpandedReasoningSet as _msg_expandedReasoning,
+  findStreamingAssistant as _findStreaming,
+  type MessagesStoreApi,
+} from './messages-store';
 
-export interface ChatSessionMeta {
-  id: number;
-  label: string;
+import {
+  getSessionStore,
+  getSessions,
+  getActiveIdx,
+  getActiveSessionId,
+  getSessionTokens,
+  getSessionMessageModels,
+  getNextSessionId,
+  getMsgIdSeq,
+  nextMsgId,
+  type SessionStoreApi,
+} from './session-store';
+
+import {
+  getPanelStore,
+  getPanelMode,
+  getActiveTab,
+  getProjectPath,
+  getTotalTokensUsed,
+  isHistoryOpen,
+  getToolFilter,
+  getContextFilter,
+  type PanelStoreApi,
+} from './panel-store';
+
+import {
+  getInputStore,
+  getInputText,
+  getAttachedFiles,
+  getInputHistory,
+  getInputHistoryIdx,
+  getDraftText,
+  type InputStoreApi,
+} from './input-store';
+
+// ── Re-export types (backward compat) ──
+
+export type { ChatSessionMeta } from './session-store';
+export type { PanelMode, AgentTab, AgentState } from './panel-store';
+
+// ── Combined state type (for type inference) ──
+
+type MessagesState = ReturnType<MessagesStoreApi['getState']>;
+type SessionState = ReturnType<SessionStoreApi['getState']>;
+type PanelState = ReturnType<PanelStoreApi['getState']>;
+type InputState = ReturnType<InputStoreApi['getState']>;
+
+// ⚡ ponytail: merged type — manually maintained to match the 4 sub-stores.
+// If you add a field to a sub-store, add it here too or the TS compiler will
+// catch mismatched selectors at the consumer.
+export interface ChatStore extends MessagesState, SessionState, PanelState, InputState {}
+
+export type ChatStoreApi = ReturnType<typeof getChatStore>;
+
+// ── Field → store routing tables ──
+
+const MSG_KEYS = new Set([
+  'messages', 'version', 'streamingAssistantId', 'userScrolledUp', 'expandedReasoning',
+  'setMessages', 'bump', 'setStreamingAssistantId', 'setUserScrolledUp',
+  'addExpandedReasoning', 'deleteExpandedReasoning', 'clearExpandedReasoning',
+]);
+
+const SESS_KEYS = new Set([
+  'sessions', 'activeIdx', 'sessionTokens', 'sessionMessageModels', 'nextSessionId', 'msgIdSeq',
+  'setSessions', 'setActiveIdx', 'setSessionTokens', 'setSessionMessageModels',
+  'removeSession', 'setNextSessionId', 'setMsgIdSeq',
+]);
+
+const PANEL_KEYS = new Set([
+  'panelMode', 'activeTab', 'projectPath', 'toolSchemas', 'totalTokensUsed',
+  'toolUsage', 'toolHistory', 'pillEventCount', 'lastAgentState', 'lastUsageText',
+  'lastAgentDiag', 'userFocusFile', 'userFocusNode', 'historyOpen', 'toolFilter', 'contextFilter',
+  'setPanelMode', 'setActiveTab', 'setProjectPath', 'setToolSchemas', 'setTotalTokensUsed',
+  'addToolUsage', 'clearToolUsage', 'clearToolHistory', 'setPillEventCount',
+  'bumpPillEventCount', 'setLastAgentState', 'setLastUsageText', 'setLastAgentDiag',
+  'setUserFocusFile', 'setUserFocusNode', 'setHistoryOpen', 'setToolFilter', 'setContextFilter',
+]);
+
+const INPUT_KEYS = new Set([
+  'inputText', 'attachedFiles', 'inputHistory', 'inputHistoryIdx', 'draftText',
+  'setInputText', 'setAttachedFiles', 'addAttachedFile', 'removeAttachedFile',
+  'clearAttachedFiles', 'pushInputHistory', 'setInputHistory', 'setInputHistoryIdx',
+  'setDraftText',
+]);
+
+// ── Merge helper ──
+
+function mergeState(storeId?: string): ChatStore {
+  return {
+    ...getMessagesStore(storeId).getState(),
+    ...getSessionStore(storeId).getState(),
+    ...getPanelStore(storeId).getState(),
+    ...getInputStore(storeId).getState(),
+  } as ChatStore;
 }
 
-export type PanelMode = 'pill' | 'input' | 'panel' | 'hud';
-export type AgentTab = 'chat' | 'tools' | 'context';
-export type AgentState = 'idle' | 'thinking' | 'running' | 'error';
+function routePartial(partial: Record<string, unknown>, storeId?: string): void {
+  const msgPart: Record<string, unknown> = {};
+  const sessPart: Record<string, unknown> = {};
+  const panelPart: Record<string, unknown> = {};
+  const inputPart: Record<string, unknown> = {};
 
-interface ToolHistoryEntry { name: string; args: string; ts: number }
-
-interface ChatStore {
-  // ── Messages ──
-  messages: ChatMessage[];
-  version: number;
-
-  // ── Sessions ──
-  sessions: ChatSessionMeta[];
-  activeIdx: number;
-  sessionTokens: Record<number, number>;
-  sessionMessageModels: Record<number, ChatMessage[]>;
-  nextSessionId: number;
-  msgIdSeq: number;
-
-  // ── Panel chrome ──
-  panelMode: PanelMode;
-  activeTab: AgentTab;
-  projectPath: string;
-  toolSchemas: ToolSchema[];
-
-  // ── Streaming ──
-  streamingAssistantId: MessageId | null;
-  userScrolledUp: boolean;
-  /** Reasoning block indices that are manually expanded (kept as number[] — Set is non-serializable). */
-  expandedReasoning: number[];
-
-  // ── Metrics / counters ──
-  totalTokensUsed: number;
-  toolUsage: Record<string, number>;
-  toolHistory: ToolHistoryEntry[];
-  pillEventCount: number;
-  lastAgentState: AgentState;
-  lastUsageText: string;
-  lastAgentDiag: string;
-
-  // ── User context (injected into agent hooks) ──
-  userFocusFile: string | null;
-  userFocusNode: { name: string; location?: string } | null;
-
-  // ── Input state (ChatInput React component will own these) ──
-  inputText: string;
-  attachedFiles: Array<{ path: string; name: string; size: number }>;
-
-  // ── Input history (up/down arrow navigation) ──
-  inputHistory: string[];
-  inputHistoryIdx: number;
-  draftText: string;
-
-  // ── Panel visibility ──
-  historyOpen: boolean;
-
-  // ── Tool / Context filter ──
-  toolFilter: string;
-  contextFilter: string;
-
-  // ── Actions ──
-  setMessages: (msgs: ChatMessage[]) => void;
-  bump: () => void;
-
-  setSessions: (sessions: ChatSessionMeta[]) => void;
-  setActiveIdx: (idx: number) => void;
-  setSessionTokens: (id: number, count: number) => void;
-  setSessionMessageModels: (id: number, models: ChatMessage[]) => void;
-  removeSession: (id: number) => void;
-
-  setPanelMode: (mode: PanelMode) => void;
-  setActiveTab: (tab: AgentTab) => void;
-  setProjectPath: (path: string) => void;
-  setToolSchemas: (schemas: ToolSchema[]) => void;
-
-  setStreamingAssistantId: (id: MessageId | null) => void;
-  setUserScrolledUp: (v: boolean) => void;
-  addExpandedReasoning: (idx: number) => void;
-  deleteExpandedReasoning: (idx: number) => void;
-  clearExpandedReasoning: () => void;
-
-  setTotalTokensUsed: (n: number) => void;
-  addToolUsage: (name: string, args: string) => void;
-  clearToolUsage: () => void;
-  clearToolHistory: () => void;
-  setPillEventCount: (n: number) => void;
-  bumpPillEventCount: () => void;
-  setLastAgentState: (state: AgentState) => void;
-  setLastUsageText: (s: string) => void;
-  setLastAgentDiag: (s: string) => void;
-
-  setUserFocusFile: (file: string | null) => void;
-  setUserFocusNode: (node: { name: string; location?: string } | null) => void;
-
-  setInputText: (text: string) => void;
-  setAttachedFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
-  addAttachedFile: (file: { path: string; name: string; size: number }) => void;
-  removeAttachedFile: (idx: number) => void;
-  clearAttachedFiles: () => void;
-  pushInputHistory: (text: string) => void;
-  setInputHistory: (history: string[]) => void;
-  setInputHistoryIdx: (idx: number) => void;
-  setDraftText: (text: string) => void;
-  setHistoryOpen: (open: boolean) => void;
-  setToolFilter: (filter: string) => void;
-  setContextFilter: (filter: string) => void;
-}
-
-// ── Zustand store type (the hook + getState/setState) ──
-
-export type ChatStoreApi = ReturnType<typeof createChatStoreImpl>;
-
-// ── Store factory ──
-
-function createChatStoreImpl() {
-  return create<ChatStore>((set) => ({
-    messages: [],
-    version: 0,
-    sessions: [],
-    activeIdx: -1,
-    sessionTokens: {},
-    sessionMessageModels: {},
-    nextSessionId: 1,
-    msgIdSeq: 0,
-
-    panelMode: 'pill',
-    activeTab: 'chat',
-    projectPath: '',
-    toolSchemas: [],
-
-    streamingAssistantId: null,
-    userScrolledUp: false,
-    expandedReasoning: [],
-
-    totalTokensUsed: 0,
-    toolUsage: {},
-    toolHistory: [],
-    pillEventCount: 0,
-    lastAgentState: 'idle',
-    lastUsageText: '',
-    lastAgentDiag: '',
-
-    userFocusFile: null,
-    userFocusNode: null,
-
-    inputText: '',
-    attachedFiles: [],
-
-    inputHistory: [],
-    inputHistoryIdx: -1,
-    draftText: '',
-
-    historyOpen: false,
-
-    toolFilter: '',
-    contextFilter: '',
-
-    setMessages: (msgs) => set({ messages: msgs, version: Date.now() }),
-    bump: () => set((s) => ({ version: s.version + 1 })),
-
-    setSessions: (sessions) => set({ sessions }),
-    setActiveIdx: (activeIdx) => set({ activeIdx }),
-    setSessionTokens: (id, count) =>
-      set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
-    setSessionMessageModels: (id, models) =>
-      set((s) => ({ sessionMessageModels: { ...s.sessionMessageModels, [id]: models } })),
-    removeSession: (id) =>
-      set((s) => {
-        const { [id]: _, ...restTokens } = s.sessionTokens;
-        const { [id]: __, ...restModels } = s.sessionMessageModels;
-        return { sessionTokens: restTokens, sessionMessageModels: restModels };
-      }),
-
-    setPanelMode: (panelMode) => set({ panelMode }),
-    setActiveTab: (activeTab) => set({ activeTab }),
-    setProjectPath: (projectPath) => set({ projectPath }),
-    setToolSchemas: (toolSchemas) => set({ toolSchemas }),
-
-    setStreamingAssistantId: (streamingAssistantId) => set({ streamingAssistantId }),
-    setUserScrolledUp: (userScrolledUp) => set({ userScrolledUp }),
-    addExpandedReasoning: (idx) =>
-      set((s) => {
-        if (s.expandedReasoning.includes(idx)) return s;
-        return { expandedReasoning: [...s.expandedReasoning, idx] };
-      }),
-    deleteExpandedReasoning: (idx) =>
-      set((s) => ({ expandedReasoning: s.expandedReasoning.filter(i => i !== idx) })),
-    clearExpandedReasoning: () => set({ expandedReasoning: [] }),
-
-    setTotalTokensUsed: (totalTokensUsed) => set({ totalTokensUsed }),
-    addToolUsage: (name, args) =>
-      set((s) => {
-        const next = { ...s.toolUsage };
-        next[name] = (next[name] || 0) + 1;
-        const hist = [...s.toolHistory, { name, args, ts: Date.now() }].slice(-50);
-        return { toolUsage: next, toolHistory: hist };
-      }),
-    clearToolUsage: () => set({ toolUsage: {} }),
-    clearToolHistory: () => set({ toolHistory: [] }),
-    setPillEventCount: (pillEventCount) => set({ pillEventCount }),
-    bumpPillEventCount: () => set((s) => ({ pillEventCount: s.pillEventCount + 1 })),
-    setLastAgentState: (lastAgentState) => set({ lastAgentState }),
-    setLastUsageText: (lastUsageText) => set({ lastUsageText }),
-    setLastAgentDiag: (lastAgentDiag) => set({ lastAgentDiag }),
-
-    setUserFocusFile: (userFocusFile) => set({ userFocusFile }),
-    setUserFocusNode: (userFocusNode) => set({ userFocusNode }),
-
-    setInputText: (inputText) => set({ inputText }),
-    setAttachedFiles: (attachedFiles) => set({ attachedFiles }),
-    addAttachedFile: (file) => set((s) => ({ attachedFiles: [...s.attachedFiles, file] })),
-    removeAttachedFile: (idx) => set((s) => ({ attachedFiles: s.attachedFiles.filter((_, i) => i !== idx) })),
-    clearAttachedFiles: () => set({ attachedFiles: [] }),
-    pushInputHistory: (text) =>
-      set((s) => {
-        const filtered = s.inputHistory.filter((t) => t !== text);
-        if (filtered.length >= 50) filtered.shift();
-        return { inputHistory: [...filtered, text] };
-      }),
-    setInputHistory: (inputHistory) => set({ inputHistory }),
-    setInputHistoryIdx: (inputHistoryIdx) => set({ inputHistoryIdx }),
-    setDraftText: (draftText) => set({ draftText }),
-    setHistoryOpen: (historyOpen) => set({ historyOpen }),
-    setToolFilter: (toolFilter) => set({ toolFilter }),
-    setContextFilter: (contextFilter) => set({ contextFilter }),
-  }));
-}
-
-// ── Per-panel store registry ──
-
-const stores = new Map<string, ChatStoreApi>();
-
-/** Default store — backward compatible, used when no storeId is specified. */
-const DEFAULT_ID = '__default__';
-stores.set(DEFAULT_ID, createChatStoreImpl());
-
-/** Get or create a chat store by panel/store ID. When omitted, returns the default store. */
-export function getChatStore(storeId?: string): ChatStoreApi {
-  const id = storeId || DEFAULT_ID;
-  let s = stores.get(id);
-  if (!s) {
-    s = createChatStoreImpl();
-    stores.set(id, s);
+  for (const k of Object.keys(partial)) {
+    if (MSG_KEYS.has(k)) msgPart[k] = partial[k];
+    else if (SESS_KEYS.has(k)) sessPart[k] = partial[k];
+    else if (PANEL_KEYS.has(k)) panelPart[k] = partial[k];
+    else if (INPUT_KEYS.has(k)) inputPart[k] = partial[k];
   }
-  return s;
+
+  if (Object.keys(msgPart).length) getMessagesStore(storeId).setState(msgPart as any);
+  if (Object.keys(sessPart).length) getSessionStore(storeId).setState(sessPart as any);
+  if (Object.keys(panelPart).length) getPanelStore(storeId).setState(panelPart as any);
+  if (Object.keys(inputPart).length) getInputStore(storeId).setState(inputPart as any);
 }
 
-/** The default Zustand store hook — backward compatible. */
-export const useChatStore = getChatStore();
+// ── Shim registry — one combined facade per panel ──
 
-// ── Non-reactive accessors (all accept optional storeId) ──
+const shims = new Map<string, ReturnType<typeof createShim>>();
 
-function _store(storeId?: string) { return getChatStore(storeId).getState(); }
+function createShim(storeId: string) {
+  const getState = () => mergeState(storeId);
 
-export function getChatMessages(storeId?: string): ChatMessage[] {
-  return _store(storeId).messages;
-}
-export function setChatMessages(msgs: ChatMessage[], storeId?: string): void {
-  getChatStore(storeId).getState().setMessages(msgs);
-}
-export function bumpChat(storeId?: string): void {
-  getChatStore(storeId).getState().bump();
-}
-export function findStreamingAssistant(storeId?: string): { msg: AssistantMessage; idx: number } | null {
-  const msgs = _store(storeId).messages;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.role === 'assistant' && (m as AssistantMessage).status === 'streaming') {
-      return { msg: m as AssistantMessage, idx: i };
+  const setState = (partial: any, _replace?: boolean) => {
+    if (typeof partial === 'function') {
+      partial = partial(getState());
     }
+    routePartial(partial, storeId);
+  };
+
+  const subscribe = (listener: (state: any, prevState: any) => void) => {
+    let prev = getState();
+    const u1 = getMessagesStore(storeId).subscribe((s) => {
+      const next = getState();
+      listener(next, prev);
+      prev = next;
+    });
+    const u2 = getSessionStore(storeId).subscribe((s) => {
+      const next = getState();
+      listener(next, prev);
+      prev = next;
+    });
+    const u3 = getPanelStore(storeId).subscribe((s) => {
+      const next = getState();
+      listener(next, prev);
+      prev = next;
+    });
+    const u4 = getInputStore(storeId).subscribe((s) => {
+      const next = getState();
+      listener(next, prev);
+      prev = next;
+    });
+    return () => { u1(); u2(); u3(); u4(); };
+  };
+
+  return { getState, setState, subscribe };
+}
+
+// ── Public API — backward-compatible with old chat-store.ts ──
+
+/** Combined store facade — delegates to the 4 domain stores.
+ *  @deprecated New code should import from the specific domain store:
+ *    messages-store.ts, session-store.ts, panel-store.ts, input-store.ts */
+export function getChatStore(storeId?: string) {
+  const id = storeId || '__default__';
+  let shim = shims.get(id);
+  if (!shim) {
+    shim = createShim(id);
+    shims.set(id, shim);
   }
-  return null;
+  return shim;
 }
 
-// ── Session accessors ──
-
-export function getSessions(storeId?: string): ChatSessionMeta[] { return _store(storeId).sessions; }
-export function getActiveIdx(storeId?: string): number { return _store(storeId).activeIdx; }
-export function getActiveSessionId(storeId?: string): number | null {
-  const { sessions, activeIdx } = _store(storeId);
-  return sessions[activeIdx]?.id ?? null;
-}
-export function getSessionTokens(storeId?: string): Record<number, number> { return _store(storeId).sessionTokens; }
-export function getSessionMessageModels(storeId?: string): Record<number, ChatMessage[]> { return _store(storeId).sessionMessageModels; }
-export function getNextSessionId(storeId?: string): number { return _store(storeId).nextSessionId; }
-
-// ── Panel chrome accessors ──
-
-export function getPanelMode(storeId?: string): PanelMode { return _store(storeId).panelMode; }
-export function getActiveTab(storeId?: string): AgentTab { return _store(storeId).activeTab; }
-export function getProjectPath(storeId?: string): string { return _store(storeId).projectPath; }
-
-// ── Streaming accessors ──
-
-export function getStreamingAssistantId(storeId?: string): MessageId | null { return _store(storeId).streamingAssistantId; }
-export function getUserScrolledUp(storeId?: string): boolean { return _store(storeId).userScrolledUp; }
-export function getExpandedReasoningSet(storeId?: string): Set<number> {
-  return new Set(_store(storeId).expandedReasoning);
+// ponytail: useStore types require StoreApi<ChatStore> but our shim is {getState,setState,subscribe}.
+// Cast through unknown — the runtime API is compatible.
+/** Zustand-compatible hook for the combined store.
+ *  @deprecated Prefer useMessagesStore / individual domain hooks. */
+export function useChatStore<T>(selector: (state: ChatStore) => T): T {
+  return (useStore as any)(getChatStore(), selector);
 }
 
-// ── Input state accessors ──
+// ── Accessor re-exports (all delegate to domain stores) ──
 
-export function getInputText(storeId?: string): string { return _store(storeId).inputText; }
-export function getAttachedFiles(storeId?: string): Array<{ path: string; name: string; size: number }> {
-  return _store(storeId).attachedFiles;
-}
-export function getInputHistory(storeId?: string): string[] { return _store(storeId).inputHistory; }
-export function getInputHistoryIdx(storeId?: string): number { return _store(storeId).inputHistoryIdx; }
-export function getDraftText(storeId?: string): string { return _store(storeId).draftText; }
-export function isHistoryOpen(storeId?: string): boolean { return _store(storeId).historyOpen; }
-export function getToolFilter(storeId?: string): string { return _store(storeId).toolFilter; }
-export function getContextFilter(storeId?: string): string { return _store(storeId).contextFilter; }
+export const getChatMessages = getMessages;
+export const setChatMessages = setMessages;
+export const bumpChat = bumpMessages;
+export const findStreamingAssistant = _findStreaming;
+
+// Streaming
+export const getStreamingAssistantId = _msg_streamingId;
+export const getUserScrolledUp = _msg_scrolledUp;
+export const getExpandedReasoningSet = _msg_expandedReasoning;
+
+// Session (re-exported)
+export {
+  getSessions,
+  getActiveIdx,
+  getActiveSessionId,
+  getSessionTokens,
+  getSessionMessageModels,
+  getNextSessionId,
+  getMsgIdSeq,
+  nextMsgId,
+};
+
+// Panel (re-exported)
+export {
+  getPanelMode,
+  getActiveTab,
+  getProjectPath,
+  getTotalTokensUsed,
+  isHistoryOpen,
+  getToolFilter,
+  getContextFilter,
+};
+
+// Input (re-exported)
+export {
+  getInputText,
+  getAttachedFiles,
+  getInputHistory,
+  getInputHistoryIdx,
+  getDraftText,
+};

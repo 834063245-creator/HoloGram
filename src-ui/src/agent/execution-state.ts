@@ -18,25 +18,9 @@ import { createStore } from 'zustand/vanilla';
 
 export type StateChangeListener = () => void;
 
-export type SubAgentStatus = 'Running' | 'Completed' | 'Failed' | 'Stopped';
-
-export interface SubAgentHandle {
-  id: string;
-  description: string;
-  status: SubAgentStatus;
-  startedAt: number;
-  result?: string;
-  error?: string;
-}
-
 interface PermCard {
   resolve: (r: { allow: boolean; remember: boolean }) => void;
   cleanup: () => void;
-}
-
-interface SubAgentEntry {
-  handle: SubAgentHandle;
-  abortController: AbortController;
 }
 
 // ── Zustand store — serialisable state only ──
@@ -45,11 +29,7 @@ interface ExecState {
   isRunning: boolean;
   sessionVersion: number;
   permCardCount: number;
-  subAgentCount: number;
-  subCompleted: SubAgentHandle[];
 }
-
-const MAX_COMPLETED = 20;
 
 // ── Public API type — what createExecState() returns ──
 
@@ -60,8 +40,6 @@ export interface ExecStateInstance {
   readonly abortSignal: AbortSignal | undefined;
   readonly sessionVersion: number;
   readonly permCardCount: number;
-  readonly subAgentCount: number;
-
   // ── 主 Agent 生命周期 ──
   start(): AbortSignal;
   done(): void;
@@ -76,12 +54,6 @@ export interface ExecStateInstance {
   enqueuePerm<T>(fn: () => Promise<T>): Promise<T>;
   resetPermQueue(): void;
 
-  // ── 子Agent 管理 ──
-  registerSubAgent(id: string, handle: SubAgentHandle): AbortController;
-  subAgentDone(id: string, status: 'Completed' | 'Failed' | 'Stopped', result?: string, error?: string): void;
-  stopSubAgent(id: string): boolean;
-  pollCompleted(): SubAgentHandle[];
-
   // ── 订阅（委托给 Zustand） ──
   onChange(fn: StateChangeListener): () => void;
 }
@@ -93,8 +65,6 @@ export function createExecState(): ExecStateInstance {
     isRunning: false,
     sessionVersion: 0,
     permCardCount: 0,
-    subAgentCount: 0,
-    subCompleted: [],
   }));
 
   // ── Per-instance closures — non-serialisable mutable state ──
@@ -102,7 +72,6 @@ export function createExecState(): ExecStateInstance {
   let _abortController: AbortController | null = null;
   let _permQueue: Promise<void> = Promise.resolve();
   let _permCards: PermCard[] = [];
-  let _subAgents = new Map<string, SubAgentEntry>();
 
   function _set(s: Partial<ExecState>): void {
     store.setState(s);
@@ -116,13 +85,6 @@ export function createExecState(): ExecStateInstance {
     }
   }
 
-  function _addCompleted(handle: SubAgentHandle): void {
-    store.setState((s) => {
-      const next = [...s.subCompleted, handle];
-      return { subCompleted: next.length > MAX_COMPLETED ? next.slice(-MAX_COMPLETED) : next };
-    });
-  }
-
   // ── Public API ──
 
   const self: ExecStateInstance = {
@@ -130,7 +92,7 @@ export function createExecState(): ExecStateInstance {
 
     get isBusy(): boolean {
       const s = store.getState();
-      return s.isRunning || _subAgents.size > 0 || s.permCardCount > 0;
+      return s.isRunning || s.permCardCount > 0;
     },
 
     get isRunning(): boolean {
@@ -147,10 +109,6 @@ export function createExecState(): ExecStateInstance {
 
     get permCardCount(): number {
       return store.getState().permCardCount;
-    },
-
-    get subAgentCount(): number {
-      return _subAgents.size;
     },
 
     // ── 主 Agent 生命周期 ──
@@ -172,16 +130,9 @@ export function createExecState(): ExecStateInstance {
         _abortController.abort();
         _abortController = null;
       }
-      for (const [, entry] of _subAgents) {
-        entry.abortController.abort();
-        entry.handle.status = 'Stopped' as any;
-        entry.handle.error = 'stopped by user';
-        _addCompleted(entry.handle);
-      }
-      _subAgents.clear();
       _cancelAllPermissions();
       _permQueue = Promise.resolve();
-      _set({ isRunning: false, permCardCount: 0, subAgentCount: 0 });
+      _set({ isRunning: false, permCardCount: 0 });
     },
 
     forceReset(): void {
@@ -224,44 +175,6 @@ export function createExecState(): ExecStateInstance {
       _cancelAllPermissions();
       _permQueue = Promise.resolve();
       _set({ permCardCount: 0 });
-    },
-
-    // ── 子Agent 管理 ──
-
-    registerSubAgent(id: string, handle: SubAgentHandle): AbortController {
-      const ac = new AbortController();
-      _subAgents.set(id, { handle, abortController: ac });
-      _set({ subAgentCount: _subAgents.size });
-      return ac;
-    },
-
-    subAgentDone(id: string, status: 'Completed' | 'Failed' | 'Stopped', result?: string, error?: string): void {
-      const entry = _subAgents.get(id);
-      if (!entry) return;
-      entry.handle.status = status as any;
-      if (result !== undefined) entry.handle.result = result;
-      if (error !== undefined) entry.handle.error = error;
-      _addCompleted(entry.handle);
-      _subAgents.delete(id);
-      _set({ subAgentCount: _subAgents.size });
-    },
-
-    stopSubAgent(id: string): boolean {
-      const entry = _subAgents.get(id);
-      if (!entry) return false;
-      entry.abortController.abort();
-      entry.handle.status = 'Stopped' as any;
-      entry.handle.error = 'stopped by user';
-      _addCompleted(entry.handle);
-      _subAgents.delete(id);
-      _set({ subAgentCount: _subAgents.size });
-      return true;
-    },
-
-    pollCompleted(): SubAgentHandle[] {
-      const results = [...store.getState().subCompleted];
-      store.setState({ subCompleted: [] });
-      return results;
     },
 
     // ── 订阅（委托给 Zustand） ──

@@ -691,19 +691,6 @@ ${goal}
         });
       }
 
-      // Check for permission denial — stop the agent immediately
-      const permDenied = pendingResults.some(r => {
-        const output = r.output || '';
-        return output.includes('权限被拒绝') || output.includes('permission denied')
-          || (r.err && (r.err.includes('权限') || r.err.includes('permission')));
-      });
-      if (permDenied) {
-        this._execState.stop();
-        this._sink({ kind: EventKind.Notice, level: 'warn', text: '权限被拒绝，Agent 已停止' });
-        this._saveSession();
-        return;
-      }
-
       // Save session after each complete turn (fire-and-forget)
       this._saveSession();
 
