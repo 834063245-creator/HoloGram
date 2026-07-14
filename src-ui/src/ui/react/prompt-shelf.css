@@ -70,7 +70,8 @@
       flex-shrink: 0; color: var(--pass); margin-top: 1px;
     }
     .prompt-shelf__detail {
-      margin-top: 6px; padding: 5px 10px;
+      margin-top: 6px; min-height: calc(18px * var(--font-scale));
+      padding: 5px 10px;
       font-family: var(--font-mono); font-size: calc(10px * var(--font-scale));
       color: var(--text-dim);
       background: rgba(10, 20, 40, 0.4);
@@ -128,3 +129,23 @@
     }
     .prompt-shelf__perm-btn--deny:hover { background: rgba(217, 68, 68, 0.15); border-color: rgba(217, 68, 68, 0.3); }
 
+    /* Free-form custom input */
+    .prompt-shelf__custom {
+      margin-top: 6px;
+    }
+    .prompt-shelf__custom-input {
+      width: 100%; padding: 6px 10px;
+      font-family: var(--font-body); font-size: calc(11px * var(--font-scale));
+      background: rgba(0,0,0,0.2);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 0;
+      color: var(--starlight-dim);
+      outline: none;
+      transition: border-color var(--snap);
+    }
+    .prompt-shelf__custom-input:focus {
+      border-color: var(--signal-glow);
+    }
+    .prompt-shelf__custom-input::placeholder {
+      color: var(--text-faint);
+    }

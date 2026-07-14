@@ -785,6 +785,14 @@
       display: block;
     }
 
+        /* Streaming text — plain pre-wrap div, no react-markdown parse */
+    .msg-streaming-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.7;
+      color: rgba(200, 215, 235, 0.92);
+    }
+
     /* Streaming typing — incomplete line being received */
     .streaming-typing {
       white-space: pre-wrap;

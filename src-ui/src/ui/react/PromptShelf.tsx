@@ -34,8 +34,10 @@ export type PromptData = AskPrompt | PermissionPrompt;
 
 function svgIcon(name: string, size: number = 12): string {
   const icons: Record<string, string> = {
-    'check-circle': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+        'check-circle': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
     close: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+    lock: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    shield: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
   };
   return icons[name] || '';
 }
@@ -140,13 +142,32 @@ const AskCard: React.FC<{
         })}
       </div>
 
-      {/* Detail preview (hovered option's description) */}
-      {hoveredOption?.description && (
-        <div className="prompt-shelf__detail">
-          <span className="prompt-shelf__detail-label">{hoveredOption.label}</span>
-          <span className="prompt-shelf__detail-text">{hoveredOption.description}</span>
-        </div>
-      )}
+      {/* Detail preview — always rendered at fixed height to prevent jitter */}
+      <div className="prompt-shelf__detail">
+        {hoveredOption?.description ? (
+          <>
+            <span className="prompt-shelf__detail-label">{hoveredOption.label}</span>
+            <span className="prompt-shelf__detail-text">{hoveredOption.description}</span>
+          </>
+        ) : (
+          <span className="prompt-shelf__detail-text" style={{ opacity: 0 }}>&nbsp;</span>
+        )}
+      </div>
+
+      {/* Free-form input for custom answers beyond predefined options */}
+      <div className="prompt-shelf__custom">
+        <input
+          className="prompt-shelf__custom-input"
+          type="text"
+          placeholder="或者直接输入自定义回答…"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
+              e.preventDefault();
+              onResolve([(e.target as HTMLInputElement).value.trim()]);
+            }
+          }}
+        />
+      </div>
 
       {/* Multi-select confirm */}
       {prompt.multiSelect && selected.size > 0 && (
@@ -178,7 +199,7 @@ const PermCard: React.FC<{
   return (
     <div className="prompt-shelf__card" role="dialog" aria-modal="false">
       <div className="prompt-shelf__head">
-        <span className="prompt-shelf__tag">🔐 权限</span>
+        <span className="prompt-shelf__tag"><span dangerouslySetInnerHTML={{ __html: svgIcon('lock', 10) }} /> 权限</span>
         <span className="prompt-shelf__question">{prompt.toolName}</span>
       </div>
       {prompt.subject && (
@@ -188,15 +209,15 @@ const PermCard: React.FC<{
       <div className="prompt-shelf__perm-btns">
         <button className="prompt-shelf__perm-btn prompt-shelf__perm-btn--session"
           onClick={() => onResolve({ allow: true, remember: true })} type="button">
-          本次会话允许
+          <span dangerouslySetInnerHTML={{ __html: svgIcon('shield', 12) }} /> 本次会话允许
         </button>
         <button className="prompt-shelf__perm-btn prompt-shelf__perm-btn--once"
           onClick={() => onResolve({ allow: true, remember: false })} type="button">
-          允许 Enter
+          <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} /> 允许 Enter
         </button>
         <button className="prompt-shelf__perm-btn prompt-shelf__perm-btn--deny"
           onClick={() => onResolve({ allow: false, remember: false })} type="button">
-          拒绝 Esc
+          <span dangerouslySetInnerHTML={{ __html: svgIcon('close', 12) }} /> 拒绝 Esc
         </button>
       </div>
     </div>

@@ -152,10 +152,21 @@ const MarkdownContent: React.FC<{
     if (el) linkifyNodeNames(el, onNavigateToNode);
   }, [text, streaming, onNavigateToNode]);
 
-  // During streaming, use a stable wrapper so React reconciliation is efficient
-  // react-markdown re-renders from scratch each time, but that's fine at rAF rate
+  // 【性能】streaming 时用纯文本渲染，避免 react-markdown 全量重解析。
+  // 累积文本每帧都在增长，react-markdown 的 AST 解析是 O(n)，
+  // 5000 字输出时累计解析量 ≈ 12.5 万字（O(n²)），是长文卡顿的主犯。
+  // finalised 后才跑一次完整的 markdown 渲染。
+  if (streaming) {
+    return (
+      <div ref={containerRef} className="msg-text msg-markdown streaming">
+        <div className="msg-streaming-text">{text}</div>
+        <span className="streaming-typing">▊</span>
+      </div>
+    );
+  }
+
   return (
-    <div ref={containerRef} className={`msg-text msg-markdown${streaming ? ' streaming' : ''}`}>
+    <div ref={containerRef} className="msg-text msg-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -165,7 +176,6 @@ const MarkdownContent: React.FC<{
       >
         {text}
       </ReactMarkdown>
-      {streaming && <span className="streaming-typing">▊</span>}
     </div>
   );
 });
