@@ -859,15 +859,16 @@ export class Workspace {
           newAgent.setPreflightHooks(preflightHooks);
           loadEngineSnapshot(hookCtx, ws.path).catch(() => {});
         }
-        // Sub-agent tool — same as _setupAgentInner
+        // Sub-agent tool — uses workspace pool for timeout/abort safety
         {
           const agentRef = newAgent;
           r.register(createSubAgentTool(
             async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
-              const parentSig = new AbortController().signal;
+              const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
               const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
               return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
             },
+            ws.subAgentPool,
           ));
         }
         // Compaction stats tool

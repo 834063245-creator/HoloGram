@@ -975,7 +975,7 @@ export type SubAgentSpawner = (
 
 export function createSubAgentTool(
   spawner: SubAgentSpawner,
-  pool?: import('./coordinator').SubAgentPool,
+  pool: import('./coordinator').SubAgentPool,
 ): Tool {
   return {
     name: () => 'agent_spawn',
@@ -1014,35 +1014,28 @@ export function createSubAgentTool(
       const mode = subagentType ? 'fresh' : 'fork';
       const callId = (args['_callId'] as string) || `sub_${Date.now()}`;
 
-            // G2: async spawn via pool — fire-and-forget, parent doesn't block
-      if (pool) {
-        // ⚡ R4 fix: capture coordinator abort signal so stopAll() actually stops sub-agents
-        let subSignal: AbortSignal | undefined;
-        const spawnId = pool.spawn(
-          description,
-          async (onMsg) => {
-            const result = await spawner(description, prompt, onMsg, mode, toolAllowlist ?? null, subSignal);
-            return result;
-          },
-          (chunk) => {
-            onProgress?.(chunk);
-          },
-          callId,
-        );
-        if (spawnId) {
-          subSignal = pool.getSubSignal(spawnId);
-        }
-        if (!spawnId) {
-          return `无法启动子Agent：已达到并发上限（${pool.runningCount} 个正在运行）。请等待已有子Agent完成后再试，或用 agent_stop_all 批量停止。`;
-        }
-        return `Fork started — processing in background\n[task-notification: 子Agent "${description}" 已启动 (ID: ${callId})。结果将通过独立通知返回。]`;
+      // All sub-agent spawns go through the pool — fire-and-forget, non-blocking.
+      // The pool handles timeout (2 min default) and concurrency (max 5).
+      // Results arrive asynchronously via injectTaskNotification.
+      let subSignal: AbortSignal | undefined;
+      const spawnId = pool.spawn(
+        description,
+        async (onMsg) => {
+          const result = await spawner(description, prompt, onMsg, mode, toolAllowlist ?? null, subSignal);
+          return result;
+        },
+        (chunk) => {
+          onProgress?.(chunk);
+        },
+        callId,
+      );
+      if (spawnId) {
+        subSignal = pool.getSubSignal(spawnId);
       }
-
-      // Fallback: synchronous spawn (legacy behavior, no pool)
-      const result = await spawner(description, prompt, onProgress, mode, toolAllowlist ?? null);
-
-      if (result.err) return `[子 Agent 错误] ${result.err}`;
-      return result.text;
+      if (!spawnId) {
+        return `无法启动子Agent：已达到并发上限（${pool.runningCount} 个正在运行）。请等待已有子Agent完成后再试，或用 agent_stop_all 批量停止。`;
+      }
+      return `Fork started — processing in background\n[task-notification: 子Agent "${description}" 已启动 (ID: ${callId})。结果将通过独立通知返回。]`;
     },
   };
 }

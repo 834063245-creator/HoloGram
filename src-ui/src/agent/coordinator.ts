@@ -38,7 +38,7 @@ interface PendingAgent {
 export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
 
 const DEFAULT_MAX_CONCURRENT = 5;
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
 /** Pool of asynchronously running sub-agents.
  *  Spawn is fire-and-forget — parent agent doesn't block.
