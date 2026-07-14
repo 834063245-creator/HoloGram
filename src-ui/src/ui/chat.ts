@@ -543,6 +543,7 @@ export class ChatPanel {
 
   /** Build DomContext bridge for extracted DOM construction functions. */
   private _domCtx(): Dom.DomContext {
+    const self = this; // ponytail: captured for getters — getter `this` is ctx object, not ChatPanel
     return {
       panelId: this.panelId,
       container: this.container,
@@ -591,11 +592,11 @@ export class ChatPanel {
       getPanel: () => this.panel,
       getInputArea: () => this.inputArea,
       // Slash panel — migrated to React
-      _slashController: this._slashController,      // @ autocomplete
-      atPopup: this.atPopup,
-      setAtPopup: (el) => { this.atPopup = el; },
-      atIdx: this.atIdx,
-      setAtIdx: (n) => { this.atIdx = n; },
+      _slashController: this._slashController,      // @ autocomplete — getters keep buildDOM keydown handler live
+      get atPopup() { return self.atPopup; },
+      setAtPopup: (el) => { self.atPopup = el; },
+      get atIdx() { return self.atIdx; },
+      setAtIdx: (n) => { self.atIdx = n; },
       atFileCache: this.atFileCache,
       setAtFileCache: (c) => { this.atFileCache = c; },
       // Settings
@@ -606,13 +607,13 @@ export class ChatPanel {
       _toolSchemas: getChatStore(this.panelId).getState().toolSchemas,
       toolUsage: getChatStore(this.panelId).getState().toolUsage,
       toolHistory: getChatStore(this.panelId).getState().toolHistory,
-      // Input history
-      inputHistory: this.inputHistory,
-      setInputHistory: (h) => { this.inputHistory = h; },
-      historyIdx: this.historyIdx,
-      setHistoryIdx: (n) => { this.historyIdx = n; },
-      draftText: this.draftText,
-      setDraftText: (s) => { this.draftText = s; },
+      // Input history — getters keep buildDOM keydown handler live
+      get inputHistory() { return self.inputHistory; },
+      setInputHistory: (h) => { self.inputHistory = h; },
+      get historyIdx() { return self.historyIdx; },
+      setHistoryIdx: (n) => { self.historyIdx = n; },
+      get draftText() { return self.draftText; },
+      setDraftText: (s) => { self.draftText = s; },
       // Callbacks
       handleAtInput: () => this.handleAtInput(),
       handleSlashInput: () => this.handleSlashInput(),

@@ -520,8 +520,9 @@ export function buildDOM(ctx: DomContext): void {
 // ═══════════════════════════════════════════════════════════════════
 
 export function switchTab(ctx: DomContext, tab: 'chat' | 'tools' | 'context'): void {
-  if (ctx._activeTab === tab) return;
-  ctx._activeTab = tab;
+  const store = getChatStore(ctx.panelId).getState();
+  if (store.activeTab === tab) return;
+  store.setActiveTab(tab);
 
   // Update tab buttons
   ctx.getPanel().querySelectorAll('.chat-panel-tab').forEach(btn => {
@@ -541,7 +542,7 @@ export function switchTab(ctx: DomContext, tab: 'chat' | 'tools' | 'context'): v
 }
 
 export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | 'running' | 'error', detail?: string): void {
-  ctx._lastAgentState = state;
+  getChatStore(ctx.panelId).getState().setLastAgentState(state);
   const panel = ctx.getPanel();
   const dot = panel.querySelector('.chat-status-dot') as HTMLElement;
   if (dot) dot.className = 'chat-status-dot ' + state;
@@ -560,8 +561,9 @@ export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | '
     modelEl.textContent = active.name ? `${active.name}/${ml}` : ml;
   }
   const tokensEl = panel.querySelector('.chat-status-tokens') as HTMLElement;
-  if (tokensEl && ctx.totalTokensUsed > 0) {
-    tokensEl.textContent = `${(ctx.totalTokensUsed / 1000).toFixed(1)}k tok`;
+  const tokensUsed = getChatStore(ctx.panelId).getState().totalTokensUsed;
+  if (tokensEl && tokensUsed > 0) {
+    tokensEl.textContent = `${(tokensUsed / 1000).toFixed(1)}k tok`;
   }
 }
 
