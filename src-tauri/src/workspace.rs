@@ -219,11 +219,11 @@ impl WorkspaceHandle {
 /// Collect mtimes of all source files under root, keyed by path.
 fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
     let mut map = std::collections::HashMap::new();
-    let exts = [
-        ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".go", ".rs", ".java", ".c",
-        ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".rb", ".cs", ".kt", ".kts", ".swift",
-        ".php", ".lua",
-    ];
+    // ponytail: dynamically load supported extensions from the engine's
+    // grammar loader instead of a hardcoded list — new grammar DLLs are
+    // automatically picked up without code changes.
+    let exts: std::collections::HashSet<String> =
+        engine_api::engine_supported_extensions().into_iter().collect();
     const IGNORE_DIRS: &[&str] = &[
         ".git",
         "node_modules",
@@ -266,8 +266,7 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
             continue;
         }
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let ext_with_dot = format!(".{}", ext);
-        if exts.contains(&ext_with_dot.as_str()) {
+        if exts.contains(ext) {
             if let Ok(meta) = path.metadata() {
                 if let Ok(mtime) = meta.modified() {
                     if let Ok(secs) = mtime.duration_since(std::time::UNIX_EPOCH) {

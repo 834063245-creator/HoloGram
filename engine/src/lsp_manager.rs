@@ -464,7 +464,10 @@ impl LspManager {
         }
     }
 
-    /// Scan project root for unique file extensions (limited to first 500 files).
+    /// Scan project root for unique file extensions.
+    /// Goes root → 1 subdir deep, up to 5000 files.
+    /// Bumped from 500 — large monorepos (engine + src-tauri + src-ui)
+    /// easily exceed 500 before reaching all language dirs.
     fn scan_project_extensions(root: &str) -> std::collections::HashSet<String> {
         let mut exts = std::collections::HashSet::new();
         let mut count = 0;
@@ -477,7 +480,7 @@ impl LspManager {
         };
         if let Ok(entries) = std::fs::read_dir(root_path) {
             for entry in entries.flatten() {
-                if count >= 500 { break; }
+                if count >= 5000 { break; }
                 let path = entry.path();
                 if path.is_dir() {
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -486,7 +489,7 @@ impl LspManager {
                     // Recurse one level
                     if let Ok(sub) = std::fs::read_dir(&path) {
                         for se in sub.flatten() {
-                            if count >= 500 { break; }
+                            if count >= 5000 { break; }
                             let sp = se.path();
                             if sp.is_file() {
                                 if let Some(ext) = sp.extension().and_then(|e| e.to_str()) {
