@@ -328,6 +328,10 @@ struct LspServerConfig {
     language_id: &'static str,
     /// File extensions handled by this server
     extensions: &'static [&'static str],
+    /// Configuration file that marks the correct workspace root.
+    /// If present and not found at project root, we search one level
+    /// of subdirectories and use the first match's parent as rootUri.
+    config_marker: &'static [&'static str],
 }
 
 const SERVER_CONFIGS: &[LspServerConfig] = &[
@@ -336,54 +340,63 @@ const SERVER_CONFIGS: &[LspServerConfig] = &[
         args: &[],
         language_id: "rust",
         extensions: &["rs"],
+        config_marker: &["Cargo.toml"],
     },
     LspServerConfig {
         command: "gopls",
         args: &[],
         language_id: "go",
         extensions: &["go"],
+        config_marker: &["go.mod"],
     },
     LspServerConfig {
         command: "pyright-langserver",
         args: &["--stdio"],
         language_id: "python",
         extensions: &["py", "pyi"],
+        config_marker: &["pyproject.toml", "setup.py", "setup.cfg"],
     },
     LspServerConfig {
         command: "typescript-language-server",
         args: &["--stdio"],
         language_id: "typescript",
         extensions: &["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"],
+        config_marker: &["tsconfig.json", "jsconfig.json"],
     },
     LspServerConfig {
         command: "clangd",
         args: &[],
         language_id: "cpp",
         extensions: &["c", "h", "cpp", "hpp", "cc", "hh", "cxx", "hxx"],
+        config_marker: &["compile_commands.json", "CMakeLists.txt", "Makefile"],
     },
     LspServerConfig {
         command: "jdtls",
         args: &[],
         language_id: "java",
         extensions: &["java"],
+        config_marker: &["pom.xml", "build.gradle", "build.gradle.kts"],
     },
     LspServerConfig {
         command: "omnisharp",
         args: &["--languageserver"],
         language_id: "csharp",
         extensions: &["cs"],
+        config_marker: &["*.sln", "*.csproj"],
     },
     LspServerConfig {
         command: "intelephense",
         args: &["--stdio"],
         language_id: "php",
         extensions: &["php"],
+        config_marker: &["composer.json"],
     },
     LspServerConfig {
         command: "kotlin-language-server",
         args: &[],
         language_id: "kotlin",
         extensions: &["kt", "kts"],
+        config_marker: &["build.gradle.kts", "settings.gradle.kts"],
     },
 ];
 
@@ -421,93 +434,102 @@ impl LspManager {
         }
     }
 
-    /// Warm the pool — spawn LSP servers whose file extensions exist in
-    /// the project. Call after index completes. Failures include diagnosis.
+    /// Warm the pool — spawn ALL configured LSP servers in parallel.
+    /// No extension scanning, no filtering: if a server is installed on PATH,
+    /// we try to start it. Slow starters don't block fast ones. Failures are
+    /// recorded in `last_warm_errors` for diagnostics. Call after index completes.
     pub fn warm(project_root: &str) {
         let mgr = Self::global();
         *mgr.project_root.write().unwrap() = Some(project_root.to_string());
         *mgr.initialized.write().unwrap() = true;
 
-        // Only warm servers for languages actually present in this project
-        let exts = Self::scan_project_extensions(project_root);
-        let relevant: Vec<&LspServerConfig> = if exts.is_empty() {
-            // No files found yet (empty project or scan failed) — warm all
-            SERVER_CONFIGS.iter().collect()
-        } else {
-            SERVER_CONFIGS.iter()
-                .filter(|cfg| cfg.extensions.iter().any(|e| exts.contains(*e)))
-                .collect()
-        };
-
-        for cfg in &relevant {
+        let root = project_root.to_string();
+        for cfg in SERVER_CONFIGS {
+            let root = Self::resolve_workspace_root(&root, cfg.config_marker);
             let cmd = cfg.command;
-            match Self::spawn_server(cfg, project_root) {
-                Ok(process) => {
-                    tracing::info!(cmd, "[lsp_manager] server started");
-                    mgr.pool
-                        .write()
-                        .unwrap()
-                        .insert(cmd, Arc::new(Mutex::new(Some(process))));
-                    // Clear any previous error for this command
-                    mgr.last_warm_errors.write().unwrap().remove(cmd);
+            let cfg: &'static LspServerConfig = cfg; // const slice → 'static
+            std::thread::spawn(move || {
+                match Self::spawn_server(cfg, &root) {
+                    Ok(process) => {
+                        tracing::info!(cmd, "[lsp_manager] server started");
+                        mgr.pool
+                            .write()
+                            .unwrap()
+                            .insert(cmd, Arc::new(Mutex::new(Some(process))));
+                        mgr.last_warm_errors.write().unwrap().remove(cmd);
+                    }
+                    Err(e) => {
+                        let diagnosed = Self::diagnose_error(cmd, &e);
+                        let err_msg = format!("spawn+init {}: {}", cmd, diagnosed);
+                        tracing::error!(cmd, err = %diagnosed, "[lsp_manager] server unavailable");
+                        mgr.last_warm_errors
+                            .write()
+                            .unwrap()
+                            .insert(cmd.to_string(), err_msg);
+                    }
                 }
-                Err(e) => {
-                    let diagnosed = Self::diagnose_error(cmd, &e);
-                    let err_msg = format!("spawn+init {}: {}", cmd, diagnosed);
-                    tracing::error!(cmd, err = %diagnosed, "[lsp_manager] server unavailable");
-                    mgr.last_warm_errors
-                        .write()
-                        .unwrap()
-                        .insert(cmd.to_string(), err_msg);
-                }
-            }
+            });
         }
     }
 
-    /// Scan project root for unique file extensions.
-    /// Goes root → 1 subdir deep, up to 5000 files.
-    /// Bumped from 500 — large monorepos (engine + src-tauri + src-ui)
-    /// easily exceed 500 before reaching all language dirs.
-    fn scan_project_extensions(root: &str) -> std::collections::HashSet<String> {
-        let mut exts = std::collections::HashSet::new();
-        let mut count = 0;
-        let root_path = std::path::Path::new(root);
-        // Skip dirs that are definitely not source code
-        let skip = |name: &str| -> bool {
-            matches!(name, "node_modules" | "target" | ".git" | ".hologram"
-                | "dist" | "build" | "__pycache__" | ".venv" | "venv"
-                | "vendor" | ".next" | ".nuxt")
-        };
-        if let Ok(entries) = std::fs::read_dir(root_path) {
+    /// Find the correct workspace root for an LSP server.
+    /// Searches for any of the config_marker files in the project root,
+    /// then one level of subdirectories. Returns the directory containing
+    /// the first match, or the project root if nothing found.
+    fn resolve_workspace_root(project_root: &str, markers: &[&str]) -> String {
+        if markers.is_empty() {
+            return project_root.to_string();
+        }
+        // Check project root first
+        if Self::dir_has_marker(project_root, markers) {
+            return project_root.to_string();
+        }
+        // Search immediate subdirectories
+        if let Ok(entries) = std::fs::read_dir(project_root) {
             for entry in entries.flatten() {
-                if count >= 5000 { break; }
                 let path = entry.path();
                 if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if skip(name) { continue; }
+                    if let Some(dir_str) = path.to_str() {
+                        if Self::dir_has_marker(dir_str, markers) {
+                            return dir_str.to_string();
+                        }
                     }
-                    // Recurse one level
-                    if let Ok(sub) = std::fs::read_dir(&path) {
-                        for se in sub.flatten() {
-                            if count >= 5000 { break; }
-                            let sp = se.path();
-                            if sp.is_file() {
-                                if let Some(ext) = sp.extension().and_then(|e| e.to_str()) {
-                                    exts.insert(ext.to_lowercase());
-                                    count += 1;
+                }
+            }
+        }
+        // Fallback: project root
+        project_root.to_string()
+    }
+
+    /// Check whether a directory contains any of the given marker files.
+    /// Supports literal names and extension globs (e.g. "*.sln").
+    fn dir_has_marker(dir: &str, markers: &[&str]) -> bool {
+        for marker in markers {
+            if marker.starts_with("*.") {
+                // Extension glob: check if any file with this extension exists
+                let ext = &marker[1..]; // ".sln", ".csproj"
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_file() {
+                            if let Some(file_ext) = p.extension().and_then(|e| e.to_str()) {
+                                let dot_ext = format!(".{}", file_ext);
+                                if dot_ext.eq_ignore_ascii_case(ext) {
+                                    return true;
                                 }
                             }
                         }
                     }
-                } else if path.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        exts.insert(ext.to_lowercase());
-                        count += 1;
-                    }
+                }
+            } else {
+                // Literal filename
+                let full = std::path::Path::new(dir).join(marker);
+                if full.exists() {
+                    return true;
                 }
             }
         }
-        exts
+        false
     }
 
     /// Diagnose common LSP spawn failures and return actionable guidance.

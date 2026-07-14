@@ -1008,10 +1008,10 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
-    // Trigger LSP warm if not yet initialized (background — non-blocking).
-    // Servers are only spawned during analyze_project; if the user opens
-    // settings before running analysis, they'd see "installed but not running".
-    if !crate::lsp_manager::LspManager::is_initialized() {
+    // Always warm LSP pool — ensures servers are bound to the current
+    // project root even after workspace switch. Old processes are killed
+    // automatically when their Arc is replaced in the pool.
+    {
         let proj = project_root();
         let root = if proj.as_os_str().is_empty() {
             std::env::current_dir().unwrap_or_default()
