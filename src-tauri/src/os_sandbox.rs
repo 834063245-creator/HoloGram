@@ -106,11 +106,32 @@ impl SandboxedChild {
 // Public functions
 // ═══════════════════════════════════════════════════════════════
 
+/// Detect dev build by checking if binary lives under target/debug/.
+/// ponytail: heuristic — avoids env-var ceremony. If someone renames their
+/// target dir or runs a release build via tauri dev, we miss it, but the
+/// worst case is a dev-only loop which won't happen in production anyway.
+fn is_dev_build() -> bool {
+    std::env::current_exe()
+        .map(|p| {
+            let s = p.to_string_lossy();
+            s.contains("target\\debug") || s.contains("target/debug")
+        })
+        .unwrap_or(false)
+}
+
 /// One-time init — call at app startup. Creates Job Object + AppContainer profile.
 /// Also sweeps residual ACL entries from previous crashes.
+/// In dev builds (binary under target/debug/), skips ACL operations entirely —
+/// modifying DACLs during `cargo tauri dev` triggers file system notifications
+/// that the watcher sees as source changes → rebuild → restart → ACL change → loop.
 pub fn init() {
     #[cfg(windows)]
     {
+        if is_dev_build() {
+            // Job Object only — no ACL touches to avoid Tauri watcher loop.
+            imp::job::init();
+            return;
+        }
         imp::sweep_residual_acls();
         imp::init_all();
     }
@@ -127,9 +148,13 @@ pub fn save_acl_snapshots() {
 
 /// Remove AppContainer ACEs from all directories modified by grant_path_acl.
 /// Called at app shutdown. Best-effort — failures are logged but not propagated.
+/// No-op in dev builds (ACLs were never modified).
 pub fn cleanup_acls() {
     #[cfg(windows)]
-    imp::cleanup_acls();
+    {
+        if is_dev_build() { return; }
+        imp::cleanup_acls();
+    }
 }
 
 /// Query the current sandbox status for UI display (spec §6.6).

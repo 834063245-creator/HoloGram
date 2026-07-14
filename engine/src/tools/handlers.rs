@@ -1008,6 +1008,21 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
+    // Trigger LSP warm if not yet initialized (background — non-blocking).
+    // Servers are only spawned during analyze_project; if the user opens
+    // settings before running analysis, they'd see "installed but not running".
+    if !crate::lsp_manager::LspManager::is_initialized() {
+        let proj = project_root();
+        let root = if proj.as_os_str().is_empty() {
+            std::env::current_dir().unwrap_or_default()
+        } else {
+            proj
+        };
+        let root_str = root.to_string_lossy().to_string();
+        std::thread::spawn(move || {
+            crate::lsp_manager::LspManager::warm(&root_str);
+        });
+    }
     // LSP status is independent of engine state — always collect it
     let lsp = crate::lsp_manager::LspManager::lsp_status();
     let lsp_available: Vec<&str> = lsp.iter()

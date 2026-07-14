@@ -690,7 +690,7 @@
 
     #settings-panel {
       position: fixed; top: 50%; left: 50%;
-      width: 440px; max-width: 92vw; max-height: 82vh;
+      width: 520px; max-width: 92vw; height: 540px; max-height: 86vh;
       z-index: 201;
       background: var(--panel-bg);
       backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
@@ -1003,6 +1003,43 @@
     .sp-add-form { margin-top: 8px; padding: 8px;
       background: rgba(10, 15, 25, 0.3); border: 1px solid rgba(40, 60, 100, 0.15);
       border-radius: 4px; }
+
+    /* ── Languages tab ── */
+    .sp-lsp-card {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px 12px; margin-bottom: 6px;
+      border-radius: 6px;
+      border: 1px solid rgba(40, 60, 100, 0.15);
+      background: transparent;
+    }
+    .sp-lsp-card.running { background: rgba(61,165,93,0.06); }
+    .sp-lsp-card.installed { background: rgba(214,150,34,0.06); }
+    .sp-lsp-card-icon { margin-top: 1px; flex-shrink: 0; }
+    .sp-lsp-card-body { flex: 1; min-width: 0; }
+    .sp-lsp-card-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sp-lsp-card-header .lang-name { font-weight: 600; font-size: 12px; }
+    .sp-lsp-card-header .lang-status { font-size: 10px; font-weight: 500; }
+    .sp-lsp-card-meta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+    .sp-lsp-card-meta code { font-size: 10px; }
+    .sp-lsp-card-err {
+      font-size: 10px; color: var(--text-muted); margin-top: 4px;
+      padding: 4px 8px; background: rgba(6, 14, 26, 0.5); border-radius: 4px;
+      word-break: break-all;
+    }
+
+    /* Install guide — collapsible */
+    .sp-install-toggle {
+      font-family: var(--font-hud); font-size: calc(8px * var(--font-scale)); font-weight: 600;
+      letter-spacing: 0.8px; text-transform: uppercase;
+      color: rgba(100, 140, 200, 0.62);
+      background: none; border: none; cursor: pointer; padding: 0;
+      display: flex; align-items: center; gap: 4px;
+      transition: color var(--snap);
+    }
+    .sp-install-toggle:hover { color: var(--signal); }
+    .sp-install-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+    .sp-install-row .lang-label { min-width: 80px; font-weight: 500; flex-shrink: 0; font-size: 11px; }
+    .sp-install-row code { font-size: 10px; }
 
     /* ═══════════════════════════════════════════════════════════════
        SHORTCUTS HUD — barely-there text, brightens on hover, no box

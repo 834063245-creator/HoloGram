@@ -61,6 +61,7 @@ const SettingsPanelApp: React.FC<{
   // LSP status
   const [lspStatus, setLspStatus] = useState<LspData | null>(null);
   const [lspLoading, setLspLoading] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   // Tool search
   const [toolFilter, setToolFilter] = useState('');
@@ -72,20 +73,38 @@ const SettingsPanelApp: React.FC<{
   const isAnthropic = active?.kind === 'anthropic';
 
   // ── Load LSP status when Languages tab opens ──
-  // ponytail: useRef gate prevents re-entry when invoke fails (lspLoading flips
-  // back to false → effect would fire again → infinite loop).
+  // Poll until at least one server is running (backend warm is async).
   const lspLoaded = useRef(false);
+  const lspPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (activeTab !== 'languages' || lspLoaded.current) return;
     lspLoaded.current = true;
     setLspLoading(true);
-    invoke<string>('hologram_call', { tool: 'engine_status', args: {} })
-      .then(raw => {
-        const parsed = JSON.parse(raw);
-        if (parsed?.lsp?.servers) setLspStatus(parsed.lsp);
-      })
-      .catch(() => {})
-      .finally(() => setLspLoading(false));
+
+    const fetchStatus = () => {
+      invoke<string>('rpc', { method: 'hologram_call', params: { tool: 'engine_status', args: {} } })
+        .then(raw => {
+          const parsed = JSON.parse(raw);
+          if (parsed?.lsp?.servers) {
+            setLspStatus(parsed.lsp);
+            // Stop polling once at least one server is running
+            const hasRunning = parsed.lsp.servers.some((s: any) => s.available);
+            if (hasRunning && lspPollTimer.current) {
+              clearInterval(lspPollTimer.current);
+              lspPollTimer.current = null;
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLspLoading(false));
+    };
+
+    fetchStatus();
+    // Poll every 2s until servers come up (max ~30s = 15 attempts)
+    lspPollTimer.current = setInterval(fetchStatus, 2000);
+    return () => {
+      if (lspPollTimer.current) clearInterval(lspPollTimer.current);
+    };
   }, [activeTab]);
 
   // ── Handlers ──
@@ -422,55 +441,68 @@ const SettingsPanelApp: React.FC<{
               <>
                 <div className="sp-section">
                   <div className="sp-section-title">语言服务器状态</div>
-                  <div className="sp-hint" style={{ margin: '4px 0 12px' }}>
+                  <div className="sp-hint" style={{ marginBottom: 10 }}>
                     {[
                       lspStatus.available.length > 0 && `${lspStatus.available.length} 运行中`,
                       lspStatus.servers.filter(s => !s.available && (s as any).installed).length > 0 &&
                         `${lspStatus.servers.filter(s => !s.available && (s as any).installed).length} 待启动`,
                       lspStatus.servers.filter(s => !s.available && !(s as any).installed).length > 0 &&
                         `${lspStatus.servers.filter(s => !s.available && !(s as any).installed).length} 未安装`,
-                    ].filter(Boolean).join(', ') || '没有检测到已安装的语言服务器'}
+                    ].filter(Boolean).join('  ·  ') || '没有检测到已安装的语言服务器'}
                   </div>
                   {lspStatus.servers.map(srv => {
                     const installed = (srv as any).installed === true;
-                    let icon: string, statusText: string, color: string;
+                    let icon: string, statusText: string, color: string, rowClass: string;
                     if (srv.available) {
-                      icon = 'check'; statusText = '运行中'; color = 'var(--green)';
+                      icon = 'check-circle'; statusText = '运行中'; color = 'var(--pass)'; rowClass = 'running';
                     } else if (installed) {
-                      icon = 'alert-circle'; statusText = '已安装'; color = 'var(--yellow)';
+                      icon = 'alert-circle'; statusText = '已安装'; color = 'var(--warn)'; rowClass = 'installed';
                     } else {
-                      icon = 'close'; statusText = '未安装'; color = 'var(--text-muted)';
+                      icon = 'close'; statusText = '未安装'; color = 'var(--text-muted)'; rowClass = '';
                     }
                     return (
-                      <div key={srv.language_id} className="sp-lsp-row" style={{
-                        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0',
-                        borderBottom: '1px solid var(--border-subtle)',
-                      }}>
-                        <span style={{ color }} dangerouslySetInnerHTML={{ __html: iconHtml(icon, 11) }} />
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, minWidth: 80 }}>{srv.language_id}</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 80 }}>.{srv.extensions.join(', ')}</span>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>{srv.command}</span>
-                        <span style={{ fontSize: 10, color }}>{statusText}</span>
-                        {!srv.available && srv.error && (
-                          <small style={{ color: 'var(--text-muted)' }}>{srv.error}</small>
-                        )}
+                      <div key={srv.language_id} className={`sp-lsp-card ${rowClass}`}>
+                        <span className="sp-lsp-card-icon" style={{ color }} dangerouslySetInnerHTML={{ __html: iconHtml(icon, 13) }} />
+                        <div className="sp-lsp-card-body">
+                          <div className="sp-lsp-card-header">
+                            <span className="lang-name">{srv.language_id}</span>
+                            <span className="lang-status" style={{ color }}>{statusText}</span>
+                          </div>
+                          <div className="sp-lsp-card-meta">
+                            <code>{srv.command}</code>
+                            &nbsp;·&nbsp; .{srv.extensions.join(', .')}
+                          </div>
+                          {!srv.available && srv.error && (
+                            <div className="sp-lsp-card-err">{srv.error}</div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-                <div className="sp-section" style={{ marginTop: 18 }}>
-                  <div className="sp-section-title">安装指南</div>
-                  <div className="sp-hint" dangerouslySetInnerHTML={{ __html: `
-                    <b>Python:</b> <code>npm install -g pyright</code><br>
-                    <b>TypeScript:</b> <code>npm install -g typescript-language-server typescript</code><br>
-                    <b>Rust:</b> <code>rustup component add rust-analyzer</code><br>
-                    <b>Go:</b> <code>go install golang.org/x/tools/gopls@latest</code><br>
-                    <b>C/C++:</b> <code>scoop install clangd</code> or <code>apt install clangd</code><br>
-                    <b>Java:</b> <code>scoop install jdtls</code><br>
-                    <b>C#:</b> <code>dotnet tool install --global OmniSharp</code><br>
-                    <b>PHP:</b> <code>npm install -g intelephense</code><br>
-                    <b>Kotlin:</b> <code>scoop install kotlin-language-server</code>
-                  `}} />
+                <div className="sp-section">
+                  <button className="sp-install-toggle" onClick={() => setShowInstallGuide(v => !v)}
+                    dangerouslySetInnerHTML={{ __html: iconHtml(showInstallGuide ? 'chevron-down' : 'chevron-right', 9) + ' 安装指南' }} />
+                  {showInstallGuide && (
+                    <div style={{ marginTop: 10, fontSize: 11, lineHeight: 1.8 }}>
+                      {[
+                        ['Python', 'npm install -g pyright'],
+                        ['TypeScript', 'npm install -g typescript-language-server typescript'],
+                        ['Rust', 'rustup component add rust-analyzer'],
+                        ['Go', 'go install golang.org/x/tools/gopls@latest'],
+                        ['C/C++', 'scoop install clangd'],
+                        ['Java', 'scoop install jdtls'],
+                        ['C#', 'dotnet tool install --global OmniSharp'],
+                        ['PHP', 'npm install -g intelephense'],
+                        ['Kotlin', 'scoop install kotlin-language-server'],
+                      ].map(([lang, cmd]) => (
+                        <div key={lang} className="sp-install-row">
+                          <span className="lang-label">{lang}</span>
+                          <code>{cmd}</code>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}
