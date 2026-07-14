@@ -18,8 +18,6 @@ import { rpc } from '../bridge';
 import {
   getChatStore,
   bumpChat,
-  getChatMessages,
-  setChatMessages,
 } from './chat-store';
 import type { ChatSessionMeta } from './chat-store';
 import { loadSettings, CHAT_MODES } from '../settings';

@@ -23,7 +23,10 @@ import {
   type SubAgentPart,
   type AssistantPart,
 } from '../message-model';
-import { useChatStore, bumpChat } from '../chat-store';
+import { bumpChat } from '../chat-store';
+import { getMessagesStore } from '../messages-store';
+
+import { useStore } from 'zustand';
 
 // ── Constants ──
 
@@ -650,9 +653,11 @@ const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
 const ChatMessagesApp: React.FC<{
   callbacks: ChatMessagesCallbacks;
   scrollContainer?: HTMLElement;
-}> = ({ callbacks, scrollContainer }) => {
-  const messages = useChatStore((s) => s.messages);
-  const version = useChatStore((s) => s.version);
+  storeId: string;
+}> = ({ callbacks, scrollContainer, storeId }) => {
+  const msgStore = useMemo(() => getMessagesStore(storeId), [storeId]);
+  const messages = useStore(msgStore, (s) => s.messages);
+  const version = useStore(msgStore, (s) => s.version);
 
   const listRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -798,11 +803,13 @@ export class ChatMessagesPanel {
   private _root: Root;
   private _mount: HTMLElement;
   private _scrollContainer: HTMLElement;
+  private _storeId: string;
   private _callbacks: ChatMessagesCallbacks = {};
 
   setCallbacks(cbs: ChatMessagesCallbacks): void { this._callbacks = cbs; }
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, storeId: string) {
+    this._storeId = storeId;
     this._scrollContainer = container;
     this._mount = document.createElement('div');
     container.appendChild(this._mount);
@@ -812,7 +819,7 @@ export class ChatMessagesPanel {
 
   /** Trigger re-render — called by store-aware code instead of manual bump(). */
   bump(): void {
-    bumpChat();
+    bumpChat(this._storeId);
   }
 
   private _render(): void {
@@ -820,6 +827,7 @@ export class ChatMessagesPanel {
       React.createElement(ChatMessagesApp, {
         callbacks: this._callbacks,
         scrollContainer: this._scrollContainer,
+        storeId: this._storeId,
       }),
     );
   }

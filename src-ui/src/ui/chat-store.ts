@@ -212,15 +212,17 @@ export function useChatStore<T>(selector: (state: ChatStore) => T): T {
 
 // ── Accessor re-exports (all delegate to domain stores) ──
 
-export const getChatMessages = getMessages;
-export const setChatMessages = setMessages;
-export const bumpChat = bumpMessages;
-export const findStreamingAssistant = _findStreaming;
+// ponytail: wrapper functions forward storeId so callers can isolate per-panel.
+// Direct re-exports would lose the storeId param and fall back to default store.
+export function getChatMessages(storeId?: string) { return getMessages(storeId); }
+export function setChatMessages(msgs: ChatMessage[], storeId?: string) { setMessages(msgs, storeId); }
+export const bumpChat = bumpMessages; // storeId already forwarded by bumpMessages
+export function findStreamingAssistant(storeId?: string) { return _findStreaming(storeId); }
 
 // Streaming
-export const getStreamingAssistantId = _msg_streamingId;
-export const getUserScrolledUp = _msg_scrolledUp;
-export const getExpandedReasoningSet = _msg_expandedReasoning;
+export function getStreamingAssistantId(storeId?: string) { return _msg_streamingId(storeId); }
+export function getUserScrolledUp(storeId?: string) { return _msg_scrolledUp(storeId); }
+export function getExpandedReasoningSet(storeId?: string) { return _msg_expandedReasoning(storeId); }
 
 // Session (re-exported)
 export {

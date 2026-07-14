@@ -94,8 +94,8 @@ export class ChatPanel {
 
   // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
   // ⚡ Zustand store-backed — getter/setter routes through chat-store.ts
-  private get messages(): ChatMessage[] { return getChatMessages(); }
-  private set messages(msgs: ChatMessage[]) { setChatMessages(msgs); }
+  private get messages(): ChatMessage[] { return getChatMessages(this.panelId); }
+  private set messages(msgs: ChatMessage[]) { setChatMessages(msgs, this.panelId); }
   // ⚡ streamingAssistantId / userScrolledUp → chat-store.ts
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
@@ -188,7 +188,7 @@ export class ChatPanel {
     reactRoot.className = 'chat-messages';
     this.msgList.style.display = 'none';
     this.msgList.parentElement?.insertBefore(reactRoot, this.msgList);
-    this._chatMessages = new ChatMessagesPanel(reactRoot);
+    this._chatMessages = new ChatMessagesPanel(reactRoot, this.panelId);
     this._chatMessages.setCallbacks({
       onCopyText: (text) => navigator.clipboard.writeText(text).catch(() => {}),
       onNavigateToNode: (nodeName) => {
@@ -249,15 +249,14 @@ export class ChatPanel {
       }).then(data.callback);
     });
     // ── Track user focus — file viewer / file tree / graph selection ──
-    bus.on('highlight:file', (filePath: string) => { getChatStore(this.panelId).getState().userFocusFile = filePath; getChatStore(this.panelId).getState().userFocusNode = null; });
-    bus.on('navigate:file', (filePath: string) => { getChatStore(this.panelId).getState().userFocusFile = filePath; getChatStore(this.panelId).getState().userFocusNode = null; });
+    bus.on('highlight:file', (filePath: string) => { getChatStore(this.panelId).setState({ userFocusFile: filePath, userFocusNode: null }); });
+    bus.on('navigate:file', (filePath: string) => { getChatStore(this.panelId).setState({ userFocusFile: filePath, userFocusNode: null }); });
     bus.on('graph:node-clicked', (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
-      getChatStore(this.panelId).getState().userFocusNode = { name: data.nodeName, location: data.location || undefined };
-      getChatStore(this.panelId).getState().userFocusFile = null;
+      getChatStore(this.panelId).setState({ userFocusNode: { name: data.nodeName, location: data.location || undefined }, userFocusFile: null });
     });
     // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
-      getChatStore(this.panelId).getState().lastAgentDiag = d.text;
+      getChatStore(this.panelId).setState({ lastAgentDiag: d.text });
       if (!d.ready && this.isOpen()) {
         this.refreshHint();
       }
@@ -339,10 +338,9 @@ export class ChatPanel {
     // ponytail: clear user focus when project changes — stale node/file refs
     // from the old workspace would misdirect the agent's tool calls.
     if (p && p !== getChatStore(this.panelId).getState().projectPath) {
-      getChatStore(this.panelId).getState().userFocusFile = null;
-      getChatStore(this.panelId).getState().userFocusNode = null;
+      getChatStore(this.panelId).setState({ userFocusFile: null, userFocusNode: null });
     }
-    getChatStore(this.panelId).getState().projectPath = p;
+    getChatStore(this.panelId).setState({ projectPath: p });
   }
 
   toggle(): void {
@@ -491,17 +489,18 @@ export class ChatPanel {
 
   /** Build SessionContext bridge for extracted session management functions. */
   private _sessionCtx(): Session.SessionContext {
+    const storeId = this.panelId;
     return {
-      storeId: this.panelId,
+      storeId,
       panel: this.panel,
       sessionTabs: this.sessionTabs,
       tabBar: this.tabBar,
-      getProjectPath: () => getChatStore(this.panelId).getState().projectPath,
+      getProjectPath: () => getChatStore(storeId).getState().projectPath,
       agentFactory: Session.getAgentFactory(),
-      getMessages: () => getChatMessages(),
-      setMessages: (msgs) => { setChatMessages(msgs); },
-      getStreamingAssistantId: () => getChatStore(this.panelId).getState().streamingAssistantId,
-      setStreamingAssistantId: (id) => { getChatStore(this.panelId).getState().setStreamingAssistantId(id); },
+      getMessages: () => getChatMessages(storeId),
+      setMessages: (msgs) => { setChatMessages(msgs, storeId); },
+      getStreamingAssistantId: () => getChatStore(storeId).getState().streamingAssistantId,
+      setStreamingAssistantId: (id) => { getChatStore(storeId).getState().setStreamingAssistantId(id); },
       // ⚡ Zustand store triggers React re-render on mutation
       flushReasoning: () => {},
       flushText: () => {},
@@ -510,13 +509,13 @@ export class ChatPanel {
       abort: () => this.abort(),
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       updateFooter: () => this.updateFooter(),
-      getTotalTokensUsed: () => getChatStore(this.panelId).getState().totalTokensUsed,
-      setTotalTokensUsed: (n) => { getChatStore(this.panelId).getState().setTotalTokensUsed(n); },
-      clearToolUsage: () => { getChatStore(this.panelId).getState().clearToolUsage(); },
-      clearToolHistory: () => { getChatStore(this.panelId).getState().clearToolHistory(); },
-      getLastUsageText: () => getChatStore(this.panelId).getState().lastUsageText,
-      setLastUsageText: (s) => { getChatStore(this.panelId).getState().lastUsageText = s; },
-      getLastAgentDiag: () => getChatStore(this.panelId).getState().lastAgentDiag,
+      getTotalTokensUsed: () => getChatStore(storeId).getState().totalTokensUsed,
+      setTotalTokensUsed: (n) => { getChatStore(storeId).getState().setTotalTokensUsed(n); },
+      clearToolUsage: () => { getChatStore(storeId).getState().clearToolUsage(); },
+      clearToolHistory: () => { getChatStore(storeId).getState().clearToolHistory(); },
+      getLastUsageText: () => getChatStore(storeId).getState().lastUsageText,
+      setLastUsageText: (s) => { getChatStore(storeId).setState({ lastUsageText: s }); },
+      getLastAgentDiag: () => getChatStore(storeId).getState().lastAgentDiag,
       clearInputHistory: () => { this.inputHistory = []; this.historyIdx = 0; this.draftText = ''; },
       getStarGraph: () => this.starGraph,
     };
@@ -657,38 +656,39 @@ export class ChatPanel {
 
   /** Build StreamContext bridge for extracted stream rendering functions. */
   private _streamCtx(): Stream.StreamContext {
+    const storeId = this.panelId;
     return {
-      storeId: this.panelId,
-      getMessages: () => getChatMessages(),
-      setMessages: (msgs) => { setChatMessages(msgs); },
-      getStreamingAssistantId: () => getStreamingAssistantId(),
-      setStreamingAssistantId: (id) => { getChatStore(this.panelId).getState().setStreamingAssistantId(id); },
-      getUserScrolledUp: () => getUserScrolledUp(),
-      setUserScrolledUp: (v) => { getChatStore(this.panelId).getState().setUserScrolledUp(v); },
+      storeId,
+      getMessages: () => getChatMessages(storeId),
+      setMessages: (msgs) => { setChatMessages(msgs, storeId); },
+      getStreamingAssistantId: () => getStreamingAssistantId(storeId),
+      setStreamingAssistantId: (id) => { getChatStore(storeId).getState().setStreamingAssistantId(id); },
+      getUserScrolledUp: () => getUserScrolledUp(storeId),
+      setUserScrolledUp: (v) => { getChatStore(storeId).getState().setUserScrolledUp(v); },
       getSyncRafId: () => this._syncRafId,
       setSyncRafId: (id) => { this._syncRafId = id; },
       getTurnPairs: () => Session.getTurnPairs(),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
       updateFooter: () => this.updateFooter(),
-      setLastUsageText: (s) => { getChatStore(this.panelId).getState().setLastUsageText(s); },
+      setLastUsageText: (s) => { getChatStore(storeId).getState().setLastUsageText(s); },
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
-      bumpPillBadge: () => { getChatStore(this.panelId).getState().bumpPillEventCount(); },
+      bumpPillBadge: () => { getChatStore(storeId).getState().bumpPillEventCount(); },
       animateBubbleIn: (el, delay) => this.animateBubbleIn(el, delay),
       setRunning: (_r: boolean) => { /* migrated to execState */ },
       abort: () => this.abort(),
       _updateStatusBar: (s, d) => this._updateStatusBar(s, d),
-      _recordToolUsage: (n, a) => { getChatStore(this.panelId).getState().addToolUsage(n, a); },
+      _recordToolUsage: (n, a) => { getChatStore(storeId).getState().addToolUsage(n, a); },
       _retractUserMessage: (m) => this._retractUserMessage(m),
       retractTurn: (i) => this.retractTurn(i),
       sendMessage: () => this.sendMessage(),
-      _updateTokens: (n) => { getChatStore(this.panelId).getState().setTotalTokensUsed(n); },
-      getProjectPath: () => getChatStore(this.panelId).getState().projectPath,
+      _updateTokens: (n) => { getChatStore(storeId).getState().setTotalTokensUsed(n); },
+      getProjectPath: () => getChatStore(storeId).getState().projectPath,
       getRunning: () => this._activeExec().isRunning,
       getAbortCtrl: () => this._activeExec().abortSignal ? { signal: this._activeExec().abortSignal } as AbortController : null,
       setAbortCtrl: (_c: any) => { /* managed by execState */ },
-      getExpandedReasoning: () => getExpandedReasoningSet(),
+      getExpandedReasoning: () => getExpandedReasoningSet(storeId),
     };
   }
 
@@ -891,7 +891,7 @@ export class ChatPanel {
     const signal = this._activeExec().start();
 
     // Reset auto-scroll for this new turn
-    getChatStore(this.panelId).getState().userScrolledUp = false;
+    getChatStore(this.panelId).setState({ userScrolledUp: false });
 
     const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
     if (hint) hint.remove();
@@ -923,7 +923,7 @@ export class ChatPanel {
   private runGoal(goal: string): void {
     if (!this.agent || this._activeExec().isRunning) return;
     const signal = this._activeExec().start();
-    getChatStore(this.panelId).getState().userScrolledUp = false;
+    getChatStore(this.panelId).setState({ userScrolledUp: false });
 
     const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
     if (hint) hint.remove();
@@ -954,7 +954,7 @@ export class ChatPanel {
 
   private async sendMessage(): Promise<void> {
     // Reset auto-scroll for this new turn
-    getChatStore(this.panelId).getState().userScrolledUp = false;
+    getChatStore(this.panelId).setState({ userScrolledUp: false });
 
     const text = this.inputArea.value.trim();
     if (!text) return;
@@ -1680,7 +1680,7 @@ export class ChatPanel {
   }
 
   private _resetPillBadge(): void {
-    getChatStore(this.panelId).getState().pillEventCount = 0;
+    getChatStore(this.panelId).setState({ pillEventCount: 0 });
     this.pillBadge.textContent = '';
     this.pillBadge.classList.remove('show');
   }
