@@ -564,7 +564,8 @@ export class ChatPanel {
       closeSession: (idx) => this.closeSession(idx),
       toggleHistory: () => this.toggleHistory(),
       closeHistory: () => this.closeHistory(),
-      running: this._activeExec().isRunning,
+      // ponytail: getters — live reads, not snapshots
+      get running() { return self._activeExec().isRunning; },
       // DOM element setters
       setPanel: (el) => { this.panel = el; },
       setMsgList: (el) => { this.msgList = el; },
@@ -592,21 +593,21 @@ export class ChatPanel {
       getPanel: () => this.panel,
       getInputArea: () => this.inputArea,
       // Slash panel — migrated to React
-      _slashController: this._slashController,      // @ autocomplete — getters keep buildDOM keydown handler live
+      get _slashController() { return self._slashController; },
       get atPopup() { return self.atPopup; },
       setAtPopup: (el) => { self.atPopup = el; },
       get atIdx() { return self.atIdx; },
       setAtIdx: (n) => { self.atIdx = n; },
-      atFileCache: this.atFileCache,
-      setAtFileCache: (c) => { this.atFileCache = c; },
+      get atFileCache() { return self.atFileCache; },
+      setAtFileCache: (c) => { self.atFileCache = c; },
       // Settings
-      onOpenSettings: this.onOpenSettings,
-      _onModeChange: this._onModeChange,
-      _onTrailToggle: this._onTrailToggle,
-      // Tool
-      _toolSchemas: getChatStore(this.panelId).getState().toolSchemas,
-      toolUsage: getChatStore(this.panelId).getState().toolUsage,
-      toolHistory: getChatStore(this.panelId).getState().toolHistory,
+      get onOpenSettings() { return self.onOpenSettings; },
+      get _onModeChange() { return self._onModeChange; },
+      get _onTrailToggle() { return self._onTrailToggle; },
+      // Tool — live from Zustand store
+      get _toolSchemas() { return getChatStore(self.panelId).getState().toolSchemas; },
+      get toolUsage() { return getChatStore(self.panelId).getState().toolUsage; },
+      get toolHistory() { return getChatStore(self.panelId).getState().toolHistory; },
       // Input history — getters keep buildDOM keydown handler live
       get inputHistory() { return self.inputHistory; },
       setInputHistory: (h) => { self.inputHistory = h; },
@@ -633,17 +634,19 @@ export class ChatPanel {
       hintText: () => this.hintText(),
       refreshHint: () => this.refreshHint(),
       getLastAgentDiag: () => getChatStore(this.panelId).getState().lastAgentDiag,
-      // State
-      _lastAgentState: getChatStore(this.panelId).getState().lastAgentState,
-      lastUsageText: getChatStore(this.panelId).getState().lastUsageText,
-      totalTokensUsed: getChatStore(this.panelId).getState().totalTokensUsed,
+      // State — live from Zustand store
+      get _lastAgentState() { return getChatStore(self.panelId).getState().lastAgentState; },
+      get lastUsageText() { return getChatStore(self.panelId).getState().lastUsageText; },
+      get totalTokensUsed() { return getChatStore(self.panelId).getState().totalTokensUsed; },
+      // ponytail: _expandedReasoning bridges store array→Set; kept snapshot for now since
+      // it's only consumed via toggleReasoning callback, not read directly from ctx
       _expandedReasoning: new Set(getChatStore(this.panelId).getState().expandedReasoning),
-      _activeTab: getChatStore(this.panelId).getState().activeTab,
-      attachedFiles: this.attachedFiles,
-      historyPanel: this.historyPanel,
-      setHistoryPanel: (el) => { this.historyPanel = el; },
-      historyOpen: this.historyOpen,
-      setHistoryOpen: (v) => { this.historyOpen = v; },
+      get _activeTab() { return getChatStore(self.panelId).getState().activeTab; },
+      get attachedFiles() { return self.attachedFiles; },
+      get historyPanel() { return self.historyPanel; },
+      setHistoryPanel: (el) => { self.historyPanel = el; },
+      get historyOpen() { return self.historyOpen; },
+      setHistoryOpen: (v) => { self.historyOpen = v; },
       toolCategory: (name) => ChatPanel.toolCategory(name),
       // Session persistence callbacks
       listSavedSessions: (p) => this.listSavedSessions(p),
