@@ -1,0 +1,27 @@
+# Tauri dev watcher ignore rules (gitignore syntax).
+# Paths here will NOT trigger a rebuild/restart in `cargo tauri dev`.
+
+# Build output — Cargo writes here on every build; without this the watcher
+# sees the changes and triggers another build → infinite restart loop.
+target/
+
+# Runtime data / logs (written while the app is running)
+../.hologram/
+.hologram/
+**/.hologram/
+*.log
+
+# Persisted graph snapshots regenerated on every analysis
+../hologram_graph.json
+../hologram_graph_files.json
+../hologram_before.json
+../hologram_graph.db
+../.last_project
+
+# Vector index / caches
+**/vectors.usearch
+**/dataflow/
+
+# Misc runtime scratch
+../nul
+../*.tmp

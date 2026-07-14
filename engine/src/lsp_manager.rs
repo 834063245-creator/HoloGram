@@ -76,11 +76,21 @@ impl LspProcess {
         let mut content_length: Option<usize> = None;
         loop {
             let mut line = String::new();
-            self.reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
+            let n = self.reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
+            if n == 0 {
+                // EOF — server exited without sending headers
+                break;
+            }
             let trimmed = line.trim();
-            if trimmed.is_empty() { break; }
-            if let Some(len_str) = trimmed.strip_prefix("Content-Length: ") {
-                content_length = len_str.trim().parse().ok();
+            // Skip leading noise (startup banners, stray log output, etc.)
+            if trimmed.is_empty() {
+                if content_length.is_some() { break; }
+                continue;
+            }
+            // Match "Content-Length: N" with flexible whitespace
+            let lower = trimmed.to_lowercase();
+            if let Some(val) = lower.strip_prefix("content-length:") {
+                content_length = val.trim().parse().ok();
             }
         }
         let len = content_length.ok_or("missing Content-Length")?;
@@ -382,6 +392,10 @@ impl LspManager {
         &MANAGER
     }
 
+    pub fn is_initialized() -> bool {
+        *Self::global().initialized.read().unwrap()
+    }
+
     fn new() -> Self {
         Self {
             pool: RwLock::new(HashMap::new()),
@@ -458,7 +472,11 @@ impl LspManager {
     }
 
     fn spawn_server(cfg: &LspServerConfig, root: &str) -> Result<LspProcess, String> {
-        let mut c = Command::new(cfg.command);
+        // Resolve full path — on Windows npm-global tools are .cmd wrappers
+        // that Command::new(cmd) won't find without the extension.
+        let exe = Self::resolve_cmd_path(cfg.command)
+            .unwrap_or_else(|| std::path::PathBuf::from(cfg.command));
+        let mut c = Command::new(&exe);
         c.args(cfg.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -637,26 +655,34 @@ impl LspManager {
         Self::global().last_warm_errors.read().unwrap().clone()
     }
 
-    /// Check whether a command exists on PATH without spawning it.
-    /// Always works — no warm() required. Used by lsp_status() to
-    /// distinguish "not started" from "not installed".
-    fn find_on_path(cmd: &str) -> bool {
+    /// Resolve a command to its full path on the filesystem.
+    /// On Windows, also checks .exe, .cmd, .bat extensions.
+    fn resolve_cmd_path(cmd: &str) -> Option<std::path::PathBuf> {
         if let Ok(paths) = std::env::var("PATH") {
             for dir in std::env::split_paths(&paths) {
-                if dir.join(cmd).exists() {
-                    return true;
+                let full = dir.join(cmd);
+                if full.exists() {
+                    return Some(full);
                 }
                 #[cfg(target_os = "windows")]
                 {
                     for ext in ["exe", "cmd", "bat"] {
-                        if dir.join(cmd).with_extension(ext).exists() {
-                            return true;
+                        let with_ext = dir.join(cmd).with_extension(ext);
+                        if with_ext.exists() {
+                            return Some(with_ext);
                         }
                     }
                 }
             }
         }
-        false
+        None
+    }
+
+    /// Check whether a command exists on PATH without spawning it.
+    /// Always works — no warm() required. Used by lsp_status() to
+    /// distinguish "not started" from "not installed".
+    fn find_on_path(cmd: &str) -> bool {
+        Self::resolve_cmd_path(cmd).is_some()
     }
 
     /// Full LSP status for the settings panel / engine_status.
