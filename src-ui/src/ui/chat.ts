@@ -182,7 +182,7 @@ export class ChatPanel {
   get progressSink(): (data: { step: number; toolName: string }) => void {
     return (data: { step: number; toolName: string }) => this._bus.emit('agent:progress', data);
   }
-  setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void { Session.setAgentFactory(fn); }
+  setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void { Session.setAgentFactory(this.panelId, fn); }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -229,7 +229,7 @@ export class ChatPanel {
         const agent = this.agent;
         if (!agent) return;
         const sessIdx = agent.getSession().length;
-        Session.getTurnPairs().push({ userText, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+        Session.getTurnPairs(this.panelId).push({ userText, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
         agent.run(signal, userText)
           .catch((err: any) => {
             if (!err.message?.includes('aborted')) {
@@ -319,7 +319,7 @@ export class ChatPanel {
   private _activeExec(): ExecStateInstance {
     const s = getChatStore(this.panelId).sess.getState();
     const sid = s.sessions[s.activeIdx]?.id;
-    return sid ? Session.getSessionExecState(sid) : this._exec;
+    return sid ? Session.getSessionExecState(this.panelId, sid) : this._exec;
   }
 
   setAgent(agent: ChatAgentHandle | null): void {
@@ -505,7 +505,7 @@ export class ChatPanel {
       sessionTabs: this.sessionTabs,
       tabBar: this.tabBar,
       getProjectPath: () => getChatStore(storeId).panel.getState().projectPath,
-      agentFactory: Session.getAgentFactory(),
+      // agentFactory removed — use Session.getAgentFactory(storeId) directly
       getMessages: () => getChatMessages(storeId),
       setMessages: (msgs) => { setChatMessages(msgs, storeId); },
       getStreamingAssistantId: () => getChatStore(storeId).msg.getState().streamingAssistantId,
@@ -676,7 +676,7 @@ export class ChatPanel {
       setUserScrolledUp: (v) => { getChatStore(storeId).msg.getState().setUserScrolledUp(v); },
       getSyncRafId: () => this._syncRafId,
       setSyncRafId: (id) => { this._syncRafId = id; },
-      getTurnPairs: () => Session.getTurnPairs(),
+      getTurnPairs: () => Session.getTurnPairs(this.panelId),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
       updateFooter: () => this.updateFooter(),
@@ -897,6 +897,7 @@ export class ChatPanel {
    *  @param displayLabel If set, shows this as a user bubble (for slash commands) */
   private sendAgentText(text: string, displayLabel?: string): void {
     if (!this.agent || this._activeExec().isRunning) return;
+    if (Session.hasRunningBackgroundSession(this.panelId)) { this.addNotice('有后台会话运行中，请等待完成', 'info'); return; }
     const signal = this._activeExec().start();
 
     // Reset auto-scroll for this new turn
@@ -906,7 +907,7 @@ export class ChatPanel {
     if (hint) hint.remove();
 
     if (displayLabel) {
-      Session.getTurnPairs().push({ userText: displayLabel, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
+      Session.getTurnPairs(this.panelId).push({ userText: displayLabel, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
       this.appendUserBubble(displayLabel);
     }
 
@@ -931,13 +932,14 @@ export class ChatPanel {
    *  ponytail: same UI scaffolding as sendAgentText, but calls runGoal instead of run. */
   private runGoal(goal: string): void {
     if (!this.agent || this._activeExec().isRunning) return;
+    if (Session.hasRunningBackgroundSession(this.panelId)) { this.addNotice('有后台会话运行中，请等待完成', 'info'); return; }
     const signal = this._activeExec().start();
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
 
     const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
     if (hint) hint.remove();
 
-    Session.getTurnPairs().push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
+    Session.getTurnPairs(this.panelId).push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
     this.appendUserBubble(`🎯 ${goal}`);
 
 
@@ -970,7 +972,7 @@ export class ChatPanel {
 
     if (!this.agent) {
       const detail = getChatStore(this.panelId).panel.getState().lastAgentDiag
-        ? `${getChatStore(this.panelId).panel.getState().lastAgentDiag} (factory:${Session.getAgentFactory() ? 'yes' : 'NO'})`
+        ? `${getChatStore(this.panelId).panel.getState().lastAgentDiag} (factory:${Session.getAgentFactory(this.panelId) ? 'yes' : 'NO'})`
         : '请先配置 API Key 或等待项目加载';
       this.addNotice(`Agent 未就绪 — ${detail}`, 'error');
       return;
@@ -1030,9 +1032,15 @@ export class ChatPanel {
       const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
       if (hint) hint.remove();
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
-      Session.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+      Session.getTurnPairs(this.panelId).push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
       this.appendUserBubble(text);
         return;
+    }
+    // ⚡ Block new runs if ANY background session still has an agent running.
+    // Two agents streaming simultaneously would interleave events and cross sessions.
+    if (Session.hasRunningBackgroundSession(this.panelId)) {
+      this.addNotice('有后台会话正在运行中，请等待完成', 'info');
+      return;
     }
 
     // Auto-label session on first user message
@@ -1064,7 +1072,7 @@ export class ChatPanel {
 
     // Turn pair for retry (item 4) — sessionIndex is where user msg will land
     const sessIdx = this.agent.getSession().length;
-    Session.getTurnPairs().push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+    Session.getTurnPairs(this.panelId).push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
 
     // User bubble (original text, focus context is for Agent eyes only)
     const filesSnapshot = [...this.attachedFiles];

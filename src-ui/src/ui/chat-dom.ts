@@ -662,7 +662,7 @@ export function renderContextView(ctx: DomContext): void {
   html += '<div class="chat-context-section">';
   html += '<div class="chat-context-section-label">会话统计</div>';
   const msgCount = agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
-  const turnCount = Session.getTurnPairs().length;
+  const turnCount = Session.getTurnPairs(ctx.panelId).length;
   const toolTotal = Object.values(s.toolUsage || {}).reduce((a: number, b: any) => a + b, 0);
   html += `<div style="font-family:var(--font-mono);font-size: calc(11px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
     <span>${msgCount} 条消息</span>

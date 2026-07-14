@@ -36,23 +36,24 @@ export interface ChatSession {
   agent: ChatAgentHandle;
 }
 
-/** Agent handles keyed by session id — non-serializable, stays module-level. */
-const agentHandles = new Map<number, ChatAgentHandle>();
+// ── Per-panel module state (composite key: panelId:sessionId) ──
+// ponytail: was singleton Maps/arrays — caused cross-panel leaks when
+// multiple ChatPanel instances shared the same module-level state.
+// session IDs collide across panels (both start at 1), so composite keys
+// prevent wrong-agent / wrong-execState / wrong-turnPairs bugs.
 
-/** Execution state per session — for parallel session isolation. */
-const sessionExecStates = new Map<number, ExecStateInstance>();
+function agentKey(storeId: string, sid: number): string { return `${storeId}:${sid}`; }
 
-/** Turn pairs for retract/resend — userBubble/assistantBubble always null now (React renders messages). */
-let turnPairs: Array<{ userText: string; userBubble: null; assistantBubble: null; sessionIndex: number }> = [];
-
-/** Agent factory function — set once by ChatPanel. */
-let agentFactory: (() => Promise<ChatAgentHandle | null>) | null = null;
+const agentHandles = new Map<string, ChatAgentHandle>();
+const sessionExecStates = new Map<string, ExecStateInstance>();
+const turnPairsByPanel = new Map<string, Array<{ userText: string; userBubble: null; assistantBubble: null; sessionIndex: number }>>();
+const agentFactoryByPanel = new Map<string, () => Promise<ChatAgentHandle | null>>();
 
 // ── Helpers: bridge store sessions to ChatSession (with agent handles) ──
 
 function storeSessionsWithAgents(storeId: string): ChatSession[] {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
-  return sessions.map(s => ({ ...s, agent: agentHandles.get(s.id)! }));
+  return sessions.map(s => ({ ...s, agent: agentHandles.get(agentKey(storeId, s.id))! }));
 }
 
 // ── Accessors (used by ChatPanel to bridge module state) ──
@@ -62,7 +63,7 @@ export function getActiveIdx(storeId: string): number { return getChatStore(stor
 export function getActiveAgent(storeId: string): ChatAgentHandle | null {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
   const s = sessions[activeIdx];
-  return s ? agentHandles.get(s.id) ?? null : null;
+  return s ? agentHandles.get(agentKey(storeId, s.id)) ?? null : null;
 }
 export function getNextSessionId(storeId: string): number { return getChatStore(storeId).sess.getState().nextSessionId; }
 export function setNextSessionId(storeId: string, id: number): void {
@@ -79,32 +80,56 @@ export function getSessionMessageModels(storeId: string): Map<number, ChatMessag
   const models = getChatStore(storeId).sess.getState().sessionMessageModels;
   return new Map(Object.entries(models).map(([k, v]) => [Number(k), v]));
 }
-export function getTurnPairs(): typeof turnPairs { return turnPairs; }
-export function setTurnPairs(pairs: typeof turnPairs): void { turnPairs = pairs; }
-export function getAgentFactory(): (() => Promise<ChatAgentHandle | null>) | null { return agentFactory; }
-export function setAgentFactory(fn: (() => Promise<ChatAgentHandle | null>) | null): void { agentFactory = fn; }
+type TurnPair = { userText: string; userBubble: null; assistantBubble: null; sessionIndex: number };
+
+function ensureTurnPairs(storeId: string): TurnPair[] {
+  let tp = turnPairsByPanel.get(storeId);
+  if (!tp) { tp = []; turnPairsByPanel.set(storeId, tp); }
+  return tp;
+}
+export function getTurnPairs(storeId: string): TurnPair[] { return ensureTurnPairs(storeId); }
+export function setTurnPairs(storeId: string, pairs: TurnPair[]): void { turnPairsByPanel.set(storeId, pairs); }
+export function getAgentFactory(storeId: string) { return agentFactoryByPanel.get(storeId) ?? null; }
+export function setAgentFactory(storeId: string, fn: (() => Promise<ChatAgentHandle | null>) | null): void {
+  if (fn) agentFactoryByPanel.set(storeId, fn); else agentFactoryByPanel.delete(storeId);
+}
 
 /** Get or create the execState for a session. */
-export function getSessionExecState(sessionId: number): ExecStateInstance {
-  let es = sessionExecStates.get(sessionId);
-  if (!es) { es = createExecState(); sessionExecStates.set(sessionId, es); }
+export function getSessionExecState(storeId: string, sessionId: number): ExecStateInstance {
+  const k = agentKey(storeId, sessionId);
+  let es = sessionExecStates.get(k);
+  if (!es) { es = createExecState(); sessionExecStates.set(k, es); }
   return es;
 }
 
+/** Check if any session other than the active one has a running agent.
+ *  Two agents streaming simultaneously would interleave events. */
+export function hasRunningBackgroundSession(storeId: string): boolean {
+  const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
+  for (let i = 0; i < sessions.length; i++) {
+    if (i === activeIdx) continue;
+    const es = sessionExecStates.get(agentKey(storeId, sessions[i].id));
+    if (es?.isRunning) return true;
+  }
+  return false;
+}
+
 /** Clean up execState for a closed session. */
-export function removeSessionExecState(sessionId: number): void {
-  const es = sessionExecStates.get(sessionId);
-  if (es) { es.stop(); sessionExecStates.delete(sessionId); }
+export function removeSessionExecState(storeId: string, sessionId: number): void {
+  const k = agentKey(storeId, sessionId);
+  const es = sessionExecStates.get(k);
+  if (es) { es.stop(); sessionExecStates.delete(k); }
 }
 
 /** Full reset — used by setAgent in ChatPanel when switching workspace. */
 export function resetSessionState(storeId: string, ag: ChatAgentHandle): void {
 const id = getChatStore(storeId).sess.getState().nextSessionId;
   const label = '会话 1';
-  agentHandles.clear();
-  sessionExecStates.clear();
-  agentHandles.set(id, ag);
-  sessionExecStates.set(id, createExecState());
+  // Clear only this panel's agent handles and exec states
+  for (const k of [...agentHandles.keys()]) { if (k.startsWith(storeId + ':')) agentHandles.delete(k); }
+  for (const k of [...sessionExecStates.keys()]) { if (k.startsWith(storeId + ':')) sessionExecStates.delete(k); }
+  agentHandles.set(agentKey(storeId, id), ag);
+  sessionExecStates.set(agentKey(storeId, id), createExecState());
   getChatStore(storeId).sess.setState({
     sessions: [{ id, label }],
     activeIdx: 0,
@@ -113,7 +138,7 @@ const id = getChatStore(storeId).sess.getState().nextSessionId;
     sessionStreamingIds: {},
     nextSessionId: id + 1,
   });
-  turnPairs = [];
+  setTurnPairs(storeId, []);
 }
 
 /** If the active session still has a default label ("会话 N"), auto-title it
@@ -127,7 +152,7 @@ export function autoTitleSessionIfDefault(storeId: string): void {
   // Only auto-title if label is still the default "会话 N" pattern
   if (!/^会话 \d+$/.test(s.label)) return;
 
-  const agent = agentHandles.get(s.id);
+  const agent = agentHandles.get(agentKey(storeId, s.id));
   if (!agent) return;
 
   const msgs = agent.getSession();
@@ -155,8 +180,7 @@ export interface SessionContext {
   // Project path
   getProjectPath: () => string;
 
-  // Agent
-  agentFactory: (() => Promise<ChatAgentHandle | null>) | null;
+  // Agent (removed — use getAgentFactory(storeId) instead)
 
   // Message model
   getMessages: () => ChatMessage[];
@@ -295,8 +319,8 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   }
   const s = st.sessions[idx];
   // Stop this session's agent if running, then clean up
-  removeSessionExecState(s.id);
-  agentHandles.delete(s.id);
+  removeSessionExecState(ctx.storeId, s.id);
+  agentHandles.delete(agentKey(ctx.storeId, s.id));
   st.removeSession(s.id);
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
@@ -329,12 +353,13 @@ ctx.addNotice('关闭会话失败', 'error');
 }
 
 export async function createNewSession(ctx: SessionContext): Promise<void> {
-  if (!ctx.agentFactory) {
+  const factory = getAgentFactory(ctx.storeId);
+  if (!factory) {
     const extra = ctx.getLastAgentDiag() ? `\n诊断: ${ctx.getLastAgentDiag()}` : '';
     ctx.addNotice(`请先配置 API Key（设置 → Provider）${extra}`, 'info');
     return;
   }
-  const newAgent = await ctx.agentFactory();
+  const newAgent = await factory();
   if (!newAgent) {
     ctx.addNotice('无法创建会话: Agent 工厂返回空', 'error');
     return;
@@ -352,9 +377,9 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.clearPendingToolCards();
   const id = st.nextSessionId;
   const label = `会话 ${st.sessions.length + 1}`;
-  agentHandles.set(id, newAgent);
+  agentHandles.set(agentKey(ctx.storeId, id), newAgent);
   // Create fresh execState for the new session (old sessions keep theirs)
-  sessionExecStates.set(id, createExecState());
+  sessionExecStates.set(agentKey(ctx.storeId, id), createExecState());
   getChatStore(ctx.storeId).sess.setState({
     sessions: [...st.sessions, { id, label }],
     activeIdx: st.sessions.length,
@@ -366,7 +391,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   resetMsgIdCounter();
   ctx.setStreamingAssistantId(null);
   ctx.clearInputHistory();
-  setTurnPairs([]);
+  setTurnPairs(ctx.storeId, []);
   ctx.setTotalTokensUsed(0);
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(id, 0);
   ctx.addNotice(`新会话已创建 — 会话 ${st.sessions[st.activeIdx]?.label ?? ''} 仍在后台运行`, 'info');
@@ -395,7 +420,7 @@ function restoreMessages(ctx: SessionContext): void {
     return;
   }
 
-  const agent = agentHandles.get(sid);
+  const agent = agentHandles.get(agentKey(ctx.storeId, sid));
   if (agent) {
     _rebuildMessagesFromSession(ctx);
     bumpChat(ctx.storeId);
@@ -451,7 +476,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   if (!projectPath || activeIdx < 0) return;
   const sMeta = sessions[activeIdx];
   if (!sMeta) return;
-  const agent = agentHandles.get(sMeta.id);
+  const agent = agentHandles.get(agentKey(ctx.storeId, sMeta.id));
   if (!agent) return;
 
   saveCurrentMessages(ctx);
@@ -494,7 +519,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
 /** Restore the last active session on project open.
  *  Tries file first, falls back to localStorage (survives app crash / force-close). */
 export async function autoRestoreLastSession(ctx: SessionContext, projectPath: string): Promise<void> {
-  if (!ctx.agentFactory || !projectPath) return;
+  if (!getAgentFactory(ctx.storeId) || !projectPath) return;
 
   let curNextId = getChatStore(ctx.storeId).sess.getState().nextSessionId;
 
@@ -584,7 +609,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     }
   }
 
-  const newAgent = await ctx.agentFactory();
+  const newAgent = await getAgentFactory(ctx.storeId)!();
   if (!newAgent) {
     ctx.addNotice('Agent 未就绪（API Key 未配置？），历史会话暂未恢复', 'warn');
     return;
@@ -601,9 +626,9 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   ctx.clearPendingToolCards();
 
   const label = data.label || '已恢复的会话';
-  // Replace ALL sessions — switch workspace = fresh start
-agentHandles.clear();
-  agentHandles.set(data.id, newAgent);
+  // Replace ALL sessions — switch workspace = fresh start (clear only this panel)
+  for (const k of [...agentHandles.keys()]) { if (k.startsWith(ctx.storeId + ':')) agentHandles.delete(k); }
+  agentHandles.set(agentKey(ctx.storeId, data.id), newAgent);
   getChatStore(ctx.storeId).sess.setState({
     sessions: [{ id: data.id, label }],
     activeIdx: 0,
@@ -675,7 +700,7 @@ export async function listSavedSessions(ctx: SessionContext, projectPath: string
 
 /** Load a saved session from disk into a new tab. Falls back to localStorage. */
 export async function loadSessionFromDisk(ctx: SessionContext, projectPath: string, sessionId: number): Promise<void> {
-  if (!ctx.agentFactory) {
+  if (!getAgentFactory(ctx.storeId)) {
     const extra = ctx.getLastAgentDiag() ? `\n诊断: ${ctx.getLastAgentDiag()}` : '';
     ctx.addNotice(`请先配置 API Key${extra}`, 'error');
     return;
@@ -699,7 +724,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     return;
   }
 
-  const newAgent = await ctx.agentFactory();
+  const newAgent = await getAgentFactory(ctx.storeId)!();
   if (!newAgent) { ctx.addNotice('无法创建 Agent', 'error'); return; }
 
   const freshSys = newAgent.getSession().filter((m: Message) => m.role === 'system');
@@ -716,7 +741,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   ctx.flushReasoning(); ctx.flushText(); ctx.clearPendingToolCards();
 
   const sid = data.id || sessionId;
-  agentHandles.set(sid, newAgent);
+  agentHandles.set(agentKey(ctx.storeId, sid), newAgent);
   getChatStore(ctx.storeId).sess.setState({
     sessions: [...st1.sessions, { id: sid, label }],
     activeIdx: st1.sessions.length,
@@ -762,7 +787,7 @@ export async function deleteSessionFile(ctx: SessionContext, projectPath: string
 /** Walk through active agent's session array and build ChatMessage[] + turnPairs. */
 function renderRestoredSession(ctx: SessionContext): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
+  const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
   bumpChat(ctx.storeId);
@@ -773,7 +798,7 @@ function renderRestoredSession(ctx: SessionContext): void {
  *  Pure data rebuild — no DOM sync, no notices. */
 export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
+  const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
   if (!agent) return;
 
   const msgs = agent.getSession();
@@ -781,7 +806,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   // Reset messages and rebuild from session data
   resetMsgIdCounter();
   ctx.setMessages([]);
-  setTurnPairs([]);
+  setTurnPairs(ctx.storeId, []);
 
   // Index tool results by call_id so we can attach outputs to tool parts
   const toolResults = new Map<string, string>();
@@ -808,7 +833,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
       }
       // Finalize previous pair
       if (pendingUserText && pendingUserId) {
-        turnPairs.push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+        getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
       }
       pendingUserText = m.content || '';
       pendingUserId = nextMsgId();
@@ -855,7 +880,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
 
       // Link to pending user turn
       if (pendingUserText) {
-        turnPairs.push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+        getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
         pendingUserText = null;
         pendingUserId = null;
       }
@@ -864,7 +889,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
 
   // Flush any trailing user message
   if (pendingUserText) {
-    turnPairs.push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+    getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
   }
 }
 
@@ -872,13 +897,14 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
 
 /** Retract a turn from DOM and agent session. Returns userText or null. */
 export function retractTurn(ctx: SessionContext, idx: number): string | null {
-  const pair = turnPairs[idx];
+  const tp = getTurnPairs(ctx.storeId);
+  const pair = tp[idx];
   if (!pair) return null;
   // ⚡ React handles DOM removal, just clean the model
   // Remove from agent session — search by content if index is stale (inserted mid-run)
   let sessIdx = pair.sessionIndex;
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
+  const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
   if (sessIdx < 0 && agent) {
     const agentSession = agent.getSession();
     for (let i = 0; i < agentSession.length; i++) {
@@ -889,7 +915,7 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
   }
   if (sessIdx >= 0) agent?.retractTurnAt(sessIdx);
   // Remove from turnPairs
-  turnPairs.splice(idx, 1);
+  tp.splice(idx, 1);
   // Re-index sessionIndex for remaining pairs from the actual session
   if (agent) {
     const agentSession = agent.getSession();
@@ -897,8 +923,8 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
     for (let i = 0; i < agentSession.length; i++) {
       if (agentSession[i].role === 'user') userMsgIndices.push(i);
     }
-    for (let i = 0; i < turnPairs.length && i < userMsgIndices.length; i++) {
-      turnPairs[i].sessionIndex = userMsgIndices[i];
+    for (let i = 0; i < tp.length && i < userMsgIndices.length; i++) {
+      tp[i].sessionIndex = userMsgIndices[i];
     }
   }
   return pair.userText;
@@ -928,7 +954,7 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
   // Also retract from agent session
   if (msg.sessionIndex >= 0) {
     const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-    agentHandles.get(sessions[activeIdx]?.id ?? -1)?.retractTurnAt(msg.sessionIndex);
+    agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1))?.retractTurnAt(msg.sessionIndex);
   }
 }
 
@@ -936,7 +962,7 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
 
 export async function exportSession(ctx: SessionContext): Promise<void> {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const agent = agentHandles.get(sessions[activeIdx]?.id ?? -1);
+  const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
   if (!agent) { ctx.addNotice('没有可导出的会话', 'info'); return; }
 
   const msgs = agent.getSession();
