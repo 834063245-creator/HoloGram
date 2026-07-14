@@ -110,6 +110,7 @@ const id = getChatStore(storeId).sess.getState().nextSessionId;
     activeIdx: 0,
     sessionTokens: {},
     sessionMessageModels: {},
+    sessionStreamingIds: {},
     nextSessionId: id + 1,
   });
   turnPairs = [];
@@ -261,10 +262,15 @@ export function renderSessionTabs(ctx: SessionContext): void {
 export function switchSession(ctx: SessionContext, idx: number): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
-  // Save current messages + token count to cache (don't abort — keep agent running)
+  // Save current messages + streamingId + token count to cache
   if (activeIdx >= 0) {
     saveCurrentMessages(ctx);
-    getChatStore(ctx.storeId).sess.getState().setSessionTokens(sessions[activeIdx].id, ctx.getTotalTokensUsed());
+    const oldSid = sessions[activeIdx].id;
+    getChatStore(ctx.storeId).sess.getState().setSessionTokens(oldSid, ctx.getTotalTokensUsed());
+    // Persist streaming assistant ID with the session so background agents
+    // don't leak their output into the wrong tab when events arrive.
+    const streamId = ctx.getStreamingAssistantId();
+    getChatStore(ctx.storeId).sess.getState().setSessionStreamingId(oldSid, streamId);
   }
   ctx.flushReasoning();
   ctx.flushText();
@@ -273,10 +279,11 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
   renderSessionTabs(ctx);
   restoreMessages(ctx);
-  // Restore target session's token count
+  // Restore target session's token count + streaming state
   ctx.setTotalTokensUsed(getChatStore(ctx.storeId).sess.getState().sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
-  ctx.setStreamingAssistantId(null);
+  const restoredStreamId = getChatStore(ctx.storeId).sess.getState().sessionStreamingIds[sessions[idx].id];
+  ctx.setStreamingAssistantId(restoredStreamId || null);
   ctx.updateFooter();
 }
 
@@ -333,8 +340,13 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
     return;
   }
   const st = getChatStore(ctx.storeId).sess.getState();
-  // Save current session's messages before switching
-  if (st.activeIdx >= 0) saveCurrentMessages(ctx);
+  // Save current session's messages + streaming state before switching
+  if (st.activeIdx >= 0) {
+    saveCurrentMessages(ctx);
+    const oldSid = st.sessions[st.activeIdx].id;
+    const streamId = ctx.getStreamingAssistantId();
+    getChatStore(ctx.storeId).sess.getState().setSessionStreamingId(oldSid, streamId);
+  }
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();

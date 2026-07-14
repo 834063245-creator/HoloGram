@@ -11,6 +11,7 @@ import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { iconHtml } from './icons';
 import { bumpChat } from './chat-store';
 import { autoTitleSessionIfDefault } from './chat-session';
+import { getChatStore } from './chat-store';
 import type { StarGraph } from './graph';
 import type {
   ChatMessage,
@@ -96,10 +97,8 @@ export interface StreamContext {
 function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   const id = ctx.getStreamingAssistantId();
   if (id) {
-    const found = ctx.getMessages().find(
-      (m) => m.role === 'assistant' && m._id === id,
-    );
-    if (found) return found as AssistantMessage;
+    const found = _findAssistantById(ctx, id);
+    if (found) return found;
   }
   // Create a new one — find the last user message to link to
   const lastUser = [...ctx.getMessages()].reverse().find((m) => m.role === 'user');
@@ -139,12 +138,27 @@ export function addNotice(ctx: StreamContext, text: string, level: 'info' | 'war
 // _finaliseStreamingAssistant
 // ═══════════════════════════════════════════════════════════
 
+/** Find assistant in active messages or background session caches. */
+function _findAssistantById(ctx: StreamContext, id: MessageId | null): AssistantMessage | undefined {
+  if (!id) return undefined;
+  const found = ctx.getMessages().find(
+    (m) => m.role === 'assistant' && m._id === id,
+  );
+  if (found) return found as AssistantMessage;
+  // Search background session caches (tab switched while agent ran)
+  const models = getChatStore(ctx.storeId).sess.getState().sessionMessageModels;
+  for (const sid of Object.keys(models)) {
+    const cached = models[Number(sid)];
+    const bg = cached.find((m) => m.role === 'assistant' && m._id === id);
+    if (bg) return bg as AssistantMessage;
+  }
+  return undefined;
+}
+
 /** Mark the current streaming assistant as done and start a new turn. */
 export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
-  const assistant = ctx.getMessages().find(
-    (m) => m.role === 'assistant' && m._id === sid,
-  ) as AssistantMessage | undefined;
+  const assistant = _findAssistantById(ctx, sid);
   if (assistant) {
     assistant.status = 'done';
     for (const part of assistant.parts) {
@@ -162,6 +176,15 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   bumpChat(ctx.storeId);
   }
   ctx.setStreamingAssistantId(null);
+  // Also clear any stale session-level streaming IDs pointing to this assistant.
+  // ponytail: scan instead of tracking owner — session count is small.
+  if (sid) {
+    const sess = getChatStore(ctx.storeId).sess;
+    const ids = sess.getState().sessionStreamingIds;
+    for (const [key, val] of Object.entries(ids)) {
+      if (val === sid) sess.getState().setSessionStreamingId(Number(key), null);
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════

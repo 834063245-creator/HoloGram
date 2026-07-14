@@ -17,6 +17,8 @@ interface SessionStore {
   activeIdx: number;
   sessionTokens: Record<number, number>;
   sessionMessageModels: Record<number, ChatMessage[]>;
+  /** Track streaming assistant per session so tab-switch doesn't orphan it. */
+  sessionStreamingIds: Record<number, string>;
   nextSessionId: number;
   msgIdSeq: number;
 
@@ -24,6 +26,7 @@ interface SessionStore {
   setActiveIdx: (idx: number) => void;
   setSessionTokens: (id: number, count: number) => void;
   setSessionMessageModels: (id: number, models: ChatMessage[]) => void;
+  setSessionStreamingId: (sessionId: number, streamingId: string | null) => void;
   removeSession: (id: number) => void;
   setNextSessionId: (id: number) => void;
   setMsgIdSeq: (seq: number) => void;
@@ -37,6 +40,7 @@ function createSessionStoreImpl() {
     activeIdx: -1,
     sessionTokens: {},
     sessionMessageModels: {},
+    sessionStreamingIds: {},
     nextSessionId: 1,
     msgIdSeq: 0,
 
@@ -46,11 +50,14 @@ function createSessionStoreImpl() {
       set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
     setSessionMessageModels: (id, models) =>
       set((s) => ({ sessionMessageModels: { ...s.sessionMessageModels, [id]: models } })),
+    setSessionStreamingId: (id, streamingId) =>
+      set((s) => ({ sessionStreamingIds: { ...s.sessionStreamingIds, [id]: streamingId ?? '' } })),
     removeSession: (id) =>
       set((s) => {
         const { [id]: _, ...restTokens } = s.sessionTokens;
         const { [id]: __, ...restModels } = s.sessionMessageModels;
-        return { sessionTokens: restTokens, sessionMessageModels: restModels };
+        const { [id]: ___, ...restStreaming } = s.sessionStreamingIds;
+        return { sessionTokens: restTokens, sessionMessageModels: restModels, sessionStreamingIds: restStreaming };
       }),
     setNextSessionId: (nextSessionId) => set({ nextSessionId }),
     setMsgIdSeq: (msgIdSeq) => set({ msgIdSeq }),
