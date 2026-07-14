@@ -82,7 +82,7 @@ const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[]; onComm
                   onClick={() => { hide(); onCommit(item); }}>
                   <span className="sp-label">{item.label}</span>
                   <span className="sp-desc">{item.description}</span>
-                  <span className="sp-sk">{item.shortcut ? item.shortcut.split('/').pop() : ''}</span>
+                  <span className="sp-key">{item.shortcut ? item.shortcut.split('/').pop() : ''}</span>
                 </div>
               );
             })}

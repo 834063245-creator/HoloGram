@@ -181,6 +181,7 @@ export interface DomContext {
 export function buildDOM(ctx: DomContext): void {
   // Panel root
   const panel = document.createElement('div');
+  panel.className = 'chat-panel';
   panel.id = `chat-panel-${ctx.panelId}`;
 
   // Corner brackets

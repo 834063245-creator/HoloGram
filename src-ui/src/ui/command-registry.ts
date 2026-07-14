@@ -44,7 +44,15 @@ export class CommandRegistry {
 
   register(cmd: CommandDef): void { this._commands.push(cmd); }
 
-  registerAll(cmds: CommandDef[]): void { this._commands.push(...cmds); }
+  registerAll(cmds: CommandDef[]): void {
+    const existing = new Set(this._commands.map(c => c.id));
+    for (const cmd of cmds) {
+      if (!existing.has(cmd.id)) {
+        this._commands.push(cmd);
+        existing.add(cmd.id);
+      }
+    }
+  }
 
   setSkillProvider(provider: SkillProvider): void { this._skillProvider = provider; }
 
@@ -86,53 +94,6 @@ export class CommandRegistry {
     });
   }
 
-  /** 渲染命令项 HTML — no icons, just label + description + shortcut */
-  renderItem(cmd: CommandDef, query?: string): string {
-    const highlight = (text: string) => {
-      if (!query) return text;
-      const q = query.toLowerCase().replace(/^\//, '');
-      if (!q) return text;
-      const lower = text.toLowerCase();
-      const idx = lower.indexOf(q);
-      if (idx < 0) return text;
-      const before = text.slice(0, idx);
-      const match = text.slice(idx, idx + q.length);
-      const after = text.slice(idx + q.length);
-      return `${before}<mark class="sp-match">${match}</mark>${after}`;
-    };
-
-    const label = highlight(cmd.label);
-    const desc = cmd.description ? `<span class="sp-desc">${highlight(cmd.description)}</span>` : '';
-    const shortcut = cmd.shortcut ? `<span class="sp-key">${cmd.shortcut}</span>` : '';
-
-    return `
-      <button class="sp-item" data-cmd-id="${cmd.id}" data-shortcut="${cmd.shortcut}">
-        <span class="sp-label">${label}</span>
-        ${desc}
-        ${shortcut}
-      </button>`;
-  }
-
-  /** 渲染整个分组面板 */
-  renderPanel(cmds: CommandDef[], query?: string): string {
-    const groups = new Map<string, CommandDef[]>();
-    for (const cmd of cmds) {
-      const g = groups.get(cmd.group) || [];
-      g.push(cmd);
-      groups.set(cmd.group, g);
-    }
-
-    let html = '';
-    for (const [group, items] of groups) {
-      html += `<div class="sp-group">`;
-      html += `<div class="sp-group-title">${group}</div>`;
-      for (const item of items) {
-        html += this.renderItem(item, query);
-      }
-      html += `</div>`;
-    }
-    return html;
-  }
 }
 
 // ── Default commands ──

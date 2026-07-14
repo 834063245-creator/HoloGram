@@ -181,6 +181,7 @@ export class ChatPanel {
     this._bus = bus.withPrefix(`p:${this.panelId}:`);
     this._exec = createExecState();
     this.buildDOM();
+    this._initSlashPanel();
 
     // ⚡ React-based message list — own container, shared messages array
     const reactRoot = document.createElement('div');
@@ -1272,16 +1273,8 @@ export class ChatPanel {
 
     this._buildModePopup(mode);
 
-    // ── Slash panel: React-based, mounted outside footerEl so rebuilds don't touch it ──
-    this._setupSlashPanel(); // registers commands + wires local handlers
-    if (!this._slashController) {
-      this._slashController = new SlashPanelController(
-        this.panel,
-        CommandRegistry.instance.getAll(),
-        (cmd) => this._executeCommand(cmd),
-      );
-    }
-    this._slashController.hide();
+    // ── Slash panel: React-based, created once in _initSlashPanel, just hide on rebuild ──
+    this._slashController?.hide();
 
     // Model badge click → open settings
     this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
@@ -1551,13 +1544,16 @@ export class ChatPanel {
 
   // ── Slash inline panel (item 14, registry-driven) ──
 
-  /** Create slash panel once, outside footerEl so updateFooter's innerHTML wipe
-   *  doesn't destroy it. Anchored to panel (position:fixed), floats above footer. */
-  private _setupSlashPanel(): void {
-    // ⚡ React-based — SlashPanelController handles all rendering.
-    // Command registry + local handlers still wired here for ChatPanel context.
+  /** Create slash panel once in constructor. Mounted to `this.panel` so
+   *  updateFooter's innerHTML wipe doesn't touch it. Anchored via position:absolute. */
+  private _initSlashPanel(): void {
     CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
     this._wireCommandHandlers();
+    this._slashController = new SlashPanelController(
+      this.panel,
+      CommandRegistry.instance.getAll(),
+      (cmd) => this._executeCommand(cmd),
+    );
   }
 
   /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */
