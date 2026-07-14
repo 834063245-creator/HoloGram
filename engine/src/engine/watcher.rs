@@ -11,8 +11,11 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use super::Engine;
+use crate::analysis::coupling::compute_coupling;
+use crate::community::louvain::detect_communities_and_hierarchy;
 use crate::engine::GRAMMAR_LOADER;
 use crate::storage::incremental::IncrementalUpdater;
+use crate::storage::memory::MemoryIndex;
 
 impl Engine {
     /// Whether the file watcher is currently running.
@@ -190,6 +193,22 @@ impl Engine {
         let count = changed_files.len();
         info!("[engine watcher] {} file(s) changed, trying incremental update", count);
 
+        // Populate pending_changes so staleness banners fire for tools that
+        // query the index while the update is in progress (see staleness.rs).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        {
+            let engine_guard = super::ENGINE.read();
+            if let Some(engine) = engine_guard.as_ref() {
+                let mut pending = engine.pending_changes.lock().unwrap();
+                for (path, _action) in changed_files {
+                    pending.push((path.to_string_lossy().to_string(), now_ms, true));
+                }
+            }
+        }
+
         // Try incremental update via IncrementalUpdater (accesses store directly)
         let inc_result = (|| -> Result<(), String> {
             let engine_guard = super::ENGINE.read();
@@ -212,9 +231,33 @@ impl Engine {
             let (new_idx, errors) =
                 IncrementalUpdater::update(&paths, &store.index.read(), root, &store.db)?;
 
-            store.swap_index(new_idx);
-            // ponytail: 增量更新后重建向量索引 — 全量分析时 pipeline 7.5 自动做，
-            // 增量路径没走 pipeline 所以缺这一步。
+            // ── Post-incremental synthesis ──
+            // ponytail: the incremental updater only does re-parse + diff + edge repair.
+            // Synthesis stages (community detection, coupling analysis) that operate on
+            // graph structure, not files, are re-run here so the incremental result
+            // matches the full-pipeline result for these dimensions.
+            // Stages that need parse_cache (dynamic dispatch, framework routes, snippets)
+            // are still skipped — they fall back to full re-analysis when needed.
+            let synth_start = std::time::Instant::now();
+            let mut graph = new_idx.to_graph();
+            let (communities, _hierarchical) = detect_communities_and_hierarchy(&graph, 42);
+            for (comm_idx, comm) in communities.iter().enumerate() {
+                for node_id in comm {
+                    if let Some(node) = graph.nodes.get_mut(node_id) {
+                        node.community_id = Some(comm_idx);
+                    }
+                }
+            }
+            compute_coupling(&mut graph);
+            let final_idx =
+                MemoryIndex::from_existing_graph(graph.nodes, graph.edges);
+            let synth_ms = synth_start.elapsed().as_millis();
+            info!(
+                "[engine watcher] post-incremental synthesis: {} communities, {}ms",
+                communities.len(), synth_ms
+            );
+
+            store.swap_index(final_idx);
             store.reindex_vectors();
             if errors > 0 {
                 info!("[engine watcher] incremental update with {} parse errors", errors);
@@ -248,6 +291,13 @@ impl Engine {
                 );
                 if let Some(ref cb) = on_change {
                     cb(String::from(r#"{"status":"updated"}"#));
+                }
+                // Clear pending_changes — index is now up-to-date
+                {
+                    let engine_guard = super::ENGINE.read();
+                    if let Some(engine) = engine_guard.as_ref() {
+                        engine.clear_pending_files();
+                    }
                 }
                 return Ok(());
             }
@@ -287,6 +337,13 @@ impl Engine {
                 );
                 if let Some(ref cb) = on_change {
                     cb(summary);
+                }
+                // Clear pending_changes — full re-analysis succeeded
+                {
+                    let engine_guard = super::ENGINE.read();
+                    if let Some(engine) = engine_guard.as_ref() {
+                        engine.clear_pending_files();
+                    }
                 }
                 Ok(())
             }

@@ -1059,6 +1059,34 @@ impl MemoryIndex {
         results
     }
 
+    /// Build a full Graph from this MemoryIndex.
+    /// Used by the incremental-update path to run synthesis stages (community
+    /// detection, coupling analysis) that operate on Graph, not MemoryIndex.
+    /// Edge IDs are derived from (source, target, kind) since CSR arrays don't
+    /// store edge IDs.
+    // ponytail: O(N+E) conversion. MemoryIndex keeps the canonical data;
+    // Graph is a transient format for synthesis passes.
+    pub fn to_graph(&self) -> crate::graph::Graph {
+        use crate::graph::{Edge, Graph};
+
+        let mut graph = Graph::new();
+        for node in self.nodes_iter() {
+            graph.add_node(node.clone());
+        }
+        let mut edge_id_counter: u64 = 0;
+        for (source, targets) in self.edges_iter() {
+            for (target, kind, coupling_depth, temporal_delay) in targets {
+                edge_id_counter += 1;
+                let eid = format!("e_{}_{}_{}", source, target, edge_id_counter);
+                let mut edge = Edge::new(eid, source.clone(), target, kind);
+                edge.coupling_depth = coupling_depth;
+                edge.temporal_delay_sec = temporal_delay;
+                graph.add_edge(edge);
+            }
+        }
+        graph
+    }
+
     // ── mutators (for incremental update) ──
 
     pub fn insert_node(&mut self, node: Node) {

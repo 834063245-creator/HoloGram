@@ -653,6 +653,12 @@ pub fn engine_fts_search(
     engine.fts_search(query, limit)
 }
 
+/// Supported source file extensions (dynamic, from GRAMMAR_LOADER).
+/// Always up-to-date with installed grammar DLLs.
+pub fn engine_supported_extensions() -> Vec<String> {
+    GRAMMAR_LOADER.supported_extensions()
+}
+
 /// Run analysis on the global engine. Convenience wrapper that callers
 /// (MCP, TCP, Tauri) can use without directly touching the ENGINE lock.
 pub fn engine_analyze(project_root: &Path) -> Result<AnalyzeResult, String> {

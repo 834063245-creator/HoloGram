@@ -9,6 +9,21 @@
 //   Phase 3 — Cross-file edge repair (re-derive imports via name_index)
 //
 // Plus: rename detection (Jaccard ≥ 70%), validate guard, SQLite write-back.
+//
+// ═══ Known gaps (ponytail: synthesis stages not re-run) ═══
+// After incremental update, the following pipeline stages are NOT re-executed:
+//   - Coupling analysis (edge-based coupling depth)
+//   - Community detection (global algorithm, new nodes get no community)
+//   - Dynamic dispatch synthesis (React/Vue/DI edges)
+//   - Framework route detection
+//   - Dynamic import / eval / cross-language detection
+//   - Snippet extraction
+// These are skipped because each stage operates on the FULL graph and
+// can't be run per-file without a major refactor. The fallback path
+// (full re-analysis on watcher failure) covers the complete picture.
+// Upgrade path: if incremental drift becomes visible, add a lightweight
+// "re-synthesize affected subgraph" pass that runs coupling + community
+// on new/changed nodes and their 1-hop neighbors only.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -147,11 +162,16 @@ impl IncrementalUpdater {
         }
 
         // ── Validate ──
+        // ponytail: always validate edge count, not just on parse errors.
+        // Clean parses can still lose edges from diff mismatches or cross-file
+        // repair gaps. Reject if >5% edge loss (was: only checked on errors, 15%).
         let new_edge_count = new_index.recompute_edge_count();
-        if total_errors > 0 && (new_edge_count as f64) < (old_edge_count as f64) * 0.85 {
+        if (new_edge_count as f64) < (old_edge_count as f64) * 0.95 {
             return Err(format!(
-                "validate failed: {} edges → {} edges ({} parse errors), rejecting swap",
-                old_edge_count, new_edge_count, total_errors
+                "validate failed: {} edges → {} edges (loss {}%, threshold 5%), rejecting swap",
+                old_edge_count,
+                new_edge_count,
+                (100.0 * (1.0 - new_edge_count as f64 / old_edge_count as f64)) as u32
             ));
         }
 
