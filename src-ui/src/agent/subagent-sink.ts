@@ -25,7 +25,7 @@ export interface SubAgentSinkOpts {
  *  Mutations are in-place; bump is rAF-throttled to at most one per frame.
  *  subPart.version counts total mutations for potential fine-grained subscriptions. */
 export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => void {
-  const { subPart, bump, onProgress } = opts;
+  const { subPart, bump } = opts;
 
   let rafId: number | null = null;
   const tick = () => {
@@ -67,7 +67,6 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
             status: ev.tool.partial ? 'pending' : 'running',
           });
           tick();
-          if (onProgress) onProgress(`🔧 ${ev.tool.name}\n`);
         }
         break;
 

@@ -73,6 +73,8 @@ export class StreamingToolExecutor {
   private pending = new Map<string, Promise<PendingResult>>();
   private completed: PendingResult[] = [];
   private toolIndex = 0;
+  /** Track dispatched tool IDs to prevent duplicate dispatch on stream retry. */
+  private dispatchedIds = new Set<string>();
 
   private agentId: string | null;
 
@@ -90,8 +92,11 @@ export class StreamingToolExecutor {
     this.agentId = agentId ?? null;
   }
 
-  /** Add a tool call from the stream. Execution starts immediately. */
+  /** Add a tool call from the stream. Execution starts immediately.
+   *  Skips tool IDs already dispatched (can happen on stream retry). */
   addTool(call: ToolCall): void {
+    if (this.dispatchedIds.has(call.id)) return;
+    this.dispatchedIds.add(call.id);
     const tool = this.tools.get(call.name);
     const idx = this.toolIndex++;
 
@@ -161,6 +166,7 @@ export class StreamingToolExecutor {
   discard(): void {
     this.pending.clear();
     this.completed = [];
+    this.dispatchedIds.clear();
   }
 
   get hasPending(): boolean {

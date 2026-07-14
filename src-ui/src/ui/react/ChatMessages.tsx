@@ -318,7 +318,10 @@ const SubReasoningBlock: React.FC<{
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
 
-const SubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(({ part }) => {
+// ponytail: NOT wrapped in React.memo — subagent-sink mutates SubAgentPart in-place
+// (push to parts[], version++), so the object reference never changes. React.memo
+// would block re-renders. Performance is handled by useMemo on renderedParts.
+const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [expanded, setExpanded] = useState(part.status === 'running');
@@ -448,7 +451,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(({ part }) =>
       </div>
     </div>
   );
-});
+};
 
 // ── User message ──
 
