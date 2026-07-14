@@ -303,11 +303,14 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
   renderSessionTabs(ctx);
   restoreMessages(ctx);
-  // Restore target session's token count + streaming state
+  // Restore target session's token count + streaming state.
+  // ponytail: only restore streamingAssistantId if the target session actually
+  // has one. Otherwise keep the current value — it belongs to a background
+  // agent whose events must still route to its session cache via _findAssistantById.
   ctx.setTotalTokensUsed(getChatStore(ctx.storeId).sess.getState().sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
   const restoredStreamId = getChatStore(ctx.storeId).sess.getState().sessionStreamingIds[sessions[idx].id];
-  ctx.setStreamingAssistantId(restoredStreamId || null);
+  if (restoredStreamId) ctx.setStreamingAssistantId(restoredStreamId);
   ctx.updateFooter();
 }
 
@@ -389,7 +392,8 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.setMessages([]);
   bumpChat(ctx.storeId);
   resetMsgIdCounter();
-  ctx.setStreamingAssistantId(null);
+  // ponytail: don't clear streamingAssistantId — it belongs to a background
+  // agent whose events must still route to its session cache.
   ctx.clearInputHistory();
   setTurnPairs(ctx.storeId, []);
   ctx.setTotalTokensUsed(0);
