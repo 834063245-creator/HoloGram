@@ -14,6 +14,7 @@ import { iconHtml } from './icons';
 import { loadSettings } from '../settings';
 import DOMPurify from 'dompurify';
 import * as Session from './chat-session';
+import { getChatStore } from './chat-store';
 import { escapeHtml } from './chat-utils';
 
 // ── Constants ──
@@ -565,17 +566,23 @@ export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | '
 }
 
 export function renderToolsView(ctx: DomContext): void {
-  const tools = ctx._toolSchemas.length > 0
-    ? ctx._toolSchemas.map(t => ({ name: t.name, desc: (t.description||'').split('\n')[0].slice(0,60), cat: ctx.toolCategory(t.name) }))
+  // ponytail: read schemas/usage/history from the live store, NOT from ctx
+  // which is a stale snapshot captured at DomContext creation time.
+  const s = getChatStore(ctx.panelId).getState();
+  const schemas = s.toolSchemas || [];
+  const usage = s.toolUsage || {};
+  const history = s.toolHistory || [];
+  const tools = schemas.length > 0
+    ? schemas.map((t: any) => ({ name: t.name, desc: (t.description||'').split('\n')[0].slice(0,60), cat: ctx.toolCategory(t.name) }))
     : [];
 
-  const maxUsage = Math.max(1, ...Object.values(ctx.toolUsage));
+  const maxUsage = Math.max(1, ...Object.values(usage));
 
   let html = '<div class="chat-tools-view">';
   html += '<div class="chat-tools-section-title">工具清单</div>';
   html += '<div class="chat-tools-grid">';
   for (const t of tools) {
-    const count = ctx.toolUsage[t.name] || 0;
+    const count = usage[t.name] || 0;
     const pct = (count / maxUsage) * 100;
     html += `<div class="chat-tool-card tool-cat-${t.cat}" title="${t.name} — ${t.desc}">
       <div class="chat-tool-card-name">${t.name}</div>
@@ -587,10 +594,10 @@ export function renderToolsView(ctx: DomContext): void {
   html += '</div>';
 
   // Recent tool calls
-  if (ctx.toolHistory.length > 0) {
+  if (history.length > 0) {
     html += '<div class="chat-tools-section-title" style="margin-top:4px">最近调用</div>';
     html += '<div class="chat-tools-recent">';
-    for (const h of ctx.toolHistory.slice(0, 10)) {
+    for (const h of history.slice(0, 10)) {
       const argsShort = h.args ? (h.args.length > 40 ? h.args.slice(0, 39) + '…' : h.args) : '';
       html += `<div class="chat-tool-recent-item">
         <span class="chat-tool-recent-name">${h.name}</span>
@@ -606,10 +613,13 @@ export function renderToolsView(ctx: DomContext): void {
 }
 
 export function renderContextView(ctx: DomContext): void {
+  // ponytail: read tokens/usage from the live store, not from stale ctx snapshot
+  const s = getChatStore(ctx.panelId).getState();
   const settings = loadSettings();
   const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
   const ctxWin = settings.agent?.contextWindow || 0;
-  const pct = ctxWin > 0 ? Math.min((ctx.totalTokensUsed / ctxWin) * 100, 100) : 0;
+  const tokensUsed = s.totalTokensUsed;
+  const pct = ctxWin > 0 ? Math.min((tokensUsed / ctxWin) * 100, 100) : 0;
   let meterClass = 'safe';
   if (pct >= 90) meterClass = 'danger';
   else if (pct >= 80) meterClass = 'warn';
@@ -621,7 +631,7 @@ export function renderContextView(ctx: DomContext): void {
   html += '<div class="chat-context-section-label">上下文窗口</div>';
   html += `<div class="chat-context-meter">
     <div class="chat-context-meter-bar"><div class="chat-context-meter-fill ${meterClass}" style="width:${pct}%"></div></div>
-    <span class="chat-context-meter-val">${ctxWin > 0 ? `${(ctx.totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k` : '未配置'}</span>
+    <span class="chat-context-meter-val">${ctxWin > 0 ? `${(tokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k` : '未配置'}</span>
   </div>`;
   html += '</div>';
 
@@ -651,7 +661,7 @@ export function renderContextView(ctx: DomContext): void {
   html += '<div class="chat-context-section-label">会话统计</div>';
   const msgCount = agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
   const turnCount = Session.getTurnPairs().length;
-  const toolTotal = Object.values(ctx.toolUsage).reduce((a, b) => a + b, 0);
+  const toolTotal = Object.values(s.toolUsage || {}).reduce((a: number, b: any) => a + b, 0);
   html += `<div style="font-family:var(--font-mono);font-size: calc(11px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
     <span>${msgCount} 条消息</span>
     <span>${turnCount} 轮对话</span>
