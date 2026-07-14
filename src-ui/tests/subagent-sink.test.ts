@@ -43,6 +43,21 @@ describe('createSubAgentSink', () => {
     expect(part.version).toBe(2);
   });
 
+  it('reasoning → text → reasoning creates two separate blocks (not merged across non-reasoning)', () => {
+    const part = freshPart();
+    const bump = vi.fn();
+    const sink = createSubAgentSink({ subPart: part, bump });
+    sink({ kind: EventKind.Reasoning, text: 'Round 1 thinking...' });
+    sink({ kind: EventKind.Text, text: 'Tool output analysis' });
+    sink({ kind: EventKind.Message }); // finalise text
+    sink({ kind: EventKind.Reasoning, text: 'Round 2 thinking...' });
+    vi.runAllTimers();
+    expect(part.parts).toHaveLength(3); // reasoning, text, reasoning
+    expect(part.parts[0]).toMatchObject({ type: 'reasoning', text: 'Round 1 thinking...' });
+    expect(part.parts[2]).toMatchObject({ type: 'reasoning', text: 'Round 2 thinking...' });
+    expect(bump).toHaveBeenCalledTimes(1); // throttled
+  });
+
   it('ignores reasoning with empty text', () => {
     const part = freshPart();
     const bump = vi.fn();
@@ -118,11 +133,28 @@ describe('createSubAgentSink', () => {
     expect(onProgress).toHaveBeenCalledWith('🔧 read_file\n');
   });
 
-  it('ToolDispatch → non-partial is running', () => {
+    it('ToolDispatch → non-partial is running', () => {
     const part = freshPart();
     const sink = createSubAgentSink({ subPart: part, bump: vi.fn() });
     flush(sink, { kind: EventKind.ToolDispatch, tool: { id: 't2', name: 'write_file', args: '{}', read_only: false } });
     expect(part.parts[0]).toMatchObject({ status: 'running' });
+  });
+
+  it('ToolDispatch → upserts when same toolId arrives twice (ToolCallStart + ToolCall)', () => {
+    const part = freshPart();
+    const bump = vi.fn();
+    const sink = createSubAgentSink({ subPart: part, bump });
+    // First dispatch (ToolCallStart: partial=true, args='')
+    sink({ kind: EventKind.ToolDispatch, tool: { id: 't1', name: 'search_content', args: '', read_only: true, partial: true } });
+    // Second dispatch (ToolCall: partial=false, full args)
+    sink({ kind: EventKind.ToolDispatch, tool: { id: 't1', name: 'search_content', args: '{"pattern":"test"}', read_only: true, partial: false } });
+    vi.runAllTimers();
+    expect(part.parts).toHaveLength(1);  // upserted, not duplicated
+    expect(part.parts[0]).toMatchObject({
+      type: 'tool', toolId: 't1', name: 'search_content',
+      status: 'running', args: '{"pattern":"test"}',
+    });
+    expect(bump).toHaveBeenCalledTimes(1); // throttled
   });
 
   // ── ToolProgress ──

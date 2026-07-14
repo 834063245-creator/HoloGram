@@ -25,9 +25,8 @@ import {
   createUserMessage,
   createAssistantMessage,
   createNoticeMessage,
-  lastTextPart,
-  findToolPart,
 } from './message-model';
+import { applyEventToParts } from '../agent/part-mutator';
 
 // ── Turn pair type (shared with chat-session) ──
 type TurnPair = {
@@ -78,11 +77,6 @@ export interface StreamContext {
   _retractUserMessage: (msg: UserMessage) => void;
   retractTurn: (idx: number) => string | null;
   sendMessage: () => Promise<void>;
-  _upsertToolPart: (
-    toolId: string, name: string, args: string, label: string,
-    readOnly: boolean, status: 'pending' | 'running' | 'done' | 'error',
-    output?: string, err?: string, truncated?: boolean,
-  ) => void;
   _updateTokens: (tokensUsed: number) => void;
 
   // ── 项目路径 ──
@@ -98,7 +92,6 @@ export interface StreamContext {
 }
 
 // ── Streaming assistant helper ─────────────────────────────
-// Used by _appendTextPart, _appendReasoningPart, _finaliseTextPart
 
 function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   const id = ctx.getStreamingAssistantId();
@@ -114,41 +107,6 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   ctx.getMessages().push(assistant);
   ctx.setStreamingAssistantId(assistant._id);
   return assistant;
-}
-
-// ═══════════════════════════════════════════════════════════
-// Data-driven message model — append parts
-// ═══════════════════════════════════════════════════════════
-
-/** Append reasoning text — accumulates into the last reasoning part if one exists. */
-export function _appendReasoningPart(ctx: StreamContext, text: string): void {
-  const assistant = _streamingAssistant(ctx);
-  const last = assistant.parts.length > 0
-    ? assistant.parts[assistant.parts.length - 1]
-    : null;
-  if (last && last.type === 'reasoning') {
-    last.text += text;
-  } else {
-    assistant.parts.push({ type: 'reasoning', text });
-  }
-}
-
-/** Append streaming text — merges into the last text part if one exists. */
-export function _appendTextPart(ctx: StreamContext, text: string): void {
-  const assistant = _streamingAssistant(ctx);
-  const last = lastTextPart(assistant.parts);
-  if (last && !last.finalised) {
-    last.text += text;
-  } else {
-    assistant.parts.push({ type: 'text', text, finalised: false });
-  }
-}
-
-/** Mark the last text part as finalised (streaming text is complete for this step). */
-export function _finaliseTextPart(ctx: StreamContext): void {
-  const assistant = _streamingAssistant(ctx);
-  const last = lastTextPart(assistant.parts);
-  if (last) last.finalised = true;
 }
 
 /** Push a notice message to the log.
@@ -241,24 +199,12 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       break;
 
     case EventKind.Reasoning:
-      if (ev.text) {
-        _appendReasoningPart(ctx, ev.text);
-        bumpChat(ctx.storeId);
-      }
-      break;
-
     case EventKind.Text:
-      if (ev.text) {
-        _appendTextPart(ctx, ev.text);
+    case EventKind.Message:
+      if (ev.text || ev.kind === EventKind.Message) {
+        applyEventToParts(_streamingAssistant(ctx).parts, ev);
         bumpChat(ctx.storeId);
       }
-      break;
-
-    case EventKind.Message:
-      if (ev.text) {
-        _finaliseTextPart(ctx);
-      }
-      bumpChat(ctx.storeId);
       break;
 
     case EventKind.ToolDispatch:
@@ -266,39 +212,21 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         const t = ev.tool;
         ctx._recordToolUsage(t.name, t.args || '');
         ctx._updateStatusBar('running', `执行 ${t.name}`);
-        ctx._upsertToolPart(
-          t.id, t.name, t.args || '', t.name,
-          t.read_only ?? false,
-          t.partial ? 'pending' : 'running',
-        );
+        applyEventToParts(_streamingAssistant(ctx).parts, ev);
         bumpChat(ctx.storeId);
       }
       break;
 
     case EventKind.ToolProgress:
       if (ev.tool) {
-        const t = ev.tool;
-        ctx._upsertToolPart(
-          t.id, t.name, t.args || '', t.name,
-          t.read_only ?? false,
-          'running',
-          t.output,
-        );
+        applyEventToParts(_streamingAssistant(ctx).parts, ev);
         _scheduleSync(ctx);
       }
       break;
 
     case EventKind.ToolResult:
       if (ev.tool) {
-        const t = ev.tool;
-        ctx._upsertToolPart(
-          t.id, t.name, t.args || '', t.name,
-          t.read_only ?? false,
-          t.err ? 'error' : 'done',
-          !t.err ? t.output : undefined,
-          t.err,
-          t.truncated,
-        );
+        applyEventToParts(_streamingAssistant(ctx).parts, ev);
         bumpChat(ctx.storeId);
       }
       break;

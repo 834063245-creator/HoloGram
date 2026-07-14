@@ -45,8 +45,6 @@ import {
   createUserMessage,
   createAssistantMessage,
   createNoticeMessage,
-  lastTextPart,
-  findToolPart,
 } from './message-model';
 import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
 import { SlashPanelController } from './react/SlashPanel';
@@ -680,7 +678,6 @@ export class ChatPanel {
       _retractUserMessage: (m) => this._retractUserMessage(m),
       retractTurn: (i) => this.retractTurn(i),
       sendMessage: () => this.sendMessage(),
-      _upsertToolPart: (...args) => this._upsertToolPart(...args),
       _updateTokens: (n) => { getChatStore(this.panelId).getState().setTotalTokensUsed(n); },
       getProjectPath: () => getChatStore(this.panelId).getState().projectPath,
       getRunning: () => this._activeExec().isRunning,
@@ -1170,44 +1167,6 @@ export class ChatPanel {
     this.messages.push(assistant);
     getChatStore(this.panelId).getState().setStreamingAssistantId(assistant._id);
     return assistant;
-  }
-
-  /** Append reasoning text — accumulates into the last reasoning part if one exists. */
-  private _appendReasoningPart(text: string): void { Stream._appendReasoningPart(this._streamCtx(), text); }
-
-  /** Append streaming text — merges into the last text part if one exists. */
-  private _appendTextPart(text: string): void { Stream._appendTextPart(this._streamCtx(), text); }
-
-  /** Mark the last text part as finalised (streaming text is complete for this step). */
-  private _finaliseTextPart(): void { Stream._finaliseTextPart(this._streamCtx()); }
-
-  /** Add or update a tool part. Called from ToolDispatch (create) and ToolProgress (update output). */
-  private _upsertToolPart(
-    toolId: string,
-    name: string,
-    args: string,
-    label: string,
-    readOnly: boolean,
-    status: 'pending' | 'running' | 'done' | 'error',
-    output?: string,
-    err?: string,
-    truncated?: boolean,
-  ): void {
-    const assistant = this._streamingAssistant();
-    const existing = findToolPart(assistant.parts, toolId);
-    if (existing) {
-      existing.status = status;
-      if (output !== undefined) existing.output = (existing.output || '') + output;
-      if (err !== undefined) existing.err = err;
-      if (truncated !== undefined) existing.truncated = truncated;
-      // Update args if they grew (partial → complete)
-      if (args && args.length > existing.args.length) existing.args = args;
-    } else {
-      assistant.parts.push({
-        type: 'tool',
-        toolId, name, args, label, readOnly, status, output, err, truncated,
-      });
-    }
   }
 
   /** Update token usage on the current assistant. */
