@@ -8,7 +8,7 @@
 // 推理块：流式时展开，流结束自动折叠（用户手动 toggle 后尊重用户选择）
 // 流式截断：推理文本只保留末尾 12,000 字符 / 240 行
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -318,7 +318,7 @@ const SubReasoningBlock: React.FC<{
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
 
-const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
+const SubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(({ part }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [expanded, setExpanded] = useState(part.status === 'running');
@@ -328,6 +328,17 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
     if (part.status === 'running' && !userOverridden.current) setExpanded(true);
     else if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
   }, [part.status]);
+
+  // Auto-scroll body div to bottom as new content streams in
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !expanded) return;
+    const observer = new MutationObserver(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [expanded]);
 
   const toggle = () => { userOverridden.current = true; setExpanded(v => !v); };
   const toggleTool = useCallback((id: string) => {
@@ -344,8 +355,77 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
     : part.status === 'error' ? 'badge-fail'
     : 'badge-running';
 
-  // Render parts interleaved: reasoning → text → tool — same order as parent bubble
   const streaming = part.status === 'running';
+
+  // Memoized parts list — re-builds only when sub-agent content changes,
+  // not on every parent re-render (performance fix for large chat histories).
+  const renderedParts = useMemo(() => {
+    const items: React.ReactNode[] = [];
+    let i = 0;
+    while (i < part.parts.length) {
+      const p = part.parts[i];
+      if (p.type === 'tool') {
+        const run: typeof part.parts = [];
+        while (i < part.parts.length && part.parts[i].type === 'tool') {
+          run.push(part.parts[i]); i++;
+        }
+        const tools = run as any[];
+        const doneTools = tools.filter((t: any) => t.status === 'done' || t.status === 'error');
+        const allDone = doneTools.length === tools.length && tools.length >= 3;
+        const groupExpanded = tools.some((t: any) => expandedTools.has(t.toolId));
+        const collapsed = allDone && !groupExpanded;
+        items.push(
+          <div key={`tool-group-${i}`} className="msg-tool-wrapper">
+            {collapsed ? (
+              <ToolSummary
+                tools={doneTools as any} expandedTools={expandedTools}
+                onExpandAll={() => {
+                  setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
+                }}
+                onCollapseAll={() => {}}
+              />
+            ) : (
+              <>
+                {allDone && (
+                  <ToolSummary
+                    tools={doneTools as any} expandedTools={expandedTools}
+                    onExpandAll={() => {
+                      setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
+                    }}
+                    onCollapseAll={() => {
+                      setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.delete((t as any).toolId); return n; });
+                    }}
+                  />
+                )}
+                {tools.map((t: any) => (
+                  <ToolCard key={t.toolId} part={t}
+                    expanded={expandedTools.has(t.toolId)}
+                    onToggle={() => toggleTool(t.toolId)}
+                  />
+                ))}
+              </>
+            )}
+          </div>
+        );
+      } else if (p.type === 'reasoning') {
+        items.push(
+          <SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />
+        );
+        i++;
+      } else if (p.type === 'text') {
+        items.push(
+          <MarkdownContent key={i}
+            text={(p as any).text}
+            streaming={streaming && !(p as any).finalised}
+          />
+        );
+        i++;
+      } else {
+        i++;
+      }
+    }
+    return items;
+  }, [part.version, part.status, expandedTools]);
 
   return (
     <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
@@ -358,74 +438,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
         <span className={`msg-tool-badge ${statusCls}`}>{statusLabel}</span>
       </div>
       <div ref={bodyRef} className={`msg-sub-agent-body${expanded ? ' open' : ''}`}>
-        {((): React.ReactNode[] => {
-          // Group consecutive tool parts for collapse, same as AssistantBubble
-          const items: React.ReactNode[] = [];
-          let i = 0;
-          while (i < part.parts.length) {
-            const p = part.parts[i];
-            if (p.type === 'tool') {
-              const run: typeof part.parts = [];
-              while (i < part.parts.length && part.parts[i].type === 'tool') {
-                run.push(part.parts[i]); i++;
-              }
-              const tools = run as any[];
-              const doneTools = tools.filter((t: any) => t.status === 'done' || t.status === 'error');
-              const allDone = doneTools.length === tools.length && tools.length >= 3;
-              const groupExpanded = tools.some((t: any) => expandedTools.has(t.toolId));
-              const collapsed = allDone && !groupExpanded;
-              items.push(
-                <div key={`tool-group-${i}`} className="msg-tool-wrapper">
-                  {collapsed ? (
-                    <ToolSummary
-                      tools={doneTools as any} expandedTools={expandedTools}
-                      onExpandAll={() => {
-                        setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
-                      }}
-                      onCollapseAll={() => {}}
-                    />
-                  ) : (
-                    <>
-                      {allDone && (
-                        <ToolSummary
-                          tools={doneTools as any} expandedTools={expandedTools}
-                          onExpandAll={() => {
-                            setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
-                          }}
-                          onCollapseAll={() => {
-                            setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.delete((t as any).toolId); return n; });
-                          }}
-                        />
-                      )}
-                      {tools.map((t: any) => (
-                        <ToolCard key={t.toolId} part={t}
-                          expanded={expandedTools.has(t.toolId)}
-                          onToggle={() => toggleTool(t.toolId)}
-                        />
-                      ))}
-                    </>
-                  )}
-                </div>
-              );
-            } else if (p.type === 'reasoning') {
-              items.push(
-                <SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />
-              );
-              i++;
-            } else if (p.type === 'text') {
-              items.push(
-                <MarkdownContent key={i}
-                  text={(p as any).text}
-                  streaming={streaming && !(p as any).finalised}
-                />
-              );
-              i++;
-            } else {
-              i++;
-            }
-          }
-          return items;
-        })()}
+        {renderedParts}
         {part.parts.length === 0 && part.status === 'running' && (
           <div className="msg-text" style={{ color: 'var(--text-faint)', padding: '8px 0' }}>分析中…</div>
         )}
@@ -435,7 +448,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
       </div>
     </div>
   );
-};
+});
 
 // ── User message ──
 
