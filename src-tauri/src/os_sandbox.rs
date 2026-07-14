@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 // OS-level sandbox (spec §6)
-// Phase 4a: Windows Job Object — die-with-parent process lifecycle
-// Phase 4b: Windows AppContainer — filesystem + network isolation
+// Phase 4a: Windows Job Object — die-with-parent process lifecycle.
+//   AppContainer (Phase 4b) has been removed — it conflicted with general-purpose
+//   dev toolchains that spawn deep process trees loading DLLs from unpredictable
+//   paths. File-system and network isolation are handled by the permission engine.
 // Phase 5: macOS sandbox-exec + Linux bubblewrap (spec §6.4–§6.7)
 // ponytail: pure Win32 FFI + platform tools, zero new crate deps.
 
@@ -16,89 +18,52 @@ use std::process::ExitStatus;
 
 /// Sandbox availability status for UI/warning display (spec §6.6–§6.7).
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // ponytail: wired into UI in later phase
+#[allow(dead_code)]
 pub enum SandboxStatus {
-    /// Full sandbox active (Job Object + AppContainer on Windows).
+    /// Full sandbox active (Job Object on Windows).
     Available,
-    /// Degraded — only Job Object, no filesystem/network isolation.
-    Degraded { reason: String },
-    /// Unavailable — no OS sandbox at all (pre-Win8, etc.).
+    /// Unavailable — no OS sandbox (permission engine is the fallback).
     Unavailable,
 }
 
-/// Sandboxed process handle — wraps either an AppContainer-spawned raw process
-/// or a standard std::process::Child, unified under one API.
+/// Sandboxed process handle — wraps a std::process::Child,
+/// assigned to the Job Object (Windows) or plain spawn (other platforms).
 pub struct SandboxedChild {
-    #[cfg(windows)]
-    inner: imp::ChildInner,
-    #[cfg(not(windows))]
     inner: std::process::Child,
 }
 
-#[allow(dead_code)] // ponytail: public API, wired in exec_command foreground
+#[allow(dead_code)]
 impl SandboxedChild {
-    /// Process ID.
     pub fn id(&self) -> u32 {
-        #[cfg(windows)]
-        { self.inner.id() }
-        #[cfg(not(windows))]
-        { self.inner.id() }
+        self.inner.id()
     }
 
-    /// Non-blocking wait. Returns Some(status) if exited, None if still running.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        #[cfg(windows)]
-        { self.inner.try_wait() }
-        #[cfg(not(windows))]
-        { self.inner.try_wait() }
+        self.inner.try_wait()
     }
 
-    /// Blocking wait for process exit.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        #[cfg(windows)]
-        { self.inner.wait() }
-        #[cfg(not(windows))]
-        { self.inner.wait() }
+        self.inner.wait()
     }
 
-    /// Kill the process forcefully.
     pub fn kill(&mut self) -> io::Result<()> {
-        #[cfg(windows)]
-        { self.inner.kill() }
-        #[cfg(not(windows))]
-        { self.inner.kill() }
+        self.inner.kill()
     }
 
-    /// Take the stdout pipe reader. Returns None if already taken.
     pub fn take_stdout(&mut self) -> Option<Box<dyn Read + Send + Unpin>> {
-        #[cfg(windows)]
-        { self.inner.take_stdout() }
-        #[cfg(not(windows))]
-        { self.inner.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>) }
+        self.inner.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>)
     }
 
-    /// Take the stderr pipe reader.
     pub fn take_stderr(&mut self) -> Option<Box<dyn Read + Send + Unpin>> {
-        #[cfg(windows)]
-        { self.inner.take_stderr() }
-        #[cfg(not(windows))]
-        { self.inner.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>) }
+        self.inner.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>)
     }
 
-    /// Borrow the stdout reader without taking ownership.
     pub fn stdout_reader(&mut self) -> Option<&mut dyn Read> {
-        #[cfg(windows)]
-        { self.inner.stdout_reader() }
-        #[cfg(not(windows))]
-        { self.inner.stdout.as_mut().map(|s| s as &mut dyn Read) }
+        self.inner.stdout.as_mut().map(|s| s as &mut dyn Read)
     }
 
-    /// Borrow the stderr reader without taking ownership.
     pub fn stderr_reader(&mut self) -> Option<&mut dyn Read> {
-        #[cfg(windows)]
-        { self.inner.stderr_reader() }
-        #[cfg(not(windows))]
-        { self.inner.stderr.as_mut().map(|s| s as &mut dyn Read) }
+        self.inner.stderr.as_mut().map(|s| s as &mut dyn Read)
     }
 }
 
@@ -106,58 +71,12 @@ impl SandboxedChild {
 // Public functions
 // ═══════════════════════════════════════════════════════════════
 
-/// Detect dev build by checking if binary lives under target/debug/.
-/// ponytail: heuristic — avoids env-var ceremony. If someone renames their
-/// target dir or runs a release build via tauri dev, we miss it, but the
-/// worst case is a dev-only loop which won't happen in production anyway.
-fn is_dev_build() -> bool {
-    std::env::current_exe()
-        .map(|p| {
-            let s = p.to_string_lossy();
-            s.contains("target\\debug") || s.contains("target/debug")
-        })
-        .unwrap_or(false)
-}
-
-/// One-time init — call at app startup. Creates Job Object + AppContainer profile.
-/// Also sweeps residual ACL entries from previous crashes.
-/// In dev builds (binary under target/debug/), skips ACL operations entirely —
-/// modifying DACLs during `cargo tauri dev` triggers file system notifications
-/// that the watcher sees as source changes → rebuild → restart → ACL change → loop.
+/// One-time init — call at app startup. Creates Job Object.
 pub fn init() {
     #[cfg(windows)]
-    {
-        if is_dev_build() {
-            // Job Object only — no ACL touches to avoid Tauri watcher loop.
-            imp::job::init();
-            return;
-        }
-        imp::sweep_residual_acls();
-        imp::init_all();
-    }
+    imp::job::init();
 }
 
-/// Persist paths modified by grant_path_acl so cleanup_acls / sweep_residual_acls
-/// can restore them. Called internally by init_appcontainer; public for symmetry
-/// with cleanup_acls / sweep_residual_acls.
-#[allow(dead_code)]
-pub fn save_acl_snapshots() {
-    #[cfg(windows)]
-    imp::save_acl_snapshots();
-}
-
-/// Remove AppContainer ACEs from all directories modified by grant_path_acl.
-/// Called at app shutdown. Best-effort — failures are logged but not propagated.
-/// No-op in dev builds (ACLs were never modified).
-pub fn cleanup_acls() {
-    #[cfg(windows)]
-    {
-        if is_dev_build() { return; }
-        imp::cleanup_acls();
-    }
-}
-
-/// Query the current sandbox status for UI display (spec §6.6).
 /// Query the current sandbox status for UI display (spec §6.6).
 pub fn status() -> SandboxStatus {
     #[cfg(windows)]
@@ -170,30 +89,26 @@ pub fn status() -> SandboxStatus {
     { SandboxStatus::Unavailable }
 }
 
-    /// Spawn a shell command in the sandbox. Handles shell selection and applies
-    /// all active sandbox layers (Windows: JobObject + AppContainer when available;
-    /// macOS: sandbox-exec; Linux: bubblewrap). Falls back to JobObject-only when
-    /// AppContainer SID cannot be initialised (spec §6.7 — permission engine is
-    /// the hard floor).
-    pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
-        #[cfg(windows)]
-        {
-            let shell = imp::detect_shell();
-            // If bash is cached, try it first; fall back to Cmd on spawn failure.
-            if let imp::Shell::Bash(ref bash_path) = shell {
-                let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
-                match imp::spawn_sandboxed(&cmdline, cwd, true) {
-                    Ok(child) => return Ok(child),
-                    Err(e) => {
-                        eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
-                        // Fall through to Cmd path below
-                    }
+/// Spawn a shell command in the sandbox. On Windows this assigns the
+/// process to the Job Object for die-with-parent lifecycle management.
+/// On macOS this uses sandbox-exec; on Linux, bubblewrap.
+/// Falls back to plain spawn when the OS sandbox tool is not available.
+pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
+    #[cfg(windows)]
+    {
+        let shell = imp::detect_shell();
+        if let imp::Shell::Bash(ref bash_path) = shell {
+            let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
+            match imp::spawn(&cmdline, cwd) {
+                Ok(child) => return Ok(child),
+                Err(e) => {
+                    eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
                 }
             }
-            // Cmd path
-            let cmdline = format!("cmd /s /c \"{}\"", command);
-            imp::spawn_sandboxed(&cmdline, cwd, true)
         }
+        let cmdline = format!("cmd /s /c \"{}\"", command);
+        imp::spawn(&cmdline, cwd)
+    }
     #[cfg(target_os = "macos")]
     {
         match mac::spawn(command, cwd) {
@@ -221,8 +136,7 @@ pub fn status() -> SandboxStatus {
 }
 
 /// Plain shell spawn without any sandbox wrapping — used as fallback when
-/// OS sandbox is unavailable (spec §6.7). Non-Windows only; Windows always has
-/// Job Object + AppContainer available.
+/// OS sandbox is unavailable (spec §6.7).
 #[cfg(not(windows))]
 fn spawn_plain(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     let child = std::process::Command::new("sh")
@@ -251,23 +165,20 @@ pub fn assign_to_job(child: &std::process::Child) -> bool {
 
 /// Single-quote a command for bash -c. Single quotes escape EVERYTHING
 /// (including $, &, !, `, \), only ' itself needs special handling.
-/// ponytail: was double-quote before — broke on 2>&1, $VAR, nested quotes.
 fn quote_cmd(cmd: &str) -> String {
-    // escape embedded single quotes: close, escape, reopen
     let escaped = cmd.replace('\'', "'\\''");
     format!("'{}'", escaped)
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Windows implementation
+// Windows implementation — Job Object only
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
-#[allow(dead_code)] // Windows FFI for future sandbox phases (AppContainer, etc.)
+#[allow(dead_code)]
 pub mod imp {
-    use std::io::{self, Read};
-    use std::os::windows::process::{CommandExt, ExitStatusExt};
-    use std::process::ExitStatus;
+    use std::io;
+    use std::os::windows::process::CommandExt;
     use std::sync::OnceLock;
 
     use super::SandboxStatus;
@@ -281,80 +192,12 @@ pub mod imp {
             job: isize, info_class: i32, info: *const std::ffi::c_void, info_len: u32,
         ) -> i32;
         fn AssignProcessToJobObject(job: isize, process: isize) -> i32;
-
-        // Process
-        fn CreateProcessW(
-            app: *const u16, cmdline: *mut u16,
-            proc_attrs: *const std::ffi::c_void, thread_attrs: *const std::ffi::c_void,
-            inherit: i32, flags: u32, env: *const std::ffi::c_void,
-            cwd: *const u16, startup: *const StartupInfoExW, proc_info: *mut ProcInfo,
-        ) -> i32;
-        fn ResumeThread(thread: isize) -> u32;
-        fn TerminateProcess(process: isize, exit_code: u32) -> i32;
-        fn WaitForSingleObject(handle: isize, ms: u32) -> u32;
-        fn GetExitCodeProcess(process: isize, code: *mut u32) -> i32;
-        fn CloseHandle(handle: isize) -> i32;
-
-        // Pipes
-        fn CreatePipe(
-            read: *mut isize, write: *mut isize,
-            attrs: *const std::ffi::c_void, size: u32,
-        ) -> i32;
-        fn ReadFile(
-            file: isize, buf: *mut u8, n: u32, read: *mut u32, overlapped: *const std::ffi::c_void,
-        ) -> i32;
-        // Proc thread attributes
-        fn InitializeProcThreadAttributeList(
-            list: *mut std::ffi::c_void, count: u32, flags: u32, size: *mut usize,
-        ) -> i32;
-        fn UpdateProcThreadAttribute(
-            list: *mut std::ffi::c_void, flags: u32, attr: usize,
-            value: *mut std::ffi::c_void, cb: usize,
-            prev: *mut std::ffi::c_void, ret_size: *mut usize,
-        ) -> i32;
-        fn DeleteProcThreadAttributeList(list: *mut std::ffi::c_void);
-
-        // AppContainer
-        fn CreateAppContainerProfile(
-            name: *const u16, display: *const u16, desc: *const u16,
-            caps: *const SidAndAttributes, cap_count: u32,
-            sid_out: *mut *mut std::ffi::c_void,
-        ) -> i32;
-        fn DeriveAppContainerSidFromAppContainerName(
-            name: *const u16, sid_out: *mut *mut std::ffi::c_void,
-        ) -> i32;
-        fn ConvertStringSidToSidW(str: *const u16, sid: *mut *mut std::ffi::c_void) -> i32;
-        fn EqualSid(a: *mut std::ffi::c_void, b: *mut std::ffi::c_void) -> i32;
-        fn GetNamedSecurityInfoW(
-            name: *const u16, obj_type: i32, sec_info: u32,
-            owner: *mut *mut std::ffi::c_void, group: *mut *mut std::ffi::c_void,
-            dacl: *mut *mut std::ffi::c_void, sacl: *mut *mut std::ffi::c_void,
-            sd: *mut *mut std::ffi::c_void,
-        ) -> u32;
-        fn SetEntriesInAclW(
-            count: u32, entries: *const ExplicitAccessW,
-            old_acl: *mut std::ffi::c_void, new_acl: *mut *mut std::ffi::c_void,
-        ) -> u32;
-        fn SetNamedSecurityInfoW(
-            name: *const u16, obj_type: i32, sec_info: u32,
-            owner: *mut std::ffi::c_void, group: *mut std::ffi::c_void,
-            dacl: *mut std::ffi::c_void, sacl: *mut std::ffi::c_void,
-        ) -> u32;
-        fn LocalFree(mem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
     }
 
     // ── Constants ──
 
-    const CREATE_SUSPENDED: u32 = 0x00000004;
     const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
-    const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES: usize = 0x00020009;
-    const WAIT_OBJECT_0: u32 = 0;
-    const WAIT_TIMEOUT: u32 = 258;
-    const INFINITE: u32 = 0xFFFFFFFF;
-    const SW_HIDE: u16 = 0;
-    const STARTF_USESTDHANDLES: u32 = 0x00000100;
 
     // Job Object limits
     const JOB_OBJECT_LIMIT_DIE_ON_JOB_CLOSE: u32 = 0x00002000;
@@ -363,84 +206,7 @@ pub mod imp {
     const JOB_OBJECT_LIMIT_JOB_MEMORY: u32 = 0x00000200;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
 
-    // ACL
-    const SE_FILE_OBJECT: i32 = 1;
-    const DACL_SECURITY_INFORMATION: u32 = 0x00000004;
-    const GRANT_ACCESS: i32 = 1;
-    const TRUSTEE_IS_SID: i32 = 0;
-    pub const TRUSTEE_IS_UNKNOWN: i32 = 0;
-    const TRUSTEE_IS_WELL_KNOWN_GROUP: i32 = 5;
-    const SUB_CONTAINERS_AND_OBJECTS_INHERIT: u32 = 3;
-    pub const FILE_GENERIC_READ: u32 = 0x120089;
-    pub const FILE_GENERIC_EXECUTE: u32 = 0x1200A0;
-    pub const FILE_ALL_ACCESS: u32 = 0x1F01FF;
-    const ERROR_SUCCESS: u32 = 0;
-
     // ── FFI structs ──
-
-    #[repr(C)]
-    struct ProcInfo {
-        process: isize,
-        thread: isize,
-        pid: u32,
-        tid: u32,
-    }
-
-    #[repr(C)]
-    struct StartupInfoW {
-        cb: u32,
-        _reserved: *const u16,
-        desktop: *const u16,
-        title: *const u16,
-        x: u32, y: u32, x_size: u32, y_size: u32,
-        x_chars: u32, y_chars: u32,
-        fill: u32,
-        flags: u32,
-        show_window: u16,
-        _reserved2: u16,
-        _reserved3: *const u8,
-        stdin: isize,
-        stdout: isize,
-        stderr: isize,
-    }
-
-    #[repr(C)]
-    struct StartupInfoExW {
-        startup: StartupInfoW,
-        attr_list: *mut std::ffi::c_void,
-    }
-
-    #[repr(C)]
-    struct SecurityCapabilities {
-        appcontainer_sid: *mut std::ffi::c_void,
-        capabilities: *mut SidAndAttributes,
-        capability_count: u32,
-        _reserved: u32,
-    }
-
-    #[repr(C)]
-    struct SidAndAttributes {
-        sid: *mut std::ffi::c_void,
-        attributes: u32,
-    }
-
-    #[repr(C)]
-    #[repr(C)]
-    pub struct ExplicitAccessW {
-        access_permissions: u32,
-        access_mode: i32,
-        inheritance: u32,
-        trustee: TrusteeW,
-    }
-
-    #[repr(C)]
-    struct TrusteeW {
-        multiple_trustee: *mut std::ffi::c_void,
-        multiple_trustee_op: i32,
-        trustee_form: i32,
-        trustee_type: i32,
-        name: *mut u16,
-    }
 
     #[repr(C)]
     struct JobObjectExtendedLimitInformationRaw {
@@ -475,17 +241,13 @@ pub mod imp {
 
     #[derive(Clone)]
     pub enum Shell {
-        Bash(String), // full path to bash.exe
+        Bash(String),
         Cmd,
     }
 
-    /// Cached shell detection — only runs once, reused across all spawns.
-    static DETECTED_SHELL: std::sync::OnceLock<Shell> = std::sync::OnceLock::new();
+    static DETECTED_SHELL: OnceLock<Shell> = OnceLock::new();
 
     fn detect_shell_inner() -> Shell {
-        // ponytail: Git Bash provides native UTF-8 encoding — no GBK/UTF-8
-        // conversion layer. cmd.exe uses the system code page which corrupts
-        // Chinese characters.
         let bash_candidates = [
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files (x86)\Git\bin\bash.exe",
@@ -495,12 +257,8 @@ pub mod imp {
                 if smoke_test_bash(path) {
                     return Shell::Bash(path.to_string());
                 }
-                // bash found on disk but fails to spawn — keep looking
             }
         }
-        // Try to locate via where.exe git → Git\cmd\git.exe → ..\bin\bash.exe
-        // ponytail: DETACHED_PROCESS | CREATE_NO_WINDOW together avoids the
-        // old DLL_INIT_FAILED bug where CREATE_NO_WINDOW alone was used.
         if let Ok(output) = std::process::Command::new("where")
             .arg("git")
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
@@ -509,7 +267,6 @@ pub mod imp {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 let git_path = line.trim();
                 if let Some(cmd_dir) = std::path::Path::new(git_path).parent() {
-                    // git.exe is typically in Git\cmd, bash.exe is in Git\bin
                     if let Some(git_root) = cmd_dir.parent() {
                         let bash = git_root.join("bin").join("bash.exe");
                         if bash.exists() {
@@ -519,7 +276,6 @@ pub mod imp {
                             }
                         }
                     }
-                    // Also check if bash.exe is in the same directory (atypical installs)
                     let bash = cmd_dir.join("bash.exe");
                     if bash.exists() {
                         let bash_str = bash.to_string_lossy().into_owned();
@@ -533,15 +289,10 @@ pub mod imp {
         Shell::Cmd
     }
 
-    /// Smoke-test: spawn `bash -c "exit 0"` to verify bash actually works
-    /// before caching it as the system shell. Returns false if spawn fails,
-    /// hangs, or returns non-zero exit code — we fall back to Cmd.
-    /// ponytail: this catches broken Git Bash installs where bash.exe exists
-    /// on disk but msys-2.0.dll or other deps fail to init.
-    /// Uses spawn_job_only — smoke test doesn't need AppContainer isolation.
+    /// Smoke-test: spawn `bash -c "exit 0"` to verify bash actually works.
     fn smoke_test_bash(bash_path: &str) -> bool {
         let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
-        match spawn_job_only(&cmdline, ".", false) {
+        match spawn(&cmdline, ".") {
             Ok(mut child) => match child.wait() {
                 Ok(status) => status.success(),
                 Err(_) => false,
@@ -550,17 +301,13 @@ pub mod imp {
         }
     }
 
-    /// Detect the best available shell. Result is cached — only runs once.
-    /// Calls `detect_shell_inner()` on first invocation, returns cached `Shell` afterwards.
     pub fn detect_shell() -> Shell {
         DETECTED_SHELL.get_or_init(detect_shell_inner).clone()
     }
 
     /// Convert a Windows path to POSIX form for Git Bash.
     /// "C:\\Users\\foo\\bar" → "/c/Users/foo/bar"
-    /// UNC paths stay as-is but with forward slashes.
     pub fn windows_to_posix_path(path: &str) -> String {
-        // Strip NT long path prefix \\?\ before conversion
         let path = path.strip_prefix("\\\\?\\").unwrap_or(path);
         if path.starts_with("\\\\") {
             return path.replace('\\', "/");
@@ -574,7 +321,7 @@ pub mod imp {
         path.replace('\\', "/")
     }
 
-    // ── Job Object (Phase 4a) ──
+    // ── Job Object ──
 
     pub mod job {
         use std::os::windows::io::AsRawHandle;
@@ -598,9 +345,7 @@ pub mod imp {
                     | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
                     | JOB_OBJECT_LIMIT_JOB_MEMORY;
                 limits.basic.active_process_limit = 64;
-                // ponytail: 1 GiB job memory cap — generous for normal dev tools,
-                // tight enough to stop a runaway memory leak from taking down the OS.
-                limits.job_memory_limit = 1024 * 1024 * 1024;
+                limits.job_memory_limit = 1024 * 1024 * 1024; // 1 GiB
                 let ret = unsafe {
                     SetInformationJobObject(
                         h, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -626,938 +371,25 @@ pub mod imp {
             unsafe { AssignProcessToJobObject(job, raw as isize) != 0 }
         }
 
-        pub fn assign_raw(process: isize) -> bool {
-            let job = match JOB.get().and_then(|o| *o) {
-                Some(h) => h,
-                None => return false,
-            };
-            unsafe { AssignProcessToJobObject(job, process) != 0 }
-        }
-
         pub fn is_active() -> bool {
             JOB.get().and_then(|o| *o).is_some()
         }
     }
 
-    // ── AppContainer (Phase 4b) ──
-
-    static APPCONTAINER_SID: OnceLock<Option<isize>> = OnceLock::new();
-    static INTERNET_CLIENT_SID: OnceLock<Option<isize>> = OnceLock::new();
-    /// Paths whose DACLs were modified by grant_path_acl. Written to disk on
-    /// save_acl_snapshots(), used by cleanup_acls() on shutdown and
-    /// sweep_residual_acls() on startup for crash recovery.
-    static ACL_MODIFIED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    const APPCONTAINER_NAME: &str = "hologram-sandbox\0";
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    /// Get the INTERNET_CLIENT well-known capability SID (S-1-15-3-1).
-    /// Cached via OnceLock — only derived once per process lifetime.
-    fn internet_client_sid() -> Option<isize> {
-        *INTERNET_CLIENT_SID.get_or_init(|| {
-            let sid_str = wide("S-1-15-3-1\0");
-            let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
-            let ok = unsafe { ConvertStringSidToSidW(sid_str.as_ptr(), &mut sid) };
-            if ok == 0 || sid.is_null() {
-                eprintln!("[hologram] ConvertStringSidToSidW(INTERNET_CLIENT) failed");
-                None
-            } else {
-                Some(sid as isize)
-            }
-        })
-    }
-
-    fn init_appcontainer() {
-        APPCONTAINER_SID.get_or_init(|| {
-            let name = wide(APPCONTAINER_NAME.trim_end_matches('\0'));
-
-            // Try to derive SID first (profile may already exist from previous run)
-            let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hr = unsafe {
-                DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid)
-            };
-            // HRESULT: S_OK = 0 = success, non-zero = error
-            if hr == 0 && !sid.is_null() {
-                // Profile already exists from previous run — re-grant ACLs
-                // in case new tool directories have been added since creation
-                grant_appcontainer_fs(sid);
-                return Some(sid as isize);
-            }
-
-            // Create new profile
-            let display = wide("HoloGram Sandbox");
-            let desc = wide("Restricted execution environment for agent commands");
-            let hr = unsafe {
-                CreateAppContainerProfile(
-                    name.as_ptr(),
-                    display.as_ptr(),
-                    desc.as_ptr(),
-                    std::ptr::null(), // no extra capabilities
-                    0,
-                    &mut sid,
-                )
-            };
-            if hr != 0 {
-                eprintln!(
-                    "[hologram] CreateAppContainerProfile failed (hr=0x{hr:08X}) — \
-                     AppContainer unavailable, falling back to Job Object only"
-                );
-                return None;
-            }
-
-            // Grant file access to project root + temp
-            grant_appcontainer_fs(sid);
-
-            Some(sid as isize)
-        });
-    }
-
-    /// Grant AppContainer SID read/write/execute on project root and TEMP,
-    /// read/execute on dynamically-discovered tool directories from PATH.
-    ///
-    /// # Design
-    /// Hardcoded per-machine paths (like `C:\Program Files\Git\mingw64\bin`)
-    /// are inherently fragile — users install tools in wildly different locations.
-    /// Instead, this function:
-    ///
-    /// 1. Grants FULL_ACCESS on project root + TEMP (agent needs to read/write files).
-    /// 2. Grants READ|EXECUTE on a small set of OS-critical directories
-    ///    (System32, WinSxS, SysWOW64) that EVERY process needs to load system DLLs.
-    /// 3. Scans PATH for common tool executables (bash, node, python, git, cargo, etc.)
-    ///    and grants READ|EXECUTE on each tool's installation tree.
-    ///
-    /// This means a user who installed Git in `E:\PortableApps\Git` or node via
-    /// nvm at `C:\Users\alice\AppData\Roaming\nvm\v20.11.0` will work out of the
-    /// box — no per-machine config needed.
-    fn grant_appcontainer_fs(raw_sid: *mut std::ffi::c_void) {
-        let project = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let temp = std::env::temp_dir();
-
-        let canon_project = std::fs::canonicalize(&project).unwrap_or(project);
-        let canon_temp = std::fs::canonicalize(&temp).unwrap_or(temp);
-
-        // ── OS bootstrap directories (MUST be present for any process to start) ──
-        let os_bootstrap = &[
-            r"C:\Windows\System32",
-            r"C:\Windows\SysWOW64",
-            r"C:\Windows\WinSxS",
-        ];
-
-        // ── Full access on project + temp ──
-        let path_rwe = canon_project.to_string_lossy().replace('/', "\\");
-        let path_temp = canon_temp.to_string_lossy().replace('/', "\\");
-        let _ = grant_path_acl(&path_rwe, raw_sid, FILE_ALL_ACCESS);
-        let _ = grant_path_acl(&path_temp, raw_sid, FILE_ALL_ACCESS);
-
-        // ── OS bootstrap ──
-        for dir in os_bootstrap {
-            if std::path::Path::new(dir).exists() {
-                let _ = grant_path_acl(dir, raw_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
-            }
-        }
-
-        // ── Dynamic tool discovery from PATH ──
-        let granted = collect_and_grant_tool_dirs(raw_sid);
-        eprintln!(
-            "[hologram] AppContainer: granted access to {} tool directories \
-             (+ project root + TEMP + OS bootstrap)",
-            granted,
-        );
-    }
-
-    /// Scan PATH for known tool executables, discover their install roots, and
-    /// grant READ|EXECUTE on each unique directory tree.
-    ///
-    /// Returns the number of directories granted.
-    fn collect_and_grant_tool_dirs(raw_sid: *mut std::ffi::c_void) -> usize {
-        use std::collections::HashSet;
-
-        // Tools we look for on PATH. For each, we grant not just the directory
-        // containing the EXE, but also its sibling `lib`, `bin`, `usr/bin`,
-        // `mingw64/bin` directories — tools like Git Bash load DLLs from these.
-        const SEARCH_EXES: &[&str] = &[
-            "bash.exe",      // Git Bash / MSYS2
-            "node.exe",      // Node.js
-            "python.exe",    // Python
-            "python3.exe",   // Python 3
-            "git.exe",       // Git
-            "cargo.exe",     // Rust
-            "rustc.exe",     // Rust
-            "go.exe",        // Go
-            "java.exe",      // Java
-            "javac.exe",     // Java
-            "ruby.exe",      // Ruby
-            "perl.exe",      // Perl
-            "php.exe",       // PHP
-            "dotnet.exe",    // .NET
-            "npx.cmd",       // npm runner
-            "npm.cmd",       // npm
-            "pnpm.cmd",      // pnpm
-            "yarn.cmd",      // yarn
-        ];
-
-        let path_var = std::env::var("PATH").unwrap_or_default();
-        let mut granted = HashSet::new();
-        let mut count = 0;
-
-        // Split PATH on ';' (Windows)
-        for dir in path_var.split(';') {
-            let dir = dir.trim();
-            if dir.is_empty() { continue; }
-            if !std::path::Path::new(dir).exists() { continue; }
-
-            // Check if any of our known tools live in this directory
-            let mut found_tool = false;
-            for exe in SEARCH_EXES {
-                if std::path::Path::new(&format!("{}/{}", dir, exe)).exists() {
-                    found_tool = true;
-                    break;
-                }
-            }
-            if !found_tool { continue; }
-
-            // Normalize and canonicalize the directory
-            let canon = std::fs::canonicalize(dir).unwrap_or_else(|_| std::path::PathBuf::from(dir));
-            let dir_str = canon.to_string_lossy().replace('/', "\\");
-
-            if !granted.insert(dir_str.clone()) { continue; }
-            let _ = grant_path_acl(&dir_str, raw_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
-            count += 1;
-
-            // ── Heuristic: for bash.exe, walk up to find the Git/MSYS2 root ──
-            // and grant its sub-trees (mingw64/bin, usr/bin, etc.)
-            if std::path::Path::new(&format!("{}/bash.exe", dir_str)).exists() {
-                // Walk up from the bin directory to find the install root
-                if let Some(install_root) = find_install_root(&dir_str) {
-                    // Common Git/MSYS2 sub-trees that contain DLLs
-                    let sub_dirs = &[
-                        "mingw64/bin", "mingw64/lib", "mingw32/bin", "mingw32/lib",
-                        "usr/bin", "usr/lib", "lib", "libexec",
-                        "bin",           // already granted, but ensure consistency
-                        "ssl/certs",     // git SSL certs
-                        "etc",           // gitconfig etc.
-                    ];
-                    for sub in sub_dirs {
-                        let sub_path = format!("{}\\{}", install_root, sub);
-                        let sub_path = sub_path.replace('/', "\\");
-                        if std::path::Path::new(&sub_path).exists()
-                            && granted.insert(sub_path.clone())
-                        {
-                            let _ = grant_path_acl(
-                                &sub_path, raw_sid,
-                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-                            );
-                            count += 1;
-                        }
-                    }
-                }
-            }
-
-            // ── Heuristic: for node.exe, also grant npm global prefix ──
-            if std::path::Path::new(&format!("{}/node.exe", dir_str)).exists() {
-                // Try to read npm prefix
-                if let Ok(output) = std::process::Command::new("npm")
-                    .args(["config", "get", "prefix"])
-                    .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
-                    .output()
-                {
-                    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !prefix.is_empty()
-                        && std::path::Path::new(&prefix).exists()
-                    {
-                        let canon = std::fs::canonicalize(&prefix)
-                            .unwrap_or_else(|_| std::path::PathBuf::from(&prefix));
-                        let prefix_str = canon.to_string_lossy().replace('/', "\\");
-                        if granted.insert(prefix_str.clone()) {
-                            let _ = grant_path_acl(
-                                &prefix_str, raw_sid,
-                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-                            );
-                            count += 1;
-                        }
-                    }
-                }
-            }
-
-            // Safety cap — don't blow up startup time
-            if count >= 120 { break; }
-        }
-
-        count
-    }
-
-    /// Given a directory containing bash.exe, walk up to find the Git/MSYS2
-    /// install root (the directory that contains `bin/`, `mingw64/`, `usr/`, etc.).
-    /// Returns None if the structure doesn't match.
-    fn find_install_root(bin_dir: &str) -> Option<String> {
-        let path = std::path::Path::new(bin_dir);
-
-        // Try: bin_dir is <root>/bin
-        if let Some(parent) = path.parent() {
-            let mingw64 = parent.join("mingw64");
-            let usr = parent.join("usr");
-            if mingw64.exists() || usr.exists() {
-                return Some(parent.to_string_lossy().replace('/', "\\"));
-            }
-        }
-
-        // Try: bin_dir is <root>/mingw64/bin (atypical MSYS2 layout)
-        if let Some(mingw64) = path.parent() {
-            if let Some(root) = mingw64.parent() {
-                let bin = root.join("bin");
-                let usr = root.join("usr");
-                if bin.exists() || usr.exists() {
-                    return Some(root.to_string_lossy().replace('/', "\\"));
-                }
-            }
-        }
-
-        // Try: bin_dir is <root>/usr/bin
-        if let Some(usr) = path.parent() {
-            if let Some(root) = usr.parent() {
-                let bin = root.join("bin");
-                if bin.exists() {
-                    return Some(root.to_string_lossy().replace('/', "\\"));
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Add an ACCESS_ALLOWED_ACE to a directory's DACL for the given SID.
-    pub fn grant_path_acl(path: &str, sid: *mut std::ffi::c_void, access_mask: u32) -> Result<(), u32> {
-        let path_w = wide(path);
-
-        // Get existing DACL
-        let mut dacl: *mut std::ffi::c_void = std::ptr::null_mut();
-        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
-        let ret = unsafe {
-            GetNamedSecurityInfoW(
-                path_w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(), std::ptr::null_mut(),
-                &mut dacl, std::ptr::null_mut(), &mut sd,
-            )
-        };
-        if ret != ERROR_SUCCESS {
-            eprintln!("[hologram] GetNamedSecurityInfoW({path}) failed: 0x{ret:08X}");
-            return Err(ret);
-        }
-
-        // Build new ACE
-        let trustee = TrusteeW {
-            multiple_trustee: std::ptr::null_mut(),
-            multiple_trustee_op: 0,
-            trustee_form: TRUSTEE_IS_SID,
-            trustee_type: TRUSTEE_IS_UNKNOWN, // ponytail: must be 0; 5 (WELL_KNOWN_GROUP) + SID form → ERROR_INVALID_PARAMETER
-            name: sid as *mut u16,
-        };
-        let ea = ExplicitAccessW {
-            access_permissions: access_mask,
-            access_mode: GRANT_ACCESS,
-            inheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-            trustee,
-        };
-
-        // Merge into new ACL
-        let mut new_dacl: *mut std::ffi::c_void = std::ptr::null_mut();
-        let ret = unsafe {
-            SetEntriesInAclW(1, &ea, dacl, &mut new_dacl)
-        };
-        if ret != ERROR_SUCCESS {
-            eprintln!("[hologram] SetEntriesInAclW({path}) failed: 0x{ret:08X}");
-            unsafe { LocalFree(sd); }
-            return Err(ret);
-        }
-
-        // Apply
-        let ret = unsafe {
-            SetNamedSecurityInfoW(
-                path_w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(), std::ptr::null_mut(),
-                new_dacl, std::ptr::null_mut(),
-            )
-        };
-        unsafe {
-            LocalFree(new_dacl as *mut std::ffi::c_void);
-            LocalFree(sd);
-        }
-        if ret != ERROR_SUCCESS {
-            eprintln!("[hologram] SetNamedSecurityInfoW({path}) failed: 0x{ret:08X}");
-            return Err(ret);
-        }
-        // Track for shutdown cleanup / crash recovery.
-        // Persist to disk immediately so crash recovery can find this path.
-        if let Ok(mut paths) = ACL_MODIFIED.lock() {
-            if !paths.contains(&path.to_string()) {
-                paths.push(path.to_string());
-                // ponytail: write snapshot on every grant so crash doesn't leave
-                // orphan ACEs. On large PATH (many tools) this writes ~120 lines
-                // once at startup; negligible. Call write_snapshot_file directly
-                // since we already hold ACL_MODIFIED lock.
-                write_snapshot_file(&paths);
-            }
-        }
-        Ok(())
-    }
-
-    /// Convert string SID → raw pointer. Caller must pass result to free_sid().
-    pub unsafe fn sid_from_str(s: &str) -> Option<*mut std::ffi::c_void> {
-        let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
-        if ConvertStringSidToSidW(w.as_ptr(), &mut sid) == 0 { return None; }
-        Some(sid)
-    }
-
-    /// Free a SID allocated by ConvertStringSidToSidW.
-    pub unsafe fn free_sid(sid: *mut std::ffi::c_void) {
-        LocalFree(sid);
-    }
-
-    /// Path to the ACL snapshot file in .hologram/
-    fn acl_snapshot_path() -> std::path::PathBuf {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        cwd.join(".hologram").join(".acl_snapshots")
-    }
-
-    /// Write the snapshot file from a pre-locked path list. Split from
-    /// save_acl_snapshots() so grant_path_acl can call it while holding the lock.
-    fn write_snapshot_file(paths: &[String]) {
-        let path = acl_snapshot_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let content = paths.join("\n");
-        let _ = std::fs::write(&path, &content);
-    }
-
-    /// Persist modified path list to disk so crash recovery can find them.
-    pub fn save_acl_snapshots() {
-        if let Ok(paths) = ACL_MODIFIED.lock() {
-            write_snapshot_file(&paths);
-        }
-    }
-
-    /// Remove AppContainer ACEs from all tracked paths. Called on graceful shutdown.
-    /// Best-effort: failures are logged, not propagated.
-    pub fn cleanup_acls() {
-        let paths: Vec<String> = ACL_MODIFIED
-            .lock()
-            .map(|p| p.clone())
-            .unwrap_or_default();
-        let ac_sid = APPCONTAINER_SID.get().and_then(|o| *o);
-        let internet_sid = internet_client_sid();
-
-        for dir in &paths {
-            if let Some(sid) = ac_sid {
-                remove_appcontainer_ace(dir, sid as *mut std::ffi::c_void, internet_sid);
-            }
-        }
-
-        // Clear the snapshot file
-        let snap_path = acl_snapshot_path();
-        let _ = std::fs::remove_file(&snap_path);
-    }
-
-    /// Read snapshot file from disk and try to clean up residual ACEs from
-    /// a previous crash. Called at app startup before init_all().
-    pub fn sweep_residual_acls() {
-        let snap_path = acl_snapshot_path();
-        let content = match std::fs::read_to_string(&snap_path) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        if content.trim().is_empty() {
-            let _ = std::fs::remove_file(&snap_path);
-            return;
-        }
-
-        // We don't have the AppContainer SID yet (init_appcontainer hasn't run),
-        // so derive it from the well-known name
-        let name = wide(APPCONTAINER_NAME.trim_end_matches('\0'));
-        let mut sid: *mut std::ffi::c_void = std::ptr::null_mut();
-        let hr = unsafe {
-            DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid)
-        };
-        if hr != 0 || sid.is_null() {
-            eprintln!("[hologram] sweep: cannot derive AppContainer SID for cleanup");
-            return;
-        }
-
-        let internet_sid = {
-            let sid_str = wide("S-1-15-3-1\0");
-            let mut isid: *mut std::ffi::c_void = std::ptr::null_mut();
-            let ok = unsafe { ConvertStringSidToSidW(sid_str.as_ptr(), &mut isid) };
-            if ok == 0 || isid.is_null() { None } else { Some(isid as isize) }
-        };
-
-        let mut cleaned = 0usize;
-        for line in content.lines() {
-            let dir = line.trim();
-            if dir.is_empty() { continue; }
-            if !std::path::Path::new(dir).exists() { continue; }
-            if remove_appcontainer_ace(dir, sid, internet_sid) {
-                cleaned += 1;
-            }
-        }
-
-        if cleaned > 0 {
-            eprintln!("[hologram] sweep: cleaned residual ACEs from {} directories", cleaned);
-        }
-
-        // Always remove snapshot file after sweep attempt
-        let _ = std::fs::remove_file(&snap_path);
-    }
-
-    /// Remove ACEs for the AppContainer SID (and optionally INTERNET_CLIENT SID)
-    /// from a directory's DACL. Returns true if any ACEs were removed.
-    fn remove_appcontainer_ace(
-        path: &str,
-        ac_sid: *mut std::ffi::c_void,
-        internet_sid: Option<isize>,
-    ) -> bool {
-        let path_w = wide(path);
-
-        // Get existing DACL
-        let mut dacl: *mut std::ffi::c_void = std::ptr::null_mut();
-        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
-        let ret = unsafe {
-            GetNamedSecurityInfoW(
-                path_w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(), std::ptr::null_mut(),
-                &mut dacl, std::ptr::null_mut(), &mut sd,
-            )
-        };
-        if ret != ERROR_SUCCESS {
-            return false;
-        }
-
-        // Count existing ACEs
-        let ace_count = unsafe { acl_ace_count(dacl) };
-
-        // Walk the ACL and rebuild without our SIDs
-        let mut new_acl: Vec<u8> = Vec::new();
-        let mut removed = false;
-
-        // ponytail: ACL layout = ACL header + ACE entries. Copy header, filter ACEs.
-        // ACL size info header is 8 bytes (AclRevision, Sbz1, AclSize, AceCount, Sbz2).
-        // We copy the header then filter ACEs one by one.
-        let header_size = 8usize;
-        if ace_count > 0 && !dacl.is_null() {
-            let acl_ptr = dacl as *const u8;
-            // Copy ACL header
-            new_acl.extend_from_slice(unsafe { std::slice::from_raw_parts(acl_ptr, header_size) });
-
-            let mut offset = header_size;
-            for _ in 0..ace_count {
-                let ace_ptr = unsafe { acl_ptr.add(offset) };
-                // ACE header: AceType(u8), AceFlags(u8), AceSize(u16)
-                let ace_size = unsafe { *(ace_ptr.add(2) as *const u16) } as usize;
-                let ace_type = unsafe { *ace_ptr };
-
-                // ACE types: ACCESS_ALLOWED_ACE_TYPE=0, ACCESS_DENIED_ACE_TYPE=1
-                // SID starts at offset 8 in the ACE
-                let sid_in_ace = unsafe { ace_ptr.add(8) as *mut std::ffi::c_void };
-
-                let is_our_sid = unsafe { equal_sid(sid_in_ace, ac_sid) };
-                let is_internet = internet_sid
-                    .map(|is| unsafe { equal_sid(sid_in_ace, is as *mut std::ffi::c_void) })
-                    .unwrap_or(false);
-
-                if ace_type == 0 && (is_our_sid || is_internet) {
-                    // Skip this ACE — it's ours
-                    removed = true;
-                } else {
-                    // Copy ACE as-is
-                    new_acl.extend_from_slice(unsafe {
-                        std::slice::from_raw_parts(ace_ptr, ace_size)
-                    });
-                }
-                offset += ace_size;
-            }
-        } else {
-            unsafe { LocalFree(sd); }
-            return false;
-        }
-
-        if !removed {
-            unsafe { LocalFree(sd); }
-            return false;
-        }
-
-        // Update ACL header: AclSize (bytes 2-3) and AceCount (bytes 4-5)
-        // must reflect the filtered ACE list, not the stale original header.
-        // Walk the rebuilt ACL to count remaining ACEs and compute correct size.
-        let mut kept_ace_count: u16 = 0;
-        {
-            let mut off = header_size;
-            while off < new_acl.len() {
-                let ace_size = unsafe { *(new_acl.as_ptr().add(off + 2) as *const u16) } as usize;
-                if ace_size == 0 { break; }
-                kept_ace_count += 1;
-                off += ace_size;
-            }
-        }
-        let new_acl_size = new_acl.len() as u16;
-        // Write corrected header fields
-        new_acl[2..4].copy_from_slice(&new_acl_size.to_le_bytes());
-        new_acl[4..6].copy_from_slice(&kept_ace_count.to_le_bytes());
-
-        // Write back the filtered ACL
-        let new_acl_ptr = new_acl.as_ptr() as *mut std::ffi::c_void;
-        let ret = unsafe {
-            SetNamedSecurityInfoW(
-                path_w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(), std::ptr::null_mut(),
-                new_acl_ptr, std::ptr::null_mut(),
-            )
-        };
-        unsafe { LocalFree(sd); }
-
-        if ret != ERROR_SUCCESS {
-            eprintln!("[hologram] cleanup: SetNamedSecurityInfoW({path}) failed: 0x{ret:08X}");
-            return false;
-        }
-        true
-    }
-
-    /// Count the number of ACE entries in an ACL.
-    unsafe fn acl_ace_count(acl: *mut std::ffi::c_void) -> u32 {
-        if acl.is_null() { return 0; }
-        let ptr = acl as *const u8;
-        // AclSize is at offset 2, AceCount at offset 4
-        let ace_count = *(ptr.add(4) as *const u16) as u32;
-        ace_count
-    }
-
-    /// Compare two SIDs for equality via Windows EqualSid. Handles edge cases
-    /// (misordered SubAuthority arrays, non-canonical forms) that byte comparison misses.
-    unsafe fn equal_sid(a: *mut std::ffi::c_void, b: *mut std::ffi::c_void) -> bool {
-        if a.is_null() || b.is_null() { return false; }
-        EqualSid(a, b) != 0
-    }
+    // ── Sandbox status ──
 
     pub fn status() -> SandboxStatus {
-        let has_job = job::is_active();
-        let has_ac = APPCONTAINER_SID.get().and_then(|o| *o).is_some();
-
-        if has_ac && has_job {
+        if job::is_active() {
             SandboxStatus::Available
-        } else if has_job {
-            SandboxStatus::Degraded {
-                reason: "AppContainer 不可用 — 仅有进程生命周期保护，无文件系统/网络隔离".into(),
-            }
         } else {
             SandboxStatus::Unavailable
         }
     }
 
-    pub fn init_all() {
-        job::init();
-        init_appcontainer();
-        // Persist modified path list for crash recovery
-        save_acl_snapshots();
-    }
+    // ── Sandboxed spawn (Job Object only) ──
 
-    // ── Sandboxed spawn ──
-
-    /// Internal child representation — either a standard Child or a raw AppContainer process.
-    pub enum ChildInner {
-        Standard(std::process::Child),
-        AppContainer {
-            process: isize,
-            #[allow(dead_code)]
-            thread: isize,
-            #[allow(dead_code)]
-            pid: u32,
-            stdout_read: Option<AnonPipeReader>,
-            stderr_read: Option<AnonPipeReader>,
-        },
-    }
-
-    impl ChildInner {
-        #[allow(dead_code)]
-        pub fn id(&self) -> u32 {
-            match self {
-                ChildInner::Standard(c) => c.id(),
-                ChildInner::AppContainer { pid, .. } => *pid,
-            }
-        }
-
-        pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            match self {
-                ChildInner::Standard(c) => c.try_wait(),
-                ChildInner::AppContainer { process, .. } => {
-                    if *process == 0 { return Ok(None); }
-                    let ret = unsafe { WaitForSingleObject(*process, 0) };
-                    match ret {
-                        WAIT_OBJECT_0 => {
-                            let mut code: u32 = 0;
-                            let ok = unsafe { GetExitCodeProcess(*process, &mut code) };
-                            if ok == 0 {
-                                return Err(io::Error::last_os_error());
-                            }
-                            // Close handles on exit
-                            unsafe { CloseHandle(*process); }
-                            *process = 0;
-                            Ok(Some(ExitStatus::from_raw(code)))
-                        }
-                        WAIT_TIMEOUT => Ok(None),
-                        _ => Err(io::Error::last_os_error()),
-                    }
-                }
-            }
-        }
-
-        pub fn wait(&mut self) -> io::Result<ExitStatus> {
-            match self {
-                ChildInner::Standard(c) => c.wait(),
-                ChildInner::AppContainer { process, .. } => {
-                    if *process == 0 {
-                        return Ok(ExitStatus::from_raw(0));
-                    }
-                    unsafe { WaitForSingleObject(*process, INFINITE) };
-                    let mut code: u32 = 0;
-                    let ok = unsafe { GetExitCodeProcess(*process, &mut code) };
-                    if ok == 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    unsafe { CloseHandle(*process); }
-                    *process = 0;
-                    Ok(ExitStatus::from_raw(code))
-                }
-            }
-        }
-
-        pub fn kill(&mut self) -> io::Result<()> {
-            match self {
-                ChildInner::Standard(c) => c.kill(),
-                ChildInner::AppContainer { process, .. } => {
-                    if *process == 0 { return Ok(()); }
-                    let ret = unsafe { TerminateProcess(*process, 1) };
-                    if ret == 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                }
-            }
-        }
-
-        pub fn take_stdout(&mut self) -> Option<Box<dyn Read + Send + Unpin>> {
-            match self {
-                ChildInner::Standard(c) => {
-                    c.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>)
-                }
-                ChildInner::AppContainer { stdout_read, .. } => {
-                    stdout_read.take().map(|r| Box::new(r) as Box<dyn Read + Send + Unpin>)
-                }
-            }
-        }
-
-        pub fn take_stderr(&mut self) -> Option<Box<dyn Read + Send + Unpin>> {
-            match self {
-                ChildInner::Standard(c) => {
-                    c.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>)
-                }
-                ChildInner::AppContainer { stderr_read, .. } => {
-                    stderr_read.take().map(|r| Box::new(r) as Box<dyn Read + Send + Unpin>)
-                }
-            }
-        }
-
-        pub fn stdout_reader(&mut self) -> Option<&mut dyn Read> {
-            match self {
-                ChildInner::Standard(c) => c.stdout.as_mut().map(|s| s as &mut dyn Read),
-                ChildInner::AppContainer { stdout_read, .. } => {
-                    stdout_read.as_mut().map(|r| r as &mut dyn Read)
-                }
-            }
-        }
-
-        pub fn stderr_reader(&mut self) -> Option<&mut dyn Read> {
-            match self {
-                ChildInner::Standard(c) => c.stderr.as_mut().map(|s| s as &mut dyn Read),
-                ChildInner::AppContainer { stderr_read, .. } => {
-                    stderr_read.as_mut().map(|r| r as &mut dyn Read)
-                }
-            }
-        }
-    }
-
-    /// Create anonymous pipes for stdout/stderr and spawn via CreateProcessW with AppContainer.
-    /// Falls back to std::process::Command if AppContainer is unavailable.
-    pub fn spawn_sandboxed(
-        cmdline: &str,
-        cwd: &str,
-        piped_io: bool,
-    ) -> io::Result<super::SandboxedChild> {
-        let ac_sid = APPCONTAINER_SID
-            .get()
-            .and_then(|o| *o)
-            .map(|s| s as *mut std::ffi::c_void);
-
-        // Fallback path: no AppContainer, use standard Command
-        if ac_sid.is_none() {
-            let (program, args) = split_cmdline(cmdline);
-            let mut c = std::process::Command::new(&program);
-            for a in &args {
-                c.arg(a);
-            }
-            c.current_dir(cwd)
-                .stdin(std::process::Stdio::null())  // ponytail: Tauri is GUI subsystem — no console stdin; inherit would give a dead handle
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);   // ponytail: DETACHED_PROCESS alone creates a console briefly (flash); CREATE_NO_WINDOW suppresses it. The old DLL_INIT_FAILED bug was CREATE_NO_WINDOW WITHOUT DETACHED_PROCESS in GUI+Job Object combo — DETACHED_PROCESS | CREATE_NO_WINDOW together avoid both problems
-            let child = c.spawn()?;
-            job::assign(&child);
-            return Ok(super::SandboxedChild {
-                inner: ChildInner::Standard(child),
-            });
-        }
-
-        // AppContainer path: raw CreateProcessW
-        let ac_sid = ac_sid.unwrap();
-        let cmdline_w: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
-        let cwd_w: Vec<u16> = cwd.encode_utf16().chain(std::iter::once(0)).collect();
-
-        // Create pipes
-        let (stdout_r, stdout_w) = if piped_io {
-            (Some(create_pipe()?), Some(create_pipe()?))
-        } else {
-            (None, None)
-        };
-        let (stderr_r, stderr_w) = if piped_io {
-            (Some(create_pipe()?), Some(create_pipe()?))
-        } else {
-            (None, None)
-        };
-
-        // Build STARTUPINFOEXW
-        let mut si_ex = StartupInfoExW {
-            startup: StartupInfoW {
-                cb: std::mem::size_of::<StartupInfoExW>() as u32,
-                _reserved: std::ptr::null(),
-                desktop: std::ptr::null(),
-                title: std::ptr::null(),
-                x: 0, y: 0, x_size: 0, y_size: 0,
-                x_chars: 0, y_chars: 0,
-                fill: 0,
-                flags: STARTF_USESTDHANDLES,
-                show_window: SW_HIDE,
-                _reserved2: 0,
-                _reserved3: std::ptr::null(),
-                stdin: 0,
-                stdout: stdout_w.as_ref().map_or(0, |p| p.write),
-                stderr: stderr_w.as_ref().map_or(0, |p| p.write),
-            },
-            attr_list: std::ptr::null_mut(),
-        };
-
-        // Security capabilities with AppContainer SID + INTERNET_CLIENT
-        let internet_sid = internet_client_sid();
-        let mut cap_attr = internet_sid.map(|s| SidAndAttributes {
-            sid: s as *mut std::ffi::c_void,
-            attributes: 0,
-        });
-        let sec_caps = SecurityCapabilities {
-            appcontainer_sid: ac_sid,
-            capabilities: cap_attr.as_mut().map_or(std::ptr::null_mut(), |c| c),
-            capability_count: if internet_sid.is_some() { 1 } else { 0 },
-            _reserved: 0,
-        };
-
-        // Initialize proc thread attribute list (1 attribute)
-        let _attr_size = std::mem::size_of::<*mut std::ffi::c_void>() * 3; // rough estimate
-        let mut size: usize = 0;
-        unsafe {
-            InitializeProcThreadAttributeList(
-                std::ptr::null_mut(), 1, 0, &mut size,
-            );
-        }
-        let mut attr_buf: Vec<u8> = vec![0u8; size];
-        si_ex.attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
-        let ok = unsafe {
-            InitializeProcThreadAttributeList(si_ex.attr_list, 1, 0, &mut size)
-        };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let ok = unsafe {
-            UpdateProcThreadAttribute(
-                si_ex.attr_list,
-                0,
-                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-                &sec_caps as *const _ as *mut std::ffi::c_void,
-                std::mem::size_of::<SecurityCapabilities>(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            unsafe { DeleteProcThreadAttributeList(si_ex.attr_list); }
-            return Err(io::Error::last_os_error());
-        }
-
-        // CreateProcessW — suspended so we can assign to Job first
-        let flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS | CREATE_NO_WINDOW;
-        let mut proc_info = ProcInfo { process: 0, thread: 0, pid: 0, tid: 0 };
-        let ok = unsafe {
-            CreateProcessW(
-                std::ptr::null(),
-                cmdline_w.as_ptr() as *mut u16,
-                std::ptr::null(),
-                std::ptr::null(),
-                1, // inherit handles (for the pipes)
-                flags,
-                std::ptr::null(),
-                cwd_w.as_ptr(),
-                &si_ex,
-                &mut proc_info,
-            )
-        };
-
-        unsafe { DeleteProcThreadAttributeList(si_ex.attr_list); }
-
-        // Close the write ends of pipes (child has its copies)
-        if let Some(ref p) = stdout_w { unsafe { CloseHandle(p.write); } }
-        if let Some(ref p) = stderr_w { unsafe { CloseHandle(p.write); } }
-
-        if ok == 0 {
-            let err = io::Error::last_os_error();
-            if let Some(ref p) = stdout_r { unsafe { CloseHandle(p.read); } }
-            if let Some(ref p) = stderr_r { unsafe { CloseHandle(p.read); } }
-            return Err(err);
-        }
-
-        // Assign to Job Object, then resume
-        job::assign_raw(proc_info.process);
-        unsafe { ResumeThread(proc_info.thread); }
-
-        // Thread handle not needed after resume
-        unsafe { CloseHandle(proc_info.thread); }
-
-        Ok(super::SandboxedChild {
-            inner: ChildInner::AppContainer {
-                process: proc_info.process,
-                thread: 0, // already closed
-                pid: proc_info.pid,
-                stdout_read: stdout_r.map(|p| AnonPipeReader { handle: p.read }),
-                stderr_read: stderr_r.map(|p| AnonPipeReader { handle: p.read }),
-            },
-        })
-    }
-
-    /// Job Object only spawn — no AppContainer. Used as fallback when
-    /// AppContainer fails (missing DLL paths, SxS, Windows Update drift).
-    /// Same as spawn_sandboxed's ac_sid.is_none() branch.
-    pub fn spawn_job_only(
-        cmdline: &str,
-        cwd: &str,
-        _piped_io: bool,
-    ) -> io::Result<super::SandboxedChild> {
+    /// Spawn a shell command and assign it to the Job Object.
+    pub fn spawn(cmdline: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
         let (program, args) = split_cmdline(cmdline);
         let mut c = std::process::Command::new(&program);
         for a in &args {
@@ -1567,74 +399,15 @@ pub mod imp {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW);
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
         let child = c.spawn()?;
         job::assign(&child);
-        Ok(super::SandboxedChild {
-            inner: ChildInner::Standard(child),
-        })
+        Ok(super::SandboxedChild { inner: child })
     }
 
-    // ── Pipe helpers ──
-
-    struct PipePair { read: isize, write: isize }
-
-    fn create_pipe() -> io::Result<PipePair> {
-        let mut read: isize = 0;
-        let mut write: isize = 0;
-        let ok = unsafe {
-            CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
-        };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(PipePair { read, write })
-    }
-
-    /// Win32 anonymous pipe reader — implements std::io::Read.
-    pub struct AnonPipeReader {
-        handle: isize,
-    }
-
-    impl Read for AnonPipeReader {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let mut n: u32 = 0;
-            let len = buf.len().min(u32::MAX as usize) as u32;
-            let ok = unsafe {
-                ReadFile(
-                    self.handle,
-                    buf.as_mut_ptr(),
-                    len,
-                    &mut n,
-                    std::ptr::null(),
-                )
-            };
-            if ok == 0 {
-                let err = io::Error::last_os_error();
-                if err.raw_os_error() == Some(109) {
-                    // ERROR_BROKEN_PIPE → EOF
-                    return Ok(0);
-                }
-                return Err(err);
-            }
-            Ok(n as usize)
-        }
-    }
-
-    impl Drop for AnonPipeReader {
-        fn drop(&mut self) {
-            if self.handle != 0 {
-                unsafe { CloseHandle(self.handle); }
-            }
-        }
-    }
-
-    // Send + Unpin for trait object compatibility
-    unsafe impl Send for AnonPipeReader {}
-    impl Unpin for AnonPipeReader {}
+    // ── Command-line helpers ──
 
     /// Split "bash" -c '...' into ("bash", ["-c", "..."]).
-    /// Handles both single and double quotes — spans inside quotes are not split.
     fn split_cmdline(cmdline: &str) -> (String, Vec<String>) {
         let mut parts: Vec<String> = Vec::new();
         let mut current = String::new();
@@ -1644,15 +417,13 @@ pub mod imp {
             match ch {
                 '"' if !in_single => {
                     in_double = !in_double;
-                    // Still push the quote so unquoting can strip it
                 }
                 '\'' if !in_double => {
                     in_single = !in_single;
                 }
-                ' ' if !in_double && !in_single => {
+                ' ' | '\t' if !in_double && !in_single => {
                     if !current.is_empty() {
-                        let clean = unquote(&current);
-                        parts.push(clean);
+                        parts.push(unquote(&current));
                         current.clear();
                     }
                 }
@@ -1662,19 +433,92 @@ pub mod imp {
         if !current.is_empty() {
             parts.push(unquote(&current));
         }
-        let prog = parts.first().cloned().unwrap_or_default();
-        let args = if parts.len() > 1 { parts[1..].to_vec() } else { Vec::new() };
-        (prog, args)
+        if parts.is_empty() {
+            return (String::new(), vec![]);
+        }
+        let program = parts.remove(0);
+        (program, parts)
     }
 
-    /// Strip surrounding single or double quotes from a token.
+    /// Strip one layer of matching quotes.
     fn unquote(s: &str) -> String {
+        let s = s.trim();
         if s.len() >= 2 {
-            if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-                return s[1..s.len()-1].to_string();
+            let bytes = s.as_bytes();
+            if (bytes[0] == b'"' && bytes[s.len() - 1] == b'"')
+                || (bytes[0] == b'\'' && bytes[s.len() - 1] == b'\'')
+            {
+                return s[1..s.len() - 1].to_string();
             }
         }
         s.to_string()
+    }
+
+    // ── Tests ──
+
+    #[cfg(test)]
+    mod tests {
+        use super::{detect_shell, windows_to_posix_path, Shell};
+
+        #[test]
+        fn test_windows_to_posix_drive_letter() {
+            assert_eq!(windows_to_posix_path("C:\\Users\\foo\\bar"), "/c/Users/foo/bar");
+            assert_eq!(windows_to_posix_path("D:\\project\\src\\main.rs"), "/d/project/src/main.rs");
+            assert_eq!(windows_to_posix_path("C:/Users/foo"), "/c/Users/foo");
+        }
+
+        #[test]
+        fn test_windows_to_posix_nt_prefix() {
+            assert_eq!(
+                windows_to_posix_path("\\\\?\\D:\\HoloGramHG\\src"),
+                "/d/HoloGramHG/src"
+            );
+            assert_eq!(
+                windows_to_posix_path("\\\\?\\C:\\Program Files\\Git"),
+                "/c/Program Files/Git"
+            );
+        }
+
+        #[test]
+        fn test_windows_to_posix_unc() {
+            assert_eq!(
+                windows_to_posix_path("\\\\server\\share\\file.txt"),
+                "//server/share/file.txt"
+            );
+        }
+
+        #[test]
+        fn test_windows_to_posix_no_drive() {
+            assert_eq!(windows_to_posix_path("src\\main.rs"), "src/main.rs");
+            assert_eq!(windows_to_posix_path("some/relative/path"), "some/relative/path");
+        }
+
+        #[test]
+        fn test_windows_to_posix_chinese_path() {
+            assert_eq!(
+                windows_to_posix_path("C:\\Users\\用户\\桌面\\绝密"),
+                "/c/Users/用户/桌面/绝密"
+            );
+            assert_eq!(
+                windows_to_posix_path("\\\\?\\D:\\360MoveData\\绝密\\data"),
+                "/d/360MoveData/绝密/data"
+            );
+        }
+
+        #[test]
+        fn test_detect_shell_returns_valid_variant() {
+            let shell = detect_shell();
+            match shell {
+                Shell::Bash(ref path) => {
+                    assert!(
+                        std::path::Path::new(path).exists(),
+                        "detected bash path must exist: {}",
+                        path
+                    );
+                }
+                Shell::Cmd => {}
+            }
+        }
     }
 }
 
@@ -1689,8 +533,6 @@ mod mac {
 
     use super::{SandboxStatus, SandboxedChild};
 
-    /// Check whether sandbox-exec is available on this system.
-    /// sandbox-exec ships with macOS but is an Apple private API (spec §6.4 note).
     pub fn status() -> SandboxStatus {
         if Path::new("/usr/bin/sandbox-exec").exists() {
             SandboxStatus::Available
@@ -1699,15 +541,9 @@ mod mac {
         }
     }
 
-    /// Spawn a shell command under sandbox-exec with a profile that allows
-    /// reads everywhere, writes only within cwd + /tmp, and full network outbound.
-    /// Falls back to plain spawn if sandbox-exec is missing.
     pub fn spawn(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
         if !Path::new("/usr/bin/sandbox-exec").exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "sandbox-exec not found",
-            ));
+            return Err(io::Error::new(io::ErrorKind::NotFound, "sandbox-exec not found"));
         }
         let profile = build_profile(cwd);
         let child = std::process::Command::new("/usr/bin/sandbox-exec")
@@ -1724,20 +560,8 @@ mod mac {
         Ok(SandboxedChild { inner: child })
     }
 
-    /// Build a seatbelt profile string for sandbox-exec (spec §6.4).
-    ///
-    /// Design: default-deny, then punch holes for what dev commands need.
-    /// File reads are allowed everywhere (commands need system libs, configs,
-    /// SDKs). File writes are restricted to cwd + /tmp. Network, process exec,
-    /// fork, signals, sysctl, mach-lookup, and IOKit are explicitly allowed
-    /// so node/npm/python/git/xcodebuild work.
-    ///
-    /// # ponytail: profile is a starting point; add per-command profiles when
-    ///   specific restrictions (e.g. deny-network) are needed.
     fn build_profile(cwd: &str) -> String {
-        // Escape double-quotes in path for the TinyScheme profile syntax
         let root = cwd.replace('"', "\\\"");
-        // Canonicalise /tmp for the allow clause
         let tmp = std::env::temp_dir();
         let tmp_str = tmp.to_string_lossy().replace('"', "\\\"");
 
@@ -1772,9 +596,7 @@ mod linux {
 
     use super::{SandboxStatus, SandboxedChild};
 
-    /// Check whether bubblewrap (bwrap) is installed.
     pub fn status() -> SandboxStatus {
-        // which bwrap — succeed → Available; not found → Unavailable
         let ok = std::process::Command::new("which")
             .arg("bwrap")
             .stdout(std::process::Stdio::null())
@@ -1793,32 +615,21 @@ mod linux {
         }
     }
 
-    /// Spawn a shell command under bubblewrap.
-    /// Read-only bind-mounts system directories; read-write binds cwd + /tmp.
-    /// Network is permitted (permission engine handles SSRF/domain rules).
-    /// If bwrap is missing, Command::new("bwrap") fails naturally and the
-    /// caller (spawn_shell) falls back to spawn_plain (spec §6.7).
     pub fn spawn(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
         let ro_binds = existing_ro_binds();
         let temp = std::env::temp_dir();
 
         let mut cmd = std::process::Command::new("bwrap");
 
-        // Read-only bind system directories (only those that exist on this system)
         for (src, dst) in &ro_binds {
             cmd.arg("--ro-bind").arg(src).arg(dst);
         }
 
-        // Read-write bind cwd and /tmp
         cmd.arg("--bind").arg(cwd).arg(cwd);
         cmd.arg("--bind")
             .arg(temp.as_os_str())
             .arg("/tmp");
-
-        // Die with parent so killed process tree is cleaned up
         cmd.arg("--die-with-parent");
-
-        // ── Shell invocation ──
         cmd.arg("--")
             .arg("sh")
             .arg("-c")
@@ -1832,9 +643,6 @@ mod linux {
         Ok(SandboxedChild { inner: child })
     }
 
-    /// Return the list of (src, dst) pairs for read-only bind mounts.
-    /// Only includes paths that actually exist on the filesystem so bwrap
-    /// doesn't fail on distros with different layouts (e.g. merged-/usr).
     fn existing_ro_binds() -> Vec<(&'static str, &'static str)> {
         let candidates: &[(&str, &str)] = &[
             ("/usr", "/usr"),
@@ -1851,208 +659,4 @@ mod linux {
             .copied()
             .collect()
     }
-
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Re-export: assign_to_job is the public name
-// ═══════════════════════════════════════════════════════════════
-
-// assign_to_job is defined above, public. On Windows it delegates to imp::job::assign.
-// On non-Windows it returns true (stub).
-
-#[cfg(test)]
-#[cfg(windows)]
-mod tests {
-    use super::imp::{detect_shell, windows_to_posix_path, Shell};
-
-    #[test]
-    fn test_windows_to_posix_drive_letter() {
-        assert_eq!(windows_to_posix_path("C:\\Users\\foo\\bar"), "/c/Users/foo/bar");
-        assert_eq!(windows_to_posix_path("D:\\project\\src\\main.rs"), "/d/project/src/main.rs");
-        assert_eq!(windows_to_posix_path("C:/Users/foo"), "/c/Users/foo");
-    }
-
-    #[test]
-    fn test_windows_to_posix_nt_prefix() {
-        // \\?\ prefix must be stripped before conversion
-        assert_eq!(
-            windows_to_posix_path("\\\\?\\D:\\HoloGramHG\\src"),
-            "/d/HoloGramHG/src"
-        );
-        assert_eq!(
-            windows_to_posix_path("\\\\?\\C:\\Program Files\\Git"),
-            "/c/Program Files/Git"
-        );
-    }
-
-    #[test]
-    fn test_windows_to_posix_unc() {
-        assert_eq!(
-            windows_to_posix_path("\\\\server\\share\\file.txt"),
-            "//server/share/file.txt"
-        );
-    }
-
-    #[test]
-    fn test_windows_to_posix_no_drive() {
-        // Relative or already-posix paths get slashes flipped
-        assert_eq!(windows_to_posix_path("src\\main.rs"), "src/main.rs");
-        assert_eq!(windows_to_posix_path("some/relative/path"), "some/relative/path");
-    }
-
-    #[test]
-    fn test_windows_to_posix_chinese_path() {
-        // Chinese characters pass through unchanged — only slashes flip
-        assert_eq!(
-            windows_to_posix_path("C:\\Users\\用户\\桌面\\绝密"),
-            "/c/Users/用户/桌面/绝密"
-        );
-        // NT prefix + Chinese
-        assert_eq!(
-            windows_to_posix_path("\\\\?\\D:\\360MoveData\\绝密\\data"),
-            "/d/360MoveData/绝密/data"
-        );
-    }
-
-    #[test]
-    fn test_detect_shell_returns_valid_variant() {
-        // On a dev machine with Git installed, this should return Bash.
-        // On a minimal CI image, it falls back to Cmd — both are valid.
-        let shell = detect_shell();
-        match shell {
-            Shell::Bash(ref path) => {
-                assert!(
-                    std::path::Path::new(path).exists(),
-                    "detected bash path must exist: {}",
-                    path
-                );
-            }
-            Shell::Cmd => {
-                // Cmd fallback is always valid
-            }
-        }
-    }
-
-    // ── ACL lifecycle tests ──
-
-    #[test]
-    fn test_acl_snapshot_path_in_hologram_dir() {
-        // Access acl_snapshot_path through the public API: save + cleanup.
-        // Just verify the file goes to .hologram/.acl_snapshots.
-        let path = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(".hologram").join(".acl_snapshots");
-        assert!(path.to_string_lossy().replace('\\', "/").contains(".hologram/.acl_snapshots"),
-            "snapshot path should be under .hologram/: {:?}", path);
-    }
-
-    #[test]
-    fn test_write_and_read_snapshot_roundtrip() {
-        let tmp = std::env::temp_dir().join(format!("holo_acl_test_{}", std::process::id()));
-        let _ = std::fs::create_dir_all(tmp.join(".hologram"));
-        let snap_path = tmp.join(".hologram").join(".acl_snapshots");
-        let paths: Vec<String> = vec![
-            "C:\\test\\project".to_string(),
-            "C:\\test\\temp".to_string(),
-        ];
-
-        // Write
-        let content = paths.join("\n");
-        std::fs::write(&snap_path, &content).unwrap();
-
-        // Read back — same format sweep_residual_acls expects
-        let read_back = std::fs::read_to_string(&snap_path).unwrap();
-        let lines: Vec<&str> = read_back.lines().filter(|l| !l.trim().is_empty()).collect();
-        assert_eq!(lines.len(), 2);
-        assert!(lines.contains(&"C:\\test\\project"));
-        assert!(lines.contains(&"C:\\test\\temp"));
-
-        // File is deleted after sweep attempt — verify we can delete it
-        std::fs::remove_file(&snap_path).unwrap();
-        assert!(!snap_path.exists());
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    // ── ACL regression tests (fix: TRUSTEE_IS_WELL_KNOWN_GROUP → TRUSTEE_IS_UNKNOWN) ──
-
-    #[test]
-    fn test_explicit_access_is_repr_c() {
-        // ⚠️ CRITICAL: ExplicitAccessW MUST be #[repr(C)].
-        // Without it, Rust reorders fields and SetEntriesInAclW reads
-        // garbage → ERROR_INVALID_PARAMETER (0x57) on every call.
-        // Verify via size/alignment: 4+4+4+(8+4+4+4+8)=40 bytes on x64
-        use std::mem::{size_of, align_of};
-        let size = size_of::<super::imp::ExplicitAccessW>();
-        let align = align_of::<super::imp::ExplicitAccessW>();
-        assert!(size >= 32 && size <= 48,
-            "ExplicitAccessW size is {} (expected ~40 for #[repr(C)] on x64)", size);
-        assert!(align >= 4,
-            "ExplicitAccessW align is {} (expected >=4)", align);
-    }
-
-    #[test]
-    fn test_sid_conversion_works() {
-        // Verify the SID string conversion itself works before blaming grant_path_acl
-        unsafe {
-            let sid = super::imp::sid_from_str("S-1-1-0")
-                .expect("ConvertStringSidToSidW('S-1-1-0') must succeed");
-            assert!(!sid.is_null(), "SID pointer must not be null");
-            super::imp::free_sid(sid);
-        }
-    }
-
-    #[test]
-    fn test_grant_acl_succeeds_on_temp_dir() {
-        unsafe {
-            let sid = super::imp::sid_from_str("S-1-1-0")
-                .expect("ConvertStringSidToSidW should work");
-            assert!(!sid.is_null(), "SID must not be null");
-            let tmp = std::env::temp_dir()
-                .join(format!("holo_acl_test_{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&tmp);
-            let path_s = tmp.to_string_lossy().replace('/', "\\");
-
-            let r = super::imp::grant_path_acl(&path_s, sid, super::imp::FILE_GENERIC_READ);
-            super::imp::free_sid(sid);
-            let _ = std::fs::remove_dir_all(&tmp);
-
-            assert!(r.is_ok(), "grant_path_acl failed: Err(0x{:08X})", r.err().unwrap_or(0));
-        }
-    }
-
-    #[test]
-    fn test_grant_acl_fails_on_nonexistent_dir() {
-        unsafe {
-            let sid = super::imp::sid_from_str("S-1-1-0")
-                .expect("ConvertStringSidToSidW should work");
-            let path_s = format!("C:\\holo_nonexistent_acl_{}.tmp", std::process::id());
-
-            let r = super::imp::grant_path_acl(&path_s, sid, super::imp::FILE_GENERIC_READ);
-            super::imp::free_sid(sid);
-
-            assert!(r.is_err(), "grant on nonexistent path must fail");
-        }
-    }
-
-    #[test]
-    fn test_grant_acl_file_all_access_succeeds() {
-        unsafe {
-            let sid = super::imp::sid_from_str("S-1-1-0")
-                .expect("ConvertStringSidToSidW should work");
-            let tmp = std::env::temp_dir()
-                .join(format!("holo_acl_full_{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&tmp);
-            let path_s = tmp.to_string_lossy().replace('/', "\\");
-
-            let r = super::imp::grant_path_acl(&path_s, sid, super::imp::FILE_ALL_ACCESS);
-            super::imp::free_sid(sid);
-            let _ = std::fs::remove_dir_all(&tmp);
-
-            assert!(r.is_ok(), "FILE_ALL_ACCESS grant failed: Err(0x{:08X})", r.err().unwrap_or(0));
-        }
-    }
-
-
 }

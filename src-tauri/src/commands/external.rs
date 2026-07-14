@@ -102,7 +102,6 @@ pub(crate) fn sandbox_status() -> Result<String, String> {
     let s = crate::os_sandbox::status();
     let (available, degraded, reason) = match s {
         crate::os_sandbox::SandboxStatus::Available => (true, false, String::new()),
-        crate::os_sandbox::SandboxStatus::Degraded { reason } => (false, true, reason),
         crate::os_sandbox::SandboxStatus::Unavailable => (false, true, "OS sandbox 不可用 — 仅权限引擎生效".into()),
     };
     Ok(serde_json::json!({

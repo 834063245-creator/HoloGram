@@ -86,8 +86,6 @@ fn main() {
                 }
                 // Stop Unity
                 let _ = commands::external::UNITY_MANAGER.stop();
-                // Remove AppContainer ACEs from project directories
-                os_sandbox::cleanup_acls();
                 // Hard exit to ensure no zombie processes
                 std::process::exit(0);
             }
@@ -103,11 +101,7 @@ fn main() {
             // Warn if OS sandbox is degraded — permission engine is the fallback
             let s = os_sandbox::status();
             if !matches!(s, os_sandbox::SandboxStatus::Available) {
-                let reason = match &s {
-                    os_sandbox::SandboxStatus::Degraded { reason } => reason.as_str(),
-                    _ => "OS sandbox 不可用",
-                };
-                eprintln!("[hologram] ⚠ SANDBOX DEGRADED: {reason} — permission engine is the only barrier");
+                eprintln!("[hologram] OS sandbox 不可用 — 仅权限引擎生效");
             }
             // v4 Phase 4: server for Unity events
             commands::external::start_unity_event_server(app.handle().clone());
