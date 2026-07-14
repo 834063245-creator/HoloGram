@@ -647,8 +647,9 @@ export class Workspace {
     this.prov = prov;
     this.registry = registry;
     this.agent = new Agent(prov, registry, systemPrompt, {
+      eventSink: chatPanel.eventSink,
       onSubAgentSpawn: (part: SubAgentPart) => {
-        const msgs = getChatStore(this._storeId).getState().messages;
+        const msgs = getChatStore(this._storeId).msg.getState().messages;
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
           if (m.role === 'assistant' && (m as any).status === 'streaming') {
@@ -829,8 +830,9 @@ export class Workspace {
         }
         const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
         const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
+          eventSink: chatPanel.eventSink,
           onSubAgentSpawn: (part: SubAgentPart) => {
-            const msgs = getChatStore(this._storeId).getState().messages;
+            const msgs = getChatStore(this._storeId).msg.getState().messages;
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i];
               if (m.role === 'assistant' && (m as any).status === 'streaming') {

@@ -13,15 +13,15 @@ export type MessageId = string;
 import { getChatStore } from './chat-store';
 
 export function nextMsgId(storeId?: string): MessageId {
-  const store = getChatStore(storeId).getState();
+  const store = getChatStore(storeId).sess.getState();
   const id = store.msgIdSeq + 1;
-  getChatStore(storeId).setState({ msgIdSeq: id });
+  getChatStore(storeId).sess.setState({ msgIdSeq: id });
   return `m${id}`;
 }
 
 /** Resets the global message id counter (for test isolation or /clear). */
 export function resetMsgIdCounter(storeId?: string): void {
-  getChatStore(storeId).setState({ msgIdSeq: 0 });
+  getChatStore(storeId).sess.setState({ msgIdSeq: 0 });
 }
 
 // ── Attachments ──────────────────────────────────────────

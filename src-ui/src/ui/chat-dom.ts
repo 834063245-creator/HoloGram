@@ -520,7 +520,7 @@ export function buildDOM(ctx: DomContext): void {
 // ═══════════════════════════════════════════════════════════════════
 
 export function switchTab(ctx: DomContext, tab: 'chat' | 'tools' | 'context'): void {
-  const store = getChatStore(ctx.panelId).getState();
+  const store = getChatStore(ctx.panelId).panel.getState();
   if (store.activeTab === tab) return;
   store.setActiveTab(tab);
 
@@ -542,7 +542,7 @@ export function switchTab(ctx: DomContext, tab: 'chat' | 'tools' | 'context'): v
 }
 
 export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | 'running' | 'error', detail?: string): void {
-  getChatStore(ctx.panelId).getState().setLastAgentState(state);
+  getChatStore(ctx.panelId).panel.getState().setLastAgentState(state);
   const panel = ctx.getPanel();
   const dot = panel.querySelector('.chat-status-dot') as HTMLElement;
   if (dot) dot.className = 'chat-status-dot ' + state;
@@ -561,7 +561,7 @@ export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | '
     modelEl.textContent = active.name ? `${active.name}/${ml}` : ml;
   }
   const tokensEl = panel.querySelector('.chat-status-tokens') as HTMLElement;
-  const tokensUsed = getChatStore(ctx.panelId).getState().totalTokensUsed;
+  const tokensUsed = getChatStore(ctx.panelId).panel.getState().totalTokensUsed;
   if (tokensEl && tokensUsed > 0) {
     tokensEl.textContent = `${(tokensUsed / 1000).toFixed(1)}k tok`;
   }
@@ -570,7 +570,7 @@ export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | '
 export function renderToolsView(ctx: DomContext): void {
   // ponytail: read schemas/usage/history from the live store, NOT from ctx
   // which is a stale snapshot captured at DomContext creation time.
-  const s = getChatStore(ctx.panelId).getState();
+  const s = getChatStore(ctx.panelId).panel.getState();
   const schemas = s.toolSchemas || [];
   const usage = s.toolUsage || {};
   const history = s.toolHistory || [];
@@ -616,7 +616,7 @@ export function renderToolsView(ctx: DomContext): void {
 
 export function renderContextView(ctx: DomContext): void {
   // ponytail: read tokens/usage from the live store, not from stale ctx snapshot
-  const s = getChatStore(ctx.panelId).getState();
+  const s = getChatStore(ctx.panelId).panel.getState();
   const settings = loadSettings();
   const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
   const ctxWin = settings.agent?.contextWindow || 0;
