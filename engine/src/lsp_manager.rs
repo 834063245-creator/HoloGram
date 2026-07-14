@@ -26,6 +26,8 @@ struct LspProcess {
     process: Child,
     stdin: ChildStdin,
     reader: BufReader<std::process::ChildStdout>,
+    #[allow(dead_code)]
+    stderr: Option<std::process::ChildStderr>,
     next_id: u64,
 }
 
@@ -118,7 +120,21 @@ impl LspProcess {
                 },
             },
         });
-        let resp = self.send_request("initialize", params)?;
+        let resp = self.send_request("initialize", params)
+            .map_err(|e| {
+                // Try to read stderr for diagnostics
+                let mut extra = String::new();
+                if let Some(ref mut stderr) = self.stderr {
+                    let mut buf = [0u8; 512];
+                    use std::io::Read;
+                    if let Ok(n) = stderr.read(&mut buf) {
+                        if n > 0 {
+                            extra = format!(" stderr: {}", String::from_utf8_lossy(&buf[..n]).trim());
+                        }
+                    }
+                }
+                format!("{}{}", e, extra)
+            })?;
         let _capabilities = resp.get("result").ok_or("no capabilities")?;
 
         // initialized is a notification, not a request
@@ -405,16 +421,25 @@ impl LspManager {
         }
     }
 
-    /// Warm the pool — spawn all available LSP servers for the project.
-    /// Call after index completes. Failures are stored in last_warm_errors
-    /// and surfaced at error level — they are NOT silently swallowed.
-    /// Individual servers can be re-tried via try_warm_one() on demand.
+    /// Warm the pool — spawn LSP servers whose file extensions exist in
+    /// the project. Call after index completes. Failures include diagnosis.
     pub fn warm(project_root: &str) {
         let mgr = Self::global();
         *mgr.project_root.write().unwrap() = Some(project_root.to_string());
         *mgr.initialized.write().unwrap() = true;
 
-        for cfg in SERVER_CONFIGS {
+        // Only warm servers for languages actually present in this project
+        let exts = Self::scan_project_extensions(project_root);
+        let relevant: Vec<&LspServerConfig> = if exts.is_empty() {
+            // No files found yet (empty project or scan failed) — warm all
+            SERVER_CONFIGS.iter().collect()
+        } else {
+            SERVER_CONFIGS.iter()
+                .filter(|cfg| cfg.extensions.iter().any(|e| exts.contains(*e)))
+                .collect()
+        };
+
+        for cfg in &relevant {
             let cmd = cfg.command;
             match Self::spawn_server(cfg, project_root) {
                 Ok(process) => {
@@ -423,10 +448,13 @@ impl LspManager {
                         .write()
                         .unwrap()
                         .insert(cmd, Arc::new(Mutex::new(Some(process))));
+                    // Clear any previous error for this command
+                    mgr.last_warm_errors.write().unwrap().remove(cmd);
                 }
                 Err(e) => {
-                    let err_msg = format!("spawn+init {}: {}", cmd, e);
-                    tracing::error!(cmd, err = %e, "[lsp_manager] server unavailable — LSP resolution will fall back to handwritten adapters for this language");
+                    let diagnosed = Self::diagnose_error(cmd, &e);
+                    let err_msg = format!("spawn+init {}: {}", cmd, diagnosed);
+                    tracing::error!(cmd, err = %diagnosed, "[lsp_manager] server unavailable");
                     mgr.last_warm_errors
                         .write()
                         .unwrap()
@@ -434,6 +462,86 @@ impl LspManager {
                 }
             }
         }
+    }
+
+    /// Scan project root for unique file extensions (limited to first 500 files).
+    fn scan_project_extensions(root: &str) -> std::collections::HashSet<String> {
+        let mut exts = std::collections::HashSet::new();
+        let mut count = 0;
+        let root_path = std::path::Path::new(root);
+        // Skip dirs that are definitely not source code
+        let skip = |name: &str| -> bool {
+            matches!(name, "node_modules" | "target" | ".git" | ".hologram"
+                | "dist" | "build" | "__pycache__" | ".venv" | "venv"
+                | "vendor" | ".next" | ".nuxt")
+        };
+        if let Ok(entries) = std::fs::read_dir(root_path) {
+            for entry in entries.flatten() {
+                if count >= 500 { break; }
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if skip(name) { continue; }
+                    }
+                    // Recurse one level
+                    if let Ok(sub) = std::fs::read_dir(&path) {
+                        for se in sub.flatten() {
+                            if count >= 500 { break; }
+                            let sp = se.path();
+                            if sp.is_file() {
+                                if let Some(ext) = sp.extension().and_then(|e| e.to_str()) {
+                                    exts.insert(ext.to_lowercase());
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                } else if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        exts.insert(ext.to_lowercase());
+                        count += 1;
+                    }
+                }
+            }
+        }
+        exts
+    }
+
+    /// Diagnose common LSP spawn failures and return actionable guidance.
+    fn diagnose_error(cmd: &str, raw: &str) -> String {
+        let lower = raw.to_lowercase();
+        // npm global package corruption — node_modules missing
+        if lower.contains("cannot find module") && lower.contains("node_modules") {
+            return format!(
+                "{} — npm package appears corrupted. Reinstall: npm uninstall -g {} && npm install -g {}",
+                raw,
+                cmd.replace("-langserver", "").replace("-language-server", ""),
+                cmd.replace("-langserver", "").replace("-language-server", ""),
+            );
+        }
+        // rustup proxy without the actual component
+        if cmd == "rust-analyzer" && lower.contains("unknown binary") && lower.contains("toolchain") {
+            return format!(
+                "{} — rust-analyzer not installed for your Rust toolchain. Run: rustup component add rust-analyzer",
+                raw,
+            );
+        }
+        // gopls not installed
+        if cmd == "gopls" && (lower.contains("not found") || lower.contains("no such file")) {
+            return format!(
+                "{} — gopls not found. Install: go install golang.org/x/tools/gopls@latest",
+                raw,
+            );
+        }
+        // Generic "not found"
+        if lower.contains("program not found") || lower.contains("no such file") {
+            return format!(
+                "{} — {} is not installed or not on PATH. See 安装指南 for install instructions.",
+                raw, cmd,
+            );
+        }
+        // Pass through with no modification
+        raw.to_string()
     }
 
     /// Try to warm a single LSP server by extension. Used as a lazy retry
@@ -472,33 +580,52 @@ impl LspManager {
     }
 
     fn spawn_server(cfg: &LspServerConfig, root: &str) -> Result<LspProcess, String> {
-        // Resolve full path — on Windows npm-global tools are .cmd wrappers
-        // that Command::new(cmd) won't find without the extension.
+        // Resolve full path — on Windows npm-global tools are .cmd wrappers.
+        // .cmd/.bat files must be run via cmd.exe /c (they're scripts, not PE executables).
         let exe = Self::resolve_cmd_path(cfg.command)
             .unwrap_or_else(|| std::path::PathBuf::from(cfg.command));
-        let mut c = Command::new(&exe);
-        c.args(cfg.args)
+        let (program, args_vec) = {
+            let ext = exe.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            #[cfg(target_os = "windows")]
+            {
+                if ext == "cmd" || ext == "bat" {
+                    let mut v = vec!["/c".to_string(), exe.to_string_lossy().into_owned()];
+                    v.extend(cfg.args.iter().map(|a| a.to_string()));
+                    (std::path::PathBuf::from("cmd.exe"), v)
+                } else {
+                    let v: Vec<String> = cfg.args.iter().map(|a| a.to_string()).collect();
+                    (exe, v)
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let v: Vec<String> = cfg.args.iter().map(|a| a.to_string()).collect();
+                (exe, v)
+            }
+        };
+
+        let mut c = Command::new(&program);
+        c.args(&args_vec)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped()); // capture stderr for diagnostics
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            // CREATE_NO_WINDOW = 0x08000000 — prevents console flash when
-            // spawning LSP servers (rust-analyzer, pyright, etc.) from a
-            // GUI-subsystem parent process.
-            c.creation_flags(0x08000000);
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
         let mut child = c.spawn()
             .map_err(|e| format!("spawn {}: {}", cfg.command, e))?;
 
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
+        let stderr = child.stderr.take();
 
         let mut process = LspProcess {
             process: child,
             stdin,
             reader: BufReader::new(stdout),
+            stderr,
             next_id: 0,
         };
 
@@ -656,14 +783,12 @@ impl LspManager {
     }
 
     /// Resolve a command to its full path on the filesystem.
-    /// On Windows, also checks .exe, .cmd, .bat extensions.
+    /// On Windows, checks .exe/.cmd/.bat first — npm global tools have
+    /// extensionless Unix scripts alongside .cmd wrappers; the extensionless
+    /// file is a shell script that can't be spawned directly.
     fn resolve_cmd_path(cmd: &str) -> Option<std::path::PathBuf> {
         if let Ok(paths) = std::env::var("PATH") {
             for dir in std::env::split_paths(&paths) {
-                let full = dir.join(cmd);
-                if full.exists() {
-                    return Some(full);
-                }
                 #[cfg(target_os = "windows")]
                 {
                     for ext in ["exe", "cmd", "bat"] {
@@ -672,6 +797,11 @@ impl LspManager {
                             return Some(with_ext);
                         }
                     }
+                }
+                // Fallback: extensionless (Unix) or non-Windows
+                let full = dir.join(cmd);
+                if full.exists() {
+                    return Some(full);
                 }
             }
         }
