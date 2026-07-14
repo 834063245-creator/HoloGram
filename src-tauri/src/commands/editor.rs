@@ -12,9 +12,13 @@ pub(crate) async fn edit_file(
     new_string: String,
     replace_all: Option<bool>,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let is_agent = is_agent.unwrap_or(false);
     let (_, content) = crate::confined_fs::read_text(&file_path, is_agent, &state, &app).await?;
     let resolved = crate::utils::resolve_write_dispatch(&file_path, is_agent, &state, &app).await?;

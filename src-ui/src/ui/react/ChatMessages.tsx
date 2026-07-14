@@ -358,30 +358,74 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
         <span className={`msg-tool-badge ${statusCls}`}>{statusLabel}</span>
       </div>
       <div ref={bodyRef} className={`msg-sub-agent-body${expanded ? ' open' : ''}`}>
-        {part.parts.map((p, pi) => {
-          if (p.type === 'reasoning') {
-            return (
-              <SubReasoningBlock key={pi} part={p} parts={part.parts} index={pi} />
-            );
+        {((): React.ReactNode[] => {
+          // Group consecutive tool parts for collapse, same as AssistantBubble
+          const items: React.ReactNode[] = [];
+          let i = 0;
+          while (i < part.parts.length) {
+            const p = part.parts[i];
+            if (p.type === 'tool') {
+              const run: typeof part.parts = [];
+              while (i < part.parts.length && part.parts[i].type === 'tool') {
+                run.push(part.parts[i]); i++;
+              }
+              const tools = run as any[];
+              const doneTools = tools.filter((t: any) => t.status === 'done' || t.status === 'error');
+              const allDone = doneTools.length === tools.length && tools.length >= 3;
+              const groupExpanded = tools.some((t: any) => expandedTools.has(t.toolId));
+              const collapsed = allDone && !groupExpanded;
+              items.push(
+                <div key={`tool-group-${i}`} className="msg-tool-wrapper">
+                  {collapsed ? (
+                    <ToolSummary
+                      tools={doneTools as any} expandedTools={expandedTools}
+                      onExpandAll={() => {
+                        setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
+                      }}
+                      onCollapseAll={() => {}}
+                    />
+                  ) : (
+                    <>
+                      {allDone && (
+                        <ToolSummary
+                          tools={doneTools as any} expandedTools={expandedTools}
+                          onExpandAll={() => {
+                            setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
+                          }}
+                          onCollapseAll={() => {
+                            setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.delete((t as any).toolId); return n; });
+                          }}
+                        />
+                      )}
+                      {tools.map((t: any) => (
+                        <ToolCard key={t.toolId} part={t}
+                          expanded={expandedTools.has(t.toolId)}
+                          onToggle={() => toggleTool(t.toolId)}
+                        />
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            } else if (p.type === 'reasoning') {
+              items.push(
+                <SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />
+              );
+              i++;
+            } else if (p.type === 'text') {
+              items.push(
+                <MarkdownContent key={i}
+                  text={(p as any).text}
+                  streaming={streaming && !(p as any).finalised}
+                />
+              );
+              i++;
+            } else {
+              i++;
+            }
           }
-          if (p.type === 'text') {
-            return (
-              <MarkdownContent key={pi}
-                text={p.text}
-                streaming={streaming && !p.finalised}
-              />
-            );
-          }
-          if (p.type === 'tool') {
-            return (
-              <ToolCard key={p.toolId} part={p}
-                expanded={expandedTools.has(p.toolId)}
-                onToggle={() => toggleTool(p.toolId)}
-              />
-            );
-          }
-          return null;
-        })}
+          return items;
+        })()}
         {part.parts.length === 0 && part.status === 'running' && (
           <div className="msg-text" style={{ color: 'var(--text-faint)', padding: '8px 0' }}>分析中…</div>
         )}
@@ -613,7 +657,27 @@ const ChatMessagesApp: React.FC<{
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
     });
-  }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-scroll during streaming — MutationObserver catches incremental DOM
+  // additions when message parts are mutated in-place (no version bump).
+  useEffect(() => {
+    const el = scrollEl;
+    if (!el) return;
+
+    const observer = new MutationObserver(() => {
+      if (!stickRef.current) return;
+      if (autoScrollRaf.current !== null) return;
+      autoScrollRaf.current = requestAnimationFrame(() => {
+        autoScrollRaf.current = null;
+        if (!stickRef.current) return;
+        el.scrollTop = el.scrollHeight;
+      });
+    });
+
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [scrollEl]);
 
   useEffect(() => {
     return () => {

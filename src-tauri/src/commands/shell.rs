@@ -5,6 +5,8 @@
 use std::thread;
 use std::time::Duration;
 
+use tauri::Emitter;
+
 #[tauri::command]
 pub(crate) async fn exec_command(
     command: String,
@@ -12,9 +14,14 @@ pub(crate) async fn exec_command(
     timeout_ms: Option<u64>,
     run_in_background: Option<bool>,
     is_agent: Option<bool>,
+    stream_tool_id: Option<String>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let dir = cwd.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
 
     let is_bg = run_in_background.unwrap_or(false);
@@ -37,6 +44,106 @@ pub(crate) async fn exec_command(
     let mut child = crate::os_sandbox::spawn_shell(&command, &physical_dir_str)
         .map_err(|e| format!("无法执行命令: {e}"))?;
 
+    // ── Streaming path: emit chunks via Tauri events ──
+    if let Some(stream_id) = stream_tool_id.clone() {
+        let stdout_reader = child.take_stdout();
+        let stderr_reader = child.take_stderr();
+        let app_stdout = app.clone();
+        let sid_stdout = stream_id.clone();
+        let app_stderr = app.clone();
+
+        // Drain stdout in background thread, emitting chunks
+        let stdout_thread = stdout_reader.map(|mut reader| {
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match std::io::Read::read(&mut reader, &mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                            let _ = app_stdout.emit("shell:output", serde_json::json!({
+                                "streamId": sid_stdout,
+                                "kind": "stdout",
+                                "chunk": chunk,
+                            }));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+        });
+
+        // Drain stderr in background thread
+        let stream_id_stderr = stream_id.clone();
+        let stderr_thread = stderr_reader.map(|mut reader| {
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match std::io::Read::read(&mut reader, &mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                            let _ = app_stderr.emit("shell:output", serde_json::json!({
+                                "streamId": stream_id_stderr,
+                                "kind": "stderr",
+                                "chunk": chunk,
+                            }));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+        });
+
+        // Wait for child in background, emit done event
+        let app_done = app.clone();
+        let sid_done = stream_id.clone();
+        let timeout_ms_val = timeout_ms.unwrap_or(300_000);
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        // Wait for drainer threads to finish
+                        if let Some(t) = stdout_thread { let _ = t.join(); }
+                        if let Some(t) = stderr_thread { let _ = t.join(); }
+                        let _ = app_done.emit("shell:done", serde_json::json!({
+                            "streamId": sid_done,
+                            "exitCode": status.code().unwrap_or(-1),
+                        }));
+                        return;
+                    }
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_millis(timeout_ms_val) {
+                            child.kill().ok();
+                            let _ = app_done.emit("shell:done", serde_json::json!({
+                                "streamId": sid_done,
+                                "exitCode": -1,
+                                "error": format!("命令超时 ({}ms)，已强制终止", timeout_ms_val),
+                            }));
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(_) => {
+                        let _ = app_done.emit("shell:done", serde_json::json!({
+                            "streamId": sid_done,
+                            "exitCode": -1,
+                            "error": "命令执行异常",
+                        }));
+                        return;
+                    }
+                }
+            }
+        });
+
+        return Ok(serde_json::json!({
+            "streamId": stream_id,
+            "status": "started"
+        }).to_string());
+    }
+
+    // ── Non-streaming path (original blocking behavior) ──
     let stdout_drainer = child.take_stdout().map(|mut reader| {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

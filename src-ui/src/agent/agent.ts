@@ -121,6 +121,10 @@ export class Agent {
   private _subagentDepth = 0;
   private static readonly MAX_SUBAGENT_DEPTH = 3;
 
+  // Isolation ID for sub-agents — injected into tool args so Rust backend
+  // can resolve worktree paths via forward_map_path.
+  _isolationId?: string;
+
   // Goal loop safety: max iterations before forced termination
   private static readonly MAX_GOAL_ITERATIONS = 20;
 
@@ -598,7 +602,7 @@ ${goal}
 
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
-      const executor = new StreamingToolExecutor(this.tools, (ev: AgentEvent) => this._sink(ev), this.hooks, this.preflightHooks);
+      const executor = new StreamingToolExecutor(this.tools, (ev: AgentEvent) => this._sink(ev), this.hooks, this.preflightHooks, this._isolationId ?? null);
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
         log.error('agent', 'stream error', { error: String(err.message || err) });
@@ -677,8 +681,21 @@ ${goal}
         bus.emit('agent:tool-done', {
           toolName: call.name,
           args: (() => { try { return JSON.parse(call.arguments || '{}'); } catch { return {}; } })(),
-          output: r?.output || '',
+                    output: r?.output || '',
         });
+      }
+
+      // Check for permission denial — stop the agent immediately
+      const permDenied = pendingResults.some(r => {
+        const output = r.output || '';
+        return output.includes('权限被拒绝') || output.includes('permission denied')
+          || (r.err && (r.err.includes('权限') || r.err.includes('permission')));
+      });
+      if (permDenied) {
+        execState.stop();
+        this._sink({ kind: EventKind.Notice, level: 'warn', text: '权限被拒绝，Agent 已停止' });
+        this._saveSession();
+        return;
       }
 
       // Save session after each complete turn (fire-and-forget)
@@ -1354,6 +1371,9 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       subSystem,
       { temperature: 0.3, subagentDepth: this._subagentDepth + 1, contextWindow: this.contextWindow, eventSink: subSink },
     );
+    if (isolationId) {
+      subAgent._isolationId = isolationId;
+    }
 
     let subAgentSucceeded = false;
     try {

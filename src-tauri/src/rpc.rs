@@ -126,125 +126,148 @@ pub(crate) async fn rpc(
         "git_tree_status" => {
             let path = req_str(&params, "path", "git_tree_status")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_tree_status(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_tree_status(path, is_agent, _agent_id, state, app).await
         }
         "git_status" => {
             let path = req_str(&params, "path", "git_status")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_status(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_status(path, is_agent, _agent_id, state, app).await
         }
         "git_diff_unstaged" => {
             let path = req_str(&params, "path", "git_diff_unstaged")?;
             let file = req_str(&params, "file", "git_diff_unstaged")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_diff_unstaged(path, file, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_diff_unstaged(path, file, is_agent, _agent_id, state, app).await
         }
         "git_diff_staged" => {
             let path = req_str(&params, "path", "git_diff_staged")?;
             let file = req_str(&params, "file", "git_diff_staged")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_diff_staged(path, file, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_diff_staged(path, file, is_agent, _agent_id, state, app).await
         }
         "git_stage" => {
             let path = req_str(&params, "path", "git_stage")?;
             let files = req_strs(&params, "files", "git_stage")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_stage(path, files, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_stage(path, files, is_agent, _agent_id, state, app).await
         }
         "git_unstage" => {
             let path = req_str(&params, "path", "git_unstage")?;
             let files = req_strs(&params, "files", "git_unstage")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_unstage(path, files, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_unstage(path, files, is_agent, _agent_id, state, app).await
         }
         "git_stage_all" => {
             let path = req_str(&params, "path", "git_stage_all")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_stage_all(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_stage_all(path, is_agent, _agent_id, state, app).await
         }
         "git_commit" => {
             let path = req_str(&params, "path", "git_commit")?;
             let message = req_str(&params, "message", "git_commit")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_commit(path, message, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_commit(path, message, is_agent, _agent_id, state, app).await
         }
         "git_push" => {
             let path = req_str(&params, "path", "git_push")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_push(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_push(path, is_agent, _agent_id, state, app).await
         }
         "git_pull" => {
             let path = req_str(&params, "path", "git_pull")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_pull(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_pull(path, is_agent, _agent_id, state, app).await
         }
         "git_fetch" => {
             let path = req_str(&params, "path", "git_fetch")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_fetch(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_fetch(path, is_agent, _agent_id, state, app).await
         }
         "git_log" => {
             let path = req_str(&params, "path", "git_log")?;
             let limit = opt_i32(&params, "limit");
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_log(path, limit, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_log(path, limit, is_agent, _agent_id, state, app).await
         }
         "git_init" => {
             let path = req_str(&params, "path", "git_init")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_init(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_init(path, is_agent, _agent_id, state, app).await
         }
         "git_list_branches" => {
             let path = req_str(&params, "path", "git_list_branches")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_list_branches(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_list_branches(path, is_agent, _agent_id, state, app).await
         }
         "git_checkout" => {
             let path = req_str(&params, "path", "git_checkout")?;
             let branch = req_str(&params, "branch", "git_checkout")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_checkout(path, branch, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_checkout(path, branch, is_agent, _agent_id, state, app).await
         }
         "git_create_branch" => {
             let path = req_str(&params, "path", "git_create_branch")?;
             let name = req_str(&params, "name", "git_create_branch")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_create_branch(path, name, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_create_branch(path, name, is_agent, _agent_id, state, app).await
         }
         "git_stash_push" => {
             let path = req_str(&params, "path", "git_stash_push")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_stash_push(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_stash_push(path, is_agent, _agent_id, state, app).await
         }
         "git_stash_pop" => {
             let path = req_str(&params, "path", "git_stash_pop")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_stash_pop(path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_stash_pop(path, is_agent, _agent_id, state, app).await
         }
         "git_stash_list" => {
             let path = req_str(&params, "path", "git_stash_list")?;
-            commands::git_cmds::git_stash_list(path, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_stash_list(path, _agent_id, state, app).await
         }
         "git_discard" => {
             let path = req_str(&params, "path", "git_discard")?;
             let file = req_str(&params, "file", "git_discard")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::git_cmds::git_discard(path, file, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_discard(path, file, is_agent, _agent_id, state, app).await
         }
         "git_blame" => {
             let path = req_str(&params, "path", "git_blame")?;
             let file = req_str(&params, "file", "git_blame")?;
-            commands::git_cmds::git_blame(path, file, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_blame(path, file, _agent_id, state, app).await
         }
         "git_file_at_head" => {
             let path = req_str(&params, "path", "git_file_at_head")?;
             let file = req_str(&params, "file", "git_file_at_head")?;
-            commands::git_cmds::git_file_at_head(path, file, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_file_at_head(path, file, _agent_id, state, app).await
         }
         "git_show" => {
             let path = req_str(&params, "path", "git_show")?;
             let commit = req_str(&params, "commit", "git_show")?;
-            commands::git_cmds::git_show(path, commit, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::git_cmds::git_show(path, commit, _agent_id, state, app).await
         }
 
         // ═══════════════════════════════════════════════════════
@@ -253,19 +276,22 @@ pub(crate) async fn rpc(
         "list_directory" => {
             let path = req_str(&params, "path", "list_directory")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_json(commands::filesystem::list_directory(path, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_json(commands::filesystem::list_directory(path, is_agent, _agent_id, state, app).await)
         }
         "list_directory_flat" => {
             let path = req_str(&params, "path", "list_directory_flat")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_json(commands::filesystem::list_directory_flat(path, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_json(commands::filesystem::list_directory_flat(path, is_agent, _agent_id, state, app).await)
         }
         "read_file_content" => {
             let file_path = req_str(&params, "file_path", "read_file_content")?;
             let offset = opt_usize(&params, "offset");
             let limit = opt_usize(&params, "limit");
             let is_agent = opt_bool(&params, "is_agent");
-            commands::filesystem::read_file_content(file_path, offset, limit, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::filesystem::read_file_content(file_path, offset, limit, is_agent, _agent_id, state, app).await
         }
         "read_memory_batch" => {
             let paths: Vec<String> = params.get("paths")
@@ -277,46 +303,54 @@ pub(crate) async fn rpc(
         "read_file_base64" => {
             let file_path = req_str(&params, "file_path", "read_file_base64")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::filesystem::read_file_base64(file_path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::filesystem::read_file_base64(file_path, is_agent, _agent_id, state, app).await
         }
         "write_file_content" => {
             let file_path = req_str(&params, "file_path", "write_file_content")?;
             let content = req_str(&params, "content", "write_file_content")?;
             let is_agent = opt_bool(&params, "is_agent");
-            commands::filesystem::write_file_content(file_path, content, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::filesystem::write_file_content(file_path, content, is_agent, _agent_id, state, app).await
         }
         "log_append" => {
             let path = req_str(&params, "path", "log_append")?;
             let content = req_str(&params, "content", "log_append")?;
-            ok_unit(commands::filesystem::log_append(path, content, state))
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_unit(commands::filesystem::log_append(path, content, _agent_id, state))
         }
         "create_directory" => {
             let path = req_str(&params, "path", "create_directory")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_unit(commands::filesystem::create_directory(path, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_unit(commands::filesystem::create_directory(path, is_agent, _agent_id, state, app).await)
         }
         "get_global_memory_dir" => Ok(commands::filesystem::get_global_memory_dir()),
         "delete_file_or_dir" => {
             let path = req_str(&params, "path", "delete_file_or_dir")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_unit(commands::filesystem::delete_file_or_dir(path, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_unit(commands::filesystem::delete_file_or_dir(path, is_agent, _agent_id, state, app).await)
         }
         "rename_file_or_dir" => {
             let file_path = req_str(&params, "file_path", "rename_file_or_dir")?;
             let new_name = req_str(&params, "new_name", "rename_file_or_dir")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_unit(commands::filesystem::rename_file_or_dir(file_path, new_name, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_unit(commands::filesystem::rename_file_or_dir(file_path, new_name, is_agent, _agent_id, state, app).await)
         }
         "move_file" => {
             let from = req_str(&params, "from", "move_file")?;
             let to = req_str(&params, "to", "move_file")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_unit(commands::filesystem::move_file(from, to, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_unit(commands::filesystem::move_file(from, to, is_agent, _agent_id, state, app).await)
         }
         "open_in_explorer" => {
             let path = req_str(&params, "path", "open_in_explorer")?;
             let is_agent = opt_bool(&params, "is_agent");
-            ok_unit(commands::filesystem::open_in_explorer(path, is_agent, state, app).await)
+            let _agent_id = opt_str(&params, "_agent_id");
+            ok_unit(commands::filesystem::open_in_explorer(path, is_agent, _agent_id, state, app).await)
         }
 
         // ═══════════════════════════════════════════════════════
@@ -335,10 +369,11 @@ pub(crate) async fn rpc(
             let offset = opt_usize(&params, "offset");
             let glob_filter = opt_str(&params, "glob_filter");
             let is_agent = opt_bool(&params, "is_agent");
+            let _agent_id = opt_str(&params, "_agent_id");
             commands::search::search_code(
                 directory, pattern, file_types, max_results, use_regex,
                 context_lines, output_mode, show_line_numbers, head_limit,
-                offset, glob_filter, is_agent, state, app,
+                offset, glob_filter, is_agent, _agent_id, state, app,
             ).await
         }
         "search_content" => {
@@ -354,17 +389,19 @@ pub(crate) async fn rpc(
             let offset = opt_usize(&params, "offset");
             let glob_filter = opt_str(&params, "glob_filter");
             let is_agent = opt_bool(&params, "is_agent");
+            let _agent_id = opt_str(&params, "_agent_id");
             commands::search::search_content(
                 directory, pattern, file_types, max_results, use_regex,
                 context_lines, output_mode, show_line_numbers, head_limit,
-                offset, glob_filter, is_agent, state, app,
+                offset, glob_filter, is_agent, _agent_id, state, app,
             ).await
         }
         "glob" => {
             let pattern = req_str(&params, "pattern", "glob")?;
             let path = opt_str(&params, "path");
             let is_agent = opt_bool(&params, "is_agent");
-            commands::search::glob(pattern, path, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::search::glob(pattern, path, is_agent, _agent_id, state, app).await
         }
 
         // ═══════════════════════════════════════════════════════
@@ -388,7 +425,8 @@ pub(crate) async fn rpc(
             let timeout_ms = opt_u64(&params, "timeout_ms");
             let run_in_background = opt_bool(&params, "run_in_background");
             let is_agent = opt_bool(&params, "is_agent");
-            commands::shell::exec_command(command, cwd, timeout_ms, run_in_background, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::shell::exec_command(command, cwd, timeout_ms, run_in_background, is_agent, None, _agent_id, state, app).await
         }
         "bash_output" => {
             let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)
@@ -410,7 +448,8 @@ pub(crate) async fn rpc(
             let new_string = req_str(&params, "new_string", "edit_file")?;
             let replace_all = opt_bool(&params, "replace_all");
             let is_agent = opt_bool(&params, "is_agent");
-            commands::editor::edit_file(file_path, old_string, new_string, replace_all, is_agent, state, app).await
+            let _agent_id = opt_str(&params, "_agent_id");
+            commands::editor::edit_file(file_path, old_string, new_string, replace_all, is_agent, _agent_id, state, app).await
         }
 
         // ═══════════════════════════════════════════════════════

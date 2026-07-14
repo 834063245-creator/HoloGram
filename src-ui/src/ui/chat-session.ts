@@ -216,6 +216,10 @@ export function renderSessionTabs(ctx: SessionContext): void {
 export function switchSession(ctx: SessionContext, idx: number): void {
   const { sessions, activeIdx } = useChatStore.getState();
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
+  // 如果当前会话的 Agent 还在跑，先停止它，防止输出污染目标会话
+  if (activeIdx >= 0 && ctx.getRunning()) {
+    ctx.abort();
+  }
   // Save current messages + token count to cache
   if (activeIdx >= 0) {
     saveCurrentMessages(ctx);
@@ -231,6 +235,7 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   // Restore target session's token count
   ctx.setTotalTokensUsed(useChatStore.getState().sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
+  ctx.setStreamingAssistantId(null);
   ctx.updateFooter();
 }
 
@@ -279,6 +284,11 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
     const extra = ctx.getLastAgentDiag() ? `\n诊断: ${ctx.getLastAgentDiag()}` : '';
     ctx.addNotice(`请先配置 API Key（设置 → Provider）${extra}`, 'info');
     return;
+  }
+  // 停止当前会话的 Agent（如果在运行），防止输出污染新会话
+  const curSt = useChatStore.getState();
+  if (curSt.activeIdx >= 0 && ctx.getRunning()) {
+    ctx.abort();
   }
   const newAgent = await ctx.agentFactory();
   if (!newAgent) {

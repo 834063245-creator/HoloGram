@@ -19,9 +19,13 @@ pub(crate) async fn search_code(
     offset: Option<usize>,
     glob_filter: Option<String>,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let root = crate::utils::resolve_read_dispatch(&directory, is_agent.unwrap_or(false), &state, &app).await?;
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
@@ -222,13 +226,14 @@ pub(crate) async fn search_content(
     show_line_numbers: Option<bool>, head_limit: Option<usize>,
     offset: Option<usize>, glob_filter: Option<String>,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     search_code(
         directory, pattern, file_types, max_results, use_regex,
         context_lines, output_mode, show_line_numbers, head_limit,
-        offset, glob_filter, is_agent, state, app,
+        offset, glob_filter, is_agent, _agent_id, state, app,
     ).await
 }
 
@@ -237,9 +242,13 @@ pub(crate) async fn glob(
     pattern: String,
     path: Option<String>,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
     let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?;
 

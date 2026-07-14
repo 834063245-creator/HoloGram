@@ -11,9 +11,13 @@ use hologram_engine::pipeline::discovery::is_ignored_path;
 pub(crate) async fn list_directory(
     path: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
@@ -29,9 +33,13 @@ pub(crate) async fn list_directory(
 pub(crate) async fn list_directory_flat(
     path: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
@@ -49,9 +57,13 @@ pub(crate) async fn read_file_content(
     offset: Option<usize>,
     limit: Option<usize>,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let (_, content) = crate::confined_fs::read_text(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(crate::confined_fs::format_lines(&content, offset, limit))
 }
@@ -74,9 +86,13 @@ pub(crate) fn read_memory_batch(
 pub(crate) async fn read_file_base64(
     file_path: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let (_, bytes) = crate::confined_fs::read_bytes(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
@@ -86,9 +102,13 @@ pub(crate) async fn write_file_content(
     file_path: String,
     content: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let real_path = crate::confined_fs::write_text(&file_path, &content, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
 
@@ -116,8 +136,12 @@ pub(crate) async fn write_file_content(
 pub(crate) fn log_append(
     path: String,
     content: String,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let ctx = crate::utils::get_ctx(&state)?;
     let physical = ctx.forward_map_path(std::path::Path::new(&path));
     let physical_str = physical.to_string_lossy().to_string();
@@ -136,9 +160,13 @@ pub(crate) fn log_append(
 pub(crate) async fn create_directory(
     path: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     crate::confined_fs::create_dir(&path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(())
 }
@@ -155,9 +183,13 @@ pub(crate) fn get_global_memory_dir() -> String {
 pub(crate) async fn delete_file_or_dir(
     path: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let real = crate::confined_fs::delete(&path, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
@@ -177,9 +209,13 @@ pub(crate) async fn rename_file_or_dir(
     file_path: String,
     new_name: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let is_agent = is_agent.unwrap_or(false);
     let parent = std::path::Path::new(&file_path)
         .parent()
@@ -209,9 +245,13 @@ pub(crate) async fn move_file(
     from: String,
     to: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let is_agent = is_agent.unwrap_or(false);
     let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, &state, &app).await?;
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
@@ -231,9 +271,13 @@ pub(crate) async fn move_file(
 pub(crate) async fn open_in_explorer(
     path: String,
     is_agent: Option<bool>,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if let Some(id) = &_agent_id {
+        crate::permissions::set_active_agent_id(id);
+    }
     let real = crate::confined_fs::verify_read_path(&path, is_agent.unwrap_or(false), &state, &app).await?;
     #[cfg(target_os = "windows")]
     {

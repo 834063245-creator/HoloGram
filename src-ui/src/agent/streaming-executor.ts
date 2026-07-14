@@ -74,16 +74,20 @@ export class StreamingToolExecutor {
   private completed: PendingResult[] = [];
   private toolIndex = 0;
 
+  private agentId: string | null;
+
   constructor(
     tools: ToolRegistry,
     emitEvent: (ev: AgentEvent) => void,
     hooks?: HookRegistry | null,
     preflightHooks?: PreflightHookRegistry | null,
+    agentId?: string | null,
   ) {
     this.tools = tools;
     this.emit = emitEvent;
     this.hooks = hooks ?? null;
     this.preflightHooks = preflightHooks ?? null;
+    this.agentId = agentId ?? null;
   }
 
   /** Add a tool call from the stream. Execution starts immediately. */
@@ -209,6 +213,11 @@ export class StreamingToolExecutor {
     // ponytail: inject _callId for agent_spawn so sub-agent events can correlate
     if (call.name === 'agent_spawn') {
       args['_callId'] = call.id;
+    }
+
+    // Inject _agent_id for isolation — tells Rust backend which worktree to use
+    if (this.agentId) {
+      args['_agent_id'] = this.agentId;
     }
 
     try {
