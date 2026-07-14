@@ -119,8 +119,14 @@ class EventBus {
     if (event) {
       const key = this._key(event);
       bus.handlers.delete(key);
+    } else if (this._prefix) {
+      // Prefixed bus: only clear handlers matching this prefix
+      for (const k of bus.handlers.keys()) {
+        if (k.startsWith(this._prefix)) bus.handlers.delete(k);
+      }
+    } else {
+      bus.handlers.clear();
     }
-    else { bus.handlers.clear(); }
   }
 }
 
@@ -133,3 +139,4 @@ export const bus = new EventBus();
 //   shell.notifyPanelChanged() / navigateToNode() / navigateToFile()
 //   shell.highlightFile() / highlightFolder() / clearHighlight()
 //   shell.queryAgent()
+
