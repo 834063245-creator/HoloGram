@@ -12,6 +12,9 @@
 (object_creation_expression) @call
 (nullsafe_member_call_expression) @call
 
+;; ── Imports ──
+(use_declaration) @import
+
 ;; ── Variables ──
 (expression_statement) @var
 

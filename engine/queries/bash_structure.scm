@@ -6,5 +6,8 @@
 ;; ── Variables ──
 (variable_assignment) @var
 
+;; ── Writes ──
+(variable_assignment) @write
+
 ;; ── Usage ──
 (word) @usage
