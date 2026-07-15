@@ -741,18 +741,36 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
         "selector", "command_call", "builtin_function",
         "constructor_expression", "generic_function",
         "navigation_expression", "with_statement",
+        // PHP: function_call_expression has "function" field;
+        // member_call_expression / scoped_call_expression /
+        // nullsafe_member_call_expression have "name" field
+        "function_call_expression", "member_call_expression",
+        "scoped_call_expression", "nullsafe_member_call_expression",
     ];
     let nk = node.kind();
     if FUNC_FIELD_NODES.iter().any(|&s| s == nk) {
-        // ponytail: Ruby "call" nodes have "method" field, not "function".
-        // Don't early-return None — fall through to the Ruby handler below.
+        // Try "function" field first (JS/TS/Python/Rust/Go/Swift/C#/Scala)
         if let Some(result) = node
             .child_by_field_name("function")
             .and_then(|f| extract_func_field_name(f, source))
         {
             return Some(result);
         }
-        // Fall through for Ruby "call" (no "function" field)
+        // Fallback: "method" field (Ruby call/command_call)
+        if let Some(result) = node
+            .child_by_field_name("method")
+            .and_then(|f| extract_func_field_name(f, source))
+        {
+            return Some(result);
+        }
+        // Fallback: "name" field (Java method_invocation, PHP member_call_expression)
+        if let Some(result) = node
+            .child_by_field_name("name")
+            .and_then(|f| extract_func_field_name(f, source))
+        {
+            return Some(result);
+        }
+        // Fall through to language-specific handlers below
     }
 
     // ── Nodes with a "name" or "constructor" field ──
@@ -769,7 +787,10 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
     }
 
     // ── Ruby: "method" + optional "receiver" fields ──
-    if nk == "call" {
+    // ponytail: "command_call" (no-parens calls like `puts "hi"`) also
+    // uses "method" field. Handled by the FUNC_FIELD_NODES fallback above,
+    // but this path adds receiver.method qualification.
+    if nk == "call" || nk == "command_call" {
         if let Some(method) = node.child_by_field_name("method") {
             let m = method.utf8_text(source).ok()?.to_string();
             if let Some(recv) = node.child_by_field_name("receiver") {
@@ -1484,6 +1505,120 @@ mod tests {
         let fid = &file_node.unwrap().id;
         assert!(fid.contains("src"), "file_id should contain dir, got '{}'", fid);
         assert!(fid.contains("ui"), "file_id should contain subdir, got '{}'", fid);
+    }
+
+    // ── Python coverage tests ──
+
+    fn py_adapter() -> QueryStructureAdapter {
+        QueryStructureAdapter::new_generic(
+            vec!["py".into()],
+            include_str!("../../queries/python_structure.scm"),
+            &["function_definition", "lambda"],
+            &["class_definition"],
+        )
+    }
+
+    #[test]
+    fn test_py_function_declaration() {
+        let a = py_adapter();
+        let src = "def foo():\n    pass";
+        let (nodes, _edges, _) = a.analyze("test.py", src);
+        let fns: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Function)).collect();
+        assert_eq!(fns.len(), 1, "should have 1 function");
+        assert_eq!(fns[0].name, "foo");
+    }
+
+    #[test]
+    fn test_py_decorator_function() {
+        let a = py_adapter();
+        let src = "@classmethod\ndef foo(cls):\n    pass";
+        let (nodes, _edges, _) = a.analyze("test.py", src);
+        let fns: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Function)).collect();
+        assert!(!fns.is_empty(), "decorated function should be captured by @fn, got nodes: {:?}",
+            nodes.iter().map(|n| format!("[{:?}] {}", n.kind, n.name)).collect::<Vec<_>>());
+        assert_eq!(fns[0].name, "foo");
+    }
+
+    #[test]
+    fn test_py_class_method() {
+        let a = py_adapter();
+        let src = "class Foo:\n    def bar(self):\n        pass";
+        let (nodes, _edges, _) = a.analyze("test.py", src);
+        let fns: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Function)).collect();
+        assert!(!fns.is_empty(), "class method should be captured");
+        // Now scope-qualified: test.py.Foo.bar not test.py.bar
+        assert!(fns[0].id.contains("Foo.bar"), "method should be scoped to class, got id={}", fns[0].id);
+    }
+
+    #[test]
+    fn test_py_nested_function_scope() {
+        let a = py_adapter();
+        let src = "def outer():\n    def inner():\n        pass";
+        let (nodes, _edges, _) = a.analyze("test.py", src);
+        let fns: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Function)).collect();
+        assert_eq!(fns.len(), 2);
+        let inner = fns.iter().find(|n| n.name == "inner").unwrap();
+        assert!(inner.id.contains("outer.inner"), "nested fn should be scope-qualified, got id={}", inner.id);
+    }
+
+    #[test]
+    fn test_py_decorated_method_scope() {
+        let a = py_adapter();
+        let src = "class Foo:\n    @staticmethod\n    def bar():\n        pass";
+        let (nodes, _edges, _) = a.analyze("test.py", src);
+        let fns: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Function)).collect();
+        assert!(!fns.is_empty());
+        assert!(fns[0].id.contains("Foo.bar"), "decorated method should be scoped to class, got id={}", fns[0].id);
+    }
+
+    #[test]
+    fn test_py_class_var_scope() {
+        let a = py_adapter();
+        let src = "class Foo:\n    x = 1\n    def bar(self):\n        y = 2";
+        let (nodes, _edges, _) = a.analyze("test.py", src);
+        let vars: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Variable)).collect();
+        let class_var = vars.iter().find(|n| n.name == "x").unwrap();
+        let local_var = vars.iter().find(|n| n.name == "y").unwrap();
+        assert!(class_var.id.contains("Foo.x"), "class var should be in class scope, got {}", class_var.id);
+        assert!(local_var.id.contains("bar.y"), "local var should be in fn scope, got {}", local_var.id);
+    }
+
+    #[test]
+    fn test_py_usage_scope_attribution() {
+        let a = py_adapter();
+        let src = "class Foo:\n    def bar(self):\n        val = 1\n        print(val)";
+        let (_nodes, edges, _) = a.analyze("test.py", src);
+        // Usage edge for "val" should be from bar's scope
+        let usage = edges.iter().find(|e| matches!(e.kind, EdgeKind::Usage) && e.target == "val");
+        assert!(usage.is_some(), "should have Usage edge for val, got usages: {:?}",
+            edges.iter().filter(|e| matches!(e.kind, EdgeKind::Usage)).map(|e| format!("{}->{}", e.source, e.target)).collect::<Vec<_>>());
+        let u = usage.unwrap();
+        assert!(u.source.contains("Foo.bar"), "usage of val should be from Foo.bar scope, got source={}", u.source);
+    }
+
+    #[test]
+    fn test_py_call_scope_attribution() {
+        let a = py_adapter();
+        let src = "class Foo:\n    def bar(self):\n        self.baz()";
+        let (_nodes, edges, _) = a.analyze("test.py", src);
+        // Call edge for self.baz should be from bar's scope
+        let call = edges.iter().find(|e| matches!(e.kind, EdgeKind::Calls));
+        assert!(call.is_some(), "should have Calls edge for self.baz, got edges: {:?}",
+            edges.iter().map(|e| format!("[{}] {}->{}", e.kind.as_str(), e.source, e.target)).collect::<Vec<_>>());
+        let c = call.unwrap();
+        assert!(c.source.contains("Foo.bar"), "call source should be Foo.bar scope, got {}", c.source);
+    }
+
+    #[test]
+    fn test_py_write_scope_attribution() {
+        let a = py_adapter();
+        let src = "val = 1\ndef foo():\n    val += 2";
+        let (_nodes, edges, _) = a.analyze("test.py", src);
+        // @write should create write edge from foo's scope
+        let writes: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Writes)).collect();
+        let foo_write = writes.iter().find(|e| e.source.contains("foo"));
+        assert!(foo_write.is_some(), "write inside foo() should be from foo scope, got writes: {:?}",
+            writes.iter().map(|e| format!("{}->{}", e.source, e.target)).collect::<Vec<_>>());
     }
 
     /// Diagnostic: parse a real file and dump all nodes and edges.
