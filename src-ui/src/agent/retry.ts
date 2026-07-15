@@ -13,12 +13,7 @@ const JITTER_MS = 1000;
 export function isRetryable(err: Error): boolean {
   const msg = err.message || String(err);
   // Abort → don't retry
-  if (
-    msg.includes('[已取消]') ||
-    err.name === 'AbortError' ||
-    msg.includes('aborted')
-  )
-    return false;
+  if (msg.includes('[已取消]') || err.name === 'AbortError' || msg.includes('aborted')) return false;
 
   // Auth / permissions → don't retry (won't fix itself)
   if (
@@ -32,17 +27,11 @@ export function isRetryable(err: Error): boolean {
     return false;
 
   // Rate limit / server errors / overload → retry
-  if (
-    msg.includes('[服务商限流]') ||
-    msg.includes('[服务商故障]') ||
-    msg.includes('[服务商繁忙]')
-  )
-    return true;
+  if (msg.includes('[服务商限流]') || msg.includes('[服务商故障]') || msg.includes('[服务商繁忙]')) return true;
 
   // Network errors — retry timeouts and resets, but not DNS/config errors
   if (msg.includes('[网络问题]')) {
-    if (msg.includes('超时') || msg.includes('ECONNRESET') || msg.includes('ECONNREFUSED'))
-      return true;
+    if (msg.includes('超时') || msg.includes('ECONNRESET') || msg.includes('ECONNREFUSED')) return true;
     // ENOTFOUND / getaddrinfo = DNS → won't fix itself
     return false;
   }
@@ -51,10 +40,7 @@ export function isRetryable(err: Error): boolean {
   if (msg.includes('[未知错误]')) return true;
 
   // Catch-all: raw fetch errors (network flakes)
-  if (
-    err.name === 'TypeError' &&
-    (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed to fetch'))
-  )
+  if (err.name === 'TypeError' && (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed to fetch')))
     return true;
 
   return false;
@@ -62,7 +48,7 @@ export function isRetryable(err: Error): boolean {
 
 /** Exponential backoff with full jitter: delay = min(base*2^attempt, max) + rand(0, jitter). */
 export function backoffDelay(attempt: number): number {
-  const exp = Math.min(BASE_DELAY_MS * Math.pow(2, attempt), MAX_DELAY_MS);
+  const exp = Math.min(BASE_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
   return exp + Math.floor(Math.random() * JITTER_MS);
 }
 

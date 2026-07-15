@@ -6,25 +6,21 @@
 // All functions receive SessionContext instead of accessing `this`.
 
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
-import type { ChatMessage, MessageId, UserMessage, AssistantMessage } from './message-model';
+import { createExecState, type ExecStateInstance } from '../agent/execution-state';
+import { rpc } from '../bridge';
+import type { Message } from '../provider/types';
+import { CHAT_MODES, loadSettings } from '../settings';
+import type { ChatSessionMeta } from './chat-store';
+import { bumpChat, bumpSession, getChatStore, msgStoreFor, msgStoreForActive } from './chat-store';
+import { iconHtml } from './icons';
+import type { AssistantMessage, ChatMessage, MessageId, UserMessage } from './message-model';
 import {
-  resetMsgIdCounter,
-  nextMsgId,
-  createUserMessage,
   createAssistantMessage,
   createNoticeMessage,
+  createUserMessage,
+  nextMsgId,
+  resetMsgIdCounter,
 } from './message-model';
-import { rpc } from '../bridge';
-import {
-  getChatStore,
-  msgStoreFor, msgStoreForActive, bumpSession,
-  bumpChat,
-} from './chat-store';
-import type { ChatSessionMeta } from './chat-store';
-import { loadSettings, CHAT_MODES } from '../settings';
-import type { Message } from '../provider/types';
-import { iconHtml } from './icons';
-import { createExecState, type ExecStateInstance } from '../agent/execution-state';
 
 // ── Module-level session state ──
 //
@@ -43,30 +39,41 @@ export interface ChatSession {
 // session IDs collide across panels (both start at 1), so composite keys
 // prevent wrong-agent / wrong-execState / wrong-turnPairs bugs.
 
-function agentKey(storeId: string, sid: number): string { return `${storeId}:${sid}`; }
+function agentKey(storeId: string, sid: number): string {
+  return `${storeId}:${sid}`;
+}
 
 const agentHandles = new Map<string, ChatAgentHandle>();
 const sessionExecStates = new Map<string, ExecStateInstance>();
-const turnPairsByPanel = new Map<string, Array<{ userText: string; userBubble: null; assistantBubble: null; sessionIndex: number }>>();
+const turnPairsByPanel = new Map<
+  string,
+  Array<{ userText: string; userBubble: null; assistantBubble: null; sessionIndex: number }>
+>();
 const agentFactoryByPanel = new Map<string, () => Promise<ChatAgentHandle | null>>();
 
 // ── Helpers: bridge store sessions to ChatSession (with agent handles) ──
 
 function storeSessionsWithAgents(storeId: string): ChatSession[] {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
-  return sessions.map(s => ({ ...s, agent: agentHandles.get(agentKey(storeId, s.id))! }));
+  return sessions.map((s) => ({ ...s, agent: agentHandles.get(agentKey(storeId, s.id))! }));
 }
 
 // ── Accessors (used by ChatPanel to bridge module state) ──
 
-export function getSessions(storeId: string): ChatSession[] { return storeSessionsWithAgents(storeId); }
-export function getActiveIdx(storeId: string): number { return getChatStore(storeId).sess.getState().activeIdx; }
+export function getSessions(storeId: string): ChatSession[] {
+  return storeSessionsWithAgents(storeId);
+}
+export function getActiveIdx(storeId: string): number {
+  return getChatStore(storeId).sess.getState().activeIdx;
+}
 export function getActiveAgent(storeId: string): ChatAgentHandle | null {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
   const s = sessions[activeIdx];
-  return s ? agentHandles.get(agentKey(storeId, s.id)) ?? null : null;
+  return s ? (agentHandles.get(agentKey(storeId, s.id)) ?? null) : null;
 }
-export function getNextSessionId(storeId: string): number { return getChatStore(storeId).sess.getState().nextSessionId; }
+export function getNextSessionId(storeId: string): number {
+  return getChatStore(storeId).sess.getState().nextSessionId;
+}
 export function setNextSessionId(storeId: string, id: number): void {
   getChatStore(storeId).sess.setState({ nextSessionId: id });
 }
@@ -80,21 +87,34 @@ type TurnPair = { userText: string; userBubble: null; assistantBubble: null; ses
 
 function ensureTurnPairs(storeId: string): TurnPair[] {
   let tp = turnPairsByPanel.get(storeId);
-  if (!tp) { tp = []; turnPairsByPanel.set(storeId, tp); }
+  if (!tp) {
+    tp = [];
+    turnPairsByPanel.set(storeId, tp);
+  }
   return tp;
 }
-export function getTurnPairs(storeId: string): TurnPair[] { return ensureTurnPairs(storeId); }
-export function setTurnPairs(storeId: string, pairs: TurnPair[]): void { turnPairsByPanel.set(storeId, pairs); }
-export function getAgentFactory(storeId: string) { return agentFactoryByPanel.get(storeId) ?? null; }
+export function getTurnPairs(storeId: string): TurnPair[] {
+  return ensureTurnPairs(storeId);
+}
+export function setTurnPairs(storeId: string, pairs: TurnPair[]): void {
+  turnPairsByPanel.set(storeId, pairs);
+}
+export function getAgentFactory(storeId: string) {
+  return agentFactoryByPanel.get(storeId) ?? null;
+}
 export function setAgentFactory(storeId: string, fn: (() => Promise<ChatAgentHandle | null>) | null): void {
-  if (fn) agentFactoryByPanel.set(storeId, fn); else agentFactoryByPanel.delete(storeId);
+  if (fn) agentFactoryByPanel.set(storeId, fn);
+  else agentFactoryByPanel.delete(storeId);
 }
 
 /** Get or create the execState for a session. */
 export function getSessionExecState(storeId: string, sessionId: number): ExecStateInstance {
   const k = agentKey(storeId, sessionId);
   let es = sessionExecStates.get(k);
-  if (!es) { es = createExecState(); sessionExecStates.set(k, es); }
+  if (!es) {
+    es = createExecState();
+    sessionExecStates.set(k, es);
+  }
   return es;
 }
 
@@ -114,16 +134,23 @@ export function hasRunningBackgroundSession(storeId: string): boolean {
 export function removeSessionExecState(storeId: string, sessionId: number): void {
   const k = agentKey(storeId, sessionId);
   const es = sessionExecStates.get(k);
-  if (es) { es.stop(); sessionExecStates.delete(k); }
+  if (es) {
+    es.stop();
+    sessionExecStates.delete(k);
+  }
 }
 
 /** Full reset — used by setAgent in ChatPanel when switching workspace. */
 export function resetSessionState(storeId: string, ag: ChatAgentHandle): void {
-const id = getChatStore(storeId).sess.getState().nextSessionId;
+  const id = getChatStore(storeId).sess.getState().nextSessionId;
   const label = '会话 1';
   // Clear only this panel's agent handles and exec states
-  for (const k of [...agentHandles.keys()]) { if (k.startsWith(storeId + ':')) agentHandles.delete(k); }
-  for (const k of [...sessionExecStates.keys()]) { if (k.startsWith(storeId + ':')) sessionExecStates.delete(k); }
+  for (const k of [...agentHandles.keys()]) {
+    if (k.startsWith(storeId + ':')) agentHandles.delete(k);
+  }
+  for (const k of [...sessionExecStates.keys()]) {
+    if (k.startsWith(storeId + ':')) sessionExecStates.delete(k);
+  }
   agentHandles.set(agentKey(storeId, id), ag);
   sessionExecStates.set(agentKey(storeId, id), createExecState());
   getChatStore(storeId).sess.setState({
@@ -152,9 +179,7 @@ export function autoTitleSessionIfDefault(storeId: string): void {
   if (!agent) return;
 
   const msgs = agent.getSession();
-  const firstUser = msgs.find(
-    (m) => m.role === 'user' && m.content && !m.content.startsWith('<compacted-context>'),
-  );
+  const firstUser = msgs.find((m) => m.role === 'user' && m.content && !m.content.startsWith('<compacted-context>'));
   if (!firstUser?.content) return;
 
   const derived = firstUser.content.slice(0, 28) + (firstUser.content.length > 28 ? '…' : '');
@@ -207,7 +232,7 @@ export interface SessionContext {
 export function hashProjectPath(projectPath: string): number {
   let hash = 0;
   for (let i = 0; i < projectPath.length; i++) {
-    hash = ((hash << 5) - hash) + projectPath.charCodeAt(i);
+    hash = (hash << 5) - hash + projectPath.charCodeAt(i);
     hash |= 0;
   }
   return hash;
@@ -216,7 +241,10 @@ export function hashProjectPath(projectPath: string): number {
 /** Strip read_file_content's cat -n line numbers. Rust backend always returns
  *  "{:>6}\t{content}" format. Session JSON files need this stripped before parse. */
 export function stripLineNumbers(text: string): string {
-  return text.split('\n').map(l => l.replace(/^\s*\d+\t/, '')).join('\n');
+  return text
+    .split('\n')
+    .map((l) => l.replace(/^\s*\d+\t/, ''))
+    .join('\n');
 }
 
 // ── Session CRUD ──
@@ -255,9 +283,12 @@ export function renderSessionTabs(ctx: SessionContext): void {
   const chatTab = ctx.tabBar.querySelector<HTMLElement>('.chat-panel-tab[data-tab="chat"]');
   if (chatTab) {
     const activeSess = sessions[activeIdx];
-    chatTab.textContent = multi && activeSess
-      ? (activeSess.label.length > 6 ? activeSess.label.slice(0, 5) + '…' : activeSess.label)
-      : '对话';
+    chatTab.textContent =
+      multi && activeSess
+        ? activeSess.label.length > 6
+          ? activeSess.label.slice(0, 5) + '…'
+          : activeSess.label
+        : '对话';
   }
 }
 
@@ -424,7 +455,9 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(lsKey(projectPath, sMeta.id), json);
     }
-  } catch { /* quota exceeded — disk write is the fallback */ }
+  } catch {
+    /* quota exceeded — disk write is the fallback */
+  }
 
   // 2) Async disk write (atomic: tmp → rename)
   try {
@@ -441,7 +474,9 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
       filePath: trackerFile(projectPath),
       content: JSON.stringify({ lastId: sMeta.id, nextId: getChatStore(ctx.storeId).sess.getState().nextSessionId }),
     });
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
 }
 
 /** Restore the last active session on project open.
@@ -457,9 +492,11 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   try {
     const t = await readSessionJSON(trackerFile(projectPath));
     lastId = t.lastId || 0;
-    const trackerNextId = t.nextId || (lastId + 1) || 1;
+    const trackerNextId = t.nextId || lastId + 1 || 1;
     curNextId = Math.max(curNextId, trackerNextId);
-  } catch { /* tracker missing — try localStorage scan below */ }
+  } catch {
+    /* tracker missing — try localStorage scan below */
+  }
 
   // 2) If tracker missing, scan localStorage for newest session IN THIS WORKSPACE
   if (!lastId && typeof localStorage !== 'undefined') {
@@ -474,7 +511,9 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
           newestTs = d.savedAt;
           lastId = d.id;
         }
-      } catch { /* skip corrupt entry */ }
+      } catch {
+        /* skip corrupt entry */
+      }
     }
     if (lastId) curNextId = lastId + 1;
   }
@@ -489,7 +528,9 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   // 1) Try disk file
   try {
     data = await readSessionJSON(sessionFile(projectPath, lastId));
-  } catch { /* file missing — try localStorage */ }
+  } catch {
+    /* file missing — try localStorage */
+  }
 
   // 2) localStorage fallback (may be newer if beforeunload save didn't complete)
   if (typeof localStorage !== 'undefined') {
@@ -501,7 +542,9 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
         if (!data || !data.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt)) {
           data = lsData;
         }
-      } catch { /* corrupt localStorage entry */ }
+      } catch {
+        /* corrupt localStorage entry */
+      }
     }
   }
   if (!data || !data.messages || data.messages.length === 0) {
@@ -515,7 +558,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     const convMsgs = (data.messages as any[]).filter((m: any) => m.role !== 'system');
     if (convMsgs.length === 0 && typeof localStorage !== 'undefined') {
       const wsPrefix = lsKey(projectPath, 0).replace(/_0$/, '_');
-      let bestId = 0; let bestTs = '';
+      let bestId = 0;
+      let bestTs = '';
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key?.startsWith(wsPrefix)) continue;
@@ -524,15 +568,25 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
           if (d.id && !d.deleted && d.savedAt > bestTs) {
             // Quick check: does it have non-system messages?
             const hasConv = (d.messages as any[])?.some?.((m: any) => m.role !== 'system');
-            if (hasConv) { bestTs = d.savedAt; bestId = d.id; }
+            if (hasConv) {
+              bestTs = d.savedAt;
+              bestId = d.id;
+            }
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
       if (bestId > 0 && bestId !== lastId) {
         try {
           const lsRaw = localStorage.getItem(lsKey(projectPath, bestId));
-          if (lsRaw) { data = JSON.parse(lsRaw); lastId = bestId; }
-        } catch { /* keep original empty data */ }
+          if (lsRaw) {
+            data = JSON.parse(lsRaw);
+            lastId = bestId;
+          }
+        } catch {
+          /* keep original empty data */
+        }
       }
     }
   }
@@ -554,7 +608,9 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   ctx.clearPendingToolCards();
 
   const label = data.label || '已恢复的会话';
-  for (const k of [...agentHandles.keys()]) { if (k.startsWith(ctx.storeId + ':')) agentHandles.delete(k); }
+  for (const k of [...agentHandles.keys()]) {
+    if (k.startsWith(ctx.storeId + ':')) agentHandles.delete(k);
+  }
   agentHandles.set(agentKey(ctx.storeId, data.id), newAgent);
   getChatStore(ctx.storeId).sess.setState({
     sessions: [{ id: data.id, label }],
@@ -565,7 +621,9 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   msgStoreFor(ctx.storeId, data.id).getState().setMessages([]);
   renderSessionTabs(ctx);
 
-  try { renderRestoredSession(ctx); } catch (e) {
+  try {
+    renderRestoredSession(ctx);
+  } catch (e) {
     console.error('[chat] render 崩溃', e);
   }
 
@@ -574,7 +632,10 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
 }
 
 /** Scan sessions directory — no agent required. */
-export async function listSavedSessions(ctx: SessionContext, projectPath: string): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
+export async function listSavedSessions(
+  ctx: SessionContext,
+  projectPath: string,
+): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
   const dirPath = sessionsDir(projectPath);
   let entries: any[];
   try {
@@ -591,8 +652,12 @@ export async function listSavedSessions(ctx: SessionContext, projectPath: string
   }
 
   // Filter valid JSON session files (skip dirs, _active.json, non-json)
-  const targets = entries.filter(e =>
-    !e.is_dir && e.name.endsWith('.json') && e.name !== '_active.json' && !isNaN(parseInt(e.name.replace('.json', ''), 10)),
+  const targets = entries.filter(
+    (e) =>
+      !e.is_dir &&
+      e.name.endsWith('.json') &&
+      e.name !== '_active.json' &&
+      !isNaN(parseInt(e.name.replace('.json', ''), 10)),
   );
 
   // ── Read all session files in parallel with a 10s timeout ──
@@ -616,13 +681,16 @@ export async function listSavedSessions(ctx: SessionContext, projectPath: string
   });
 
   const timeout: Promise<null[]> = new Promise((resolve) =>
-    setTimeout(() => { console.warn('[chat] listSavedSessions: timed out after 10s'); resolve([]); }, TIMEOUT_MS),
+    setTimeout(() => {
+      console.warn('[chat] listSavedSessions: timed out after 10s');
+      resolve([]);
+    }, TIMEOUT_MS),
   );
 
   const results = await Promise.race([Promise.all(readPromises), timeout]);
   if (!Array.isArray(results)) return [];
 
-  const result = results.filter(r => r !== null) as SessionEntry[];
+  const result = results.filter((r) => r !== null) as SessionEntry[];
   result.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
   return result;
 }
@@ -639,13 +707,19 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   // 1) Try disk file
   try {
     data = await readSessionJSON(sessionFile(projectPath, sessionId));
-  } catch { /* try localStorage */ }
+  } catch {
+    /* try localStorage */
+  }
 
   // 2) localStorage fallback
   if (!data && typeof localStorage !== 'undefined') {
     const lsRaw = localStorage.getItem(lsKey(projectPath, sessionId));
     if (lsRaw) {
-      try { data = JSON.parse(lsRaw); } catch { /* corrupt */ }
+      try {
+        data = JSON.parse(lsRaw);
+      } catch {
+        /* corrupt */
+      }
     }
   }
   if (!data) {
@@ -654,7 +728,10 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   }
 
   const newAgent = await getAgentFactory(ctx.storeId)!();
-  if (!newAgent) { ctx.addNotice('无法创建 Agent', 'error'); return; }
+  if (!newAgent) {
+    ctx.addNotice('无法创建 Agent', 'error');
+    return;
+  }
 
   const freshSys = newAgent.getSession().filter((m: Message) => m.role === 'system');
   const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
@@ -662,12 +739,17 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
 
   const firstUser = conv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
   const st1 = getChatStore(ctx.storeId).sess.getState();
-    const label = (data.label && !data.label.startsWith('会话 ') && data.label !== '已恢复的会话')
-    ? data.label
-    : firstUser ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '') : `会话 ${st1.sessions.length + 1}`;
+  const label =
+    data.label && !data.label.startsWith('会话 ') && data.label !== '已恢复的会话'
+      ? data.label
+      : firstUser
+        ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '')
+        : `会话 ${st1.sessions.length + 1}`;
 
   // ponytail: messages in per-session stores — no saveCurrentMessages needed
-  ctx.flushReasoning(); ctx.flushText(); ctx.clearPendingToolCards();
+  ctx.flushReasoning();
+  ctx.flushText();
+  ctx.clearPendingToolCards();
 
   const sid = data.id || sessionId;
   agentHandles.set(agentKey(ctx.storeId, sid), newAgent);
@@ -707,9 +789,13 @@ export async function deleteSessionFile(ctx: SessionContext, projectPath: string
   // Clean localStorage backup
   try {
     if (typeof localStorage !== 'undefined') localStorage.removeItem(lsKey(projectPath, sessionId));
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   // If this session is open in a tab, close that tab
-  const idx = getChatStore(ctx.storeId).sess.getState().sessions.findIndex(s => s.id === sessionId);
+  const idx = getChatStore(ctx.storeId)
+    .sess.getState()
+    .sessions.findIndex((s) => s.id === sessionId);
   if (idx >= 0) closeSession(ctx, idx);
 }
 
@@ -765,7 +851,12 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
         continue;
       }
       if (pendingUserText && pendingUserId) {
-        getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+        getTurnPairs(ctx.storeId).push({
+          userText: pendingUserText,
+          userBubble: null,
+          assistantBubble: null,
+          sessionIndex: pendingSessionIdx,
+        });
       }
       pendingUserText = m.content || '';
       pendingUserId = nextMsgId();
@@ -808,7 +899,12 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
       rebuilt.push(am);
 
       if (pendingUserText) {
-        getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+        getTurnPairs(ctx.storeId).push({
+          userText: pendingUserText,
+          userBubble: null,
+          assistantBubble: null,
+          sessionIndex: pendingSessionIdx,
+        });
         pendingUserText = null;
         pendingUserId = null;
       }
@@ -816,7 +912,12 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   }
 
   if (pendingUserText) {
-    getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
+    getTurnPairs(ctx.storeId).push({
+      userText: pendingUserText,
+      userBubble: null,
+      assistantBubble: null,
+      sessionIndex: pendingSessionIdx,
+    });
   }
 
   // ponytail: write to per-session store — the ONLY source of truth
@@ -839,7 +940,8 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
     const agentSession = agent.getSession();
     for (let i = 0; i < agentSession.length; i++) {
       if (agentSession[i].role === 'user' && agentSession[i].content === pair.userText) {
-        sessIdx = i; break;
+        sessIdx = i;
+        break;
       }
     }
   }
@@ -882,7 +984,9 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
     for (const i of toRemove.reverse()) {
       msgs.splice(i, 1);
     }
-    msgStoreFor(ctx.storeId, sid).getState().setMessages([...msgs]);
+    msgStoreFor(ctx.storeId, sid)
+      .getState()
+      .setMessages([...msgs]);
     bumpSession(ctx.storeId, sid);
   }
   if (msg.sessionIndex >= 0) {
@@ -895,12 +999,15 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
 export async function exportSession(ctx: SessionContext): Promise<void> {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
-  if (!agent) { ctx.addNotice('没有可导出的会话', 'info'); return; }
+  if (!agent) {
+    ctx.addNotice('没有可导出的会话', 'info');
+    return;
+  }
 
   const msgs = agent.getSession();
   const settings = loadSettings();
-  const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
-  const mode = CHAT_MODES.find(m => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
+  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  const mode = CHAT_MODES.find((m) => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
   const now = new Date();
   const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 

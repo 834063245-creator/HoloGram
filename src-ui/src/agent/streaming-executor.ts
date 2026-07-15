@@ -11,10 +11,9 @@
 // CC ref: StreamingToolExecutor, query.ts:1366-1408
 
 import type { ToolCall } from '../provider/types';
-import { ToolRegistry } from './tool';
-import type { Tool } from './tool';
-import { EventKind, type AgentEvent } from './agent-types';
+import { type AgentEvent, EventKind } from './agent-types';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
+import type { Tool, ToolRegistry } from './tool';
 
 export interface ExecutorToolCall {
   call: ToolCall;
@@ -205,7 +204,9 @@ export class StreamingToolExecutor {
       if (!forceGate) {
         const blockedResult: PendingResult = {
           call,
-          output: preflightWarning + '\n\n' +
+          output:
+            preflightWarning +
+            '\n\n' +
             '🚫 架构门禁已阻止此操作。\n' +
             '使用 trace_impact 查看完整波及范围。\n' +
             '确认安全后，带 _forceGate: true 重试同一工具调用。',

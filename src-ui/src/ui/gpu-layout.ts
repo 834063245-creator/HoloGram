@@ -268,11 +268,17 @@ export class GPULayout {
     try {
       // ── Build adjacency lists (CSR format) ──
       const deg = new Uint32Array(n);
-      for (const [s, t] of pairs) { deg[s]++; deg[t]++; }
+      for (const [s, t] of pairs) {
+        deg[s]++;
+        deg[t]++;
+      }
 
       const adjOff = new Uint32Array(n + 1);
       let off = 0;
-      for (let i = 0; i < n; i++) { adjOff[i] = off; off += deg[i]; }
+      for (let i = 0; i < n; i++) {
+        adjOff[i] = off;
+        off += deg[i];
+      }
       adjOff[n] = off;
 
       const adjTgt = new Uint32Array(off);
@@ -283,10 +289,11 @@ export class GPULayout {
       }
 
       // ── Upload buffers ──
-      const posBuf = this._upload(initPos.buffer,
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST);
-      const velBuf = this._upload(new Float32Array(n * 3).buffer,
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+      const posBuf = this._upload(
+        initPos.buffer,
+        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      );
+      const velBuf = this._upload(new Float32Array(n * 3).buffer, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
       const adjOffBuf = this._upload(adjOff.buffer, GPUBufferUsage.STORAGE);
       const adjTgtBuf = this._upload(adjTgt.buffer, GPUBufferUsage.STORAGE);
 

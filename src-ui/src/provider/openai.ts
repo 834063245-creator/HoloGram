@@ -4,7 +4,16 @@
 // OpenAI-compatible provider — DeepSeek, MiMo, and any OpenAI-compatible endpoint
 // 手写 fetch() + SSE 解析，零第三方 SDK
 
-import { Chunk, ChunkType, Message, Provider, Request, Role, classifyError, sanitizeToolPairing } from './types';
+import {
+  type Chunk,
+  ChunkType,
+  classifyError,
+  type Message,
+  type Provider,
+  type Request,
+  type Role,
+  sanitizeToolPairing,
+} from './types';
 
 const DEFAULT_MAX_TOKENS = 32000; // ponytail: safe ceiling across providers (GLM caps at 131072)
 
@@ -28,7 +37,13 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
     },
 
     async *stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk> {
-      const body = buildChatRequest(sanitizeToolPairing(req.messages), req.tools, model, req.max_tokens, disableThinking);
+      const body = buildChatRequest(
+        sanitizeToolPairing(req.messages),
+        req.tools,
+        model,
+        req.max_tokens,
+        disableThinking,
+      );
       const response = await sendWithRetry(signal, baseUrl, apiKey, name, body);
 
       if (!response.body) throw new Error(`${name}: no response body`);
@@ -138,10 +153,7 @@ function buildChatRequest(
           function: {
             name: t.name,
             description: t.description,
-            parameters:
-              Object.keys(t.parameters).length > 0
-                ? t.parameters
-                : { type: 'object', properties: {} },
+            parameters: Object.keys(t.parameters).length > 0 ? t.parameters : { type: 'object', properties: {} },
           },
         }))
       : undefined;
@@ -173,7 +185,7 @@ async function sendWithRetry(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) {
-      const delay = 500 * Math.pow(2, attempt - 1) + Math.random() * 250;
+      const delay = 500 * 2 ** (attempt - 1) + Math.random() * 250;
       await new Promise((r) => setTimeout(r, delay));
     }
     if (signal.aborted) throw new Error(`${name}: aborted`);
@@ -254,20 +266,13 @@ interface ChatChunk {
   };
 }
 
-async function* readSSE(
-  body: ReadableStream<Uint8Array>,
-  name: string,
-  signal?: AbortSignal,
-): AsyncGenerator<Chunk> {
+async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
 
   // Accumulate tool calls by index
-  const toolsByIndex = new Map<
-    number,
-    { id: string; name: string; arguments: string }
-  >();
+  const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
   let usage: Chunk['usage'];
 
   try {
@@ -313,11 +318,8 @@ async function* readSSE(
             completion_tokens: ev.usage.completion_tokens,
             total_tokens: ev.usage.total_tokens,
             cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
-            cache_miss_tokens:
-              ev.usage.prompt_tokens -
-              (ev.usage.prompt_tokens_details?.cached_tokens || 0),
-            reasoning_tokens:
-              ev.usage.completion_tokens_details?.reasoning_tokens || 0,
+            cache_miss_tokens: ev.usage.prompt_tokens - (ev.usage.prompt_tokens_details?.cached_tokens || 0),
+            reasoning_tokens: ev.usage.completion_tokens_details?.reasoning_tokens || 0,
             finish_reason: 'stop',
           };
         }
@@ -402,11 +404,8 @@ async function* readSSE(
             completion_tokens: ev.usage.completion_tokens,
             total_tokens: ev.usage.total_tokens,
             cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
-            cache_miss_tokens:
-              ev.usage.prompt_tokens -
-              (ev.usage.prompt_tokens_details?.cached_tokens || 0),
-            reasoning_tokens:
-              ev.usage.completion_tokens_details?.reasoning_tokens || 0,
+            cache_miss_tokens: ev.usage.prompt_tokens - (ev.usage.prompt_tokens_details?.cached_tokens || 0),
+            reasoning_tokens: ev.usage.completion_tokens_details?.reasoning_tokens || 0,
             finish_reason: 'stop',
           };
         }

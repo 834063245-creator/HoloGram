@@ -1,13 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '' }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) } }));
+vi.mock('../src/ui/events', () => ({
+  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
+}));
 vi.mock('../src/ui/app-shell', () => ({ shell: { register: vi.fn() } }));
 vi.mock('../src/agent/permission', () => ({}));
 vi.mock('../src/agent/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../src/settings', () => ({
-  loadSettings: vi.fn(() => ({ providers: [{ name: 'test', model: 'test', apiKey: 'k', kind: 'openai', baseUrl: '', thinking: false }], activeProvider: 'test', agent: {}, display: { language: 'zh', fontScale: 1 } })),
+  loadSettings: vi.fn(() => ({
+    providers: [{ name: 'test', model: 'test', apiKey: 'k', kind: 'openai', baseUrl: '', thinking: false }],
+    activeProvider: 'test',
+    agent: {},
+    display: { language: 'zh', fontScale: 1 },
+  })),
   saveSettings: vi.fn(),
   CHAT_MODES: [{ id: 'general', label: '通用', description: '', temperature: 0.7, maxSteps: 50 }],
 }));
@@ -15,22 +22,33 @@ vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 vi.mock('gsap', () => {
   const tween = () => ({ kill: vi.fn(), play: vi.fn(), pause: vi.fn() });
-  return { default: { set: vi.fn(), to: vi.fn(tween), from: vi.fn(tween), fromTo: vi.fn(tween), killTweensOf: vi.fn(), isTweening: vi.fn(() => false), utils: { toArray: vi.fn(() => []) } }, gsap: { set: vi.fn() } };
+  return {
+    default: {
+      set: vi.fn(),
+      to: vi.fn(tween),
+      from: vi.fn(tween),
+      fromTo: vi.fn(tween),
+      killTweensOf: vi.fn(),
+      isTweening: vi.fn(() => false),
+      utils: { toArray: vi.fn(() => []) },
+    },
+    gsap: { set: vi.fn() },
+  };
 });
 
+import type { AgentEvent } from '../src/agent/agent-types';
+import { EventKind } from '../src/agent/agent-types';
+import { msgStoreFor, msgStoreForActive } from '../src/ui/chat-store';
+import type { StreamContext } from '../src/ui/chat-stream';
 import {
-  renderEvent,
-  appendUserBubble,
   addNotice,
+  appendUserBubble,
   finishTurn,
+  renderEvent,
   setPendingStreamingSession,
 } from '../src/ui/chat-stream';
-import type { StreamContext } from '../src/ui/chat-stream';
-import { msgStoreFor, msgStoreForActive } from '../src/ui/chat-store';
+import type { AssistantMessage, ChatMessage, MessageId } from '../src/ui/message-model';
 import { getSessionStore } from '../src/ui/session-store';
-import type { ChatMessage, AssistantMessage, MessageId } from '../src/ui/message-model';
-import { EventKind } from '../src/agent/agent-types';
-import type { AgentEvent } from '../src/agent/agent-types';
 
 const STORE_ID = 'test-panel';
 const SESSION_A = 1;
@@ -59,10 +77,16 @@ function makeCtx(activeSession: number = SESSION_A): StreamContext {
     storeId: STORE_ID,
     getSessionMessages: (sid: number) => msgStoreFor(STORE_ID, sid).getState().messages,
     getActiveMessages: () => msgStoreForActive(STORE_ID)?.getState().messages ?? [],
-    setSessionMessages: (sid: number, msgs: ChatMessage[]) => { msgStoreFor(STORE_ID, sid).getState().setMessages(msgs); },
-    bumpSessionMessages: (sid: number) => { msgStoreFor(STORE_ID, sid).getState().bump(); },
+    setSessionMessages: (sid: number, msgs: ChatMessage[]) => {
+      msgStoreFor(STORE_ID, sid).getState().setMessages(msgs);
+    },
+    bumpSessionMessages: (sid: number) => {
+      msgStoreFor(STORE_ID, sid).getState().bump();
+    },
     getStreamingAssistantId: (() => _streamingId) as () => MessageId | null,
-    setStreamingAssistantId: ((id: MessageId | null) => { _streamingId = id; }) as (id: MessageId | null) => void,
+    setStreamingAssistantId: ((id: MessageId | null) => {
+      _streamingId = id;
+    }) as (id: MessageId | null) => void,
     getUserScrolledUp: () => false,
     setUserScrolledUp: vi.fn(),
     getSyncRafId: () => null,

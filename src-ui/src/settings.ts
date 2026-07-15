@@ -116,10 +116,14 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
       if (key) {
         try {
           await rpc('credential_store', { provider: p.name, key });
-        } catch { /* non-critical — localStorage still has the key */ }
+        } catch {
+          /* non-critical — localStorage still has the key */
+        }
       }
     }
-  } catch { /* dynamic import failed — non-critical */ }
+  } catch {
+    /* dynamic import failed — non-critical */
+  }
 }
 
 /** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。removeProvider 时调用。 */
@@ -127,7 +131,9 @@ export async function removeSecret(providerName: string): Promise<void> {
   try {
     const { rpc } = await import('./bridge');
     await rpc('credential_delete', { provider: providerName });
-  } catch { /* no encrypted store or key not found — non-critical */ }
+  } catch {
+    /* no encrypted store or key not found — non-critical */
+  }
 }
 
 /** 从系统加密存储恢复 API Key（仅填充 apiKey 为空的 provider）。loadSettings 后用。 */
@@ -143,13 +149,17 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
             p.apiKey = stored.trim();
             changed = true;
           }
-        } catch { /* no encrypted store or decrypt failed */ }
+        } catch {
+          /* no encrypted store or decrypt failed */
+        }
       }
     }
     if (changed) {
       saveSettings(s);
     }
-  } catch { /* dynamic import failed — proceed with localStorage-only settings */ }
+  } catch {
+    /* dynamic import failed — proceed with localStorage-only settings */
+  }
   return s;
 }
 
@@ -165,41 +175,32 @@ function setActiveProvider(s: AppSettings, name: string): AppSettings {
   return { ...s, activeProvider: name };
 }
 
-export function updateProvider(
-  s: AppSettings,
-  name: string,
-  patch: Partial<ProviderSettings>,
-): AppSettings {
+export function updateProvider(s: AppSettings, name: string, patch: Partial<ProviderSettings>): AppSettings {
   return {
     ...s,
-    providers: s.providers.map((p) =>
-      p.name === name ? { ...p, ...patch } : p,
-    ),
+    providers: s.providers.map((p) => (p.name === name ? { ...p, ...patch } : p)),
   };
 }
 
-export function addProvider(
-  s: AppSettings,
-  name: string,
-  kind: 'anthropic' | 'openai',
-): AppSettings {
+export function addProvider(s: AppSettings, name: string, kind: 'anthropic' | 'openai'): AppSettings {
   if (s.providers.find((p) => p.name === name)) {
     throw new Error(`Provider "${name}" 已存在`);
   }
-  const baseUrl = kind === 'anthropic'
-    ? 'https://api.anthropic.com'
-    : 'https://api.openai.com/v1';
+  const baseUrl = kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1';
   return {
     ...s,
     activeProvider: name,
-    providers: [...s.providers, {
-      kind,
-      name,
-      apiKey: '',
-      baseUrl,
-      model: '',
-      maxTokens: 0,
-    }],
+    providers: [
+      ...s.providers,
+      {
+        kind,
+        name,
+        apiKey: '',
+        baseUrl,
+        model: '',
+        maxTokens: 0,
+      },
+    ],
   };
 }
 
@@ -217,7 +218,7 @@ export function removeProvider(s: AppSettings, name: string): AppSettings {
 export function defaultPricing(kind: string, model: string) {
   if (kind === 'anthropic') {
     // Claude Sonnet 4 pricing
-    return { cache_hit: 0.30, input: 3, output: 15, currency: '$' };
+    return { cache_hit: 0.3, input: 3, output: 15, currency: '$' };
   }
   if (model.includes('deepseek')) {
     return { cache_hit: 0.14, input: 2.0, output: 8.0, currency: '¥' };

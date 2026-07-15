@@ -10,23 +10,13 @@
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
-import { iconHtml } from './icons';
-import { bumpChat, msgStoreFor, bumpSession, getChatStore } from './chat-store';
-import { autoTitleSessionIfDefault } from './chat-session';
-import type { StarGraph } from './graph';
-import type {
-  ChatMessage,
-  UserMessage,
-  AssistantMessage,
-  MessageId,
-  FileAttachment,
-} from './message-model';
-import {
-  createUserMessage,
-  createAssistantMessage,
-  createNoticeMessage,
-} from './message-model';
 import { applyEventToParts } from '../agent/part-mutator';
+import { autoTitleSessionIfDefault } from './chat-session';
+import { bumpChat, bumpSession, getChatStore, msgStoreFor } from './chat-store';
+import type { StarGraph } from './graph';
+import { iconHtml } from './icons';
+import type { AssistantMessage, ChatMessage, FileAttachment, MessageId, UserMessage } from './message-model';
+import { createAssistantMessage, createNoticeMessage, createUserMessage } from './message-model';
 
 // ── Turn pair type (shared with chat-session) ──
 type TurnPair = {
@@ -120,7 +110,7 @@ function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null
   if (assistantId) {
     for (const s of sessions) {
       const msgs = ctx.getSessionMessages(s.id);
-      if (msgs.some(m => m._id === assistantId)) {
+      if (msgs.some((m) => m._id === assistantId)) {
         return { sessionId: s.id, messages: msgs, isActive: s.id === activeSid };
       }
     }
@@ -157,7 +147,7 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   const msgs = target.messages;
 
   if (id) {
-    const found = msgs.find(m => m.role === 'assistant' && m._id === id) as AssistantMessage | undefined;
+    const found = msgs.find((m) => m.role === 'assistant' && m._id === id) as AssistantMessage | undefined;
     if (found) return found;
   }
 
@@ -183,9 +173,7 @@ export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info
 
   const msgs = target.messages;
   if (sid) {
-    const assistIdx = msgs.findIndex(
-      (m) => m.role === 'assistant' && (m as AssistantMessage)._id === sid,
-    );
+    const assistIdx = msgs.findIndex((m) => m.role === 'assistant' && (m as AssistantMessage)._id === sid);
     if (assistIdx >= 0) {
       msgs.splice(assistIdx, 0, createNoticeMessage(text, level));
     } else {
@@ -214,9 +202,7 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   const target = _resolveSessionTarget(ctx, sid);
   const msgs = target ? target.messages : ctx.getActiveMessages();
 
-  const assistant = msgs.find(
-    (m) => m.role === 'assistant' && m._id === sid,
-  ) as AssistantMessage | undefined;
+  const assistant = msgs.find((m) => m.role === 'assistant' && m._id === sid) as AssistantMessage | undefined;
   if (assistant) {
     assistant.status = 'done';
     for (const part of assistant.parts) {
@@ -269,13 +255,18 @@ export function _scheduleSync(ctx: StreamContext): void {
   if (ctx.getSyncRafId() !== null) return;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const rafId = requestAnimationFrame(() => {
-    if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     ctx.setSyncRafId(null);
     _streamingBump(ctx);
   });
   ctx.setSyncRafId(rafId);
   timeoutId = setTimeout(() => {
-    if (timeoutId !== null) { timeoutId = null; }
+    if (timeoutId !== null) {
+      timeoutId = null;
+    }
     ctx.setSyncRafId(null);
     _streamingBump(ctx);
   }, 500);
@@ -333,7 +324,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         const cached = u.cache_hit_tokens ?? 0;
         const missTokens = u.cache_miss_tokens ?? 0;
         const inputTokens = cached + missTokens;
-        const hitRate = inputTokens > 0 ? (cached / inputTokens * 100) : 0;
+        const hitRate = inputTokens > 0 ? (cached / inputTokens) * 100 : 0;
         let label = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
         label += ' tok';
         if (cached > 0) label += ` · ${cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached} cache`;

@@ -8,36 +8,57 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { iconHtml } from './icons';
-import { bus } from './events';
+import { getLang, setLang, t } from '../i18n';
 import { shell } from './app-shell';
-import { t, getLang, setLang } from '../i18n';
+import { bus } from './events';
 import { gpuLayout } from './gpu-layout';
-import { layout3D, fibonacciSphere, spiralGalaxies, repelCommunityCentroids, relaxNewNodes } from './graph-layout';
-import { NODE_COLORS, GLOW_COLORS, edgeColorByType, edgeOpacityByDepth, edgeWidthByDepth, hexToCSS, communityColor, BG_COLOR, TYPE_LABELS } from './graph-colors';
-import { createGlowTexture, createSpikeTexture } from './graph-textures';
-import { makeGlowPointMaterial, makeCoreFresnelMaterial, _GLSL_HSL2RGB } from './graph-shaders';
+import { type AnalysisHost, GraphAnalysis } from './graph-analysis';
+import {
+  BG_COLOR,
+  communityColor,
+  edgeColorByType,
+  edgeOpacityByDepth,
+  edgeWidthByDepth,
+  GLOW_COLORS,
+  hexToCSS,
+  NODE_COLORS,
+  TYPE_LABELS,
+} from './graph-colors';
+import { type FoldHost, type GalaxyMeta, GraphFold } from './graph-fold';
+import {
+  buildHoloGrid as buildHoloGridFX,
+  buildStarfield as buildStarfieldFX,
+  positionGrid as positionGridFX,
+} from './graph-fx';
+import { fibonacciSphere, layout3D, relaxNewNodes, repelCommunityCentroids, spiralGalaxies } from './graph-layout';
 import * as Scene from './graph-scene';
-import { buildLegend, buildFocusBanner } from './graph-ui';
-import { GraphFold, type FoldHost, type GalaxyMeta } from './graph-fold';
-import { buildStarfield as buildStarfieldFX, buildHoloGrid as buildHoloGridFX, positionGrid as positionGridFX } from './graph-fx';
-import { GraphAnalysis, type AnalysisHost } from './graph-analysis';
+import { _GLSL_HSL2RGB, makeCoreFresnelMaterial, makeGlowPointMaterial } from './graph-shaders';
+import { createGlowTexture, createSpikeTexture } from './graph-textures';
 import { GraphTooltip, type TooltipHost } from './graph-tooltip';
-import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { buildFocusBanner, buildLegend } from './graph-ui';
+import { iconHtml } from './icons';
 
 // ── Types ────────────────────────────────────────────────────
 
 interface GraphNode {
-  id: string; name: string; type?: string; kind?: string;
-  location?: string; properties?: Record<string, unknown>;
+  id: string;
+  name: string;
+  type?: string;
+  kind?: string;
+  location?: string;
+  properties?: Record<string, unknown>;
 }
 interface GraphEdge {
-  id: string; source: string; target: string; type?: string;
+  id: string;
+  source: string;
+  target: string;
+  type?: string;
   properties?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -47,8 +68,21 @@ interface GraphJSON {
   meta?: Record<string, unknown>;
 }
 
-interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; crossFile: boolean; }
-interface CommunityData { id: string; label: string; node_ids: string[]; level?: number; parent_id?: string | null; }
+interface EdgeData {
+  s: number;
+  t: number;
+  couplingDepth: number;
+  edgeType: string;
+  direction: string;
+  crossFile: boolean;
+}
+interface CommunityData {
+  id: string;
+  label: string;
+  node_ids: string[];
+  level?: number;
+  parent_id?: string | null;
+}
 
 // ponytail: diff payload from watcher — added/removed/changed nodes and edges
 interface GraphDiffJson {
@@ -58,7 +92,6 @@ interface GraphDiffJson {
   added_edges: GraphEdge[];
   removed_edges: Array<{ id: string; source: string; target: string }>;
 }
-
 
 // ═════ Colors + Textures moved to graph-colors.ts / graph-textures.ts ═══
 
@@ -103,8 +136,8 @@ export class StarGraph {
   private _coreScales: Float32Array = new Float32Array(0);
   private _glowRgba: Float32Array = new Float32Array(0);
   private _glow2Rgba: Float32Array = new Float32Array(0);
-  private _glowSizes: Float32Array = new Float32Array(0);   // per-point size (twinkle variation)
-  private _glow2Sizes: Float32Array = new Float32Array(0);  // outer glow size
+  private _glowSizes: Float32Array = new Float32Array(0); // per-point size (twinkle variation)
+  private _glow2Sizes: Float32Array = new Float32Array(0); // outer glow size
   private _nodeMagCache: Float32Array = new Float32Array(0); // pre-computed log1p ratio
   private _overrideFlags: Float32Array = new Float32Array(0); // 0=shader animated, 1=CPU overridden
   private _prevOverrideSet: Set<number> = new Set(); // nodes overridden last frame (for reset)
@@ -203,10 +236,10 @@ export class StarGraph {
   // and cold-start blank screen on slow machines).
   private _renderInProgress = false;
 
-    // ── Community / Galaxy fold overlay ──────────────────────
+  // ── Community / Galaxy fold overlay ──────────────────────
   private _fold: GraphFold;
   private communities: CommunityData[] = [];
-  private nodeCommMap = new Map<number, string>();           // nodeIdx → communityId
+  private nodeCommMap = new Map<number, string>(); // nodeIdx → communityId
 
   // ── DOM 交互层（tooltip/detail card/select rect/prompt bar）─
   private _tooltip: GraphTooltip;
@@ -238,7 +271,8 @@ export class StarGraph {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.4;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.4;
     container.appendChild(this.renderer.domElement);
 
     // ── Post-processing pipeline ──
@@ -248,9 +282,9 @@ export class StarGraph {
     // is ~16M pixels × 5 blur passes = GPU murder. Quarter-res fixes it.
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(Math.floor(container.clientWidth / 4), Math.floor(container.clientHeight / 4)),
-      0.35,  // strength — low default, bright objects still bloom on hover
-      0.3,   // radius — tight bloom, no global glow fog
-      0.85,  // threshold — only bright things bloom (hover highlights)
+      0.35, // strength — low default, bright objects still bloom on hover
+      0.3, // radius — tight bloom, no global glow fog
+      0.85, // threshold — only bright things bloom (hover highlights)
     );
     this.composer.addPass(this.bloomPass);
 
@@ -259,14 +293,19 @@ export class StarGraph {
     this.controls.addEventListener('start', () => {
       this._userInteracting = true;
       this.focusActive = false;
-      if (this._flyDebounce) { clearTimeout(this._flyDebounce); this._flyDebounce = null; }
+      if (this._flyDebounce) {
+        clearTimeout(this._flyDebounce);
+        this._flyDebounce = null;
+      }
     });
-    this.controls.addEventListener('end', () => { this._userInteracting = false; });
+    this.controls.addEventListener('end', () => {
+      this._userInteracting = false;
+    });
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.15;       // quick stop
-    this.controls.rotateSpeed = 0.5;          // halved — no whip
-    this.controls.zoomSpeed = 1.0;            // responsive zoom
-    this.controls.screenSpacePanning = true;  // right-drag to pan = recenter orbit target
+    this.controls.dampingFactor = 0.15; // quick stop
+    this.controls.rotateSpeed = 0.5; // halved — no whip
+    this.controls.zoomSpeed = 1.0; // responsive zoom
+    this.controls.screenSpacePanning = true; // right-drag to pan = recenter orbit target
     this.controls.minDistance = 5;
     this.controls.maxDistance = 12000;
     this.controls.maxDistance = 4000;
@@ -304,7 +343,6 @@ export class StarGraph {
     if (false) this.labelsContainer.style.display = 'none';
     this.container.appendChild(this.labelsContainer);
 
-
     this.buildLegend();
     this.buildFocusBanner();
 
@@ -312,21 +350,24 @@ export class StarGraph {
     this._langHandler = ({ lang }: { lang: string }) => {
       setLang(lang as 'zh' | 'en');
       // Remove old DOM elements before rebuilding
-      if (this.legendEl) { this.legendEl.remove(); }
+      if (this.legendEl) {
+        this.legendEl.remove();
+      }
       this.buildLegend();
       if (this._nodeCount > 0) this.legendEl.style.display = '';
-      if (this.focusSubgraphBanner) { this.focusSubgraphBanner.remove(); }
+      if (this.focusSubgraphBanner) {
+        this.focusSubgraphBanner.remove();
+      }
       this.buildFocusBanner();
       if (this.focusSubgraphActive && this.focusSubgraphIdx >= 0) {
         // Refresh focus banner text while staying in focus mode
         const node = this.graphNodes[this.focusSubgraphIdx];
-        this.focusSubgraphBanner.innerHTML =
-          `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
+        this.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
         this.focusSubgraphBanner.style.display = 'flex';
       }
     };
     bus.on('lang:changed', this._langHandler);
-    let pointerDown = new THREE.Vector2();
+    const pointerDown = new THREE.Vector2();
     let pointerDragged = false;
     const canvas = this.renderer.domElement;
     canvas.addEventListener('pointerdown', (e: PointerEvent) => {
@@ -361,8 +402,12 @@ export class StarGraph {
         this._tooltip._hideSelectRect();
         this.controls.enabled = true;
         this._tooltip._handleRegionSelect(
-          this._nodeCount, this.nodePositions, this.graphNodes,
-          this._coreScales, this.camera, this.container,
+          this._nodeCount,
+          this.nodePositions,
+          this.graphNodes,
+          this._coreScales,
+          this.camera,
+          this.container,
           this.highlightNodeNames.bind(this),
           this.clearAgentHighlight.bind(this),
           { blastMode: this._analysis.blastMode, _pathSource: this._analysis._pathSource },
@@ -382,21 +427,55 @@ export class StarGraph {
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     this._onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return; }
-        if (this._tooltip._promptBarEl?.style.display === 'flex') { this._tooltip._hidePrompt(); return; }
-        if (this._tooltip._selecting) { this._tooltip._selecting = false; this._tooltip._hideSelectRect(); this.controls.enabled = true; return; }
-        if (this._analysis._shiftSourceIdx >= 0) { this._analysis._clearShiftPath(); return; }
-        if (this._analysis._pathSource >= 0) { this._analysis.clearPath(); e.stopImmediatePropagation(); return; }
-        if (this._fold.enteredSubCommunityId) { this._fold.exitSubCommunity(); return; }
-        if (this._fold.enteredGalaxyId) { this._fold.exitGalaxy(); return; }
+        if (this.focusSubgraphActive) {
+          this.exitFocusSubgraph();
+          return;
+        }
+        if (this._tooltip._promptBarEl?.style.display === 'flex') {
+          this._tooltip._hidePrompt();
+          return;
+        }
+        if (this._tooltip._selecting) {
+          this._tooltip._selecting = false;
+          this._tooltip._hideSelectRect();
+          this.controls.enabled = true;
+          return;
+        }
+        if (this._analysis._shiftSourceIdx >= 0) {
+          this._analysis._clearShiftPath();
+          return;
+        }
+        if (this._analysis._pathSource >= 0) {
+          this._analysis.clearPath();
+          e.stopImmediatePropagation();
+          return;
+        }
+        if (this._fold.enteredSubCommunityId) {
+          this._fold.exitSubCommunity();
+          return;
+        }
+        if (this._fold.enteredGalaxyId) {
+          this._fold.exitGalaxy();
+          return;
+        }
         // In universe fold view: ESC exits fold mode
-        if (this._fold.foldMode) { this._fold.setFoldMode(false); return; }
-        if (this._analysis.blastMode) { this._analysis.exitBlastMode(); return; }
+        if (this._fold.foldMode) {
+          this._fold.setFoldMode(false);
+          return;
+        }
+        if (this._analysis.blastMode) {
+          this._analysis.exitBlastMode();
+          return;
+        }
       }
       if (e.key === 'b' || e.key === 'B') {
-        if (this._analysis.blastMode) { this._analysis.exitBlastMode(); }
-        else if (this.hoveredIdx >= 0) { this._analysis.startBlastMode(this.hoveredIdx); }
-        else if (this._tooltip.selectedIdx >= 0) { this._analysis.startBlastMode(this._tooltip.selectedIdx); }
+        if (this._analysis.blastMode) {
+          this._analysis.exitBlastMode();
+        } else if (this.hoveredIdx >= 0) {
+          this._analysis.startBlastMode(this.hoveredIdx);
+        } else if (this._tooltip.selectedIdx >= 0) {
+          this._analysis.startBlastMode(this._tooltip.selectedIdx);
+        }
       }
     };
     window.addEventListener('keydown', this._onKeyDown);
@@ -406,9 +485,14 @@ export class StarGraph {
     this.animate();
 
     // Kick off WebGPU compute pipeline init (non-blocking)
-    gpuLayout.init().then(ready => {
-      if (ready) console.log('[StarGraph] GPU layout ready');
-    }).catch(() => { /* GPU init failure is non-critical; CPU fallback used */ });
+    gpuLayout
+      .init()
+      .then((ready) => {
+        if (ready) console.log('[StarGraph] GPU layout ready');
+      })
+      .catch(() => {
+        /* GPU init failure is non-critical; CPU fallback used */
+      });
   }
 
   // ── Starfield ────────────────────────────────────────────
@@ -465,22 +549,27 @@ export class StarGraph {
     // In universe view: click galaxy cloud → enterGalaxy
     if (this._fold.foldMode && !this._fold.enteredGalaxyId) {
       const cid = hitCloudId();
-      if (cid) { this._fold.enterGalaxy(cid); }
+      if (cid) {
+        this._fold.enterGalaxy(cid);
+      }
       return;
     }
 
     // Inside a galaxy or sub-community: dispatch based on whether we're in cloud or constellation view
     if (this._fold.foldMode && this._fold.enteredGalaxyId) {
       // Current parent is the deepest sub-community, or the galaxy itself
-      const activeParentId = this._fold._drillStack.length > 0
-        ? this._fold._drillStack[this._fold._drillStack.length - 1]
-        : this._fold.enteredGalaxyId;
+      const activeParentId =
+        this._fold._drillStack.length > 0
+          ? this._fold._drillStack[this._fold._drillStack.length - 1]
+          : this._fold.enteredGalaxyId;
 
       // Check if current parent has sub-communities (→ cloud view) or not (→ constellation view)
       if (this._fold._hasVisibleSubCommunities(activeParentId)) {
         // Cloud view: click sub-cloud → enterSubCommunity
         const cid = hitCloudId();
-        if (cid) { this._fold.enterSubCommunity(cid); }
+        if (cid) {
+          this._fold.enterSubCommunity(cid);
+        }
         return;
       }
     }
@@ -489,7 +578,16 @@ export class StarGraph {
     const hits = this.raycaster.intersectObject(this.nodeCoresInstanced);
     const idx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
 
-    if (idx >= 0 && idx !== this._tooltip.selectedIdx) this._tooltip.showDetail(idx, this.edgeDataList, this.deg, this.nodePositions, this.container, this.camera, this.graphNodes);
+    if (idx >= 0 && idx !== this._tooltip.selectedIdx)
+      this._tooltip.showDetail(
+        idx,
+        this.edgeDataList,
+        this.deg,
+        this.nodePositions,
+        this.container,
+        this.camera,
+        this.graphNodes,
+      );
     else if (idx < 0) this._tooltip.hideDetail();
 
     // Step 3: Emit graph:node-clicked (for external interaction handlers)
@@ -515,8 +613,6 @@ export class StarGraph {
 
   // ── Step 3: Alt+drag rectangle selection → graph-tooltip.ts ──
 
-
-
   // ── Step 3: Shift+click quick path mode ──────────────────
   // ── Hover ────────────────────────────────────────────────
   // Hover raycaster uses ALL nodeCores regardless of .visible state.
@@ -534,7 +630,8 @@ export class StarGraph {
       this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     });
     this.container.addEventListener('pointerleave', () => {
-      this.mouse.x = -999; this.mouse.y = -999;
+      this.mouse.x = -999;
+      this.mouse.y = -999;
     });
   }
 
@@ -555,7 +652,11 @@ export class StarGraph {
     // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
     const cloudViewActive = this._fold.foldMode && this._fold.galaxyGlows.length > 0;
     if (cloudViewActive) {
-      if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
+      if (this.hoveredIdx >= 0) {
+        this.hoveredIdx = -1;
+        this.targetHoverScale = 0;
+        this.rebuildHighlightEdges(-1);
+      }
       this.raycaster.setFromCamera(this.mouse, this.camera);
       const coreSprites = this._fold.galaxyGlows.filter((_, i) => i % 2 === 1);
       const galaxyHits = this.raycaster.intersectObjects(coreSprites);
@@ -568,14 +669,18 @@ export class StarGraph {
           const shortName = (gm.label || gm.id).split('/')[0].replace(/_/g, ' ');
           const isSub = !!this._fold.enteredGalaxyId;
           this._tooltip.tooltipEl.querySelector('.tt-name')!.textContent = `${isSub ? '📁' : '🌌'} ${shortName}`;
-          this._tooltip.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
-          this._tooltip.tooltipEl.querySelector('.tt-loc')!.textContent = isSub ? '点击钻入子社区' : '点击进入查看内部连线';
+          this._tooltip.tooltipEl.querySelector('.tt-meta')!.textContent =
+            `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
+          this._tooltip.tooltipEl.querySelector('.tt-loc')!.textContent = isSub
+            ? '点击钻入子社区'
+            : '点击进入查看内部连线';
           this.tmpVec3.copy(gm.centroid);
           this.tmpVec3.project(this.camera);
           if (this.tmpVec3.z <= 1) {
             const x = (this.tmpVec3.x * 0.5 + 0.5) * this.container.clientWidth;
             const y = (-this.tmpVec3.y * 0.5 + 0.5) * this.container.clientHeight;
-            this._tooltip.tooltipEl.style.left = `${x + 18}px`; this._tooltip.tooltipEl.style.top = `${y - 10}px`;
+            this._tooltip.tooltipEl.style.left = `${x + 18}px`;
+            this._tooltip.tooltipEl.style.top = `${y - 10}px`;
             this._tooltip.tooltipEl.classList.add('visible');
           }
         }
@@ -609,19 +714,31 @@ export class StarGraph {
     const edges = this.edgeIndexOf[nodeIdx];
     if (edges.length === 0) return;
     const pos = this.nodePositions;
-    const degNorm = 1 / Math.pow(edges.length, 0.25);
+    const degNorm = 1 / edges.length ** 0.25;
     for (const ei of edges) {
       const d = this.edgeDataList[ei];
       verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
       const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
       const nearB = 2.5 * degNorm * 0.3;
-      const farB  = 2.5 * degNorm;
+      const farB = 2.5 * degNorm;
       if (d.s === nodeIdx) {
-        colors.push(Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB),
-                    Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB));
+        colors.push(
+          Math.min(1, c.r * nearB),
+          Math.min(1, c.g * nearB),
+          Math.min(1, c.b * nearB),
+          Math.min(1, c.r * farB),
+          Math.min(1, c.g * farB),
+          Math.min(1, c.b * farB),
+        );
       } else {
-        colors.push(Math.min(1, c.r * farB),  Math.min(1, c.g * farB),  Math.min(1, c.b * farB),
-                    Math.min(1, c.r * nearB), Math.min(1, c.g * nearB), Math.min(1, c.b * nearB));
+        colors.push(
+          Math.min(1, c.r * farB),
+          Math.min(1, c.g * farB),
+          Math.min(1, c.b * farB),
+          Math.min(1, c.r * nearB),
+          Math.min(1, c.g * nearB),
+          Math.min(1, c.b * nearB),
+        );
       }
     }
   }
@@ -631,41 +748,70 @@ export class StarGraph {
     if (this.focusSubgraphActive) {
       this._buildFocusSubgraphEdges();
       if (nodeIdx >= 0 && nodeIdx < this._nodeCount) {
-        const verts: number[] = [], colors: number[] = [];
+        const verts: number[] = [],
+          colors: number[] = [];
         this._buildHoverEdgeVerts(nodeIdx, verts, colors);
         if (verts.length > 0) {
           const geo = new THREE.BufferGeometry();
           geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
           geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-          this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })));
+          this.highlightEdgeGroup.add(
+            new THREE.LineSegments(
+              geo,
+              new THREE.LineBasicMaterial({
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.6,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+              }),
+            ),
+          );
         }
       }
       return;
     }
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     if (nodeIdx < 0 || nodeIdx >= this._nodeCount) return;
-    const verts: number[] = [], colors: number[] = [];
+    const verts: number[] = [],
+      colors: number[] = [];
     this._buildHoverEdgeVerts(nodeIdx, verts, colors);
     if (verts.length === 0) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })));
+    this.highlightEdgeGroup.add(
+      new THREE.LineSegments(
+        geo,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.6,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      ),
+    );
   }
 
   // ── Labels ───────────────────────────────────────────────
 
   private updateLabels(): void {
-    const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
+    const halfW = this.container.clientWidth * 0.5,
+      halfH = this.container.clientHeight * 0.5;
     const hoverI = this.hoveredIdx;
     const selI = this._tooltip.selectedIdx;
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
-      const i = this.nodeLabelIdx[k], div = this.labelDivs[k];
+      const i = this.nodeLabelIdx[k],
+        div = this.labelDivs[k];
       if (!div) continue;
       this.tmpVec3.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]);
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
-      if (behind || this._fold.foldMode) { div.style.display = 'none'; continue; }
+      if (behind || this._fold.foldMode) {
+        div.style.display = 'none';
+        continue;
+      }
       const focused = i === hoverI || i === selI;
       div.style.display = '';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
@@ -683,7 +829,7 @@ export class StarGraph {
       this.tmpVec3.project(this.camera);
       const behind = this.tmpVec3.z > 1;
       const hovered = gIdx === this.hoveredGalaxyIdx;
-      div.style.display = (!behind && this._fold.foldMode && !this._fold.enteredGalaxyId) ? '' : 'none';
+      div.style.display = !behind && this._fold.foldMode && !this._fold.enteredGalaxyId ? '' : 'none';
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       div.style.opacity = hovered ? '0.9' : '0.3';
@@ -694,7 +840,6 @@ export class StarGraph {
   }
 
   // ── Blast ────────────────────────────────────────────────
-
 
   private _flushOverrideAttrs(): void {
     if (this.nodeGlowsPoints?.geometry.attributes['override']) {
@@ -708,15 +853,21 @@ export class StarGraph {
   // ── Focus ────────────────────────────────────────────────
 
   private flyToNode(idx: number): void {
-    const px = this.nodePositions[idx * 3], py = this.nodePositions[idx * 3 + 1], pz = this.nodePositions[idx * 3 + 2];
+    const px = this.nodePositions[idx * 3],
+      py = this.nodePositions[idx * 3 + 1],
+      pz = this.nodePositions[idx * 3 + 2];
     const dist = 30 + (this.deg[idx] || 0) * 4;
     this._planFlight(new THREE.Vector3(px, py, pz), dist);
-    this.focusNodeIdx = idx; this.focusFlash = 1;
+    this.focusNodeIdx = idx;
+    this.focusFlash = 1;
   }
 
   // ponytail: 保持当前视线方向飞向 target，不横穿场景；delayMs>0 去抖，连击只飞最后一次
   private _planFlight(targetPos: THREE.Vector3, dist: number, delayMs = 150): void {
-    if (this._flyDebounce) { clearTimeout(this._flyDebounce); this._flyDebounce = null; }
+    if (this._flyDebounce) {
+      clearTimeout(this._flyDebounce);
+      this._flyDebounce = null;
+    }
     const run = () => {
       const dir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
       if (dir.lengthSq() < 1e-4) dir.set(0.5, 0.4, 0.7);
@@ -725,7 +876,8 @@ export class StarGraph {
       this._focusLookTarget.copy(targetPos);
       this.focusStartCam.copy(this.camera.position);
       this.focusStartLook.copy(this.controls.target);
-      this.focusActive = true; this.focusProgress = 0;
+      this.focusActive = true;
+      this.focusProgress = 0;
       this._focusStartTime = performance.now();
     };
     if (delayMs > 0 && !this._userInteracting) {
@@ -740,11 +892,17 @@ export class StarGraph {
   /** Reset camera to the default overview position with smooth animation. */
   resetCamera(): void {
     if (this._initCamPos.lengthSq() < 1) return; // not initialized
-    if (this._flyDebounce) { clearTimeout(this._flyDebounce); this._flyDebounce = null; }
+    if (this._flyDebounce) {
+      clearTimeout(this._flyDebounce);
+      this._flyDebounce = null;
+    }
     this.focusStartCam.copy(this.camera.position);
     this.focusStartLook.copy(this.controls.target);
     this.focusTarget.copy(this._initCamPos);
-    this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
+    this.focusActive = true;
+    this.focusProgress = 0;
+    this.focusNodeIdx = -1;
+    this.focusFlash = 0;
     this._focusStartTime = performance.now();
     this._resettingCamera = true;
   }
@@ -770,11 +928,16 @@ export class StarGraph {
     // If fold mode is on, enter that galaxy instead of flying to node
     if (this._fold.foldMode) {
       const cid = this.nodeCommMap.get(idx);
-      if (cid) { this.enterGalaxy(cid); return true; }
+      if (cid) {
+        this.enterGalaxy(cid);
+        return true;
+      }
       // Orphan node — can't enter, just fly
-      this.flyToNode(idx); return true;
+      this.flyToNode(idx);
+      return true;
     }
-    this.flyToNode(idx); return true;
+    this.flyToNode(idx);
+    return true;
   }
 
   // ── File highlight (文件树 → 星图联动) ────────────────────
@@ -875,7 +1038,7 @@ export class StarGraph {
       return k === filter;
     };
     for (let i = 0; i < this._nodeCount; i++) {
-      const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string);
+      const kind = (this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string;
       const hit = matches(kind);
       this._overrideFlags[i] = hit ? 0 : 1; // matching=let shader animate, non-matching=CPU freeze at alpha 0
       if (hit) {
@@ -892,15 +1055,15 @@ export class StarGraph {
   }
 
   private _updateLegendActive(activeEdge: string | null, activeNode: string | null = null): void {
-    this.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach(row => {
+    this.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach((row) => {
       const et = row.dataset['edgeType'] || '';
       row.classList.toggle('active', activeEdge !== null && et === activeEdge);
-      row.style.opacity = activeEdge === null ? '1' : (et === activeEdge ? '1' : '0.35');
+      row.style.opacity = activeEdge === null ? '1' : et === activeEdge ? '1' : '0.35';
     });
-    this.legendEl.querySelectorAll<HTMLElement>('.legend-node-row').forEach(row => {
+    this.legendEl.querySelectorAll<HTMLElement>('.legend-node-row').forEach((row) => {
       const nk = row.dataset['nodeFilter'] || '';
       row.classList.toggle('active', activeNode !== null && nk === activeNode);
-      row.style.opacity = activeNode === null ? '1' : (nk === activeNode ? '1' : '0.35');
+      row.style.opacity = activeNode === null ? '1' : nk === activeNode ? '1' : '0.35';
     });
   }
 
@@ -910,7 +1073,7 @@ export class StarGraph {
   // ── Node scale mode ──────────────────────────────────────
 
   private getNodeBaseScale(i: number): number {
-    const val = this.scaleMode === 'degree' ? this.deg[i] : (this.l34Count[i] || 0);
+    const val = this.scaleMode === 'degree' ? this.deg[i] : this.l34Count[i] || 0;
     const maxVal = this.scaleMode === 'degree' ? this.maxDeg : Math.max(1, ...this.l34Count);
     return 0.6 + (val / maxVal) * 2.8;
   }
@@ -929,22 +1092,27 @@ export class StarGraph {
     this._coreScales[i] = s;
     const m = new THREE.Matrix4();
     this.nodeCoresInstanced.getMatrixAt(i, m);
-    const p = new THREE.Vector3(); m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
+    const p = new THREE.Vector3();
+    m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
     m.compose(p, new THREE.Quaternion(), new THREE.Vector3(s, s, s));
     this.nodeCoresInstanced.setMatrixAt(i, m);
     this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
   }
 
   private _setCoreVisible(i: number, v: boolean): void {
-    this._setCoreScale(i, v ? (this._coreScales[i] || this._getCoreBaseScale(i)) : 0);
+    this._setCoreScale(i, v ? this._coreScales[i] || this._getCoreBaseScale(i) : 0);
   }
 
-  private _getCoreBaseScale(i: number): number { return this.getNodeBaseScale(i) * 0.35; }
+  private _getCoreBaseScale(i: number): number {
+    return this.getNodeBaseScale(i) * 0.35;
+  }
 
   private _setGlowRgba(i: number, r: number, g: number, b: number, a: number): void {
     if (!this.nodeGlowsPoints || i >= this._nodeCount) return;
-    this._glowRgba[i * 4] = r; this._glowRgba[i * 4 + 1] = g;
-    this._glowRgba[i * 4 + 2] = b; this._glowRgba[i * 4 + 3] = a;
+    this._glowRgba[i * 4] = r;
+    this._glowRgba[i * 4 + 1] = g;
+    this._glowRgba[i * 4 + 2] = b;
+    this._glowRgba[i * 4 + 3] = a;
     this.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
   }
 
@@ -962,8 +1130,10 @@ export class StarGraph {
 
   private _setGlow2Rgba(i: number, r: number, g: number, b: number, a: number): void {
     if (!this.nodeGlows2Points || i >= this._nodeCount) return;
-    this._glow2Rgba[i * 4] = r; this._glow2Rgba[i * 4 + 1] = g;
-    this._glow2Rgba[i * 4 + 2] = b; this._glow2Rgba[i * 4 + 3] = a;
+    this._glow2Rgba[i * 4] = r;
+    this._glow2Rgba[i * 4 + 1] = g;
+    this._glow2Rgba[i * 4 + 2] = b;
+    this._glow2Rgba[i * 4 + 3] = a;
     this.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
   }
 
@@ -1007,13 +1177,13 @@ export class StarGraph {
     if (!names.length || this._nodeCount === 0) return;
 
     const color = colorHex ? parseInt(colorHex.replace('#', ''), 16) : 0xf0b848; // default sol
-    const lowerNames = names.map(n => n.trim().toLowerCase());
+    const lowerNames = names.map((n) => n.trim().toLowerCase());
 
     for (let i = 0; i < this._nodeCount; i++) {
       const nodeName = (this.graphNodes[i].name || '').toLowerCase();
       const shortName = nodeName.split('.').pop() || '';
-      const found = lowerNames.some(q =>
-        nodeName === q || nodeName.startsWith(q) || nodeName.includes(q) || shortName === q
+      const found = lowerNames.some(
+        (q) => nodeName === q || nodeName.startsWith(q) || nodeName.includes(q) || shortName === q,
       );
       if (found) {
         this._agentHighlightIndices.add(i);
@@ -1074,8 +1244,7 @@ export class StarGraph {
     this._flushOverrideAttrs();
     // Restore edge opacities
     for (const lines of this.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
     }
     this._agentHighlightIndices.clear();
   }
@@ -1105,7 +1274,9 @@ export class StarGraph {
           const intensity = Math.min(1, 0.3 + (count - 2) * 0.12);
           if (i < this._nodeCount) {
             this._overrideFlags[i] = 1;
-            const r = 0.85, g = 0.2 + (1 - intensity) * 0.3, b = 0.2 + (1 - intensity) * 0.3;
+            const r = 0.85,
+              g = 0.2 + (1 - intensity) * 0.3,
+              b = 0.2 + (1 - intensity) * 0.3;
             this._setGlowRgba(i, r, g, b, 0.35 + intensity * 0.55);
           }
           break;
@@ -1140,13 +1311,13 @@ export class StarGraph {
 
     // Build set of matched node indices
     const lensIndices = new Set<number>();
-    const lowerNames = Array.from(nodeNames).map(n => n.trim().toLowerCase());
+    const lowerNames = Array.from(nodeNames).map((n) => n.trim().toLowerCase());
 
     for (let i = 0; i < this._nodeCount; i++) {
       const nodeName = (this.graphNodes[i].name || '').toLowerCase();
       const shortName = nodeName.split('.').pop() || '';
-      const found = lowerNames.some(q =>
-        nodeName === q || nodeName.startsWith(q) || nodeName.includes(q) || shortName === q
+      const found = lowerNames.some(
+        (q) => nodeName === q || nodeName.startsWith(q) || nodeName.includes(q) || shortName === q,
       );
       if (found) lensIndices.add(i);
     }
@@ -1187,14 +1358,13 @@ export class StarGraph {
 
     // Restore edge opacities
     for (const lines of this.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
     }
 
     this._clearTrailLine();
   }
 
-    // ── Agent Trail (retrospective mode) — thick glowing line + visited node highlight ──
+  // ── Agent Trail (retrospective mode) — thick glowing line + visited node highlight ──
 
   /** Activate retrospective trail mode: highlight all visited nodes, dim others
    *  to 30% (not 2.5% — still visible, just backgrounded), draw a thick glowing
@@ -1217,7 +1387,7 @@ export class StarGraph {
         this._setGlowAlpha(i, 0.85);
         this._setCoreVisible(i, true);
       } else {
-        this._setGlowAlpha(i, 0.30);
+        this._setGlowAlpha(i, 0.3);
       }
     }
     this._flushOverrideAttrs();
@@ -1249,14 +1419,15 @@ export class StarGraph {
     this._flushOverrideAttrs();
 
     for (const lines of this.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
     }
 
     this._clearTrailLine();
   }
 
-  get isTrailActive(): boolean { return this._trailActive; }
+  get isTrailActive(): boolean {
+    return this._trailActive;
+  }
 
   /** Draw the thick glowing trail line through visited nodes. Uses LineMaterial
    *  for variable width support. */
@@ -1280,26 +1451,30 @@ export class StarGraph {
     const verts: number[] = [];
     const colors: number[] = [];
     for (let k = 0; k < indices.length - 1; k++) {
-      const i = indices[k], j = indices[k + 1];
-      verts.push(pos[i*3], pos[i*3+1], pos[i*3+2], pos[j*3], pos[j*3+1], pos[j*3+2]);
+      const i = indices[k],
+        j = indices[k + 1];
+      verts.push(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2], pos[j * 3], pos[j * 3 + 1], pos[j * 3 + 2]);
       const t = (k + 1) / (indices.length - 1);
       const bright = 0.4 + t * 0.6;
-      colors.push(0.15*bright, 0.9*bright, bright, 0.15*bright, 0.9*bright, bright);
+      colors.push(0.15 * bright, 0.9 * bright, bright, 0.15 * bright, 0.9 * bright, bright);
     }
 
     const geo = new LineSegmentsGeometry();
     geo.setPositions(verts);
     geo.setColors(colors);
-    this._trailLine = new LineSegments2(geo, new LineMaterial({
-      color: 0x33ccff,
-      linewidth: 2.5,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      worldUnits: false,
-    }));
+    this._trailLine = new LineSegments2(
+      geo,
+      new LineMaterial({
+        color: 0x33ccff,
+        linewidth: 2.5,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        worldUnits: false,
+      }),
+    );
     this._trailLine.renderOrder = 999;
     this.nodeGroup.add(this._trailLine);
   }
@@ -1311,7 +1486,7 @@ export class StarGraph {
       if (this._trailLine.geometry) this._trailLine.geometry.dispose();
       const mat = this._trailLine.material;
       if (mat) {
-        if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
         else mat.dispose();
       }
       this._trailLine = null;
@@ -1322,27 +1497,33 @@ export class StarGraph {
   private _findNodeIndexByName(query: string): number {
     const q = query.trim().toLowerCase();
     if (!q || this._nodeCount === 0) return -1;
-    let idx = this.graphNodes.findIndex(n => n.name.toLowerCase() === q);
-    if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
-    if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
+    let idx = this.graphNodes.findIndex((n) => n.name.toLowerCase() === q);
+    if (idx < 0) idx = this.graphNodes.findIndex((n) => n.name.toLowerCase().startsWith(q));
+    if (idx < 0) idx = this.graphNodes.findIndex((n) => n.name.toLowerCase().includes(q));
     return idx;
   }
 
   /** Fly camera to the centroid of a set of node indices. */
   private _flyToCentroid(indices: Set<number>): void {
     if (indices.size === 0) return;
-    let cx = 0, cy = 0, cz = 0;
+    let cx = 0,
+      cy = 0,
+      cz = 0;
     for (const i of indices) {
       cx += this.nodePositions[i * 3];
       cy += this.nodePositions[i * 3 + 1];
       cz += this.nodePositions[i * 3 + 2];
     }
     const n = indices.size;
-    const mx = cx / n, my = cy / n, mz = cz / n;
+    const mx = cx / n,
+      my = cy / n,
+      mz = cz / n;
     // ponytail: 用包围盒半径算自适应距离，密集星团不贴脸、稀疏区域不偏远
     let r = 0;
     for (const i of indices) {
-      const dx = this.nodePositions[i * 3] - mx, dy = this.nodePositions[i * 3 + 1] - my, dz = this.nodePositions[i * 3 + 2] - mz;
+      const dx = this.nodePositions[i * 3] - mx,
+        dy = this.nodePositions[i * 3 + 1] - my,
+        dz = this.nodePositions[i * 3 + 2] - mz;
       r = Math.max(r, Math.sqrt(dx * dx + dy * dy + dz * dz));
     }
     this._planFlight(new THREE.Vector3(mx, my, mz), Math.max(40, r * 3.2));
@@ -1382,26 +1563,45 @@ export class StarGraph {
 
     // Labels: hide non-highlighted
     for (let k = 0; k < this.nodeLabelIdx.length; k++) {
-      this.labelDivs[k].style.display = (!hl || idxs.has(this.nodeLabelIdx[k])) ? '' : 'none';
+      this.labelDivs[k].style.display = !hl || idxs.has(this.nodeLabelIdx[k]) ? '' : 'none';
     }
-
   }
 
   // ══════════════════════════════════════════════════════════
   // Community / Galaxy fold overlay — delegated to GraphFold
   // ══════════════════════════════════════════════════════════
 
-  get isFolded(): boolean { return this._fold.isFolded; }
-  get isInsideGalaxy(): boolean { return this._fold.isInsideGalaxy; }
-  get communityCount(): number { return this._fold.communityCount; }
+  get isFolded(): boolean {
+    return this._fold.isFolded;
+  }
+  get isInsideGalaxy(): boolean {
+    return this._fold.isInsideGalaxy;
+  }
+  get communityCount(): number {
+    return this._fold.communityCount;
+  }
 
-  setFoldMode(on: boolean): void { this._fold.setFoldMode(on); }
-  toggleFold(): void { this._fold.toggleFold(); }
-  enterGalaxy(galaxyId: string): void { this._fold.enterGalaxy(galaxyId); }
-  exitGalaxy(): void { this._fold.exitGalaxy(); }
-  enterSubCommunity(subCommId: string): void { this._fold.enterSubCommunity(subCommId); }
-  exitSubCommunity(): void { this._fold.exitSubCommunity(); }
-  showGalaxyLabel(gm: { id: string; label: string; centroid: THREE.Vector3 } | undefined): void { this._fold.showGalaxyLabel(gm); }
+  setFoldMode(on: boolean): void {
+    this._fold.setFoldMode(on);
+  }
+  toggleFold(): void {
+    this._fold.toggleFold();
+  }
+  enterGalaxy(galaxyId: string): void {
+    this._fold.enterGalaxy(galaxyId);
+  }
+  exitGalaxy(): void {
+    this._fold.exitGalaxy();
+  }
+  enterSubCommunity(subCommId: string): void {
+    this._fold.enterSubCommunity(subCommId);
+  }
+  exitSubCommunity(): void {
+    this._fold.exitSubCommunity();
+  }
+  showGalaxyLabel(gm: { id: string; label: string; centroid: THREE.Vector3 } | undefined): void {
+    this._fold.showGalaxyLabel(gm);
+  }
 
   // ponytail: 总览(相机距 target > graphRadius*2.2)关 bloom 防边密集叠加区被 bloom 扩散成雾;
   // 聚焦(< graphRadius*1.6)开 bloom 让 hover/选中节点发光鲜明。滞回 30 帧防阈值抖动回弹。
@@ -1411,7 +1611,10 @@ export class StarGraph {
     const farThresh = this._graphRadius * 2.2;
     const nearThresh = this._graphRadius * 1.6;
     const hasBloom = this.composer.passes.indexOf(this.bloomPass) !== -1;
-    if (this._bloomHysteresis > 0) { this._bloomHysteresis--; return; }
+    if (this._bloomHysteresis > 0) {
+      this._bloomHysteresis--;
+      return;
+    }
     if (this._bloomFar) {
       if (dist < nearThresh) {
         this._bloomFar = false;
@@ -1430,13 +1633,19 @@ export class StarGraph {
   // ── Diff overlay (P4: 变更回看着色) ──────────────────────
 
   /** Apply diff coloring: green=added, red=removed, orange=modified. */
-  showDiff(diffJson: { added_nodes?: Array<{id:string}>; removed_nodes?: Array<{id:string}>; modified_nodes?: Array<{node_id:string}> }): void {
+  showDiff(diffJson: {
+    added_nodes?: Array<{ id: string }>;
+    removed_nodes?: Array<{ id: string }>;
+    modified_nodes?: Array<{ node_id: string }>;
+  }): void {
     this.diffActive = true;
-    this.diffAddedIds = new Set((diffJson.added_nodes || []).map(n => n.id));
-    this.diffRemovedIds = new Set((diffJson.removed_nodes || []).map(n => n.id));
-    this.diffModifiedIds = new Set((diffJson.modified_nodes || []).map(n => n.node_id));
+    this.diffAddedIds = new Set((diffJson.added_nodes || []).map((n) => n.id));
+    this.diffRemovedIds = new Set((diffJson.removed_nodes || []).map((n) => n.id));
+    this.diffModifiedIds = new Set((diffJson.modified_nodes || []).map((n) => n.node_id));
 
-    const GREEN = 0x44dd44, RED = 0xee4444, ORANGE = 0xf0a020;
+    const GREEN = 0x44dd44,
+      RED = 0xee4444,
+      ORANGE = 0xf0a020;
 
     for (let i = 0; i < this._nodeCount; i++) {
       if (!this.graphNodes[i]) continue;
@@ -1496,8 +1705,12 @@ export class StarGraph {
     this._flushOverrideAttrs();
   }
 
-  get hasDiff(): boolean { return this.diffActive; }
-  get hasGraph(): boolean { return this._nodeCount > 0; }
+  get hasDiff(): boolean {
+    return this.diffActive;
+  }
+  get hasGraph(): boolean {
+    return this._nodeCount > 0;
+  }
 
   // ══════════════════════════════════════════════════════════
   // Incremental graph update — apply diff without full re-render
@@ -1556,7 +1769,10 @@ export class StarGraph {
     for (let i = 0; i < oldCount; i++) {
       oldInst.getMatrixAt(i, _m);
       newInst.setMatrixAt(i, _m);
-      if (oldInst.instanceColor) { oldInst.getColorAt(i, _c); newInst.setColorAt(i, _c); }
+      if (oldInst.instanceColor) {
+        oldInst.getColorAt(i, _c);
+        newInst.setColorAt(i, _c);
+      }
     }
     newInst.instanceMatrix.needsUpdate = true;
     if (newInst.instanceColor) newInst.instanceColor.needsUpdate = true;
@@ -1580,7 +1796,8 @@ export class StarGraph {
     const glowPosArr = new Float32Array(newCapacity * 3);
     glowPosArr.set(oldGlowGeo.attributes['position'].array as Float32Array);
     const glow2PosArr = new Float32Array(newCapacity * 3);
-    if (this.nodeGlows2Points) glow2PosArr.set(this.nodeGlows2Points.geometry.attributes['position'].array as Float32Array);
+    if (this.nodeGlows2Points)
+      glow2PosArr.set(this.nodeGlows2Points.geometry.attributes['position'].array as Float32Array);
 
     const addAnimAttrs = (geo: THREE.BufferGeometry) => {
       geo.setAttribute('phase', new THREE.BufferAttribute(phaseArr, 1));
@@ -1625,8 +1842,10 @@ export class StarGraph {
   /** Append new nodes to existing buffers (capacity must be sufficient). */
   private _appendNodes(nodes: GraphNode[], fullGraph: GraphJSON, nodeIdxMap: Map<string, number>): void {
     // ponytail: 只取 level0 社区 — 与 _renderImpl 的 nodeCommMap 层级一致
-    const allComms = ((fullGraph as any).hierarchical_communities || (fullGraph as any).communities || []) as CommunityData[];
-    const comms = allComms.filter(c => !c.level || c.level === 0);
+    const allComms = ((fullGraph as any).hierarchical_communities ||
+      (fullGraph as any).communities ||
+      []) as CommunityData[];
+    const comms = allComms.filter((c) => !c.level || c.level === 0);
     const nodeComm = new Map<string, string>();
     for (const c of comms) for (const nid of c.node_ids) nodeComm.set(nid, c.id);
 
@@ -1637,18 +1856,38 @@ export class StarGraph {
       const cid = this.nodeCommMap.get(i);
       if (!cid) continue;
       let c = centroids.get(cid);
-      if (!c) { c = { x: 0, y: 0, z: 0, n: 0 }; centroids.set(cid, c); }
-      c.x += this.nodePositions[i * 3]; c.y += this.nodePositions[i * 3 + 1]; c.z += this.nodePositions[i * 3 + 2]; c.n++;
+      if (!c) {
+        c = { x: 0, y: 0, z: 0, n: 0 };
+        centroids.set(cid, c);
+      }
+      c.x += this.nodePositions[i * 3];
+      c.y += this.nodePositions[i * 3 + 1];
+      c.z += this.nodePositions[i * 3 + 2];
+      c.n++;
     }
-    for (const c of centroids.values()) { c.x /= c.n; c.y /= c.n; c.z /= c.n; }
+    for (const c of centroids.values()) {
+      c.x /= c.n;
+      c.y /= c.n;
+      c.z /= c.n;
+    }
 
     // Graph center fallback
-    let bcx = 0, bcy = 0, bcz = 0, bn = 0;
+    let bcx = 0,
+      bcy = 0,
+      bcz = 0,
+      bn = 0;
     for (let i = 0; i < this._nodeCount; i++) {
       if (this._deadIndices.has(i)) continue;
-      bcx += this.nodePositions[i * 3]; bcy += this.nodePositions[i * 3 + 1]; bcz += this.nodePositions[i * 3 + 2]; bn++;
+      bcx += this.nodePositions[i * 3];
+      bcy += this.nodePositions[i * 3 + 1];
+      bcz += this.nodePositions[i * 3 + 2];
+      bn++;
     }
-    if (bn > 0) { bcx /= bn; bcy /= bn; bcz /= bn; }
+    if (bn > 0) {
+      bcx /= bn;
+      bcy /= bn;
+      bcz /= bn;
+    }
 
     const _m = new THREE.Matrix4();
     const _v = new THREE.Vector3();
@@ -1677,9 +1916,14 @@ export class StarGraph {
 
       // Core
       this._coreScales[i] = 0.8 * 0.35;
-      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
-        _v.set(px, py, pz), _q, new THREE.Vector3(this._coreScales[i], this._coreScales[i], this._coreScales[i]),
-      ));
+      this.nodeCoresInstanced.setMatrixAt(
+        i,
+        _m.compose(
+          _v.set(px, py, pz),
+          _q,
+          new THREE.Vector3(this._coreScales[i], this._coreScales[i], this._coreScales[i]),
+        ),
+      );
       this._setCoreColor(i, coreColor);
       this.nodeCoreColors[i] = coreColor;
       this.nodeGlowColors[i] = glowColor;
@@ -1690,8 +1934,10 @@ export class StarGraph {
       (gAttr['position'].array as Float32Array)[i * 3] = px;
       (gAttr['position'].array as Float32Array)[i * 3 + 1] = py;
       (gAttr['position'].array as Float32Array)[i * 3 + 2] = pz;
-      this._glowRgba[i * 4] = gc.r; this._glowRgba[i * 4 + 1] = gc.g;
-      this._glowRgba[i * 4 + 2] = gc.b; this._glowRgba[i * 4 + 3] = 0.85;
+      this._glowRgba[i * 4] = gc.r;
+      this._glowRgba[i * 4 + 1] = gc.g;
+      this._glowRgba[i * 4 + 2] = gc.b;
+      this._glowRgba[i * 4 + 3] = 0.85;
       this._glowSizes[i] = 1.0 * 0.8; // ponytail: 新节点 deg=0, baseScale=0.8; _rebuildEdgeData 后不回填, 跟 core 对齐足够
       // Shared anim attrs (write once — both geometries share the same arrays)
       (gAttr['phase'].array as Float32Array)[i] = Math.random() * Math.PI * 2;
@@ -1709,8 +1955,10 @@ export class StarGraph {
         (g2Attr['position'].array as Float32Array)[i * 3] = px;
         (g2Attr['position'].array as Float32Array)[i * 3 + 1] = py;
         (g2Attr['position'].array as Float32Array)[i * 3 + 2] = pz;
-        this._glow2Rgba[i * 4] = gc.r; this._glow2Rgba[i * 4 + 1] = gc.g;
-        this._glow2Rgba[i * 4 + 2] = gc.b; this._glow2Rgba[i * 4 + 3] = 0.55;
+        this._glow2Rgba[i * 4] = gc.r;
+        this._glow2Rgba[i * 4 + 1] = gc.g;
+        this._glow2Rgba[i * 4 + 2] = gc.b;
+        this._glow2Rgba[i * 4 + 3] = 0.55;
         this._glow2Sizes[i] = 0.8 * 0.8; // ponytail: 同 inner glow, baseScale=0.8
       }
 
@@ -1747,9 +1995,11 @@ export class StarGraph {
       const t = nodeIdxMap.get(e.target);
       if (s === undefined || t === undefined || s === t) continue;
       if (this._deadIndices.has(s) || this._deadIndices.has(t)) continue;
-      deg[s]++; deg[t]++;
+      deg[s]++;
+      deg[t]++;
       eData.push({
-        s, t,
+        s,
+        t,
         couplingDepth: ((e as any).coupling_depth as number) || 0,
         edgeType: e.type || '',
         direction: (e as any).direction || '',
@@ -1764,11 +2014,18 @@ export class StarGraph {
     this.edgeIndexOf = Array.from({ length: this._nodeCount }, () => []);
     for (let ei = 0; ei < eData.length; ei++) {
       const { s, t } = eData[ei];
-      this.neighborMap[s].push(t); this.neighborMap[t].push(s);
-      this.edgeIndexOf[s].push(ei); this.edgeIndexOf[t].push(ei);
+      this.neighborMap[s].push(t);
+      this.neighborMap[t].push(s);
+      this.edgeIndexOf[s].push(ei);
+      this.edgeIndexOf[t].push(ei);
     }
     this.l34Count = new Array(this._nodeCount).fill(0);
-    for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
+    for (const e of eData) {
+      if (e.couplingDepth >= 3) {
+        this.l34Count[e.s]++;
+        this.l34Count[e.t]++;
+      }
+    }
 
     // Update mag/risk GPU attrs for all nodes
     const logMax = Math.log1p(this.maxDeg);
@@ -1781,8 +2038,14 @@ export class StarGraph {
         (gAttr['risk'].array as Float32Array)[i] = this.l34Count[i] || 0;
       }
     }
-    if (gAttr) { gAttr['mag'].needsUpdate = true; gAttr['risk'].needsUpdate = true; }
-    if (g2Attr) { g2Attr['mag'].needsUpdate = true; g2Attr['risk'].needsUpdate = true; }
+    if (gAttr) {
+      gAttr['mag'].needsUpdate = true;
+      gAttr['risk'].needsUpdate = true;
+    }
+    if (g2Attr) {
+      g2Attr['mag'].needsUpdate = true;
+      g2Attr['risk'].needsUpdate = true;
+    }
 
     this._disposeEdges();
     this.buildEdges(this.nodePositions, eData);
@@ -1796,7 +2059,10 @@ export class StarGraph {
    * Falls back to full render() if no existing graph.
    */
   async applyGraphDiff(diff: GraphDiffJson, fullGraph: GraphJSON): Promise<void> {
-    if (this._nodeCount === 0) { this.render(fullGraph); return; }
+    if (this._nodeCount === 0) {
+      this.render(fullGraph);
+      return;
+    }
 
     // Exit fold mode — incremental + fold is visually inconsistent
     if (this._fold.foldMode) this.setFoldMode(false);
@@ -1813,7 +2079,10 @@ export class StarGraph {
     // 1. Removed nodes → mark dead
     for (const rn of diff.removed_nodes) {
       const idx = nodeIdxMap.get(rn.id);
-      if (idx !== undefined) { this._markNodeDead(idx); nodeIdxMap.delete(rn.id); }
+      if (idx !== undefined) {
+        this._markNodeDead(idx);
+        nodeIdxMap.delete(rn.id);
+      }
     }
 
     // 2. Modified nodes → update kind/color
@@ -1853,7 +2122,7 @@ export class StarGraph {
 
     // 5. Collect neighbor indices for local layout relaxation
     for (const ni of newIndices) {
-      for (const nb of (this.neighborMap[ni] || [])) {
+      for (const nb of this.neighborMap[ni] || []) {
         if (!newIndices.has(nb)) neighborIndices.add(nb);
       }
     }
@@ -1863,7 +2132,7 @@ export class StarGraph {
     if (newIndices.size > 0) {
       const affected = new Set([...newIndices, ...neighborIndices]);
       // Build edge pairs from edgeDataList
-      const allPairs: [number, number][] = this.edgeDataList.map(e => [e.s, e.t]);
+      const allPairs: [number, number][] = this.edgeDataList.map((e) => [e.s, e.t]);
       try {
         await relaxNewNodes(
           this.nodePositions,
@@ -1883,22 +2152,43 @@ export class StarGraph {
     this._syncNodeCoreMatrices();
 
     // 8. Update communities from full graph
-    this.communities = ((fullGraph as any).hierarchical_communities || (fullGraph as any).communities || []) as CommunityData[];
+    this.communities = ((fullGraph as any).hierarchical_communities ||
+      (fullGraph as any).communities ||
+      []) as CommunityData[];
 
     // 9. Clear stale interaction state pointing to dead nodes
-    if (this.hoveredIdx >= 0 && this._deadIndices.has(this.hoveredIdx)) { this.hoveredIdx = -1; this.targetHoverScale = 0; }
-    if (this._tooltip.selectedIdx >= 0 && this._deadIndices.has(this._tooltip.selectedIdx)) this._tooltip.selectedIdx = -1;
-    if (this._analysis.blastSource >= 0 && this._deadIndices.has(this._analysis.blastSource)) { this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; }
-    if (this.focusNodeIdx >= 0 && this._deadIndices.has(this.focusNodeIdx)) { this.focusActive = false; this.focusNodeIdx = -1; }
-    if (this._analysis._pathSource >= 0 && this._deadIndices.has(this._analysis._pathSource)) { this._analysis._pathSource = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
-    if (this._analysis._pathTarget >= 0 && this._deadIndices.has(this._analysis._pathTarget)) { this._analysis._pathTarget = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear(); }
+    if (this.hoveredIdx >= 0 && this._deadIndices.has(this.hoveredIdx)) {
+      this.hoveredIdx = -1;
+      this.targetHoverScale = 0;
+    }
+    if (this._tooltip.selectedIdx >= 0 && this._deadIndices.has(this._tooltip.selectedIdx))
+      this._tooltip.selectedIdx = -1;
+    if (this._analysis.blastSource >= 0 && this._deadIndices.has(this._analysis.blastSource)) {
+      this._analysis.blastMode = false;
+      this._analysis.blastSource = -1;
+      this._analysis.blastDistances = [];
+    }
+    if (this.focusNodeIdx >= 0 && this._deadIndices.has(this.focusNodeIdx)) {
+      this.focusActive = false;
+      this.focusNodeIdx = -1;
+    }
+    if (this._analysis._pathSource >= 0 && this._deadIndices.has(this._analysis._pathSource)) {
+      this._analysis._pathSource = -1;
+      this._analysis._pathNodes.clear();
+      this._analysis._pathEdges.clear();
+    }
+    if (this._analysis._pathTarget >= 0 && this._deadIndices.has(this._analysis._pathTarget)) {
+      this._analysis._pathTarget = -1;
+      this._analysis._pathNodes.clear();
+      this._analysis._pathEdges.clear();
+    }
 
     // 10. Re-apply diff overlay if active (new nodes might be in the diff set)
     if (this.diffActive && this.diffAddedIds.size + this.diffRemovedIds.size + this.diffModifiedIds.size > 0) {
       const saved = {
-        added_nodes: [...this.diffAddedIds].map(id => ({ id })),
-        removed_nodes: [...this.diffRemovedIds].map(id => ({ id })),
-        modified_nodes: [...this.diffModifiedIds].map(id => ({ node_id: id })),
+        added_nodes: [...this.diffAddedIds].map((id) => ({ id })),
+        removed_nodes: [...this.diffRemovedIds].map((id) => ({ id })),
+        modified_nodes: [...this.diffModifiedIds].map((id) => ({ node_id: id })),
       };
       this.clearDiff();
       this.showDiff(saved);
@@ -1923,12 +2213,12 @@ export class StarGraph {
     const g2Attr = this.nodeGlows2Points?.geometry.attributes;
     for (const i of indices) {
       if (i >= this._nodeCount) continue;
-      const px = this.nodePositions[i * 3], py = this.nodePositions[i * 3 + 1], pz = this.nodePositions[i * 3 + 2];
+      const px = this.nodePositions[i * 3],
+        py = this.nodePositions[i * 3 + 1],
+        pz = this.nodePositions[i * 3 + 2];
       // Core matrix
       const s = this._coreScales[i] || 0.28;
-      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
-        _v.set(px, py, pz), _q, new THREE.Vector3(s, s, s),
-      ));
+      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(_v.set(px, py, pz), _q, new THREE.Vector3(s, s, s)));
       // Glow point positions
       if (gAttr) {
         (gAttr['position'].array as Float32Array)[i * 3] = px;
@@ -1954,10 +2244,14 @@ export class StarGraph {
     for (let i = 0; i < this._nodeCount; i++) {
       if (this._deadIndices.has(i)) continue;
       const s = this._coreScales[i] || 0.28;
-      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
-        _v.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]),
-        _q, new THREE.Vector3(s, s, s),
-      ));
+      this.nodeCoresInstanced.setMatrixAt(
+        i,
+        _m.compose(
+          _v.set(this.nodePositions[i * 3], this.nodePositions[i * 3 + 1], this.nodePositions[i * 3 + 2]),
+          _q,
+          new THREE.Vector3(s, s, s),
+        ),
+      );
     }
     this.nodeCoresInstanced.count = this._nodeCount;
     this.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
@@ -1970,24 +2264,12 @@ export class StarGraph {
   //   Layer 2 (inside):   single constellation — member nodes + internal edges lit
   // ══════════════════════════════════════════════════════════
 
-
-
-
-
-
-
-
-
-
-
   /** Enter a galaxy: hide clouds, reveal its constellation. */
-
-
-
 
   /** Render sub-community clouds — clickable "mini galaxies" inside a parent galaxy. */
   private _gaussRand(): number {
-    let u = 0, v = 0;
+    let u = 0,
+      v = 0;
     while (u === 0) u = Math.random();
     while (v === 0) v = Math.random();
     return Math.min(3, Math.max(-3, Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v))) / 3;
@@ -2014,13 +2296,14 @@ export class StarGraph {
       }
       const base = this.getNodeBaseScale(this.focusNodeIdx);
       const flashScale = 1 + Math.sin(t * Math.PI * 2) * 0.5 * this.focusFlash;
-      
+
       this._setGlowAlpha(this.focusNodeIdx, 0.55 + 0.45 * this.focusFlash);
       this._setCoreScale(this.focusNodeIdx, base * flashScale);
       this.focusFlash *= 0.97;
     }
     if (t >= 1) {
-      this.focusActive = false; this._resettingCamera = false;
+      this.focusActive = false;
+      this._resettingCamera = false;
       if (this._fold.enteredGalaxyId === null && !this._resettingCamera && this.focusNodeIdx >= 0) {
         setTimeout(() => this.restoreFocusNode(), 800);
       }
@@ -2032,7 +2315,7 @@ export class StarGraph {
 
   private restoreFocusNode(): void {
     if (this.focusNodeIdx < 0 || this.focusNodeIdx >= this._nodeCount) return;
-    
+
     this._setGlowAlpha(this.focusNodeIdx, 0.55);
     this._setCoreScale(this.focusNodeIdx, this._savedFocusCoreScale || 1);
     this._savedFocusGlowScale = 0;
@@ -2048,14 +2331,20 @@ export class StarGraph {
     } catch (e) {
       console.error('[StarGraph] render crashed:', e);
       this._renderInProgress = false;
-      try { this.clearGraph(); } catch { /* best effort */ }
+      try {
+        this.clearGraph();
+      } catch {
+        /* best effort */
+      }
       this.updateStatus(0, 0);
     }
   }
 
   private async _renderImpl(graph: GraphJSON): Promise<void> {
     // Cancel any in-flight layout from a previous render
-    if (this._layoutAbort) { this._layoutAbort.abort(); }
+    if (this._layoutAbort) {
+      this._layoutAbort.abort();
+    }
     this._layoutAbort = new AbortController();
     // Block animation loop during scene rebuild — prevents access to
     // disposed GPU resources which causes ghost artifacts and cold-start
@@ -2064,7 +2353,11 @@ export class StarGraph {
     this.clearGraph();
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
-    if (nodes.length === 0) { this.updateStatus(0, 0); this._renderInProgress = false; return; }
+    if (nodes.length === 0) {
+      this.updateStatus(0, 0);
+      this._renderInProgress = false;
+      return;
+    }
     this.graphNodes = nodes;
 
     const nodeIdx = new Map<string, number>();
@@ -2081,24 +2374,38 @@ export class StarGraph {
       nodeFile.set(i, filePath);
     }
     for (const e of edges) {
-      const s = nodeIdx.get(e.source), t = nodeIdx.get(e.target);
+      const s = nodeIdx.get(e.source),
+        t = nodeIdx.get(e.target);
       if (s !== undefined && t !== undefined && s !== t) {
-        pairs.push([s, t]); deg[s]++; deg[t]++;
+        pairs.push([s, t]);
+        deg[s]++;
+        deg[t]++;
         const crossFile = nodeFile.get(s) !== nodeFile.get(t);
-        eData.push({ s, t, couplingDepth: ((e as any).coupling_depth as number) || 0, edgeType: e.type || '', direction: (e as any).direction || '', crossFile });
+        eData.push({
+          s,
+          t,
+          couplingDepth: ((e as any).coupling_depth as number) || 0,
+          edgeType: e.type || '',
+          direction: (e as any).direction || '',
+          crossFile,
+        });
       }
     }
     // Debug: count cross-file edges
-    const crossFileCount = eData.filter(e => e.crossFile).length;
+    const crossFileCount = eData.filter((e) => e.crossFile).length;
     console.log(`[DEBUG] Total edges: ${eData.length}, cross-file edges: ${crossFileCount}`);
-    this.deg = deg; this.edgeDataList = eData; this.maxDeg = Math.max(...deg, 1);
+    this.deg = deg;
+    this.edgeDataList = eData;
+    this.maxDeg = Math.max(...deg, 1);
 
     this.neighborMap = Array.from({ length: nodes.length }, () => []);
     this.edgeIndexOf = Array.from({ length: nodes.length }, () => []);
     for (let ei = 0; ei < eData.length; ei++) {
       const { s, t } = eData[ei];
-      this.neighborMap[s].push(t); this.neighborMap[t].push(s);
-      this.edgeIndexOf[s].push(ei); this.edgeIndexOf[t].push(ei);
+      this.neighborMap[s].push(t);
+      this.neighborMap[t].push(s);
+      this.edgeIndexOf[s].push(ei);
+      this.edgeIndexOf[t].push(ei);
     }
 
     // ── Parse communities & build node→community index ──────
@@ -2106,11 +2413,16 @@ export class StarGraph {
     this.communities = ((graph as any).hierarchical_communities || (graph as any).communities || []) as CommunityData[];
     this.nodeCommMap.clear();
     // Debug: log community data
-    const level0Comms = this.communities.filter(c => !c.level || c.level === 0);
-    const level1Comms = this.communities.filter(c => c.level === 1);
-    console.log(`[DEBUG] Total communities: ${this.communities.length}, Level 0: ${level0Comms.length}, Level 1: ${level1Comms.length}`);
+    const level0Comms = this.communities.filter((c) => !c.level || c.level === 0);
+    const level1Comms = this.communities.filter((c) => c.level === 1);
+    console.log(
+      `[DEBUG] Total communities: ${this.communities.length}, Level 0: ${level0Comms.length}, Level 1: ${level1Comms.length}`,
+    );
     if (level1Comms.length > 0) {
-      console.log(`[DEBUG] Level 1 communities:`, level1Comms.map(c => ({ id: c.id, parent_id: c.parent_id, node_count: c.node_ids.length })));
+      console.log(
+        `[DEBUG] Level 1 communities:`,
+        level1Comms.map((c) => ({ id: c.id, parent_id: c.parent_id, node_count: c.node_ids.length })),
+      );
     }
 
     // ponytail: layout + galaxyMeta 都用 level0 — 质心/ring/cloud/折叠视图统一层级,
@@ -2137,7 +2449,13 @@ export class StarGraph {
         if (idx !== undefined) members.push(idx);
       }
       if (members.length >= GraphFold.MIN_GALAXY_SIZE) {
-        this._fold.galaxyMeta.push({ id: comm.id, label: comm.label, centroid: new THREE.Vector3(), memberIndices: members, radius: 0 });
+        this._fold.galaxyMeta.push({
+          id: comm.id,
+          label: comm.label,
+          centroid: new THREE.Vector3(),
+          memberIndices: members,
+          radius: 0,
+        });
       } else if (members.length > 0 && members.length < GraphFold.MIN_GALAXY_SIZE) {
         skippedSingletons += members.length;
       }
@@ -2146,7 +2464,12 @@ export class StarGraph {
     this._fold.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
 
     this.l34Count = new Array(nodes.length).fill(0);
-    for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
+    for (const e of eData) {
+      if (e.couplingDepth >= 3) {
+        this.l34Count[e.s]++;
+        this.l34Count[e.t]++;
+      }
+    }
 
     // ── Force-directed layout: GPU compute (WebGPU) → CPU fallback ──
     const shellRadius = Math.cbrt(nodes.length) * 14;
@@ -2165,12 +2488,14 @@ export class StarGraph {
 
     // Fallback: if Louvain gave us ≤1 community, group by top-level directory
     if (commStrIds.length <= 1) {
-      console.warn(`[StarGraph] Louvain only found ${commStrIds.length} communities — falling back to directory-based grouping`);
+      console.warn(
+        `[StarGraph] Louvain only found ${commStrIds.length} communities — falling back to directory-based grouping`,
+      );
       const dirGroups = new Map<string, number[]>();
       for (let i = 0; i < nodes.length; i++) {
         const loc = nodes[i].location || '';
         // Extract top-level dir: "src/foo/bar.py" → "src", "engine/src/main.rs" → "engine"
-        const topDir = loc.replace(/^[\/\\]+/, '').split(/[\/\\]/)[0] || '(root)';
+        const topDir = loc.replace(/^[/\\]+/, '').split(/[/\\]/)[0] || '(root)';
         if (!dirGroups.has(topDir)) dirGroups.set(topDir, []);
         dirGroups.get(topDir)!.push(i);
       }
@@ -2185,7 +2510,9 @@ export class StarGraph {
         layoutSource = 'CPU(dirs)';
         console.warn(`[StarGraph] Using ${dirGroups.size} directory-based communities for layout`);
       } else {
-        console.warn(`[StarGraph] Even directory grouping only found ${dirGroups.size} group — falling back to uniform`);
+        console.warn(
+          `[StarGraph] Even directory grouping only found ${dirGroups.size} group — falling back to uniform`,
+        );
       }
     } else {
       console.warn(`[StarGraph] Using ${commStrIds.length} Louvain communities for layout`);
@@ -2193,20 +2520,29 @@ export class StarGraph {
     }
 
     let rawPos: Float32Array;
-    const effGroups = new Set(nodeCommArr.filter(c => c >= 0));
+    const effGroups = new Set(nodeCommArr.filter((c) => c >= 0));
     // GPU path: N-body for macro structure, spiral for micro
     if (gpuLayout.ready) {
       // ── GPU N-body: macro structure from edge forces, spiral for micro ──
       const initPos = fibonacciSphere(nodes.length, shellRadius);
-      const gpuResult = await gpuLayout.compute(nodes.length, pairs, initPos, {
-        n: nodes.length,
-        rep: 600, att: 0.018, damp: 0.72,
-        REP_CAP: shellRadius * 8,
-        ATT_CAP: shellRadius,
-        VEL_CAP: shellRadius * 0.25,
-        shellRadius, sp,
-        originStr: 0.0004,
-      }, maxIter);
+      const gpuResult = await gpuLayout.compute(
+        nodes.length,
+        pairs,
+        initPos,
+        {
+          n: nodes.length,
+          rep: 600,
+          att: 0.018,
+          damp: 0.72,
+          REP_CAP: shellRadius * 8,
+          ATT_CAP: shellRadius,
+          VEL_CAP: shellRadius * 0.25,
+          shellRadius,
+          sp,
+          originStr: 0.0004,
+        },
+        maxIter,
+      );
       if (gpuResult) {
         rawPos = gpuResult;
         layoutSource = 'GPU';
@@ -2228,23 +2564,39 @@ export class StarGraph {
     // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
-      if (!isFinite(rawPos[i])) { rawPos[i] = 0; fixed++; }
+      if (!isFinite(rawPos[i])) {
+        rawPos[i] = 0;
+        fixed++;
+      }
     }
     if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components`);
     // ── Bounding-box centering (immune to cluster-size bias) ──
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
     for (let i = 0; i < nodes.length; i++) {
-      const x = rawPos[i * 3], y = rawPos[i * 3 + 1], z = rawPos[i * 3 + 2];
+      const x = rawPos[i * 3],
+        y = rawPos[i * 3 + 1],
+        z = rawPos[i * 3 + 2];
       if (isFinite(x) && isFinite(y) && isFinite(z)) {
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
       }
     }
-    const bbcx = (minX + maxX) / 2, bbcy = (minY + maxY) / 2, bbcz = (minZ + maxZ) / 2;
+    const bbcx = (minX + maxX) / 2,
+      bbcy = (minY + maxY) / 2,
+      bbcz = (minZ + maxZ) / 2;
     for (let i = 0; i < nodes.length; i++) {
-      rawPos[i * 3] -= bbcx; rawPos[i * 3 + 1] -= bbcy; rawPos[i * 3 + 2] -= bbcz;
+      rawPos[i * 3] -= bbcx;
+      rawPos[i * 3 + 1] -= bbcy;
+      rawPos[i * 3 + 2] -= bbcz;
     }
     this.nodePositions = rawPos;
 
@@ -2260,12 +2612,12 @@ export class StarGraph {
     this._graphRadius = radius; // graph spatial scale — used for camera zoom range only
 
     // FOV-based camera distance — fills frame regardless of project size
-    const fovRad = this.camera.fov * Math.PI / 180;
+    const fovRad = (this.camera.fov * Math.PI) / 180;
     const aspect = this.container.clientWidth / Math.max(1, this.container.clientHeight);
-    const camDist = (radius / Math.tan(fovRad / 2)) * 0.4 / Math.min(1, aspect);
+    const camDist = ((radius / Math.tan(fovRad / 2)) * 0.4) / Math.min(1, aspect);
 
     const shellR = Math.cbrt(nodes.length) * 14;
-    const isoCount = deg.filter(d => d === 0).length;
+    const isoCount = deg.filter((d) => d === 0).length;
     this._diagMsg = `${layoutSource} shellR≈${shellR | 0} radius=${radius | 0} absMax=${absMax | 0} cam=${camDist | 0} iso=${isoCount}/${nodes.length} NaNfix=${fixed}`;
 
     // ── Camera zoom range — wide open, no LOD clamping ──
@@ -2282,7 +2634,8 @@ export class StarGraph {
     this._initCamPos.copy(this.camera.position);
     this._initCamTarget.set(0, 0, 0);
     this.camera.aspect = aspect;
-    this.camera.updateProjectionMatrix(); this.controls.update();
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
 
     // (standard mode: no bloom — bloom is full-mode only)
 
@@ -2294,11 +2647,7 @@ export class StarGraph {
     this._glowRgba = new Float32Array(nodes.length * 4);
     this._glow2Rgba = true ? new Float32Array(nodes.length * 4) : new Float32Array(0);
 
-    this.nodeCoresInstanced = new THREE.InstancedMesh(
-      this.sphereGeo,
-      this._makeCoreFresnelMaterial(),
-      nodes.length,
-    );
+    this.nodeCoresInstanced = new THREE.InstancedMesh(this.sphereGeo, this._makeCoreFresnelMaterial(), nodes.length);
     this.nodeCoresInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.nodeCoresInstanced.count = 0;
     // ponytail: 10K+ instances spread across large volume → bounding sphere covers
@@ -2326,16 +2675,24 @@ export class StarGraph {
 
     // ── Compute galaxy centroids + radii from layout ──────────
     for (const gm of this._fold.galaxyMeta) {
-      let sx = 0, sy = 0, sz = 0;
+      let sx = 0,
+        sy = 0,
+        sz = 0;
       for (const mi of gm.memberIndices) {
-        sx += rawPos[mi * 3]; sy += rawPos[mi * 3 + 1]; sz += rawPos[mi * 3 + 2];
+        sx += rawPos[mi * 3];
+        sy += rawPos[mi * 3 + 1];
+        sz += rawPos[mi * 3 + 2];
       }
-      const cx = sx / gm.memberIndices.length, cy = sy / gm.memberIndices.length, cz = sz / gm.memberIndices.length;
+      const cx = sx / gm.memberIndices.length,
+        cy = sy / gm.memberIndices.length,
+        cz = sz / gm.memberIndices.length;
       gm.centroid.set(cx, cy, cz);
       // p90 radius
       const dists: number[] = [];
       for (const mi of gm.memberIndices) {
-        const dx = rawPos[mi * 3] - cx, dy = rawPos[mi * 3 + 1] - cy, dz = rawPos[mi * 3 + 2] - cz;
+        const dx = rawPos[mi * 3] - cx,
+          dy = rawPos[mi * 3 + 1] - cy,
+          dz = rawPos[mi * 3 + 2] - cz;
         dists.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
       }
       dists.sort((a, b) => a - b);
@@ -2444,7 +2801,9 @@ export class StarGraph {
         this.nodeCoresInstanced.boundingSphere = null;
         this.labelsContainer.style.transition = 'opacity 0.4s ease-in';
         this.labelsContainer.style.opacity = '1';
-        setTimeout(() => { this.labelsContainer.style.transition = ''; }, 500);
+        setTimeout(() => {
+          this.labelsContainer.style.transition = '';
+        }, 500);
         // ponytail: unblock animation loop now that progressive reveal is done.
         // _renderInProgress was kept true since _renderImpl to prevent the
         // animation loop from rendering partial state (ghost dots).
@@ -2493,35 +2852,58 @@ export class StarGraph {
     }
     while (this.edgeGroup.children.length) this.edgeGroup.remove(this.edgeGroup.children[0]);
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
-    while (this._fold.commFoldGroup.children.length) this._fold.commFoldGroup.remove(this._fold.commFoldGroup.children[0]);
+    while (this._fold.commFoldGroup.children.length)
+      this._fold.commFoldGroup.remove(this._fold.commFoldGroup.children[0]);
 
     // Legacy: edgeLineGroups array may hold references already disposed above — clear.
     this.edgeLineGroups = [];
     this.labelsContainer.innerHTML = '';
-    this.labelDivs = []; this.nodeLabelIdx = [];
-    this.nodeGlowColors = []; this.nodeCoreColors = []; this._nodeBaseHSL = [];
-    this._fold.galaxyClouds = []; this._fold.galaxyGlows = [];
-    this._fold.galaxyMeta = []; this._fold.communityRingGroup.clear(); this._fold._communityGlowSprites = []; this._fold._hoveredCommunityIdx = -1;
-    this._fold.foldMode = false; this._fold.enteredGalaxyId = null; this._fold.enteredSubCommunityId = null;
+    this.labelDivs = [];
+    this.nodeLabelIdx = [];
+    this.nodeGlowColors = [];
+    this.nodeCoreColors = [];
+    this._nodeBaseHSL = [];
+    this._fold.galaxyClouds = [];
+    this._fold.galaxyGlows = [];
+    this._fold.galaxyMeta = [];
+    this._fold.communityRingGroup.clear();
+    this._fold._communityGlowSprites = [];
+    this._fold._hoveredCommunityIdx = -1;
+    this._fold.foldMode = false;
+    this._fold.enteredGalaxyId = null;
+    this._fold.enteredSubCommunityId = null;
     this._fold._drillStack = [];
     this._fold._subCommByNodeIdx.clear();
     this._fold._savedGalaxyMeta = null;
     this._fold.hideGalaxyTitle();
-    this._analysis._pathSource = -1; this._analysis._pathTarget = -1; this._analysis._pathNodes.clear(); this._analysis._pathEdges.clear();
-    this._analysis._shiftSourceIdx = -1; this._tooltip._selecting = false;
+    this._analysis._pathSource = -1;
+    this._analysis._pathTarget = -1;
+    this._analysis._pathNodes.clear();
+    this._analysis._pathEdges.clear();
+    this._analysis._shiftSourceIdx = -1;
+    this._tooltip._selecting = false;
     this._tooltip._hidePrompt();
     for (const d of this._fold.galaxyLabelDivs) d.remove();
     this._fold.galaxyLabelDivs = [];
-    this.neighborMap = []; this.edgeIndexOf = [];
+    this.neighborMap = [];
+    this.edgeIndexOf = [];
     this._deadIndices.clear();
-    this.hoveredIdx = -1; this.targetHoverScale = 0;
-    this.focusActive = false; this.focusNodeIdx = -1; this._tooltip.selectedIdx = -1;
+    this.hoveredIdx = -1;
+    this.targetHoverScale = 0;
+    this.focusActive = false;
+    this.focusNodeIdx = -1;
+    this._tooltip.selectedIdx = -1;
     this._edgeTypeFilter = null;
     this._nodeKindFilter = null;
-    this._analysis.blastMode = false; this._analysis.blastSource = -1; this._analysis.blastDistances = []; this.l34Count = [];
+    this._analysis.blastMode = false;
+    this._analysis.blastSource = -1;
+    this._analysis.blastDistances = [];
+    this.l34Count = [];
     this._diagMsg = '';
     if (this.legendEl) this.legendEl.style.display = 'none';
-    this.focusSubgraphActive = false; this.focusSubgraphIdx = -1; this.focusSubgraphVisibleIndices.clear();
+    this.focusSubgraphActive = false;
+    this.focusSubgraphIdx = -1;
+    this.focusSubgraphVisibleIndices.clear();
     if (this.focusSubgraphBanner) this.focusSubgraphBanner.style.display = 'none';
     this._tooltip.tooltipEl?.classList.remove('visible');
     this._tooltip.detailCard?.classList.remove('visible');
@@ -2536,10 +2918,21 @@ export class StarGraph {
   private buildEdges(pos: Float32Array, data: EdgeData[]): void {
     if (data.length === 0) return;
     const key = (d: EdgeData) => `${d.edgeType}:${d.direction}:${d.couplingDepth}:${d.crossFile ? 1 : 0}`;
-    const groups = new Map<string, { verts: number[]; colors: number[]; depth: number; crossFile: boolean; edgeType: string }>();
+    const groups = new Map<
+      string,
+      { verts: number[]; colors: number[]; depth: number; crossFile: boolean; edgeType: string }
+    >();
     for (const d of data) {
       const k = key(d);
-      if (!groups.has(k)) { groups.set(k, { verts: [], colors: [], depth: d.couplingDepth, crossFile: d.crossFile, edgeType: d.edgeType.toLowerCase() }); }
+      if (!groups.has(k)) {
+        groups.set(k, {
+          verts: [],
+          colors: [],
+          depth: d.couplingDepth,
+          crossFile: d.crossFile,
+          edgeType: d.edgeType.toLowerCase(),
+        });
+      }
       const g = groups.get(k)!;
       g.verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
       const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
@@ -2549,7 +2942,8 @@ export class StarGraph {
     for (const [, g] of groups) {
       const B = 2000;
       for (let b = 0; b < g.verts.length; b += B * 6) {
-        const v = g.verts.slice(b, b + B * 6), cl = g.colors.slice(b, b + B * 6);
+        const v = g.verts.slice(b, b + B * 6),
+          cl = g.colors.slice(b, b + B * 6);
         const opacity = edgeOpacityByDepth(g.depth);
         const lw = edgeWidthByDepth(g.depth);
 
@@ -2558,15 +2952,21 @@ export class StarGraph {
         baseGeo.setPositions(v);
         baseGeo.setColors(cl);
         const baseMat = new LineMaterial({
-          vertexColors: true, transparent: true, opacity,
-          linewidth: lw, resolution, depthWrite: false, blending: THREE.AdditiveBlending,
+          vertexColors: true,
+          transparent: true,
+          opacity,
+          linewidth: lw,
+          resolution,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
         });
         // ponytail: static edge opacity — no per-frame breathing, set once
         const baseLines = new LineSegments2(baseGeo, baseMat);
         baseLines.userData['edgeDepth'] = g.depth;
         baseLines.userData['edgeType'] = g.edgeType;
         baseLines.computeLineDistances();
-        this.edgeGroup.add(baseLines); this.edgeLineGroups.push(baseLines);
+        this.edgeGroup.add(baseLines);
+        this.edgeLineGroups.push(baseLines);
       }
     }
   }
@@ -2605,19 +3005,24 @@ export class StarGraph {
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = NODE_COLORS[kind] || 0x6ab0ff;
       const baseScale = 0.8 + (deg[i] / this.maxDeg) * 2.8;
-      const px = pos[i * 3], py = pos[i * 3 + 1], pz = pos[i * 3 + 2];
+      const px = pos[i * 3],
+        py = pos[i * 3 + 1],
+        pz = pos[i * 3 + 2];
 
       // Core InstancedMesh: position + scale in matrix, color in instanceColor
       this._coreScales[i] = baseScale * 0.35;
-      this.nodeCoresInstanced.setMatrixAt(i, _m.compose(
-        _v.set(px, py, pz), _q, new THREE.Vector3(1, 1, 1).multiplyScalar(this._coreScales[i]),
-      ));
+      this.nodeCoresInstanced.setMatrixAt(
+        i,
+        _m.compose(_v.set(px, py, pz), _q, new THREE.Vector3(1, 1, 1).multiplyScalar(this._coreScales[i])),
+      );
       this._setCoreColor(i, coreColor);
       this.nodeCoreColors[i] = coreColor;
 
       // Inner glow RGBA
       const gc = new THREE.Color(glowColor);
-      glowPosArr[i * 3] = px; glowPosArr[i * 3 + 1] = py; glowPosArr[i * 3 + 2] = pz;
+      glowPosArr[i * 3] = px;
+      glowPosArr[i * 3 + 1] = py;
+      glowPosArr[i * 3 + 2] = pz;
       this._glowRgba[i * 4] = gc.r;
       this._glowRgba[i * 4 + 1] = gc.g;
       this._glowRgba[i * 4 + 2] = gc.b;
@@ -2634,14 +3039,16 @@ export class StarGraph {
 
       // Outer glow RGBA + size
       if (isFull) {
-        glow2PosArr[i * 3] = px; glow2PosArr[i * 3 + 1] = py; glow2PosArr[i * 3 + 2] = pz;
+        glow2PosArr[i * 3] = px;
+        glow2PosArr[i * 3 + 1] = py;
+        glow2PosArr[i * 3 + 2] = pz;
         this._glow2Rgba[i * 4] = gc.r;
         this._glow2Rgba[i * 4 + 1] = gc.g;
         this._glow2Rgba[i * 4 + 2] = gc.b;
         this._glow2Rgba[i * 4 + 3] = 0.55;
-      this._glow2Sizes[i] = 0.8 * baseScale; // outer glow scales with degree — matches core
-    }
-    this._glowSizes[i] = 1.0 * baseScale; // inner glow scales with degree — matches core
+        this._glow2Sizes[i] = 0.8 * baseScale; // outer glow scales with degree — matches core
+      }
+      this._glowSizes[i] = 1.0 * baseScale; // inner glow scales with degree — matches core
     }
 
     // Pre-compute _nodeMag cache (ponytail: log1p ratio is static, avoid per-frame recalc)
@@ -2749,7 +3156,9 @@ export class StarGraph {
         uniform sampler2D uTex;
         varying vec4 vColor;
         void main() { gl_FragColor = vColor * texture2D(uTex, gl_PointCoord); }`,
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
     });
   }
 
@@ -2758,7 +3167,9 @@ export class StarGraph {
    *  so we don't depend on a 'normal' attribute that MeshBasicMaterial may omit. */
   private _makeCoreFresnelMaterial(): THREE.MeshBasicMaterial {
     const mat = new THREE.MeshBasicMaterial({
-      transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
     });
     mat.onBeforeCompile = (shader) => {
       // ── Vertex: varyings for world-normal, UV, world-pos ──
@@ -2812,8 +3223,7 @@ export class StarGraph {
     this.legendEl = document.createElement('div');
     this.legendEl.id = 'graph-legend';
     this.legendEl.style.display = 'none';
-    this.legendEl.innerHTML =
-      `<div class="legend-section">
+    this.legendEl.innerHTML = `<div class="legend-section">
         <div class="legend-title">${t('legend.node')}</div>
         <div class="legend-row legend-node-row" data-node-filter="function" title="${t('legend.function.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x4ad8c8)};color:${hexToCSS(0x4ad8c8)}"></span> ${t('legend.function')}</div>
         <div class="legend-row legend-node-row" data-node-filter="class" title="${t('legend.class.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x7fd84a)};color:${hexToCSS(0x7fd84a)}"></span> ${t('legend.class')}</div>
@@ -2830,14 +3240,14 @@ export class StarGraph {
         <div class="legend-row legend-edge-row" data-edge-type="inherits" title="${t('legend.inherits.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff66dd)}"></span> ${t('legend.inherits')}</div>
       </div>`;
     this.container.appendChild(this.legendEl);
-    this.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach(row => {
+    this.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach((row) => {
       row.style.cursor = 'pointer';
       row.addEventListener('click', () => {
         const et = row.dataset['edgeType'] || '';
         this.setEdgeTypeFilter(this._edgeTypeFilter === et ? null : et);
       });
     });
-    this.legendEl.querySelectorAll<HTMLElement>('.legend-node-row').forEach(row => {
+    this.legendEl.querySelectorAll<HTMLElement>('.legend-node-row').forEach((row) => {
       row.style.cursor = 'pointer';
       row.addEventListener('click', () => {
         const nk = row.dataset['nodeFilter'] || '';
@@ -2867,10 +3277,8 @@ export class StarGraph {
     this.focusSubgraphSavedGlowOpacities = [];
     this.focusSubgraphSavedCoreVisible = [];
     for (let i = 0; i < this._nodeCount; i++) {
-      this.focusSubgraphSavedGlowOpacities.push(
-        (i < this._nodeCount ? this._glowRgba[i*4+3] : 0.55));
-      this.focusSubgraphSavedCoreVisible.push(
-        (i < this._nodeCount ? this._coreScales[i] > 0 : true));
+      this.focusSubgraphSavedGlowOpacities.push(i < this._nodeCount ? this._glowRgba[i * 4 + 3] : 0.55);
+      this.focusSubgraphSavedCoreVisible.push(i < this._nodeCount ? this._coreScales[i] > 0 : true);
 
       if (!this.focusSubgraphVisibleIndices.has(i)) {
         if (i < this._nodeCount) {
@@ -2884,8 +3292,7 @@ export class StarGraph {
     }
 
     // Dim edges
-    this.focusSubgraphSavedEdgeOpacities = this.edgeLineGroups.map(
-      lines => (lines.material as LineMaterial).opacity);
+    this.focusSubgraphSavedEdgeOpacities = this.edgeLineGroups.map((lines) => (lines.material as LineMaterial).opacity);
     for (const lines of this.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = 0.005;
     }
@@ -2903,8 +3310,7 @@ export class StarGraph {
     this._flushOverrideAttrs();
     this.focusSubgraphActive = true;
     const node = this.graphNodes[idx];
-    this.focusSubgraphBanner.innerHTML =
-      `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
+    this.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
     this.focusSubgraphBanner.style.display = 'flex';
     this.flyToNode(idx);
   }
@@ -2923,7 +3329,10 @@ export class StarGraph {
         this._setGlowAlpha(i, this.focusSubgraphSavedGlowOpacities[i]);
       }
       if (i < this.focusSubgraphSavedCoreVisible.length && i < this._nodeCount) {
-        { let _v=this.focusSubgraphSavedCoreVisible[i]; this._setCoreVisible(i, _v); }
+        {
+          const _v = this.focusSubgraphSavedCoreVisible[i];
+          this._setCoreVisible(i, _v);
+        }
       }
       // ponytail: 恢复 core color — focus 期间节点可能被 enter 设白或被 hover 循环提白
       if (i < this._nodeCount && i < this.nodeCoreColors.length) {
@@ -2936,13 +3345,11 @@ export class StarGraph {
     }
     for (let ei = 0; ei < this.edgeLineGroups.length; ei++) {
       if (ei < this.focusSubgraphSavedEdgeOpacities.length) {
-        (this.edgeLineGroups[ei].material as LineMaterial).opacity =
-          this.focusSubgraphSavedEdgeOpacities[ei];
+        (this.edgeLineGroups[ei].material as LineMaterial).opacity = this.focusSubgraphSavedEdgeOpacities[ei];
       }
     }
     // Clear focus edges
-    while (this.highlightEdgeGroup.children.length)
-      this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
 
     // ponytail: clear override flags — shader resumes animation
     for (let i = 0; i < this._nodeCount; i++) this._overrideFlags[i] = 0;
@@ -2955,8 +3362,7 @@ export class StarGraph {
   }
 
   private _buildFocusSubgraphEdges(): void {
-    while (this.highlightEdgeGroup.children.length)
-      this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     const visible = this.focusSubgraphVisibleIndices;
     const verts: number[] = [];
     const colors: number[] = [];
@@ -2969,25 +3375,31 @@ export class StarGraph {
       if (visible.has(d.s) && visible.has(d.t)) edgeCount++;
     }
     if (edgeCount === 0) return;
-    const degNorm = 1 / Math.pow(edgeCount, 0.2);
+    const degNorm = 1 / edgeCount ** 0.2;
 
     for (const d of this.edgeDataList) {
       if (visible.has(d.s) && visible.has(d.t)) {
-        verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2],
-                    pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
+        verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
         const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
-        colors.push(c.r * degNorm, c.g * degNorm, c.b * degNorm,
-                    c.r * degNorm, c.g * degNorm, c.b * degNorm);
+        colors.push(c.r * degNorm, c.g * degNorm, c.b * degNorm, c.r * degNorm, c.g * degNorm, c.b * degNorm);
       }
     }
     if (verts.length === 0) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.55,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
+    this.highlightEdgeGroup.add(
+      new THREE.LineSegments(
+        geo,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      ),
+    );
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
@@ -2997,22 +3409,28 @@ export class StarGraph {
   // ── Status ───────────────────────────────────────────────
 
   private updateStatus(nodeCount: number, edgeCount: number, meta?: Record<string, unknown>): void {
-    const ns = document.getElementById('status-nodes'), es = document.getElementById('status-edges'), st = document.getElementById('status-text');
+    const ns = document.getElementById('status-nodes'),
+      es = document.getElementById('status-edges'),
+      st = document.getElementById('status-text');
     if (ns) ns.textContent = `${nodeCount} 节点`;
     if (es) es.textContent = `${edgeCount} 边`;
-    let sCount = 0, dCount = 0, tCount = 0;
+    let sCount = 0,
+      dCount = 0,
+      tCount = 0;
     for (const e of this.edgeDataList) {
       if (e.edgeType === 'structural' || e.edgeType === 'STRUCTURAL') sCount++;
       else if (e.edgeType === 'data' || e.edgeType === 'DATA') dCount++;
       else if (e.edgeType === 'temporal' || e.edgeType === 'TEMPORAL') tCount++;
     }
     const coup = (meta?.coupling || {}) as Record<string, number>;
-    const l3 = coup.total_l3 || 0, l4 = coup.total_l4 || 0;
+    const l3 = coup.total_l3 || 0,
+      l4 = coup.total_l4 || 0;
     if (st) {
       let text = `${nodeCount} 节点 · ${edgeCount} 边 · S${sCount} D${dCount} T${tCount}`;
       if (l4 > 0) text += ` · ${iconHtml('block', 10)} L4×${l4}`;
       else if (l3 > 0) text += ` · ${iconHtml('alert', 10)} L3×${l3}`;
-      if (this._fold.foldMode && this._fold.galaxyMeta.length > 0) text += ` · ${iconHtml('galaxy', 10)} ${this._fold.galaxyMeta.length} 星座`;
+      if (this._fold.foldMode && this._fold.galaxyMeta.length > 0)
+        text += ` · ${iconHtml('galaxy', 10)} ${this._fold.galaxyMeta.length} 星座`;
       st.innerHTML = text;
     }
   }
@@ -3021,11 +3439,15 @@ export class StarGraph {
 
   // ponytail: twinkle data now generated inline in buildNodes (GPU buffer attrs).
   // Kept as no-op for backward compat — called from _renderImpl after init.
-  private initTwinkleData(_n: number): void { /* no-op: phase/speed baked into GPU attrs in buildNodes */ }
+  private initTwinkleData(_n: number): void {
+    /* no-op: phase/speed baked into GPU attrs in buildNodes */
+  }
 
   // ── Edge flow: built into edgeLineGroups as dashed overlay in buildEdges() ──
   // ponytail: no separate particle system — dashOffset animation on LineMaterial handles flow.
-  private initEdgeParticles(_pos: Float32Array, _data: EdgeData[]): void { /* no-op: flow dashes built in buildEdges */ }
+  private initEdgeParticles(_pos: Float32Array, _data: EdgeData[]): void {
+    /* no-op: flow dashes built in buildEdges */
+  }
 
   // ── Animate ──────────────────────────────────────────────
 
@@ -3055,28 +3477,51 @@ export class StarGraph {
       this.holoGrid.position.y = Math.min(this.camera.position.y, this.holoGridY);
     }
 
-    if (false) { // ponytail: minimal-mode fast path (disabled — isMinimal always false)
+    if (false) {
+      // ponytail: minimal-mode fast path (disabled — isMinimal always false)
       this.controls.update();
       this.composer.render();
       return;
     }
 
     // ── Idle detection: throttle expensive work when scene is static ──
-    const camMoved = this.camera.position.distanceToSquared(this._lastCamPos) > 0.0001
-                  || this.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
+    const camMoved =
+      this.camera.position.distanceToSquared(this._lastCamPos) > 0.0001 ||
+      this.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
     const mouseOnCanvas = this.mouse.x > -999;
-    const isActive = camMoved || mouseOnCanvas || this.hoveredIdx >= 0
-                  || this.focusProgress > 0 || this._analysis.blastMode
-                  || (this._analysis._pathSource >= 0) || this._tooltip._selecting;
-    if (isActive) { this._idleCounter = 0; } else { this._idleCounter++; }
+    const isActive =
+      camMoved ||
+      mouseOnCanvas ||
+      this.hoveredIdx >= 0 ||
+      this.focusProgress > 0 ||
+      this._analysis.blastMode ||
+      this._analysis._pathSource >= 0 ||
+      this._tooltip._selecting;
+    if (isActive) {
+      this._idleCounter = 0;
+    } else {
+      this._idleCounter++;
+    }
     this._lastCamPos.copy(this.camera.position);
     this._lastCamTarget.copy(this.controls.target);
     const IDLE = this._idleCounter > 60; // ~1s of no activity
 
     if (!IDLE || this._idleCounter % 4 === 0) {
-      try { this.updateHover(); } catch { /* hover must never crash the animation loop */ }
-      try { this.updateFocus(); } catch { /* ditto */ }
-      try { this._updateBloomByDistance(); } catch { /* bloom switch must never crash loop */ }
+      try {
+        this.updateHover();
+      } catch {
+        /* hover must never crash the animation loop */
+      }
+      try {
+        this.updateFocus();
+      } catch {
+        /* ditto */
+      }
+      try {
+        this._updateBloomByDistance();
+      } catch {
+        /* bloom switch must never crash loop */
+      }
     }
 
     // ponytail: GPU-driven glow — set time uniforms, shader handles all animation.
@@ -3121,7 +3566,7 @@ export class StarGraph {
         if (ni !== this.hoveredIdx && ni < this._nodeCount) {
           this._overrideFlags[ni] = 1;
           this._prevOverrideSet.add(ni);
-          this._setGlowAlpha(ni, 0.55 + this.hoverScale * 0.10);
+          this._setGlowAlpha(ni, 0.55 + this.hoverScale * 0.1);
         }
       }
     }
@@ -3170,10 +3615,21 @@ export class StarGraph {
 
     if (!IDLE || this._idleCounter % 3 === 0) {
       this._tooltip.updateTooltip(
-        this.hoveredIdx, this.hoveredGalaxyIdx, this.communities, this.nodeCommMap,
-        this._fold.foldMode, this._fold, this.container, this.camera,
-        this._nodeCount, this.graphNodes, this.deg, this.nodePositions,
-      ); this.updateLabels(); this._fold._updateCommunityRingHover();
+        this.hoveredIdx,
+        this.hoveredGalaxyIdx,
+        this.communities,
+        this.nodeCommMap,
+        this._fold.foldMode,
+        this._fold,
+        this.container,
+        this.camera,
+        this._nodeCount,
+        this.graphNodes,
+        this.deg,
+        this.nodePositions,
+      );
+      this.updateLabels();
+      this._fold._updateCommunityRingHover();
     }
     this.controls.update();
     this.composer.render();
@@ -3182,10 +3638,13 @@ export class StarGraph {
   // ── Resize ───────────────────────────────────────────────
 
   /** Public resize — call after CSS layout changes (e.g. --font-scale, --toolbar-h) */
-  resize(): void { this.onResize(); }
+  resize(): void {
+    this.onResize();
+  }
 
   private onResize = (): void => {
-    const w = this.container.clientWidth, h = this.container.clientHeight;
+    const w = this.container.clientWidth,
+      h = this.container.clientHeight;
     if (h === 0 || w === 0) return;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -3206,31 +3665,66 @@ export class StarGraph {
     // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
     this._revealCancelled = true;
     // Clear prompt auto-hide timer (audit: prevent timeout after destroy)
-    if (this._tooltip._promptTimer) { clearTimeout(this._tooltip._promptTimer); this._tooltip._promptTimer = null; }
+    if (this._tooltip._promptTimer) {
+      clearTimeout(this._tooltip._promptTimer);
+      this._tooltip._promptTimer = null;
+    }
     window.removeEventListener('resize', this.onResize);
     // Remove window keydown listener (audit HIGH fix — prevent stale reference)
     if (this._onKeyDown) window.removeEventListener('keydown', this._onKeyDown);
     // Unsubscribe EventBus handlers (audit: prevent stale bus listeners)
-    if (this._langHandler) { bus.off('lang:changed', this._langHandler); this._langHandler = null; }
-    if (this._tooltip._showPromptBound) { bus.off('graph:show-prompt', this._tooltip._showPromptBound); this._tooltip._showPromptBound = null; }
+    if (this._langHandler) {
+      bus.off('lang:changed', this._langHandler);
+      this._langHandler = null;
+    }
+    if (this._tooltip._showPromptBound) {
+      bus.off('graph:show-prompt', this._tooltip._showPromptBound);
+      this._tooltip._showPromptBound = null;
+    }
     // Dispose all GPU resources
-    for (const cloud of this._fold.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
+    for (const cloud of this._fold.galaxyClouds) {
+      if (cloud) {
+        cloud.geometry.dispose();
+        (cloud.material as THREE.Material).dispose();
+      }
+    }
     for (const glow of this._fold.galaxyGlows) ((glow as THREE.Mesh).material as THREE.Material).dispose();
-    if (this.nebulaDust) { this.nebulaDust.geometry.dispose(); (this.nebulaDust.material as THREE.Material).dispose(); }
+    if (this.nebulaDust) {
+      this.nebulaDust.geometry.dispose();
+      (this.nebulaDust.material as THREE.Material).dispose();
+    }
     // Dispose InstancedMesh cores + glows
-    if (this.nodeCoresInstanced) { (this.nodeCoresInstanced.material as THREE.Material)?.dispose(); }
-    if (this.nodeGlowsPoints) { (this.nodeGlowsPoints.material as THREE.Material)?.dispose(); this.nodeGlowsPoints.geometry?.dispose(); }
-    if (this.nodeGlows2Points) { (this.nodeGlows2Points.material as THREE.Material)?.dispose(); this.nodeGlows2Points.geometry?.dispose(); }
-    for (const lines of this.edgeLineGroups) { lines.geometry?.dispose(); (lines.material as THREE.Material)?.dispose(); }
+    if (this.nodeCoresInstanced) {
+      (this.nodeCoresInstanced.material as THREE.Material)?.dispose();
+    }
+    if (this.nodeGlowsPoints) {
+      (this.nodeGlowsPoints.material as THREE.Material)?.dispose();
+      this.nodeGlowsPoints.geometry?.dispose();
+    }
+    if (this.nodeGlows2Points) {
+      (this.nodeGlows2Points.material as THREE.Material)?.dispose();
+      this.nodeGlows2Points.geometry?.dispose();
+    }
+    for (const lines of this.edgeLineGroups) {
+      lines.geometry?.dispose();
+      (lines.material as THREE.Material)?.dispose();
+    }
     this.bloomPass?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
-    this.glowTex.dispose(); this.sphereGeo.dispose();
-    for (const d of this._fold.galaxyLabelDivs) d.remove(); this._fold.galaxyLabelDivs = [];
-    this._fold.galaxyTitleEl?.remove(); this._tooltip.tooltipEl?.remove(); this.labelsContainer?.remove(); this._tooltip.detailCard?.remove();
+    this.glowTex.dispose();
+    this.sphereGeo.dispose();
+    for (const d of this._fold.galaxyLabelDivs) d.remove();
+    this._fold.galaxyLabelDivs = [];
+    this._fold.galaxyTitleEl?.remove();
+    this._tooltip.tooltipEl?.remove();
+    this.labelsContainer?.remove();
+    this._tooltip.detailCard?.remove();
     this._tooltip._selectRectEl?.remove();
     this._tooltip._promptBarEl?.remove();
   }
 }
 
-function easeInOutCubic(t: number): number { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}

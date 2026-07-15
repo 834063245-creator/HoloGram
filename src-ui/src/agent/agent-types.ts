@@ -43,17 +43,17 @@ export interface AgentEvent {
 }
 
 export interface Pricing {
-  cache_hit: number;  // per 1M tokens
-  input: number;      // per 1M tokens
-  output: number;     // per 1M tokens
+  cache_hit: number; // per 1M tokens
+  input: number; // per 1M tokens
+  output: number; // per 1M tokens
   currency: string;
 }
 
 export function computeCost(p: Pricing | undefined, u: Usage | undefined): number {
   if (!p || !u) return 0;
-  return (u.cache_hit_tokens * p.cache_hit +
-    u.cache_miss_tokens * p.input +
-    u.completion_tokens * p.output) / 1_000_000;
+  return (
+    (u.cache_hit_tokens * p.cache_hit + u.cache_miss_tokens * p.input + u.completion_tokens * p.output) / 1_000_000
+  );
 }
 
 /** Sink receives the agent's typed event stream. */

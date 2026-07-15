@@ -12,7 +12,7 @@ export interface AuraRecord {
   id: string;
   content: string;
   score: number;
-  level: string;   // Working | Decisions | Domain | Identity
+  level: string; // Working | Decisions | Domain | Identity
   strength: number;
   tags: string[];
   created_at: string;

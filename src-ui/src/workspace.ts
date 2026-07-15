@@ -11,57 +11,57 @@
 //
 // Switching workspaces is atomic: old.deactivate() → new = Workspace.open() → assign.
 
-import { rpc, listen } from './bridge';
-import { bus } from './ui/events';
-import { StarGraph } from './ui/graph';
-import { ChatPanel } from './ui/chat';
-import { stripLineNumbers } from './ui/chat-session';
-import { bumpChat, getChatStore } from './ui/chat-store';
-import type { SubAgentPart } from './ui/message-model';
-import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
+import { auraShutdown } from './agent/aura-memory';
+import { type CompactionConfig, createCompactionTools } from './agent/compaction-model';
+import { type SubAgentHandle, SubAgentPool } from './agent/coordinator';
+import type { GraphContext } from './agent/hooks';
 import {
-  ToolRegistry,
+  buildFileNodeIndex,
+  buildGraphSnapshot,
+  createGraphContext,
+  createGraphContextHook,
+  createGraphPreflightHook,
+  createStatePreflightHook,
+  createStateReadHook,
+  HookRegistry,
+  PreflightHookRegistry,
+} from './agent/hooks';
+import { initLogger, log } from './agent/logger';
+// ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
+import { createMemoryTools, MemoryManager } from './agent/memory';
+import { memoryBundleIngest } from './agent/memory-bundle-client';
+import { createSkillTool, SkillRegistry } from './agent/skills';
+import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/state-inject';
+import { createTaskTools, TaskManager } from './agent/task';
+import type { Tool } from './agent/tool';
+import {
+  agentInvoke,
+  createAgentMessageTool,
+  createAgentStopAllTool,
   createCodingTools,
   createSubAgentTool,
-  createAgentStopAllTool,
-  createAgentMessageTool,
-  agentInvoke,
   type ToolExecutor,
+  ToolRegistry,
 } from './agent/tool';
-import { SubAgentPool, type SubAgentHandle } from './agent/coordinator';
-// ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
-import { MemoryManager, createMemoryTools } from './agent/memory';
-import { createCompactionTools, type CompactionConfig } from './agent/compaction-model';
-import { auraShutdown } from './agent/aura-memory';
-import { memoryBundleIngest } from './agent/memory-bundle-client';
-import { TaskManager, createTaskTools } from './agent/task';
-import { initLogger, log } from './agent/logger';
-import {
-  HookRegistry,
-  createGraphContextHook,
-  createGraphContext,
-  buildFileNodeIndex,
-  PreflightHookRegistry,
-  createGraphPreflightHook,
-  buildGraphSnapshot,
-  createStateReadHook,
-  createStatePreflightHook,
-} from './agent/hooks';
-import type { GraphContext } from './agent/hooks';
-import { refreshGitStatus, refreshTimeline, buildTurnStartBlock } from './agent/state-inject';
-import { SkillRegistry, createSkillTool } from './agent/skills';
-import {
-  loadSettings,
-  saveSettings,
-  getActiveProvider,
-  defaultPricing,
-  CHAT_MODES,
-  restoreSecrets,
-  persistSecrets,
-} from './settings';
+import { listen, rpc } from './bridge';
 import { createAnthropicProvider } from './provider/anthropic';
-import type { Tool } from './agent/tool';
+import {
+  CHAT_MODES,
+  defaultPricing,
+  getActiveProvider,
+  loadSettings,
+  persistSecrets,
+  restoreSecrets,
+  saveSettings,
+} from './settings';
+import type { ChatPanel } from './ui/chat';
+import { stripLineNumbers } from './ui/chat-session';
+import { bumpChat, getChatStore } from './ui/chat-store';
+import type { CheckPanel, CheckResult } from './ui/check';
+import { bus } from './ui/events';
+import type { StarGraph } from './ui/graph';
+import type { SubAgentPart } from './ui/message-model';
 
 // ═══════════════════════════════════════════════════════
 // Dynamic tool loading from engine registry
@@ -100,6 +100,7 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
     execute: (args: Record<string, unknown>) => exec(schema.name, args),
   };
 }
+
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { dbg } from './ui/debug';
@@ -875,7 +876,7 @@ export class Workspace {
             return createGraphContext(fileIndex, fanIn, fanOut);
           })()
         : null;
-      const ws = this;
+
       chatPanel.setAgentFactory(async () => {
         let s = loadSettings();
         s = await restoreSecrets(s);
@@ -902,7 +903,7 @@ export class Workspace {
           const result = await agentInvoke<string>(name, args);
           return typeof result === 'string' ? result : JSON.stringify(result);
         };
-        if (ws.graphData) {
+        if (this.graphData) {
           const schemas = await loadHologramSchemas();
           const holoExec: ToolExecutor = async (name, args) => {
             const result = await rpc<string>('hologram_call', { tool: name, args });
@@ -956,8 +957,8 @@ export class Workspace {
         for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
         r.alias('read_file', 'read_file_content');
         // ponytail: symbol_history / cluster_report now first-class — no aliases needed
-        if (ws.skillRegistry) {
-          r.register(createSkillTool(ws.skillRegistry));
+        if (this.skillRegistry) {
+          r.register(createSkillTool(this.skillRegistry));
         }
         if (mm) {
           for (const tool of createMemoryTools(mm)) r.register(tool);
@@ -975,12 +976,12 @@ export class Workspace {
         // Load project conventions — same CLAUDE.md that Claude Code reads
         let claudeMd = '';
         try {
-          claudeMd = await rpc<string>('read_file_content', { filePath: `${ws.path}/CLAUDE.md` });
+          claudeMd = await rpc<string>('read_file_content', { filePath: `${this.path}/CLAUDE.md` });
         } catch {
           /* file missing is fine */
         }
-        const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
-        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap, '', claudeMd), {
+        const snap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
+        const newAgent = new Agent(p, r, buildSystemPrompt(this, memSection, snap, '', claudeMd), {
           eventSink: chatPanel.eventSink,
           onSubAgentSpawn: (part: SubAgentPart) => {
             const msgs = getChatStore(this._storeId).msg.getState().messages;
@@ -999,18 +1000,18 @@ export class Workspace {
           contextWindow: s.agent?.contextWindow,
           maxTokens: act.maxTokens ?? 0,
         });
-        newAgent.setCompactionConfigPath(ws.path);
+        newAgent.setCompactionConfigPath(this.path);
         newAgent.applyAutoTuneConfig().catch(() => {});
         if (hookCtx) {
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));
-          hooks.register(createStateReadHook(ws.path));
+          hooks.register(createStateReadHook(this.path));
           newAgent.setHooks(hooks);
           const preflightHooks = new PreflightHookRegistry();
           preflightHooks.register(createGraphPreflightHook(hookCtx));
           preflightHooks.register(createStatePreflightHook());
           newAgent.setPreflightHooks(preflightHooks);
-          loadEngineSnapshot(hookCtx, ws.path).catch(() => {});
+          loadEngineSnapshot(hookCtx, this.path).catch(() => {});
         }
         // Sub-agent tool — uses workspace pool for timeout/abort safety
         {
@@ -1020,7 +1021,7 @@ export class Workspace {
               const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
               const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
               return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
-            }, ws.subAgentPool),
+            }, this.subAgentPool),
           );
         }
         // Compaction stats tool

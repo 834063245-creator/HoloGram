@@ -10,55 +10,52 @@
 //
 // Each is a real Zustand store. getState() returns live internal state.
 
-import type { ChatMessage } from './message-model';
-
 import {
-  getMessagesStore,
-  getStreamingAssistantId as _msg_streamingId,
-  getUserScrolledUp as _msg_scrolledUp,
+  getAttachedFiles,
+  getDraftText,
+  getInputHistory,
+  getInputHistoryIdx,
+  getInputStore,
+  getInputText,
+  type InputStoreApi,
+} from './input-store';
+import type { ChatMessage } from './message-model';
+import {
   getExpandedReasoningSet as _msg_expandedReasoning,
+  getUserScrolledUp as _msg_scrolledUp,
+  getStreamingAssistantId as _msg_streamingId,
   bumpMessages,
+  getMessagesStore,
   type MessagesStoreApi,
 } from './messages-store';
 
 import {
-  getSessionStore,
-  getSessions,
+  getActiveTab,
+  getContextFilter,
+  getPanelMode,
+  getPanelStore,
+  getProjectPath,
+  getToolFilter,
+  getTotalTokensUsed,
+  isHistoryOpen,
+  type PanelStoreApi,
+} from './panel-store';
+import {
   getActiveIdx,
   getActiveSessionId,
-  getSessionTokens,
-  getNextSessionId,
   getMsgIdSeq,
+  getNextSessionId,
+  getSessionStore,
+  getSessions,
+  getSessionTokens,
   nextMsgId,
   type SessionStoreApi,
 } from './session-store';
 
-import {
-  getPanelStore,
-  getPanelMode,
-  getActiveTab,
-  getProjectPath,
-  getTotalTokensUsed,
-  isHistoryOpen,
-  getToolFilter,
-  getContextFilter,
-  type PanelStoreApi,
-} from './panel-store';
-
-import {
-  getInputStore,
-  getInputText,
-  getAttachedFiles,
-  getInputHistory,
-  getInputHistoryIdx,
-  getDraftText,
-  type InputStoreApi,
-} from './input-store';
-
 // ── Re-export types ──
 
+export type { AgentState, AgentTab, PanelMode } from './panel-store';
 export type { ChatSessionMeta } from './session-store';
-export type { PanelMode, AgentTab, AgentState } from './panel-store';
 
 // ── ChatStore handles — direct sub-store access ──
 
@@ -105,18 +102,42 @@ export function bumpSession(storeId: string, sessionId: number): void {
 
 // ── Panel-level streaming flags (read from default msg store, migrated to per-session later) ──
 
-export function bumpChat(storeId?: string): void { bumpMessages(storeId); }
+export function bumpChat(storeId?: string): void {
+  bumpMessages(storeId);
+}
 
 // Streaming
-export function getStreamingAssistantId(storeId?: string) { return _msg_streamingId(storeId); }
-export function getUserScrolledUp(storeId?: string) { return _msg_scrolledUp(storeId); }
-export function getExpandedReasoningSet(storeId?: string) { return _msg_expandedReasoning(storeId); }
+export function getStreamingAssistantId(storeId?: string) {
+  return _msg_streamingId(storeId);
+}
+export function getUserScrolledUp(storeId?: string) {
+  return _msg_scrolledUp(storeId);
+}
+export function getExpandedReasoningSet(storeId?: string) {
+  return _msg_expandedReasoning(storeId);
+}
 
 // Session (re-exported)
-export { getSessions, getActiveIdx, getActiveSessionId, getSessionTokens, getNextSessionId, getMsgIdSeq, nextMsgId };
-
 // Panel (re-exported)
-export { getPanelMode, getActiveTab, getProjectPath, getTotalTokensUsed, isHistoryOpen, getToolFilter, getContextFilter };
-
 // Input (re-exported)
-export { getInputText, getAttachedFiles, getInputHistory, getInputHistoryIdx, getDraftText };
+export {
+  getActiveIdx,
+  getActiveSessionId,
+  getActiveTab,
+  getAttachedFiles,
+  getContextFilter,
+  getDraftText,
+  getInputHistory,
+  getInputHistoryIdx,
+  getInputText,
+  getMsgIdSeq,
+  getNextSessionId,
+  getPanelMode,
+  getProjectPath,
+  getSessions,
+  getSessionTokens,
+  getToolFilter,
+  getTotalTokensUsed,
+  isHistoryOpen,
+  nextMsgId,
+};

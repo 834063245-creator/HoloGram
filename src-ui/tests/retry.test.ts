@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-import { describe, it, expect } from 'vitest';
-import { isRetryable, backoffDelay, sleepWithAbort } from '../src/agent/retry';
+import { describe, expect, it } from 'vitest';
+import { backoffDelay, isRetryable, sleepWithAbort } from '../src/agent/retry';
 
 describe('isRetryable', () => {
   it('retries rate limit errors', () => {

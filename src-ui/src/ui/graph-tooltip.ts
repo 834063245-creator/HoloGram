@@ -6,10 +6,10 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
-import { iconHtml } from './icons';
-import { TYPE_LABELS } from './graph-colors';
 import { shell } from './app-shell';
 import { bus } from './events';
+import { TYPE_LABELS } from './graph-colors';
+import { iconHtml } from './icons';
 
 // ── Host interface — StarGraph 需要暴露给 TooltipHost 的成员 ──
 

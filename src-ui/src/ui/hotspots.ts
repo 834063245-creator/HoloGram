@@ -4,12 +4,12 @@
 // Hotspots Panel — 复发热点检测（P6）
 // 同一文件多次触发 L4 警报 → 星图着色升级
 
-import { rpc } from '../bridge';
-import { shell } from './app-shell';
-import { iconHtml } from './icons';
-import { askAgent } from './agent-visualizer';
 import DOMPurify from 'dompurify';
+import { rpc } from '../bridge';
+import { askAgent } from './agent-visualizer';
+import { shell } from './app-shell';
 import type { StarGraph } from './graph';
+import { iconHtml } from './icons';
 
 interface HotspotItem {
   file: string;
@@ -52,7 +52,9 @@ export class HotspotsPanel {
     this.buildDOM(container);
   }
 
-  setGraph(sg: StarGraph): void { this.starGraph = sg; }
+  setGraph(sg: StarGraph): void {
+    this.starGraph = sg;
+  }
 
   private buildDOM(container: HTMLElement): void {
     this.panel = document.createElement('div');
@@ -129,7 +131,9 @@ export class HotspotsPanel {
     shell.notifyPanelChanged();
   }
 
-  isOpen(): boolean { return this.openState; }
+  isOpen(): boolean {
+    return this.openState;
+  }
 
   open(): void {
     if (!this.openState) this.toggle();
@@ -139,7 +143,9 @@ export class HotspotsPanel {
     if (this.openState) this.toggle();
   }
 
-  getHotspots(): HotspotItem[] { return this.hotspots; }
+  getHotspots(): HotspotItem[] {
+    return this.hotspots;
+  }
 
   private render(): void {
     if (this.hotspots.length === 0) {
@@ -153,7 +159,9 @@ export class HotspotsPanel {
       const fn = basename(hs.file);
       const sevClass = SEVERITY_CLASS[hs.last_details.level] || 'hs-sev-mid';
       const desc = hs.last_details.description
-        ? (hs.last_details.description.length > 60 ? hs.last_details.description.slice(0, 60) + '…' : hs.last_details.description)
+        ? hs.last_details.description.length > 60
+          ? hs.last_details.description.slice(0, 60) + '…'
+          : hs.last_details.description
         : '';
       const line = hs.last_details.line ? `:${hs.last_details.line}` : '';
       const lastTs = hs.recent_timestamps[0] ? fmtTime(hs.recent_timestamps[0]) : '';
@@ -174,7 +182,7 @@ export class HotspotsPanel {
     this.content.innerHTML = DOMPurify.sanitize(html);
 
     // Wire click → navigate to file on star graph
-    this.content.querySelectorAll('.hs-item').forEach(el => {
+    this.content.querySelectorAll('.hs-item').forEach((el) => {
       el.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
         if (target.closest('.hs-ask-btn')) return;
@@ -188,19 +196,21 @@ export class HotspotsPanel {
     });
 
     // Wire "Ask Agent" buttons
-    this.content.querySelectorAll('.hs-ask-btn').forEach(el => {
+    this.content.querySelectorAll('.hs-ask-btn').forEach((el) => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const item = (el as HTMLElement).closest('.hs-item') as HTMLElement;
         if (!item) return;
         const file = item.dataset['file'] || '';
-        const hs = this.hotspots.find(h => h.file === file);
+        const hs = this.hotspots.find((h) => h.file === file);
         if (!hs) return;
         const context = [
           `复发热点: ${basename(file)}`,
           `复发次数: ${hs.count}× L4 封装穿透`,
           hs.last_details.description ? `最近描述: ${hs.last_details.description}` : '',
-        ].filter(Boolean).join(' | ');
+        ]
+          .filter(Boolean)
+          .join(' | ');
         askAgent(`分析这个复发热点: ${context}`);
       });
     });

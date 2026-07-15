@@ -4,8 +4,8 @@
 // Session persistence — JSONL file store for agent sessions.
 // CC ref: utils/sessionStorage.ts
 
-import type { Message } from '../provider/types';
 import { rpc } from '../bridge';
+import type { Message } from '../provider/types';
 
 export interface SessionMeta {
   id: string;
@@ -42,15 +42,17 @@ export class SessionStore {
     await this.ensureDir();
     const lines: string[] = [];
     for (const m of messages) {
-      lines.push(JSON.stringify({
-        role: m.role,
-        content: m.content,
-        tool_calls: m.tool_calls,
-        tool_call_id: m.tool_call_id,
-        name: m.name,
-        reasoning_content: m.reasoning_content,
-        timestamp: Date.now(),
-      }));
+      lines.push(
+        JSON.stringify({
+          role: m.role,
+          content: m.content,
+          tool_calls: m.tool_calls,
+          tool_call_id: m.tool_call_id,
+          name: m.name,
+          reasoning_content: m.reasoning_content,
+          timestamp: Date.now(),
+        }),
+      );
     }
     const content = lines.join('\n') + '\n';
     try {
@@ -99,14 +101,16 @@ export class SessionStore {
       const raw = await rpc<string>('list_directory_flat', { path: this.baseDir });
       const files: string[] = JSON.parse(raw);
       const metas: SessionMeta[] = [];
-      for (const file of (files || [])) {
+      for (const file of files || []) {
         if (!file.endsWith('.jsonl')) continue;
         const id = file.replace(/\.jsonl$/, '');
         try {
           const msgs = await this.load(id);
-          const firstUser = msgs.find(m => m.role === 'user');
+          const firstUser = msgs.find((m) => m.role === 'user');
           const preview = firstUser?.content
-            ? (typeof firstUser.content === 'string' ? firstUser.content.slice(0, 80) : '...')
+            ? typeof firstUser.content === 'string'
+              ? firstUser.content.slice(0, 80)
+              : '...'
             : '(空会话)';
           metas.push({
             id,

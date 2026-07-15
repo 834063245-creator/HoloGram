@@ -17,9 +17,12 @@
 // ── Fibonacci Sphere ──────────────────────────────────────────────
 
 export function fibonacciSphere(n: number, radius: number): Float32Array {
-  const pos = new Float32Array(n * 3), phi = Math.PI * (3 - Math.sqrt(5));
+  const pos = new Float32Array(n * 3),
+    phi = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
-    const y = 1 - (i / (n - 1 || 1)) * 2, r = Math.sqrt(1 - y * y), theta = phi * i;
+    const y = 1 - (i / (n - 1 || 1)) * 2,
+      r = Math.sqrt(1 - y * y),
+      theta = phi * i;
     pos[i * 3] = Math.cos(theta) * r * radius;
     pos[i * 3 + 1] = y * radius;
     pos[i * 3 + 2] = Math.sin(theta) * r * radius;
@@ -48,7 +51,9 @@ async function simulateForces(
   if (m === 0) return new Float32Array(0);
 
   // ── Core parameters (LOCKED) ──
-  const rep = 600, att = 0.018, damp = 0.72;
+  const rep = 600,
+    att = 0.018,
+    damp = 0.72;
   const pos = fibonacciSphere(m, shellRadius);
   const vel = new Float32Array(m * 3);
 
@@ -73,20 +78,32 @@ async function simulateForces(
     // ── Repulsion (all pairs) ──
     for (let i = 0; i < m; i++) {
       for (let j = i + 1; j < m; j++) {
-        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+        const dx = pos[i * 3] - pos[j * 3],
+          dy = pos[i * 3 + 1] - pos[j * 3 + 1],
+          dz = pos[i * 3 + 2] - pos[j * 3 + 2];
         const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
         const f = Math.min(rep / (dist * dist + 1), REP_CAP);
-        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
-        vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
+        vel[i * 3] += (dx / dist) * f;
+        vel[i * 3 + 1] += (dy / dist) * f;
+        vel[i * 3 + 2] += (dz / dist) * f;
+        vel[j * 3] -= (dx / dist) * f;
+        vel[j * 3 + 1] -= (dy / dist) * f;
+        vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
     // ── Attraction (edges only) ──
     for (const [s, t] of localPairs) {
-      const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
+      const dx = pos[s * 3] - pos[t * 3],
+        dy = pos[s * 3 + 1] - pos[t * 3 + 1],
+        dz = pos[s * 3 + 2] - pos[t * 3 + 2];
       const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
       const f = Math.min(dist * att, ATT_CAP);
-      vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
-      vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
+      vel[s * 3] -= (dx / dist) * f;
+      vel[s * 3 + 1] -= (dy / dist) * f;
+      vel[s * 3 + 2] -= (dz / dist) * f;
+      vel[t * 3] += (dx / dist) * f;
+      vel[t * 3 + 1] += (dy / dist) * f;
+      vel[t * 3 + 2] += (dz / dist) * f;
     }
     // ── Origin attraction ──
     for (let i = 0; i < m; i++) {
@@ -96,12 +113,22 @@ async function simulateForces(
     }
     // ── Per-node velocity cap ──
     for (let i = 0; i < m; i++) {
-      const vx = vel[i * 3], vy = vel[i * 3 + 1], vz = vel[i * 3 + 2];
+      const vx = vel[i * 3],
+        vy = vel[i * 3 + 1],
+        vz = vel[i * 3 + 2];
       const vm = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      if (vm > VEL_CAP) { const s = VEL_CAP / vm; vel[i * 3] = vx * s; vel[i * 3 + 1] = vy * s; vel[i * 3 + 2] = vz * s; }
+      if (vm > VEL_CAP) {
+        const s = VEL_CAP / vm;
+        vel[i * 3] = vx * s;
+        vel[i * 3 + 1] = vy * s;
+        vel[i * 3 + 2] = vz * s;
+      }
     }
     // ── Damping + position update ──
-    for (let i = 0; i < m * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+    for (let i = 0; i < m * 3; i++) {
+      vel[i] *= damp;
+      pos[i] += vel[i];
+    }
     // ── NaN detection ──
     if (iter % 5 === 0) {
       let diverged = false;
@@ -110,7 +137,10 @@ async function simulateForces(
       }
       if (diverged) {
         const fresh = fibonacciSphere(m, shellRadius);
-        for (let i = 0; i < m * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
+        for (let i = 0; i < m * 3; i++) {
+          pos[i] = fresh[i];
+          vel[i] = 0;
+        }
       }
     } else {
       const sample = Math.max(10, Math.floor(Math.sqrt(m)));
@@ -118,19 +148,30 @@ async function simulateForces(
       for (let k = 0; k < sample && !diverged; k++) {
         const i = (k * 2654435761 + iter * 0x9e3779b9) % m;
         const i3 = i * 3;
-        if (!isFinite(pos[i3]) || !isFinite(pos[i3 + 1]) || !isFinite(pos[i3 + 2]) ||
-            !isFinite(vel[i3]) || !isFinite(vel[i3 + 1]) || !isFinite(vel[i3 + 2])) {
+        if (
+          !isFinite(pos[i3]) ||
+          !isFinite(pos[i3 + 1]) ||
+          !isFinite(pos[i3 + 2]) ||
+          !isFinite(vel[i3]) ||
+          !isFinite(vel[i3 + 1]) ||
+          !isFinite(vel[i3 + 2])
+        ) {
           diverged = true;
         }
       }
       if (diverged) {
         const fresh = fibonacciSphere(m, shellRadius);
-        for (let i = 0; i < m * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
+        for (let i = 0; i < m * 3; i++) {
+          pos[i] = fresh[i];
+          vel[i] = 0;
+        }
       }
     }
     // ── Shell constraint (adaptive strength) ──
     for (let i = 0; i < m; i++) {
-      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2];
+      const dx = pos[i * 3],
+        dy = pos[i * 3 + 1],
+        dz = pos[i * 3 + 2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > 1) {
         const drift = (dist - shellRadius) * sp;
@@ -142,7 +183,7 @@ async function simulateForces(
 
     // Yield to event loop every N iterations to keep the UI responsive
     if (iter % YIELD_EVERY === YIELD_EVERY - 1 && iter < maxIter - 1) {
-      await new Promise<void>(r => setTimeout(r, 0));
+      await new Promise<void>((r) => setTimeout(r, 0));
     }
   }
   return pos;
@@ -196,12 +237,15 @@ export async function relaxNewNodes(
   // Build local edge pairs (only edges where both nodes are in affected set)
   const localPairs: [number, number][] = [];
   for (const [s, t] of allPairs) {
-    const ls = gl2loc.get(s), lt = gl2loc.get(t);
+    const ls = gl2loc.get(s),
+      lt = gl2loc.get(t);
     if (ls !== undefined && lt !== undefined) localPairs.push([ls, lt]);
   }
 
   // Light parameters — short run, strong damping
-  const rep = 300, att = 0.03, damp = 0.55;
+  const rep = 300,
+    att = 0.03,
+    damp = 0.55;
   const maxIter = 8; // few iterations — layout should be close already
   const REP_CAP = shellR * 6;
 
@@ -211,36 +255,58 @@ export async function relaxNewNodes(
     // Repulsion (all local pairs)
     for (let i = 0; i < m; i++) {
       for (let j = i + 1; j < m; j++) {
-        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+        const dx = pos[i * 3] - pos[j * 3],
+          dy = pos[i * 3 + 1] - pos[j * 3 + 1],
+          dz = pos[i * 3 + 2] - pos[j * 3 + 2];
         const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
         const f = Math.min(rep / (dist * dist + 1), REP_CAP);
-        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
-        vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
+        vel[i * 3] += (dx / dist) * f;
+        vel[i * 3 + 1] += (dy / dist) * f;
+        vel[i * 3 + 2] += (dz / dist) * f;
+        vel[j * 3] -= (dx / dist) * f;
+        vel[j * 3 + 1] -= (dy / dist) * f;
+        vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
     // Attraction (local edges)
     for (const [s, t] of localPairs) {
-      const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
+      const dx = pos[s * 3] - pos[t * 3],
+        dy = pos[s * 3 + 1] - pos[t * 3 + 1],
+        dz = pos[s * 3 + 2] - pos[t * 3 + 2];
       const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
       const f = Math.min(dist * att, REP_CAP);
-      vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
-      vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
+      vel[s * 3] -= (dx / dist) * f;
+      vel[s * 3 + 1] -= (dy / dist) * f;
+      vel[s * 3 + 2] -= (dz / dist) * f;
+      vel[t * 3] += (dx / dist) * f;
+      vel[t * 3 + 1] += (dy / dist) * f;
+      vel[t * 3 + 2] += (dz / dist) * f;
     }
     // Damping + update
-    for (let i = 0; i < m * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+    for (let i = 0; i < m * 3; i++) {
+      vel[i] *= damp;
+      pos[i] += vel[i];
+    }
     // Zero vel for anchored nodes → no movement
     for (let li = 0; li < m; li++) {
       const gi = affected[li];
-      if (anchoredIndices.has(gi)) { vel[li * 3] = 0; vel[li * 3 + 1] = 0; vel[li * 3 + 2] = 0; }
+      if (anchoredIndices.has(gi)) {
+        vel[li * 3] = 0;
+        vel[li * 3 + 1] = 0;
+        vel[li * 3 + 2] = 0;
+      }
     }
     // NaN guard
     if (iter % 3 === 0) {
       for (let i = 0; i < m * 3; i++) {
-        if (!isFinite(pos[i])) { pos[i] = allPos[affected[Math.floor(i / 3)] * 3 + (i % 3)]; vel[i] = 0; }
+        if (!isFinite(pos[i])) {
+          pos[i] = allPos[affected[Math.floor(i / 3)] * 3 + (i % 3)];
+          vel[i] = 0;
+        }
       }
     }
     if (iter % 2 === 1 && iter < maxIter - 1) {
-      await new Promise<void>(r => setTimeout(r, 0));
+      await new Promise<void>((r) => setTimeout(r, 0));
     }
   }
 
@@ -265,16 +331,26 @@ export function spiralGalaxies(
   const unassigned: number[] = [];
   for (let i = 0; i < n; i++) {
     const c = nodeComm[i];
-    if (c < 0) { unassigned.push(i); continue; }
+    if (c < 0) {
+      unassigned.push(i);
+      continue;
+    }
     let cc = comms.get(c);
-    if (!cc) { cc = { cx: 0, cy: 0, cz: 0, cnt: 0, nodes: [] }; comms.set(c, cc); }
-    cc.cx += pos[i * 3]; cc.cy += pos[i * 3 + 1]; cc.cz += pos[i * 3 + 2];
+    if (!cc) {
+      cc = { cx: 0, cy: 0, cz: 0, cnt: 0, nodes: [] };
+      comms.set(c, cc);
+    }
+    cc.cx += pos[i * 3];
+    cc.cy += pos[i * 3 + 1];
+    cc.cz += pos[i * 3 + 2];
     cc.cnt++;
     cc.nodes.push(i);
   }
   const commArr = [...comms.values()];
   for (const cc of commArr) {
-    cc.cx /= cc.cnt; cc.cy /= cc.cnt; cc.cz /= cc.cnt;
+    cc.cx /= cc.cnt;
+    cc.cy /= cc.cnt;
+    cc.cz /= cc.cnt;
   }
 
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
@@ -287,28 +363,31 @@ export function spiralGalaxies(
     const flat = 0.15 + (m % 5) * 0.04;
     const tiltA = (cc.cx * 7.3 + cc.cy * 3.1) % (Math.PI * 2);
     const tiltB = (cc.cz * 5.7 + cc.cx * 2.3) % (Math.PI * 0.6);
-    const ctA = Math.cos(tiltA), stA = Math.sin(tiltA);
-    const ctB = Math.cos(tiltB), stB = Math.sin(tiltB);
+    const ctA = Math.cos(tiltA),
+      stA = Math.sin(tiltA);
+    const ctB = Math.cos(tiltB),
+      stB = Math.sin(tiltB);
 
     for (let j = 0; j < m; j++) {
       const t = j / Math.max(1, m - 1);
-      const r = commR * Math.pow(t, 0.55);
+      const r = commR * t ** 0.55;
       const armIdx = j % arms;
       const armAngle = (armIdx / arms) * Math.PI * 2;
       const spiralAngle = r * twist + armAngle;
       const scatter = commR * 0.06 * (0.3 + t * 1.2);
       const gauss = () => {
-        let u = 0, v = 0;
+        let u = 0,
+          v = 0;
         while (u === 0) u = Math.random();
         while (v === 0) v = Math.random();
         return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
       };
-      let px = Math.cos(spiralAngle) * r + gauss() * scatter;
-      let py = gauss() * r * flat * 0.5;
-      let pz = Math.sin(spiralAngle) * r + gauss() * scatter;
-      let rx = px * ctA - pz * stA;
+      const px = Math.cos(spiralAngle) * r + gauss() * scatter;
+      const py = gauss() * r * flat * 0.5;
+      const pz = Math.sin(spiralAngle) * r + gauss() * scatter;
+      const rx = px * ctA - pz * stA;
       let rz = px * stA + pz * ctA;
-      let ry = py * ctB - rz * stB;
+      const ry = py * ctB - rz * stB;
       rz = py * stB + rz * ctB;
       const i = cc.nodes[j];
       pos[i * 3] = cc.cx + rx;
@@ -321,7 +400,7 @@ export function spiralGalaxies(
     const i = unassigned[j];
     const r = shellRadius * 0.1 * Math.cbrt(j + 1);
     const th = goldenAngle * j;
-    const ph = Math.acos(1 - 2 * (j + 0.5) / Math.max(1, unassigned.length));
+    const ph = Math.acos(1 - (2 * (j + 0.5)) / Math.max(1, unassigned.length));
     pos[i * 3] = Math.cos(th) * Math.sin(ph) * r;
     pos[i * 3 + 1] = Math.cos(ph) * r;
     pos[i * 3 + 2] = Math.sin(th) * Math.sin(ph) * r;
@@ -342,18 +421,27 @@ export function repelCommunityCentroids(
     const c = nodeComm[i];
     if (c < 0) continue;
     let cc = commMap.get(c);
-    if (!cc) { cc = { cx: 0, cy: 0, cz: 0, nodes: [], r: 0, idx: 0 }; commMap.set(c, cc); }
-    cc.cx += pos[i * 3]; cc.cy += pos[i * 3 + 1]; cc.cz += pos[i * 3 + 2];
+    if (!cc) {
+      cc = { cx: 0, cy: 0, cz: 0, nodes: [], r: 0, idx: 0 };
+      commMap.set(c, cc);
+    }
+    cc.cx += pos[i * 3];
+    cc.cy += pos[i * 3 + 1];
+    cc.cz += pos[i * 3 + 2];
     cc.nodes.push(i);
   }
   const comms = [...commMap.values()];
   if (comms.length < 2) return;
   for (let a = 0; a < comms.length; a++) comms[a].idx = a;
   for (const cc of comms) {
-    cc.cx /= cc.nodes.length; cc.cy /= cc.nodes.length; cc.cz /= cc.nodes.length;
+    cc.cx /= cc.nodes.length;
+    cc.cy /= cc.nodes.length;
+    cc.cz /= cc.nodes.length;
     const dists: number[] = [];
     for (const i of cc.nodes) {
-      const dx = pos[i * 3] - cc.cx, dy = pos[i * 3 + 1] - cc.cy, dz = pos[i * 3 + 2] - cc.cz;
+      const dx = pos[i * 3] - cc.cx,
+        dy = pos[i * 3 + 1] - cc.cy,
+        dz = pos[i * 3 + 2] - cc.cz;
       dists.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
     }
     dists.sort((a, b) => a - b);
@@ -362,11 +450,14 @@ export function repelCommunityCentroids(
   const C = comms.length;
   const crossW = new Array(C).fill(0).map(() => new Array(C).fill(0));
   for (const [s, t] of edgePairs) {
-    const sc = nodeComm[s], tc = nodeComm[t];
+    const sc = nodeComm[s],
+      tc = nodeComm[t];
     if (sc < 0 || tc < 0 || sc === tc) continue;
-    const sa = commMap.get(sc)?.idx, ta = commMap.get(tc)?.idx;
+    const sa = commMap.get(sc)?.idx,
+      ta = commMap.get(tc)?.idx;
     if (sa === undefined || ta === undefined) continue;
-    crossW[sa][ta]++; crossW[ta][sa]++;
+    crossW[sa][ta]++;
+    crossW[ta][sa]++;
   }
   const FACTOR = 2.1;
   const ITERS = 40;
@@ -376,32 +467,50 @@ export function repelCommunityCentroids(
     let hadOverlap = false;
     for (let a = 0; a < C; a++) {
       for (let b = a + 1; b < C; b++) {
-        const ca = comms[a], cb = comms[b];
-        const dx = cb.cx - ca.cx, dy = cb.cy - ca.cy, dz = cb.cz - ca.cz;
+        const ca = comms[a],
+          cb = comms[b];
+        const dx = cb.cx - ca.cx,
+          dy = cb.cy - ca.cy,
+          dz = cb.cz - ca.cz;
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dist < 0.01) continue;
-        const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+        const nx = dx / dist,
+          ny = dy / dist,
+          nz = dz / dist;
         const minDist = (ca.r + cb.r) * FACTOR;
         if (dist < minDist) {
           hadOverlap = true;
           const push = (minDist - dist) / 2;
-          deltas[a].dx -= nx * push; deltas[a].dy -= ny * push; deltas[a].dz -= nz * push;
-          deltas[b].dx += nx * push; deltas[b].dy += ny * push; deltas[b].dz += nz * push;
+          deltas[a].dx -= nx * push;
+          deltas[a].dy -= ny * push;
+          deltas[a].dz -= nz * push;
+          deltas[b].dx += nx * push;
+          deltas[b].dy += ny * push;
+          deltas[b].dz += nz * push;
         }
         const w = crossW[a][b];
         if (w > 0) {
           const pull = Math.min(w * ATT_STR, dist * 0.3);
-          deltas[a].dx += nx * pull; deltas[a].dy += ny * pull; deltas[a].dz += nz * pull;
-          deltas[b].dx -= nx * pull; deltas[b].dy -= ny * pull; deltas[b].dz -= nz * pull;
+          deltas[a].dx += nx * pull;
+          deltas[a].dy += ny * pull;
+          deltas[a].dz += nz * pull;
+          deltas[b].dx -= nx * pull;
+          deltas[b].dy -= ny * pull;
+          deltas[b].dz -= nz * pull;
         }
       }
     }
     if (!hadOverlap && iter > 10) break;
     for (let a = 0; a < C; a++) {
-      const cc = comms[a], d = deltas[a];
-      cc.cx += d.dx; cc.cy += d.dy; cc.cz += d.dz;
+      const cc = comms[a],
+        d = deltas[a];
+      cc.cx += d.dx;
+      cc.cy += d.dy;
+      cc.cz += d.dz;
       for (const i of cc.nodes) {
-        pos[i * 3] += d.dx; pos[i * 3 + 1] += d.dy; pos[i * 3 + 2] += d.dz;
+        pos[i * 3] += d.dx;
+        pos[i * 3 + 1] += d.dy;
+        pos[i * 3 + 2] += d.dz;
       }
     }
   }
@@ -421,7 +530,7 @@ export async function layout3D(
 ): Promise<Float32Array> {
   if (n === 0) return new Float32Array(0);
 
-  const groupIds = nodeComm ? [...new Set(nodeComm.filter(c => c >= 0))] : [];
+  const groupIds = nodeComm ? [...new Set(nodeComm.filter((c) => c >= 0))] : [];
 
   // Degenerate: ≤1 community → single-ball
   if (groupIds.length <= 1) {
@@ -469,7 +578,8 @@ export async function layout3D(
 
     const localPairs: [number, number][] = [];
     for (const [s, t] of edgePairs) {
-      const ls = g2l[s], lt = g2l[t];
+      const ls = g2l[s],
+        lt = g2l[t];
       if (ls >= 0 && lt >= 0) localPairs.push([ls, lt]);
     }
 
@@ -477,14 +587,22 @@ export async function layout3D(
     const localPos = await simulateForces(m, localPairs, localShell, signal);
     localPositions[g] = localPos;
 
-    let cx = 0, cy = 0, cz = 0;
+    let cx = 0,
+      cy = 0,
+      cz = 0;
     for (let li = 0; li < m; li++) {
-      cx += localPos[li * 3]; cy += localPos[li * 3 + 1]; cz += localPos[li * 3 + 2];
+      cx += localPos[li * 3];
+      cy += localPos[li * 3 + 1];
+      cz += localPos[li * 3 + 2];
     }
-    cx /= m; cy /= m; cz /= m;
+    cx /= m;
+    cy /= m;
+    cz /= m;
     const dists: number[] = [];
     for (let li = 0; li < m; li++) {
-      const dx = localPos[li * 3] - cx, dy = localPos[li * 3 + 1] - cy, dz = localPos[li * 3 + 2] - cz;
+      const dx = localPos[li * 3] - cx,
+        dy = localPos[li * 3 + 1] - cy,
+        dz = localPos[li * 3 + 2] - cz;
       dists.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
     }
     dists.sort((a, b) => a - b);
@@ -516,12 +634,13 @@ export async function layout3D(
 
   const crossWeight: number[][] = Array.from({ length: C }, () => new Array(C).fill(0));
   for (const [s, t] of edgePairs) {
-    const sg = nodeToGroup[s], tg = nodeToGroup[t];
+    const sg = nodeToGroup[s],
+      tg = nodeToGroup[t];
     if (sg >= 0 && tg >= 0 && sg !== tg) crossWeight[sg][tg]++;
   }
 
   const totalDiameter = groupRadii.reduce((s, r) => s + 2 * r, 0);
-  const R0 = Math.max(SEP * totalDiameter / (2 * Math.PI), 10);
+  const R0 = Math.max((SEP * totalDiameter) / (2 * Math.PI), 10);
 
   const centers = fibonacciSphere(C, R0);
   const cVel = new Float32Array(C * 3);
@@ -538,9 +657,15 @@ export async function layout3D(
         const dz = centers[i * 3 + 2] - centers[j * 3 + 2];
         const dist = Math.max(0.1, Math.sqrt(dx * dx + dy * dy + dz * dz));
         const f = Math.min(w * ATT_A, dist * 0.5);
-        const fx = (dx / dist) * f, fy = (dy / dist) * f, fz = (dz / dist) * f;
-        cVel[i * 3] -= fx; cVel[i * 3 + 1] -= fy; cVel[i * 3 + 2] -= fz;
-        cVel[j * 3] += fx; cVel[j * 3 + 1] += fy; cVel[j * 3 + 2] += fz;
+        const fx = (dx / dist) * f,
+          fy = (dy / dist) * f,
+          fz = (dz / dist) * f;
+        cVel[i * 3] -= fx;
+        cVel[i * 3 + 1] -= fy;
+        cVel[i * 3 + 2] -= fz;
+        cVel[j * 3] += fx;
+        cVel[j * 3 + 1] += fy;
+        cVel[j * 3 + 2] += fz;
       }
     }
 
@@ -553,7 +678,9 @@ export async function layout3D(
         const minDist = (groupRadii[i] + groupRadii[j]) * SEP;
         if (dist < minDist && dist > 0.001) {
           const push = (minDist - dist) / 2;
-          const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+          const nx = dx / dist,
+            ny = dy / dist,
+            nz = dz / dist;
           centers[i * 3] += nx * push;
           centers[i * 3 + 1] += ny * push;
           centers[i * 3 + 2] += nz * push;
@@ -562,13 +689,24 @@ export async function layout3D(
           centers[j * 3 + 2] -= nz * push;
           const vi = cVel[i * 3] * nx + cVel[i * 3 + 1] * ny + cVel[i * 3 + 2] * nz;
           const vj = cVel[j * 3] * nx + cVel[j * 3 + 1] * ny + cVel[j * 3 + 2] * nz;
-          if (vi > 0) { cVel[i * 3] -= nx * vi; cVel[i * 3 + 1] -= ny * vi; cVel[i * 3 + 2] -= nz * vi; }
-          if (vj < 0) { cVel[j * 3] -= nx * vj; cVel[j * 3 + 1] -= ny * vj; cVel[j * 3 + 2] -= nz * vj; }
+          if (vi > 0) {
+            cVel[i * 3] -= nx * vi;
+            cVel[i * 3 + 1] -= ny * vi;
+            cVel[i * 3 + 2] -= nz * vi;
+          }
+          if (vj < 0) {
+            cVel[j * 3] -= nx * vj;
+            cVel[j * 3 + 1] -= ny * vj;
+            cVel[j * 3 + 2] -= nz * vj;
+          }
         }
       }
     }
 
-    for (let i = 0; i < C * 3; i++) { cVel[i] *= 0.9; centers[i] += cVel[i]; }
+    for (let i = 0; i < C * 3; i++) {
+      cVel[i] *= 0.9;
+      centers[i] += cVel[i];
+    }
 
     if (iter % 10 === 0) {
       let diverged = false;
@@ -577,7 +715,10 @@ export async function layout3D(
       }
       if (diverged) {
         const fresh = fibonacciSphere(C, R0);
-        for (let i = 0; i < C * 3; i++) { centers[i] = fresh[i]; cVel[i] = 0; }
+        for (let i = 0; i < C * 3; i++) {
+          centers[i] = fresh[i];
+          cVel[i] = 0;
+        }
       }
     }
   }
@@ -587,7 +728,9 @@ export async function layout3D(
   for (let g = 0; g < C; g++) {
     const members = groupEntries[g][1];
     const localPos = localPositions[g];
-    const cx = centers[g * 3], cy = centers[g * 3 + 1], cz = centers[g * 3 + 2];
+    const cx = centers[g * 3],
+      cy = centers[g * 3 + 1],
+      cz = centers[g * 3 + 2];
     for (let li = 0; li < members.length; li++) {
       const gi = members[li];
       finalPos[gi * 3] = cx + localPos[li * 3];

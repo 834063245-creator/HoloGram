@@ -4,13 +4,13 @@
 // File Translator — LLM-powered code-to-human translation panel
 // Integrated into FileViewer. Caches results in .hologram/translations/
 
+import type * as monaco from 'monaco-editor';
 import { rpc } from '../bridge';
-import { loadSettings, getActiveProvider, type ProviderSettings } from '../settings';
 import { createAnthropicProvider } from '../provider/anthropic';
 import { createOpenAIProvider } from '../provider/openai';
 import { ChunkType } from '../provider/types';
+import { getActiveProvider, loadSettings, type ProviderSettings } from '../settings';
 import { iconHtml } from './icons';
-import type * as monaco from 'monaco-editor';
 import './file-translator.css';
 
 // ── Types ────────────────────────────────────────
@@ -360,9 +360,16 @@ export class FileTranslator {
     // Show loading
     this.currentFilePath = filePath;
     this.state = {
-      visible: true, mode: 'loading', error: null,
-      cacheHit: false, translatedAt: null,
-      lines: [], fileName, filePath, lineCount, waitSeconds: 0,
+      visible: true,
+      mode: 'loading',
+      error: null,
+      cacheHit: false,
+      translatedAt: null,
+      lines: [],
+      fileName,
+      filePath,
+      lineCount,
+      waitSeconds: 0,
     };
     this.show(filePath);
     this.renderLoading(fileName, lineCount);
@@ -378,10 +385,16 @@ export class FileTranslator {
       if (cached.lines && Array.isArray(cached.lines)) {
         const aligned = this.alignLines(cached.lines, codeLines);
         this.state = {
-          visible: true, mode: 'content', error: null,
+          visible: true,
+          mode: 'content',
+          error: null,
           cacheHit: true,
           translatedAt: cached.translated_at,
-          lines: aligned, fileName, filePath, lineCount, waitSeconds: 0,
+          lines: aligned,
+          fileName,
+          filePath,
+          lineCount,
+          waitSeconds: 0,
         };
         this.clearWaitInterval();
         this.renderContent(aligned, { cacheHit: true, translatedAt: cached.translated_at, fileName });
@@ -425,14 +438,19 @@ export class FileTranslator {
       this.sessionCache.set(filePath, aligned);
 
       this.state = {
-        visible: true, mode: 'content', error: null,
+        visible: true,
+        mode: 'content',
+        error: null,
         cacheHit: false,
         translatedAt: cacheData.translated_at,
-        lines: aligned, fileName, filePath, lineCount, waitSeconds: 0,
+        lines: aligned,
+        fileName,
+        filePath,
+        lineCount,
+        waitSeconds: 0,
       };
       this.clearWaitInterval();
       this.renderContent(aligned, { cacheHit: false, translatedAt: cacheData.translated_at, fileName });
-
     } catch (err: any) {
       this.clearWaitInterval();
       if (err.name === 'AbortError') {
@@ -441,7 +459,8 @@ export class FileTranslator {
       }
       this.state = {
         ...this.state,
-        mode: 'error', error: err.message || String(err),
+        mode: 'error',
+        error: err.message || String(err),
       };
       this.renderError(err.message || String(err));
     }
@@ -470,9 +489,16 @@ export class FileTranslator {
 
     this.currentFilePath = null; // selection doesn't belong to a file
     this.state = {
-      visible: true, mode: 'loading', error: null,
-      cacheHit: false, translatedAt: null,
-      lines: [], fileName: `选中 ${lineCount} 行翻译`, filePath: null, lineCount, waitSeconds: 0,
+      visible: true,
+      mode: 'loading',
+      error: null,
+      cacheHit: false,
+      translatedAt: null,
+      lines: [],
+      fileName: `选中 ${lineCount} 行翻译`,
+      filePath: null,
+      lineCount,
+      waitSeconds: 0,
     };
     this.show(null);
     this.renderLoading(`选中 ${lineCount} 行翻译`, lineCount);
@@ -491,16 +517,23 @@ export class FileTranslator {
       this.sessionCache.set(sessionKey, aligned);
 
       this.state = {
-        visible: true, mode: 'content', error: null,
+        visible: true,
+        mode: 'content',
+        error: null,
         cacheHit: false,
         translatedAt: new Date().toISOString(),
         lines: aligned,
         fileName: `选中 ${lineCount} 行翻译`,
-        filePath: null, lineCount, waitSeconds: 0,
+        filePath: null,
+        lineCount,
+        waitSeconds: 0,
       };
       this.clearWaitInterval();
-      this.renderContent(aligned, { cacheHit: false, translatedAt: new Date().toISOString(), fileName: `选中 ${lineCount} 行翻译` });
-
+      this.renderContent(aligned, {
+        cacheHit: false,
+        translatedAt: new Date().toISOString(),
+        fileName: `选中 ${lineCount} 行翻译`,
+      });
     } catch (err: any) {
       this.clearWaitInterval();
       if (err.name === 'AbortError') return;
@@ -574,7 +607,10 @@ export class FileTranslator {
     const cacheLabel = meta.cacheHit ? `缓存命中 · ${relativeTime(meta.translatedAt)} 前` : '新翻译 · 刚刚';
 
     // Audit stats
-    let bug = 0, risk = 0, smell = 0, ok = 0;
+    let bug = 0,
+      risk = 0,
+      smell = 0,
+      ok = 0;
     for (const l of lines) {
       if (l.audit_type === 'bug') bug++;
       else if (l.audit_type === 'risk') risk++;
@@ -592,12 +628,23 @@ export class FileTranslator {
 
     // Render columns
     const colDefs = [
-      { body: this.colBodies[0], cls: 'ft-code-line', render: (l: TranslationLine, i: number) =>
-          `<span class="ft-ln">${i + 1}</span><span class="ft-ct">${this.escHtml(l.code)}</span>` },
-      { body: this.colBodies[1], cls: 'ft-human-line', render: (l: TranslationLine, _i: number) =>
-          `<span class="ft-ct">${this.escHtml(l.human) || '<span style="opacity:0.3">—</span>'}</span>` },
-      { body: this.colBodies[2], cls: 'ft-audit-line', render: (l: TranslationLine, _i: number) =>
-          this.renderAuditCell(l) },
+      {
+        body: this.colBodies[0],
+        cls: 'ft-code-line',
+        render: (l: TranslationLine, i: number) =>
+          `<span class="ft-ln">${i + 1}</span><span class="ft-ct">${this.escHtml(l.code)}</span>`,
+      },
+      {
+        body: this.colBodies[1],
+        cls: 'ft-human-line',
+        render: (l: TranslationLine, _i: number) =>
+          `<span class="ft-ct">${this.escHtml(l.human) || '<span style="opacity:0.3">—</span>'}</span>`,
+      },
+      {
+        body: this.colBodies[2],
+        cls: 'ft-audit-line',
+        render: (l: TranslationLine, _i: number) => this.renderAuditCell(l),
+      },
     ];
 
     colDefs.forEach((def) => {
@@ -855,8 +902,14 @@ export class FileTranslator {
       const rightMin = 0.12;
       let newLeft = this.dragStartWidths[i] + dFrac;
       let newRight = this.dragStartWidths[i + 1] - dFrac;
-      if (newLeft < leftMin) { newLeft = leftMin; newRight = 1 - leftMin - this.colWidths[2]; }
-      if (newRight < rightMin) { newRight = rightMin; newLeft = 1 - rightMin - this.colWidths[0]; }
+      if (newLeft < leftMin) {
+        newLeft = leftMin;
+        newRight = 1 - leftMin - this.colWidths[2];
+      }
+      if (newRight < rightMin) {
+        newRight = rightMin;
+        newLeft = 1 - rightMin - this.colWidths[0];
+      }
       // Recalculate — keep it simple: just two adjacent cols
       const remaining = 1 - newLeft - newRight;
       // Distribute remaining to the third column
@@ -893,10 +946,6 @@ export class FileTranslator {
   // ── Util ──────────────────────────────────────
 
   private escHtml(s: string): string {
-    return s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 }

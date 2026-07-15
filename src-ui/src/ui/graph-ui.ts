@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-import { hexToCSS } from './graph-colors';
 import { t } from '../i18n';
+import { hexToCSS } from './graph-colors';
 
 // ── Legend (color key) ────────────────────────────────────────
 
@@ -16,8 +16,7 @@ export function buildLegend(
   const el = document.createElement('div');
   el.id = 'graph-legend';
   el.style.display = 'none';
-  el.innerHTML =
-    `<div class="legend-section">
+  el.innerHTML = `<div class="legend-section">
       <div class="legend-title">${t('legend.node')}</div>
       <div class="legend-row legend-node-row" data-node-filter="function" title="${t('legend.function.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x4ad8c8)};color:${hexToCSS(0x4ad8c8)}"></span> ${t('legend.function')}</div>
       <div class="legend-row legend-node-row" data-node-filter="class" title="${t('legend.class.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x7fd84a)};color:${hexToCSS(0x7fd84a)}"></span> ${t('legend.class')}</div>
@@ -34,14 +33,14 @@ export function buildLegend(
       <div class="legend-row legend-edge-row" data-edge-type="inherits" title="${t('legend.inherits.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff66dd)}"></span> ${t('legend.inherits')}</div>
     </div>`;
   container.appendChild(el);
-  el.querySelectorAll<HTMLElement>('.legend-edge-row').forEach(row => {
+  el.querySelectorAll<HTMLElement>('.legend-edge-row').forEach((row) => {
     row.style.cursor = 'pointer';
     row.addEventListener('click', () => {
       const et = row.dataset['edgeType'] || '';
       setEdgeTypeFilter(_edgeTypeFilter() === et ? null : et);
     });
   });
-  el.querySelectorAll<HTMLElement>('.legend-node-row').forEach(row => {
+  el.querySelectorAll<HTMLElement>('.legend-node-row').forEach((row) => {
     row.style.cursor = 'pointer';
     row.addEventListener('click', () => {
       const nk = row.dataset['nodeFilter'] || '';

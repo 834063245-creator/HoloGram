@@ -117,11 +117,7 @@ export type ChatMessage = UserMessage | AssistantMessage | NoticeMessage;
 // ── Helpers ──────────────────────────────────────────────
 
 /** Create a new user message. */
-export function createUserMessage(
-  text: string,
-  files?: FileAttachment[],
-  sessionIndex?: number,
-): UserMessage {
+export function createUserMessage(text: string, files?: FileAttachment[], sessionIndex?: number): UserMessage {
   return {
     role: 'user',
     _id: nextMsgId(),
@@ -143,10 +139,7 @@ export function createAssistantMessage(respondingTo: MessageId): AssistantMessag
 }
 
 /** Create a notice message (info/warn/error banners). */
-export function createNoticeMessage(
-  text: string,
-  level: NoticeMessage['level'] = 'info',
-): NoticeMessage {
+export function createNoticeMessage(text: string, level: NoticeMessage['level'] = 'info'): NoticeMessage {
   return { role: 'notice', _id: nextMsgId(), text, level };
 }
 
@@ -167,11 +160,6 @@ export function lastReasoningPart(parts: AssistantPart[]): ReasonPart | undefine
 }
 
 /** Find a tool part by toolId. */
-export function findToolPart(
-  parts: AssistantPart[],
-  toolId: string,
-): ToolCallPart | undefined {
-  return parts.find(
-    (p): p is ToolCallPart => p.type === 'tool' && p.toolId === toolId,
-  );
+export function findToolPart(parts: AssistantPart[], toolId: string): ToolCallPart | undefined {
+  return parts.find((p): p is ToolCallPart => p.type === 'tool' && p.toolId === toolId);
 }

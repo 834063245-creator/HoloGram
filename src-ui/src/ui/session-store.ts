@@ -38,8 +38,7 @@ function createSessionStoreImpl() {
 
     setSessions: (sessions) => set({ sessions }),
     setActiveIdx: (activeIdx) => set({ activeIdx }),
-    setSessionTokens: (id, count) =>
-      set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
+    setSessionTokens: (id, count) => set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
     removeSession: (id) =>
       set((s) => {
         const { [id]: _, ...restTokens } = s.sessionTokens;
@@ -68,17 +67,29 @@ export function getSessionStore(storeId?: string): SessionStoreApi {
 
 // ── Non-reactive accessors ──
 
-function _store(storeId?: string) { return getSessionStore(storeId).getState(); }
+function _store(storeId?: string) {
+  return getSessionStore(storeId).getState();
+}
 
-export function getSessions(storeId?: string): ChatSessionMeta[] { return _store(storeId).sessions; }
-export function getActiveIdx(storeId?: string): number { return _store(storeId).activeIdx; }
+export function getSessions(storeId?: string): ChatSessionMeta[] {
+  return _store(storeId).sessions;
+}
+export function getActiveIdx(storeId?: string): number {
+  return _store(storeId).activeIdx;
+}
 export function getActiveSessionId(storeId?: string): number | null {
   const { sessions, activeIdx } = _store(storeId);
   return sessions[activeIdx]?.id ?? null;
 }
-export function getSessionTokens(storeId?: string): Record<number, number> { return _store(storeId).sessionTokens; }
-export function getNextSessionId(storeId?: string): number { return _store(storeId).nextSessionId; }
-export function getMsgIdSeq(storeId?: string): number { return _store(storeId).msgIdSeq; }
+export function getSessionTokens(storeId?: string): Record<number, number> {
+  return _store(storeId).sessionTokens;
+}
+export function getNextSessionId(storeId?: string): number {
+  return _store(storeId).nextSessionId;
+}
+export function getMsgIdSeq(storeId?: string): number {
+  return _store(storeId).msgIdSeq;
+}
 
 export function nextMsgId(storeId?: string): string {
   const store = getSessionStore(storeId);

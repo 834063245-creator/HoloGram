@@ -5,10 +5,10 @@
 // 消费 hologram check --json 的输出，渲染变更摘要面板
 // 右侧边栏，保存时自动刷新
 
+import { cacheCheckResult } from '../agent/state-inject';
+import { askAgent } from './agent-visualizer';
 import { shell } from './app-shell';
 import { iconHtml } from './icons';
-import { askAgent } from './agent-visualizer';
-import { cacheCheckResult } from '../agent/state-inject';
 
 interface Violation {
   signal?: {
@@ -77,7 +77,11 @@ export class CheckPanel {
     // Feed check result to state injection cache so the agent sees it
     cacheCheckResult({
       passed: result.passed,
-      violationCount: (result.l5_violations?.length || 0) + (result.l4_violations?.length || 0) + (result.l3_violations?.length || 0) + (result.l2_violations?.length || 0),
+      violationCount:
+        (result.l5_violations?.length || 0) +
+        (result.l4_violations?.length || 0) +
+        (result.l3_violations?.length || 0) +
+        (result.l2_violations?.length || 0),
       newCount: result.new_violations || 0,
       resolvedCount: result.resolved_violations || 0,
       persistentCount: result.persistent_violations || 0,
@@ -128,10 +132,12 @@ export class CheckPanel {
         tool: 'project_timeline',
         args: { limit: 80 },
       });
-      const data = JSON.parse(json) as { events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }> };
+      const data = JSON.parse(json) as {
+        events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }>;
+      };
       this.historyEvents = (data.events || [])
-        .filter(e => e.event_type === 'commit_clean' || e.event_type === 'commit_violation')
-        .map(e => ({ timestamp: e.timestamp, summary: e.summary, props: e.properties }));
+        .filter((e) => e.event_type === 'commit_clean' || e.event_type === 'commit_violation')
+        .map((e) => ({ timestamp: e.timestamp, summary: e.summary, props: e.properties }));
     } catch {
       this.historyEvents = [];
     }
@@ -146,7 +152,10 @@ export class CheckPanel {
     banner.appendChild(label);
     const backBtn = ce('button', 'check-history-back');
     backBtn.textContent = '返回当前';
-    backBtn.addEventListener('click', () => { this.showHistoryList = false; this.showCurrent(); });
+    backBtn.addEventListener('click', () => {
+      this.showHistoryList = false;
+      this.showCurrent();
+    });
     banner.appendChild(backBtn);
     this.content.appendChild(banner);
 
@@ -161,7 +170,10 @@ export class CheckPanel {
     for (const ev of this.historyEvents) {
       const item = ce('div', 'check-history-item');
       const passed = ev.props?.passed !== false;
-      const status = ce('span', passed ? 'check-history-status check-history-pass' : 'check-history-status check-history-fail');
+      const status = ce(
+        'span',
+        passed ? 'check-history-status check-history-pass' : 'check-history-status check-history-fail',
+      );
       status.textContent = passed ? '✓' : '✗';
       item.appendChild(status);
       const info = ce('div', 'check-history-info');
@@ -352,9 +364,9 @@ export class CheckPanel {
     if (nv > 0 || rv > 0 || pv > 0) {
       const diffRow = ce('div', 'check-diff-row');
       const badges: Array<{ text: string; cls: string }> = [];
-      if (nv  > 0) badges.push({ text: `+${nv} 新增`, cls: 'check-diff-new' });
-      if (rv  > 0) badges.push({ text: `-${rv} 已解决`, cls: 'check-diff-resolved' });
-      if (pv  > 0) badges.push({ text: `↻ ${pv} 持续`, cls: 'check-diff-persistent' });
+      if (nv > 0) badges.push({ text: `+${nv} 新增`, cls: 'check-diff-new' });
+      if (rv > 0) badges.push({ text: `-${rv} 已解决`, cls: 'check-diff-resolved' });
+      if (pv > 0) badges.push({ text: `↻ ${pv} 持续`, cls: 'check-diff-persistent' });
       for (const b of badges) {
         const span = ce('span', `check-diff-badge ${b.cls}`);
         span.textContent = b.text;
@@ -367,7 +379,8 @@ export class CheckPanel {
 
     // Files
     this.addCollapsible(
-      '变更文件', String(r.total_changed_files),
+      '变更文件',
+      String(r.total_changed_files),
       r.total_changed_files <= 5, // auto-expand if few
       () => {
         const list = ce('div', 'check-file-list');
@@ -392,7 +405,9 @@ export class CheckPanel {
     for (const vl of vLevels) {
       if (vl.count === 0) continue;
       const expand = vl.cls === 'l5' || vl.cls === 'l4'; // auto-expand L5/L4
-      this.addCollapsible(vl.label, String(vl.count), expand, () => this.buildViolationGroup(vl.label, vl.cls, vl.violations));
+      this.addCollapsible(vl.label, String(vl.count), expand, () =>
+        this.buildViolationGroup(vl.label, vl.cls, vl.violations),
+      );
     }
 
     // Stats
@@ -485,7 +500,9 @@ export class CheckPanel {
           fp ? `文件: ${fp}${line ? ':' + line : ''}` : '',
           nodeList ? `影响: ${nodeList}` : '',
           sig.old_value ? `变更: ${sig.old_value} → ${sig.new_value}` : '',
-        ].filter(Boolean).join(' | ');
+        ]
+          .filter(Boolean)
+          .join(' | ');
         askAgent(`分析这条违规: ${ctx}`);
       });
       titleRow.appendChild(askBtn);

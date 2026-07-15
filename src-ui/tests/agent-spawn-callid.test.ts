@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { type AgentEvent, EventKind } from '../src/agent/agent-types';
 import { StreamingToolExecutor } from '../src/agent/streaming-executor';
-import { ToolRegistry } from '../src/agent/tool';
 import type { Tool } from '../src/agent/tool';
-import { EventKind, type AgentEvent } from '../src/agent/agent-types';
+import { ToolRegistry } from '../src/agent/tool';
 
 // ── Helpers ──
 
@@ -10,7 +10,11 @@ function makeSpawnTool(onExecute: (args: Record<string, unknown>) => Promise<str
   return {
     name: () => 'agent_spawn',
     description: () => 'spawn sub-agent',
-    parameters: () => ({ type: 'object', properties: { description: { type: 'string' }, prompt: { type: 'string' } }, required: ['description', 'prompt'] }),
+    parameters: () => ({
+      type: 'object',
+      properties: { description: { type: 'string' }, prompt: { type: 'string' } },
+      required: ['description', 'prompt'],
+    }),
     readOnly: () => false,
     execute: async (args) => onExecute(args),
   };
@@ -19,7 +23,6 @@ function makeSpawnTool(onExecute: (args: Record<string, unknown>) => Promise<str
 // ── Tests ──
 
 describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
-
   it('streaming path injects _callId into agent_spawn args', async () => {
     const receivedArgs: Record<string, unknown>[] = [];
     const tool = makeSpawnTool(async (args) => {
@@ -30,7 +33,9 @@ describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
     registry.register(tool);
 
     const events: AgentEvent[] = [];
-    const sink = (ev: AgentEvent) => { events.push(ev); };
+    const sink = (ev: AgentEvent) => {
+      events.push(ev);
+    };
 
     const executor = new StreamingToolExecutor(registry, sink, null, null);
     executor.addTool({ id: 'call-42', name: 'agent_spawn', arguments: '{"description":"test","prompt":"hello"}' });
@@ -75,7 +80,9 @@ describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
     registry.register(tool);
 
     const events: AgentEvent[] = [];
-    const sink = (ev: AgentEvent) => { events.push(ev); };
+    const sink = (ev: AgentEvent) => {
+      events.push(ev);
+    };
 
     const executor = new StreamingToolExecutor(registry, sink, null, null);
     executor.addTool({ id: 'call-7', name: 'agent_spawn', arguments: '{"description":"d","prompt":"p"}' });
@@ -83,10 +90,9 @@ describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
     await executor.awaitRemaining();
 
     // Should have ToolDispatch + ToolResult events
-    const dispatch = events.find(e => e.kind === EventKind.ToolDispatch);
+    const dispatch = events.find((e) => e.kind === EventKind.ToolDispatch);
     expect(dispatch).toBeDefined();
     expect(dispatch!.tool!.id).toBe('call-7');
     expect(dispatch!.tool!.name).toBe('agent_spawn');
   });
-
 });

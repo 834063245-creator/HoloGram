@@ -5,32 +5,45 @@
 // 可从简报/详情卡片/聊天/时间轴中点击文件名呼出
 // 支持拖拽移动、调整大小、多标签页、Ctrl+S 保存
 
-import { rpc } from '../bridge';
-import { iconHtml, iconSvg } from './icons';
-import { askAgent } from './agent-visualizer';
 import * as monaco from 'monaco-editor';
+import { rpc } from '../bridge';
+import { askAgent } from './agent-visualizer';
+import { iconHtml, iconSvg } from './icons';
 
 // ponytail: read CSS var once at init; user changes require reload
 function getFontScale(): number {
   try {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
     return parseFloat(v) || 1;
-  } catch { return 1; }
+  } catch {
+    return 1;
+  }
 }
-import { startLsp, didOpen, didChange, didClose, stopAllLsp, registerCompletionProvider, registerHoverProvider, registerDefinitionProvider, registerReferencesProvider, listenForDiagnostics } from './lsp-client';
+
+import DOMPurify from 'dompurify';
+import hljs from 'highlight.js';
+import { marked } from 'marked';
+// Monaco workers — Vite ?worker syntax bundles them as separate chunks
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { ChatPanel } from './chat';
 import { stripLineNumbers } from './chat-session';
 import { FileTranslator } from './file-translator';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import hljs from 'highlight.js';
-
-// Monaco workers — Vite ?worker syntax bundles them as separate chunks
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
-import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
-import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
-import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import {
+  didChange,
+  didClose,
+  didOpen,
+  listenForDiagnostics,
+  registerCompletionProvider,
+  registerDefinitionProvider,
+  registerHoverProvider,
+  registerReferencesProvider,
+  startLsp,
+  stopAllLsp,
+} from './lsp-client';
 
 // LSP session cache: language -> session_id (shared across all FileViewer instances)
 const lspSessions = new Map<string, number>();
@@ -39,11 +52,21 @@ const lspSessions = new Map<string, number>();
 self.MonacoEnvironment = {
   getWorker(_workerId: string, label: string) {
     switch (label) {
-      case 'json': return new jsonWorker();
-      case 'css': case 'scss': case 'less': return new cssWorker();
-      case 'html': case 'handlebars': case 'razor': return new htmlWorker();
-      case 'typescript': case 'javascript': return new tsWorker();
-      default: return new editorWorker();
+      case 'json':
+        return new jsonWorker();
+      case 'css':
+      case 'scss':
+      case 'less':
+        return new cssWorker();
+      case 'html':
+      case 'handlebars':
+      case 'razor':
+        return new htmlWorker();
+      case 'typescript':
+      case 'javascript':
+        return new tsWorker();
+      default:
+        return new editorWorker();
     }
   },
 };
@@ -109,15 +132,21 @@ export class FileViewer {
   private constructor() {
     this.state = {
       open: false,
-      x: 100, y: 80,
-      width: 780, height: 500,
+      x: 100,
+      y: 80,
+      width: 780,
+      height: 500,
     };
     this.buildDOM();
     this.initEditor();
-    this.translator = new FileTranslator(this.el, () => {
-      this.editor.layout();
-      if (this.diffEditor) this.diffEditor.layout();
-    }, () => this.editor);
+    this.translator = new FileTranslator(
+      this.el,
+      () => {
+        this.editor.layout();
+        if (this.diffEditor) this.diffEditor.layout();
+      },
+      () => this.editor,
+    );
   }
 
   private buildDOM(): void {
@@ -126,17 +155,22 @@ export class FileViewer {
     this.el.id = 'file-viewer';
     this.el.className = 'file-viewer';
     Object.assign(this.el.style, {
-      position: 'absolute', zIndex: '30',
-      width: `${this.state.width}px`, height: `${this.state.height}px`,
-      left: `${this.state.x}px`, top: `${this.state.y}px`,
+      position: 'absolute',
+      zIndex: '30',
+      width: `${this.state.width}px`,
+      height: `${this.state.height}px`,
+      left: `${this.state.x}px`,
+      top: `${this.state.y}px`,
       background: 'var(--panel-bg, rgba(6, 12, 24, 0.97))',
       backdropFilter: 'var(--blur, blur(14px))',
       WebkitBackdropFilter: 'var(--blur, blur(14px))',
       border: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.5))',
       borderRadius: '8px',
       boxShadow: '0 12px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(88,120,180,0.08) inset',
-      flexDirection: 'column', overflow: 'hidden',
-      minWidth: '420px', minHeight: '320px',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      minWidth: '420px',
+      minHeight: '320px',
     });
 
     const brackets = document.createElement('div');
@@ -150,9 +184,14 @@ export class FileViewer {
     this.header = document.createElement('div');
     this.header.className = 'fv-titlebar';
     Object.assign(this.header.style, {
-      display: 'flex', alignItems: 'center', gap: '6px',
-      minHeight: 'calc(30px * var(--font-scale))', padding: '0 calc(6px * var(--font-scale))', flexShrink: '0',
-      cursor: 'move', userSelect: 'none',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      minHeight: 'calc(30px * var(--font-scale))',
+      padding: '0 calc(6px * var(--font-scale))',
+      flexShrink: '0',
+      cursor: 'move',
+      userSelect: 'none',
       background: 'rgba(14, 22, 38, 0.7)',
       borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.25))',
     });
@@ -161,9 +200,15 @@ export class FileViewer {
     this.breadcrumb = document.createElement('div');
     this.breadcrumb.className = 'fv-breadcrumb';
     Object.assign(this.breadcrumb.style, {
-      display: 'flex', alignItems: 'center', gap: '2px', flex: '1',
-      overflow: 'hidden', fontSize: 'calc(10px * var(--font-scale))', fontFamily: 'var(--font-mono, monospace)',
-      color: 'var(--text-muted)', minWidth: '0',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '2px',
+      flex: '1',
+      overflow: 'hidden',
+      fontSize: 'calc(10px * var(--font-scale))',
+      fontFamily: 'var(--font-mono, monospace)',
+      color: 'var(--text-muted)',
+      minWidth: '0',
     });
     this.header.appendChild(this.breadcrumb);
 
@@ -171,7 +216,10 @@ export class FileViewer {
     const winActions = document.createElement('div');
     winActions.className = 'fv-win-actions';
     Object.assign(winActions.style, {
-      display: 'flex', alignItems: 'center', gap: '2px', flexShrink: '0',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '2px',
+      flexShrink: '0',
     });
     for (const { id, icon, tip, colorVar } of [
       { id: 'agent', icon: 'agent', tip: '问 Agent 分析当前文件', colorVar: 'var(--signal, #7eb8ff)' },
@@ -183,16 +231,34 @@ export class FileViewer {
       btn.innerHTML = iconHtml(icon, 13);
       btn.title = tip;
       Object.assign(btn.style, {
-        minWidth: 'calc(22px * var(--font-scale))', minHeight: 'calc(22px * var(--font-scale))', padding: '0', border: 'none', cursor: 'pointer',
-        background: 'none', color: 'var(--text-muted)', borderRadius: '4px',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(13px * var(--font-scale))',
+        minWidth: 'calc(22px * var(--font-scale))',
+        minHeight: 'calc(22px * var(--font-scale))',
+        padding: '0',
+        border: 'none',
+        cursor: 'pointer',
+        background: 'none',
+        color: 'var(--text-muted)',
+        borderRadius: '4px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 'calc(13px * var(--font-scale))',
       });
-      btn.addEventListener('mouseenter', () => { btn.style.color = colorVar; btn.style.background = 'rgba(255,255,255,0.05)'; });
-      btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-muted)'; btn.style.background = 'none'; });
+      btn.addEventListener('mouseenter', () => {
+        btn.style.color = colorVar;
+        btn.style.background = 'rgba(255,255,255,0.05)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.color = 'var(--text-muted)';
+        btn.style.background = 'none';
+      });
       if (id === 'agent') {
         btn.addEventListener('click', () => {
           const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
-          if (tab) askAgent(`分析文件 "${tab.filePath}" 的依赖关系和耦合状况。它和其他模块的关联是什么？如果修改它会影响哪些模块？`);
+          if (tab)
+            askAgent(
+              `分析文件 "${tab.filePath}" 的依赖关系和耦合状况。它和其他模块的关联是什么？如果修改它会影响哪些模块？`,
+            );
         });
       } else if (id === 'translate') {
         btn.addEventListener('click', () => {
@@ -219,8 +285,12 @@ export class FileViewer {
     this.toolbar = document.createElement('div');
     this.toolbar.className = 'fv-toolbar';
     Object.assign(this.toolbar.style, {
-      display: 'flex', alignItems: 'center', gap: '1px',
-      height: '26px', padding: '0 4px', flexShrink: '0',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '1px',
+      height: '26px',
+      padding: '0 4px',
+      flexShrink: '0',
       background: 'rgba(10, 18, 32, 0.5)',
       borderBottom: '1px solid rgba(48, 60, 80, 0.2)',
     });
@@ -237,12 +307,26 @@ export class FileViewer {
       btn.innerHTML = iconHtml(icon, 12);
       btn.title = tip;
       Object.assign(btn.style, {
-        width: '22px', height: '20px', padding: '0', border: 'none', cursor: 'pointer',
-        background: 'none', color: 'var(--text-muted)', borderRadius: '3px',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: '22px',
+        height: '20px',
+        padding: '0',
+        border: 'none',
+        cursor: 'pointer',
+        background: 'none',
+        color: 'var(--text-muted)',
+        borderRadius: '3px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
       });
-      btn.addEventListener('mouseenter', () => { btn.style.color = 'var(--starlight-dim)'; btn.style.background = 'rgba(255,255,255,0.04)'; });
-      btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-muted)'; btn.style.background = 'none'; });
+      btn.addEventListener('mouseenter', () => {
+        btn.style.color = 'var(--starlight-dim)';
+        btn.style.background = 'rgba(255,255,255,0.04)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.color = 'var(--text-muted)';
+        btn.style.background = 'none';
+      });
       btn.addEventListener('click', action);
       this.toolbarBtns[icon] = btn;
       this.toolbar.appendChild(btn);
@@ -258,12 +342,26 @@ export class FileViewer {
     fmtBtn.innerHTML = iconHtml('edit', 12);
     fmtBtn.title = '格式化文档';
     Object.assign(fmtBtn.style, {
-      width: '22px', height: '20px', padding: '0', border: 'none', cursor: 'pointer',
-      background: 'none', color: 'var(--text-muted)', borderRadius: '3px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      width: '22px',
+      height: '20px',
+      padding: '0',
+      border: 'none',
+      cursor: 'pointer',
+      background: 'none',
+      color: 'var(--text-muted)',
+      borderRadius: '3px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
     });
-    fmtBtn.addEventListener('mouseenter', () => { fmtBtn.style.color = 'var(--signal, #7eb8ff)'; fmtBtn.style.background = 'rgba(255,255,255,0.04)'; });
-    fmtBtn.addEventListener('mouseleave', () => { fmtBtn.style.color = 'var(--text-muted)'; fmtBtn.style.background = 'none'; });
+    fmtBtn.addEventListener('mouseenter', () => {
+      fmtBtn.style.color = 'var(--signal, #7eb8ff)';
+      fmtBtn.style.background = 'rgba(255,255,255,0.04)';
+    });
+    fmtBtn.addEventListener('mouseleave', () => {
+      fmtBtn.style.color = 'var(--text-muted)';
+      fmtBtn.style.background = 'none';
+    });
     fmtBtn.addEventListener('click', () => this.editor.getAction('editor.action.formatDocument')?.run());
     this.toolbarBtns['format'] = fmtBtn;
     this.toolbar.appendChild(fmtBtn);
@@ -277,12 +375,26 @@ export class FileViewer {
     previewBtn.innerHTML = iconHtml('eye', 12);
     previewBtn.title = '切换预览 (Markdown / 图片)';
     Object.assign(previewBtn.style, {
-      width: '22px', height: '20px', padding: '0', border: 'none', cursor: 'pointer',
-      background: 'none', color: 'var(--text-muted)', borderRadius: '3px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      width: '22px',
+      height: '20px',
+      padding: '0',
+      border: 'none',
+      cursor: 'pointer',
+      background: 'none',
+      color: 'var(--text-muted)',
+      borderRadius: '3px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
     });
-    previewBtn.addEventListener('mouseenter', () => { previewBtn.style.color = 'var(--nebula, #a088e0)'; previewBtn.style.background = 'rgba(255,255,255,0.04)'; });
-    previewBtn.addEventListener('mouseleave', () => { previewBtn.style.color = 'var(--text-muted)'; previewBtn.style.background = 'none'; });
+    previewBtn.addEventListener('mouseenter', () => {
+      previewBtn.style.color = 'var(--nebula, #a088e0)';
+      previewBtn.style.background = 'rgba(255,255,255,0.04)';
+    });
+    previewBtn.addEventListener('mouseleave', () => {
+      previewBtn.style.color = 'var(--text-muted)';
+      previewBtn.style.background = 'none';
+    });
     previewBtn.addEventListener('click', () => this.togglePreview());
     this.toolbarBtns['preview'] = previewBtn;
     this.toolbar.appendChild(previewBtn);
@@ -293,8 +405,14 @@ export class FileViewer {
     this.tabBar = document.createElement('div');
     this.tabBar.className = 'fv-tabbar';
     Object.assign(this.tabBar.style, {
-      display: 'flex', alignItems: 'flex-end', gap: '0',
-      height: '30px', padding: '0 4px', flexShrink: '0', overflowX: 'auto', overflowY: 'hidden',
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: '0',
+      height: '30px',
+      padding: '0 4px',
+      flexShrink: '0',
+      overflowX: 'auto',
+      overflowY: 'hidden',
       background: 'rgba(8, 14, 26, 0.6)',
       borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
       minHeight: '30px',
@@ -312,10 +430,13 @@ export class FileViewer {
     this.previewContainer = document.createElement('div');
     this.previewContainer.className = 'fv-preview';
     Object.assign(this.previewContainer.style, {
-      flex: '1', overflow: 'auto', display: 'none',
+      flex: '1',
+      overflow: 'auto',
+      display: 'none',
       padding: '24px 32px',
       color: 'var(--starlight-dim, #c8d6e5)',
-      fontSize: 'calc(13px * var(--font-scale))', lineHeight: '1.7',
+      fontSize: 'calc(13px * var(--font-scale))',
+      lineHeight: '1.7',
       fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif)',
     });
 
@@ -325,11 +446,16 @@ export class FileViewer {
     this.statusBar = document.createElement('div');
     this.statusBar.className = 'fv-statusbar';
     Object.assign(this.statusBar.style, {
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      height: '22px', padding: '0 8px', flexShrink: '0',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      height: '22px',
+      padding: '0 8px',
+      flexShrink: '0',
       background: 'rgba(8, 14, 26, 0.8)',
       borderTop: '1px solid rgba(48, 60, 80, 0.3)',
-      fontSize: 'calc(10px * var(--font-scale))', fontFamily: 'var(--font-mono, monospace)',
+      fontSize: 'calc(10px * var(--font-scale))',
+      fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text-muted)',
     });
 
@@ -381,8 +507,13 @@ export class FileViewer {
     this.resizeHandle = document.createElement('div');
     this.resizeHandle.className = 'fv-grip';
     Object.assign(this.resizeHandle.style, {
-      position: 'absolute', right: '0', bottom: '0',
-      width: '14px', height: '14px', cursor: 'nwse-resize', zIndex: '2',
+      position: 'absolute',
+      right: '0',
+      bottom: '0',
+      width: '14px',
+      height: '14px',
+      cursor: 'nwse-resize',
+      zIndex: '2',
     });
     this.el.appendChild(this.resizeHandle);
 
@@ -441,13 +572,17 @@ export class FileViewer {
 
     // Editor context menu actions
     this.editor.addAction({
-      id: 'format-document', label: '格式化文档',
-      contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 2,
+      id: 'format-document',
+      label: '格式化文档',
+      contextMenuGroupId: '9_cutcopypaste',
+      contextMenuOrder: 2,
       run: () => this.editor.getAction('editor.action.formatDocument')?.run(),
     });
     this.editor.addAction({
-      id: 'copy-file-path', label: '复制文件路径',
-      contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 3,
+      id: 'copy-file-path',
+      label: '复制文件路径',
+      contextMenuGroupId: '9_cutcopypaste',
+      contextMenuOrder: 3,
       run: () => {
         const tab = this.tabs[this.activeIdx];
         if (tab?.filePath) navigator.clipboard.writeText(tab.filePath);
@@ -463,11 +598,7 @@ export class FileViewer {
         if (!selection || selection.isEmpty()) return;
         const selectedText = this.editor.getModel()?.getValueInRange(selection);
         if (selectedText?.trim()) {
-          this.translator.translateSelection(
-            selectedText,
-            selection.startLineNumber,
-            selection.endLineNumber,
-          );
+          this.translator.translateSelection(selectedText, selection.startLineNumber, selection.endLineNumber);
         }
       },
     });
@@ -486,10 +617,17 @@ export class FileViewer {
       tabEl.className = 'fv-tab';
       tabEl.title = tab.filePath;
       Object.assign(tabEl.style, {
-        display: 'inline-flex', alignItems: 'center', gap: '5px',
-        height: '26px', padding: '0 10px', cursor: 'pointer',
-        fontSize: 'calc(11px * var(--font-scale))', fontFamily: 'var(--font-mono, monospace)',
-        whiteSpace: 'nowrap', flexShrink: '0', maxWidth: '170px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        height: '26px',
+        padding: '0 10px',
+        cursor: 'pointer',
+        fontSize: 'calc(11px * var(--font-scale))',
+        fontFamily: 'var(--font-mono, monospace)',
+        whiteSpace: 'nowrap',
+        flexShrink: '0',
+        maxWidth: '170px',
         borderTop: isActive ? '2px solid rgba(80, 140, 220, 0.7)' : '2px solid transparent',
         background: isActive ? 'rgba(22, 40, 70, 0.55)' : 'transparent',
         color: isActive ? 'var(--starlight, #e6edf3)' : 'var(--text-muted)',
@@ -519,14 +657,28 @@ export class FileViewer {
       const closeBtn = document.createElement('button');
       closeBtn.innerHTML = iconHtml('close', 10);
       Object.assign(closeBtn.style, {
-        background: 'none', border: 'none', cursor: 'pointer',
-        color: 'inherit', padding: '0', fontSize: 'calc(10px * var(--font-scale))',
-        display: 'flex', alignItems: 'center', flexShrink: '0',
-        opacity: '0', borderRadius: '2px',
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        color: 'inherit',
+        padding: '0',
+        fontSize: 'calc(10px * var(--font-scale))',
+        display: 'flex',
+        alignItems: 'center',
+        flexShrink: '0',
+        opacity: '0',
+        borderRadius: '2px',
       });
-      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closeTab(i); });
-      tabEl.addEventListener('mouseenter', () => { closeBtn.style.opacity = '0.6'; });
-      tabEl.addEventListener('mouseleave', () => { closeBtn.style.opacity = '0'; });
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closeTab(i);
+      });
+      tabEl.addEventListener('mouseenter', () => {
+        closeBtn.style.opacity = '0.6';
+      });
+      tabEl.addEventListener('mouseleave', () => {
+        closeBtn.style.opacity = '0';
+      });
 
       tabEl.appendChild(label);
       tabEl.appendChild(closeBtn);
@@ -706,7 +858,7 @@ export class FileViewer {
 
   async open(filePath: string, opts?: { noAutoPreview?: boolean; line?: number }): Promise<void> {
     const targetLine = opts?.line;
-    const existingIdx = this.tabs.findIndex(t => t.filePath === filePath);
+    const existingIdx = this.tabs.findIndex((t) => t.filePath === filePath);
     if (existingIdx >= 0) {
       this.activeIdx = existingIdx;
       this.renderTabs();
@@ -744,9 +896,13 @@ export class FileViewer {
 
       const model = monaco.editor.createModel('', 'plaintext', uri);
       const newTab: TabData = {
-        filePath, fileName, model,
-        dirty: false, originalContent: '',
-        loading: false, error: '',
+        filePath,
+        fileName,
+        model,
+        dirty: false,
+        originalContent: '',
+        loading: false,
+        error: '',
         viewMode: 'preview',
       };
       this.tabs.push(newTab);
@@ -781,9 +937,13 @@ export class FileViewer {
       const model = monaco.editor.createModel(content, language, uri);
 
       const newTab: TabData = {
-        filePath, fileName, model,
-        dirty: false, originalContent: content,
-        loading: false, error: '',
+        filePath,
+        fileName,
+        model,
+        dirty: false,
+        originalContent: content,
+        loading: false,
+        error: '',
       };
 
       // Track dirty state
@@ -797,18 +957,41 @@ export class FileViewer {
 
       // LSP: only attempt for languages with configured servers
       const LSP_LANGUAGES = new Set([
-        'python', 'rust', 'go', 'typescript', 'javascript',
-        'java', 'c', 'cpp', 'csharp', 'ruby', 'lua', 'php',
-        'swift', 'dart', 'haskell', 'elixir', 'erlang', 'zig',
-        'shell', 'html', 'css', 'scss', 'less', 'yaml', 'yml',
-        'scala', 'kotlin', 'r', 'nix', 'ocaml',
+        'python',
+        'rust',
+        'go',
+        'typescript',
+        'javascript',
+        'java',
+        'c',
+        'cpp',
+        'csharp',
+        'ruby',
+        'lua',
+        'php',
+        'swift',
+        'dart',
+        'haskell',
+        'elixir',
+        'erlang',
+        'zig',
+        'shell',
+        'html',
+        'css',
+        'scss',
+        'less',
+        'yaml',
+        'yml',
+        'scala',
+        'kotlin',
+        'r',
+        'nix',
+        'ocaml',
       ]);
       // ponytail: use project root as rootUri so LSP can find tsconfig/pyproject/etc.
-      const rootUri = this.projectPath
-        ? `file:///${this.projectPath.replace(/\\/g, '/')}`
-        : `file:///${filePath}`;
+      const rootUri = this.projectPath ? `file:///${this.projectPath.replace(/\\/g, '/')}` : `file:///${filePath}`;
       if (!lspSessions.has(language) && LSP_LANGUAGES.has(language)) {
-        startLsp(language, rootUri).then(sid => {
+        startLsp(language, rootUri).then((sid) => {
           if (sid !== null) {
             lspSessions.set(language, sid);
             registerCompletionProvider(language, sid, monaco);
@@ -834,9 +1017,13 @@ export class FileViewer {
       const errMsg = `❌ 读取失败: ${err}`;
       const errModel = monaco.editor.createModel(errMsg, 'plaintext');
       const newTab: TabData = {
-        filePath, fileName, model: errModel,
-        dirty: false, originalContent: '',
-        loading: false, error: String(err),
+        filePath,
+        fileName,
+        model: errModel,
+        dirty: false,
+        originalContent: '',
+        loading: false,
+        error: String(err),
       };
       this.tabs.push(newTab);
       this.activeIdx = this.tabs.length - 1;
@@ -870,7 +1057,9 @@ export class FileViewer {
         eventType: 'file_changed',
         file: tab.filePath,
         summary: `保存: ${tab.fileName}`,
-      }).catch(() => { /* timeline recording is best-effort */ });
+      }).catch(() => {
+        /* timeline recording is best-effort */
+      });
       tab.originalContent = content;
       tab.dirty = false;
       tab.error = '';
@@ -1028,7 +1217,7 @@ export class FileViewer {
     const safeHtml = DOMPurify.sanitize(rawHtml);
     this.previewContainer.innerHTML = safeHtml;
     // Syntax highlight code blocks
-    this.previewContainer.querySelectorAll('pre code').forEach(block => {
+    this.previewContainer.querySelectorAll('pre code').forEach((block) => {
       hljs.highlightElement(block as HTMLElement);
     });
   }
@@ -1039,9 +1228,14 @@ export class FileViewer {
       const b64 = await rpc<string>('read_file_base64', { filePath });
       const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
       const mimeMap: Record<string, string> = {
-        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
-        gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
-        bmp: 'image/bmp', ico: 'image/x-icon',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        gif: 'image/gif',
+        svg: 'image/svg+xml',
+        webp: 'image/webp',
+        bmp: 'image/bmp',
+        ico: 'image/x-icon',
       };
       const mime = mimeMap[ext] || 'image/png';
       this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:200px;"><img src="data:${mime};base64,${b64}" alt="${filePath.replace(/\\/g, '/').split('/').pop()}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;box-shadow:0 4px 24px rgba(0,0,0,0.4);" /></div>`;
@@ -1088,7 +1282,9 @@ export class FileViewer {
     this.el.style.top = `${Math.max(36, (window.innerHeight - h) / 2)}px`;
   }
 
-  get isOpen(): boolean { return this.state.open; }
+  get isOpen(): boolean {
+    return this.state.open;
+  }
 
   // ── Drag ──
 
@@ -1124,7 +1320,8 @@ export class FileViewer {
   // ── Resize ──
 
   private onResizeStart(e: PointerEvent): void {
-    e.stopPropagation(); e.preventDefault();
+    e.stopPropagation();
+    e.preventDefault();
     this.resizing = true;
     this.dragStart.x = e.clientX;
     this.dragStart.y = e.clientY;
@@ -1157,16 +1354,45 @@ export class FileViewer {
 function fileIconSvg(fileName: string, size: number): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
-    ts: 'code', tsx: 'code', mts: 'code', cts: 'code',
-    js: 'code', jsx: 'code', mjs: 'code', cjs: 'code',
-    py: 'code-py', rs: 'code-rs', go: 'code-go', java: 'code',
-    c: 'code', cpp: 'code', h: 'code', hpp: 'code',
-    cs: 'code', rb: 'code', php: 'code',
-    kt: 'code', kts: 'code', swift: 'code', lua: 'code',
-    html: 'code', htm: 'code', css: 'code', scss: 'code',
-    json: 'file', yaml: 'file', yml: 'file', toml: 'file',
-    md: 'file', txt: 'file', log: 'file',
-    svg: 'file', png: 'file', jpg: 'file', gif: 'file', ico: 'file',
+    ts: 'code',
+    tsx: 'code',
+    mts: 'code',
+    cts: 'code',
+    js: 'code',
+    jsx: 'code',
+    mjs: 'code',
+    cjs: 'code',
+    py: 'code-py',
+    rs: 'code-rs',
+    go: 'code-go',
+    java: 'code',
+    c: 'code',
+    cpp: 'code',
+    h: 'code',
+    hpp: 'code',
+    cs: 'code',
+    rb: 'code',
+    php: 'code',
+    kt: 'code',
+    kts: 'code',
+    swift: 'code',
+    lua: 'code',
+    html: 'code',
+    htm: 'code',
+    css: 'code',
+    scss: 'code',
+    json: 'file',
+    yaml: 'file',
+    yml: 'file',
+    toml: 'file',
+    md: 'file',
+    txt: 'file',
+    log: 'file',
+    svg: 'file',
+    png: 'file',
+    jpg: 'file',
+    gif: 'file',
+    ico: 'file',
   };
   return iconSvg(map[ext] || 'file', size);
 }
@@ -1176,24 +1402,59 @@ function fileIconSvg(fileName: string, size: number): string {
 function detectLanguage(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    py: 'python', rs: 'rust', go: 'go', java: 'java', c: 'c', cpp: 'cpp',
-    h: 'c', hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php',
-    kt: 'kotlin', kts: 'kotlin', swift: 'swift', lua: 'lua',
-    html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
-    json: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml',
-    md: 'markdown', sql: 'sql', sh: 'shell', bash: 'shell',
-    toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+    ts: 'typescript',
+    tsx: 'typescript',
+    mts: 'typescript',
+    cts: 'typescript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    py: 'python',
+    rs: 'rust',
+    go: 'go',
+    java: 'java',
+    c: 'c',
+    cpp: 'cpp',
+    h: 'c',
+    hpp: 'cpp',
+    cs: 'csharp',
+    rb: 'ruby',
+    php: 'php',
+    kt: 'kotlin',
+    kts: 'kotlin',
+    swift: 'swift',
+    lua: 'lua',
+    html: 'html',
+    htm: 'html',
+    css: 'css',
+    scss: 'scss',
+    less: 'less',
+    json: 'json',
+    xml: 'xml',
+    yaml: 'yaml',
+    yml: 'yaml',
+    md: 'markdown',
+    sql: 'sql',
+    sh: 'shell',
+    bash: 'shell',
+    toml: 'ini',
+    ini: 'ini',
+    cfg: 'ini',
+    conf: 'ini',
     dart: 'dart',
-    hs: 'haskell', lhs: 'haskell',
-    ex: 'elixir', exs: 'elixir',
-    erl: 'erlang', hrl: 'erlang',
+    hs: 'haskell',
+    lhs: 'haskell',
+    ex: 'elixir',
+    exs: 'elixir',
+    erl: 'erlang',
+    hrl: 'erlang',
     zig: 'zig',
     scala: 'scala',
     r: 'r',
     nix: 'nix',
-    ml: 'ocaml', mli: 'ocaml',
+    ml: 'ocaml',
+    mli: 'ocaml',
   };
   return map[ext] || 'plaintext';
 }

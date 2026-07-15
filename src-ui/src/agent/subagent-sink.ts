@@ -30,7 +30,10 @@ export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => 
   const tick = () => {
     subPart.version++;
     if (rafId !== null) return; // already pending this frame
-    rafId = requestAnimationFrame(() => { rafId = null; bump(); });
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      bump();
+    });
   };
 
   return (ev: AgentEvent) => {

@@ -4,16 +4,16 @@
 // Compaction cost model tests — verifying the math, not the integration.
 // Regression guard: if netBenefit / optimalRecentKeep / breakevenTurns breaks, CI catches it.
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  netBenefit,
   breakevenTurns,
-  estimateLoss,
-  tailCost,
-  optimalRecentKeep,
-  estimateTokens,
   CompactionTracker,
+  estimateLoss,
+  estimateTokens,
   formatCompactionReport,
+  netBenefit,
+  optimalRecentKeep,
+  tailCost,
 } from '../src/agent/compaction-model';
 
 // ── netBenefit ──
@@ -195,9 +195,14 @@ describe('CompactionTracker', () => {
     t.recordFileRead('/src/foo.ts');
     // Simulate compaction
     t.recordCompaction({
-      ts: Date.now(), regionMsgCount: 5, regionTokensEst: 10000,
-      summaryInputTokens: 10000, summaryOutputTokens: 500,
-      tailMsgCount: 4, preTokens: 15000, postTokens: 5000,
+      ts: Date.now(),
+      regionMsgCount: 5,
+      regionTokensEst: 10000,
+      summaryInputTokens: 10000,
+      summaryOutputTokens: 500,
+      tailMsgCount: 4,
+      preTokens: 15000,
+      postTokens: 5000,
       outcome: 'summary',
     });
     // Re-read same file after compaction
@@ -210,9 +215,14 @@ describe('CompactionTracker', () => {
     const t = new CompactionTracker();
     t.recordToolCall('read_file', '{"filePath":"/src/bar.ts"}');
     t.recordCompaction({
-      ts: Date.now(), regionMsgCount: 5, regionTokensEst: 10000,
-      summaryInputTokens: 10000, summaryOutputTokens: 500,
-      tailMsgCount: 4, preTokens: 15000, postTokens: 5000,
+      ts: Date.now(),
+      regionMsgCount: 5,
+      regionTokensEst: 10000,
+      summaryInputTokens: 10000,
+      summaryOutputTokens: 500,
+      tailMsgCount: 4,
+      preTokens: 15000,
+      postTokens: 5000,
       outcome: 'summary',
     });
     t.recordToolCall('read_file', '{"filePath":"/src/bar.ts"}');
@@ -230,9 +240,14 @@ describe('CompactionTracker', () => {
   it('estimateLossFactor counts re-reads + dup tools', () => {
     const t = new CompactionTracker();
     t.recordCompaction({
-      ts: Date.now(), regionMsgCount: 5, regionTokensEst: 10000,
-      summaryInputTokens: 10000, summaryOutputTokens: 500,
-      tailMsgCount: 4, preTokens: 15000, postTokens: 5000,
+      ts: Date.now(),
+      regionMsgCount: 5,
+      regionTokensEst: 10000,
+      summaryInputTokens: 10000,
+      summaryOutputTokens: 500,
+      tailMsgCount: 4,
+      preTokens: 15000,
+      postTokens: 5000,
       outcome: 'summary',
     });
     t.recordFileRead('/src/a.ts');
@@ -249,9 +264,14 @@ describe('CompactionTracker', () => {
     t.recordTurn();
     t.recordFileRead('/src/foo.ts');
     t.recordCompaction({
-      ts: Date.now(), regionMsgCount: 5, regionTokensEst: 10000,
-      summaryInputTokens: 10000, summaryOutputTokens: 500,
-      tailMsgCount: 4, preTokens: 15000, postTokens: 5000,
+      ts: Date.now(),
+      regionMsgCount: 5,
+      regionTokensEst: 10000,
+      summaryInputTokens: 10000,
+      summaryOutputTokens: 500,
+      tailMsgCount: 4,
+      preTokens: 15000,
+      postTokens: 5000,
       outcome: 'summary',
     });
     t.reset();
@@ -268,9 +288,14 @@ describe('formatCompactionReport', () => {
   it('produces markdown', () => {
     const t = new CompactionTracker();
     t.recordCompaction({
-      ts: Date.now(), regionMsgCount: 10, regionTokensEst: 50000,
-      summaryInputTokens: 50000, summaryOutputTokens: 3000,
-      tailMsgCount: 4, preTokens: 60000, postTokens: 10000,
+      ts: Date.now(),
+      regionMsgCount: 10,
+      regionTokensEst: 50000,
+      summaryInputTokens: 50000,
+      summaryOutputTokens: 3000,
+      tailMsgCount: 4,
+      preTokens: 60000,
+      postTokens: 10000,
       outcome: 'summary',
     });
     const report = formatCompactionReport(t.getStats());

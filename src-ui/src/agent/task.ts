@@ -36,7 +36,7 @@ export class TaskManager {
 
   list(filter?: Task['status']): Task[] {
     const all = Array.from(this.tasks.values()).sort((a, b) => b.ts - a.ts);
-    if (filter) return all.filter(t => t.status === filter);
+    if (filter) return all.filter((t) => t.status === filter);
     return all;
   }
 
@@ -78,7 +78,7 @@ export function createTaskTools(mgr: TaskManager): Tool[] {
     {
       name: () => 'task_update',
       description: () =>
-        'Update a task\'s status or details. Status can be: pending, in_progress, completed, cancelled.',
+        "Update a task's status or details. Status can be: pending, in_progress, completed, cancelled.",
       parameters: () => ({
         type: 'object',
         properties: {
@@ -107,8 +107,7 @@ export function createTaskTools(mgr: TaskManager): Tool[] {
     },
     {
       name: () => 'task_list',
-      description: () =>
-        'List all tracked tasks, optionally filtered by status. Returns tasks sorted newest-first.',
+      description: () => 'List all tracked tasks, optionally filtered by status. Returns tasks sorted newest-first.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -128,8 +127,7 @@ export function createTaskTools(mgr: TaskManager): Tool[] {
     },
     {
       name: () => 'task_get',
-      description: () =>
-        'Get full details of a single task by ID.',
+      description: () => 'Get full details of a single task by ID.',
       parameters: () => ({
         type: 'object',
         properties: {

@@ -6,10 +6,14 @@
 // 将交互翻译为 Agent 查询，但不自动发送 —— 通过 graph:show-prompt 弹出确认条。
 // 不改 Agent 循环，不改 Python 引擎。纯增量。
 
-import { bus } from './events';
 import { dbg } from './debug';
+import { bus } from './events';
 
-interface NodeInfo { name: string; id: string; type: string; }
+interface NodeInfo {
+  name: string;
+  id: string;
+  type: string;
+}
 
 interface NodeClickedData {
   nodeName: string;
@@ -47,9 +51,7 @@ export class GraphInteraction {
   // ── Path selected (Shift+click two nodes) → highlight + show confirmation prompt ──
 
   private _onPathSelected(data: PathSelectedData): void {
-    const pathStr = data.pathNames.length > 0
-      ? data.pathNames.join(' → ')
-      : `${data.from.name} → ${data.to.name}`;
+    const pathStr = data.pathNames.length > 0 ? data.pathNames.join(' → ') : `${data.from.name} → ${data.to.name}`;
     const question = [
       `分析从 \`${data.from.name}\` 到 \`${data.to.name}\` 的依赖路径。`,
       ``,
@@ -73,7 +75,7 @@ export class GraphInteraction {
     const maxShow = 12;
     const shown = data.nodeNames.slice(0, maxShow);
     const more = data.nodeCount > maxShow ? `...等共 ${data.nodeCount} 个` : '';
-    const nameList = shown.map(n => `\`${n}\``).join(', ') + more;
+    const nameList = shown.map((n) => `\`${n}\``).join(', ') + more;
     const question = [
       `我框选了图中的 ${data.nodeCount} 个节点：${nameList}`,
       ``,

@@ -13,7 +13,7 @@
 //
 // 此测试通过 mock Tauri invoke 来验证整条链路的实际运行时行为。
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock Tauri invoke BEFORE importing the module under test
 vi.mock('@tauri-apps/api/core', () => ({
@@ -68,10 +68,13 @@ describe('Logger 数据流链路验证', () => {
 
     const { invoke } = await import('@tauri-apps/api/core');
     // 第 50 条写入时，logBuffer.length >= MAX_BUFFER → write 内部调用 flush
-    expect(invoke).toHaveBeenCalledWith('log_append', expect.objectContaining({
-      path: expect.stringContaining('ui.log'),
-      content: expect.any(String),
-    }));
+    expect(invoke).toHaveBeenCalledWith(
+      'log_append',
+      expect.objectContaining({
+        path: expect.stringContaining('ui.log'),
+        content: expect.any(String),
+      }),
+    );
   });
 
   it('手动触发 flush → 清空 logBuffer → appendToFile 接收完整批次', async () => {
@@ -124,7 +127,10 @@ describe('Logger 数据流链路验证', () => {
 
     const { invoke } = await import('@tauri-apps/api/core');
     const content: string = (invoke as any).mock.calls[0][1].content;
-    const allEntries = content.trim().split('\n').map((l: string) => JSON.parse(l));
+    const allEntries = content
+      .trim()
+      .split('\n')
+      .map((l: string) => JSON.parse(l));
 
     // 验证批次包含 50 条
     expect(allEntries.length).toBe(50);
@@ -135,9 +141,7 @@ describe('Logger 数据流链路验证', () => {
     // → logBuffer.push(JSON.stringify(entry))
     // → flush: logBuffer.splice(0).join('\n')
     // → appendToFile(path, batch)
-    const targetEntry = allEntries.find(
-      (e: any) => e.module === 'AuthModule' && e.message === 'token expired'
-    );
+    const targetEntry = allEntries.find((e: any) => e.module === 'AuthModule' && e.message === 'token expired');
 
     expect(targetEntry).toBeDefined();
     expect(targetEntry!.level).toBe('error');

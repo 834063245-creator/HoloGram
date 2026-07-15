@@ -38,14 +38,16 @@ export class CommandRegistry {
   private _skillProvider: SkillProvider | null = null;
 
   static get instance(): CommandRegistry {
-    if (!this._instance) this._instance = new CommandRegistry();
-    return this._instance;
+    if (!CommandRegistry._instance) CommandRegistry._instance = new CommandRegistry();
+    return CommandRegistry._instance;
   }
 
-  register(cmd: CommandDef): void { this._commands.push(cmd); }
+  register(cmd: CommandDef): void {
+    this._commands.push(cmd);
+  }
 
   registerAll(cmds: CommandDef[]): void {
-    const existing = new Set(this._commands.map(c => c.id));
+    const existing = new Set(this._commands.map((c) => c.id));
     for (const cmd of cmds) {
       if (!existing.has(cmd.id)) {
         this._commands.push(cmd);
@@ -54,7 +56,9 @@ export class CommandRegistry {
     }
   }
 
-  setSkillProvider(provider: SkillProvider): void { this._skillProvider = provider; }
+  setSkillProvider(provider: SkillProvider): void {
+    this._skillProvider = provider;
+  }
 
   /** 获取所有命令，包括动态技能 */
   getAll(): CommandDef[] {
@@ -77,23 +81,20 @@ export class CommandRegistry {
 
   /** 按 shortcut 精确查找 */
   findByShortcut(shortcut: string): CommandDef | undefined {
-    return this.getAll().find(c => c.shortcut === shortcut);
+    return this.getAll().find((c) => c.shortcut === shortcut);
   }
 
   /** 模糊搜索：匹配 shortcut、label、description */
   filter(query: string): CommandDef[] {
     const q = query.toLowerCase().replace(/^\//, '');
     if (!q) return this.getAll();
-    return this.getAll().filter(c => {
+    return this.getAll().filter((c) => {
       const shortcut = c.shortcut.toLowerCase().replace(/^\//, '');
       return (
-        shortcut.includes(q) ||
-        c.label.toLowerCase().includes(q) ||
-        (c.description || '').toLowerCase().includes(q)
+        shortcut.includes(q) || c.label.toLowerCase().includes(q) || (c.description || '').toLowerCase().includes(q)
       );
     });
   }
-
 }
 
 // ── Default commands ──
@@ -122,7 +123,11 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
     description: '查看上下文压缩的运行数据',
     group: '会话',
     shortcut: '/compact-stats',
-    action: { type: 'send', text: '查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）', displayLabel: '/compact-stats' },
+    action: {
+      type: 'send',
+      text: '查看上下文压缩的运行状态和数据（使用 hologram_compaction_stats）',
+      displayLabel: '/compact-stats',
+    },
   },
   {
     id: 'export',

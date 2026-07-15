@@ -5,17 +5,17 @@
 // Extracted from chat.ts ChatPanel class.
 // All functions receive DomContext instead of accessing `this`.
 
-import type { ChatAgentHandle } from '../agent/chat-agent-handle';
-import type { StarGraph } from './graph';
-import type { CommandDef } from './command-registry';
-import type { ChatMessage, MessageId } from './message-model';
-import type { ToolSchema } from '../provider/types';
-import { iconHtml } from './icons';
-import { loadSettings } from '../settings';
 import DOMPurify from 'dompurify';
+import type { ChatAgentHandle } from '../agent/chat-agent-handle';
+import type { ToolSchema } from '../provider/types';
+import { loadSettings } from '../settings';
 import * as Session from './chat-session';
 import { getChatStore } from './chat-store';
 import { escapeHtml } from './chat-utils';
+import type { CommandDef } from './command-registry';
+import type { StarGraph } from './graph';
+import { iconHtml } from './icons';
+import type { ChatMessage, MessageId } from './message-model';
 
 // ── Constants ──
 

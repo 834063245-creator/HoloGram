@@ -5,8 +5,8 @@
 
 import { rpc } from '../bridge';
 import { shell } from './app-shell';
-import { iconHtml } from './icons';
 import { bus } from './events';
+import { iconHtml } from './icons';
 
 interface TraceSummary {
   traceId: string;

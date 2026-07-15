@@ -8,9 +8,9 @@
   "scripts": {
     "dev": "vite",
     "dev:mock": "vite",
-    "build": "tsc --noEmit && biome ci . && vite build",
+    "build": "tsc --noEmit && vite build",
     "format": "biome format --write .",
-    "lint": "biome lint .",
+    "lint": "biome check --fix .",
     "check": "biome ci .",
     "preview": "vite preview",
     "test": "vitest run"

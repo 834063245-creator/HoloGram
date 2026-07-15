@@ -6,9 +6,9 @@
 // All functions receive AnimContext instead of accessing `this`.
 
 import gsap from 'gsap';
-import { iconHtml } from './icons';
-import { shell } from './app-shell';
 import type { ExecStateInstance } from '../agent/execution-state';
+import { shell } from './app-shell';
+import { iconHtml } from './icons';
 
 // ── AnimContext — the bridge between standalone animation functions and ChatPanel state ──
 
@@ -72,17 +72,14 @@ export function getAnimating(ctx: AnimContext): boolean {
  * CSS value. We save targets upfront to avoid the self-shadowing.
  */
 export function snapshotContentOpacities(ctx: AnimContext): number[] {
-  return contentEls(ctx).map(el => parseFloat(getComputedStyle(el).opacity));
+  return contentEls(ctx).map((el) => parseFloat(getComputedStyle(el).opacity));
 }
 
 /** Fade content in from 0 → current CSS opacities. For elements that were display:none. */
 export function fadeContentIn(ctx: AnimContext, delay = 0.12, duration = 0.2): void {
   const c = contentEls(ctx);
   const targets = snapshotContentOpacities(ctx);
-  gsap.fromTo(c,
-    { opacity: 0 },
-    { opacity: (i) => targets[i], duration, ease: 'power2.out', delay },
-  );
+  gsap.fromTo(c, { opacity: 0 }, { opacity: (i) => targets[i], duration, ease: 'power2.out', delay });
 }
 
 /**
@@ -93,16 +90,14 @@ export function fadeContentIn(ctx: AnimContext, delay = 0.12, duration = 0.2): v
 export function crossfadeContent(ctx: AnimContext, fromOpacities: number[], duration = 0.2, ease = 'power2.out'): void {
   const c = contentEls(ctx);
   const targets = snapshotContentOpacities(ctx); // new mode's CSS opacities
-  gsap.fromTo(c,
-    { opacity: (i) => fromOpacities[i] },
-    { opacity: (i) => targets[i], duration, ease },
-  );
+  gsap.fromTo(c, { opacity: (i) => fromOpacities[i] }, { opacity: (i) => targets[i], duration, ease });
 }
 
 // ── Per-bubble entrance animation ──
 
 export function animateBubbleIn(el: HTMLElement, delay = 0): gsap.core.Tween {
-  return gsap.fromTo(el,
+  return gsap.fromTo(
+    el,
     { y: 12, opacity: 0 },
     { y: 0, opacity: 1, duration: 0.28, ease: 'power2.out', delay, clearProps: 'transform,opacity' },
   );
@@ -119,8 +114,12 @@ export function toggleToolCard(card: HTMLElement): void {
   if (isOpen) {
     // Collapse → animate to 0, then remove class
     gsap.to(result, {
-      height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0,
-      duration: 0.2, ease: 'power2.in',
+      height: 0,
+      opacity: 0,
+      paddingTop: 0,
+      paddingBottom: 0,
+      duration: 0.2,
+      ease: 'power2.in',
       onComplete: () => {
         card.classList.remove('tool-expanded');
         gsap.set(result, { clearProps: 'all' });
@@ -130,10 +129,18 @@ export function toggleToolCard(card: HTMLElement): void {
     // Expand → add class (triggers display:block), measure, animate from 0
     card.classList.add('tool-expanded');
     const h = result.scrollHeight;
-    gsap.fromTo(result,
+    gsap.fromTo(
+      result,
       { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0 },
-      { height: h, opacity: 1, paddingTop: '', paddingBottom: '', duration: 0.25, ease: 'power2.out',
-        onComplete: () => gsap.set(result, { clearProps: 'height,opacity,paddingTop,paddingBottom' }) },
+      {
+        height: h,
+        opacity: 1,
+        paddingTop: '',
+        paddingBottom: '',
+        duration: 0.25,
+        ease: 'power2.out',
+        onComplete: () => gsap.set(result, { clearProps: 'height,opacity,paddingTop,paddingBottom' }),
+      },
     );
   }
 }
@@ -147,8 +154,13 @@ export function toggleReasoning(toggleBtn: HTMLElement, content: HTMLElement): v
   if (isOpen) {
     // Collapse
     gsap.to(content, {
-      height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0,
-      duration: 0.2, ease: 'power2.in',
+      height: 0,
+      opacity: 0,
+      paddingTop: 0,
+      paddingBottom: 0,
+      marginTop: 0,
+      duration: 0.2,
+      ease: 'power2.in',
       onComplete: () => {
         content.classList.remove('msg-reasoning-open');
         gsap.set(content, { clearProps: 'all' });
@@ -161,9 +173,17 @@ export function toggleReasoning(toggleBtn: HTMLElement, content: HTMLElement): v
     content.style.display = 'block';
     const h = content.scrollHeight;
     content.style.display = '';
-    gsap.fromTo(content,
+    gsap.fromTo(
+      content,
       { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0 },
-      { height: h, opacity: 1, paddingTop: '', paddingBottom: '', marginTop: '', duration: 0.28, ease: 'power2.out',
+      {
+        height: h,
+        opacity: 1,
+        paddingTop: '',
+        paddingBottom: '',
+        marginTop: '',
+        duration: 0.28,
+        ease: 'power2.out',
         onComplete: () => {
           gsap.set(content, { clearProps: 'height,opacity,paddingTop,paddingBottom,marginTop' });
         },
@@ -178,7 +198,7 @@ export function toggleReasoning(toggleBtn: HTMLElement, content: HTMLElement): v
 /** Expand: pill → input/panel (full morph) or input → panel (height only) */
 export function morphToMode(ctx: AnimContext, mode: 'input' | 'panel', cls: string): void {
   if (getAnimating(ctx)) return;
-  const prevMode = ctx.getMode();  // capture before overwriting
+  const prevMode = ctx.getMode(); // capture before overwriting
   ctx.setMode(mode);
   killPanelTweens(ctx);
 
@@ -186,7 +206,8 @@ export function morphToMode(ctx: AnimContext, mode: 'input' | 'panel', cls: stri
 
   removeAllPanelClasses(ctx);
   ctx.panel.classList.add(cls);
-  ctx.panel.style.maxHeight = ''; ctx.panel.style.minHeight = '';
+  ctx.panel.style.maxHeight = '';
+  ctx.panel.style.minHeight = '';
   ctx.updateFooter();
 
   if (prevMode === 'pill') {
@@ -201,15 +222,21 @@ export function morphToMode(ctx: AnimContext, mode: 'input' | 'panel', cls: stri
     ctx.panel.style.borderRadius = '50%';
 
     gsap.to(ctx.panel, {
-      width: 560, height: toH, borderRadius: 0,
-      duration: 0.38, ease: 'power2.out',
-      onComplete: () => { ctx.panel.style.height = ''; },
+      width: 560,
+      height: toH,
+      borderRadius: 0,
+      duration: 0.38,
+      ease: 'power2.out',
+      onComplete: () => {
+        ctx.panel.style.height = '';
+      },
     });
     fadeContentIn(ctx, 0.2, 0.22);
 
     // Handle — elastic stretch-in
     const hi = ctx.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
-    gsap.fromTo(hi,
+    gsap.fromTo(
+      hi,
       { scaleX: 0, transformOrigin: 'center center' },
       { scaleX: 1, duration: 0.5, delay: 0.24, ease: 'elastic.out(1, 0.4)' },
     );
@@ -224,15 +251,22 @@ export function morphToMode(ctx: AnimContext, mode: 'input' | 'panel', cls: stri
     ctx.panel.style.height = fromH + 'px';
 
     gsap.to(ctx.panel, {
-      height: toH, duration: 0.3, ease: 'power2.out',
-      onComplete: () => { ctx.panel.style.height = ''; },
+      height: toH,
+      duration: 0.3,
+      ease: 'power2.out',
+      onComplete: () => {
+        ctx.panel.style.height = '';
+      },
     });
     fadeContentIn(ctx, 0.1, 0.18);
 
     // Handle — quick pulse (already visible)
     const hi = ctx.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
     gsap.to(hi, {
-      scaleX: 1.15, duration: 0.1, ease: 'power2.out', transformOrigin: 'center center',
+      scaleX: 1.15,
+      duration: 0.1,
+      ease: 'power2.out',
+      transformOrigin: 'center center',
       onComplete: () => gsap.to(hi, { scaleX: 1, duration: 0.25, ease: 'elastic.out(1, 0.5)' }),
     });
   }
@@ -267,12 +301,15 @@ export function collapseToInput(ctx: AnimContext): void {
 
   // Content out → class switch → height down + content in (all overlapped)
   gsap.to(c, {
-    opacity: 0, duration: 0.1, ease: 'power2.in',
+    opacity: 0,
+    duration: 0.1,
+    ease: 'power2.in',
     onComplete: () => {
       ctx.setMode('input');
       removeAllPanelClasses(ctx);
       ctx.panel.classList.add('chat-input-mode');
-      ctx.panel.style.maxHeight = ''; ctx.panel.style.minHeight = '';
+      ctx.panel.style.maxHeight = '';
+      ctx.panel.style.minHeight = '';
       gsap.set(ctx.panel, { clearProps: 'scale,y,opacity' });
 
       // Measure target input-bar height then lock back to panel height
@@ -284,16 +321,18 @@ export function collapseToInput(ctx: AnimContext): void {
 
       // Height + content animate together, snappy ease
       gsap.to(ctx.panel, {
-        height: toH, duration: 0.24, ease: 'power3.out',
-        onComplete: () => { ctx.panel.style.height = ''; },
+        height: toH,
+        duration: 0.24,
+        ease: 'power3.out',
+        onComplete: () => {
+          ctx.panel.style.height = '';
+        },
       });
-      gsap.fromTo(c,
-        { opacity: 0 },
-        { opacity: (i) => targets[i], duration: 0.16, ease: 'power2.out' },
-      );
+      gsap.fromTo(c, { opacity: 0 }, { opacity: (i) => targets[i], duration: 0.16, ease: 'power2.out' });
 
       const hi = ctx.panel.querySelector('.chat-expand-handle-inner') as HTMLElement;
-      gsap.fromTo(hi,
+      gsap.fromTo(
+        hi,
         { scaleX: 0, transformOrigin: 'center center' },
         { scaleX: 1, duration: 0.35, delay: 0.08, ease: 'elastic.out(1, 0.5)' },
       );
@@ -329,8 +368,11 @@ export function collapseToPill(ctx: AnimContext): void {
   gsap.to(c, { opacity: 0, duration: 0.18, ease: 'power2.in' });
 
   gsap.to(ctx.panel, {
-    width: 48, height: 48, borderRadius: '50%',
-    duration: 0.3, ease: 'power3.in',
+    width: 48,
+    height: 48,
+    borderRadius: '50%',
+    duration: 0.3,
+    ease: 'power3.in',
     onComplete: () => {
       ctx.setMode('pill');
       removeAllPanelClasses(ctx);
@@ -364,12 +406,16 @@ export function fadeToHud(ctx: AnimContext): void {
   ctx.setMode('hud');
   removeAllPanelClasses(ctx);
   ctx.panel.classList.add('chat-hud');
-  ctx.panel.style.maxHeight = ''; ctx.panel.style.minHeight = '';
+  ctx.panel.style.maxHeight = '';
+  ctx.panel.style.minHeight = '';
 
   // Panel retreat: scale down, push back, go translucent
   gsap.to(ctx.panel, {
-    scale: 0.96, y: 14, opacity: 0.62,
-    duration: 0.45, ease: 'power2.out',
+    scale: 0.96,
+    y: 14,
+    opacity: 0.62,
+    duration: 0.45,
+    ease: 'power2.out',
   });
   // Content elements fade to HUD opacities
   crossfadeContent(ctx, fromOpacities, 0.4);
@@ -383,12 +429,16 @@ export function restoreFromHud(ctx: AnimContext): void {
   ctx.setMode('panel');
   removeAllPanelClasses(ctx);
   ctx.panel.classList.add('chat-open');
-  ctx.panel.style.maxHeight = ''; ctx.panel.style.minHeight = '';
+  ctx.panel.style.maxHeight = '';
+  ctx.panel.style.minHeight = '';
 
   // Reverse the retreat
   gsap.to(ctx.panel, {
-    scale: 1, y: 0, opacity: 1,
-    duration: 0.35, ease: 'power2.out',
+    scale: 1,
+    y: 0,
+    opacity: 1,
+    duration: 0.35,
+    ease: 'power2.out',
     onComplete: () => {
       // Clear GSAP inline transform so CSS translateX(-50%) takes over cleanly
       gsap.set(ctx.panel, { clearProps: 'scale,y,opacity' });

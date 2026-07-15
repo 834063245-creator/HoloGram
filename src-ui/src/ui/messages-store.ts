@@ -5,7 +5,7 @@
 // Split from chat-store.ts (god store → domain stores).
 
 import { create } from 'zustand';
-import type { ChatMessage, AssistantMessage, MessageId } from './message-model';
+import type { AssistantMessage, ChatMessage, MessageId } from './message-model';
 
 interface MessagesStore {
   messages: ChatMessage[];
@@ -42,8 +42,7 @@ function createMessagesStoreImpl() {
         if (s.expandedReasoning.includes(idx)) return s;
         return { expandedReasoning: [...s.expandedReasoning, idx] };
       }),
-    deleteExpandedReasoning: (idx) =>
-      set((s) => ({ expandedReasoning: s.expandedReasoning.filter(i => i !== idx) })),
+    deleteExpandedReasoning: (idx) => set((s) => ({ expandedReasoning: s.expandedReasoning.filter((i) => i !== idx) })),
     clearExpandedReasoning: () => set({ expandedReasoning: [] }),
   }));
 }
@@ -73,9 +72,13 @@ export const useMessagesStore = getMessagesStore();
 
 // ── Non-reactive accessors ──
 
-function _store(storeId?: string) { return getMessagesStore(storeId).getState(); }
+function _store(storeId?: string) {
+  return getMessagesStore(storeId).getState();
+}
 
-export function getMessages(storeId?: string): ChatMessage[] { return _store(storeId).messages; }
+export function getMessages(storeId?: string): ChatMessage[] {
+  return _store(storeId).messages;
+}
 export function setMessages(msgs: ChatMessage[], storeId?: string): void {
   getMessagesStore(storeId).getState().setMessages(msgs);
 }

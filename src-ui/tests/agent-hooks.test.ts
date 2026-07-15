@@ -1,13 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type { GraphContext } from '../src/agent/hooks';
 import {
+  buildFileNodeIndex,
+  createGraphContext,
   createGraphContextHook,
   createGraphPreflightHook,
-  createGraphContext,
-  buildFileNodeIndex,
   HookRegistry,
   PreflightHookRegistry,
 } from '../src/agent/hooks';
-import type { GraphContext } from '../src/agent/hooks';
 
 // ── 模拟图数据（2776 节点 / 6128 边的简化版）──
 
@@ -57,7 +57,7 @@ describe('GraphContext', () => {
   it('getNodesInFile 返回文件内所有符号', () => {
     const nodes = ctx.getNodesInFile('D:/repo/src/config.ts');
     expect(nodes).toHaveLength(2);
-    expect(nodes.map(n => n.name).sort()).toEqual(['applyConfig', 'parseConfig']);
+    expect(nodes.map((n) => n.name).sort()).toEqual(['applyConfig', 'parseConfig']);
   });
 
   it('getNodesInFile 大小写不敏感 + 反斜杠归一化', () => {
@@ -77,10 +77,7 @@ describe('GraphContext', () => {
   });
 
   it('getSearchContext 返回多文件符号概要', () => {
-    const ctx2 = ctx.getSearchContext([
-      'D:/repo/src/config.ts',
-      'D:/repo/src/ui/app.tsx',
-    ]);
+    const ctx2 = ctx.getSearchContext(['D:/repo/src/config.ts', 'D:/repo/src/ui/app.tsx']);
     expect(ctx2).toContain('config.ts');
     expect(ctx2).toContain('app.tsx');
   });
@@ -94,14 +91,26 @@ describe('GraphContextHook.shouldEnrich', () => {
   const hook = createGraphContextHook(makeCtx());
 
   const shouldTrigger = [
-    'read_file_content', 'read_file', 'search_content',
-    'glob', 'list_directory', 'trace_dataflow',
-    'search_symbols', 'inspect_symbol', 'git_diff', 'run_shell',
+    'read_file_content',
+    'read_file',
+    'search_content',
+    'glob',
+    'list_directory',
+    'trace_dataflow',
+    'search_symbols',
+    'inspect_symbol',
+    'git_diff',
+    'run_shell',
   ];
 
   const shouldNotTrigger = [
-    'edit_file', 'write_file', 'explore_deps', 'git_status',
-    'agent_spawn', 'ask_user', 'web_search',
+    'edit_file',
+    'write_file',
+    'explore_deps',
+    'git_status',
+    'agent_spawn',
+    'ask_user',
+    'web_search',
   ];
 
   for (const name of shouldTrigger) {
@@ -126,9 +135,7 @@ describe('GraphContextHook.enrich', () => {
   const hook = createGraphContextHook(ctx);
 
   it('read_file_content 注入符号概要', async () => {
-    const out = await hook.enrich('read_file_content',
-      { filePath: 'D:/repo/src/config.ts' },
-      'line 1\nline 2\n');
+    const out = await hook.enrich('read_file_content', { filePath: 'D:/repo/src/config.ts' }, 'line 1\nline 2\n');
     expect(out).toContain('📊 [图上下文]');
     expect(out).toContain('parseConfig');
     // 原始结果在注入块之后
@@ -136,9 +143,7 @@ describe('GraphContextHook.enrich', () => {
   });
 
   it('read_file 有函数时追加 dataflow 提示', async () => {
-    const out = await hook.enrich('read_file',
-      { filePath: 'D:/repo/src/config.ts' },
-      'some content');
+    const out = await hook.enrich('read_file', { filePath: 'D:/repo/src/config.ts' }, 'some content');
     expect(out).toContain('trace_dataflow 追踪');
   });
 
@@ -155,8 +160,11 @@ describe('GraphContextHook.enrich', () => {
   });
 
   it('glob 注入匹配文件符号', async () => {
-    const out = await hook.enrich('glob', { pattern: '*.ts' },
-      'D:/repo/src/config.ts\nD:/repo/src/ui/app.tsx\nREADME.md\n');
+    const out = await hook.enrich(
+      'glob',
+      { pattern: '*.ts' },
+      'D:/repo/src/config.ts\nD:/repo/src/ui/app.tsx\nREADME.md\n',
+    );
     expect(out).toContain('📊 [图上下文]');
     expect(out).toContain('config.ts');
     // 非源文件(README.md)不会被 extractFilesFromGlobResult 提取，
@@ -166,8 +174,11 @@ describe('GraphContextHook.enrich', () => {
   });
 
   it('list_directory 注入源文件符号', async () => {
-    const out = await hook.enrich('list_directory', { path: 'D:/repo' },
-      'path: D:/repo/src/config.ts  type: file\npath: D:/repo/src/ui/app.tsx  type: file\npath: D:/repo/readme.txt  type: file');
+    const out = await hook.enrich(
+      'list_directory',
+      { path: 'D:/repo' },
+      'path: D:/repo/src/config.ts  type: file\npath: D:/repo/src/ui/app.tsx  type: file\npath: D:/repo/readme.txt  type: file',
+    );
     expect(out).toContain('📊 [图上下文]');
     expect(out).toContain('config.ts');
     // 非源文件(readme.txt)不会被提取，注入块中不应出现
@@ -176,38 +187,49 @@ describe('GraphContextHook.enrich', () => {
   });
 
   it('trace_dataflow 注入共享变量', async () => {
-    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] },
-      JSON.stringify({ shared_state: [{ var: 'store', readers: 6, writers: 1 }] }));
+    const out = await hook.enrich(
+      'trace_dataflow',
+      { files: ['src/state.ts'] },
+      JSON.stringify({ shared_state: [{ var: 'store', readers: 6, writers: 1 }] }),
+    );
     expect(out).toContain('共享变量');
     expect(out).toContain('store');
     expect(out).toContain('trace_impact');
   });
 
   it('trace_dataflow 无共享变量时不注入', async () => {
-    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] },
-      JSON.stringify({ shared_state: [] }));
+    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] }, JSON.stringify({ shared_state: [] }));
     expect(out).not.toContain('📊 [图上下文]');
   });
 
   it('search_symbols 注入命中节点', async () => {
-    const out = await hook.enrich('search_symbols', { query: 'config' },
-      JSON.stringify({ results: [{ name: 'parseConfig' }, { name: 'applyConfig' }] }));
+    const out = await hook.enrich(
+      'search_symbols',
+      { query: 'config' },
+      JSON.stringify({ results: [{ name: 'parseConfig' }, { name: 'applyConfig' }] }),
+    );
     expect(out).toContain('命中 2 个节点');
     expect(out).toContain('parseConfig');
     expect(out).toContain('get_neighbors');
   });
 
   it('inspect_symbol 注入社区归属', async () => {
-    const out = await hook.enrich('inspect_symbol', { nodeId: 'parseConfig' },
-      JSON.stringify({ community: 'core-utils' }));
+    const out = await hook.enrich(
+      'inspect_symbol',
+      { nodeId: 'parseConfig' },
+      JSON.stringify({ community: 'core-utils' }),
+    );
     expect(out).toContain('社区归属');
     expect(out).toContain('core-utils');
     expect(out).toContain('get_community');
   });
 
   it('git_diff 注入变更文件符号', async () => {
-    const out = await hook.enrich('git_diff', { path: 'D:/repo' },
-      '+++ a/D:/repo/src/config.ts\n@@ -1,3 +1,5 @@\n+++ b/D:/repo/src/ui/app.tsx\n');
+    const out = await hook.enrich(
+      'git_diff',
+      { path: 'D:/repo' },
+      '+++ a/D:/repo/src/config.ts\n@@ -1,3 +1,5 @@\n+++ b/D:/repo/src/ui/app.tsx\n',
+    );
     expect(out).toContain('📊 [图上下文]');
     expect(out).toContain('config.ts');
   });
@@ -235,20 +257,17 @@ describe('GraphContextHook.enrich', () => {
 
   it('结果过大时跳过注入', async () => {
     const big = 'x'.repeat(31_000);
-    const out = await hook.enrich('read_file',
-      { filePath: 'D:/repo/src/config.ts' }, big);
+    const out = await hook.enrich('read_file', { filePath: 'D:/repo/src/config.ts' }, big);
     expect(out).toBe(big); // 原文不动
   });
 
   it('错误结果不注入', async () => {
-    const out = await hook.enrich('read_file',
-      { filePath: 'D:/repo/src/config.ts' }, 'error: file not found');
+    const out = await hook.enrich('read_file', { filePath: 'D:/repo/src/config.ts' }, 'error: file not found');
     expect(out).toBe('error: file not found');
   });
 
   it('不存在文件返回原结果', async () => {
-    const out = await hook.enrich('read_file',
-      { filePath: 'D:/repo/src/nonexistent.ts' }, 'some content');
+    const out = await hook.enrich('read_file', { filePath: 'D:/repo/src/nonexistent.ts' }, 'some content');
     expect(out).toBe('some content');
   });
 });
@@ -261,9 +280,14 @@ describe('GraphPreflightHook.shouldCheck', () => {
   const hook = createGraphPreflightHook(makeCtx());
 
   const shouldTrigger = [
-    'edit_file', 'write_file',
-    'delete_file', 'rename_file', 'move_file',
-    'git_discard', 'git_checkout', 'git_commit',
+    'edit_file',
+    'write_file',
+    'delete_file',
+    'rename_file',
+    'move_file',
+    'git_discard',
+    'git_checkout',
+    'git_commit',
   ];
 
   const shouldNotTrigger = ['read_file', 'explore_deps', 'search_content'];
@@ -356,7 +380,9 @@ describe('HookRegistry', () => {
     reg.register({
       name: 'crash',
       shouldEnrich: () => true,
-      enrich: async () => { throw new Error('boom'); },
+      enrich: async () => {
+        throw new Error('boom');
+      },
     });
     reg.register({
       name: 'ok',

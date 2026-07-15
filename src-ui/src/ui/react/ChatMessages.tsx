@@ -8,26 +8,25 @@
 // 推理块：流式时展开，流结束自动折叠（用户手动 toggle 后尊重用户选择）
 // 流式截断：推理文本只保留末尾 12,000 字符 / 240 行
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import hljs from 'highlight.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import hljs from 'highlight.js';
-import {
-  type ChatMessage,
-  type UserMessage,
-  type AssistantMessage,
-  type ToolCallPart,
-  type TextPart,
-  type NoticeMessage,
-  type SubAgentPart,
-  type AssistantPart,
-} from '../message-model';
+import { useStore } from 'zustand';
 import { bumpChat } from '../chat-store';
+import type {
+  AssistantMessage,
+  AssistantPart,
+  ChatMessage,
+  NoticeMessage,
+  SubAgentPart,
+  TextPart,
+  ToolCallPart,
+  UserMessage,
+} from '../message-model';
 import { getMessagesStore } from '../messages-store';
 import { getSessionStore } from '../session-store';
-
-import { useStore } from 'zustand';
 
 // ── Constants ──
 
@@ -101,7 +100,10 @@ function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) =>
       const span = document.createElement('span');
       span.className = 'node-link';
       span.textContent = m[1];
-      span.addEventListener('click', (e) => { e.stopPropagation(); onNavigate(m![1]); });
+      span.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onNavigate(m![1]);
+      });
       frag.appendChild(span);
       last = m.index + m[0].length;
     }
@@ -121,7 +123,11 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
   const ref = useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
     el.querySelectorAll('pre code').forEach((block) => {
-      try { hljs.highlightElement(block as HTMLElement); } catch { /* noop */ }
+      try {
+        hljs.highlightElement(block as HTMLElement);
+      } catch {
+        /* noop */
+      }
     });
   }, []);
 
@@ -133,7 +139,9 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
   if (isBlock) {
     return (
       <div ref={ref}>
-        <pre><code className={className}>{text}</code></pre>
+        <pre>
+          <code className={className}>{text}</code>
+        </pre>
       </div>
     );
   }
@@ -207,7 +215,7 @@ const ReasoningBlock: React.FC<{
 
   const toggle = () => {
     userOverridden.current = true;
-    setOpen(v => !v);
+    setOpen((v) => !v);
   };
 
   const displayText = streaming ? truncateReasoning(text) : text;
@@ -215,9 +223,11 @@ const ReasoningBlock: React.FC<{
   return (
     <div className={`msg-reasoning${open ? ' msg-reasoning-open' : ''}`}>
       <div className="msg-reasoning-toggle" onClick={toggle}>
-        <span dangerouslySetInnerHTML={{
-          __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
-        }} />
+        <span
+          dangerouslySetInnerHTML={{
+            __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          }}
+        />
         {open ? '收起思考' : '查看思考'}
       </div>
       <div ref={bodyRef} className={`msg-reasoning-content${open ? ' msg-reasoning-open' : ''}`}>
@@ -231,18 +241,24 @@ const ReasoningBlock: React.FC<{
 
 const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = React.memo(
   ({ part, expanded, onToggle }) => {
-    const icon = part.status === 'running' ? svgIcon('dot')
-      : part.status === 'done' ? svgIcon('check-circle')
-      : part.status === 'error' ? svgIcon('close')
-      : svgIcon('dot');
+    const icon =
+      part.status === 'running'
+        ? svgIcon('dot')
+        : part.status === 'done'
+          ? svgIcon('check-circle')
+          : part.status === 'error'
+            ? svgIcon('close')
+            : svgIcon('dot');
     const toolDone = part.status === 'done' || part.status === 'error';
-    const badgeLabel = part.status === 'running' ? '执行中'
-      : part.status === 'done' ? '完成'
-      : part.status === 'error' ? '失败'
-      : '等待中';
-    const badgeCls = part.status === 'done' ? 'badge-ok'
-      : part.status === 'error' ? 'badge-fail'
-      : 'badge-running';
+    const badgeLabel =
+      part.status === 'running'
+        ? '执行中'
+        : part.status === 'done'
+          ? '完成'
+          : part.status === 'error'
+            ? '失败'
+            : '等待中';
+    const badgeCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
 
     return (
       <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${expanded ? ' tool-expanded' : ''}`}>
@@ -250,23 +266,31 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
           <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
           <span className="tool-name">{part.name}</span>
           <span className="tool-args">
-            {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : (part.args || '')}
+            {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : part.args || ''}
           </span>
           <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
         </div>
         {expanded && part.output && (
           <div className="msg-tool-result">
-            <pre><code>{part.output.slice(0, 2000)}{part.output.length > 2000 ? '\n…(截断)' : ''}</code></pre>
+            <pre>
+              <code>
+                {part.output.slice(0, 2000)}
+                {part.output.length > 2000 ? '\n…(截断)' : ''}
+              </code>
+            </pre>
           </div>
         )}
         {expanded && part.err && (
           <div className="msg-tool-result msg-tool-err">
-            <pre><code>{part.err}</code></pre>
+            <pre>
+              <code>{part.err}</code>
+            </pre>
           </div>
         )}
       </div>
     );
-  });
+  },
+);
 
 // ── Tool summary ──
 
@@ -276,20 +300,24 @@ const ToolSummary: React.FC<{
   onExpandAll: () => void;
   onCollapseAll: () => void;
 }> = ({ tools, expandedTools, onExpandAll, onCollapseAll }) => {
-    const doneTools = tools.filter(t => t.status === 'done' || t.status === 'error');
-    const names = doneTools.map(t => t.label || t.name);
-    const unique = [...new Set(names)];
-    const allExpanded = doneTools.every(t => expandedTools.has(t.toolId));
-    return (
-      <div className="msg-tool-summary"
-        onClick={allExpanded ? onCollapseAll : onExpandAll}
-        title={allExpanded ? '点击折叠所有工具' : '点击展开所有工具'}>
-        <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} />
-        {' '}已执行 {doneTools.length} 个工具：
-        <span>{unique.slice(0, 3).join(', ')}{unique.length > 3 ? ` 等 ${unique.length} 个` : ''}</span>
-      </div>
-    );
-  };
+  const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
+  const names = doneTools.map((t) => t.label || t.name);
+  const unique = [...new Set(names)];
+  const allExpanded = doneTools.every((t) => expandedTools.has(t.toolId));
+  return (
+    <div
+      className="msg-tool-summary"
+      onClick={allExpanded ? onCollapseAll : onExpandAll}
+      title={allExpanded ? '点击折叠所有工具' : '点击展开所有工具'}
+    >
+      <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} /> 已执行 {doneTools.length} 个工具：
+      <span>
+        {unique.slice(0, 3).join(', ')}
+        {unique.length > 3 ? ` 等 ${unique.length} 个` : ''}
+      </span>
+    </div>
+  );
+};
 
 // ── Sub-agent reasoning (collapsed except last) ──
 
@@ -301,22 +329,29 @@ const SubReasoningBlock: React.FC<{
   // Find index of the LAST reasoning part — only that one renders expanded
   let lastIdx = -1;
   for (let i = parts.length - 1; i >= 0; i--) {
-    if (parts[i].type === 'reasoning') { lastIdx = i; break; }
+    if (parts[i].type === 'reasoning') {
+      lastIdx = i;
+      break;
+    }
   }
   const isLast = index === lastIdx;
   const [open, setOpen] = useState(isLast);
 
   // Sync open state when a NEW part becomes the last (streaming progress)
-  useEffect(() => { if (isLast) setOpen(true); }, [isLast]);
+  useEffect(() => {
+    if (isLast) setOpen(true);
+  }, [isLast]);
 
   const displayText = open ? (isLast ? truncateReasoning(part.text) : part.text) : '';
 
   return (
     <div className="msg-reasoning">
-      <div className="msg-reasoning-toggle" onClick={() => setOpen(v => !v)}>
-        <span dangerouslySetInnerHTML={{
-          __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
-        }} />
+      <div className="msg-reasoning-toggle" onClick={() => setOpen((v) => !v)}>
+        <span
+          dangerouslySetInnerHTML={{
+            __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          }}
+        />
         {open ? '收起思考' : `思考 (${(part.text.length / 1000).toFixed(0)}k)`}
       </div>
       {open && (
@@ -357,20 +392,22 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
     return () => observer.disconnect();
   }, [expanded]);
 
-  const toggle = () => { userOverridden.current = true; setExpanded(v => !v); };
+  const toggle = () => {
+    userOverridden.current = true;
+    setExpanded((v) => !v);
+  };
   const toggleTool = useCallback((id: string) => {
-    setExpandedTools(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
   }, []);
 
-  const statusIcon = part.status === 'running' ? svgIcon('dot')
-    : part.status === 'done' ? svgIcon('check-circle')
-    : svgIcon('close');
-  const statusLabel = part.status === 'running' ? '执行中'
-    : part.status === 'done' ? '完成'
-    : '失败';
-  const statusCls = part.status === 'done' ? 'badge-ok'
-    : part.status === 'error' ? 'badge-fail'
-    : 'badge-running';
+  const statusIcon =
+    part.status === 'running' ? svgIcon('dot') : part.status === 'done' ? svgIcon('check-circle') : svgIcon('close');
+  const statusLabel = part.status === 'running' ? '执行中' : part.status === 'done' ? '完成' : '失败';
+  const statusCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
 
   const streaming = part.status === 'running';
 
@@ -384,7 +421,8 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
       if (p.type === 'tool') {
         const run: typeof part.parts = [];
         while (i < part.parts.length && part.parts[i].type === 'tool') {
-          run.push(part.parts[i]); i++;
+          run.push(part.parts[i]);
+          i++;
         }
         const tools = run as any[];
         const doneTools = tools.filter((t: any) => t.status === 'done' || t.status === 'error');
@@ -395,9 +433,14 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
           <div key={`tool-group-${i}`} className="msg-tool-wrapper">
             {collapsed ? (
               <ToolSummary
-                tools={doneTools as any} expandedTools={expandedTools}
+                tools={doneTools as any}
+                expandedTools={expandedTools}
                 onExpandAll={() => {
-                  setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
+                  setExpandedTools((prev) => {
+                    const n = new Set(prev);
+                    for (const t of tools) n.add((t as any).toolId);
+                    return n;
+                  });
                 }}
                 onCollapseAll={() => {}}
               />
@@ -405,37 +448,41 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
               <>
                 {allDone && (
                   <ToolSummary
-                    tools={doneTools as any} expandedTools={expandedTools}
+                    tools={doneTools as any}
+                    expandedTools={expandedTools}
                     onExpandAll={() => {
-                      setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.add((t as any).toolId); return n; });
+                      setExpandedTools((prev) => {
+                        const n = new Set(prev);
+                        for (const t of tools) n.add((t as any).toolId);
+                        return n;
+                      });
                     }}
                     onCollapseAll={() => {
-                      setExpandedTools(prev => { const n = new Set(prev); for (const t of tools) n.delete((t as any).toolId); return n; });
+                      setExpandedTools((prev) => {
+                        const n = new Set(prev);
+                        for (const t of tools) n.delete((t as any).toolId);
+                        return n;
+                      });
                     }}
                   />
                 )}
                 {tools.map((t: any) => (
-                  <ToolCard key={t.toolId} part={t}
+                  <ToolCard
+                    key={t.toolId}
+                    part={t}
                     expanded={expandedTools.has(t.toolId)}
                     onToggle={() => toggleTool(t.toolId)}
                   />
                 ))}
               </>
             )}
-          </div>
+          </div>,
         );
       } else if (p.type === 'reasoning') {
-        items.push(
-          <SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />
-        );
+        items.push(<SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />);
         i++;
       } else if (p.type === 'text') {
-        items.push(
-          <MarkdownContent key={i}
-            text={(p as any).text}
-            streaming={streaming && !(p as any).finalised}
-          />
-        );
+        items.push(<MarkdownContent key={i} text={(p as any).text} streaming={streaming && !(p as any).finalised} />);
         i++;
       } else {
         i++;
@@ -447,9 +494,11 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   return (
     <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
       <div className="msg-sub-agent-header" onClick={toggle}>
-        <span dangerouslySetInnerHTML={{
-          __html: expanded ? svgIcon('chevron-down') : svgIcon('chevron-right'),
-        }} />
+        <span
+          dangerouslySetInnerHTML={{
+            __html: expanded ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          }}
+        />
         <span className="msg-sub-agent-icon" dangerouslySetInnerHTML={{ __html: statusIcon }} />
         <span className="msg-sub-agent-desc">{part.description}</span>
         <span className={`msg-tool-badge ${statusCls}`}>{statusLabel}</span>
@@ -457,10 +506,14 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
       <div ref={bodyRef} className={`msg-sub-agent-body${expanded ? ' open' : ''}`}>
         {renderedParts}
         {part.parts.length === 0 && part.status === 'running' && (
-          <div className="msg-text" style={{ color: 'var(--text-faint)', padding: '8px 0' }}>分析中…</div>
+          <div className="msg-text" style={{ color: 'var(--text-faint)', padding: '8px 0' }}>
+            分析中…
+          </div>
         )}
         {part.parts.length === 0 && part.status === 'error' && (
-          <div className="msg-text" style={{ color: 'var(--anomaly-red)', padding: '8px 0' }}>执行失败</div>
+          <div className="msg-text" style={{ color: 'var(--anomaly-red)', padding: '8px 0' }}>
+            执行失败
+          </div>
         )}
       </div>
     </div>
@@ -481,7 +534,8 @@ const UserBubble: React.FC<{
         <div className="msg-attach-pills">
           {msg.files.map((f, i) => (
             <span key={i} className="msg-attach-pill">
-              {f.name} <span className="attach-pill-size">
+              {f.name}{' '}
+              <span className="attach-pill-size">
                 ({f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`})
               </span>
             </span>
@@ -491,12 +545,20 @@ const UserBubble: React.FC<{
     </div>
     <span className="msg-actions">
       {onEdit && (
-        <span className="msg-action-btn" onClick={() => onEdit(msg)} title="编辑"
-          dangerouslySetInnerHTML={{ __html: svgIcon('edit') }} />
+        <span
+          className="msg-action-btn"
+          onClick={() => onEdit(msg)}
+          title="编辑"
+          dangerouslySetInnerHTML={{ __html: svgIcon('edit') }}
+        />
       )}
       {onResend && (
-        <span className="msg-action-btn" onClick={() => onResend(msg)} title="重发"
-          dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }} />
+        <span
+          className="msg-action-btn"
+          onClick={() => onResend(msg)}
+          title="重发"
+          dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+        />
       )}
     </span>
   </div>
@@ -514,24 +576,31 @@ const AssistantBubble: React.FC<{
   onRetry?: () => void;
   onNavigateToNode?: (name: string) => void;
 }> = ({
-  msg, expandedTools,
-  onToggleTool, onExpandAllTools, onCollapseAllTools,
-  onCopy, onRetry, onNavigateToNode,
+  msg,
+  expandedTools,
+  onToggleTool,
+  onExpandAllTools,
+  onCollapseAllTools,
+  onCopy,
+  onRetry,
+  onNavigateToNode,
 }) => {
   const streaming = msg.status === 'streaming';
 
   // Count reasoning blocks so we know which one is "last" (still streaming)
   let reasoningTotal = 0;
-  for (const p of msg.parts) { if (p.type === 'reasoning') reasoningTotal++; }
+  for (const p of msg.parts) {
+    if (p.type === 'reasoning') reasoningTotal++;
+  }
   let reasoningSeen = 0;
 
   // Build flat render groups — reasoning blocks are NOT pulled out to top;
   // they render inline, interspersed with tool groups and text.
   const groups: Array<
-    { kind: 'tool'; tools: ToolCallPart[] } |
-    { kind: 'reasoning'; text: string; idx: number } |
-    { kind: 'text'; text: string; finalised: boolean; idx: number } |
-    { kind: 'subagent'; part: SubAgentPart }
+    | { kind: 'tool'; tools: ToolCallPart[] }
+    | { kind: 'reasoning'; text: string; idx: number }
+    | { kind: 'text'; text: string; finalised: boolean; idx: number }
+    | { kind: 'subagent'; part: SubAgentPart }
   > = [];
   let i = 0;
   while (i < msg.parts.length) {
@@ -565,31 +634,35 @@ const AssistantBubble: React.FC<{
       {groups.map((g, gi) => {
         if (g.kind === 'tool') {
           const tools = g.tools;
-          const doneCount = tools.filter(t => t.status === 'done' || t.status === 'error').length;
+          const doneCount = tools.filter((t) => t.status === 'done' || t.status === 'error').length;
           const allDone = doneCount === tools.length && tools.length >= 3;
-          const doneTools = tools.filter(t => t.status === 'done' || t.status === 'error');
-          const groupExpanded = tools.some(t => expandedTools.has(t.toolId));
+          const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
+          const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
           // ponytail: when collapsed, show summary ONLY; when expanded, show cards + summary as toggle
           const collapsed = allDone && !groupExpanded;
           return (
             <div key={gi} className="msg-tool-wrapper">
               {collapsed ? (
                 <ToolSummary
-                  tools={doneTools} expandedTools={expandedTools}
-                  onExpandAll={() => onExpandAllTools(tools.map(t => t.toolId))}
+                  tools={doneTools}
+                  expandedTools={expandedTools}
+                  onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
                   onCollapseAll={() => {}}
                 />
               ) : (
                 <>
                   {allDone && (
                     <ToolSummary
-                      tools={doneTools} expandedTools={expandedTools}
-                      onExpandAll={() => onExpandAllTools(tools.map(t => t.toolId))}
-                      onCollapseAll={() => onCollapseAllTools(tools.map(t => t.toolId))}
+                      tools={doneTools}
+                      expandedTools={expandedTools}
+                      onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                      onCollapseAll={() => onCollapseAllTools(tools.map((t) => t.toolId))}
                     />
                   )}
-                  {tools.map(t => (
-                    <ToolCard key={t.toolId} part={t}
+                  {tools.map((t) => (
+                    <ToolCard
+                      key={t.toolId}
+                      part={t}
                       expanded={expandedTools.has(t.toolId)}
                       onToggle={() => onToggleTool(t.toolId)}
                     />
@@ -603,7 +676,8 @@ const AssistantBubble: React.FC<{
         if (g.kind === 'reasoning') {
           const isLast = g.idx === reasoningTotal;
           return (
-            <ReasoningBlock key={gi}
+            <ReasoningBlock
+              key={gi}
               text={g.text}
               streaming={streaming && isLast}
               reasoningComplete={!streaming || !isLast}
@@ -613,7 +687,8 @@ const AssistantBubble: React.FC<{
 
         if (g.kind === 'text') {
           return (
-            <MarkdownContent key={gi}
+            <MarkdownContent
+              key={gi}
               text={g.text}
               streaming={streaming && !g.finalised}
               onNavigateToNode={onNavigateToNode}
@@ -629,12 +704,20 @@ const AssistantBubble: React.FC<{
       })}
       <span className="msg-actions">
         {onCopy && (
-          <span className="msg-action-btn" onClick={onCopy} title="复制"
-            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }} />
+          <span
+            className="msg-action-btn"
+            onClick={onCopy}
+            title="复制"
+            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
+          />
         )}
         {onRetry && msg.status === 'done' && (
-          <span className="msg-action-btn" onClick={onRetry} title="重试"
-            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }} />
+          <span
+            className="msg-action-btn"
+            onClick={onRetry}
+            title="重试"
+            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+          />
         )}
       </span>
     </div>
@@ -663,10 +746,11 @@ const ChatMessagesApp: React.FC<{
     const active = s.sessions[s.activeIdx];
     return active?.id ?? null;
   });
-  const msgStore = useMemo(() =>
-    activeSessionId != null
-      ? getMessagesStore(`${storeId}:${activeSessionId}`)
-      : getMessagesStore(`${storeId}:__empty__`),
+  const msgStore = useMemo(
+    () =>
+      activeSessionId != null
+        ? getMessagesStore(`${storeId}:${activeSessionId}`)
+        : getMessagesStore(`${storeId}:__empty__`),
     [storeId, activeSessionId],
   );
   const messages = useStore(msgStore, (s) => s.messages);
@@ -701,7 +785,7 @@ const ChatMessagesApp: React.FC<{
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
     });
-    }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll during streaming — MutationObserver catches incremental DOM
   // additions when message parts are mutated in-place (no version bump).
@@ -763,42 +847,61 @@ const ChatMessagesApp: React.FC<{
   }, [scrollEl]);
 
   const toggleTool = useCallback((id: string) => {
-    setExpandedTools(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
   }, []);
   const expandAllTools = useCallback((ids: string[]) => {
-    setExpandedTools(prev => { const n = new Set(prev); for (const id of ids) n.add(id); return n; });
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      for (const id of ids) n.add(id);
+      return n;
+    });
   }, []);
   const collapseAllTools = useCallback((ids: string[]) => {
-    setExpandedTools(prev => { const n = new Set(prev); for (const id of ids) n.delete(id); return n; });
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      for (const id of ids) n.delete(id);
+      return n;
+    });
   }, []);
 
   return (
     <div className="chat-messages" ref={listRef}>
-      {messages.map(msg => {
+      {messages.map((msg) => {
         switch (msg.role) {
           case 'user':
             return (
-              <UserBubble key={msg._id} msg={msg}
+              <UserBubble
+                key={msg._id}
+                msg={msg}
                 onEdit={callbacks.onEditUserMessage}
                 onResend={callbacks.onResendUserMessage}
               />
             );
           case 'assistant':
             return (
-              <AssistantBubble key={msg._id} msg={msg}
+              <AssistantBubble
+                key={msg._id}
+                msg={msg}
                 expandedTools={expandedTools}
                 onToggleTool={toggleTool}
                 onExpandAllTools={expandAllTools}
                 onCollapseAllTools={collapseAllTools}
-                onCopy={callbacks.onCopyText ? () => {
-                  const text = msg.parts
-                    .filter((p): p is TextPart => p.type === 'text')
-                    .map(p => p.text).join('\n');
-                  callbacks.onCopyText?.(text);
-                } : undefined}
-                onRetry={callbacks.onRetryAssistant
-                  ? () => callbacks.onRetryAssistant!(msg)
-                  : undefined}
+                onCopy={
+                  callbacks.onCopyText
+                    ? () => {
+                        const text = msg.parts
+                          .filter((p): p is TextPart => p.type === 'text')
+                          .map((p) => p.text)
+                          .join('\n');
+                        callbacks.onCopyText?.(text);
+                      }
+                    : undefined
+                }
+                onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant!(msg) : undefined}
                 onNavigateToNode={callbacks.onNavigateToNode}
               />
             );
@@ -819,7 +922,9 @@ export class ChatMessagesPanel {
   private _storeId: string;
   private _callbacks: ChatMessagesCallbacks = {};
 
-  setCallbacks(cbs: ChatMessagesCallbacks): void { this._callbacks = cbs; }
+  setCallbacks(cbs: ChatMessagesCallbacks): void {
+    this._callbacks = cbs;
+  }
 
   constructor(container: HTMLElement, storeId: string) {
     this._storeId = storeId;
@@ -845,5 +950,8 @@ export class ChatMessagesPanel {
     );
   }
 
-  destroy(): void { this._root.unmount(); this._mount.remove(); }
+  destroy(): void {
+    this._root.unmount();
+    this._mount.remove();
+  }
 }

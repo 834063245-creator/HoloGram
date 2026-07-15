@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
-import { StreamingToolExecutor } from '../src/agent/streaming-executor';
-import { ToolRegistry } from '../src/agent/tool';
-import type { Tool } from '../src/agent/tool';
-import { HookRegistry, PreflightHookRegistry } from '../src/agent/hooks';
+import { describe, expect, it, vi } from 'vitest';
+import { type AgentEvent, EventKind, type Pricing } from '../src/agent/agent-types';
 import type { Hook, PreflightHook } from '../src/agent/hooks';
-import { EventKind, type AgentEvent, type Pricing } from '../src/agent/agent-types';
+import { HookRegistry, PreflightHookRegistry } from '../src/agent/hooks';
+import { StreamingToolExecutor } from '../src/agent/streaming-executor';
+import type { Tool } from '../src/agent/tool';
+import { ToolRegistry } from '../src/agent/tool';
 
 // ── Helpers ──
 
@@ -29,7 +29,6 @@ function noopSink(_ev: AgentEvent): void {}
 // ── Tests ──
 
 describe('StreamingToolExecutor — hook integration', () => {
-
   it('post-tool hook is called after tool execution', async () => {
     const tool = makeTool('read_file_content', true, 'hello world');
     const registry = makeRegistry([tool]);
@@ -200,7 +199,9 @@ describe('StreamingToolExecutor — hook integration', () => {
     const crashHook: Hook = {
       name: 'crash-hook',
       shouldEnrich: () => true,
-      enrich: async () => { throw new Error('BOOM!'); },
+      enrich: async () => {
+        throw new Error('BOOM!');
+      },
     };
     const hooks = new HookRegistry();
     hooks.register(crashHook);
@@ -221,7 +222,9 @@ describe('StreamingToolExecutor — hook integration', () => {
     const crashHook: PreflightHook = {
       name: 'crash-preflight',
       shouldCheck: () => true,
-      check: () => { throw new Error('KABOOM!'); },
+      check: () => {
+        throw new Error('KABOOM!');
+      },
     };
     const preflight = new PreflightHookRegistry();
     preflight.register(crashHook);
@@ -242,8 +245,17 @@ describe('StreamingToolExecutor — hook integration', () => {
     const checkSpy = vi.fn(() => '⚠️ deleting file');
     const preflightHook: PreflightHook = {
       name: 'graph-preflight',
-      shouldCheck: (t: string) => ['delete_file', 'rename_file', 'edit_file', 'write_file', 'move_file',
-        'git_discard', 'git_checkout', 'git_commit'].includes(t),
+      shouldCheck: (t: string) =>
+        [
+          'delete_file',
+          'rename_file',
+          'edit_file',
+          'write_file',
+          'move_file',
+          'git_discard',
+          'git_checkout',
+          'git_commit',
+        ].includes(t),
       check: checkSpy,
     };
     const preflight = new PreflightHookRegistry();
@@ -279,5 +291,4 @@ describe('StreamingToolExecutor — hook integration', () => {
     expect(checkSpy).toHaveBeenCalledTimes(1);
     expect(results[0].output).toContain('⚠️ renaming file');
   });
-
 });

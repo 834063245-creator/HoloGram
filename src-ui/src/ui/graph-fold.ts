@@ -7,20 +7,41 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
+import { communityColor, edgeColorByType, edgeOpacityByDepth, GLOW_COLORS } from './graph-colors';
 import { iconHtml } from './icons';
-import { GLOW_COLORS, edgeColorByType, edgeOpacityByDepth, communityColor } from './graph-colors';
 
 // ── Types ────────────────────────────────────────────────────
 
 interface GraphNode {
-  id: string; name: string; type?: string; kind?: string;
-  location?: string; properties?: Record<string, unknown>;
+  id: string;
+  name: string;
+  type?: string;
+  kind?: string;
+  location?: string;
+  properties?: Record<string, unknown>;
 }
-interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; crossFile: boolean; }
-interface CommunityData { id: string; label: string; node_ids: string[]; level?: number; parent_id?: string | null; }
+interface EdgeData {
+  s: number;
+  t: number;
+  couplingDepth: number;
+  edgeType: string;
+  direction: string;
+  crossFile: boolean;
+}
+interface CommunityData {
+  id: string;
+  label: string;
+  node_ids: string[];
+  level?: number;
+  parent_id?: string | null;
+}
 
 export interface GalaxyMeta {
-  id: string; label: string; centroid: THREE.Vector3; memberIndices: number[]; radius: number;
+  id: string;
+  label: string;
+  centroid: THREE.Vector3;
+  memberIndices: number[];
+  radius: number;
 }
 
 // ── FoldHost — GraphFold 需要从 StarGraph 访问的成员 ────────
@@ -43,19 +64,19 @@ export interface FoldHost {
   _glow2Rgba: Float32Array;
 
   // 场景对象
-  edgeLineGroups: any[];  // LineSegments2[]
+  edgeLineGroups: any[]; // LineSegments2[]
   highlightEdgeGroup: THREE.Group;
   galaxyGroup: THREE.Group;
   scene: THREE.Scene;
 
   // 相机
   camera: THREE.PerspectiveCamera;
-  controls: any;  // OrbitControls
+  controls: any; // OrbitControls
 
   // 渲染
   renderer: THREE.WebGLRenderer;
-  composer: any;  // EffectComposer
-  bloomPass: any;  // UnrealBloomPass
+  composer: any; // EffectComposer
+  bloomPass: any; // UnrealBloomPass
   glowTex: THREE.Texture;
 
   // DOM
@@ -121,9 +142,15 @@ export class GraphFold {
 
   // ── Getters ────────────────────────────────────────────────
 
-  get isFolded(): boolean { return this.foldMode; }
-  get isInsideGalaxy(): boolean { return this.enteredGalaxyId !== null; }
-  get communityCount(): number { return this.host.communities.length; }
+  get isFolded(): boolean {
+    return this.foldMode;
+  }
+  get isInsideGalaxy(): boolean {
+    return this.enteredGalaxyId !== null;
+  }
+  get communityCount(): number {
+    return this.host.communities.length;
+  }
 
   // ═══════════════════════════════════════════════════════════
   // Public API
@@ -165,7 +192,9 @@ export class GraphFold {
     }
   }
 
-  toggleFold(): void { this.setFoldMode(!this.foldMode); }
+  toggleFold(): void {
+    this.setFoldMode(!this.foldMode);
+  }
 
   // ═══════════════════════════════════════════════════════════
   // Community rings + hover
@@ -177,7 +206,9 @@ export class GraphFold {
     }
     this._communityGlowSprites = [];
     const size = 128;
-    const cvs = document.createElement('canvas'); cvs.width = size; cvs.height = size;
+    const cvs = document.createElement('canvas');
+    cvs.width = size;
+    cvs.height = size;
     const ctx = cvs.getContext('2d')!;
     const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
     gradient.addColorStop(0, 'rgba(255,255,255,0)');
@@ -185,15 +216,23 @@ export class GraphFold {
     gradient.addColorStop(0.75, 'rgba(255,255,255,0.06)');
     gradient.addColorStop(0.9, 'rgba(255,255,255,0.18)');
     gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = gradient; ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
     const glowTex = new THREE.CanvasTexture(cvs);
 
     for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
       const gm = this.galaxyMeta[gi];
       if (gm.radius <= 0) continue;
-      const hue = ((gm.id.split('').reduce((h, c) => ((h << 5) - h) + c.charCodeAt(0), 0) & 0x7fffffff) % 360) / 360;
+      const hue = ((gm.id.split('').reduce((h, c) => (h << 5) - h + c.charCodeAt(0), 0) & 0x7fffffff) % 360) / 360;
       const color = new THREE.Color().setHSL(hue, 0.3, 0.5);
-      const mat = new THREE.SpriteMaterial({ map: glowTex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0 });
+      const mat = new THREE.SpriteMaterial({
+        map: glowTex,
+        color,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0,
+      });
       const sprite = new THREE.Sprite(mat);
       sprite.position.copy(gm.centroid);
       sprite.scale.setScalar(gm.radius * 2.5);
@@ -207,7 +246,10 @@ export class GraphFold {
     let next = -1;
     if (this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount) {
       for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
-        if (this.galaxyMeta[gi].memberIndices.includes(this.host.hoveredIdx)) { next = gi; break; }
+        if (this.galaxyMeta[gi].memberIndices.includes(this.host.hoveredIdx)) {
+          next = gi;
+          break;
+        }
       }
     }
     if (next === prev) return;
@@ -251,17 +293,23 @@ export class GraphFold {
       const kind = ((this.host.graphNodes[i].type || this.host.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = glowColor;
-      if (i < this.host._nodeCount) { this.host._setCoreVisible(i, true); this.host._setCoreColor(i, coreColor); }
-      if (i < this.host._nodeCount) { this.host._setGlowAlpha(i, 0.55); this.host._setGlowColor(i, glowColor); }
-          }
+      if (i < this.host._nodeCount) {
+        this.host._setCoreVisible(i, true);
+        this.host._setCoreColor(i, coreColor);
+      }
+      if (i < this.host._nodeCount) {
+        this.host._setGlowAlpha(i, 0.55);
+        this.host._setGlowColor(i, glowColor);
+      }
+    }
     for (const lines of this.host.edgeLineGroups) {
       lines.visible = true;
-      (lines.material as any).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as any).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
     }
     this._disposeFoldChildren();
     this.clearCrossEdgeFlow();
-    this.galaxyClouds = []; this.galaxyGlows = [];
+    this.galaxyClouds = [];
+    this.galaxyGlows = [];
   }
 
   _disposeFoldChildren(): void {
@@ -282,7 +330,7 @@ export class GraphFold {
   // ═══════════════════════════════════════════════════════════
 
   _showConstellation(galaxyId: string): number {
-    const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+    const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
     if (!gm) return 0;
     const isFull = true;
     const cc = new THREE.Color(GraphFold.CONSTELLATION_COLOR);
@@ -297,7 +345,8 @@ export class GraphFold {
       }
     }
     const pos = this.host.nodePositions;
-    const verts: number[] = [], colors: number[] = [];
+    const verts: number[] = [],
+      colors: number[] = [];
     const memberSet = new Set(gm.memberIndices);
     for (let ei = 0; ei < this.host.edgeDataList.length; ei++) {
       const { s, t } = this.host.edgeDataList[ei];
@@ -309,13 +358,21 @@ export class GraphFold {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
       geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-      this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.06,
-        depthWrite: false, blending: THREE.AdditiveBlending,
-      })));
+      this.commFoldGroup.add(
+        new THREE.LineSegments(
+          geo,
+          new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.06,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        ),
+      );
     }
 
-    const subCommunities = this.host.communities.filter(c => {
+    const subCommunities = this.host.communities.filter((c) => {
       if (!c.parent_id || c.parent_id !== galaxyId) return false;
       const lvl = Number(c.level);
       return !isNaN(lvl) && lvl >= 1;
@@ -328,7 +385,7 @@ export class GraphFold {
         const subColor = new THREE.Color(subColors[idx % subColors.length]);
         const subMembers: number[] = [];
         for (const nid of subComm.node_ids) {
-          const nodeIdx = this.host.graphNodes.findIndex(n => n.id === nid);
+          const nodeIdx = this.host.graphNodes.findIndex((n) => n.id === nid);
           if (nodeIdx >= 0) {
             subMembers.push(nodeIdx);
             this._subCommByNodeIdx.set(nodeIdx, subComm.id);
@@ -361,9 +418,10 @@ export class GraphFold {
     this.host.container.style.cursor = '';
     this.host.tooltipEl?.classList.remove('visible');
     this._disposeFoldChildren();
-    this.galaxyClouds = []; this.galaxyGlows = [];
+    this.galaxyClouds = [];
+    this.galaxyGlows = [];
 
-    const subCommunities = this.host.communities.filter(c => {
+    const subCommunities = this.host.communities.filter((c) => {
       if (!c.parent_id || c.parent_id !== galaxyId) return false;
       const lvl = Number(c.level);
       return !isNaN(lvl) && lvl >= 1;
@@ -371,13 +429,14 @@ export class GraphFold {
 
     if (subCommunities.length > 0) {
       this._showSubCommunityClouds(subCommunities);
-      const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+      const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
       this.showGalaxyTitle(gm);
       const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
+      if (st)
+        st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
     } else {
       this._showConstellation(galaxyId);
-      const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+      const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
       if (gm) {
         let clusterRadius = 30;
         for (const mi of gm.memberIndices) {
@@ -387,13 +446,15 @@ export class GraphFold {
           clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
         }
         const viewDist = clusterRadius * 3.2;
-        const camPos = gm.centroid.clone().add(
-          new THREE.Vector3(viewDist * 0.55, viewDist * 0.4, viewDist * 0.7));
+        const camPos = gm.centroid.clone().add(new THREE.Vector3(viewDist * 0.55, viewDist * 0.4, viewDist * 0.7));
         this.host.focusTarget.copy(camPos);
         this.host.focusStartCam.copy(this.host.camera.position);
         this.host.focusStartLook.copy(this.host.controls.target);
         this._constellationLookTarget = gm.centroid.clone();
-        this.host.focusActive = true; this.host.focusProgress = 0; this.host.focusNodeIdx = -1; this.host.focusFlash = 0;
+        this.host.focusActive = true;
+        this.host.focusProgress = 0;
+        this.host.focusNodeIdx = -1;
+        this.host.focusFlash = 0;
         this.host._focusStartTime = performance.now();
         this.host.controls.target.copy(gm.centroid);
         this.host.controls.enablePan = true;
@@ -402,7 +463,8 @@ export class GraphFold {
       }
       this.showGalaxyTitle(gm);
       const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+      if (st)
+        st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
     }
   }
 
@@ -410,9 +472,11 @@ export class GraphFold {
     const subMeta: GalaxyMeta[] = [];
     for (const sc of subCommunities) {
       const memberIndices: number[] = [];
-      let sx = 0, sy = 0, sz = 0;
+      let sx = 0,
+        sy = 0,
+        sz = 0;
       for (const nid of sc.node_ids) {
-        const idx = this.host.graphNodes.findIndex(n => n.id === nid);
+        const idx = this.host.graphNodes.findIndex((n) => n.id === nid);
         if (idx >= 0) {
           memberIndices.push(idx);
           sx += this.host.nodePositions[idx * 3];
@@ -444,21 +508,36 @@ export class GraphFold {
     }
 
     if (subMeta.length > 0) {
-      let cx = 0, cy = 0, cz = 0;
-      for (const sm of subMeta) { cx += sm.centroid.x; cy += sm.centroid.y; cz += sm.centroid.z; }
-      cx /= subMeta.length; cy /= subMeta.length; cz /= subMeta.length;
+      let cx = 0,
+        cy = 0,
+        cz = 0;
+      for (const sm of subMeta) {
+        cx += sm.centroid.x;
+        cy += sm.centroid.y;
+        cz += sm.centroid.z;
+      }
+      cx /= subMeta.length;
+      cy /= subMeta.length;
+      cz /= subMeta.length;
       let maxR = 30;
       for (const sm of subMeta) {
-        const dx = sm.centroid.x - cx, dy = sm.centroid.y - cy, dz = sm.centroid.z - cz;
+        const dx = sm.centroid.x - cx,
+          dy = sm.centroid.y - cy,
+          dz = sm.centroid.z - cz;
         maxR = Math.max(maxR, Math.sqrt(dx * dx + dy * dy + dz * dz));
       }
       const centroid = new THREE.Vector3(cx, cy, cz);
       const viewDist = Math.max(maxR * 3.0, 120);
-      this.host.focusTarget.copy(centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)));
+      this.host.focusTarget.copy(
+        centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)),
+      );
       this.host.focusStartCam.copy(this.host.camera.position);
       this.host.focusStartLook.copy(this.host.controls.target);
       this._constellationLookTarget = centroid.clone();
-      this.host.focusActive = true; this.host.focusProgress = 0; this.host.focusNodeIdx = -1; this.host.focusFlash = 0;
+      this.host.focusActive = true;
+      this.host.focusProgress = 0;
+      this.host.focusNodeIdx = -1;
+      this.host.focusFlash = 0;
       this.host._focusStartTime = performance.now();
       this.host.controls.target.copy(centroid);
       this.host.controls.minDistance = maxR * 1.5;
@@ -495,19 +574,26 @@ export class GraphFold {
     const label = document.createElement('div');
     label.className = 'galaxy-flash-label';
     label.textContent = `🌌 ${gm.label || gm.id}`;
-    label.style.cssText = 'position:absolute;z-index:12;pointer-events:none;font-size: calc(16px * var(--font-scale));font-weight:700;color:#ffe0a0;text-shadow:0 0 20px rgba(255,180,60,0.8),0 0 40px rgba(255,140,30,0.4);white-space:nowrap;opacity:0;transition:opacity 0.2s;';
-    const halfW = this.host.container.clientWidth * 0.5, halfH = this.host.container.clientHeight * 0.5;
+    label.style.cssText =
+      'position:absolute;z-index:12;pointer-events:none;font-size: calc(16px * var(--font-scale));font-weight:700;color:#ffe0a0;text-shadow:0 0 20px rgba(255,180,60,0.8),0 0 40px rgba(255,140,30,0.4);white-space:nowrap;opacity:0;transition:opacity 0.2s;';
+    const halfW = this.host.container.clientWidth * 0.5,
+      halfH = this.host.container.clientHeight * 0.5;
     this.host.tmpVec3.copy(gm.centroid).project(this.host.camera);
     label.style.left = `${this.host.tmpVec3.x * halfW + halfW}px`;
     label.style.top = `${-this.host.tmpVec3.y * halfH + halfH}px`;
     label.style.transform = 'translate(-50%, -50%)';
     this.host.container.appendChild(label);
-    requestAnimationFrame(() => { label.style.opacity = '1'; });
-    setTimeout(() => { label.style.opacity = '0'; setTimeout(() => label.remove(), 300); }, 1800);
+    requestAnimationFrame(() => {
+      label.style.opacity = '1';
+    });
+    setTimeout(() => {
+      label.style.opacity = '0';
+      setTimeout(() => label.remove(), 300);
+    }, 1800);
   }
 
   _hasVisibleSubCommunities(parentId: string): boolean {
-    return this.host.communities.some(c => {
+    return this.host.communities.some((c) => {
       if (!c.parent_id || c.parent_id !== parentId) return false;
       const lvl = Number(c.level);
       return !isNaN(lvl) && lvl >= 1 && c.node_ids.length >= 4;
@@ -531,7 +617,10 @@ export class GraphFold {
     this.host.camera.far = this.host.controls.maxDistance * 2;
     this.host.camera.updateProjectionMatrix();
     this._disposeFoldChildren();
-    if (this._savedGalaxyMeta) { this.galaxyMeta = this._savedGalaxyMeta; this._savedGalaxyMeta = null; }
+    if (this._savedGalaxyMeta) {
+      this.galaxyMeta = this._savedGalaxyMeta;
+      this._savedGalaxyMeta = null;
+    }
     this.applyFoldOverlay();
     const st = document.getElementById('status-text');
     if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
@@ -543,7 +632,7 @@ export class GraphFold {
 
   enterSubCommunity(subCommId: string): void {
     if (!this.foldMode || !this.enteredGalaxyId || this.enteredSubCommunityId === subCommId) return;
-    const subComm = this.host.communities.find(c => c.id === subCommId);
+    const subComm = this.host.communities.find((c) => c.id === subCommId);
     if (!subComm) return;
     this._drillStack.push(subCommId);
     this.enteredSubCommunityId = subCommId;
@@ -551,9 +640,10 @@ export class GraphFold {
     this.host.container.style.cursor = '';
     this.host.tooltipEl?.classList.remove('visible');
     this._disposeFoldChildren();
-    this.galaxyClouds = []; this.galaxyGlows = [];
+    this.galaxyClouds = [];
+    this.galaxyGlows = [];
 
-    const deeperSubs = this.host.communities.filter(c => {
+    const deeperSubs = this.host.communities.filter((c) => {
       if (!c.parent_id || c.parent_id !== subCommId) return false;
       const lvl = Number(c.level);
       return !isNaN(lvl) && lvl >= 2;
@@ -564,7 +654,8 @@ export class GraphFold {
       const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
       this.showGalaxyTitle({ id: subCommId, label: subComm.label });
       const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
+      if (st)
+        st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
     } else {
       for (let i = 0; i < this.host._nodeCount; i++) {
         this.host._setCoreVisible(i, false);
@@ -572,7 +663,7 @@ export class GraphFold {
       }
       const shownIndices: number[] = [];
       for (const nid of subComm.node_ids) {
-        const idx = this.host.graphNodes.findIndex(n => n.id === nid);
+        const idx = this.host.graphNodes.findIndex((n) => n.id === nid);
         if (idx >= 0) {
           shownIndices.push(idx);
           if (idx < this.host._nodeCount) {
@@ -587,9 +678,13 @@ export class GraphFold {
         }
       }
       this._buildSubCommunityEdges(subComm.node_ids);
-      let sx = 0, sy = 0, sz = 0;
+      let sx = 0,
+        sy = 0,
+        sz = 0;
       for (const mi of shownIndices) {
-        sx += this.host.nodePositions[mi * 3]; sy += this.host.nodePositions[mi * 3 + 1]; sz += this.host.nodePositions[mi * 3 + 2];
+        sx += this.host.nodePositions[mi * 3];
+        sy += this.host.nodePositions[mi * 3 + 1];
+        sz += this.host.nodePositions[mi * 3 + 2];
       }
       const centroid = new THREE.Vector3(sx / shownIndices.length, sy / shownIndices.length, sz / shownIndices.length);
       let clusterRadius = 30;
@@ -600,11 +695,16 @@ export class GraphFold {
         clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
       }
       const viewDist = clusterRadius * 3.5;
-      this.host.focusTarget.copy(centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)));
+      this.host.focusTarget.copy(
+        centroid.clone().add(new THREE.Vector3(viewDist * 0.5, viewDist * 0.4, viewDist * 0.7)),
+      );
       this.host.focusStartCam.copy(this.host.camera.position);
       this.host.focusStartLook.copy(this.host.controls.target);
       this._constellationLookTarget = centroid.clone();
-      this.host.focusActive = true; this.host.focusProgress = 0; this.host.focusNodeIdx = -1; this.host.focusFlash = 0;
+      this.host.focusActive = true;
+      this.host.focusProgress = 0;
+      this.host.focusNodeIdx = -1;
+      this.host.focusFlash = 0;
       this.host._focusStartTime = performance.now();
       this.host.controls.target.copy(centroid);
       this.host.controls.minDistance = clusterRadius * 1.5;
@@ -620,20 +720,22 @@ export class GraphFold {
     if (!this.foldMode || this._drillStack.length === 0) return;
     this._drillStack.pop();
     this._disposeFoldChildren();
-    this.galaxyClouds = []; this.galaxyGlows = [];
+    this.galaxyClouds = [];
+    this.galaxyGlows = [];
 
     if (this._drillStack.length > 0) {
       const parentSubId = this._drillStack[this._drillStack.length - 1];
       this.enteredSubCommunityId = parentSubId;
-      const parentSub = this.host.communities.find(c => c.id === parentSubId);
+      const parentSub = this.host.communities.find((c) => c.id === parentSubId);
       if (!parentSub) return;
       if (this._hasVisibleSubCommunities(parentSubId)) {
-        const deeperSubs = this.host.communities.filter(c => c.parent_id === parentSubId && Number(c.level) >= 2);
+        const deeperSubs = this.host.communities.filter((c) => c.parent_id === parentSubId && Number(c.level) >= 2);
         this._showSubCommunityClouds(deeperSubs);
         const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
         this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
         const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
+        if (st)
+          st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
       } else {
         for (let i = 0; i < this.host._nodeCount; i++) {
           this.host._setCoreVisible(i, false);
@@ -641,11 +743,18 @@ export class GraphFold {
         }
         const shownIndices: number[] = [];
         for (const nid of parentSub.node_ids) {
-          const idx = this.host.graphNodes.findIndex(n => n.id === nid);
+          const idx = this.host.graphNodes.findIndex((n) => n.id === nid);
           if (idx >= 0) {
             shownIndices.push(idx);
-            if (idx < this.host._nodeCount) { this.host._setCoreVisible(idx, true); this.host._setCoreColor(idx, 0xffaa44); }
-            if (idx < this.host._nodeCount) { this.host._setGlowAlpha(idx, 0.55); this.host._setGlowColor(idx, 0xffaa44); this.host._setGlowAlpha(idx, 0.7); }
+            if (idx < this.host._nodeCount) {
+              this.host._setCoreVisible(idx, true);
+              this.host._setCoreColor(idx, 0xffaa44);
+            }
+            if (idx < this.host._nodeCount) {
+              this.host._setGlowAlpha(idx, 0.55);
+              this.host._setGlowColor(idx, 0xffaa44);
+              this.host._setGlowAlpha(idx, 0.7);
+            }
           }
         }
         this._buildSubCommunityEdges(parentSub.node_ids);
@@ -659,18 +768,20 @@ export class GraphFold {
       const galaxyId = this.enteredGalaxyId;
       if (!galaxyId) return;
       if (this._hasVisibleSubCommunities(galaxyId)) {
-        const subCommunities = this.host.communities.filter(c => c.parent_id === galaxyId && Number(c.level) >= 1);
+        const subCommunities = this.host.communities.filter((c) => c.parent_id === galaxyId && Number(c.level) >= 1);
         this._showSubCommunityClouds(subCommunities);
-        const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+        const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
         this.showGalaxyTitle(gm);
         const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
+        if (st)
+          st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
       } else {
         this._showConstellation(galaxyId);
-        const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+        const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
         this.showGalaxyTitle(gm);
         const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+        if (st)
+          st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
       }
     }
   }
@@ -682,10 +793,12 @@ export class GraphFold {
   _buildSubCommunityEdges(nodeIds: string[]): void {
     const memberSet = new Set(nodeIds);
     const pos = this.host.nodePositions;
-    const verts: number[] = [], colors: number[] = [];
+    const verts: number[] = [],
+      colors: number[] = [];
     const cc = new THREE.Color(0xffaa44);
     for (const d of this.host.edgeDataList) {
-      const nidS = this.host.graphNodes[d.s]?.id, nidT = this.host.graphNodes[d.t]?.id;
+      const nidS = this.host.graphNodes[d.s]?.id,
+        nidT = this.host.graphNodes[d.t]?.id;
       if (!nidS || !nidT) continue;
       if (!memberSet.has(nidS) || !memberSet.has(nidT)) continue;
       verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
@@ -695,10 +808,18 @@ export class GraphFold {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.08,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
+    this.commFoldGroup.add(
+      new THREE.LineSegments(
+        geo,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.08,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -706,7 +827,8 @@ export class GraphFold {
   // ═══════════════════════════════════════════════════════════
 
   buildGalaxyClouds(): void {
-    this.galaxyClouds = []; this.galaxyGlows = [];
+    this.galaxyClouds = [];
+    this.galaxyGlows = [];
     for (let gi = 0; gi < this.galaxyMeta.length; gi++) {
       const gm = this.galaxyMeta[gi];
       const sizeByCount = Math.cbrt(gm.memberIndices.length) * 8;
@@ -714,14 +836,21 @@ export class GraphFold {
       const colorHex = communityColor(gm.id);
       const color = new THREE.Color(colorHex);
 
-      const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.host.glowTex, color, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.1,
-      }));
+      const halo = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: this.host.glowTex,
+          color,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.1,
+        }),
+      );
       halo.position.copy(gm.centroid);
       halo.scale.setScalar(r * 1.15);
       halo.userData = { galaxyIndex: gi, galaxyId: gm.id };
-      this.commFoldGroup.add(halo); this.galaxyGlows.push(halo);
+      this.commFoldGroup.add(halo);
+      this.galaxyGlows.push(halo);
 
       const core = new THREE.Mesh(
         new THREE.SphereGeometry(r, 32, 24),
@@ -750,13 +879,16 @@ export class GraphFold {
               gl_FragColor = vec4(col, alpha);
             }
           `,
-          transparent: true, depthWrite: false, side: THREE.FrontSide,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.FrontSide,
           blending: THREE.NormalBlending,
         }),
       );
       core.position.copy(gm.centroid);
       core.userData = { galaxyIndex: gi, galaxyId: gm.id };
-      this.commFoldGroup.add(core); this.galaxyGlows.push(core);
+      this.commFoldGroup.add(core);
+      this.galaxyGlows.push(core);
     }
     this.buildCrossEdges();
     this.buildGalaxyLabels();
@@ -770,31 +902,37 @@ export class GraphFold {
       const gm = this.galaxyMeta[gi];
       const div = document.createElement('div');
       div.className = 'galaxy-label';
-      const shortName = gm.label.split('/')[0].replace(/^test_/, '').replace(/_/g, ' ');
+      const shortName = gm.label
+        .split('/')[0]
+        .replace(/^test_/, '')
+        .replace(/_/g, ' ');
       div.textContent = shortName.length > 24 ? shortName.slice(0, 22) + '\u2026' : shortName;
-      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
+      div.style.cssText =
+        'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
       this.host.container.appendChild(div);
-      div.dataset['galaxyIndex'] = String(gi); div.dataset['galaxyId'] = gm.id;
+      div.dataset['galaxyIndex'] = String(gi);
+      div.dataset['galaxyId'] = gm.id;
       this.galaxyLabelDivs.push(div);
     }
   }
 
   buildCrossEdges(): void {
     const seen = new Set<string>();
-    const verts: number[] = [], colors: number[] = [];
+    const verts: number[] = [],
+      colors: number[] = [];
     const pos = this.host.nodePositions;
     for (const d of this.host.edgeDataList) {
-      const sc = this.host.nodeCommMap.get(d.s), tc = this.host.nodeCommMap.get(d.t);
+      const sc = this.host.nodeCommMap.get(d.s),
+        tc = this.host.nodeCommMap.get(d.t);
       if (!sc && !tc) continue;
       if (sc === tc) continue;
       const key = [sc || '', tc || ''].sort().join('::') + `::${d.edgeType}::${d.direction}`;
-      if (seen.has(key)) continue; seen.add(key);
-      const gs = sc ? this.galaxyMeta.find(g => g.id === sc) : null;
-      const gt = tc ? this.galaxyMeta.find(g => g.id === tc) : null;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const gs = sc ? this.galaxyMeta.find((g) => g.id === sc) : null;
+      const gt = tc ? this.galaxyMeta.find((g) => g.id === tc) : null;
       if (!gs || !gt) continue;
-      verts.push(
-        gs.centroid.x, gs.centroid.y, gs.centroid.z,
-        gt.centroid.x, gt.centroid.y, gt.centroid.z);
+      verts.push(gs.centroid.x, gs.centroid.y, gs.centroid.z, gt.centroid.x, gt.centroid.y, gt.centroid.z);
       const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
       colors.push(c.r * 1.2, c.g * 1.2, c.b * 1.2, c.r * 1.2, c.g * 1.2, c.b * 1.2);
     }
@@ -802,10 +940,18 @@ export class GraphFold {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.08,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
+    this.commFoldGroup.add(
+      new THREE.LineSegments(
+        geo,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.08,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -821,16 +967,22 @@ export class GraphFold {
     this.crossFlowSegments = [];
     const seen = new Set<string>();
     for (const d of this.host.edgeDataList) {
-      const sc = this.host.nodeCommMap.get(d.s), tc = this.host.nodeCommMap.get(d.t);
+      const sc = this.host.nodeCommMap.get(d.s),
+        tc = this.host.nodeCommMap.get(d.t);
       if (!sc || !tc || sc === tc) continue;
-      const gs = this.galaxyMeta.find(g => g.id === sc);
-      const gt = this.galaxyMeta.find(g => g.id === tc);
+      const gs = this.galaxyMeta.find((g) => g.id === sc);
+      const gt = this.galaxyMeta.find((g) => g.id === tc);
       if (!gs || !gt) continue;
       const key = [sc, tc].sort().join('::');
-      if (seen.has(key)) continue; seen.add(key);
+      if (seen.has(key)) continue;
+      seen.add(key);
       this.crossFlowSegments.push({
-        x1: gs.centroid.x, y1: gs.centroid.y, z1: gs.centroid.z,
-        x2: gt.centroid.x, y2: gt.centroid.y, z2: gt.centroid.z,
+        x1: gs.centroid.x,
+        y1: gs.centroid.y,
+        z1: gs.centroid.z,
+        x2: gt.centroid.x,
+        y2: gt.centroid.y,
+        z2: gt.centroid.z,
       });
     }
     if (this.crossFlowSegments.length === 0) return;
@@ -847,11 +999,17 @@ export class GraphFold {
       pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
       const colorChoice = Math.random();
       if (colorChoice < 0.4) {
-        cArr[i * 3] = 0.12; cArr[i * 3 + 1] = 0.28; cArr[i * 3 + 2] = 0.32;
+        cArr[i * 3] = 0.12;
+        cArr[i * 3 + 1] = 0.28;
+        cArr[i * 3 + 2] = 0.32;
       } else if (colorChoice < 0.8) {
-        cArr[i * 3] = 0.30; cArr[i * 3 + 1] = 0.24; cArr[i * 3 + 2] = 0.10;
+        cArr[i * 3] = 0.3;
+        cArr[i * 3 + 1] = 0.24;
+        cArr[i * 3 + 2] = 0.1;
       } else {
-        cArr[i * 3] = 0.28; cArr[i * 3 + 1] = 0.26; cArr[i * 3 + 2] = 0.24;
+        cArr[i * 3] = 0.28;
+        cArr[i * 3 + 1] = 0.26;
+        cArr[i * 3 + 2] = 0.24;
       }
       this.crossFlowData.push({ segIdx, t, speed: 0.004 + Math.random() * 0.012 });
     }
@@ -859,8 +1017,13 @@ export class GraphFold {
     geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
     const mat = new THREE.PointsMaterial({
-      size: 2.0, map: this.host.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.03,
+      size: 2.0,
+      map: this.host.glowTex,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.03,
     });
     this.crossFlowParticles = new THREE.Points(geo, mat);
     this.commFoldGroup.add(this.crossFlowParticles);
@@ -890,6 +1053,7 @@ export class GraphFold {
       this.crossFlowParticles.geometry.dispose();
       (this.crossFlowParticles.material as THREE.Material).dispose();
     }
-    this.crossFlowData = []; this.crossFlowSegments = [];
+    this.crossFlowData = [];
+    this.crossFlowSegments = [];
   }
 }

@@ -1,7 +1,7 @@
 // Verify hologram_call dispatch + dynamic schema loading work end-to-end.
 // Does NOT require a running engine — mocks invoke() and tests schema parsing.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const mockInvoke = vi.fn();
 vi.mock('../src/bridge', () => ({
@@ -11,8 +11,8 @@ vi.mock('../src/bridge', () => ({
 }));
 vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
-import { invoke } from '../src/bridge';
 import type { ToolExecutor } from '../src/agent/tool';
+import { invoke } from '../src/bridge';
 
 // Replicate the schema conversion logic from workspace.ts
 interface McpSchema {
@@ -40,8 +40,7 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor) {
       properties: schema.inputSchema.properties,
       required,
     }),
-    readOnly: () =>
-      !['analyze_project', 'validate_project', 'rename_symbol'].includes(schema.name),
+    readOnly: () => !['analyze_project', 'validate_project', 'rename_symbol'].includes(schema.name),
     execute: (args: Record<string, unknown>) => exec(schema.name, args),
   };
 }
@@ -102,7 +101,7 @@ describe('hologram dispatch integration', () => {
 
     const schemas = await loadHologramSchemas();
     const exec: ToolExecutor = async (name, args) => `result:${name}`;
-    const tools = schemas.map(s => mcpSchemaToTool(s, exec));
+    const tools = schemas.map((s) => mcpSchemaToTool(s, exec));
 
     // neighbors
     expect(tools[0].name()).toBe('get_neighbors');

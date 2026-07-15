@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { SubAgentPool, SubAgentStatus } from '../src/agent/coordinator';
 
 function fakeRun(result: string, delayMs = 10, shouldFail = false) {
@@ -36,7 +36,7 @@ describe('SubAgentPool', () => {
     pool.spawn('quick', fakeRun('result', 10));
 
     // Wait for completion
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
 
     const completed = pool.pollCompleted();
     expect(completed.length).toBe(1);
@@ -49,7 +49,7 @@ describe('SubAgentPool', () => {
     const pool = new SubAgentPool();
     pool.spawn('will fail', fakeRun('', 10, true));
 
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
 
     const completed = pool.pollCompleted();
     expect(completed.length).toBe(1);
@@ -85,7 +85,9 @@ describe('SubAgentPool', () => {
         onMsg?.('initialized');
         return fakeRun('done')();
       },
-      (msg) => { messages.push(msg); },
+      (msg) => {
+        messages.push(msg);
+      },
     );
 
     // sendMessage before the promise resolves
@@ -97,7 +99,7 @@ describe('SubAgentPool', () => {
     const pool = new SubAgentPool();
     const id = pool.spawn('quick', fakeRun('done', 10));
 
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
     pool.pollCompleted(); // consume
 
     const ok = pool.sendMessage(id, 'too late');
@@ -110,13 +112,13 @@ describe('SubAgentPool', () => {
     pool.spawn('slow', fakeRun('slow', 100));
     pool.spawn('medium', fakeRun('medium', 50));
 
-    await new Promise(r => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 60));
 
     // Fast and medium should be done
     const batch1 = pool.pollCompleted();
     expect(batch1.length).toBeGreaterThanOrEqual(1);
 
-    await new Promise(r => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 60));
     const batch2 = pool.pollCompleted();
     const all = [...batch1, ...batch2];
     expect(all.length).toBe(3);
@@ -125,7 +127,7 @@ describe('SubAgentPool', () => {
   it('pollCompleted clears after read', async () => {
     const pool = new SubAgentPool();
     pool.spawn('task', fakeRun('result', 10));
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
 
     const first = pool.pollCompleted();
     expect(first.length).toBe(1);

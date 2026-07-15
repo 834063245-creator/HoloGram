@@ -26,7 +26,9 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
 
   // ── Core parameters (LOCKED) ──
   const shellRadius = Math.cbrt(n) * 14;
-  const rep = 600, att = 0.018, damp = 0.72;
+  const rep = 600,
+    att = 0.018,
+    damp = 0.72;
   const pos = fibonacciSphere(n, shellRadius);
   const vel = new Float32Array(n * 3);
 
@@ -45,20 +47,32 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
     // Repulsion
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
-        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+        const dx = pos[i * 3] - pos[j * 3],
+          dy = pos[i * 3 + 1] - pos[j * 3 + 1],
+          dz = pos[i * 3 + 2] - pos[j * 3 + 2];
         const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
         const f = Math.min(rep / (dist * dist + 1), REP_CAP);
-        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
-        vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
+        vel[i * 3] += (dx / dist) * f;
+        vel[i * 3 + 1] += (dy / dist) * f;
+        vel[i * 3 + 2] += (dz / dist) * f;
+        vel[j * 3] -= (dx / dist) * f;
+        vel[j * 3 + 1] -= (dy / dist) * f;
+        vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
     // Attraction
     for (const [s, t] of edgePairs) {
-      const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
+      const dx = pos[s * 3] - pos[t * 3],
+        dy = pos[s * 3 + 1] - pos[t * 3 + 1],
+        dz = pos[s * 3 + 2] - pos[t * 3 + 2];
       const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
       const f = Math.min(dist * att, ATT_CAP);
-      vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
-      vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
+      vel[s * 3] -= (dx / dist) * f;
+      vel[s * 3 + 1] -= (dy / dist) * f;
+      vel[s * 3 + 2] -= (dz / dist) * f;
+      vel[t * 3] += (dx / dist) * f;
+      vel[t * 3 + 1] += (dy / dist) * f;
+      vel[t * 3 + 2] += (dz / dist) * f;
     }
     // Origin attraction
     for (let i = 0; i < n; i++) {
@@ -68,21 +82,37 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
     }
     // Per-node velocity cap
     for (let i = 0; i < n; i++) {
-      const vx = vel[i * 3], vy = vel[i * 3 + 1], vz = vel[i * 3 + 2];
+      const vx = vel[i * 3],
+        vy = vel[i * 3 + 1],
+        vz = vel[i * 3 + 2];
       const vm = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      if (vm > VEL_CAP) { const s = VEL_CAP / vm; vel[i * 3] = vx * s; vel[i * 3 + 1] = vy * s; vel[i * 3 + 2] = vz * s; }
+      if (vm > VEL_CAP) {
+        const s = VEL_CAP / vm;
+        vel[i * 3] = vx * s;
+        vel[i * 3 + 1] = vy * s;
+        vel[i * 3 + 2] = vz * s;
+      }
     }
     // Damping + position update
-    for (let i = 0; i < n * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+    for (let i = 0; i < n * 3; i++) {
+      vel[i] *= damp;
+      pos[i] += vel[i];
+    }
     // NaN guard (full sweep every 5, sampling every iter)
     if (iter % 5 === 0) {
       let diverged = false;
       for (let i = 0; i < n * 3; i++) {
-        if (!isFinite(pos[i]) || !isFinite(vel[i])) { diverged = true; break; }
+        if (!isFinite(pos[i]) || !isFinite(vel[i])) {
+          diverged = true;
+          break;
+        }
       }
       if (diverged) {
         const fresh = fibonacciSphere(n, shellRadius);
-        for (let i = 0; i < n * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
+        for (let i = 0; i < n * 3; i++) {
+          pos[i] = fresh[i];
+          vel[i] = 0;
+        }
       }
     } else {
       const sample = Math.max(10, Math.floor(Math.sqrt(n)));
@@ -90,19 +120,30 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
       for (let k = 0; k < sample && !diverged; k++) {
         const i = (k * 2654435761 + iter * 0x9e3779b9) % n;
         const i3 = i * 3;
-        if (!isFinite(pos[i3]) || !isFinite(pos[i3 + 1]) || !isFinite(pos[i3 + 2]) ||
-            !isFinite(vel[i3]) || !isFinite(vel[i3 + 1]) || !isFinite(vel[i3 + 2])) {
+        if (
+          !isFinite(pos[i3]) ||
+          !isFinite(pos[i3 + 1]) ||
+          !isFinite(pos[i3 + 2]) ||
+          !isFinite(vel[i3]) ||
+          !isFinite(vel[i3 + 1]) ||
+          !isFinite(vel[i3 + 2])
+        ) {
           diverged = true;
         }
       }
       if (diverged) {
         const fresh = fibonacciSphere(n, shellRadius);
-        for (let i = 0; i < n * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
+        for (let i = 0; i < n * 3; i++) {
+          pos[i] = fresh[i];
+          vel[i] = 0;
+        }
       }
     }
     // Shell constraint (adaptive)
     for (let i = 0; i < n; i++) {
-      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2];
+      const dx = pos[i * 3],
+        dy = pos[i * 3 + 1],
+        dz = pos[i * 3 + 2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > 1) {
         const drift = (dist - shellRadius) * sp;

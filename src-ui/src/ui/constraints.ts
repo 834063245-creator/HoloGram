@@ -4,12 +4,12 @@
 // Constraints Panel — 约束配置 UI
 // 编辑 hologram.constraints.yaml 的图形界面
 
-import { rpc } from '../bridge';
-import { iconHtml } from './icons';
-import { askAgent } from './agent-visualizer';
-import { bus } from './events';
-import { shell } from './app-shell';
 import DOMPurify from 'dompurify';
+import { rpc } from '../bridge';
+import { askAgent } from './agent-visualizer';
+import { shell } from './app-shell';
+import { bus } from './events';
+import { iconHtml } from './icons';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;
@@ -69,27 +69,39 @@ export class ConstraintsPanel {
     // Header
     const header = document.createElement('div');
     Object.assign(header.style, {
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '8px 12px', borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.4))',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '8px 12px',
+      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.4))',
       flexShrink: '0',
     });
 
     const title = document.createElement('span');
     title.innerHTML = `${iconHtml('constraints', 12)} 约束配置`;
     Object.assign(title.style, {
-      fontSize: 'calc(13px * var(--font-scale))', fontWeight: '600', color: 'var(--signal, #7eb8ff)', letterSpacing: '0.5px',
+      fontSize: 'calc(13px * var(--font-scale))',
+      fontWeight: '600',
+      color: 'var(--signal, #7eb8ff)',
+      letterSpacing: '0.5px',
     });
 
     const closeBtn = document.createElement('button');
     closeBtn.innerHTML = iconHtml('close', 14);
     Object.assign(closeBtn.style, {
-      width: '24px', height: '24px', padding: '0',
-      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: 'calc(14px * var(--font-scale))', borderRadius: '4px',
+      width: '24px',
+      height: '24px',
+      padding: '0',
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-muted, #4a5568)',
+      cursor: 'pointer',
+      fontSize: 'calc(14px * var(--font-scale))',
+      borderRadius: '4px',
       transition: 'color var(--snap, 0.12s)',
     });
-    closeBtn.addEventListener('mouseenter', () => closeBtn.style.color = 'var(--starlight-dim, #c9d1d9)');
-    closeBtn.addEventListener('mouseleave', () => closeBtn.style.color = 'var(--text-muted, #4a5568)');
+    closeBtn.addEventListener('mouseenter', () => (closeBtn.style.color = 'var(--starlight-dim, #c9d1d9)'));
+    closeBtn.addEventListener('mouseleave', () => (closeBtn.style.color = 'var(--text-muted, #4a5568)'));
     closeBtn.addEventListener('click', () => this.close());
 
     // "Ask Agent" button
@@ -97,19 +109,30 @@ export class ConstraintsPanel {
     askBtn.innerHTML = iconHtml('agent', 12);
     askBtn.title = '问 Agent 关于当前约束配置';
     Object.assign(askBtn.style, {
-      width: '24px', height: '24px', padding: '0',
-      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
-      cursor: 'pointer', fontSize: 'calc(14px * var(--font-scale))', borderRadius: '4px',
+      width: '24px',
+      height: '24px',
+      padding: '0',
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-muted, #4a5568)',
+      cursor: 'pointer',
+      fontSize: 'calc(14px * var(--font-scale))',
+      borderRadius: '4px',
       transition: 'color var(--snap, 0.12s)',
       marginRight: '4px',
     });
-    askBtn.addEventListener('mouseenter', () => askBtn.style.color = 'var(--signal, #7eb8ff)');
-    askBtn.addEventListener('mouseleave', () => askBtn.style.color = 'var(--text-muted, #4a5568)');
+    askBtn.addEventListener('mouseenter', () => (askBtn.style.color = 'var(--signal, #7eb8ff)'));
+    askBtn.addEventListener('mouseleave', () => (askBtn.style.color = 'var(--text-muted, #4a5568)'));
     askBtn.addEventListener('click', () => {
       const routingSummary = this.data?.routing
-        ? Object.entries(this.data.routing).filter(([, v]) => v).map(([k]) => k).join(', ')
+        ? Object.entries(this.data.routing)
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+            .join(', ')
         : '未知';
-      askAgent(`解释当前项目的约束配置。启用的路由: ${routingSummary}。这些约束规则的作用是什么？有没有可以优化的地方？`);
+      askAgent(
+        `解释当前项目的约束配置。启用的路由: ${routingSummary}。这些约束规则的作用是什么？有没有可以优化的地方？`,
+      );
     });
 
     header.appendChild(title);
@@ -119,7 +142,9 @@ export class ConstraintsPanel {
     // Content
     this.content = document.createElement('div');
     Object.assign(this.content.style, {
-      flex: '1', overflow: 'auto', padding: '12px',
+      flex: '1',
+      overflow: 'auto',
+      padding: '12px',
     });
 
     this.panel.appendChild(header);
@@ -165,7 +190,9 @@ export class ConstraintsPanel {
     shell.notifyPanelChanged();
   }
 
-  isOpen(): boolean { return this.openState; }
+  isOpen(): boolean {
+    return this.openState;
+  }
 
   // ── Simple YAML parser (enough for the constraints file structure) ──
 
@@ -184,10 +211,22 @@ export class ConstraintsPanel {
       if (!trimmed || trimmed.startsWith('#')) continue;
 
       // Top-level sections
-      if (trimmed === 'routing:') { section = 'routing'; continue; }
-      if (trimmed === 'thresholds:') { section = 'thresholds'; continue; }
-      if (trimmed === 'allowlist:') { section = 'allowlist'; continue; }
-      if (trimmed === 'denylist:') { section = 'denylist'; continue; }
+      if (trimmed === 'routing:') {
+        section = 'routing';
+        continue;
+      }
+      if (trimmed === 'thresholds:') {
+        section = 'thresholds';
+        continue;
+      }
+      if (trimmed === 'allowlist:') {
+        section = 'allowlist';
+        continue;
+      }
+      if (trimmed === 'denylist:') {
+        section = 'denylist';
+        continue;
+      }
 
       if (section === 'routing') {
         const m = trimmed.match(/^(\w+):\s*(true|false)/);
@@ -196,13 +235,22 @@ export class ConstraintsPanel {
         const m = trimmed.match(/^(\w+):\s*(\d+)/);
         if (m) result.thresholds[m[1]] = parseInt(m[2]);
       } else if (section === 'allowlist') {
-        if (trimmed === 'modules:') { subSection = 'modules'; continue; }
-        if (trimmed === 'files:') { subSection = 'files'; continue; }
+        if (trimmed === 'modules:') {
+          subSection = 'modules';
+          continue;
+        }
+        if (trimmed === 'files:') {
+          subSection = 'files';
+          continue;
+        }
         const m = trimmed.match(/^-\s*"([^"]+)"/);
         if (m && subSection === 'modules') result.allowlist.modules.push(m[1]);
         if (m && subSection === 'files') result.allowlist.files.push(m[1]);
       } else if (section === 'denylist') {
-        if (trimmed === 'keywords:') { subSection = 'keywords'; continue; }
+        if (trimmed === 'keywords:') {
+          subSection = 'keywords';
+          continue;
+        }
         const m = trimmed.match(/^-\s*"([^"]+)"/);
         if (m) result.denylist.keywords.push(m[1]);
       }
@@ -297,15 +345,15 @@ export class ConstraintsPanel {
 
   private wireFormEvents(): void {
     // Toggle changes
-    this.content.querySelectorAll('input[data-routing]').forEach(el => {
+    this.content.querySelectorAll('input[data-routing]').forEach((el) => {
       el.addEventListener('change', () => this.markDirty());
     });
-    this.content.querySelectorAll('input[data-threshold]').forEach(el => {
+    this.content.querySelectorAll('input[data-threshold]').forEach((el) => {
       el.addEventListener('change', () => this.markDirty());
     });
 
     // Remove tags
-    this.content.querySelectorAll('.cs-tag-rm').forEach(btn => {
+    this.content.querySelectorAll('.cs-tag-rm').forEach((btn) => {
       btn.addEventListener('click', () => {
         const value = (btn as HTMLElement).dataset['value']!;
         const listEl = btn.closest('.cs-tag-list') as HTMLElement;
@@ -314,13 +362,17 @@ export class ConstraintsPanel {
         const entry = this.getListEntry(listKey);
         if (entry) {
           const idx = entry.indexOf(value);
-          if (idx >= 0) { entry.splice(idx, 1); this.markDirty(); this.renderForm(); }
+          if (idx >= 0) {
+            entry.splice(idx, 1);
+            this.markDirty();
+            this.renderForm();
+          }
         }
       });
     });
 
     // Add tags
-    this.content.querySelectorAll('.cs-add-btn').forEach(btn => {
+    this.content.querySelectorAll('.cs-add-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const key = (btn as HTMLElement).dataset['add']!;
         const input = this.content.querySelector(`input[data-add="${key}"]`) as HTMLInputElement;
@@ -348,10 +400,14 @@ export class ConstraintsPanel {
   private getListEntry(key: string): string[] | null {
     if (!this.data) return null;
     switch (key) {
-      case 'allow-modules': return this.data.allowlist.modules;
-      case 'allow-files': return this.data.allowlist.files;
-      case 'deny-keywords': return this.data.denylist.keywords;
-      default: return null;
+      case 'allow-modules':
+        return this.data.allowlist.modules;
+      case 'allow-files':
+        return this.data.allowlist.files;
+      case 'deny-keywords':
+        return this.data.denylist.keywords;
+      default:
+        return null;
     }
   }
 
@@ -364,13 +420,13 @@ export class ConstraintsPanel {
   private readFormIntoData(): void {
     if (!this.data) return;
     // Routing
-    this.content.querySelectorAll('input[data-routing]').forEach(el => {
+    this.content.querySelectorAll('input[data-routing]').forEach((el) => {
       const input = el as HTMLInputElement;
       const key = input.dataset['routing']!;
       this.data!.routing[key] = input.checked;
     });
     // Thresholds
-    this.content.querySelectorAll('input[data-threshold]').forEach(el => {
+    this.content.querySelectorAll('input[data-threshold]').forEach((el) => {
       const input = el as HTMLInputElement;
       const key = input.dataset['threshold']!;
       let val = parseInt(input.value, 10);
@@ -407,7 +463,9 @@ export class ConstraintsPanel {
       const btn = this.content.querySelector('.cs-btn-save') as HTMLElement;
       if (btn) {
         btn.style.color = 'var(--error, #e05555)';
-        setTimeout(() => { btn.style.color = ''; }, 1500);
+        setTimeout(() => {
+          btn.style.color = '';
+        }, 1500);
       }
     } finally {
       this.saving = false;

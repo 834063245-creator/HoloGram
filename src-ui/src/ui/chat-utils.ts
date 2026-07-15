@@ -4,10 +4,10 @@
 // Chat Utilities — pure static helper functions extracted from chat.ts
 // No dependency on ChatPanel state. Safe to import from anywhere.
 
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import type { AgentEvent } from '../agent/agent-types';
 import { iconHtml } from './icons';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 
 // ═══════════════════════════════════════════════════════════════════
 // escapeHtml
@@ -25,7 +25,9 @@ export function escapeHtml(s: string): string {
 export function showCopiedFeedback(btn: HTMLElement, iconSize = 12): void {
   const copyHtml = iconHtml('copy', iconSize);
   btn.innerHTML = iconHtml('check-circle', iconSize);
-  setTimeout(() => { btn.innerHTML = copyHtml; }, 1500);
+  setTimeout(() => {
+    btn.innerHTML = copyHtml;
+  }, 1500);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -64,7 +66,7 @@ export function formatDiffResult(body: string, argsJson?: string): string {
     } catch {}
   }
 
-  let headerHtml = filePath ? `<div class="diff-header">📄 ${escapeHtml(filePath)}</div>` : '';
+  const headerHtml = filePath ? `<div class="diff-header">📄 ${escapeHtml(filePath)}</div>` : '';
   const MAX_LINES = 40;
 
   if (oldStr && newStr) {
@@ -78,8 +80,8 @@ export function formatDiffResult(body: string, argsJson?: string): string {
     let html = headerHtml;
     const linesToShow = collapsed ? diffLines.slice(0, MAX_LINES) : diffLines;
     const visibleLines = collapsed
-      ? linesToShow.map(d => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('')
-      : diffLines.map(d => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('');
+      ? linesToShow.map((d) => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('')
+      : diffLines.map((d) => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('');
 
     html += `<div class="diff-lines${collapsed ? ' diff-folded' : ''}">${visibleLines}</div>`;
     if (collapsed) {
@@ -91,12 +93,19 @@ export function formatDiffResult(body: string, argsJson?: string): string {
   // Fallback: show full body with + / - line detection
   const lines = body.split('\n');
   if (lines.length > MAX_LINES) {
-    const visible = lines.slice(0, MAX_LINES).map(l => {
-      if (l.startsWith('+')) return `<div class="diff-line diff-added">${escapeHtml(l)}</div>`;
-      if (l.startsWith('-')) return `<div class="diff-line diff-removed">${escapeHtml(l)}</div>`;
-      return `<div class="diff-line">${escapeHtml(l)}</div>`;
-    }).join('');
-    return headerHtml + visible + `<button class="diff-collapsed" onclick="this.previousElementSibling.querySelectorAll('.diff-line').forEach(d=>d.style.display='');const next=this.nextElementSibling;if(next)next.style.display='';this.remove();">展开全部 (${lines.length} 行)</button>`;
+    const visible = lines
+      .slice(0, MAX_LINES)
+      .map((l) => {
+        if (l.startsWith('+')) return `<div class="diff-line diff-added">${escapeHtml(l)}</div>`;
+        if (l.startsWith('-')) return `<div class="diff-line diff-removed">${escapeHtml(l)}</div>`;
+        return `<div class="diff-line">${escapeHtml(l)}</div>`;
+      })
+      .join('');
+    return (
+      headerHtml +
+      visible +
+      `<button class="diff-collapsed" onclick="this.previousElementSibling.querySelectorAll('.diff-line').forEach(d=>d.style.display='');const next=this.nextElementSibling;if(next)next.style.display='';this.remove();">展开全部 (${lines.length} 行)</button>`
+    );
   }
   return headerHtml + `<pre><code>${escapeHtml(body)}</code></pre>`;
 }
@@ -106,7 +115,10 @@ export function formatDiffResult(body: string, argsJson?: string): string {
 // ═══════════════════════════════════════════════════════════════════
 
 /** Compute simple line-by-line diff — marks added/removed lines. ponytail: O(n*m), fine for <100 lines. */
-export function computeSimpleDiff(oldLines: string[], newLines: string[]): Array<{ kind: string; prefix: string; text: string }> {
+export function computeSimpleDiff(
+  oldLines: string[],
+  newLines: string[],
+): Array<{ kind: string; prefix: string; text: string }> {
   // LCS-based diff
   const m = oldLines.length;
   const n = newLines.length;
@@ -122,11 +134,13 @@ export function computeSimpleDiff(oldLines: string[], newLines: string[]): Array
   }
   // Backtrack
   const result: Array<{ kind: string; prefix: string; text: string }> = [];
-  let i = m, j = n;
+  let i = m,
+    j = n;
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
       result.unshift({ kind: '', prefix: ' ', text: oldLines[i - 1] });
-      i--; j--;
+      i--;
+      j--;
     } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
       result.unshift({ kind: 'diff-added', prefix: '+', text: newLines[j - 1] });
       j--;
@@ -164,10 +178,10 @@ export function extractCodeTokens(text: string): string[] {
 
   // Patterns to match: snake_case, CamelCase, dot.paths, paths/with/slashes
   const patterns = [
-    /\b[a-z_][a-z0-9_]{2,}(?:\.[a-z_][a-z0-9_]{2,})+\b/gi,  // dot.separated
-    /\b[a-z_][a-z0-9_]*_[a-z0-9_]{2,}\b/gi,                   // snake_case
-    /\b[A-Z][a-z]+(?:[A-Z][a-z]+){1,}\b/g,                    // CamelCase
-    /\b[a-z]+(?:\/[a-z]+){1,}\b/gi,                            // path/like
+    /\b[a-z_][a-z0-9_]{2,}(?:\.[a-z_][a-z0-9_]{2,})+\b/gi, // dot.separated
+    /\b[a-z_][a-z0-9_]*_[a-z0-9_]{2,}\b/gi, // snake_case
+    /\b[A-Z][a-z]+(?:[A-Z][a-z]+){1,}\b/g, // CamelCase
+    /\b[a-z]+(?:\/[a-z]+){1,}\b/gi, // path/like
   ];
 
   for (const re of patterns) {
@@ -253,7 +267,11 @@ interface DfFileResult {
 
 export function formatDataflowCard(text: string): string | null {
   let data: { results: DfFileResult[] };
-  try { data = JSON.parse(text); } catch { return null; }
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return null;
+  }
   if (!data?.results?.length) return null;
 
   const ico = (n: string, s?: number) => iconHtml(n, s ?? 13);
@@ -284,7 +302,9 @@ export function formatDataflowCard(text: string): string | null {
           for (const v of s.reads) {
             html += `<span class="df-tag df-tag-read">${escapeHtml(v)}</span>`;
           }
-        } else { html += '<span class="df-tag-none">—</span>'; }
+        } else {
+          html += '<span class="df-tag-none">—</span>';
+        }
         html += '</div>';
         html += '<div class="df-rw-col df-rw-out">';
         html += `<span class="df-label">${ico('arrow-up', 11)} 写入</span>`;
@@ -292,7 +312,9 @@ export function formatDataflowCard(text: string): string | null {
           for (const v of s.writes) {
             html += `<span class="df-tag df-tag-write">${escapeHtml(v)}</span>`;
           }
-        } else { html += '<span class="df-tag-none">—</span>'; }
+        } else {
+          html += '<span class="df-tag-none">—</span>';
+        }
         html += '</div>';
         html += '</div>';
       }
@@ -319,7 +341,9 @@ export function formatDataflowCard(text: string): string | null {
           for (const t of s.triggers) {
             html += `<span class="df-tag df-tag-trigger">${escapeHtml(t)}</span>`;
           }
-        } else { html += '<span class="df-tag-none">—</span>'; }
+        } else {
+          html += '<span class="df-tag-none">—</span>';
+        }
         html += '</div>';
         html += '<div class="df-async-col">';
         html += `<span class="df-label">${ico('hourglass', 11)} 等待</span>`;
@@ -327,7 +351,9 @@ export function formatDataflowCard(text: string): string | null {
           for (const cb of s.awaits_callbacks) {
             html += `<span class="df-tag df-tag-await">${escapeHtml(cb)}</span>`;
           }
-        } else { html += '<span class="df-tag-none">—</span>'; }
+        } else {
+          html += '<span class="df-tag-none">—</span>';
+        }
         html += '</div>';
         html += '</div>';
       }
@@ -389,7 +415,12 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
   if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
 
   // ── Diff view for edit_file / write_file / read_file_content (item 7) ──
-  if (toolName === 'edit_file' || toolName === 'write_file' || toolName === 'write_file_content' || toolName === 'read_file_content') {
+  if (
+    toolName === 'edit_file' ||
+    toolName === 'write_file' ||
+    toolName === 'write_file_content' ||
+    toolName === 'read_file_content'
+  ) {
     return formatDiffResult(body, args);
   }
 
@@ -407,10 +438,15 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
       const data = JSON.parse(text);
       const lines = (data.results || []).map((r: any) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
       const header = `<div class="glob-summary">${data.count} 个文件${data.truncated ? ' (结果已截断)' : ''}</div>`;
-      return header + (lines.length > 30
-        ? lines.slice(0, 30).join('\n') + `\n<div class="glob-truncated">… 及其他 ${lines.length - 30} 个结果</div>`
-        : lines.join('\n'));
-    } catch { return escapeHtml(body); }
+      return (
+        header +
+        (lines.length > 30
+          ? lines.slice(0, 30).join('\n') + `\n<div class="glob-truncated">… 及其他 ${lines.length - 30} 个结果</div>`
+          : lines.join('\n'))
+      );
+    } catch {
+      return escapeHtml(body);
+    }
   }
 
   // ── Hologram tools: try parsing as JSON (already handled above), fall through ──

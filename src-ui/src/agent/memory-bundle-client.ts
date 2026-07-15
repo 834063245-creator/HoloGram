@@ -70,7 +70,7 @@ async function fetchJson<T>(path: string, body?: unknown): Promise<T | null> {
       signal: controller.signal,
     });
     if (!resp.ok) return null;
-    return await resp.json() as T;
+    return (await resp.json()) as T;
   } catch {
     return null;
   } finally {

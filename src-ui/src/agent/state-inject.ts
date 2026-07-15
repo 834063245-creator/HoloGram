@@ -12,20 +12,28 @@
 // All calls degrade gracefully — if data is unavailable, nothing is injected.
 
 import { rpc } from '../bridge';
-import { getDiagnosticsForFile } from '../ui/lsp-client';
 import type { LspDiagnostic } from '../ui/lsp-client';
+import { getDiagnosticsForFile } from '../ui/lsp-client';
 import {
   cacheStore,
-  getGitCache, setGitCache, getGitCacheTs,
-  getBlameCache, setBlameEntry, hasBlameEntry,
-  getCheckCache, setCheckCache,
-  getBuildResultCache, setBuildResultCache,
-  getTimelineCache, setTimelineCache, getTimelineCacheTs,
+  getBlameCache,
+  getBuildResultCache,
+  getCheckCache,
+  getGitCache,
+  getGitCacheTs,
+  getTimelineCache,
+  getTimelineCacheTs,
+  hasBlameEntry,
+  setBlameEntry,
+  setBuildResultCache,
+  setCheckCache,
+  setGitCache,
+  setTimelineCache,
 } from './cache-store';
 
+export type { BuildResult, CheckStatusSummary, GitStatusSummary, TimelineEvent } from './cache-store';
 // Re-export for consumers
 export type { LspDiagnostic };
-export type { GitStatusSummary, CheckStatusSummary, BuildResult, TimelineEvent } from './cache-store';
 
 // ── Git status cache ──
 
@@ -35,22 +43,29 @@ const GIT_CACHE_MS = 5000;
 export async function refreshGitStatus(projectPath: string): Promise<void> {
   const now = Date.now();
   const cached = getGitCache();
-  if (cached && (now - getGitCacheTs()) < GIT_CACHE_MS) return;
+  if (cached && now - getGitCacheTs() < GIT_CACHE_MS) return;
   try {
     const json = await rpc<string>('git_status', { path: projectPath });
     const raw = JSON.parse(json);
-    setGitCache({
-      branch: raw.branch || '',
-      ahead: raw.ahead || 0,
-      behind: raw.behind || 0,
-      dirtyCount: (raw.files || []).length,
-      dirtyFiles: (raw.files || []).slice(0, 15),
-    }, now);
-  } catch { /* silent */ }
+    setGitCache(
+      {
+        branch: raw.branch || '',
+        ahead: raw.ahead || 0,
+        behind: raw.behind || 0,
+        dirtyCount: (raw.files || []).length,
+        dirtyFiles: (raw.files || []).slice(0, 15),
+      },
+      now,
+    );
+  } catch {
+    /* silent */
+  }
 }
 
 /** Sync read for hooks. */
-export function getGitStatusCached() { return getGitCache(); }
+export function getGitStatusCached() {
+  return getGitCache();
+}
 
 // ── Git blame cache ──
 
@@ -65,14 +80,25 @@ export async function refreshGitBlame(projectPath: string, filePath: string): Pr
     let latestAuthor = '';
     let latestTime = '';
     for (const line of lines) {
-      if (line.startsWith('author ')) { const a = line.slice(7).trim(); if (a) { authors.add(a); latestAuthor = a; } }
+      if (line.startsWith('author ')) {
+        const a = line.slice(7).trim();
+        if (a) {
+          authors.add(a);
+          latestAuthor = a;
+        }
+      }
       if (line.startsWith('author-time ')) latestTime = line.slice(12).trim();
     }
     if (latestAuthor) {
       const ago = latestTime ? timeAgo(parseInt(latestTime) * 1000) : '';
-      setBlameEntry(filePath, `${latestAuthor}${ago ? ', ' + ago : ''}${authors.size > 1 ? ` (+${authors.size - 1} others)` : ''}`);
+      setBlameEntry(
+        filePath,
+        `${latestAuthor}${ago ? ', ' + ago : ''}${authors.size > 1 ? ` (+${authors.size - 1} others)` : ''}`,
+      );
     }
-  } catch { /* silent */ }
+  } catch {
+    /* silent */
+  }
 }
 
 /** Sync read for hooks. */
@@ -88,7 +114,9 @@ export function cacheCheckResult(result: ReturnType<typeof getCheckCache> & {}):
 }
 
 /** Sync read for hooks. */
-export function getCheckStatusCached() { return getCheckCache(); }
+export function getCheckStatusCached() {
+  return getCheckCache();
+}
 
 // ── Build/test result cache ──
 
@@ -114,12 +142,17 @@ const TIMELINE_CACHE_MS = 10000;
 export async function refreshTimeline(projectPath: string): Promise<void> {
   const now = Date.now();
   const cached = getTimelineCache();
-  if (cached.length > 0 && (now - getTimelineCacheTs()) < TIMELINE_CACHE_MS) return;
+  if (cached.length > 0 && now - getTimelineCacheTs() < TIMELINE_CACHE_MS) return;
   try {
-    const json = await rpc<string>('hologram_call', { tool: 'project_timeline', args: { path: projectPath, limit: 8 } });
+    const json = await rpc<string>('hologram_call', {
+      tool: 'project_timeline',
+      args: { path: projectPath, limit: 8 },
+    });
     const raw = JSON.parse(json);
     setTimelineCache((raw.events || []).slice(0, 8), now);
-  } catch { /* silent */ }
+  } catch {
+    /* silent */
+  }
 }
 
 /** Format recent timeline events for turn-start. Only show user-facing events. */
@@ -127,7 +160,7 @@ export function formatTimeline(): string | null {
   const cached = getTimelineCache();
   if (cached.length === 0) return null;
   const recent = cached.slice(0, 5);
-  const labels = recent.map(e => {
+  const labels = recent.map((e) => {
     const fname = e.file ? e.file.replace(/\\/g, '/').split('/').pop() : '';
     const label = eventLabel(e.event_type);
     return fname ? `${label} ${fname}` : label;
@@ -137,16 +170,26 @@ export function formatTimeline(): string | null {
 
 function eventLabel(type: string): string {
   switch (type) {
-    case 'agent_write': return '写入';
-    case 'agent_edit': return '编辑';
-    case 'agent_delete': return '删除';
-    case 'agent_rename': return '重命名';
-    case 'agent_move': return '移动';
-    case 'commit_clean': return '✅';
-    case 'commit_violation': return '⚠️';
-    case 'file_changed': return '外部变更';
-    case 'incremental_update': return '图更新';
-    default: return type;
+    case 'agent_write':
+      return '写入';
+    case 'agent_edit':
+      return '编辑';
+    case 'agent_delete':
+      return '删除';
+    case 'agent_rename':
+      return '重命名';
+    case 'agent_move':
+      return '移动';
+    case 'commit_clean':
+      return '✅';
+    case 'commit_violation':
+      return '⚠️';
+    case 'file_changed':
+      return '外部变更';
+    case 'incremental_update':
+      return '图更新';
+    default:
+      return type;
   }
 }
 
@@ -156,7 +199,9 @@ function eventLabel(type: string): string {
 export function formatGitStatus(): string | null {
   const git = getGitCache();
   if (!git || git.dirtyCount === 0) return null;
-  const fileList = git.dirtyFiles.map(f => `${f.file.replace(/\\/g, '/').split('/').pop()}(${f.status[0].toUpperCase()})`).join(', ');
+  const fileList = git.dirtyFiles
+    .map((f) => `${f.file.replace(/\\/g, '/').split('/').pop()}(${f.status[0].toUpperCase()})`)
+    .join(', ');
   return `[Git] ${git.branch}${git.ahead > 0 ? ` ↑${git.ahead}` : ''}${git.behind > 0 ? ` ↓${git.behind}` : ''} | ${git.dirtyCount} 脏: ${fileList}`;
 }
 
@@ -165,8 +210,11 @@ export function formatCheckStatus(): string | null {
   const r = getCheckCache();
   if (!r) return null;
   const parts: string[] = [];
-  if (r.passed) { parts.push('✅ 通过'); }
-  else { parts.push(`⚠️ ${r.violationCount} 违规`); }
+  if (r.passed) {
+    parts.push('✅ 通过');
+  } else {
+    parts.push(`⚠️ ${r.violationCount} 违规`);
+  }
   if (r.newCount > 0) parts.push(`+${r.newCount} 新增`);
   if (r.resolvedCount > 0) parts.push(`-${r.resolvedCount} 已解决`);
   if (r.persistentCount > 0) parts.push(`↻${r.persistentCount} 持续`);
@@ -177,13 +225,16 @@ export function formatCheckStatus(): string | null {
 export function formatDiagnostics(filePath: string): string | null {
   const diags = getDiagnosticsForFile(filePath);
   if (diags.length === 0) return null;
-  const errors = diags.filter(d => d.severity === 'error');
-  const warnings = diags.filter(d => d.severity === 'warning');
+  const errors = diags.filter((d) => d.severity === 'error');
+  const warnings = diags.filter((d) => d.severity === 'warning');
   const parts: string[] = [];
   if (errors.length > 0) parts.push(`${errors.length} errors`);
   if (warnings.length > 0) parts.push(`${warnings.length} warnings`);
   if (parts.length === 0) return null;
-  const top3 = diags.slice(0, 3).map(d => `L${d.startLine + 1}: ${d.message.slice(0, 80)}`).join('; ');
+  const top3 = diags
+    .slice(0, 3)
+    .map((d) => `L${d.startLine + 1}: ${d.message.slice(0, 80)}`)
+    .join('; ');
   const fname = filePath.replace(/\\/g, '/').split('/').pop();
   return `[LSP] ${fname}: ${parts.join(', ')}${top3 ? ' — ' + top3 : ''}`;
 }

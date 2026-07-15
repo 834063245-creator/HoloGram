@@ -14,17 +14,19 @@
 //   Agent 自己主动存的记忆最高只能给 reference。fact 级别只有用户通过 /remember 明确要求时才能使用。
 
 import { rpc } from '../bridge';
-import type { Tool } from './tool';
 import { bus } from '../ui/events';
-import { auraInit, auraRecall, auraStore, auraCount, auraRecallText, auraShutdown } from './aura-memory';
 import type { AuraRecord } from './aura-memory';
+import { auraCount, auraInit, auraRecall, auraRecallText, auraShutdown, auraStore } from './aura-memory';
+import type { Tool } from './tool';
 
 // ── Fact-save authorization (self-consuming sentinel) ──
 // /remember command sets this; the next hologram_memory_save consumes it.
 // Agent has no way to call authorizeFactSave() — only chat.ts's /remember handler can.
 let _factAuthorized = false;
 /** Called by /remember handler BEFORE sending the save prompt to the Agent. */
-export function authorizeFactSave(): void { _factAuthorized = true; }
+export function authorizeFactSave(): void {
+  _factAuthorized = true;
+}
 /** Consume the authorization. Returns true exactly once per /remember. */
 function consumeFactAuthorization(): boolean {
   const was = _factAuthorized;
@@ -38,9 +40,9 @@ type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
 
 /** Parsed entry from MEMORY.md index */
 export interface MemoryEntry {
-  name: string;       // kebab-case slug, e.g. "user-prefers-concise"
-  title: string;      // display title, e.g. "用户偏好简洁回复"
-  file: string;       // file name with .md extension
+  name: string; // kebab-case slug, e.g. "user-prefers-concise"
+  title: string; // display title, e.g. "用户偏好简洁回复"
+  file: string; // file name with .md extension
   description: string; // one-line hook from index
 }
 
@@ -51,8 +53,8 @@ export interface MemoryFile {
   type: 'user' | 'feedback' | 'project' | 'reference';
   confidence: Confidence;
   hit_count: number;
-  content: string;    // body only (without frontmatter)
-  raw: string;        // full file text (for rewriting with updated metadata)
+  content: string; // body only (without frontmatter)
+  raw: string; // full file text (for rewriting with updated metadata)
 }
 
 // ── MemoryManager ──
@@ -66,12 +68,17 @@ export class MemoryManager {
 
   /** @param projectPath 项目根目录
    *  @param globalPath  全局记忆目录（可选），不传则不启用全局记忆 */
-  constructor(private projectPath: string, globalPath?: string) {
+  constructor(
+    private projectPath: string,
+    globalPath?: string,
+  ) {
     this.globalDirPath = globalPath || null;
   }
 
   /** Whether AuraSDK semantic recall has been initialized. */
-  get auraReady(): boolean { return this._auraReady; }
+  get auraReady(): boolean {
+    return this._auraReady;
+  }
 
   /** Initialize AuraSDK semantic retrieval engine.
    *  Creates or opens the brain at .hologram/aura-brain/ in the project root.
@@ -82,7 +89,11 @@ export class MemoryManager {
     this._auraInitPromise = (async () => {
       try {
         // ponytail: native Aura is a global singleton — shut down old brain before init'ing new one (workspace switch)
-        try { await auraShutdown(); } catch { /* not initialized yet, ok */ }
+        try {
+          await auraShutdown();
+        } catch {
+          /* not initialized yet, ok */
+        }
         const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
         const result = await auraInit(brainPath);
         this._auraReady = true;
@@ -111,7 +122,11 @@ export class MemoryManager {
   /** Get Aura record count. */
   async auraRecordCount(): Promise<number> {
     if (!this._auraReady) return 0;
-    try { return await auraCount(); } catch { return 0; }
+    try {
+      return await auraCount();
+    } catch {
+      return 0;
+    }
   }
 
   private get projectDir(): string {
@@ -235,7 +250,7 @@ export class MemoryManager {
    *  Cached for 5 seconds for rapid session creation. */
   async loadPromptSection(graphNodes?: string[]): Promise<string> {
     const now = Date.now();
-    if (this._promptSectionCache && (now - this._promptSectionCacheTime) < 5000) {
+    if (this._promptSectionCache && now - this._promptSectionCacheTime < 5000) {
       return this._promptSectionCache;
     }
 
@@ -247,7 +262,7 @@ export class MemoryManager {
       if (entries.length === 0) continue;
 
       // Collect file paths for batch read
-      const filePaths = entries.map(e => this.filePath(e.name, scope));
+      const filePaths = entries.map((e) => this.filePath(e.name, scope));
       let batchResults: Record<string, string | null> = {};
 
       if (filePaths.length > 1) {
@@ -296,13 +311,13 @@ export class MemoryManager {
     // Facts are always included; reference/background compete for remaining slots.
     const MEMORY_LIMIT = 10;
     const allItems = [...allByName.values()];
-    const facts = allItems.filter(i => i.mf.confidence === 'fact');
-    const others = allItems.filter(i => i.mf.confidence !== 'fact');
+    const facts = allItems.filter((i) => i.mf.confidence === 'fact');
+    const others = allItems.filter((i) => i.mf.confidence !== 'fact');
 
     let itemsToLoad = allItems;
     if (allItems.length > MEMORY_LIMIT && graphNodes && graphNodes.length > 0) {
       // Score each non-fact memory by relevance to graph nodes
-      const scored = others.map(item => ({
+      const scored = others.map((item) => ({
         item,
         score: scoreMemoryRelevance(item.mf, graphNodes!),
       }));
@@ -310,7 +325,7 @@ export class MemoryManager {
 
       // Take top (MEMORY_LIMIT - facts.length) reference/background + all facts
       const refLimit = Math.max(0, MEMORY_LIMIT - facts.length);
-      const topRefs = scored.slice(0, refLimit).map(s => s.item);
+      const topRefs = scored.slice(0, refLimit).map((s) => s.item);
       itemsToLoad = [...facts, ...topRefs];
 
       // If some memories were filtered out, note it
@@ -387,7 +402,10 @@ export class MemoryManager {
     }
 
     const mf: MemoryFile = {
-      name, description, type, confidence,
+      name,
+      description,
+      type,
+      confidence,
       hit_count: hitCount,
       content,
       raw: '',
@@ -418,13 +436,13 @@ export class MemoryManager {
     let index = await this.loadIndexText(scope);
     if (!index.trim()) return false;
 
-    const pattern = new RegExp(
-      `^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(name)}\\.md\\)\\s+[—–-]\\s+.+$\\n?`,
-      'm',
-    );
+    const pattern = new RegExp(`^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(name)}\\.md\\)\\s+[—–-]\\s+.+$\\n?`, 'm');
     if (!pattern.test(index)) return false;
 
-    index = index.replace(pattern, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    index = index
+      .replace(pattern, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
     if (index) index += '\n';
 
     await rpc('write_file_content', {
@@ -445,7 +463,12 @@ export class MemoryManager {
     return true;
   }
 
-  private async upsertIndex(title: string, file: string, description: string, scope: 'project' | 'global' = 'project'): Promise<void> {
+  private async upsertIndex(
+    title: string,
+    file: string,
+    description: string,
+    scope: 'project' | 'global' = 'project',
+  ): Promise<void> {
     let index = await this.loadIndexText(scope);
     const newLine = `- [${title}](${file}) — ${description}`;
 
@@ -491,13 +514,13 @@ function parseFrontmatter(raw: string): MemoryFile {
   const desc = (fm.match(/^description:\s*(.+)$/m) || [])[1]?.trim() || '';
   // ponytail: accept both indented (under metadata:) and top-level formats
   const typeRaw = (fm.match(/^\s*type:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
-  const type = (
-    ['user', 'feedback', 'project', 'reference'] as const
-  ).includes(typeRaw as any) ? (typeRaw as MemoryFile['type']) : 'reference';
+  const type = (['user', 'feedback', 'project', 'reference'] as const).includes(typeRaw as any)
+    ? (typeRaw as MemoryFile['type'])
+    : 'reference';
   const confRaw = (fm.match(/^\s*confidence:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
-  const confidence = (
-    ['fact', 'reference', 'background', 'suppressed'] as const
-  ).includes(confRaw as any) ? (confRaw as Confidence) : 'reference';
+  const confidence = (['fact', 'reference', 'background', 'suppressed'] as const).includes(confRaw as any)
+    ? (confRaw as Confidence)
+    : 'reference';
   const hitCountRaw = (fm.match(/^\s*hit_count:\s*(\d+)$/m) || [])[1];
   const hit_count = hitCountRaw ? parseInt(hitCountRaw, 10) : 0;
 
@@ -641,16 +664,16 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
     {
       name: () => 'hologram_memory_save',
       description: () =>
-        '保存或更新一条记忆。保守使用——只记代码库查不到且未来会话忘了会出错的东西。\n\n'
-        + '置信度级别:\n'
-        + '- reference (默认) — Agent 自己发现的信息最高只能给此级别\n'
-        + '- fact — 仅用户通过 /remember 命令明确要求时才能使用\n'
-        + '- background — 仅影响风格/语气\n'
-        + '- suppressed — 已废弃，不再给 LLM 看到\n\n'
-        + '记忆范围 (scope):\n'
-        + '- project (默认) — 仅当前项目可见，适合架构决策、项目约定\n'
-        + '- global — 跨所有项目可见，适合用户偏好、编码风格、个性\n\n'
-        + '先 hologram_memory_list 检查是否已有类似记忆——已有则更新而非新建。',
+        '保存或更新一条记忆。保守使用——只记代码库查不到且未来会话忘了会出错的东西。\n\n' +
+        '置信度级别:\n' +
+        '- reference (默认) — Agent 自己发现的信息最高只能给此级别\n' +
+        '- fact — 仅用户通过 /remember 命令明确要求时才能使用\n' +
+        '- background — 仅影响风格/语气\n' +
+        '- suppressed — 已废弃，不再给 LLM 看到\n\n' +
+        '记忆范围 (scope):\n' +
+        '- project (默认) — 仅当前项目可见，适合架构决策、项目约定\n' +
+        '- global — 跨所有项目可见，适合用户偏好、编码风格、个性\n\n' +
+        '先 hologram_memory_list 检查是否已有类似记忆——已有则更新而非新建。',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -679,7 +702,8 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           scope: {
             type: 'string',
             enum: ['project', 'global'],
-            description: '记忆范围。project=仅当前项目，global=跨所有项目共享。用户偏好/编码风格 → global；架构决策/项目约定 → project。默认: project',
+            description:
+              '记忆范围。project=仅当前项目，global=跨所有项目共享。用户偏好/编码风格 → global；架构决策/项目约定 → project。默认: project',
           },
         },
         required: ['name', 'description', 'type', 'content'],
@@ -720,17 +744,14 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           confidence,
           scope,
         });
-        const downgradeNote = factDowngraded
-          ? ' (注意: fact 级别需用户授权，已自动降为 reference)'
-          : '';
+        const downgradeNote = factDowngraded ? ' (注意: fact 级别需用户授权，已自动降为 reference)' : '';
         const scopeNote = scope === 'global' ? ' [全局]' : '';
         return `已保存记忆 "${args.name}" (${confidence})${scopeNote}。${downgradeNote}`;
       },
     },
     {
       name: () => 'hologram_memory_delete',
-      description: () =>
-        '删除一条已保存的记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
+      description: () => '删除一条已保存的记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
       parameters: () => ({
         type: 'object',
         properties: {

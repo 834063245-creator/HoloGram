@@ -3,7 +3,16 @@
 
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
-import { Chunk, ChunkType, Message, Provider, Request, Role, classifyError, sanitizeToolPairing } from './types';
+import {
+  type Chunk,
+  ChunkType,
+  classifyError,
+  type Message,
+  type Provider,
+  type Request,
+  type Role,
+  sanitizeToolPairing,
+} from './types';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
@@ -120,19 +129,13 @@ function buildRequest(
         break;
       case 'tool': {
         const content = m.content || '(no output)';
-        appendBlocks('user', [
-          { type: 'tool_result', tool_use_id: m.tool_call_id, content },
-        ]);
+        appendBlocks('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id, content }]);
         break;
       }
       case 'assistant': {
         const blocks: ContentBlock[] = [];
         // Replay signed thinking block first (Anthropic requires it precede tool_use)
-        if (
-          thinkingCfg &&
-          m.reasoning_content &&
-          m.reasoning_signature
-        ) {
+        if (thinkingCfg && m.reasoning_content && m.reasoning_signature) {
           blocks.push({
             type: 'thinking',
             thinking: m.reasoning_content,
@@ -145,7 +148,11 @@ function buildRequest(
         for (const tc of m.tool_calls || []) {
           let input: unknown = {};
           if (tc.arguments) {
-            try { input = JSON.parse(tc.arguments); } catch { /* malformed JSON → empty input */ }
+            try {
+              input = JSON.parse(tc.arguments);
+            } catch {
+              /* malformed JSON → empty input */
+            }
           }
           blocks.push({
             type: 'tool_use',
@@ -163,9 +170,7 @@ function buildRequest(
   const anthTools: AnthTool[] = tools.map((t) => ({
     name: t.name,
     description: t.description,
-    input_schema: Object.keys(t.parameters).length > 0
-      ? t.parameters
-      : { type: 'object', properties: {} },
+    input_schema: Object.keys(t.parameters).length > 0 ? t.parameters : { type: 'object', properties: {} },
   }));
 
   // Cache breakpoints: mark last system block (caches tools+system) or last tool
@@ -226,7 +231,7 @@ async function sendWithRetry(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) {
-      const delay = 500 * Math.pow(2, attempt - 1) + Math.random() * 250;
+      const delay = 500 * 2 ** (attempt - 1) + Math.random() * 250;
       await new Promise((r) => setTimeout(r, delay));
     }
     if (signal.aborted) throw new Error(`${name}: aborted`);
@@ -294,11 +299,7 @@ interface StreamEvent {
   error?: { type: string; message: string };
 }
 
-async function* readSSE(
-  body: ReadableStream<Uint8Array>,
-  name: string,
-  signal?: AbortSignal,
-): AsyncGenerator<Chunk> {
+async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -370,12 +371,10 @@ async function* readSSE(
                 if (ev.delta.text) yield { type: ChunkType.Text, text: ev.delta.text };
                 break;
               case 'thinking_delta':
-                if (ev.delta.thinking)
-                  yield { type: ChunkType.Reasoning, text: ev.delta.thinking };
+                if (ev.delta.thinking) yield { type: ChunkType.Reasoning, text: ev.delta.thinking };
                 break;
               case 'signature_delta':
-                if (ev.delta.signature)
-                  yield { type: ChunkType.Reasoning, signature: ev.delta.signature };
+                if (ev.delta.signature) yield { type: ChunkType.Reasoning, signature: ev.delta.signature };
                 break;
               case 'input_json_delta': {
                 const tc = toolsByIndex.get(ev.index);

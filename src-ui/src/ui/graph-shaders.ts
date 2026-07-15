@@ -12,11 +12,7 @@ export const _GLSL_HSL2RGB = /* glsl */ `
   }
 `;
 
-export function makeGlowPointMaterial(
-  glowTex: THREE.Texture,
-  alphaMul: number,
-  sizeMul: number,
-): THREE.ShaderMaterial {
+export function makeGlowPointMaterial(glowTex: THREE.Texture, alphaMul: number, sizeMul: number): THREE.ShaderMaterial {
   const hsl2rgb = _GLSL_HSL2RGB;
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -64,7 +60,9 @@ export function makeGlowPointMaterial(
       uniform sampler2D uTex;
       varying vec4 vColor;
       void main() { gl_FragColor = vColor * texture2D(uTex, gl_PointCoord); }`,
-    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
   });
 }
 
@@ -72,7 +70,9 @@ export function makeGlowPointMaterial(
  *  Uses sphere pos→normal trick (unit sphere: localNormal = normalize(position)). */
 export function makeCoreFresnelMaterial(spikeTex: THREE.Texture): THREE.MeshBasicMaterial {
   const mat = new THREE.MeshBasicMaterial({
-    transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
   });
   mat.onBeforeCompile = (shader) => {
     // ── Vertex: varyings for world-normal, UV, world-pos ──

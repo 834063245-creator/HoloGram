@@ -11,7 +11,11 @@ export type PanelMode = 'pill' | 'input' | 'panel' | 'hud';
 export type AgentTab = 'chat' | 'tools' | 'context';
 export type AgentState = 'idle' | 'thinking' | 'running' | 'error';
 
-interface ToolHistoryEntry { name: string; args: string; ts: number }
+interface ToolHistoryEntry {
+  name: string;
+  args: string;
+  ts: number;
+}
 
 interface PanelStore {
   panelMode: PanelMode;
@@ -117,12 +121,28 @@ export function getPanelStore(storeId?: string): PanelStoreApi {
 
 // ── Non-reactive accessors ──
 
-function _store(storeId?: string) { return getPanelStore(storeId).getState(); }
+function _store(storeId?: string) {
+  return getPanelStore(storeId).getState();
+}
 
-export function getPanelMode(storeId?: string): PanelMode { return _store(storeId).panelMode; }
-export function getActiveTab(storeId?: string): AgentTab { return _store(storeId).activeTab; }
-export function getProjectPath(storeId?: string): string { return _store(storeId).projectPath; }
-export function getTotalTokensUsed(storeId?: string): number { return _store(storeId).totalTokensUsed; }
-export function isHistoryOpen(storeId?: string): boolean { return _store(storeId).historyOpen; }
-export function getToolFilter(storeId?: string): string { return _store(storeId).toolFilter; }
-export function getContextFilter(storeId?: string): string { return _store(storeId).contextFilter; }
+export function getPanelMode(storeId?: string): PanelMode {
+  return _store(storeId).panelMode;
+}
+export function getActiveTab(storeId?: string): AgentTab {
+  return _store(storeId).activeTab;
+}
+export function getProjectPath(storeId?: string): string {
+  return _store(storeId).projectPath;
+}
+export function getTotalTokensUsed(storeId?: string): number {
+  return _store(storeId).totalTokensUsed;
+}
+export function isHistoryOpen(storeId?: string): boolean {
+  return _store(storeId).historyOpen;
+}
+export function getToolFilter(storeId?: string): string {
+  return _store(storeId).toolFilter;
+}
+export function getContextFilter(storeId?: string): string {
+  return _store(storeId).contextFilter;
+}

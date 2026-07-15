@@ -69,12 +69,22 @@ export function getInputStore(storeId?: string): InputStoreApi {
 
 // ── Non-reactive accessors ──
 
-function _store(storeId?: string) { return getInputStore(storeId).getState(); }
+function _store(storeId?: string) {
+  return getInputStore(storeId).getState();
+}
 
-export function getInputText(storeId?: string): string { return _store(storeId).inputText; }
+export function getInputText(storeId?: string): string {
+  return _store(storeId).inputText;
+}
 export function getAttachedFiles(storeId?: string): Array<{ path: string; name: string; size: number }> {
   return _store(storeId).attachedFiles;
 }
-export function getInputHistory(storeId?: string): string[] { return _store(storeId).inputHistory; }
-export function getInputHistoryIdx(storeId?: string): number { return _store(storeId).inputHistoryIdx; }
-export function getDraftText(storeId?: string): string { return _store(storeId).draftText; }
+export function getInputHistory(storeId?: string): string[] {
+  return _store(storeId).inputHistory;
+}
+export function getInputHistoryIdx(storeId?: string): number {
+  return _store(storeId).inputHistoryIdx;
+}
+export function getDraftText(storeId?: string): string {
+  return _store(storeId).draftText;
+}

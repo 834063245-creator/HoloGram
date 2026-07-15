@@ -5,10 +5,10 @@
 // 替代 chat.ts 中 _showSlashPanel / _hideSlashPanel / _selectSlashItem / _navigateSlashPanel
 // 修复 R7：不再混用 CSS class 和内联 style.display。React 条件渲染天然无残留。
 
-import React, { useState, useCallback, useMemo, useImperativeHandle, forwardRef } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { CommandRegistry } from '../command-registry';
 import type { CommandDef } from '../command-registry';
+import { CommandRegistry } from '../command-registry';
 
 // ── Exposed imperative API ──
 
@@ -28,27 +28,33 @@ const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[]; onComm
     const [query, setQuery] = useState('');
     const [activeIdx, setActiveIdx] = useState(0);
 
-    const filtered = useMemo(
-      () => query ? CommandRegistry.instance.filter(query) : commands,
-      [query, commands],
-    );
+    const filtered = useMemo(() => (query ? CommandRegistry.instance.filter(query) : commands), [query, commands]);
 
-    const show = useCallback((q?: string) => { setQuery(q ?? ''); setActiveIdx(0); setVisible(true); }, []);
+    const show = useCallback((q?: string) => {
+      setQuery(q ?? '');
+      setActiveIdx(0);
+      setVisible(true);
+    }, []);
     const hide = useCallback(() => setVisible(false), []);
 
-    const navigate = useCallback((delta: number): boolean => {
-      if (!visible || filtered.length === 0) return false;
-      setActiveIdx(idx => {
-        let next = idx + delta;
-        if (next < 0) next = filtered.length - 1;
-        if (next >= filtered.length) next = 0;
-        return next;
-      });
-      return true;
-    }, [visible, filtered.length]);
+    const navigate = useCallback(
+      (delta: number): boolean => {
+        if (!visible || filtered.length === 0) return false;
+        setActiveIdx((idx) => {
+          let next = idx + delta;
+          if (next < 0) next = filtered.length - 1;
+          if (next >= filtered.length) next = 0;
+          return next;
+        });
+        return true;
+      },
+      [visible, filtered.length],
+    );
 
     useImperativeHandle(ref, () => ({
-      show, hide, navigate,
+      show,
+      hide,
+      navigate,
       select: () => {
         if (!visible || filtered.length === 0) return null;
         const cmd = filtered[activeIdx];
@@ -56,7 +62,9 @@ const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[]; onComm
         onCommit(cmd);
         return cmd;
       },
-      get visible() { return visible; },
+      get visible() {
+        return visible;
+      },
     }));
 
     if (!visible) return null;
@@ -74,12 +82,18 @@ const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[]; onComm
         {Array.from(groups.entries()).map(([group, items]) => (
           <div className="sp-group" key={group}>
             <div className="sp-group-title">{group}</div>
-            {items.map(item => {
+            {items.map((item) => {
               const idx = flatIdx++;
               return (
-                <div key={item.id} className={`sp-item${idx === activeIdx ? ' sp-active' : ''}`}
+                <div
+                  key={item.id}
+                  className={`sp-item${idx === activeIdx ? ' sp-active' : ''}`}
                   onMouseEnter={() => setActiveIdx(idx)}
-                  onClick={() => { hide(); onCommit(item); }}>
+                  onClick={() => {
+                    hide();
+                    onCommit(item);
+                  }}
+                >
                   <span className="sp-label">{item.label}</span>
                   <span className="sp-desc">{item.description}</span>
                   <span className="sp-key">{item.shortcut ? item.shortcut.split('/').pop() : ''}</span>
@@ -110,17 +124,34 @@ export class SlashPanelController {
   }
 
   private _render(onCommit: (cmd: CommandDef) => void): void {
-    const ref = (h: SlashPanelHandle | null) => { this._handle = h; };
+    const ref = (h: SlashPanelHandle | null) => {
+      this._handle = h;
+    };
     this._root.render(React.createElement(SlashPanel, { commands: this._commands, onCommit, ref }));
   }
 
-  setOnCommit(onCommit: (cmd: CommandDef) => void): void { this._render(onCommit); }
+  setOnCommit(onCommit: (cmd: CommandDef) => void): void {
+    this._render(onCommit);
+  }
 
-  show(query?: string): void { this._handle?.show(query); }
-  hide(): void { this._handle?.hide(); }
-  navigate(delta: number): boolean { return this._handle?.navigate(delta) ?? false; }
-  select(): CommandDef | null { return this._handle?.select() ?? null; }
-  get visible(): boolean { return this._handle?.visible ?? false; }
+  show(query?: string): void {
+    this._handle?.show(query);
+  }
+  hide(): void {
+    this._handle?.hide();
+  }
+  navigate(delta: number): boolean {
+    return this._handle?.navigate(delta) ?? false;
+  }
+  select(): CommandDef | null {
+    return this._handle?.select() ?? null;
+  }
+  get visible(): boolean {
+    return this._handle?.visible ?? false;
+  }
 
-  destroy(): void { this._root.unmount(); this._mount.remove(); }
+  destroy(): void {
+    this._root.unmount();
+    this._mount.remove();
+  }
 }

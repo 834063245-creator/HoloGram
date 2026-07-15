@@ -10,10 +10,10 @@
 //   Notifications (didOpen/didChange) → fire-and-forget.
 //   Server-push notifications (publishDiagnostics) → lsp-message event.
 
-import { rpc, listen } from '../bridge';
-import type { editor, languages, IRange, IDisposable } from 'monaco-editor';
+import type { editor, IDisposable, IRange, languages } from 'monaco-editor';
+import { listen, rpc } from '../bridge';
 
-let lspSessions = new Map<string, number>(); // language -> session_id
+const lspSessions = new Map<string, number>(); // language -> session_id
 let completionProviders: IDisposable[] = [];
 let hoverProviders: IDisposable[] = [];
 let definitionProviders: IDisposable[] = [];
@@ -53,16 +53,16 @@ export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
 // ── LSP → Monaco CompletionItemKind mapping ──
 // LSP enum values differ from Monaco/VS Code numbering.
 const LSP_TO_MONACO_KIND: Record<number, number> = {
-  1: 18,  // Text
-  2: 0,   // Method
-  3: 1,   // Function
-  4: 2,   // Constructor
-  5: 3,   // Field
-  6: 4,   // Variable
-  7: 5,   // Class
-  8: 7,   // Interface
-  9: 8,   // Module
-  10: 9,  // Property
+  1: 18, // Text
+  2: 0, // Method
+  3: 1, // Function
+  4: 2, // Constructor
+  5: 3, // Field
+  6: 4, // Variable
+  7: 5, // Class
+  8: 7, // Interface
+  9: 8, // Module
+  10: 9, // Property
   11: 12, // Unit
   12: 13, // Value
   13: 15, // Enum
@@ -74,7 +74,7 @@ const LSP_TO_MONACO_KIND: Record<number, number> = {
   19: 23, // Folder
   20: 16, // EnumMember
   21: 14, // Constant
-  22: 6,  // Struct
+  22: 6, // Struct
   23: 10, // Event
   24: 11, // Operator
   25: 24, // TypeParameter
@@ -92,10 +92,7 @@ function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): l
     insertText = te.newText;
     if (te.range) {
       const r = te.range;
-      range = new monaco.Range(
-        r.start.line + 1, r.start.character + 1,
-        r.end.line + 1, r.end.character + 1,
-      );
+      range = new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1);
     }
   }
 
@@ -192,7 +189,7 @@ export function registerCompletionProvider(
   monaco: typeof import('monaco-editor'),
 ): void {
   const provider = monaco.languages.registerCompletionItemProvider(lang, {
-    triggerCharacters: ['.', ':', '"', '\'', '/', ' '],
+    triggerCharacters: ['.', ':', '"', "'", '/', ' '],
     provideCompletionItems: async (model, position) => {
       try {
         const result = await rpc<any>('lsp_request', {
@@ -206,7 +203,7 @@ export function registerCompletionProvider(
         // result is the JSON-RPC `result` field — either CompletionItem[] or CompletionList
         if (!result) return { suggestions: [] };
 
-        const items: any[] = Array.isArray(result) ? result : (result.items || []);
+        const items: any[] = Array.isArray(result) ? result : result.items || [];
         const isIncomplete = !Array.isArray(result) ? result.isIncomplete : undefined;
 
         return {
@@ -223,11 +220,7 @@ export function registerCompletionProvider(
 }
 
 /** Register Monaco hover provider backed by LSP. */
-export function registerHoverProvider(
-  lang: string,
-  sessionId: number,
-  monaco: typeof import('monaco-editor'),
-): void {
+export function registerHoverProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
   const provider = monaco.languages.registerHoverProvider(lang, {
     provideHover: async (model, position) => {
       try {
@@ -248,16 +241,18 @@ export function registerHoverProvider(
             value = result.contents.value;
           } else if (Array.isArray(result.contents)) {
             // MarkupContent[]
-            value = result.contents
-              .map((c: any) => c.value || '')
-              .join('\n\n---\n\n');
+            value = result.contents.map((c: any) => c.value || '').join('\n\n---\n\n');
           } else {
             value = JSON.stringify(result.contents);
           }
-          const hoverRange = result.range ? new monaco.Range(
-            result.range.start.line + 1, result.range.start.character + 1,
-            result.range.end.line + 1, result.range.end.character + 1,
-          ) : undefined;
+          const hoverRange = result.range
+            ? new monaco.Range(
+                result.range.start.line + 1,
+                result.range.start.character + 1,
+                result.range.end.line + 1,
+                result.range.end.character + 1,
+              )
+            : undefined;
           return { contents: [{ value }], range: hoverRange };
         }
       } catch (e) {
@@ -296,10 +291,14 @@ export function registerDefinitionProvider(
           const range = loc.range;
           links.push({
             uri: monaco.Uri.parse(loc.uri),
-            range: range ? new monaco.Range(
-              range.start.line + 1, range.start.character + 1,
-              range.end.line + 1, range.end.character + 1,
-            ) : new monaco.Range(1, 1, 1, 1),
+            range: range
+              ? new monaco.Range(
+                  range.start.line + 1,
+                  range.start.character + 1,
+                  range.end.line + 1,
+                  range.end.character + 1,
+                )
+              : new monaco.Range(1, 1, 1, 1),
           });
         }
         return links.length > 0 ? links : null;
@@ -338,10 +337,14 @@ export function registerReferencesProvider(
           const range = loc.range;
           locations.push({
             uri: monaco.Uri.parse(loc.uri),
-            range: range ? new monaco.Range(
-              range.start.line + 1, range.start.character + 1,
-              range.end.line + 1, range.end.character + 1,
-            ) : new monaco.Range(1, 1, 1, 1),
+            range: range
+              ? new monaco.Range(
+                  range.start.line + 1,
+                  range.start.character + 1,
+                  range.end.line + 1,
+                  range.end.character + 1,
+                )
+              : new monaco.Range(1, 1, 1, 1),
           });
         }
         return locations.length > 0 ? locations : null;
@@ -366,10 +369,14 @@ export function listenForDiagnostics(
     if (!params?.uri || !params?.diagnostics) return;
 
     const markers: editor.IMarkerData[] = params.diagnostics.map((d: any) => ({
-      severity: d.severity === 1 ? monaco.MarkerSeverity.Error
-        : d.severity === 2 ? monaco.MarkerSeverity.Warning
-        : d.severity === 3 ? monaco.MarkerSeverity.Info
-        : monaco.MarkerSeverity.Hint,
+      severity:
+        d.severity === 1
+          ? monaco.MarkerSeverity.Error
+          : d.severity === 2
+            ? monaco.MarkerSeverity.Warning
+            : d.severity === 3
+              ? monaco.MarkerSeverity.Info
+              : monaco.MarkerSeverity.Hint,
       message: d.message,
       startLineNumber: (d.range.start.line || 0) + 1,
       startColumn: (d.range.start.character || 0) + 1,
@@ -378,16 +385,25 @@ export function listenForDiagnostics(
     }));
 
     // Populate diagnostics cache for agent state hooks (fire-and-forget)
-    diagnosticsCache.set(params.uri, params.diagnostics.map((d: any) => ({
-      severity: (d.severity === 1 ? 'error' : d.severity === 2 ? 'warning' : d.severity === 3 ? 'info' : 'hint') as LspDiagnostic['severity'],
-      message: d.message,
-      startLine: d.range.start.line || 0,
-      startColumn: d.range.start.character || 0,
-      endLine: d.range.end.line || 0,
-      endColumn: d.range.end.character || 0,
-      source: d.source,
-      code: d.code,
-    })));
+    diagnosticsCache.set(
+      params.uri,
+      params.diagnostics.map((d: any) => ({
+        severity: (d.severity === 1
+          ? 'error'
+          : d.severity === 2
+            ? 'warning'
+            : d.severity === 3
+              ? 'info'
+              : 'hint') as LspDiagnostic['severity'],
+        message: d.message,
+        startLine: d.range.start.line || 0,
+        startColumn: d.range.start.character || 0,
+        endLine: d.range.end.line || 0,
+        endColumn: d.range.end.character || 0,
+        source: d.source,
+        code: d.code,
+      })),
+    );
 
     const uri = monaco.Uri.parse(params.uri);
     const model = monaco.editor.getModel(uri);

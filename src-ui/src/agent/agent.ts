@@ -3,38 +3,32 @@
 
 // Agent 循环 — Run() → stream() → StreamingToolExecutor → 循环直到模型给出最终答案
 
-import type {
-  Chunk,
-  Message,
-  Provider,
-  ToolCall,
-  Usage,
-} from '../provider/types';
-import { ChunkType, sanitizeToolPairing } from '../provider/types';
-import { ToolRegistry } from './tool';
-import type { Tool } from './tool';
-import type { HookRegistry, PreflightHookRegistry } from './hooks';
-import { bus } from '../ui/events';
-import { log } from './logger';
-import { isRetryable, backoffDelay, sleepWithAbort, MAX_RETRIES } from './retry';
-import { SessionStore } from './session-store';
-import { CompactionTracker, type CompactionEvent, estimateTokens, type CompactionSessionStats, maybeTune, type CompactionConfig } from './compaction-model';
 import { rpc } from '../bridge';
-import { StreamingToolExecutor } from './streaming-executor';
-import { execState, type ExecStateInstance } from './execution-state';
-import { createSubAgentSink } from './subagent-sink';
+import type { Chunk, Message, Provider, ToolCall, Usage } from '../provider/types';
+import { ChunkType, sanitizeToolPairing } from '../provider/types';
+import { bus } from '../ui/events';
 import type { SubAgentPart } from '../ui/message-model';
-
 // Shared types — also used internally by this file
+import { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent } from './agent-types';
 import {
-  EventKind,
-  type AgentEvent,
-  type ToolEvent,
-  type Pricing,
-  type EventSink,
-  computeCost,
-} from './agent-types';
-export { EventKind, type ToolEvent, type AgentEvent, type Pricing, type EventSink, computeCost };
+  type CompactionConfig,
+  type CompactionEvent,
+  type CompactionSessionStats,
+  CompactionTracker,
+  estimateTokens,
+  maybeTune,
+} from './compaction-model';
+import { type ExecStateInstance, execState } from './execution-state';
+import type { HookRegistry, PreflightHookRegistry } from './hooks';
+import { log } from './logger';
+import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
+import type { SessionStore } from './session-store';
+import { StreamingToolExecutor } from './streaming-executor';
+import { createSubAgentSink } from './subagent-sink';
+import type { Tool } from './tool';
+import { ToolRegistry } from './tool';
+
+export { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent };
 
 // ---- Agent Options ----
 
@@ -205,15 +199,17 @@ export class Agent {
     // ponytail: event listener lives as long as this Agent instance; GC cleans it up.
     bus.on('memory:saved', ({ name, description, confidence }) => {
       if (!this._pendingMemoryUpdates) this._pendingMemoryUpdates = [];
-      this._pendingMemoryUpdates.push(
-        `记忆已更新: **${description || name}** (${confidence || 'reference'})`,
-      );
+      this._pendingMemoryUpdates.push(`记忆已更新: **${description || name}** (${confidence || 'reference'})`);
     });
   }
 
-  setHooks(hooks: HookRegistry): void { this.hooks = hooks; }
+  setHooks(hooks: HookRegistry): void {
+    this.hooks = hooks;
+  }
 
-  setPreflightHooks(hooks: PreflightHookRegistry): void { this.preflightHooks = hooks; }
+  setPreflightHooks(hooks: PreflightHookRegistry): void {
+    this.preflightHooks = hooks;
+  }
 
   // ---- Public API ----
 
@@ -231,7 +227,11 @@ export class Agent {
     if (!this.sessionStore) return;
     this.sessionStore.save(this.sessionId, this.session).catch(() => {});
     if (this._onSessionPersisted) {
-      try { this._onSessionPersisted(this.sessionId, this.session); } catch { /* best-effort */ }
+      try {
+        this._onSessionPersisted(this.sessionId, this.session);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 
@@ -274,11 +274,21 @@ export class Agent {
   }
 
   /** Public accessors for the compaction stats tool. */
-  getCompactionTracker(): CompactionTracker { return this.compactionTracker; }
-  getPricing(): Pricing | undefined { return this.pricing; }
-  getCompactRatio(): number { return this.compactRatio; }
-  getRecentKeep(): number { return this.recentKeep; }
-  getContextWindow(): number { return this.contextWindow; }
+  getCompactionTracker(): CompactionTracker {
+    return this.compactionTracker;
+  }
+  getPricing(): Pricing | undefined {
+    return this.pricing;
+  }
+  getCompactRatio(): number {
+    return this.compactRatio;
+  }
+  getRecentKeep(): number {
+    return this.recentKeep;
+  }
+  getContextWindow(): number {
+    return this.contextWindow;
+  }
 
   /** Set the path for persisting auto-tuned compaction config. */
   setCompactionConfigPath(projectPath: string): void {
@@ -383,12 +393,8 @@ export class Agent {
    *  Safe: queued and applied at the next safe boundary, never mid-stream.
    *  Truncates output at 4000 chars to prevent context pollution. */
   injectTaskNotification(text: string): void {
-    const truncated = text.length > 4000
-      ? text.slice(0, 4000) + `\n…[截断 ${text.length - 4000} 字符]`
-      : text;
-    this._pendingInserts.push(
-      `<task-notification>\n子Agent 任务完成:\n${truncated}\n</task-notification>`,
-    );
+    const truncated = text.length > 4000 ? text.slice(0, 4000) + `\n…[截断 ${text.length - 4000} 字符]` : text;
+    this._pendingInserts.push(`<task-notification>\n子Agent 任务完成:\n${truncated}\n</task-notification>`);
   }
 
   /** Cascade abort: stop all sub-agents when the parent is interrupted. */
@@ -437,9 +443,7 @@ export class Agent {
 
   /** Start a fresh conversation — keep system prompt, clear everything else. */
   newSession(): void {
-    const sys = this.session.length > 0 && this.session[0].role === 'system'
-      ? this.session[0]
-      : null;
+    const sys = this.session.length > 0 && this.session[0].role === 'system' ? this.session[0] : null;
     this.session = sys ? [sys] : [];
     this._execState.bumpVersion();
     this.cacheHitTotal = 0;
@@ -454,8 +458,8 @@ export class Agent {
 
   /** Check whether this agent is already a fork child (for recursion guard). */
   isInForkChild(): boolean {
-    return this.session.some(m =>
-      m.role === 'user' && typeof m.content === 'string' && m.content.includes(`<${FORK_BOILERPLATE_TAG}>`),
+    return this.session.some(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes(`<${FORK_BOILERPLATE_TAG}>`),
     );
   }
 
@@ -463,16 +467,18 @@ export class Agent {
    *  Strips system prompt, assistant tool_calls, and truncates to the last N messages. */
   extractRecentContext(maxMessages: number): string {
     const recent = this.session
-      .filter(m => m.role !== 'system') // don't leak parent system prompt
+      .filter((m) => m.role !== 'system') // don't leak parent system prompt
       .slice(-maxMessages);
     if (recent.length === 0) return '(无父Agent上下文)';
-    return recent.map(m => {
-      const roleLabel = m.role === 'assistant' ? '主Agent' :
-        m.role === 'tool' ? `工具结果(${m.name || '?'})` : '用户';
-      const content = typeof m.content === 'string' ? m.content.slice(0, 2000) :
-        JSON.stringify(m.content).slice(0, 2000);
-      return `[${roleLabel}] ${content}`;
-    }).join('\n\n');
+    return recent
+      .map((m) => {
+        const roleLabel =
+          m.role === 'assistant' ? '主Agent' : m.role === 'tool' ? `工具结果(${m.name || '?'})` : '用户';
+        const content =
+          typeof m.content === 'string' ? m.content.slice(0, 2000) : JSON.stringify(m.content).slice(0, 2000);
+        return `[${roleLabel}] ${content}`;
+      })
+      .join('\n\n');
   }
 
   /** Run one turn: append user input, drive the tool loop. */
@@ -492,7 +498,10 @@ export class Agent {
    *
    *  ponytail: serial by design. Parallel is an optimization, not a correctness
    *  requirement — serial sub-agent spawns guarantee no file conflicts. */
-  async runGoal(signal: AbortSignal, goal: string): Promise<{ status: 'completed' | 'failed' | 'aborted'; summary: string }> {
+  async runGoal(
+    signal: AbortSignal,
+    goal: string,
+  ): Promise<{ status: 'completed' | 'failed' | 'aborted'; summary: string }> {
     const goalPrompt = `<goal>
 ## 总体目标
 ${goal}
@@ -550,9 +559,10 @@ ${goal}
 
       // Goal in progress — auto-continue
       const poolSummary = this._subAgentPool?.summary() || '';
-      const pendingHint = this._subAgentPool && this._subAgentPool.runningCount > 0
-        ? `\n⚠️ 仍有 ${this._subAgentPool.runningCount} 个子Agent运行中，等待结果到达后再规划下一步。`
-        : '';
+      const pendingHint =
+        this._subAgentPool && this._subAgentPool.runningCount > 0
+          ? `\n⚠️ 仍有 ${this._subAgentPool.runningCount} 个子Agent运行中，等待结果到达后再规划下一步。`
+          : '';
       this.session.push({
         role: 'user',
         content: `<system-reminder>
@@ -569,7 +579,11 @@ ${goal}
     }
     // Max iterations reached — forced termination
     if (!signal.aborted) {
-      this._sink({ kind: EventKind.Notice, level: 'warn', text: `[目标] 达到最大迭代 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止` });
+      this._sink({
+        kind: EventKind.Notice,
+        level: 'warn',
+        text: `[目标] 达到最大迭代 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止`,
+      });
       return { status: 'failed', summary: `达到最大迭代次数 ${Agent.MAX_GOAL_ITERATIONS}。请拆分目标为更小单元。` };
     }
 
@@ -608,7 +622,13 @@ ${goal}
 
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
-      const executor = new StreamingToolExecutor(this.tools, (ev: AgentEvent) => this._sink(ev), this.hooks, this.preflightHooks, this._isolationId ?? null);
+      const executor = new StreamingToolExecutor(
+        this.tools,
+        (ev: AgentEvent) => this._sink(ev),
+        this.hooks,
+        this.preflightHooks,
+        this._isolationId ?? null,
+      );
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
         log.error('agent', 'stream error', { error: String(err.message || err) });
@@ -669,12 +689,12 @@ ${goal}
 
       // ---- Collect tool results (streaming executor ran them during stream) ----
       log.info('agent', 'collect streaming results', {
-        tools: calls.map(c => c.name),
+        tools: calls.map((c) => c.name),
         count: calls.length,
       });
       const pendingResults = await executor.awaitRemaining();
       // Build results in call order
-      const resultsByCallId = new Map(pendingResults.map(r => [r.call.id, r]));
+      const resultsByCallId = new Map(pendingResults.map((r) => [r.call.id, r]));
       for (const call of calls) {
         const r = resultsByCallId.get(call.id);
         this.session.push({
@@ -686,8 +706,14 @@ ${goal}
         // Emit tool-done event so panels can auto-refresh
         bus.emit('agent:tool-done', {
           toolName: call.name,
-          args: (() => { try { return JSON.parse(call.arguments || '{}'); } catch { return {}; } })(),
-                    output: r?.output || '',
+          args: (() => {
+            try {
+              return JSON.parse(call.arguments || '{}');
+            } catch {
+              return {};
+            }
+          })(),
+          output: r?.output || '',
         });
       }
 
@@ -754,7 +780,9 @@ ${goal}
 
       // Backoff before retry
       const delay = backoffDelay(attempt);
-      log.info('agent', `stream retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`, { error: String(lastErr.message || lastErr) });
+      log.info('agent', `stream retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`, {
+        error: String(lastErr.message || lastErr),
+      });
       this._sink({
         kind: EventKind.Notice,
         level: 'warn',
@@ -878,11 +906,7 @@ ${goal}
 
   // ---- Storm breaker — break repetitive tool-call loops ----
 
-  private applyStormBreaker(
-    calls: ToolCall[],
-    outcomes: ToolOutcome[],
-    results: string[],
-  ): void {
+  private applyStormBreaker(calls: ToolCall[], outcomes: ToolOutcome[], results: string[]): void {
     const { sig, ok } = batchStormSignature(calls, outcomes);
     if (!ok) {
       this.stormSig = '';
@@ -897,12 +921,8 @@ ${goal}
     this.stormCount++;
     if (this.stormCount < STORM_BREAK_THRESHOLD) return;
 
-    const subject =
-      calls.length === 1
-        ? `"${calls[0].name}"`
-        : `this batch of ${calls.length} tool calls`;
-    const short =
-      calls.length === 1 ? calls[0].name : `a batch of ${calls.length} calls`;
+    const subject = calls.length === 1 ? `"${calls[0].name}"` : `this batch of ${calls.length} tool calls`;
+    const short = calls.length === 1 ? calls[0].name : `a batch of ${calls.length} calls`;
 
     results[0] =
       outcomes[0].output +
@@ -948,7 +968,7 @@ ${goal}
       msg.includes('maximum context') ||
       msg.includes('reduce the length') ||
       msg.includes('token limit') ||
-      msg.includes('400') && (msg.includes('token') || msg.includes('context') || msg.includes('prompt'))
+      (msg.includes('400') && (msg.includes('token') || msg.includes('context') || msg.includes('prompt')))
     );
   }
 
@@ -965,7 +985,7 @@ ${goal}
     this.compactRunning = true;
     try {
       const msgs = this.session;
-      const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
+      const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
       // Keep last N messages verbatim (tail), compact the middle
       const tailCount = Math.max(4, this.recentKeep);
       const start = Math.max(head + 4, msgs.length - tailCount); // at least 4 compactable messages
@@ -973,20 +993,33 @@ ${goal}
         // ponytail: not enough messages to summarize but context is too long → force-truncate
         const truncated: Message[] = [
           ...msgs.slice(0, head),
-          { role: 'user' as const, content: '<truncated-context>\n前面的消息因上下文过长已被截断。\n</truncated-context>' },
+          {
+            role: 'user' as const,
+            content: '<truncated-context>\n前面的消息因上下文过长已被截断。\n</truncated-context>',
+          },
           ...msgs.slice(Math.max(head, msgs.length - tailCount)),
         ];
         this.session = truncated;
-        this._execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this._execState.bumpVersion();
+        this.stormSig = '';
+        this.stormCount = 0;
+        this.compactStuck = false;
         this.recordCompactionEvent({
-          ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
-          summaryInputTokens: 0, summaryOutputTokens: 0,
+          ts: Date.now(),
+          regionMsgCount: 0,
+          regionTokensEst: 0,
+          summaryInputTokens: 0,
+          summaryOutputTokens: 0,
           tailMsgCount: Math.min(tailCount, msgs.length - head),
           preTokens: this.tokenCountWithEstimation(),
           postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
           outcome: 'stuck',
         });
-        this._sink({ kind: EventKind.Notice, level: 'info', text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
+        this._sink({
+          kind: EventKind.Notice,
+          level: 'info',
+          text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)`,
+        });
         return 'truncated';
       }
       const region = msgs.slice(head, start);
@@ -1000,26 +1033,45 @@ ${goal}
         // ponytail: summarization failed, force-truncate as fallback
         const truncated: Message[] = [
           ...msgs.slice(0, head),
-          { role: 'user' as const, content: '<truncated-context>\n前面的消息因压缩失败已被截断。\n</truncated-context>' },
+          {
+            role: 'user' as const,
+            content: '<truncated-context>\n前面的消息因压缩失败已被截断。\n</truncated-context>',
+          },
           ...msgs.slice(Math.max(head, msgs.length - tailCount)),
         ];
         this.session = truncated;
-        this._execState.bumpVersion(); this.stormSig = ''; this.stormCount = 0; this.compactStuck = false;
+        this._execState.bumpVersion();
+        this.stormSig = '';
+        this.stormCount = 0;
+        this.compactStuck = false;
         this.recordCompactionEvent({
-          ts: Date.now(), regionMsgCount: region.length, regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
-          summaryInputTokens: 0, summaryOutputTokens: 0,
+          ts: Date.now(),
+          regionMsgCount: region.length,
+          regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          summaryInputTokens: 0,
+          summaryOutputTokens: 0,
           tailMsgCount: msgs.length - Math.max(head, msgs.length - tailCount),
           preTokens: this.tokenCountWithEstimation(),
           postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
           outcome: 'truncated',
         });
-        this._sink({ kind: EventKind.Notice, level: 'info', text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)` });
+        this._sink({
+          kind: EventKind.Notice,
+          level: 'info',
+          text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)`,
+        });
         return 'truncated';
       }
 
       const compacted: Message[] = [
         ...msgs.slice(0, head),
-        { role: 'user' as const, content: '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' + summary + '\n</compacted-context>' },
+        {
+          role: 'user' as const,
+          content:
+            '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' +
+            summary +
+            '\n</compacted-context>',
+        },
         ...msgs.slice(start),
       ];
       this.session = compacted;
@@ -1060,9 +1112,7 @@ ${goal}
     // Use API-reported tokens when available, fall back to char-based estimation.
     // Estimation allows compaction to trigger BEFORE the first API call returns,
     // preventing 400 "prompt too long" on the very next request.
-    const estimated = (usage && usage.total_tokens > 0)
-      ? usage.total_tokens
-      : this.tokenCountWithEstimation();
+    const estimated = usage && usage.total_tokens > 0 ? usage.total_tokens : this.tokenCountWithEstimation();
     const ratio = estimated / this.contextWindow;
 
     if (ratio < this.compactRatio) {
@@ -1086,16 +1136,21 @@ ${goal}
     // Run compaction asynchronously (non-blocking for the turn)
     const msgs = this.session;
     const genAtStart = this._execState.bumpVersion();
-    const head = (msgs.length > 0 && msgs[0].role === 'system') ? 1 : 0;
+    const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
     const tailCount = Math.max(4, this.recentKeep);
     const start = Math.max(head + 4, msgs.length - tailCount);
     if (start - head < 4) {
       this.compactStuck = true;
       this.compactRunning = false;
       this.recordCompactionEvent({
-        ts: Date.now(), regionMsgCount: 0, regionTokensEst: 0,
-        summaryInputTokens: 0, summaryOutputTokens: 0,
-        tailMsgCount: tailCount, preTokens: estimated, postTokens: estimated,
+        ts: Date.now(),
+        regionMsgCount: 0,
+        regionTokensEst: 0,
+        summaryInputTokens: 0,
+        summaryOutputTokens: 0,
+        tailMsgCount: tailCount,
+        preTokens: estimated,
+        postTokens: estimated,
         outcome: 'stuck',
       });
       this._sink({
@@ -1108,64 +1163,81 @@ ${goal}
 
     const region = msgs.slice(head, start);
     const abortCtrl = new AbortController();
-    this.summarizeRegion(abortCtrl.signal, region).then((summary) => {
-      if (genAtStart !== this._execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
-      if (!summary) { this.compactRunning = false; return; }
-      const compacted: Message[] = [
-        ...msgs.slice(0, head),
-        { role: 'user' as const, content: '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' + summary + '\n</compacted-context>' },
-        ...msgs.slice(start),
-      ];
-      this.session = compacted;
-      this._execState.bumpVersion();
-      this.stormSig = '';
-      this.stormCount = 0;
+    this.summarizeRegion(abortCtrl.signal, region)
+      .then((summary) => {
+        if (genAtStart !== this._execState.sessionVersion) {
+          this.compactRunning = false;
+          return;
+        } // session replaced, discard
+        if (!summary) {
+          this.compactRunning = false;
+          return;
+        }
+        const compacted: Message[] = [
+          ...msgs.slice(0, head),
+          {
+            role: 'user' as const,
+            content:
+              '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' +
+              summary +
+              '\n</compacted-context>',
+          },
+          ...msgs.slice(start),
+        ];
+        this.session = compacted;
+        this._execState.bumpVersion();
+        this.stormSig = '';
+        this.stormCount = 0;
 
-      // Check if compaction helped enough — if still above 95%, we're stuck
-      const postEstimate = this.tokenCountWithEstimation();
-      if (postEstimate / this.contextWindow > 0.95) {
+        // Check if compaction helped enough — if still above 95%, we're stuck
+        const postEstimate = this.tokenCountWithEstimation();
+        if (postEstimate / this.contextWindow > 0.95) {
+          this.compactStuck = true;
+          this.compactRunning = false;
+          this._sink({
+            kind: EventKind.Notice,
+            level: 'warn',
+            text: `压缩后上下文仍占用 ${((postEstimate / this.contextWindow) * 100).toFixed(0)}%。建议用 /new 开启新会话。`,
+          });
+          return;
+        }
+
+        this.compactStuck = false;
+        this.compactRunning = false;
+
+        // ── Compaction model instrumentation ──
+        const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
+        const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
+        this.recordCompactionEvent({
+          ts: Date.now(),
+          regionMsgCount: region.length,
+          regionTokensEst: estimateTokens(regionChars),
+          summaryInputTokens: estimateTokens(regionChars),
+          summaryOutputTokens: estimateTokens(summary.length),
+          tailMsgCount: msgs.length - start,
+          preTokens: estimated,
+          postTokens: estimateTokens(postChars),
+          outcome: 'summary',
+        });
+        this._sink({
+          kind: EventKind.Notice,
+          level: 'info',
+          text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
+        });
+      })
+      .catch(() => {
+        if (genAtStart !== this._execState.sessionVersion) {
+          this.compactRunning = false;
+          return;
+        } // session replaced, discard
         this.compactStuck = true;
         this.compactRunning = false;
         this._sink({
           kind: EventKind.Notice,
           level: 'warn',
-          text: `压缩后上下文仍占用 ${(postEstimate / this.contextWindow * 100).toFixed(0)}%。建议用 /new 开启新会话。`,
+          text: '自动压缩失败。建议用 /new 开启新会话或手动 /compact。',
         });
-        return;
-      }
-
-      this.compactStuck = false;
-      this.compactRunning = false;
-
-      // ── Compaction model instrumentation ──
-      const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
-      const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
-      this.recordCompactionEvent({
-        ts: Date.now(),
-        regionMsgCount: region.length,
-        regionTokensEst: estimateTokens(regionChars),
-        summaryInputTokens: estimateTokens(regionChars),
-        summaryOutputTokens: estimateTokens(summary.length),
-        tailMsgCount: msgs.length - start,
-        preTokens: estimated,
-        postTokens: estimateTokens(postChars),
-        outcome: 'summary',
       });
-      this._sink({
-        kind: EventKind.Notice,
-        level: 'info',
-        text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
-      });
-    }).catch(() => {
-      if (genAtStart !== this._execState.sessionVersion) { this.compactRunning = false; return; } // session replaced, discard
-      this.compactStuck = true;
-      this.compactRunning = false;
-      this._sink({
-        kind: EventKind.Notice,
-        level: 'warn',
-        text: '自动压缩失败。建议用 /new 开启新会话或手动 /compact。',
-      });
-    });
   }
 
   /** Call the provider (no tools) to summarize a message region. */
@@ -1251,19 +1323,19 @@ ${goal}
     description: string,
     prompt: string,
     onProgress?: (chunk: string) => void,
-          mode: 'fork' | 'fresh' = 'fresh',
+    mode: 'fork' | 'fresh' = 'fresh',
     toolAllowlist?: string[] | null,
-    ): Promise<{ text: string; err?: string }> {
-      // Depth-based recursion guard
-      if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
-        return { text: '', err: `Exceeded max subagent depth (${Agent.MAX_SUBAGENT_DEPTH})` };
-      }
+  ): Promise<{ text: string; err?: string }> {
+    // Depth-based recursion guard
+    if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
+      return { text: '', err: `Exceeded max subagent depth (${Agent.MAX_SUBAGENT_DEPTH})` };
+    }
 
     // Auto-isolation: create a git worktree for fork sub-agents so file mutations
     // are sandboxed and can be reviewed (diff) before merge. Falls back to direct
     // mode if isolation tool is unavailable or creation fails.
     let isolationId: string | null = null;
-    if (mode === 'fork' && !!this.tools.get('agent_isolation_create')) {
+    if (mode === 'fork' && this.tools.get('agent_isolation_create')) {
       isolationId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const createT = this.tools.get('agent_isolation_create');
@@ -1275,9 +1347,7 @@ ${goal}
 
     // Clone tools from parent — apply allowlist filter if specified
     const subTools = new ToolRegistry();
-    const allowed = toolAllowlist && toolAllowlist.length > 0
-      ? new Set(toolAllowlist)
-      : null;
+    const allowed = toolAllowlist && toolAllowlist.length > 0 ? new Set(toolAllowlist) : null;
     for (const t of this.tools.all()) {
       if (!allowed || allowed.has(t.name())) {
         subTools.register(t);
@@ -1339,7 +1409,10 @@ ${prompt}
 5. **简短** — 输出精炼，不需要写论文。
 
 ## 可用工具
-${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`).join('\n')}`;
+${subTools
+  .all()
+  .map((t) => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
+  .join('\n')}`;
     }
 
     // ── Build SubAgentPart for inline chat rendering ──
@@ -1358,12 +1431,12 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
     const subSink = createSubAgentSink({ subPart, bump: () => this._agentOpts.onSubAgentBump?.(), onProgress });
 
     // Shared provider, fresh session, no compact
-    const subAgent = new Agent(
-      this.prov,
-      subTools,
-      subSystem,
-      { temperature: 0.3, subagentDepth: this._subagentDepth + 1, contextWindow: this.contextWindow, eventSink: subSink },
-    );
+    const subAgent = new Agent(this.prov, subTools, subSystem, {
+      temperature: 0.3,
+      subagentDepth: this._subagentDepth + 1,
+      contextWindow: this.contextWindow,
+      eventSink: subSink,
+    });
     if (isolationId) {
       subAgent._isolationId = isolationId;
     }
@@ -1375,7 +1448,7 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
       subAgentSucceeded = true;
       // Extract the last assistant message as the result
       const session = subAgent.getSession();
-      const lastAssistant = [...session].reverse().find(m => m.role === 'assistant');
+      const lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
       return { text: lastAssistant?.content || '(子 Agent 没有生成回复)' };
     } catch (e: any) {
       return { text: '', err: e.message || '子 Agent 执行失败' };
@@ -1409,7 +1482,9 @@ ${subTools.all().map(t => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
           if (discardT) {
             await discardT.execute({ agent_id: isolationId });
           }
-        } catch { /* best effort — cleanup */ }
+        } catch {
+          /* best effort — cleanup */
+        }
       }
     }
   }
@@ -1453,10 +1528,7 @@ function isParallelizable(registry: ToolRegistry, name: string): boolean {
   return !!t && t.readOnly();
 }
 
-function batchStormSignature(
-  calls: ToolCall[],
-  outcomes: ToolOutcome[],
-): { sig: string; ok: boolean } {
+function batchStormSignature(calls: ToolCall[], outcomes: ToolOutcome[]): { sig: string; ok: boolean } {
   if (calls.length === 0) return { sig: '', ok: false };
   const parts: string[] = [];
   for (let i = 0; i < calls.length; i++) {
@@ -1483,7 +1555,7 @@ function truncationHint(toolName: string): string {
   switch (toolName) {
     case 'read_file_content':
       return '此工具支持 offset/limit 分页。用 offset 翻到下一段，或缩小 limit 范围。';
-        case 'search_content':
+    case 'search_content':
       return '用 maxResults 参数减少返回条数，或用更精确的 pattern + fileTypes 过滤。';
     case 'run_shell':
       return '用更精确的命令（管道过滤如 | head -n 100），或 runInBackground + bash_output 分批读取。';

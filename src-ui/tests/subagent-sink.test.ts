@@ -3,20 +3,35 @@
 
 // subagent-sink.test.ts — verify event→SubAgentPart conversion (rAF-throttled bump)
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createSubAgentSink } from '../src/agent/subagent-sink';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventKind } from '../src/agent/agent-types';
+import { createSubAgentSink } from '../src/agent/subagent-sink';
 import type { SubAgentPart } from '../src/ui/message-model';
 
 function freshPart(overrides?: Partial<SubAgentPart>): SubAgentPart {
-  return { type: 'subagent', agentId: 'test', description: 'test', status: 'running', parts: [], version: 0, ...overrides };
+  return {
+    type: 'subagent',
+    agentId: 'test',
+    description: 'test',
+    status: 'running',
+    parts: [],
+    version: 0,
+    ...overrides,
+  };
 }
 
-beforeEach(() => { vi.useFakeTimers(); });
-afterEach(() => { vi.useRealTimers(); });
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Call sink, then flush rAF so the throttled bump fires. */
-function flush(sink: (ev: any) => void, ev: any): void { sink(ev); vi.runAllTimers(); }
+function flush(sink: (ev: any) => void, ev: any): void {
+  sink(ev);
+  vi.runAllTimers();
+}
 
 describe('createSubAgentSink', () => {
   // ── Reasoning ──
@@ -126,14 +141,17 @@ describe('createSubAgentSink', () => {
     const bump = vi.fn();
     const onProgress = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump, onProgress });
-    flush(sink, { kind: EventKind.ToolDispatch, tool: { id: 't1', name: 'read_file', args: '{}', read_only: true, partial: true } });
+    flush(sink, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 't1', name: 'read_file', args: '{}', read_only: true, partial: true },
+    });
     expect(part.parts).toHaveLength(1);
     expect(part.parts[0]).toMatchObject({ type: 'tool', toolId: 't1', name: 'read_file', status: 'pending' });
     expect(bump).toHaveBeenCalledTimes(1);
     expect(onProgress).toHaveBeenCalledWith('🔧 read_file\n');
   });
 
-    it('ToolDispatch → non-partial is running', () => {
+  it('ToolDispatch → non-partial is running', () => {
     const part = freshPart();
     const sink = createSubAgentSink({ subPart: part, bump: vi.fn() });
     flush(sink, { kind: EventKind.ToolDispatch, tool: { id: 't2', name: 'write_file', args: '{}', read_only: false } });
@@ -145,14 +163,23 @@ describe('createSubAgentSink', () => {
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
     // First dispatch (ToolCallStart: partial=true, args='')
-    sink({ kind: EventKind.ToolDispatch, tool: { id: 't1', name: 'search_content', args: '', read_only: true, partial: true } });
+    sink({
+      kind: EventKind.ToolDispatch,
+      tool: { id: 't1', name: 'search_content', args: '', read_only: true, partial: true },
+    });
     // Second dispatch (ToolCall: partial=false, full args)
-    sink({ kind: EventKind.ToolDispatch, tool: { id: 't1', name: 'search_content', args: '{"pattern":"test"}', read_only: true, partial: false } });
+    sink({
+      kind: EventKind.ToolDispatch,
+      tool: { id: 't1', name: 'search_content', args: '{"pattern":"test"}', read_only: true, partial: false },
+    });
     vi.runAllTimers();
-    expect(part.parts).toHaveLength(1);  // upserted, not duplicated
+    expect(part.parts).toHaveLength(1); // upserted, not duplicated
     expect(part.parts[0]).toMatchObject({
-      type: 'tool', toolId: 't1', name: 'search_content',
-      status: 'running', args: '{"pattern":"test"}',
+      type: 'tool',
+      toolId: 't1',
+      name: 'search_content',
+      status: 'running',
+      args: '{"pattern":"test"}',
     });
     expect(bump).toHaveBeenCalledTimes(1); // throttled
   });
@@ -160,7 +187,15 @@ describe('createSubAgentSink', () => {
   // ── ToolProgress ──
   it('ToolProgress → appends output', () => {
     const part = freshPart();
-    part.parts.push({ type: 'tool', toolId: 't1', name: 'r', args: '{}', label: 'r', readOnly: true, status: 'running' });
+    part.parts.push({
+      type: 'tool',
+      toolId: 't1',
+      name: 'r',
+      args: '{}',
+      label: 'r',
+      readOnly: true,
+      status: 'running',
+    });
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
     flush(sink, { kind: EventKind.ToolProgress, tool: { id: 't1', name: 'r', output: 'line\n', read_only: true } });
@@ -170,7 +205,16 @@ describe('createSubAgentSink', () => {
 
   it('ToolProgress → accumulates, one bump (throttled)', () => {
     const part = freshPart();
-    part.parts.push({ type: 'tool', toolId: 't1', name: 'r', args: '{}', label: 'r', readOnly: true, status: 'running', output: 'a' });
+    part.parts.push({
+      type: 'tool',
+      toolId: 't1',
+      name: 'r',
+      args: '{}',
+      label: 'r',
+      readOnly: true,
+      status: 'running',
+      output: 'a',
+    });
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
     sink({ kind: EventKind.ToolProgress, tool: { id: 't1', name: 'r', output: 'b', read_only: true } });
@@ -194,7 +238,15 @@ describe('createSubAgentSink', () => {
   // ── ToolResult ──
   it('ToolResult → marks done', () => {
     const part = freshPart();
-    part.parts.push({ type: 'tool', toolId: 't1', name: 'r', args: '{}', label: 'r', readOnly: true, status: 'running' });
+    part.parts.push({
+      type: 'tool',
+      toolId: 't1',
+      name: 'r',
+      args: '{}',
+      label: 'r',
+      readOnly: true,
+      status: 'running',
+    });
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
     flush(sink, { kind: EventKind.ToolResult, tool: { id: 't1', name: 'r', output: 'ok', read_only: true } });
@@ -204,7 +256,15 @@ describe('createSubAgentSink', () => {
 
   it('ToolResult → marks error', () => {
     const part = freshPart();
-    part.parts.push({ type: 'tool', toolId: 't1', name: 'bad', args: '{}', label: 'bad', readOnly: false, status: 'running' });
+    part.parts.push({
+      type: 'tool',
+      toolId: 't1',
+      name: 'bad',
+      args: '{}',
+      label: 'bad',
+      readOnly: false,
+      status: 'running',
+    });
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
     flush(sink, { kind: EventKind.ToolResult, tool: { id: 't1', name: 'bad', err: 'broke', read_only: false } });
@@ -214,10 +274,21 @@ describe('createSubAgentSink', () => {
 
   it('ToolResult → sets truncated', () => {
     const part = freshPart();
-    part.parts.push({ type: 'tool', toolId: 't1', name: 'big', args: '{}', label: 'big', readOnly: true, status: 'running' });
+    part.parts.push({
+      type: 'tool',
+      toolId: 't1',
+      name: 'big',
+      args: '{}',
+      label: 'big',
+      readOnly: true,
+      status: 'running',
+    });
     const bump = vi.fn();
     const sink = createSubAgentSink({ subPart: part, bump });
-    flush(sink, { kind: EventKind.ToolResult, tool: { id: 't1', name: 'big', output: '...', read_only: true, truncated: true } });
+    flush(sink, {
+      kind: EventKind.ToolResult,
+      tool: { id: 't1', name: 'big', output: '...', read_only: true, truncated: true },
+    });
     expect(part.parts[0]).toMatchObject({ truncated: true });
   });
 

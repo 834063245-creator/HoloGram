@@ -9,42 +9,57 @@ import * as THREE from 'three';
 
 // ── Starfield ────────────────────────────────────────────────
 
-export function buildStarfield(
-  scene: THREE.Scene,
-  glowTex: THREE.Texture,
-): THREE.Points {
+export function buildStarfield(scene: THREE.Scene, glowTex: THREE.Texture): THREE.Points {
   const isFull = true;
   const count = isFull ? 4000 : 2200;
-  const posArr = new Float32Array(count * 3), colArr = new Float32Array(count * 3);
-  const layers = isFull ? [
-    { r: [600, 1400], n: 600, hue: [200, 240], sat: 0.5, l: [0.4, 0.7] },
-    { r: [300, 800], n: 1200, hue: [190, 220], sat: 0.35, l: [0.5, 0.85] },
-    { r: [80, 450], n: 1200, hue: [180, 210], sat: 0.25, l: [0.65, 1.0] },
-    { r: [15, 250], n: 1000, hue: [25, 55], sat: 0.55, l: [0.7, 1.0] },
-  ] : [
-    { r: [500, 1000], n: 300, hue: [210, 230], sat: 0.4, l: [0.5, 0.8] },
-    { r: [250, 600], n: 700, hue: [200, 220], sat: 0.3, l: [0.6, 0.9] },
-    { r: [60, 350], n: 700, hue: [190, 210], sat: 0.2, l: [0.7, 1.0] },
-    { r: [10, 180], n: 500, hue: [30, 50], sat: 0.5, l: [0.7, 0.95] },
-  ];
+  const posArr = new Float32Array(count * 3),
+    colArr = new Float32Array(count * 3);
+  const layers = isFull
+    ? [
+        { r: [600, 1400], n: 600, hue: [200, 240], sat: 0.5, l: [0.4, 0.7] },
+        { r: [300, 800], n: 1200, hue: [190, 220], sat: 0.35, l: [0.5, 0.85] },
+        { r: [80, 450], n: 1200, hue: [180, 210], sat: 0.25, l: [0.65, 1.0] },
+        { r: [15, 250], n: 1000, hue: [25, 55], sat: 0.55, l: [0.7, 1.0] },
+      ]
+    : [
+        { r: [500, 1000], n: 300, hue: [210, 230], sat: 0.4, l: [0.5, 0.8] },
+        { r: [250, 600], n: 700, hue: [200, 220], sat: 0.3, l: [0.6, 0.9] },
+        { r: [60, 350], n: 700, hue: [190, 210], sat: 0.2, l: [0.7, 1.0] },
+        { r: [10, 180], n: 500, hue: [30, 50], sat: 0.5, l: [0.7, 0.95] },
+      ];
   let idx = 0;
   for (const L of layers) {
     for (let i = 0; i < L.n && idx < count; i++) {
-      const theta = Math.random() * Math.PI * 2, phi = Math.acos(2 * Math.random() - 1);
+      const theta = Math.random() * Math.PI * 2,
+        phi = Math.acos(2 * Math.random() - 1);
       const r = L.r[0] + Math.random() * (L.r[1] - L.r[0]);
       posArr[idx * 3] = Math.cos(theta) * Math.sin(phi) * r;
       posArr[idx * 3 + 1] = Math.sin(phi) * r; // spherical
       posArr[idx * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
       const hsl = new THREE.Color();
-      hsl.setHSL((L.hue[0] + Math.random() * (L.hue[1] - L.hue[0])) / 360, L.sat, L.l[0] + Math.random() * (L.l[1] - L.l[0]));
-      colArr[idx * 3] = hsl.r; colArr[idx * 3 + 1] = hsl.g; colArr[idx * 3 + 2] = hsl.b;
+      hsl.setHSL(
+        (L.hue[0] + Math.random() * (L.hue[1] - L.hue[0])) / 360,
+        L.sat,
+        L.l[0] + Math.random() * (L.l[1] - L.l[0]),
+      );
+      colArr[idx * 3] = hsl.r;
+      colArr[idx * 3 + 1] = hsl.g;
+      colArr[idx * 3 + 2] = hsl.b;
       idx++;
     }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
-  const mat = new THREE.PointsMaterial({ size: 2.2, map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, transparent: true, opacity: 1.0 });
+  const mat = new THREE.PointsMaterial({
+    size: 2.2,
+    map: glowTex,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    vertexColors: true,
+    transparent: true,
+    opacity: 1.0,
+  });
   const starfield = new THREE.Points(geo, mat);
   scene.add(starfield);
   return starfield;
@@ -133,4 +148,3 @@ export function positionGrid(holoGrid: THREE.Mesh | null, pos: Float32Array): nu
   holoGrid.position.y = gridY;
   return gridY;
 }
-

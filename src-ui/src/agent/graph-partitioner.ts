@@ -17,10 +17,7 @@ export interface WorkPartition {
 
 /** Partition the project scope into N work zones using graph community detection.
  *  Returns partitions sorted by size (largest first). */
-export async function partitionByGraph(
-  scope: string,
-  maxPartitions: number = 4,
-): Promise<WorkPartition[]> {
+export async function partitionByGraph(scope: string, maxPartitions: number = 4): Promise<WorkPartition[]> {
   try {
     // Step 1: Get community clusters from hologram
     const clustersRaw = await rpc<string>('hologram_call', {
@@ -31,12 +28,14 @@ export async function partitionByGraph(
 
     if (clusters.length === 0) {
       // Fallback: single partition with entire scope
-      return [{
-        label: '全库',
-        files: [scope],
-        entryPoints: [],
-        crossDeps: [],
-      }];
+      return [
+        {
+          label: '全库',
+          files: [scope],
+          entryPoints: [],
+          crossDeps: [],
+        },
+      ];
     }
 
     // Step 2: For each community, get entry points (top-degree nodes)
@@ -73,12 +72,14 @@ export async function partitionByGraph(
     return partitions.slice(0, maxPartitions);
   } catch {
     // Fallback: single partition
-    return [{
-      label: '全库',
-      files: [scope],
-      entryPoints: [],
-      crossDeps: [],
-    }];
+    return [
+      {
+        label: '全库',
+        files: [scope],
+        entryPoints: [],
+        crossDeps: [],
+      },
+    ];
   }
 }
 
@@ -131,17 +132,13 @@ export function buildPartitionPrompts(
   task: string,
 ): Array<{ description: string; prompt: string }> {
   return partitions.map((p, i) => {
-    const fileList = p.files.length > 20
-      ? p.files.slice(0, 20).join(', ') + ` …(+${p.files.length - 20})`
-      : p.files.join(', ');
+    const fileList =
+      p.files.length > 20 ? p.files.slice(0, 20).join(', ') + ` …(+${p.files.length - 20})` : p.files.join(', ');
 
-    const epSection = p.entryPoints.length > 0
-      ? `\n关键入口点: ${p.entryPoints.join(', ')}`
-      : '';
+    const epSection = p.entryPoints.length > 0 ? `\n关键入口点: ${p.entryPoints.join(', ')}` : '';
 
-    const crossSection = p.crossDeps.length > 0
-      ? `\n跨区依赖（需与其它分区协调的接口）: ${p.crossDeps.join(', ')}`
-      : '';
+    const crossSection =
+      p.crossDeps.length > 0 ? `\n跨区依赖（需与其它分区协调的接口）: ${p.crossDeps.join(', ')}` : '';
 
     return {
       description: p.label,

@@ -5,61 +5,59 @@
 // 纯 DOM 渲染，EventSink → 消息气泡 / 工具卡片 / 思考折叠
 // Agent 引擎 (agent.ts) 已完整，此文件只管"把事件画到屏幕上"
 
-import type { ChatAgentHandle } from '../agent/chat-agent-handle';
+import DOMPurify from 'dompurify';
+import type gsap from 'gsap';
+import hljs from 'highlight.js';
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
-import type { StarGraph } from './graph';
-import { iconHtml } from './icons';
-import { bus } from './events';
+import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
-import { loadSettings, saveSettings, CHAT_MODES } from '../settings';
 import { rpc } from '../bridge';
 import type { ToolSchema } from '../provider/types';
-import DOMPurify from 'dompurify';
-import hljs from 'highlight.js';
-import gsap from 'gsap';
-
+import { CHAT_MODES, loadSettings, saveSettings } from '../settings';
 // ── Extracted animations (GSAP-powered panel mode morphing) ──
 import * as Anim from './chat-anim';
+// ── Extracted DOM construction and event wiring ──
+import * as Dom from './chat-dom';
 // ── Extracted session management (CRUD, persistence, restore) ──
 import * as Session from './chat-session';
 import { stripLineNumbers } from './chat-session';
-// ── Extracted DOM construction and event wiring ──
-import * as Dom from './chat-dom';
+import {
+  bumpChat,
+  bumpSession,
+  getChatStore,
+  getExpandedReasoningSet,
+  getStreamingAssistantId,
+  getUserScrolledUp,
+  msgStoreFor,
+  msgStoreForActive,
+} from './chat-store';
 // ── Extracted stream rendering (Agent events → DOM messages) ──
 import * as Stream from './chat-stream';
 // ── Extracted static utility functions ──
 import { escapeHtml } from './chat-utils';
-
+import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from './command-registry';
+import { bus } from './events';
+import type { StarGraph } from './graph';
+import { iconHtml } from './icons';
 // ── New message model (data-driven render) ──
 import {
-  type ChatMessage,
-  type UserMessage,
   type AssistantMessage,
   type AssistantPart,
-  type MessageId,
-  type FileAttachment,
-  nextMsgId,
-  resetMsgIdCounter,
-  createUserMessage,
+  type ChatMessage,
   createAssistantMessage,
   createNoticeMessage,
+  createUserMessage,
+  type FileAttachment,
+  type MessageId,
+  nextMsgId,
+  resetMsgIdCounter,
+  type UserMessage,
 } from './message-model';
-import { CommandRegistry, DEFAULT_COMMANDS, type CommandDef } from './command-registry';
-import { SlashPanelController } from './react/SlashPanel';
 import { ChatMessagesPanel } from './react/ChatMessages';
-import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
-import {
-  getChatStore,
-  msgStoreFor,
-  msgStoreForActive,
-  bumpSession,
-  bumpChat,
-  getStreamingAssistantId,
-  getUserScrolledUp,
-  getExpandedReasoningSet,
-} from './chat-store';
+import { type AskPrompt, type PermissionPrompt, PromptShelfController } from './react/PromptShelf';
+import { SlashPanelController } from './react/SlashPanel';
 
 // ── Constants ──
 

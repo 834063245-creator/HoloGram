@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // Hoisted mocks — must be before workspace.ts import
 vi.mock('../src/bridge', () => ({ invoke: vi.fn(), listen: vi.fn() }));
@@ -7,7 +7,19 @@ vi.mock('../src/ui/chat', () => ({ ChatPanel: class {} }));
 vi.mock('../src/ui/check', () => ({ CheckPanel: class {} }));
 vi.mock('../src/agent/agent', () => ({ Agent: class {} }));
 vi.mock('../src/agent/tool', () => ({
-  ToolRegistry: class { register() {} alias() {} all() { return []; } schemas() { return []; } get() { return null; } },
+  ToolRegistry: class {
+    register() {}
+    alias() {}
+    all() {
+      return [];
+    }
+    schemas() {
+      return [];
+    }
+    get() {
+      return null;
+    }
+  },
   createHologramTestTools: () => [],
   createCodingTools: () => [],
   createSubAgentTool: () => ({}),
@@ -17,7 +29,10 @@ vi.mock('../src/agent/memory', () => ({
   MemoryManager: class {},
   createMemoryTools: () => [],
 }));
-vi.mock('../src/agent/logger', () => ({ initLogger: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
+vi.mock('../src/agent/logger', () => ({
+  initLogger: vi.fn(),
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock('../src/agent/hooks', () => ({
   HookRegistry: class {},
   PreflightHookRegistry: class {},

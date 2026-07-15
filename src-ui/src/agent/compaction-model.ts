@@ -21,8 +21,8 @@
 // This tracker instruments the agent loop to measure it.
 
 import type { Pricing } from './agent-types';
-import type { Tool } from './tool';
 import { log } from './logger';
+import type { Tool } from './tool';
 
 // ── Collected metrics ──
 
@@ -66,7 +66,7 @@ export interface CompactionSessionStats {
 
 // ── Cost constants (Claude Sonnet, per 1M tokens) ──
 
-const DEFAULT_C_IN = 3.0;   // $3/1M input
+const DEFAULT_C_IN = 3.0; // $3/1M input
 const DEFAULT_C_OUT = 15.0; // $15/1M output
 
 /** ponytail: each re-read or duplicate tool call after compaction counts as
@@ -82,13 +82,13 @@ export function estimateTokens(chars: number): number {
 // ── Compaction cost model ──
 
 export interface CompactionParams {
-  regionTokens: number;      // |R|
-  summaryTokens: number;     // |S|
-  turnsRemaining: number;    // T
+  regionTokens: number; // |R|
+  summaryTokens: number; // |S|
+  turnsRemaining: number; // T
   extraTurnsFromLoss: number; // L
-  avgTurnCost: number;       // avg_turn_cost (dollars)
-  cIn?: number;              // default $3
-  cOut?: number;             // default $15
+  avgTurnCost: number; // avg_turn_cost (dollars)
+  cIn?: number; // default $3
+  cOut?: number; // default $15
 }
 
 /** Compute net benefit of a single compaction.
@@ -297,8 +297,7 @@ export class CompactionTracker {
     const cOut = pricing?.output ?? DEFAULT_C_OUT;
 
     for (const e of this.events) {
-      totalSummaryCost +=
-        (e.summaryInputTokens * cIn + e.summaryOutputTokens * cOut) / 1_000_000;
+      totalSummaryCost += (e.summaryInputTokens * cIn + e.summaryOutputTokens * cOut) / 1_000_000;
       totalTokensSaved += e.regionTokensEst - e.summaryOutputTokens;
     }
 
@@ -346,11 +345,11 @@ export class CompactionTracker {
 export interface CompactionConfig {
   compactRatio: number;
   recentKeep: number;
-  tunedAt: number;          // timestamp of last tune
-  sampleCount: number;      // number of compaction events used
+  tunedAt: number; // timestamp of last tune
+  sampleCount: number; // number of compaction events used
   avgCompressionRatio: number;
   avgLossFactor: number;
-  reasoning: string;        // human-readable explanation
+  reasoning: string; // human-readable explanation
 }
 
 const MIN_SAMPLES_FOR_TUNE = 5;
@@ -361,15 +360,17 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
   if (stats.events.length < MIN_SAMPLES_FOR_TUNE) return null;
 
   // Average compression ratio across all events
-  const avgCompressionRatio = stats.events.reduce((sum, e) => {
-    if (e.regionTokensEst === 0) return sum;
-    return sum + (e.summaryOutputTokens / e.regionTokensEst);
-  }, 0) / stats.events.length;
+  const avgCompressionRatio =
+    stats.events.reduce((sum, e) => {
+      if (e.regionTokensEst === 0) return sum;
+      return sum + e.summaryOutputTokens / e.regionTokensEst;
+    }, 0) / stats.events.length;
 
   // Average turns after compaction
-  const avgTurnsAfter = stats.turnsAfterCompaction.length > 0
-    ? stats.turnsAfterCompaction.reduce((a, b) => a + b, 0) / stats.turnsAfterCompaction.length
-    : 0;
+  const avgTurnsAfter =
+    stats.turnsAfterCompaction.length > 0
+      ? stats.turnsAfterCompaction.reduce((a, b) => a + b, 0) / stats.turnsAfterCompaction.length
+      : 0;
 
   // Average region size
   const avgRegionMsgs = stats.events.reduce((sum, e) => sum + e.regionMsgCount, 0) / stats.events.length;
@@ -386,27 +387,18 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
   const avgTurnCost = tracker.estimateAvgTurnCost(avgRegionTokens, avgRegionTokens * 0.15, pricing);
 
   // Compute optimal recentKeep
-  const { k: optimalK } = optimalRecentKeep(
-    Math.round(avgRegionMsgs),
-    avgMsgTokens,
-    avgTurnCost,
-    0.3,
-    pricing?.input,
-  );
+  const { k: optimalK } = optimalRecentKeep(Math.round(avgRegionMsgs), avgMsgTokens, avgTurnCost, 0.3, pricing?.input);
 
   // Compute optimal compactRatio based on expected session length
-  const { r: optimalR } = optimalCompactRatio(
-    1_000_000,
-    avgMsgTokens,
-    stats.totalTurns,
-    avgTurnCost,
-  );
+  const { r: optimalR } = optimalCompactRatio(1_000_000, avgMsgTokens, stats.totalTurns, avgTurnCost);
   // Clamp to reasonable range
   const tunedR = Math.max(0.35, Math.min(0.75, optimalR));
 
   // Build reasoning
   const parts: string[] = [];
-  parts.push(`${stats.events.length}次压缩, 平均压缩比 ${(avgCompressionRatio * 100).toFixed(1)}%, 每次平均信息丢失 ${avgLossPerEvent.toFixed(2)} 轮`);
+  parts.push(
+    `${stats.events.length}次压缩, 平均压缩比 ${(avgCompressionRatio * 100).toFixed(1)}%, 每次平均信息丢失 ${avgLossPerEvent.toFixed(2)} 轮`,
+  );
   parts.push(`compactRatio: ${(optimalR * 100).toFixed(0)}% → 夹到 ${(tunedR * 100).toFixed(0)}%`);
   parts.push(`recentKeep: ${optimalK}`);
 
@@ -422,7 +414,12 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
 }
 
 /** Try to auto-tune and return a recommendation. Caller decides whether to apply. */
-export function maybeTune(tracker: CompactionTracker, currentR: number, currentK: number, pricing?: Pricing): { config: CompactionConfig; changed: boolean } | null {
+export function maybeTune(
+  tracker: CompactionTracker,
+  currentR: number,
+  currentK: number,
+  pricing?: Pricing,
+): { config: CompactionConfig; changed: boolean } | null {
   const config = tuneCompactionParams(tracker, pricing);
   if (!config) return null;
   const changed = Math.abs(config.compactRatio - currentR) > 0.05 || config.recentKeep !== currentK;
@@ -433,7 +430,11 @@ export function maybeTune(tracker: CompactionTracker, currentR: number, currentK
 
 /** ponytail: shared cost calc — used by both formatCompactionReport and the agent tool. */
 function compactionEventCost(e: CompactionEvent, pricing?: Pricing): number {
-  return (e.summaryInputTokens * (pricing?.input ?? DEFAULT_C_IN) + e.summaryOutputTokens * (pricing?.output ?? DEFAULT_C_OUT)) / 1_000_000;
+  return (
+    (e.summaryInputTokens * (pricing?.input ?? DEFAULT_C_IN) +
+      e.summaryOutputTokens * (pricing?.output ?? DEFAULT_C_OUT)) /
+    1_000_000
+  );
 }
 
 export function formatCompactionReport(stats: CompactionSessionStats, pricing?: Pricing): string {
@@ -464,7 +465,9 @@ export function formatCompactionReport(stats: CompactionSessionStats, pricing?: 
       lines.push(`- 方式: ${e.outcome}`);
       lines.push(`- 压缩区域: ${e.regionMsgCount} 条消息, ~${e.regionTokensEst.toLocaleString()} tokens`);
       lines.push(`- 摘要大小: ~${e.summaryOutputTokens.toLocaleString()} tokens`);
-      lines.push(`- 压缩比: ${compressionRatio}% (${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens)`);
+      lines.push(
+        `- 压缩比: ${compressionRatio}% (${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens)`,
+      );
       lines.push(`- 压缩 LLM 调用费: $${compactionEventCost(e, pricing).toFixed(4)}`);
       lines.push(`- 压缩后继续: ${turnsAfter} 轮`);
     }
@@ -503,7 +506,7 @@ export function createCompactionTools(
           '',
           '## 当前参数',
           `- contextWindow: ${current.contextWindow.toLocaleString()} tokens`,
-          `- compactRatio: ${(current.compactRatio * 100).toFixed(0)}% (阈值 ${(current.contextWindow * current.compactRatio / 1000).toFixed(0)}K tokens)`,
+          `- compactRatio: ${(current.compactRatio * 100).toFixed(0)}% (阈值 ${((current.contextWindow * current.compactRatio) / 1000).toFixed(0)}K tokens)`,
           `- recentKeep: ${current.recentKeep} 条`,
           '',
         ];
@@ -529,7 +532,9 @@ export function createCompactionTools(
         lines.push(`- 当前会话轮次: ${stats.totalTurns}`);
         lines.push(`- 重读文件: ${stats.reReadCount} 次`);
         lines.push(`- 重复工具调用: ${stats.duplicateToolCalls} 次`);
-        lines.push(`- 估算信息丢失: ${((stats.reReadCount + stats.duplicateToolCalls) * LOSS_FACTOR_PER_EVENT).toFixed(1)} 轮`);
+        lines.push(
+          `- 估算信息丢失: ${((stats.reReadCount + stats.duplicateToolCalls) * LOSS_FACTOR_PER_EVENT).toFixed(1)} 轮`,
+        );
         lines.push(`- 压缩总成本: $${stats.totalSummaryCost.toFixed(4)}`);
 
         if (stats.events.length >= 5) {
@@ -550,12 +555,14 @@ export function createCompactionTools(
           for (let i = 0; i < stats.events.length; i++) {
             const e = stats.events[i];
             const turnsAfter = stats.turnsAfterCompaction[i] || 0;
-            const ratio = e.regionTokensEst > 0
-              ? ((1 - e.postTokens / e.preTokens) * 100).toFixed(1)
-              : '0';
-            lines.push(`### #${i + 1} ${e.outcome === 'summary' ? '✅ 总结' : e.outcome === 'truncated' ? '✂️ 截断' : '⏸️ 卡住'}`);
+            const ratio = e.regionTokensEst > 0 ? ((1 - e.postTokens / e.preTokens) * 100).toFixed(1) : '0';
+            lines.push(
+              `### #${i + 1} ${e.outcome === 'summary' ? '✅ 总结' : e.outcome === 'truncated' ? '✂️ 截断' : '⏸️ 卡住'}`,
+            );
             lines.push(`- 压缩 ${e.regionMsgCount} 条消息 → 摘要 ${e.summaryOutputTokens.toLocaleString()} tokens`);
-            lines.push(`- 上下文: ${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens (${ratio}%)`);
+            lines.push(
+              `- 上下文: ${e.preTokens.toLocaleString()} → ${e.postTokens.toLocaleString()} tokens (${ratio}%)`,
+            );
             lines.push(`- 压缩成本: $${compactionEventCost(e, pricing).toFixed(4)}`);
             lines.push(`- 压缩后继续: ${turnsAfter} 轮`);
           }

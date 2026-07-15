@@ -8,26 +8,26 @@
 import './ui/react/base.css';
 import './ui/react/chat.css';
 import './ui/react/panels.css';
-import { rpc, listen, isMockMode } from './bridge';
-import { StarGraph } from './ui/graph';
+import { initLogger, log } from './agent/logger';
+import { isMockMode, listen, rpc } from './bridge';
+import { setLang, t } from './i18n';
+import { loadSettings, saveSettings } from './settings';
+import { AgentVisualizer } from './ui/agent-visualizer';
+import { shell } from './ui/app-shell';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
-
-import { TimelinePanel } from './ui/react/TimelinePanel';
 import { ConstraintsPanel } from './ui/constraints';
-import { HotspotsPanel } from './ui/hotspots';
 import { DataflowPanel } from './ui/dataflow-panel';
-import { SettingsPanel } from './ui/settings-panel';
-import { bus } from './ui/events';
-import { shell } from './ui/app-shell';
-import { initLogger, log } from './agent/logger';
-import { loadSettings, saveSettings } from './settings';
-import { t, setLang } from './i18n';
-import { iconSvg } from './ui/icons';
-import { AgentVisualizer } from './ui/agent-visualizer';
-import { GraphInteraction } from './ui/graph-interaction';
 import { dbg } from './ui/debug';
-import { Workspace, isSamePath } from './workspace';
+import { bus } from './ui/events';
+import { StarGraph } from './ui/graph';
+import { GraphInteraction } from './ui/graph-interaction';
+import { HotspotsPanel } from './ui/hotspots';
+import { iconSvg } from './ui/icons';
+import { TimelinePanel } from './ui/react/TimelinePanel';
+import { SettingsPanel } from './ui/settings-panel';
+import { isSamePath, Workspace } from './workspace';
+
 // Lazy FileViewer — avoids pulling Monaco (~5MB) into initial bundle
 let _FileViewer: any = null;
 async function loadFileViewer(): Promise<void> {
@@ -171,7 +171,7 @@ const btnConstraints = document.getElementById('btn-constraints') as HTMLButtonE
 
 // ── State ──
 let workspace: Workspace | null = null;
-let starGraph: StarGraph = new StarGraph(graphEl);
+const starGraph: StarGraph = new StarGraph(graphEl);
 let agentViz: AgentVisualizer | null = null;
 // Reentry guard for switchWorkspace — prevents stacked concurrent switches
 // when deactivate() stalls on watcher teardown.
@@ -989,7 +989,7 @@ async function init(): Promise<void> {
 
     const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
     if (nodeCount > 0) {
-      let root: string = graph.meta?.source_root || '';
+      const root: string = graph.meta?.source_root || '';
       if (!root) {
         // Graph exists but no path — render without workspace
         starGraph.render(graph);

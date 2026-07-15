@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { GRAPH_ENRICH_TOOLS, GRAPH_PREFLIGHT_TOOLS } from '../src/agent/hooks';
-import { ToolRegistry, createCodingTools } from '../src/agent/tool';
 import type { Tool, ToolExecutor } from '../src/agent/tool';
+import { createCodingTools, ToolRegistry } from '../src/agent/tool';
 
 // ═══════════════════════════════════════════════════════════════
 // 工具改名影响面全量审计 — 验证 5 条通路的完整性
@@ -21,21 +21,42 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
   const registry = new ToolRegistry();
 
   // coding tools
-  for (const t of createCodingTools(exec)) { registry.register(t); }
+  for (const t of createCodingTools(exec)) {
+    registry.register(t);
+  }
 
   // hologram tools (same set as hologram_tools_list returns)
   const holoNames = [
-    'explore_deps', 'analyze_project', 'get_neighbors',
-    'trace_impact', 'find_dep_path', 'fragile_modules', 'detect_cycles',
-    'coupling_report', 'arch_blindspots',
-    'thread_conflicts', 'project_timeline', 'graph_diff',
-    'cluster_report', 'graph_summary', 'validate_project',
-    'preflight_check', 'project_health', 'get_community',
-    'async_edges', 'search_symbols', 'inspect_symbol',
-    'find_unused', 'trace_dataflow',
-    'resolve_call', 'infer_type',
-    'find_implementations', 'find_references',
-    'rename_symbol', 'engine_status', 'check_boundaries',
+    'explore_deps',
+    'analyze_project',
+    'get_neighbors',
+    'trace_impact',
+    'find_dep_path',
+    'fragile_modules',
+    'detect_cycles',
+    'coupling_report',
+    'arch_blindspots',
+    'thread_conflicts',
+    'project_timeline',
+    'graph_diff',
+    'cluster_report',
+    'graph_summary',
+    'validate_project',
+    'preflight_check',
+    'project_health',
+    'get_community',
+    'async_edges',
+    'search_symbols',
+    'inspect_symbol',
+    'find_unused',
+    'trace_dataflow',
+    'resolve_call',
+    'infer_type',
+    'find_implementations',
+    'find_references',
+    'rename_symbol',
+    'engine_status',
+    'check_boundaries',
   ];
   for (const name of holoNames) {
     registry.register({
@@ -48,7 +69,12 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
   }
 
   // memory tools
-  for (const name of ['hologram_memory_list', 'hologram_memory_read', 'hologram_memory_save', 'hologram_memory_delete']) {
+  for (const name of [
+    'hologram_memory_list',
+    'hologram_memory_read',
+    'hologram_memory_save',
+    'hologram_memory_delete',
+  ]) {
     registry.register({
       name: () => name,
       description: () => `mock ${name}`,
@@ -96,7 +122,9 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
   registry.alias('symbol_history', 'inspect_symbol');
 
   const allNames = new Set<string>();
-  for (const t of registry.all()) { allNames.add(t.name()); }
+  for (const t of registry.all()) {
+    allNames.add(t.name());
+  }
   // aliases are also valid tool names the model might use
   allNames.add('read_file');
   allNames.add('symbol_history');
@@ -112,50 +140,50 @@ describe('P3 forward: 常量名全部在 Registry 中', () => {
   const { allNames } = buildFullRegistry();
 
   it('GRAPH_ENRICH_TOOLS 全部存在', () => {
-    const missing = (GRAPH_ENRICH_TOOLS as readonly string[]).filter(n => !allNames.has(n));
+    const missing = (GRAPH_ENRICH_TOOLS as readonly string[]).filter((n) => !allNames.has(n));
     expect(missing).toEqual([]);
   });
 
   it('GRAPH_PREFLIGHT_TOOLS 全部存在', () => {
-    const missing = (GRAPH_PREFLIGHT_TOOLS as readonly string[]).filter(n => !allNames.has(n));
+    const missing = (GRAPH_PREFLIGHT_TOOLS as readonly string[]).filter((n) => !allNames.has(n));
     expect(missing).toEqual([]);
   });
 });
 
 describe('P3 reverse: 新加 coding 工具没加 hook 常量 → 炸', () => {
-  const codingNames = new Set(createCodingTools(async () => '').map(t => t.name()));
+  const codingNames = new Set(createCodingTools(async () => '').map((t) => t.name()));
   const enrichSet = new Set(GRAPH_ENRICH_TOOLS);
   const preflightSet = new Set(GRAPH_PREFLIGHT_TOOLS);
 
   // 明确不需要 enrichment/preflight 的工具
   const EXEMPT = new Set([
-    'ask_user',           // 交互工具，无文件内容
-    'write_file',         // 已有 preflight
-    'edit_file',          // 已有 preflight
-    'delete_file',        // 已有 preflight
-    'rename_file',        // 已有 preflight
-    'move_file',          // 已有 preflight
-    'create_directory',   // 目录操作，无符号
-    'read_constraints',   // 配置文件
-    'bash_output',        // 后台输出查询
-    'bash_kill',          // 后台管理
-    'monitor',            // shell 轮询 — 只读，不碰文件
-    'web_search',         // 网络搜索
-    'web_fetch',          // 网页抓取
-    'git_status',         // 状态查询
-    'git_log',            // 日志查询
-    'git_push',           // 推送
-    'git_pull',           // 拉取
-    'git_init',           // 初始化
-    'git_create_branch',  // 分支创建
-    'git_stash_push',     // 暂存
-    'git_stash_pop',      // 暂存恢复
-    'agent_isolation_create',   // 隔离管理
-    'agent_isolation_diff',     // 隔离管理
-    'agent_isolation_merge',    // 隔离管理
-    'agent_isolation_discard',  // 隔离管理
-    'agent_isolation_status',   // 隔离管理
-    'git_stage',          // 暂存（git_commit 的 preflight 已覆盖风险）
+    'ask_user', // 交互工具，无文件内容
+    'write_file', // 已有 preflight
+    'edit_file', // 已有 preflight
+    'delete_file', // 已有 preflight
+    'rename_file', // 已有 preflight
+    'move_file', // 已有 preflight
+    'create_directory', // 目录操作，无符号
+    'read_constraints', // 配置文件
+    'bash_output', // 后台输出查询
+    'bash_kill', // 后台管理
+    'monitor', // shell 轮询 — 只读，不碰文件
+    'web_search', // 网络搜索
+    'web_fetch', // 网页抓取
+    'git_status', // 状态查询
+    'git_log', // 日志查询
+    'git_push', // 推送
+    'git_pull', // 拉取
+    'git_init', // 初始化
+    'git_create_branch', // 分支创建
+    'git_stash_push', // 暂存
+    'git_stash_pop', // 暂存恢复
+    'agent_isolation_create', // 隔离管理
+    'agent_isolation_diff', // 隔离管理
+    'agent_isolation_merge', // 隔离管理
+    'agent_isolation_discard', // 隔离管理
+    'agent_isolation_status', // 隔离管理
+    'git_stage', // 暂存（git_commit 的 preflight 已覆盖风险）
   ]);
 
   it('未归类工具 = 漏加 hook 常量', () => {
@@ -167,17 +195,28 @@ describe('P3 reverse: 新加 coding 工具没加 hook 常量 → 炸', () => {
       untracked.push(name);
     }
     if (untracked.length > 0) {
-      const lines = untracked.map(n => {
+      const lines = untracked.map((n) => {
         // 根据工具类型给建议
-        if (['read_file_content', 'search_content', 'glob', 'list_directory',
-          'git_diff', 'run_shell'].includes(n)) return `  "${n}" → 加到 GRAPH_ENRICH_TOOLS（读工具应该 enrichment）`;
-        if (['edit_file', 'write_file', 'delete_file', 'rename_file', 'move_file',
-          'git_discard', 'git_checkout', 'git_commit'].includes(n)) return `  "${n}" → 加到 GRAPH_PREFLIGHT_TOOLS（写工具应该 preflight）`;
+        if (['read_file_content', 'search_content', 'glob', 'list_directory', 'git_diff', 'run_shell'].includes(n))
+          return `  "${n}" → 加到 GRAPH_ENRICH_TOOLS（读工具应该 enrichment）`;
+        if (
+          [
+            'edit_file',
+            'write_file',
+            'delete_file',
+            'rename_file',
+            'move_file',
+            'git_discard',
+            'git_checkout',
+            'git_commit',
+          ].includes(n)
+        )
+          return `  "${n}" → 加到 GRAPH_PREFLIGHT_TOOLS（写工具应该 preflight）`;
         return `  "${n}" → 加对应常量，或加 EXEMPT 并注释理由`;
       });
       expect.fail(
         `以下工具不在 hook 常量也不在豁免名单：\n${lines.join('\n')}\n` +
-        '→ 加 hook → 改 hooks.ts。不加 hook → 在本测试 EXEMPT 注明原因。'
+          '→ 加 hook → 改 hooks.ts。不加 hook → 在本测试 EXEMPT 注明原因。',
       );
     }
   });
@@ -192,28 +231,50 @@ describe('P4: invoke pathway — 每个工具名都有对应 Tauri command', () 
   // 映射关系: invoke('tool_name', args) → Rust fn tool_name()
   const KNOWN_TAURI_COMMANDS = new Set([
     // ── coding tools ──
-    'read_file_content', 'write_file', 'edit_file',
-    'list_directory', 'read_constraints', 'search_content', 'glob',
-    'run_shell', 'bash_output', 'bash_kill',
-    'git_status', 'git_diff', 'git_log', 'git_stage', 'git_commit',
-    'git_push', 'git_pull', 'web_search', 'web_fetch',
-    'delete_file', 'create_directory', 'move_file', 'rename_file',
-    'agent_invoke',             // ponytail: 底层通用 invoke，所有 hologram_* 过这条
+    'read_file_content',
+    'write_file',
+    'edit_file',
+    'list_directory',
+    'read_constraints',
+    'search_content',
+    'glob',
+    'run_shell',
+    'bash_output',
+    'bash_kill',
+    'git_status',
+    'git_diff',
+    'git_log',
+    'git_stage',
+    'git_commit',
+    'git_push',
+    'git_pull',
+    'web_search',
+    'web_fetch',
+    'delete_file',
+    'create_directory',
+    'move_file',
+    'rename_file',
+    'agent_invoke', // ponytail: 底层通用 invoke，所有 hologram_* 过这条
     // ── hologram tools 全部通过 hologram_call 分发 ──
     'hologram_call',
     'hologram_tools_list',
     'get_full_graph',
     // ── workspace ──
-    'workspace_activate', 'workspace_deactivate',
+    'workspace_activate',
+    'workspace_deactivate',
     'workspace_start_watcher',
-    'analyze_and_load', 'validate_project',
+    'analyze_and_load',
+    'validate_project',
     // ── memory ──
     'read_memory_batch',
     // ── dataflow ──
-    'dataflow_save', 'dataflow_query',
+    'dataflow_save',
+    'dataflow_query',
     // ── isolation ──
-    'agent_isolation_create', 'agent_isolation_diff',
-    'agent_isolation_merge', 'agent_isolation_discard',
+    'agent_isolation_create',
+    'agent_isolation_diff',
+    'agent_isolation_merge',
+    'agent_isolation_discard',
     'agent_isolation_status',
     // ── misc ──
     'get_global_memory_dir',
@@ -224,7 +285,7 @@ describe('P4: invoke pathway — 每个工具名都有对应 Tauri command', () 
   it('coding/hologram 工具的 invoke 路径存在', () => {
     // All hologram_* tools route through 'hologram_call' (agentInvoke in workspace.ts)
     // All coding tools use their own name as Tauri command
-    const codingNames = new Set(createCodingTools(async () => '').map(t => t.name()));
+    const codingNames = new Set(createCodingTools(async () => '').map((t) => t.name()));
 
     // Check that every coding tool name either:
     // a) exists as a Tauri command, or
@@ -260,8 +321,8 @@ describe('P5: alias pathway — 每个别名指向已注册工具', () => {
 
   // Aliases must match workspace.ts: registry.alias(X, Y)
   const ALIASES: Record<string, string> = {
-    'read_file': 'read_file_content',
-    'symbol_history': 'inspect_symbol',
+    read_file: 'read_file_content',
+    symbol_history: 'inspect_symbol',
   };
 
   for (const [alias, target] of Object.entries(ALIASES)) {
@@ -331,14 +392,18 @@ describe('P1: MCP 通路 — frontend dispatch names match engine', () => {
   // （trace_dataflow, search_symbols, inspect_symbol, resolve_call, ...）
 
   const engineToolsInEnrichList = [
-    'trace_dataflow', 'search_symbols', 'inspect_symbol',
-    'resolve_call', 'infer_type',
-    'find_implementations', 'find_references',
+    'trace_dataflow',
+    'search_symbols',
+    'inspect_symbol',
+    'resolve_call',
+    'infer_type',
+    'find_implementations',
+    'find_references',
   ];
 
   it('引擎返回的 hologram_* 工具名在 GRAPH_ENRICH_TOOLS 中', () => {
     const enrichSet = new Set(GRAPH_ENRICH_TOOLS);
-    const missing = engineToolsInEnrichList.filter(n => !enrichSet.has(n));
+    const missing = engineToolsInEnrichList.filter((n) => !enrichSet.has(n));
     expect(missing).toEqual([]);
   });
 
@@ -362,7 +427,7 @@ describe('改名模拟: 验证所有引用点被测试覆盖', () => {
   const NEW_NAME = 'read_source';
 
   it('改名后 tool.ts 中的注册名变了', () => {
-    const codingNames = createCodingTools(async () => '').map(t => t.name());
+    const codingNames = createCodingTools(async () => '').map((t) => t.name());
     // 旧名不存在
     expect(codingNames.includes(OLD_NAME)).toBe(true);
     // 新名还没注册

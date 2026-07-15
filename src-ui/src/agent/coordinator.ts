@@ -66,7 +66,9 @@ export class SubAgentPool {
   }
 
   /** Register a callback invoked when ANY sub-agent completes. Used for UI events. */
-  setOnDone(cb: SubAgentDoneCallback): void { this.onDone = cb; }
+  setOnDone(cb: SubAgentDoneCallback): void {
+    this.onDone = cb;
+  }
 
   /** Fire-and-forget spawn. Returns the handle ID immediately.
    *  Rejects if at maxConcurrent. Times out after defaultTimeoutMs.
@@ -107,7 +109,10 @@ export class SubAgentPool {
 
     const cleanup = () => {
       const t = this.timeouts.get(id);
-      if (t) { clearTimeout(t); this.timeouts.delete(id); }
+      if (t) {
+        clearTimeout(t);
+        this.timeouts.delete(id);
+      }
     };
 
     const finish = (text: string, err?: string) => {
@@ -133,10 +138,13 @@ export class SubAgentPool {
 
     // Timeout
     const ms = timeoutMs ?? this.defaultTimeoutMs;
-    this.timeouts.set(id, setTimeout(() => {
-      abortController.abort(); // ⚡ R4: abort runFn on timeout too
-      finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`);
-    }, ms));
+    this.timeouts.set(
+      id,
+      setTimeout(() => {
+        abortController.abort(); // ⚡ R4: abort runFn on timeout too
+        finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`);
+      }, ms),
+    );
 
     // Fire and forget — don't await
     runFn(onMessage).then(
@@ -167,7 +175,10 @@ export class SubAgentPool {
     const pending = this.agents.get(id);
     if (!pending) return false;
     const t = this.timeouts.get(id);
-    if (t) { clearTimeout(t); this.timeouts.delete(id); }
+    if (t) {
+      clearTimeout(t);
+      this.timeouts.delete(id);
+    }
     // ⚡ R4 fix: abort the actual runFn before resolving
     pending.abortController.abort();
     pending.handle.status = SubAgentStatus.Stopped;
@@ -183,7 +194,10 @@ export class SubAgentPool {
     const stopped: string[] = [];
     for (const [id, pending] of this.agents) {
       const t = this.timeouts.get(id);
-      if (t) { clearTimeout(t); this.timeouts.delete(id); }
+      if (t) {
+        clearTimeout(t);
+        this.timeouts.delete(id);
+      }
       // ⚡ R4 fix: abort the actual runFn before resolving
       pending.abortController.abort();
       pending.handle.status = SubAgentStatus.Stopped;
@@ -207,8 +221,7 @@ export class SubAgentPool {
     // Completed
     const recent = this.completed.slice(-5);
     for (const h of recent) {
-      const icon = h.status === SubAgentStatus.Completed ? '✅' :
-        h.status === SubAgentStatus.Failed ? '❌' : '⏹️';
+      const icon = h.status === SubAgentStatus.Completed ? '✅' : h.status === SubAgentStatus.Failed ? '❌' : '⏹️';
       lines.push(`- ${icon} ${h.description} (${h.status})`);
     }
     return lines.length > 0 ? lines.join('\n') : '无运行中的子Agent';
@@ -229,7 +242,7 @@ export class SubAgentPool {
    *  for a dozen sub-agents. Add per-handle Promise if latency matters. */
   async awaitAll(): Promise<SubAgentHandle[]> {
     while (this.agents.size > 0) {
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
     }
     return [...this.completed];
   }
@@ -245,16 +258,17 @@ export async function synthesizeResults(
 ): Promise<string> {
   if (handles.length === 0) return '子Agent 未返回任何结果。';
 
-  const report = handles.map(h => {
-    const statusIcon = h.status === SubAgentStatus.Completed ? '✅' :
-      h.status === SubAgentStatus.Failed ? '❌' : '⏹️';
-    return `### ${statusIcon} ${h.description}\n${h.result || h.error || '(无输出)'}`;
-  }).join('\n\n');
+  const report = handles
+    .map((h) => {
+      const statusIcon = h.status === SubAgentStatus.Completed ? '✅' : h.status === SubAgentStatus.Failed ? '❌' : '⏹️';
+      return `### ${statusIcon} ${h.description}\n${h.result || h.error || '(无输出)'}`;
+    })
+    .join('\n\n');
 
   const prompt = `${synthesisPrompt}\n\n## 子Agent 结果\n\n${report}`;
   await parentAgent.run(signal, prompt);
   // Return the last assistant message as the synthesis output
   const session = parentAgent.getSession();
-  const lastAssistant = [...session].reverse().find(m => m.role === 'assistant');
+  const lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
   return lastAssistant?.content || '(合成未生成输出)';
 }

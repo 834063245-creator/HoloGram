@@ -29,12 +29,7 @@ export async function initLogger(projectPath: string): Promise<void> {
   flushTimer = setInterval(flush, FLUSH_MS);
 }
 
-function buildEntry(
-  level: LogLevel,
-  module: string,
-  message: string,
-  ctx?: Record<string, unknown>,
-): LogEntry {
+function buildEntry(level: LogLevel, module: string, message: string, ctx?: Record<string, unknown>): LogEntry {
   return { ts: new Date().toISOString(), level, module, message, ctx };
 }
 

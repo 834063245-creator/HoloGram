@@ -5,7 +5,7 @@
 // Handles both ask_user cards and permission approvals.
 // Does NOT live inside the messages array — independent React root.
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import './prompt-shelf.css';
 
@@ -34,7 +34,7 @@ export type PromptData = AskPrompt | PermissionPrompt;
 
 function svgIcon(name: string, size: number = 12): string {
   const icons: Record<string, string> = {
-        'check-circle': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+    'check-circle': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
     close: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
     lock: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
     shield: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
@@ -52,30 +52,33 @@ const AskCard: React.FC<{
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const advanceTimer = useRef<number | null>(null);
 
-  const toggle = useCallback((idx: number) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (prompt.multiSelect) {
-        next.has(idx) ? next.delete(idx) : next.add(idx);
-      } else {
-        next.clear();
-        next.add(idx);
-      }
-      return next;
-    });
+  const toggle = useCallback(
+    (idx: number) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (prompt.multiSelect) {
+          next.has(idx) ? next.delete(idx) : next.add(idx);
+        } else {
+          next.clear();
+          next.add(idx);
+        }
+        return next;
+      });
 
-    // Single-select: auto-resolve after short delay
-    if (!prompt.multiSelect) {
-      if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
-      advanceTimer.current = window.setTimeout(() => {
-        const labels = prompt.options.filter((_, i) => i === idx).map(o => o.label);
-        onResolve(labels);
-      }, 140);
-    }
-  }, [prompt, onResolve]);
+      // Single-select: auto-resolve after short delay
+      if (!prompt.multiSelect) {
+        if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
+        advanceTimer.current = window.setTimeout(() => {
+          const labels = prompt.options.filter((_, i) => i === idx).map((o) => o.label);
+          onResolve(labels);
+        }, 140);
+      }
+    },
+    [prompt, onResolve],
+  );
 
   const confirm = useCallback(() => {
-    const labels = prompt.options.filter((_, i) => selected.has(i)).map(o => o.label);
+    const labels = prompt.options.filter((_, i) => selected.has(i)).map((o) => o.label);
     onResolve(labels);
   }, [prompt.options, selected, onResolve]);
 
@@ -91,7 +94,11 @@ const AskCard: React.FC<{
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); cancel(); return; }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel();
+        return;
+      }
       const idx = Number(e.key) - 1;
       if (Number.isInteger(idx) && idx >= 0 && idx < prompt.options.length) {
         e.preventDefault();
@@ -126,17 +133,20 @@ const AskCard: React.FC<{
               className={`prompt-shelf__option${on ? ' prompt-shelf__option--on' : ''}`}
               onClick={() => toggle(i)}
               onMouseEnter={() => setHoverIdx(i)}
-              onMouseLeave={() => setHoverIdx(h => h === i ? null : h)}
+              onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
               type="button"
             >
               <span className="prompt-shelf__num">{num <= 9 ? num : ''}</span>
               <div className="prompt-shelf__opt-body">
                 <span className="prompt-shelf__opt-label">{opt.label}</span>
-                {opt.description && (
-                  <span className="prompt-shelf__opt-desc">{opt.description}</span>
-                )}
+                {opt.description && <span className="prompt-shelf__opt-desc">{opt.description}</span>}
               </div>
-              {on && <span className="prompt-shelf__check" dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 14) }} />}
+              {on && (
+                <span
+                  className="prompt-shelf__check"
+                  dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 14) }}
+                />
+              )}
             </button>
           );
         })}
@@ -150,7 +160,9 @@ const AskCard: React.FC<{
             <span className="prompt-shelf__detail-text">{hoveredOption.description}</span>
           </>
         ) : (
-          <span className="prompt-shelf__detail-text" style={{ opacity: 0 }}>&nbsp;</span>
+          <span className="prompt-shelf__detail-text" style={{ opacity: 0 }}>
+            &nbsp;
+          </span>
         )}
       </div>
 
@@ -189,8 +201,14 @@ const PermCard: React.FC<{
 }> = ({ prompt, onResolve }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onResolve({ allow: false, remember: false }); return; }
-      if (e.key === 'Enter') { onResolve({ allow: true, remember: false }); return; }
+      if (e.key === 'Escape') {
+        onResolve({ allow: false, remember: false });
+        return;
+      }
+      if (e.key === 'Enter') {
+        onResolve({ allow: true, remember: false });
+        return;
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -199,24 +217,33 @@ const PermCard: React.FC<{
   return (
     <div className="prompt-shelf__card" role="dialog" aria-modal="false">
       <div className="prompt-shelf__head">
-        <span className="prompt-shelf__tag"><span dangerouslySetInnerHTML={{ __html: svgIcon('lock', 10) }} /> 权限</span>
+        <span className="prompt-shelf__tag">
+          <span dangerouslySetInnerHTML={{ __html: svgIcon('lock', 10) }} /> 权限
+        </span>
         <span className="prompt-shelf__question">{prompt.toolName}</span>
       </div>
-      {prompt.subject && (
-        <div className="prompt-shelf__perm-subject">{prompt.subject}</div>
-      )}
+      {prompt.subject && <div className="prompt-shelf__perm-subject">{prompt.subject}</div>}
       <div className="prompt-shelf__perm-reason">{prompt.reason}</div>
       <div className="prompt-shelf__perm-btns">
-        <button className="prompt-shelf__perm-btn prompt-shelf__perm-btn--session"
-          onClick={() => onResolve({ allow: true, remember: true })} type="button">
+        <button
+          className="prompt-shelf__perm-btn prompt-shelf__perm-btn--session"
+          onClick={() => onResolve({ allow: true, remember: true })}
+          type="button"
+        >
           <span dangerouslySetInnerHTML={{ __html: svgIcon('shield', 12) }} /> 本次会话允许
         </button>
-        <button className="prompt-shelf__perm-btn prompt-shelf__perm-btn--once"
-          onClick={() => onResolve({ allow: true, remember: false })} type="button">
+        <button
+          className="prompt-shelf__perm-btn prompt-shelf__perm-btn--once"
+          onClick={() => onResolve({ allow: true, remember: false })}
+          type="button"
+        >
           <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} /> 允许 Enter
         </button>
-        <button className="prompt-shelf__perm-btn prompt-shelf__perm-btn--deny"
-          onClick={() => onResolve({ allow: false, remember: false })} type="button">
+        <button
+          className="prompt-shelf__perm-btn prompt-shelf__perm-btn--deny"
+          onClick={() => onResolve({ allow: false, remember: false })}
+          type="button"
+        >
           <span dangerouslySetInnerHTML={{ __html: svgIcon('close', 12) }} /> 拒绝 Esc
         </button>
       </div>
@@ -265,11 +292,13 @@ export class PromptShelfController {
     this._render();
   }
 
-  get active(): PromptData | null { return this._active; }
+  get active(): PromptData | null {
+    return this._active;
+  }
 
   /** Show an ask prompt. Returns a Promise that resolves with selected labels or null if cancelled. */
   showAsk(prompt: AskPrompt): Promise<string[] | null> {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       this._dismissCurrent();
       this._active = prompt;
       this._pendingResolver = (v) => resolve(v as string[] | null);
@@ -279,7 +308,7 @@ export class PromptShelfController {
 
   /** Show a permission prompt. Returns a Promise that resolves with allow/remember. */
   showPermission(prompt: PermissionPrompt): Promise<{ allow: boolean; remember: boolean }> {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       this._dismissCurrent();
       this._active = prompt;
       this._pendingResolver = (v) => resolve(v as { allow: boolean; remember: boolean });

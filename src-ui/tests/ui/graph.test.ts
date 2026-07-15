@@ -4,7 +4,7 @@
 // Unit tests for StarGraph clearGraph + _renderInProgress state machine.
 // Three.js is mocked — we only test disposal discipline and state transitions.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock three.js examples (must be before three mock, hoisted) ──
 
@@ -33,7 +33,7 @@ vi.mock('three/examples/jsm/postprocessing/EffectComposer.js', () => ({
 }));
 
 vi.mock('three/examples/jsm/postprocessing/RenderPass.js', () => ({
-  RenderPass: function () {},
+  RenderPass: () => {},
 }));
 
 vi.mock('three/examples/jsm/postprocessing/UnrealBloomPass.js', () => ({
@@ -79,28 +79,134 @@ vi.mock('three', () => {
     __geomDisposeTracker: geomTrack,
 
     Color: class {
-      r = 1; g = 1; b = 1;
+      r = 1;
+      g = 1;
+      b = 1;
       constructor(_hex?: number) {}
-      getHex() { return 0xffffff; }
-      setHSL() { return this; }
+      getHex() {
+        return 0xffffff;
+      }
+      setHSL() {
+        return this;
+      }
       getHSL(_target: any) {}
-      copy(c: any) { this.r = c.r; this.g = c.g; this.b = c.b; return this; }
-      set() { return this; }
+      copy(c: any) {
+        this.r = c.r;
+        this.g = c.g;
+        this.b = c.b;
+        return this;
+      }
+      set() {
+        return this;
+      }
     },
-    Vector2: class { x: number; y: number; constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x: number, y: number) { this.x = x; this.y = y; return this; } copy(v: any) { this.x = v.x; this.y = v.y; return this; } },
-    Vector3: class { x = 0; y = 0; z = 0; constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; } set(x: number, y: number, z: number) { this.x = x; this.y = y; this.z = z; return this; } copy(v: any) { this.x = v.x; this.y = v.y; this.z = v.z; return this; } subVectors() { return new (this.constructor as any)(); } normalize() { return this; } add() { return this; } multiplyScalar() { return this; } distanceToSquared() { return 0; } lengthSq() { return 1; } project() { return this; } equals() { return true; } },
-    Quaternion: class { setFromEuler() { return this; } set() { return this; } },
-    Matrix4: class { compose() { return this; } identity() { return this; } },
+    Vector2: class {
+      x: number;
+      y: number;
+      constructor(x = 0, y = 0) {
+        this.x = x;
+        this.y = y;
+      }
+      set(x: number, y: number) {
+        this.x = x;
+        this.y = y;
+        return this;
+      }
+      copy(v: any) {
+        this.x = v.x;
+        this.y = v.y;
+        return this;
+      }
+    },
+    Vector3: class {
+      x = 0;
+      y = 0;
+      z = 0;
+      constructor(x = 0, y = 0, z = 0) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+      }
+      set(x: number, y: number, z: number) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        return this;
+      }
+      copy(v: any) {
+        this.x = v.x;
+        this.y = v.y;
+        this.z = v.z;
+        return this;
+      }
+      subVectors() {
+        return new (this.constructor as any)();
+      }
+      normalize() {
+        return this;
+      }
+      add() {
+        return this;
+      }
+      multiplyScalar() {
+        return this;
+      }
+      distanceToSquared() {
+        return 0;
+      }
+      lengthSq() {
+        return 1;
+      }
+      project() {
+        return this;
+      }
+      equals() {
+        return true;
+      }
+    },
+    Quaternion: class {
+      setFromEuler() {
+        return this;
+      }
+      set() {
+        return this;
+      }
+    },
+    Matrix4: class {
+      compose() {
+        return this;
+      }
+      identity() {
+        return this;
+      }
+    },
     BufferGeometry: class {
       attributes: Record<string, any> = {};
-      dispose() { geomTrack.calls++; geomTrack.disposed.add(this); }
-      setAttribute(name: string, attr: any) { this.attributes[name] = attr; }
+      dispose() {
+        geomTrack.calls++;
+        geomTrack.disposed.add(this);
+      }
+      setAttribute(name: string, attr: any) {
+        this.attributes[name] = attr;
+      }
     },
-    BufferAttribute: class { array: Float32Array; itemSize: number; needsUpdate = false; constructor(arr: Float32Array, itemSize: number) { this.array = arr; this.itemSize = itemSize; } },
-    MeshBasicMaterial: class { transparent = false; onBeforeCompile: ((_shader: any) => void) | null = null; dispose = vi.fn(); },
+    BufferAttribute: class {
+      array: Float32Array;
+      itemSize: number;
+      needsUpdate = false;
+      constructor(arr: Float32Array, itemSize: number) {
+        this.array = arr;
+        this.itemSize = itemSize;
+      }
+    },
+    MeshBasicMaterial: class {
+      transparent = false;
+      onBeforeCompile: ((_shader: any) => void) | null = null;
+      dispose = vi.fn();
+    },
     ShaderMaterial: function (this: any, opts?: any) {
       this.dispose = vi.fn();
-      this.uniforms = (opts && opts.uniforms) ? opts.uniforms : { uTime: { value: 0 }, uPulseTime: { value: 0 } };
+      this.uniforms = opts && opts.uniforms ? opts.uniforms : { uTime: { value: 0 }, uPulseTime: { value: 0 } };
       this.vertexShader = opts?.vertexShader || '';
       this.fragmentShader = opts?.fragmentShader || '';
       this.transparent = opts?.transparent ?? false;
@@ -109,36 +215,109 @@ vi.mock('three', () => {
       this.blending = opts?.blending ?? 0;
     },
     InstancedMesh: class {
-      geometry: any; material: any; count: number;
+      geometry: any;
+      material: any;
+      count: number;
       instanceMatrix = { needsUpdate: false, setUsage: vi.fn() };
       instanceColor = { needsUpdate: false, array: new Float32Array() };
-      frustumCulled = true; boundingSphere: any = null;
-      setMatrixAt = vi.fn(); setColorAt = vi.fn();
-      constructor(geo: any, mat: any, count: number) { this.geometry = geo; this.material = mat; this.count = count; }
+      frustumCulled = true;
+      boundingSphere: any = null;
+      setMatrixAt = vi.fn();
+      setColorAt = vi.fn();
+      constructor(geo: any, mat: any, count: number) {
+        this.geometry = geo;
+        this.material = mat;
+        this.count = count;
+      }
     },
-    Points: class { geometry: any; material: any; frustumCulled = true; renderOrder = 1; constructor(geo: any, mat: any) { this.geometry = geo; this.material = mat; } },
+    Points: class {
+      geometry: any;
+      material: any;
+      frustumCulled = true;
+      renderOrder = 1;
+      constructor(geo: any, mat: any) {
+        this.geometry = geo;
+        this.material = mat;
+      }
+    },
     SphereGeometry: class {
       attributes: Record<string, any> = {};
-      dispose() { geomTrack.calls++; geomTrack.disposed.add(this); }
+      dispose() {
+        geomTrack.calls++;
+        geomTrack.disposed.add(this);
+      }
       setAttribute(_n: string, _a: any) {}
     },
-    PlaneGeometry: class { attributes: Record<string, any> = {}; dispose = vi.fn(); rotateX = vi.fn(); },
+    PlaneGeometry: class {
+      attributes: Record<string, any> = {};
+      dispose = vi.fn();
+      rotateX = vi.fn();
+    },
     Mesh: function (this: any, geo: any, mat: any) {
-      this.geometry = geo; this.material = mat;
+      this.geometry = geo;
+      this.material = mat;
       this.position = { x: 0, y: 0, z: 0 };
       this.renderOrder = 0;
     },
-    LineSegments: class { geometry: any; material: any; userData: any = {}; constructor(geo: any, mat: any) { this.geometry = geo; this.material = mat; } },
-    Scene: class { add = vi.fn(); },
+    LineSegments: class {
+      geometry: any;
+      material: any;
+      userData: any = {};
+      constructor(geo: any, mat: any) {
+        this.geometry = geo;
+        this.material = mat;
+      }
+    },
+    Scene: class {
+      add = vi.fn();
+    },
     Group: class {
       children: any[] = [];
-      add(c: any) { this.children.push(c); }
-      remove(c: any) { const idx = this.children.indexOf(c); if (idx >= 0) this.children.splice(idx, 1); }
-      clear() { this.children.length = 0; }
+      add(c: any) {
+        this.children.push(c);
+      }
+      remove(c: any) {
+        const idx = this.children.indexOf(c);
+        if (idx >= 0) this.children.splice(idx, 1);
+      }
+      clear() {
+        this.children.length = 0;
+      }
     },
     PerspectiveCamera: class {
-      position = { x: 0, y: 0, z: 0, copy: vi.fn(function(this: any, v: any) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }), set: vi.fn(), distanceToSquared: vi.fn(() => 0), subVectors: vi.fn(function(this: any) { return this; }), normalize: vi.fn(function(this: any) { return this; }), add: vi.fn(function(this: any) { return this; }), multiplyScalar: vi.fn(function(this: any) { return this; }), lengthSq: vi.fn(() => 1), project: vi.fn(function(this: any) { return this; }), equals: vi.fn(() => true) };
-      aspect = 1; near = 0.5; far = 500000;
+      position = {
+        x: 0,
+        y: 0,
+        z: 0,
+        copy: vi.fn(function (this: any, v: any) {
+          this.x = v.x;
+          this.y = v.y;
+          this.z = v.z;
+          return this;
+        }),
+        set: vi.fn(),
+        distanceToSquared: vi.fn(() => 0),
+        subVectors: vi.fn(function (this: any) {
+          return this;
+        }),
+        normalize: vi.fn(function (this: any) {
+          return this;
+        }),
+        add: vi.fn(function (this: any) {
+          return this;
+        }),
+        multiplyScalar: vi.fn(function (this: any) {
+          return this;
+        }),
+        lengthSq: vi.fn(() => 1),
+        project: vi.fn(function (this: any) {
+          return this;
+        }),
+        equals: vi.fn(() => true),
+      };
+      aspect = 1;
+      near = 0.5;
+      far = 500000;
       updateProjectionMatrix = vi.fn();
     },
     WebGLRenderer: function (this: any) {
@@ -147,10 +326,19 @@ vi.mock('three', () => {
       this.setSize = vi.fn();
       this.toneMapping = 0;
     },
-    Raycaster: class { setFromCamera = vi.fn(); intersectObject = () => []; intersectObjects = () => []; },
-    CanvasTexture: class { dispose = vi.fn(); },
-    ACESFilmicToneMapping: 0, AdditiveBlending: 1, NormalBlending: 0,
-    DynamicDrawUsage: 2, DoubleSide: 2,
+    Raycaster: class {
+      setFromCamera = vi.fn();
+      intersectObject = () => [];
+      intersectObjects = () => [];
+    },
+    CanvasTexture: class {
+      dispose = vi.fn();
+    },
+    ACESFilmicToneMapping: 0,
+    AdditiveBlending: 1,
+    NormalBlending: 0,
+    DynamicDrawUsage: 2,
+    DoubleSide: 2,
   };
 });
 
@@ -225,9 +413,7 @@ function tinyGraph(): any {
       { id: 'n1', name: 'main', type: 'function', location: 'src/main.ts:1' },
       { id: 'n2', name: 'helper', type: 'function', location: 'src/helper.ts:3' },
     ],
-    edges: [
-      { id: 'e1', source: 'n1', target: 'n2', type: 'calls', coupling_depth: 1, direction: 'forward' },
-    ],
+    edges: [{ id: 'e1', source: 'n1', target: 'n2', type: 'calls', coupling_depth: 1, direction: 'forward' }],
     meta: { source_root: '/test', generated_at: new Date().toISOString() },
   };
 }
@@ -237,7 +423,7 @@ function makeContainer(): HTMLElement {
   div.id = 'graph';
   Object.defineProperty(div, 'clientWidth', { value: 800, writable: true });
   Object.defineProperty(div, 'clientHeight', { value: 600, writable: true });
-  div.getBoundingClientRect = () => ({ width: 800, height: 600 } as DOMRect);
+  div.getBoundingClientRect = () => ({ width: 800, height: 600 }) as DOMRect;
   document.body.appendChild(div);
   return div;
 }
@@ -317,12 +503,10 @@ describe('StarGraph.render — edge cases', () => {
   it('handles nodes as object (Record format)', async () => {
     const g = {
       nodes: {
-        'n1': { id: 'n1', name: 'a', type: 'class' },
-        'n2': { id: 'n2', name: 'b', type: 'class' },
+        n1: { id: 'n1', name: 'a', type: 'class' },
+        n2: { id: 'n2', name: 'b', type: 'class' },
       },
-      edges: [
-        { id: 'e1', source: 'n1', target: 'n2', type: 'inherits', coupling_depth: 1, direction: 'inherit' },
-      ],
+      edges: [{ id: 'e1', source: 'n1', target: 'n2', type: 'inherits', coupling_depth: 1, direction: 'inherit' }],
     };
     await sg.render(g);
     expect(sg.hasGraph).toBe(true);

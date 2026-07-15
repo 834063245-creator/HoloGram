@@ -23,9 +23,19 @@ export class SettingsPanel {
 
   // ── Public API (unchanged) ──
 
-  setOnSave(fn: () => void): void { this._ctrl.setOnSave(fn); }
-  isOpen(): boolean { return this._ctrl.isOpen(); }
-  open(): void { this._ctrl.open(); }
-  close(): void { this._ctrl.close(); }
-  toggle(): void { this._ctrl.toggle(); }
+  setOnSave(fn: () => void): void {
+    this._ctrl.setOnSave(fn);
+  }
+  isOpen(): boolean {
+    return this._ctrl.isOpen();
+  }
+  open(): void {
+    this._ctrl.open();
+  }
+  close(): void {
+    this._ctrl.close();
+  }
+  toggle(): void {
+    this._ctrl.toggle();
+  }
 }

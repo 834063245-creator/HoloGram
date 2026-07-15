@@ -26,11 +26,17 @@ function parseSkillMd(raw: string): { meta: Record<string, string>; body: string
   let i = 1;
   for (; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (line === '---') { i++; break; }
+    if (line === '---') {
+      i++;
+      break;
+    }
     const colon = line.indexOf(':');
     if (colon > 0) {
       const key = line.slice(0, colon).trim();
-      const val = line.slice(colon + 1).trim().replace(/^['"](.*)['"]$/, '$1');
+      const val = line
+        .slice(colon + 1)
+        .trim()
+        .replace(/^['"](.*)['"]$/, '$1');
       meta[key] = val;
     }
   }
@@ -44,9 +50,7 @@ async function loadSkills(projectPath: string): Promise<SkillDef[]> {
   const dir = `${root}/.hologram/skills`;
   let entries: Array<{ name: string; type: string; path: string }>;
   try {
-    const raw = await rpc<string>(
-      'list_directory_flat', { path: dir, isAgent: false },
-    );
+    const raw = await rpc<string>('list_directory_flat', { path: dir, isAgent: false });
     entries = JSON.parse(raw);
   } catch {
     return [];
@@ -65,7 +69,9 @@ async function loadSkills(projectPath: string): Promise<SkillDef[]> {
         description: meta.description || meta.name || e.name,
         prompt: body,
       });
-    } catch { /* skip broken skills */ }
+    } catch {
+      /* skip broken skills */
+    }
   }
   return skills;
 }
@@ -86,12 +92,14 @@ export class SkillRegistry {
    *  takes <10ms on any modern FS. Simpler than TTL cache + stale detection. */
   async reload(): Promise<SkillDef[]> {
     const skills = await loadSkills(this.projectPath);
-    this._names = skills.map(s => s.name);
+    this._names = skills.map((s) => s.name);
     return skills;
   }
 
   /** Get current skill names (from last reload). Used by slash command handler. */
-  get names(): string[] { return this._names; }
+  get names(): string[] {
+    return this._names;
+  }
 }
 
 // ── Skill tool factory ──
@@ -129,12 +137,12 @@ export function createSkillTool(registry: SkillRegistry): Tool {
       if (!name) {
         return skills.length === 0
           ? 'No skills installed. Create .hologram/skills/<name>/SKILL.md to add one.'
-          : `Available skills:\n${skills.map(s => `- **${s.name}**: ${s.description}`).join('\n')}`;
+          : `Available skills:\n${skills.map((s) => `- **${s.name}**: ${s.description}`).join('\n')}`;
       }
 
-      const skill = skills.find(s => s.name === name);
+      const skill = skills.find((s) => s.name === name);
       if (!skill) {
-        return `Skill "${name}" not found. Available: ${skills.map(s => s.name).join(', ') || 'none'}`;
+        return `Skill "${name}" not found. Available: ${skills.map((s) => s.name).join(', ') || 'none'}`;
       }
 
       return skill.prompt.replace(/\$ARGUMENTS/g, skillArgs);

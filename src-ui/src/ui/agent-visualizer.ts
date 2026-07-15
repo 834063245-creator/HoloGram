@@ -7,9 +7,9 @@
 // Step 2: 重构为类。订阅 'agent:tool-done' → 单入口更新图，
 // 消除 main.ts / chat.ts 中的三重 visualizeAgentTool() 调用。
 
-import type { StarGraph } from './graph';
-import { bus } from './events';
 import { shell } from './app-shell';
+import { bus } from './events';
+import type { StarGraph } from './graph';
 
 /**
  * Shared helper — send a question to the Agent (opens chat panel if closed).
@@ -25,7 +25,7 @@ export class AgentVisualizer {
   /** Set of node names the agent has ever touched (for lens mode). */
   private _visitedNodes = new Set<string>();
 
-    /** Ordered trail of recently focused nodes (max 50, for trail line). */
+  /** Ordered trail of recently focused nodes (max 50, for trail line). */
   private _trail: string[] = [];
 
   /** Whether the retrospective trail visualization is currently active. */
@@ -67,14 +67,22 @@ export class AgentVisualizer {
     this.graph.hideAgentTrail();
   }
 
-  get isTrailActive(): boolean { return this._trailActive; }
-  get visitedCount(): number { return this._visitedNodes.size; }
+  get isTrailActive(): boolean {
+    return this._trailActive;
+  }
+  get visitedCount(): number {
+    return this._visitedNodes.size;
+  }
 
   // Backward compat — old toggleLens/AgentLens APIs map to trail mode
   /** @deprecated Use toggleTrail() instead. */
-  toggleLens(): boolean { return this.toggleTrail(); }
+  toggleLens(): boolean {
+    return this.toggleTrail();
+  }
   /** @deprecated Use isTrailActive instead. */
-  get isLensActive(): boolean { return this._trailActive; }
+  get isLensActive(): boolean {
+    return this._trailActive;
+  }
 
   // ── Event handlers ────────────────────────────────────
 
@@ -122,13 +130,15 @@ export class AgentVisualizer {
     };
     switch (toolName) {
       case 'find_dep_path':
-        n('from'); n('to');
+        n('from');
+        n('to');
         break;
       case 'trace_impact':
       case 'get_neighbors':
       case 'symbol_history':
       case 'inspect_symbol':
-        n('node_id'); n('nodeId');
+        n('node_id');
+        n('nodeId');
         break;
       case 'coupling_report':
         n('module');

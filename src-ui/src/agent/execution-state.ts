@@ -71,7 +71,7 @@ export function createExecState(): ExecStateInstance {
 
   let _abortController: AbortController | null = null;
   let _permQueue: Promise<void> = Promise.resolve();
-  let _permCards: PermCard[] = [];
+  const _permCards: PermCard[] = [];
 
   function _set(s: Partial<ExecState>): void {
     store.setState(s);

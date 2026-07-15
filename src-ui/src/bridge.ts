@@ -6,9 +6,9 @@
 
 const IS_TAURI = '__TAURI_INTERNALS__' in window;
 
+import { log } from './agent/logger';
 // ── Mock invoke ──
 import { mockInvoke } from './mock-data';
-import { log } from './agent/logger';
 
 let _realInvoke: any;
 let _realListen: any;
@@ -56,10 +56,7 @@ export async function invoke<T = any>(cmd: string, args?: Record<string, unknown
  * Drop-in replacement for `listen` from @tauri-apps/api/event.
  * In browser, returns a no-op unlisten function.
  */
-export async function listen<T = any>(
-  event: string,
-  handler: (event: { payload: T }) => void,
-): Promise<() => void> {
+export async function listen<T = any>(event: string, handler: (event: { payload: T }) => void): Promise<() => void> {
   if (IS_TAURI) {
     await loadRealListen();
     return _realListen(event, handler);

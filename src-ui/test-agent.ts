@@ -9,11 +9,10 @@
 
 import { execFileSync } from 'child_process';
 import * as readline from 'readline';
-import { Agent } from './src/agent/agent';
-import { ToolRegistry, createHologramTestTools } from './src/agent/tool';
+import type { AgentEvent, EventSink } from './src/agent/agent';
+import { Agent, EventKind } from './src/agent/agent';
+import { createHologramTestTools, ToolRegistry } from './src/agent/tool';
 import { createOpenAIProvider } from './src/provider/openai';
-import type { EventSink, AgentEvent } from './src/agent/agent';
-import { EventKind } from './src/agent/agent';
 
 // ══════════════════════════════════════
 // 配置
@@ -31,11 +30,11 @@ const GRAPH_FILE = process.env.GRAPH_FILE || `${PROJECT_ROOT}/hologram_full.json
 
 async function pythonExec(toolName: string, args: Record<string, unknown>): Promise<string> {
   const cliArgs: string[] = [];
-  const graph = args.graph as string || GRAPH_FILE;
+  const graph = (args.graph as string) || GRAPH_FILE;
 
   switch (toolName) {
     case 'hologram_analyze': {
-      const path = args.path as string || PROJECT_ROOT;
+      const path = (args.path as string) || PROJECT_ROOT;
       return run(['-m', 'src_python', 'analyze', path, '-o', GRAPH_FILE]);
     }
     case 'hologram_neighbors': {
@@ -160,17 +159,21 @@ const sink: EventSink = (ev: AgentEvent) => {
     case EventKind.Usage:
       if (ev.usage) {
         const cost = ev.pricing
-          ? ((ev.usage.cache_hit_tokens * ev.pricing.cache_hit +
+          ? (ev.usage.cache_hit_tokens * ev.pricing.cache_hit +
               ev.usage.cache_miss_tokens * ev.pricing.input +
-              ev.usage.completion_tokens * ev.pricing.output) / 1_000_000)
+              ev.usage.completion_tokens * ev.pricing.output) /
+            1_000_000
           : 0;
-        console.log(`\n\x1b[90m📊 ${ev.usage.total_tokens} tokens · ${ev.usage.finish_reason} · ~$${cost.toFixed(4)}\x1b[0m`);
+        console.log(
+          `\n\x1b[90m📊 ${ev.usage.total_tokens} tokens · ${ev.usage.finish_reason} · ~$${cost.toFixed(4)}\x1b[0m`,
+        );
       }
       break;
-    case EventKind.Notice:
+    case EventKind.Notice: {
       const icon = ev.level === 'warn' ? '⚠' : 'ℹ';
       console.log(`\x1b[33m${icon} ${ev.text}\x1b[0m`);
       break;
+    }
   }
 };
 

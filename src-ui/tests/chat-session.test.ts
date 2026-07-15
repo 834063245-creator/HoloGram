@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock bridge — all Tauri backend calls route through here ──
 const mockInvoke = vi.fn();
@@ -29,9 +29,17 @@ vi.mock('../src/ui/app-shell', () => ({
   shell: { register: vi.fn(), notifyPanelChanged: vi.fn(), wire: vi.fn(), navigateToFile: vi.fn() },
 }));
 vi.mock('../src/agent/permission', () => ({ showApprovalDialog: vi.fn(), cancelPendingApprovals: vi.fn() }));
-vi.mock('../src/agent/logger', () => ({ initLogger: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
+vi.mock('../src/agent/logger', () => ({
+  initLogger: vi.fn(),
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock('../src/settings', () => ({
-  loadSettings: vi.fn(() => ({ providers: [{ name: 'test', model: 'test', apiKey: 'k', kind: 'openai', baseUrl: '', thinking: false }], activeProvider: 'test', agent: {}, display: { language: 'zh', fontScale: 1 } })),
+  loadSettings: vi.fn(() => ({
+    providers: [{ name: 'test', model: 'test', apiKey: 'k', kind: 'openai', baseUrl: '', thinking: false }],
+    activeProvider: 'test',
+    agent: {},
+    display: { language: 'zh', fontScale: 1 },
+  })),
   saveSettings: vi.fn(),
   getActiveProvider: vi.fn(() => ({ name: 'test', apiKey: 'k', baseUrl: '', model: 'm', kind: 'openai' })),
   defaultPricing: vi.fn(() => ({ cache_hit: 0, input: 0, output: 0, currency: 'CNY' })),
@@ -74,7 +82,7 @@ vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 import { ChatPanel } from '../src/ui/chat';
 import * as Session from '../src/ui/chat-session';
-import { hashProjectPath, stripLineNumbers, scanMaxSessionId } from '../src/ui/chat-session';
+import { hashProjectPath, scanMaxSessionId, stripLineNumbers } from '../src/ui/chat-session';
 
 // ── Helpers ──
 
@@ -95,7 +103,8 @@ function createChatPanel(): ChatPanel {
 /** Mock invoke to return session data on disk for read_file_content calls. */
 function mockSessionFile(id: number, messages: any[], label = `会话 ${id}`, savedAt?: string) {
   return JSON.stringify({
-    id, label,
+    id,
+    label,
     savedAt: savedAt || new Date().toISOString(),
     messages,
   });
@@ -179,12 +188,14 @@ describe('ChatPanel session persistence', () => {
 
     it('returns max numeric ID from entries', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValue(JSON.stringify([
-        { name: '1.json', path: '/sessions/1.json', is_dir: false, children: null },
-        { name: '71.json', path: '/sessions/71.json', is_dir: false, children: null },
-        { name: '_active.json', path: '/sessions/_active.json', is_dir: false, children: null },
-        { name: 'not-json.txt', path: '/sessions/not-json.txt', is_dir: false, children: null },
-      ]));
+      mockInvoke.mockResolvedValue(
+        JSON.stringify([
+          { name: '1.json', path: '/sessions/1.json', is_dir: false, children: null },
+          { name: '71.json', path: '/sessions/71.json', is_dir: false, children: null },
+          { name: '_active.json', path: '/sessions/_active.json', is_dir: false, children: null },
+          { name: 'not-json.txt', path: '/sessions/not-json.txt', is_dir: false, children: null },
+        ]),
+      );
 
       const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(71);
@@ -192,11 +203,13 @@ describe('ChatPanel session persistence', () => {
 
     it('skips directories and non-json files', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValue(JSON.stringify([
-        { name: 'sub', path: '/sessions/sub', is_dir: true, children: [] },
-        { name: '3.json', path: '/sessions/3.json', is_dir: false, children: null },
-        { name: 'readme.md', path: '/sessions/readme.md', is_dir: false, children: null },
-      ]));
+      mockInvoke.mockResolvedValue(
+        JSON.stringify([
+          { name: 'sub', path: '/sessions/sub', is_dir: true, children: [] },
+          { name: '3.json', path: '/sessions/3.json', is_dir: false, children: null },
+          { name: 'readme.md', path: '/sessions/readme.md', is_dir: false, children: null },
+        ]),
+      );
 
       const result = await scanMaxSessionId('D:/test');
       expect(result).toBe(3);
@@ -205,7 +218,7 @@ describe('ChatPanel session persistence', () => {
     it('resolves within 100ms (no hang)', async () => {
       panel = createChatPanel();
       // Simulate a slow but not hung backend
-      mockInvoke.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(JSON.stringify([])), 10)));
+      mockInvoke.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(JSON.stringify([])), 10)));
 
       const start = Date.now();
       const result = await scanMaxSessionId('D:/test');
@@ -241,16 +254,20 @@ describe('ChatPanel session persistence', () => {
       panel = createChatPanel();
       // list_directory returns file entries
       mockInvoke
-        .mockResolvedValueOnce(JSON.stringify([
-          { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
-          { name: '_active.json', path: '/s/_active.json', is_dir: false, children: null },
-          { name: '40.json', path: '/s/40.json', is_dir: false, children: null },
-        ]))
+        .mockResolvedValueOnce(
+          JSON.stringify([
+            { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+            { name: '_active.json', path: '/s/_active.json', is_dir: false, children: null },
+            { name: '40.json', path: '/s/40.json', is_dir: false, children: null },
+          ]),
+        )
         // read_file_content for 1.json
-        .mockResolvedValueOnce(mockSessionFile(1, [
-          { role: 'system', content: 'prompt' },
-          { role: 'user', content: 'hello' },
-        ]))
+        .mockResolvedValueOnce(
+          mockSessionFile(1, [
+            { role: 'system', content: 'prompt' },
+            { role: 'user', content: 'hello' },
+          ]),
+        )
         // read_file_content for 40.json (deleted marker)
         .mockResolvedValueOnce(JSON.stringify({ id: 40, deleted: true }));
 
@@ -263,10 +280,12 @@ describe('ChatPanel session persistence', () => {
     it('returns sessions sorted by savedAt descending', async () => {
       panel = createChatPanel();
       mockInvoke
-        .mockResolvedValueOnce(JSON.stringify([
-          { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
-          { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-        ]))
+        .mockResolvedValueOnce(
+          JSON.stringify([
+            { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+            { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
+          ]),
+        )
         .mockResolvedValueOnce(mockSessionFile(1, [{ role: 'user', content: 'old' }], 'Old', '2026-01-01T00:00:00Z'))
         .mockResolvedValueOnce(mockSessionFile(2, [{ role: 'user', content: 'new' }], 'New', '2026-06-30T00:00:00Z'));
 
@@ -278,18 +297,24 @@ describe('ChatPanel session persistence', () => {
 
     it('handles cat -n formatted session files (read_file_content regression)', async () => {
       panel = createChatPanel();
-      const rawJSON = mockSessionFile(46, [
-        { role: 'system', content: 'sys' },
-        { role: 'user', content: 'real conversation' },
-      ], '有对话', '2026-06-30T12:00:00Z');
+      const rawJSON = mockSessionFile(
+        46,
+        [
+          { role: 'system', content: 'sys' },
+          { role: 'user', content: 'real conversation' },
+        ],
+        '有对话',
+        '2026-06-30T12:00:00Z',
+      );
 
       mockInvoke
-        .mockResolvedValueOnce(JSON.stringify([
-          { name: '46.json', path: '/s/46.json', is_dir: false, children: null },
-        ]))
+        .mockResolvedValueOnce(JSON.stringify([{ name: '46.json', path: '/s/46.json', is_dir: false, children: null }]))
         // read_file_content returns cat -n format: line numbers prepended
         .mockResolvedValueOnce(
-          rawJSON.split('\n').map((l, i) => `${String(i + 1).padStart(6)}\t${l}`).join('\n')
+          rawJSON
+            .split('\n')
+            .map((l, i) => `${String(i + 1).padStart(6)}\t${l}`)
+            .join('\n'),
         );
 
       const result = await panel.listSavedSessions('D:/test');
@@ -302,10 +327,12 @@ describe('ChatPanel session persistence', () => {
     it('skips entries with unreadable session files', async () => {
       panel = createChatPanel();
       mockInvoke
-        .mockResolvedValueOnce(JSON.stringify([
-          { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
-          { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-        ]))
+        .mockResolvedValueOnce(
+          JSON.stringify([
+            { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+            { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
+          ]),
+        )
         // First read fails
         .mockRejectedValueOnce(new Error('permission denied'))
         // Second succeeds
@@ -347,18 +374,19 @@ describe('ChatPanel session persistence', () => {
       expect(elapsed).toBeLessThan(1000);
 
       // Verify list_directory was NOT invoked (the regression guard)
-      const listDirCalls = mockInvoke.mock.calls.filter(
-        (call: any[]) => call[0] === 'list_directory'
-      );
+      const listDirCalls = mockInvoke.mock.calls.filter((call: any[]) => call[0] === 'list_directory');
       expect(listDirCalls).toHaveLength(0);
     });
 
     it('shows notice when tracker is missing and localStorage is empty', async () => {
       panel = createChatPanel();
-      panel.setAgentFactory(async () => ({
-        getSession: () => [{ role: 'system', content: 'sys' }],
-        setSession: vi.fn(),
-      } as any));
+      panel.setAgentFactory(
+        async () =>
+          ({
+            getSession: () => [{ role: 'system', content: 'sys' }],
+            setSession: vi.fn(),
+          }) as any,
+      );
       panel.setProjectPath('D:/test');
 
       mockInvoke.mockRejectedValue(new Error('no tracker'));
@@ -366,7 +394,7 @@ describe('ChatPanel session persistence', () => {
       await panel.autoRestoreLastSession('D:/test');
 
       // Flush rAF so _scheduleSync fires (notices are now debounced via rAF)
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
       // Verify a notice was added (autoRestoreLastSession → no lastId → addNotice)
       const notices = document.querySelectorAll('.msg-notice');
@@ -392,21 +420,29 @@ describe('ChatPanel session persistence', () => {
       localStorage.setItem(`hologram_session_${hash}_71`, JSON.stringify(goodSession));
 
       let setSessionMsgs: any[] = [];
-      panel.setAgentFactory(async () => ({
-        getSession: () => [{ role: 'system', content: 'sys' }],
-        setSession: (msgs: any[]) => { setSessionMsgs = msgs; },
-      } as any));
+      panel.setAgentFactory(
+        async () =>
+          ({
+            getSession: () => [{ role: 'system', content: 'sys' }],
+            setSession: (msgs: any[]) => {
+              setSessionMsgs = msgs;
+            },
+          }) as any,
+      );
       panel.setProjectPath('D:/test');
 
       // Tracker points to session 1
       mockInvoke
         .mockResolvedValueOnce(JSON.stringify({ lastId: 1, nextId: 1 }))
         // Session 1 has only system prompt — no user messages
-        .mockResolvedValueOnce(JSON.stringify({
-          id: 1, label: '空会话',
-          savedAt: '2026-06-29T00:00:00Z',
-          messages: [{ role: 'system', content: '你是助手' }],
-        }));
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            id: 1,
+            label: '空会话',
+            savedAt: '2026-06-29T00:00:00Z',
+            messages: [{ role: 'system', content: '你是助手' }],
+          }),
+        );
 
       await panel.autoRestoreLastSession('D:/test');
 
@@ -418,26 +454,27 @@ describe('ChatPanel session persistence', () => {
 
     it('does NOT call list_directory during auto-restore', async () => {
       panel = createChatPanel();
-      panel.setAgentFactory(async () => ({
-        getSession: () => [{ role: 'system', content: 'sys' }],
-        setSession: vi.fn(),
-      } as any));
+      panel.setAgentFactory(
+        async () =>
+          ({
+            getSession: () => [{ role: 'system', content: 'sys' }],
+            setSession: vi.fn(),
+          }) as any,
+      );
       panel.setProjectPath('D:/test');
 
       // Tracker exists, session file exists with valid conversation
-      mockInvoke
-        .mockResolvedValueOnce(JSON.stringify({ lastId: 46, nextId: 77 }))
-        .mockResolvedValueOnce(mockSessionFile(46, [
+      mockInvoke.mockResolvedValueOnce(JSON.stringify({ lastId: 46, nextId: 77 })).mockResolvedValueOnce(
+        mockSessionFile(46, [
           { role: 'system', content: 'sys' },
           { role: 'user', content: 'hello' },
-        ]));
+        ]),
+      );
 
       await panel.autoRestoreLastSession('D:/test');
 
       // list_directory should NOT have been called
-      const listDirCalls = mockInvoke.mock.calls.filter(
-        (call: any[]) => call[0] === 'list_directory'
-      );
+      const listDirCalls = mockInvoke.mock.calls.filter((call: any[]) => call[0] === 'list_directory');
       expect(listDirCalls).toHaveLength(0);
     });
   });
@@ -454,8 +491,11 @@ describe('ChatPanel session persistence', () => {
     it('reads all session files in parallel (not serial)', async () => {
       panel = createChatPanel();
       // 5 session files — if serial, this takes 5x as long
-      const files = [1, 2, 3, 4, 5].map(id => ({
-        name: `${id}.json`, path: `/s/${id}.json`, is_dir: false, children: null,
+      const files = [1, 2, 3, 4, 5].map((id) => ({
+        name: `${id}.json`,
+        path: `/s/${id}.json`,
+        is_dir: false,
+        children: null,
       }));
       mockInvoke.mockResolvedValueOnce(JSON.stringify(files));
       for (const id of [1, 2, 3, 4, 5]) {
@@ -474,10 +514,12 @@ describe('ChatPanel session persistence', () => {
 
     it('returns empty after 10s timeout if a session read hangs', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValueOnce(JSON.stringify([
-        { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
-        { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-      ]));
+      mockInvoke.mockResolvedValueOnce(
+        JSON.stringify([
+          { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+          { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
+        ]),
+      );
       // First file hangs forever, second resolves
       mockInvoke.mockReturnValueOnce(new Promise(() => {})); // never resolves
       mockInvoke.mockResolvedValueOnce(mockSessionFile(2, [{ role: 'user', content: 'ok' }]));
@@ -495,11 +537,13 @@ describe('ChatPanel session persistence', () => {
 
     it('still returns readable sessions when one file fails', async () => {
       panel = createChatPanel();
-      mockInvoke.mockResolvedValueOnce(JSON.stringify([
-        { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
-        { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
-        { name: '3.json', path: '/s/3.json', is_dir: false, children: null },
-      ]));
+      mockInvoke.mockResolvedValueOnce(
+        JSON.stringify([
+          { name: '1.json', path: '/s/1.json', is_dir: false, children: null },
+          { name: '2.json', path: '/s/2.json', is_dir: false, children: null },
+          { name: '3.json', path: '/s/3.json', is_dir: false, children: null },
+        ]),
+      );
       // File 1: success
       mockInvoke.mockResolvedValueOnce(mockSessionFile(1, [{ role: 'user', content: 'hello' }]));
       // File 2: error
@@ -510,7 +554,7 @@ describe('ChatPanel session persistence', () => {
       const result = await panel.listSavedSessions('D:/test');
 
       expect(result).toHaveLength(2);
-      expect(result.map(r => r.id).sort()).toEqual([1, 3]);
+      expect(result.map((r) => r.id).sort()).toEqual([1, 3]);
     });
   });
 
@@ -544,7 +588,7 @@ describe('ChatPanel session persistence', () => {
       const hash = hashProjectPath('D:/test').toString(36);
       const sessionId = (Session as any).getSessions?.()?.[0]?.id;
       // Just verify SOMETHING was written to localStorage
-      const lsKeys = Object.keys(localStorage).filter(k => k.startsWith('hologram_session_'));
+      const lsKeys = Object.keys(localStorage).filter((k) => k.startsWith('hologram_session_'));
       expect(lsKeys.length).toBeGreaterThan(0);
 
       // ── Step 3: Simulate mode change → setupAgent → setAgent (resets all) ──
@@ -563,12 +607,9 @@ describe('ChatPanel session persistence', () => {
       // Mock read_file_content: tracker + session file
       mockInvoke.mockReset();
       // Tracker points to session that was saved
-      const savedId = lsKeys.length > 0
-        ? parseInt(lsKeys[0].replace(`hologram_session_${hash}_`, ''), 10)
-        : 1;
-      mockInvoke
-        .mockResolvedValueOnce(JSON.stringify({ lastId: savedId, nextId: savedId + 1 }))
-        .mockResolvedValueOnce(JSON.stringify({
+      const savedId = lsKeys.length > 0 ? parseInt(lsKeys[0].replace(`hologram_session_${hash}_`, ''), 10) : 1;
+      mockInvoke.mockResolvedValueOnce(JSON.stringify({ lastId: savedId, nextId: savedId + 1 })).mockResolvedValueOnce(
+        JSON.stringify({
           id: savedId,
           label: '已保存',
           savedAt: new Date().toISOString(),
@@ -577,13 +618,19 @@ describe('ChatPanel session persistence', () => {
             { role: 'user', content: '帮我分析' },
             { role: 'assistant', content: '好的，正在分析…' },
           ],
-        }));
+        }),
+      );
 
       // Set fresh agent factory for autoRestoreLastSession
-      panel.setAgentFactory(async () => ({
-        getSession: () => [{ role: 'system', content: 'fresh sys' }],
-        setSession: (msgs: any[]) => { savedMessages.push(...msgs); },
-      } as any));
+      panel.setAgentFactory(
+        async () =>
+          ({
+            getSession: () => [{ role: 'system', content: 'fresh sys' }],
+            setSession: (msgs: any[]) => {
+              savedMessages.push(...msgs);
+            },
+          }) as any,
+      );
 
       await panel.autoRestoreLastSession('D:/test');
 

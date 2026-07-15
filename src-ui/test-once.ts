@@ -3,9 +3,9 @@
  * 用法：npx tsx test-once.ts "你的问题"
  */
 import { execFileSync } from 'child_process';
-import { Agent, EventKind } from './src/agent/agent';
 import type { AgentEvent } from './src/agent/agent';
-import { ToolRegistry, createHologramTestTools } from './src/agent/tool';
+import { Agent, EventKind } from './src/agent/agent';
+import { createHologramTestTools, ToolRegistry } from './src/agent/tool';
 import { createOpenAIProvider } from './src/provider/openai';
 
 const API_KEY = process.env.DEEPSEEK_API_KEY || '';
@@ -29,9 +29,10 @@ async function pythonExec(toolName: string, args: Record<string, unknown>): Prom
       }
       case 'hologram_impact': {
         const d = args.max_depth as number;
-        cmd = d && d > 0
-          ? ['-m', 'src_python', 'impact', args.node_id as string, '-d', String(d), '-g', graph]
-          : ['-m', 'src_python', 'impact', args.node_id as string, '-g', graph];
+        cmd =
+          d && d > 0
+            ? ['-m', 'src_python', 'impact', args.node_id as string, '-d', String(d), '-g', graph]
+            : ['-m', 'src_python', 'impact', args.node_id as string, '-g', graph];
         break;
       }
       case 'hologram_path': {
@@ -128,7 +129,9 @@ const sink = (ev: AgentEvent) => {
       break;
     case EventKind.Usage:
       if (ev.usage) {
-        console.log(`\n\x1b[90m📊 ${ev.usage.total_tokens} tokens · finish=${ev.usage.finish_reason} · hit=${ev.usage.cache_hit_tokens}\x1b[0m`);
+        console.log(
+          `\n\x1b[90m📊 ${ev.usage.total_tokens} tokens · finish=${ev.usage.finish_reason} · hit=${ev.usage.cache_hit_tokens}\x1b[0m`,
+        );
       }
       break;
     case EventKind.Notice:

@@ -89,31 +89,30 @@ export function classifyError(name: string, status: number, body: string, fetchE
       return `[网络问题] 无法解析 "${name}" 的地址，请检查 URL 是否正确。`;
     if (fetchErr?.includes('ECONNREFUSED') || fetchErr?.includes('ECONNRESET'))
       return `[网络问题] 无法连接 "${name}"，请检查地址和网络。`;
-    if (fetchErr?.includes('ETIMEDOUT'))
-      return `[网络问题] 连接 "${name}" 超时，请检查地址或稍后重试。`;
-    if (fetchErr?.includes('aborted'))
-      return `[已取消] 请求被手动中止。`;
+    if (fetchErr?.includes('ETIMEDOUT')) return `[网络问题] 连接 "${name}" 超时，请检查地址或稍后重试。`;
+    if (fetchErr?.includes('aborted')) return `[已取消] 请求被手动中止。`;
     return `[网络问题] 请求 "${name}" 失败：${fetchErr || '未知网络错误'}。请检查地址格式和网络连接。`;
   }
 
   // 鉴权
   if (status === 401 || (status === 403 && b.includes('invalid')))
     return `[密钥错误] "${name}" API Key 无效或已过期。请在设置中更换 Key。`;
-  if (status === 403)
-    return `[权限不足] "${name}" 拒绝了请求。请检查账户权限或 Key 的访问范围。`;
+  if (status === 403) return `[权限不足] "${name}" 拒绝了请求。请检查账户权限或 Key 的访问范围。`;
 
   // 服务商侧
-  if (status === 429)
-    return `[服务商限流] "${name}" 请求过于频繁，稍后自动重试。`;
+  if (status === 429) return `[服务商限流] "${name}" 请求过于频繁，稍后自动重试。`;
   if (b.includes('rate') && (b.includes('limit') || b.includes('exceed')))
     return `[服务商限流] "${name}" 速率超限，稍后自动重试。`;
-  if (status >= 500 && status <= 599)
-    return `[服务商故障] "${name}" 服务器异常 (${status})，稍后重试。`;
-  if (b.includes('overloaded') || b.includes('busy'))
-    return `[服务商繁忙] "${name}" 当前负载过高，稍后重试。`;
+  if (status >= 500 && status <= 599) return `[服务商故障] "${name}" 服务器异常 (${status})，稍后重试。`;
+  if (b.includes('overloaded') || b.includes('busy')) return `[服务商繁忙] "${name}" 当前负载过高，稍后重试。`;
 
   // 余额
-  if (b.includes('insufficient_quota') || b.includes('insufficient balance') || b.includes('余额') || b.includes('quota'))
+  if (
+    b.includes('insufficient_quota') ||
+    b.includes('insufficient balance') ||
+    b.includes('余额') ||
+    b.includes('quota')
+  )
     return `[余额不足] "${name}" 账户余额/配额不足，请充值。`;
 
   // 模型
@@ -129,8 +128,7 @@ export function classifyError(name: string, status: number, body: string, fetchE
 
 // ---- Tool pairing sanitization ----
 
-const interruptedToolResult =
-  '[no result: the previous turn was interrupted before this tool call completed]';
+const interruptedToolResult = '[no result: the previous turn was interrupted before this tool call completed]';
 
 /** Repair history so every assistant tool_calls has matching tool messages. */
 export function sanitizeToolPairing(msgs: Message[]): Message[] {

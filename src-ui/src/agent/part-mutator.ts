@@ -5,10 +5,10 @@
 // Used by both main agent (chat-stream.ts) and sub-agent (subagent-sink.ts).
 // One function, one implementation — no more drifting duplicates.
 
+import type { AssistantPart } from '../ui/message-model';
+import { findToolPart, lastTextPart } from '../ui/message-model';
 import type { AgentEvent } from './agent-types';
 import { EventKind } from './agent-types';
-import type { AssistantPart } from '../ui/message-model';
-import { lastTextPart, findToolPart } from '../ui/message-model';
 
 /**
  * Apply one AgentEvent to a parts array. Mutates in-place.
@@ -44,8 +44,11 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
       }
       return false;
 
-    case EventKind.Message:
-      { const lt = lastTextPart(parts); if (lt) lt.finalised = true; return true; }
+    case EventKind.Message: {
+      const lt = lastTextPart(parts);
+      if (lt) lt.finalised = true;
+      return true;
+    }
 
     case EventKind.ToolDispatch:
       if (ev.tool) {
@@ -60,8 +63,11 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
           if (ev.tool.name) existing.name = ev.tool.name;
         } else {
           parts.push({
-            type: 'tool', toolId: ev.tool.id, name: ev.tool.name,
-            args: ev.tool.args || '', label: ev.tool.name,
+            type: 'tool',
+            toolId: ev.tool.id,
+            name: ev.tool.name,
+            args: ev.tool.args || '',
+            label: ev.tool.name,
             readOnly: ev.tool.read_only ?? false,
             status: ev.tool.partial ? 'pending' : 'running',
           });

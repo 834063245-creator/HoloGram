@@ -2,7 +2,7 @@
 // 回归背景: 旧名 _agent 因 Tauri 默认 camelCase 重命名永远匹配不上 Rust is_agent，
 // 导致 is_agent 恒为 false → agent 文件操作走 user-UI 路径被沙箱静默硬拒
 // "outside project directory" 且不弹 Ask。谁把 isAgent 改回 _agent，这俩测试就挂。
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // agentInvoke (tool.ts) 跨模块 import bridge.invoke → mock 这里拦截真实 Tauri 调用
 const mockInvoke = vi.fn();

@@ -1,6 +1,6 @@
 // 守护简报系统 — CheckPanel 渲染 + Workspace.runCheck() invoke 契约。
 // 任何改工具名/CheckResult 形状的提交直接挂 — 必须同步修。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock layer ──
 const mockInvoke = vi.fn();
@@ -51,15 +51,17 @@ function makeFailResult(overrides?: Partial<CheckResult>): CheckResult {
     changed_files: ['src/auth.ts'],
     total_changed_files: 1,
     l5_violations: [],
-    l4_violations: [{
-      signal: {
-        description: 'auth.ts has hidden temporal coupling to token_cache',
-        file_path: 'src/auth.ts',
-        line: 42,
-        affected_nodes: ['auth_service', 'token_cache'],
-        graph_node_ids: ['n1', 'n2'],
+    l4_violations: [
+      {
+        signal: {
+          description: 'auth.ts has hidden temporal coupling to token_cache',
+          file_path: 'src/auth.ts',
+          line: 42,
+          affected_nodes: ['auth_service', 'token_cache'],
+          graph_node_ids: ['n1', 'n2'],
+        },
       },
-    }],
+    ],
     l3_violations: [],
     l2_violations: [],
     passed_checks: [],
@@ -152,16 +154,20 @@ describe('CheckPanel — rendering', () => {
   });
 
   it('renders L5 as highest severity', () => {
-    panel.update(makeFailResult({
-      l5_violations: [{
-        signal: {
-          description: 'irreversible schema change',
-          file_path: 'db/schema.sql',
-          line: 1,
-          affected_nodes: ['users_table'],
-        },
-      }],
-    }));
+    panel.update(
+      makeFailResult({
+        l5_violations: [
+          {
+            signal: {
+              description: 'irreversible schema change',
+              file_path: 'db/schema.sql',
+              line: 1,
+              affected_nodes: ['users_table'],
+            },
+          },
+        ],
+      }),
+    );
     panel.open();
 
     const html = container.innerHTML;

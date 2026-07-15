@@ -136,16 +136,13 @@ export function buildFileNodeIndex(graphData: any): {
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
 
-  const nodes = Array.isArray(graphData.nodes)
-    ? graphData.nodes
-    : Object.values(graphData.nodes || {});
-  const edges = Array.isArray(graphData.edges)
-    ? graphData.edges
-    : Object.values(graphData.edges || {});
+  const nodes = Array.isArray(graphData.nodes) ? graphData.nodes : Object.values(graphData.nodes || {});
+  const edges = Array.isArray(graphData.edges) ? graphData.edges : Object.values(graphData.edges || {});
 
   // Pass 1: count degrees
   for (const e of edges) {
-    const src = (e as any).source, tgt = (e as any).target;
+    const src = (e as any).source,
+      tgt = (e as any).target;
     if (src && tgt) {
       fanOut.set(src, (fanOut.get(src) || 0) + 1);
       fanIn.set(tgt, (fanIn.get(tgt) || 0) + 1);
@@ -165,7 +162,10 @@ export function buildFileNodeIndex(graphData: any): {
     if (!fp) continue;
     const norm = fp.replace(/\\/g, '/').toLowerCase();
     let arr = fileIndex.get(norm);
-    if (!arr) { arr = []; fileIndex.set(norm, arr); }
+    if (!arr) {
+      arr = [];
+      fileIndex.set(norm, arr);
+    }
     arr.push({
       id: (n as any).id,
       name: (n as any).name,
@@ -181,12 +181,8 @@ export function buildFileNodeIndex(graphData: any): {
 // ── buildGraphSnapshot —— 从 graphData 计算架构快照，注入 system prompt ──
 
 export function buildGraphSnapshot(graphData: any): string {
-  const nodes: any[] = Array.isArray(graphData.nodes)
-    ? graphData.nodes
-    : Object.values(graphData.nodes || {});
-  const edges: any[] = Array.isArray(graphData.edges)
-    ? graphData.edges
-    : Object.values(graphData.edges || {});
+  const nodes: any[] = Array.isArray(graphData.nodes) ? graphData.nodes : Object.values(graphData.nodes || {});
+  const edges: any[] = Array.isArray(graphData.edges) ? graphData.edges : Object.values(graphData.edges || {});
 
   // Community distribution
   const communityMap = new Map<number, number>();
@@ -198,7 +194,7 @@ export function buildGraphSnapshot(graphData: any): string {
   // Edge type breakdown
   const edgeTypes = new Map<string, number>();
   for (const e of edges) {
-    const k = (e.kind || e.edge_type || '?');
+    const k = e.kind || e.edge_type || '?';
     edgeTypes.set(k, (edgeTypes.get(k) || 0) + 1);
   }
 
@@ -208,14 +204,14 @@ export function buildGraphSnapshot(graphData: any): string {
     if (e.target) fanIn.set(e.target, (fanIn.get(e.target) || 0) + 1);
   }
   const topFanIn = nodes
-    .map(n => ({ name: n.name || n.id, fanIn: fanIn.get(n.id) || 0 }))
-    .filter(n => n.fanIn > 0)
+    .map((n) => ({ name: n.name || n.id, fanIn: fanIn.get(n.id) || 0 }))
+    .filter((n) => n.fanIn > 0)
     .sort((a, b) => b.fanIn - a.fanIn)
     .slice(0, 5);
 
   // Inherits edges — count distinct
-  const inheritsEdges = edges.filter(e => (e.kind || e.edge_type) === 'inherits');
-  const classCount = nodes.filter(n => (n.kind || '').toLowerCase() === 'class').length;
+  const inheritsEdges = edges.filter((e) => (e.kind || e.edge_type) === 'inherits');
+  const classCount = nodes.filter((n) => (n.kind || '').toLowerCase() === 'class').length;
 
   const parts: string[] = [];
   parts.push(`${nodes.length} 节点 / ${edges.length} 边`);
@@ -240,7 +236,7 @@ export function buildGraphSnapshot(graphData: any): string {
 
   // Hotspots
   if (topFanIn.length > 0) {
-    parts.push(`枢纽: ${topFanIn.map(n => `\`${n.name}\`(${n.fanIn})`).join(', ')}`);
+    parts.push(`枢纽: ${topFanIn.map((n) => `\`${n.name}\`(${n.fanIn})`).join(', ')}`);
   }
 
   return parts.join(' | ');
@@ -252,19 +248,33 @@ export function buildGraphSnapshot(graphData: any): string {
 /** 触发 post-tool 图上下文注入的工具名
  *  ponytail: 'read_file' 是 alias→read_file_content，模型会吐出这个名字，必须保留 */
 export const GRAPH_ENRICH_TOOLS = [
-  'read_file_content', 'read_file',
-  'search_content', 'glob', 'list_directory',
-  'trace_dataflow', 'search_symbols', 'inspect_symbol', 'git_diff', 'run_shell',
-  'resolve_call', 'infer_type',
-  'find_implementations', 'find_references',
+  'read_file_content',
+  'read_file',
+  'search_content',
+  'glob',
+  'list_directory',
+  'trace_dataflow',
+  'search_symbols',
+  'inspect_symbol',
+  'git_diff',
+  'run_shell',
+  'resolve_call',
+  'infer_type',
+  'find_implementations',
+  'find_references',
 ] as const;
 
 /** 触发 preflight 写前影响分析的工具名
  *  ponytail: 写操作可能注册为别名，保留原始名 */
 export const GRAPH_PREFLIGHT_TOOLS = [
-  'edit_file', 'write_file',
-  'delete_file', 'rename_file', 'move_file',
-  'git_discard', 'git_checkout', 'git_commit',
+  'edit_file',
+  'write_file',
+  'delete_file',
+  'rename_file',
+  'move_file',
+  'git_discard',
+  'git_checkout',
+  'git_commit',
 ] as const;
 
 // ═══════════════════════════════════════════════════════════
@@ -296,16 +306,17 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           if (fp) {
             snippet = ctx.getImpactSummary(fp);
             const nodes = ctx.getNodesInFile(fp);
-            const hasFuncs = nodes.some(n => n.kind === 'function' || n.kind === 'method');
+            const hasFuncs = nodes.some((n) => n.kind === 'function' || n.kind === 'method');
             if (hasFuncs && snippet) {
               snippet += ' 共享变量/异步链 → trace_dataflow 追踪。';
             }
             // Engine-layer: fragility rank
             if (ctx.engine) {
               const normFp = fp.replace(/\\/g, '/').toLowerCase();
-              const rankEntry = ctx.engine.fragilityRanks.find(r =>
-                r.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
-                normFp.includes(r.file.replace(/\\/g, '/').toLowerCase())
+              const rankEntry = ctx.engine.fragilityRanks.find(
+                (r) =>
+                  r.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+                  normFp.includes(r.file.replace(/\\/g, '/').toLowerCase()),
               );
               if (rankEntry) {
                 const rank = ctx.engine.fragilityRanks.indexOf(rankEntry) + 1;
@@ -319,13 +330,13 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           // Extract symbol names from matched lines, cross-reference with fileIndex
           const graphSymbols = extractGraphSymbolsFromSearch(result, (fp: string) => ctx.getNodesInFile(fp));
           if (graphSymbols.length > 0) {
-            const parts = graphSymbols.map(s => {
+            const parts = graphSymbols.map((s) => {
               const info: string[] = [];
               if (s.fanIn > 0) info.push(`↓${s.fanIn}`);
               if (s.fanOut > 0) info.push(`↑${s.fanOut}`);
               return `\`${s.name}\`${info.length > 0 ? ` (${info.join(' ')})` : ''}`;
             });
-            const highImpact = graphSymbols.filter(s => s.fanIn >= 5);
+            const highImpact = graphSymbols.filter((s) => s.fanIn >= 5);
             snippet = `图谱命中: ${parts.join(', ')}。`;
             if (highImpact.length > 0) {
               snippet += ` → \`${highImpact[0].name}\` 下游多, 调 trace_impact 看波及`;
@@ -336,11 +347,9 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               snippet = ctx.getSearchContext(files.slice(0, 3));
               // Engine-layer: flag if any match is a high-fragility file
               if (ctx.engine) {
-                const hot = files.filter(f => {
+                const hot = files.filter((f) => {
                   const nf = f.replace(/\\/g, '/').toLowerCase();
-                  return ctx.engine!.fragilityRanks.some(r =>
-                    r.file.replace(/\\/g, '/').toLowerCase().includes(nf)
-                  );
+                  return ctx.engine!.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
                 });
                 if (hot.length > 0) {
                   snippet = (snippet || '') + ` ⚠ 其中 ${hot.length} 个文件在高脆弱度排名中 → 谨慎修改`;
@@ -363,19 +372,19 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
         case 'trace_dataflow': {
           const vars = extractSharedVarsFromDataflow(result);
           if (vars.length > 0) {
-            snippet = `共享变量: ${vars.map(v => `\`${v}\``).join(', ')}。→ 用 trace_impact 追踪下游影响`;
+            snippet = `共享变量: ${vars.map((v) => `\`${v}\``).join(', ')}。→ 用 trace_impact 追踪下游影响`;
           }
           break;
         }
         case 'search_symbols': {
           const nodes = extractNodesFromSearchResult(result);
           if (nodes.length > 0) {
-            const names = nodes.map(n => `\`${n.name}\``).join(', ');
+            const names = nodes.map((n) => `\`${n.name}\``).join(', ');
             snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 get_neighbors 查看依赖`;
             // Engine-layer: highlight high-fragility files among search hits
             if (ctx.engine) {
-              const rankHit = nodes.some(node =>
-                ctx.engine!.fragilityRanks.some(r => r.file.toLowerCase().includes(node.name.toLowerCase()))
+              const rankHit = nodes.some((node) =>
+                ctx.engine!.fragilityRanks.some((r) => r.file.toLowerCase().includes(node.name.toLowerCase())),
               );
               if (rankHit) {
                 snippet += ` ⚠ 命中了高脆弱度模块 → 调 trace_impact`;
@@ -392,7 +401,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             }
             // Engine-layer: tag synthesis alerts
             if (ctx.engine && ctx.engine.synthesisAlerts.length > 0) {
-              const alerts = ctx.engine.synthesisAlerts.map(a => a.type).join(', ');
+              const alerts = ctx.engine.synthesisAlerts.map((a) => a.type).join(', ');
               snippet = (snippet || '') + ` 合成标记: ${alerts}`;
             }
           } catch {}
@@ -404,9 +413,9 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             snippet = ctx.getSearchContext(files.slice(0, 3));
             // Engine-layer: fragility summary for changed files
             if (ctx.engine) {
-              const hot = files.filter(f => {
+              const hot = files.filter((f) => {
                 const nf = f.replace(/\\/g, '/').toLowerCase();
-                return ctx.engine!.fragilityRanks.some(r => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
+                return ctx.engine!.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
               });
               if (hot.length > 0) {
                 snippet = (snippet || '') + ` ⚠ ${hot.length} 个变更文件在高脆弱度排名中`;
@@ -424,9 +433,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             const parsed = parseBuildOutput(cmd, result);
             if (parsed) {
               cacheBuildResult(parsed);
-              snippet = parsed.outcome === 'pass'
-                ? `✅ ${parsed.summary}`
-                : `❌ ${parsed.summary}`;
+              snippet = parsed.outcome === 'pass' ? `✅ ${parsed.summary}` : `❌ ${parsed.summary}`;
               // Engine-layer: on failure, report fragility context
               if (parsed.outcome === 'fail' && ctx.engine && ctx.engine.fragilityRanks.length > 0) {
                 const top = ctx.engine.fragilityRanks[0];
@@ -475,7 +482,10 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             const impls = parsed.implementations;
             if (impls && Array.isArray(impls) && impls.length > 0) {
               const count = impls.length;
-              const names = impls.slice(0, 3).map((i: any) => `\`${i.name || i.qualified_name || '?'}\``).join(', ');
+              const names = impls
+                .slice(0, 3)
+                .map((i: any) => `\`${i.name || i.qualified_name || '?'}\``)
+                .join(', ');
               snippet = `找到 ${count} 个实现: ${names}${count > 3 ? '…' : ''}。→ 调 get_neighbors 查看完整继承树`;
             }
           } catch {}
@@ -522,10 +532,10 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 
 import {
   buildPreReadBlock,
+  cacheBuildResult,
   formatDiagnostics,
   refreshGitBlame,
   refreshGitStatus,
-  cacheBuildResult,
 } from './state-inject';
 
 const MAX_STATE_BYTES = 600;
@@ -576,7 +586,10 @@ export function createStatePreflightHook(): PreflightHook {
 // ── Build/test output parser ──
 
 /** Parse stdout/stderr from a build or test command into a structured result. */
-function parseBuildOutput(cmd: string, output: string): { command: string; outcome: 'pass' | 'fail'; summary: string; ts: number } | null {
+function parseBuildOutput(
+  cmd: string,
+  output: string,
+): { command: string; outcome: 'pass' | 'fail'; summary: string; ts: number } | null {
   const label = cmd.split(' ').slice(0, 2).join(' '); // "cargo build", "npm test"
   const ts = Date.now();
 
@@ -584,7 +597,8 @@ function parseBuildOutput(cmd: string, output: string): { command: string; outco
   if (/cargo\s+build/.test(cmd)) {
     const errors = (output.match(/^error(\[|:)/gm) || []).length;
     if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors`, ts };
-    if (/Finished\s+dev/.test(output) || /Finished\s+release/.test(output)) return { command: label, outcome: 'pass', summary: '编译通过', ts };
+    if (/Finished\s+dev/.test(output) || /Finished\s+release/.test(output))
+      return { command: label, outcome: 'pass', summary: '编译通过', ts };
     return null;
   }
 
@@ -612,7 +626,8 @@ function parseBuildOutput(cmd: string, output: string): { command: string; outco
   // pytest
   if (/pytest|python\s+-m\s+pytest/.test(cmd)) {
     const failed = output.match(/(\d+)\s+failed/);
-    if (failed && parseInt(failed[1]) > 0) return { command: label, outcome: 'fail', summary: `${failed[1]} failed`, ts };
+    if (failed && parseInt(failed[1]) > 0)
+      return { command: label, outcome: 'fail', summary: `${failed[1]} failed`, ts };
     const passed = output.match(/(\d+)\s+passed/);
     if (passed) return { command: label, outcome: 'pass', summary: `${passed[1]} passed`, ts };
     return null;
@@ -623,7 +638,8 @@ function parseBuildOutput(cmd: string, output: string): { command: string; outco
     const errors = (output.match(/^error(\[|:)/gm) || []).length + (output.match(/\bERROR\b/g) || []).length;
     if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors`, ts };
     const warnings = (output.match(/\bwarning\b/gi) || []).length;
-    if (/^(npm |yarn )/.test(cmd) && output.includes('added')) return { command: label, outcome: 'pass', summary: '安装完成', ts };
+    if (/^(npm |yarn )/.test(cmd) && output.includes('added'))
+      return { command: label, outcome: 'pass', summary: '安装完成', ts };
     if (warnings > 0) return { command: label, outcome: 'pass', summary: `完成 (${warnings} warnings)`, ts };
     return { command: label, outcome: 'pass', summary: '完成', ts };
   }
@@ -649,10 +665,7 @@ function extractIdentifiers(text: string): string[] {
 
 /** Cross-reference search_content matches with fileIndex: which matched
  *  identifiers are known graph symbols? Returns top 5 matches sorted by fanIn. */
-function extractGraphSymbolsFromSearch(
-  result: string,
-  getNodes: (fp: string) => NodeBrief[],
-): SearchGraphSymbol[] {
+function extractGraphSymbolsFromSearch(result: string, getNodes: (fp: string) => NodeBrief[]): SearchGraphSymbol[] {
   try {
     const parsed = JSON.parse(result);
     const matches = parsed.matches || parsed.results || [];
@@ -703,16 +716,21 @@ function extractFilesFromSearchResult(result: string): string[] {
       }
       return [...files];
     }
-  } catch { /* not JSON, ignore */ }
+  } catch {
+    /* not JSON, ignore */
+  }
   return [];
 }
 
 // ── 辅助解析函数（供 GraphContextHook enrich 使用）──
 
 function extractFilesFromGlobResult(result: string): string[] {
-  const lines = result.split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = result
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
   // glob 输出格式：每行一个文件路径
-  return lines.filter(l => /\.(ts|rs|py|js|tsx|jsx|go|java|cpp|c|h|hpp)$/i.test(l)).slice(0, 5);
+  return lines.filter((l) => /\.(ts|rs|py|js|tsx|jsx|go|java|cpp|c|h|hpp)$/i.test(l)).slice(0, 5);
 }
 
 function extractSourceFilesFromDirList(result: string): string[] {
@@ -736,7 +754,10 @@ function extractSharedVarsFromDataflow(result: string): string[] {
   try {
     const parsed = JSON.parse(result);
     if (parsed.shared_state && Array.isArray(parsed.shared_state)) {
-      return parsed.shared_state.map((s: any) => s.var || '').filter(Boolean).slice(0, 5);
+      return parsed.shared_state
+        .map((s: any) => s.var || '')
+        .filter(Boolean)
+        .slice(0, 5);
     }
   } catch {}
   return [];
@@ -747,7 +768,10 @@ function extractNodesFromSearchResult(result: string): { name: string }[] {
     const parsed = JSON.parse(result);
     const arr = parsed.results || parsed.matches || [];
     if (Array.isArray(arr)) {
-      return arr.map((r: any) => ({ name: r.name || r.id || '' })).filter(n => n.name).slice(0, 5);
+      return arr
+        .map((r: any) => ({ name: r.name || r.id || '' }))
+        .filter((n) => n.name)
+        .slice(0, 5);
     }
   } catch {}
   return [];
@@ -786,21 +810,21 @@ export function createGraphContext(
 
     // Downstream: who depends on this file's symbols
     const downstream = [...nodes]
-      .filter(n => n.fanIn > 0)
+      .filter((n) => n.fanIn > 0)
       .sort((a, b) => b.fanIn - a.fanIn)
       .slice(0, 5);
     // Upstream: what this file's symbols depend on
     const upstream = [...nodes]
-      .filter(n => n.fanOut > 0)
+      .filter((n) => n.fanOut > 0)
       .sort((a, b) => b.fanOut - a.fanOut)
       .slice(0, 3);
 
     let summary = `此文件 ${nodes.length} 个符号。`;
     if (downstream.length > 0) {
-      summary += ` 下游依赖: ${downstream.map(n => `\`${n.name}\`(${n.fanIn})`).join(', ')}。`;
+      summary += ` 下游依赖: ${downstream.map((n) => `\`${n.name}\`(${n.fanIn})`).join(', ')}。`;
     }
     if (upstream.length > 0) {
-      summary += ` | 依赖上游: ${upstream.map(n => `\`${n.name}\`(${n.fanOut})`).join(', ')}。`;
+      summary += ` | 依赖上游: ${upstream.map((n) => `\`${n.name}\`(${n.fanOut})`).join(', ')}。`;
     }
     if (downstream.length > 0) {
       summary += ` → 改 \`${downstream[0].name}\` 前调 trace_impact`;
@@ -824,7 +848,7 @@ export function createGraphContext(
         if (fi > 0) deps.push(`${fi}↓`);
         if (fo > 0) deps.push(`${fo}↑`);
         const top3 = nodes.sort((a, b) => b.fanIn - a.fanIn).slice(0, 3);
-        const names = top3.map(n => `\`${n.name}\``).join(', ');
+        const names = top3.map((n) => `\`${n.name}\``).join(', ');
         parts.push(`${fileName}: ${nodes.length}符号${deps.length > 0 ? ` [${deps.join(' ')}]` : ''} — ${names}`);
       }
     }
@@ -897,7 +921,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
       const totalFanIn = nodes.reduce((sum, n) => sum + n.fanIn, 0);
       const topSymbols = [...nodes]
-        .filter(n => n.fanIn > 0)
+        .filter((n) => n.fanIn > 0)
         .sort((a, b) => b.fanIn - a.fanIn)
         .slice(0, 5);
 
@@ -938,9 +962,10 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
       if (ctx.engine) {
         const eng = ctx.engine;
         const normFp = fp.replace(/\\/g, '/').toLowerCase();
-        const rankEntry = eng.fragilityRanks.find(r =>
-          r.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
-          normFp.includes(r.file.replace(/\\/g, '/').toLowerCase())
+        const rankEntry = eng.fragilityRanks.find(
+          (r) =>
+            r.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+            normFp.includes(r.file.replace(/\\/g, '/').toLowerCase()),
         );
         if (rankEntry || eng.cycleCount > 0 || eng.sessionDrift > 0) {
           lines.push(`│`);
@@ -963,9 +988,10 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
           // ── LSP hotspots ──
           if (eng.lspHotspots.length > 0) {
-            const fileHit = eng.lspHotspots.filter(h =>
-              h.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
-              normFp.includes(h.file.replace(/\\/g, '/').toLowerCase())
+            const fileHit = eng.lspHotspots.filter(
+              (h) =>
+                h.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+                normFp.includes(h.file.replace(/\\/g, '/').toLowerCase()),
             );
             if (fileHit.length > 0) {
               lines.push(`│  LSP 调用热点:`);
@@ -977,10 +1003,9 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
           // ── LSP real call resolution ──
           if (eng.lspCallers.size > 0) {
-            const callerEntries = eng.lspCallers.get(normFp)
-              || [...eng.lspCallers.entries()].find(([k]) =>
-                k.replace(/\\/g, '/').toLowerCase().includes(normFp)
-              )?.[1];
+            const callerEntries =
+              eng.lspCallers.get(normFp) ||
+              [...eng.lspCallers.entries()].find(([k]) => k.replace(/\\/g, '/').toLowerCase().includes(normFp))?.[1];
             if (callerEntries && callerEntries.length > 0) {
               lines.push(`│  LSP 调用者 (真实解析):`);
               for (const c of callerEntries.slice(0, 3)) {
@@ -991,18 +1016,19 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
           // ── Semantic neighbors ──
           if (eng.semanticNeighbors.size > 0) {
-            const neighbors = eng.semanticNeighbors.get(normFp)
-              || [...eng.semanticNeighbors.entries()].find(([k]) =>
-                k.replace(/\\/g, '/').toLowerCase().includes(normFp)
+            const neighbors =
+              eng.semanticNeighbors.get(normFp) ||
+              [...eng.semanticNeighbors.entries()].find(([k]) =>
+                k.replace(/\\/g, '/').toLowerCase().includes(normFp),
               )?.[1];
             if (neighbors && neighbors.length > 0) {
-              lines.push(`│  语义邻居: ${neighbors.map(n => `\`${n.name}\``).join(', ')}`);
+              lines.push(`│  语义邻居: ${neighbors.map((n) => `\`${n.name}\``).join(', ')}`);
             }
           }
 
           // ── Synthesis alerts ──
           if (eng.synthesisAlerts.length > 0) {
-            lines.push(`│  合成引擎: ${eng.synthesisAlerts.map(a => `${a.type}(${a.count})`).join(', ')}`);
+            lines.push(`│  合成引擎: ${eng.synthesisAlerts.map((a) => `${a.type}(${a.count})`).join(', ')}`);
           }
         }
       }
