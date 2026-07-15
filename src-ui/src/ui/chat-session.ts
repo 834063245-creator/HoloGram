@@ -17,6 +17,7 @@ import {
 import { rpc } from '../bridge';
 import {
   getChatStore,
+  msgStoreFor, msgStoreForActive, bumpSession,
   bumpChat,
 } from './chat-store';
 import type { ChatSessionMeta } from './chat-store';
@@ -75,11 +76,6 @@ export function syncActiveSessionTokens(storeId: string, count: number): void {
   const s = sessions[activeIdx];
   if (s) getChatStore(storeId).sess.getState().setSessionTokens(s.id, count);
 }
-export function getSessionMessageModels(storeId: string): Map<number, ChatMessage[]> {
-  // ponytail: adapter — callers expect Map, store uses Record
-  const models = getChatStore(storeId).sess.getState().sessionMessageModels;
-  return new Map(Object.entries(models).map(([k, v]) => [Number(k), v]));
-}
 type TurnPair = { userText: string; userBubble: null; assistantBubble: null; sessionIndex: number };
 
 function ensureTurnPairs(storeId: string): TurnPair[] {
@@ -134,10 +130,10 @@ const id = getChatStore(storeId).sess.getState().nextSessionId;
     sessions: [{ id, label }],
     activeIdx: 0,
     sessionTokens: {},
-    sessionMessageModels: {},
-    sessionStreamingIds: {},
     nextSessionId: id + 1,
   });
+  // ponytail: create per-session messages store — the ONLY source of truth
+  msgStoreFor(storeId, id).getState().setMessages([]);
   setTurnPairs(storeId, []);
 }
 
@@ -169,7 +165,6 @@ export function autoTitleSessionIfDefault(storeId: string): void {
 // ── SessionContext — the bridge between standalone session functions and ChatPanel state ──
 
 export interface SessionContext {
-  /** Store ID for panel-scoped state isolation. */
   storeId: string;
 
   // DOM elements
@@ -177,18 +172,7 @@ export interface SessionContext {
   sessionTabs: HTMLElement;
   tabBar: HTMLElement;
 
-  // Project path
   getProjectPath: () => string;
-
-  // Agent (removed — use getAgentFactory(storeId) instead)
-
-  // Message model
-  getMessages: () => ChatMessage[];
-  setMessages: (msgs: ChatMessage[]) => void;
-  getStreamingAssistantId: () => MessageId | null;
-  setStreamingAssistantId: (id: MessageId | null) => void;
-
-  // ⚡ Zustand store drives React re-render — no bump needed
 
   // Streaming helpers
   flushReasoning: () => void;
@@ -209,17 +193,11 @@ export interface SessionContext {
   clearToolUsage: () => void;
   clearToolHistory: () => void;
 
-  // Usage text
   getLastUsageText: () => string;
   setLastUsageText: (s: string) => void;
-
-  // Agent diagnostics (for error messages)
   getLastAgentDiag: () => string;
 
-  // Input history (reset on new session)
   clearInputHistory: () => void;
-
-  // StarGraph (for node-link wiring in restored sessions)
   getStarGraph: () => import('./graph').StarGraph | null;
 }
 
@@ -284,33 +262,24 @@ export function renderSessionTabs(ctx: SessionContext): void {
 }
 
 export function switchSession(ctx: SessionContext, idx: number): void {
-  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
+  const st = getChatStore(ctx.storeId).sess.getState();
+  const { sessions, activeIdx } = st;
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
-  // Save current messages + streamingId + token count to cache
+
+  // ponytail: messages live in per-session stores — no save/restore needed.
+  // Just save token count, switch activeIdx, React re-renders from new store.
   if (activeIdx >= 0) {
-    saveCurrentMessages(ctx);
-    const oldSid = sessions[activeIdx].id;
-    getChatStore(ctx.storeId).sess.getState().setSessionTokens(oldSid, ctx.getTotalTokensUsed());
-    // Persist streaming assistant ID with the session so background agents
-    // don't leak their output into the wrong tab when events arrive.
-    const streamId = ctx.getStreamingAssistantId();
-    getChatStore(ctx.storeId).sess.getState().setSessionStreamingId(oldSid, streamId);
+    getChatStore(ctx.storeId).sess.getState().setSessionTokens(sessions[activeIdx].id, ctx.getTotalTokensUsed());
   }
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
-  // Switch
   getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
   renderSessionTabs(ctx);
-  restoreMessages(ctx);
-  // Restore target session's token count + streaming state.
-  // ponytail: only restore streamingAssistantId if the target session actually
-  // has one. Otherwise keep the current value — it belongs to a background
-  // agent whose events must still route to its session cache via _findAssistantById.
-  ctx.setTotalTokensUsed(getChatStore(ctx.storeId).sess.getState().sessionTokens[sessions[idx].id] || 0);
+
+  // Restore token count for target session
+  ctx.setTotalTokensUsed(st.sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
-  const restoredStreamId = getChatStore(ctx.storeId).sess.getState().sessionStreamingIds[sessions[idx].id];
-  if (restoredStreamId) ctx.setStreamingAssistantId(restoredStreamId);
   ctx.updateFooter();
 }
 
@@ -321,37 +290,24 @@ export function closeSession(ctx: SessionContext, idx: number): void {
     return;
   }
   const s = st.sessions[idx];
-  // Stop this session's agent if running, then clean up
   removeSessionExecState(ctx.storeId, s.id);
   agentHandles.delete(agentKey(ctx.storeId, s.id));
-  st.removeSession(s.id);
+
+  const newSessions = [...st.sessions];
+  newSessions.splice(idx, 1);
+  let newIdx = st.activeIdx;
+  if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
+  if (newIdx < 0) newIdx = 0;
+  getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
+  renderSessionTabs(ctx);
+  // ponytail: no restoreMessages — React reads from per-session store automatically
+  ctx.updateFooter();
+
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
-    saveActiveSession(ctx, projectPath).then(() => {
-      const st2 = getChatStore(ctx.storeId).sess.getState();
-      const newSessions = [...st2.sessions];
-      newSessions.splice(idx, 1);
-      let newIdx = st2.activeIdx;
-      if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
-      if (newIdx < 0) newIdx = 0;
-      getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
-      renderSessionTabs(ctx);
-      restoreMessages(ctx);
-      ctx.updateFooter();
-    }).catch((e: unknown) => {
+    saveActiveSession(ctx, projectPath).catch((e: unknown) => {
       console.error('[chat] closeSession save failed:', e);
-ctx.addNotice('关闭会话失败', 'error');
     });
-  } else {
-    const newSessions = [...st.sessions];
-    newSessions.splice(idx, 1);
-    let newIdx = st.activeIdx;
-    if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
-    if (newIdx < 0) newIdx = 0;
-    getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
-    renderSessionTabs(ctx);
-    restoreMessages(ctx);
-    ctx.updateFooter();
   }
 }
 
@@ -368,12 +324,11 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
     return;
   }
   const st = getChatStore(ctx.storeId).sess.getState();
-  // Save current session's messages + streaming state before switching
+  // ponytail: messages in per-session stores — no save/restore needed.
+  // Just save token count for the old session.
   if (st.activeIdx >= 0) {
-    saveCurrentMessages(ctx);
     const oldSid = st.sessions[st.activeIdx].id;
-    const streamId = ctx.getStreamingAssistantId();
-    getChatStore(ctx.storeId).sess.getState().setSessionStreamingId(oldSid, streamId);
+    getChatStore(ctx.storeId).sess.getState().setSessionTokens(oldSid, ctx.getTotalTokensUsed());
   }
   ctx.flushReasoning();
   ctx.flushText();
@@ -381,19 +336,16 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   const id = st.nextSessionId;
   const label = `会话 ${st.sessions.length + 1}`;
   agentHandles.set(agentKey(ctx.storeId, id), newAgent);
-  // Create fresh execState for the new session (old sessions keep theirs)
   sessionExecStates.set(agentKey(ctx.storeId, id), createExecState());
   getChatStore(ctx.storeId).sess.setState({
     sessions: [...st.sessions, { id, label }],
     activeIdx: st.sessions.length,
     nextSessionId: id + 1,
   });
+  // ponytail: create per-session messages store — the ONLY source of truth
+  msgStoreFor(ctx.storeId, id).getState().setMessages([]);
   renderSessionTabs(ctx);
-  ctx.setMessages([]);
-  bumpChat(ctx.storeId);
   resetMsgIdCounter();
-  // ponytail: don't clear streamingAssistantId — it belongs to a background
-  // agent whose events must still route to its session cache.
   ctx.clearInputHistory();
   setTurnPairs(ctx.storeId, []);
   ctx.setTotalTokensUsed(0);
@@ -401,34 +353,6 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.addNotice(`新会话已创建 — 会话 ${st.sessions[st.activeIdx]?.label ?? ''} 仍在后台运行`, 'info');
   ctx.setLastUsageText('');
   ctx.updateFooter();
-}
-
-// ── Session message cache ──
-
-function saveCurrentMessages(ctx: SessionContext): void {
-  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const sid = sessions[activeIdx]?.id;
-  if (!sid) return;
-  getChatStore(ctx.storeId).sess.getState().setSessionMessageModels(sid, [...ctx.getMessages()]);
-}
-
-function restoreMessages(ctx: SessionContext): void {
-  const { sessions, activeIdx, sessionMessageModels } = getChatStore(ctx.storeId).sess.getState();
-  const sid = sessions[activeIdx]?.id;
-  if (!sid) return;
-
-  const cachedMessages = sessionMessageModels[sid];
-  if (cachedMessages && cachedMessages.length > 0) {
-    ctx.setMessages(cachedMessages);
-    bumpChat(ctx.storeId);
-    return;
-  }
-
-  const agent = agentHandles.get(agentKey(ctx.storeId, sid));
-  if (agent) {
-    _rebuildMessagesFromSession(ctx);
-    bumpChat(ctx.storeId);
-  }
 }
 
 // ── Session persistence — one file per session, localStorage backup ──
@@ -483,7 +407,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   const agent = agentHandles.get(agentKey(ctx.storeId, sMeta.id));
   if (!agent) return;
 
-  saveCurrentMessages(ctx);
+  // ponytail: messages are already in per-session store — no saveCurrentMessages needed
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(sMeta.id, ctx.getTotalTokensUsed());
 
   const data = {
@@ -624,13 +548,12 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   newAgent.setSession([...freshSys, ...conv]);
 
   const curSt = getChatStore(ctx.storeId).sess.getState();
-  if (curSt.activeIdx >= 0) saveCurrentMessages(ctx);
+  // ponytail: messages in per-session stores — no saveCurrentMessages needed
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
 
   const label = data.label || '已恢复的会话';
-  // Replace ALL sessions — switch workspace = fresh start (clear only this panel)
   for (const k of [...agentHandles.keys()]) { if (k.startsWith(ctx.storeId + ':')) agentHandles.delete(k); }
   agentHandles.set(agentKey(ctx.storeId, data.id), newAgent);
   getChatStore(ctx.storeId).sess.setState({
@@ -638,6 +561,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     activeIdx: 0,
     nextSessionId: Math.max(curNextId, curSt.nextSessionId),
   });
+  // ponytail: create per-session messages store + populate from restored data
+  msgStoreFor(ctx.storeId, data.id).getState().setMessages([]);
   renderSessionTabs(ctx);
 
   try { renderRestoredSession(ctx); } catch (e) {
@@ -741,7 +666,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     ? data.label
     : firstUser ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '') : `会话 ${st1.sessions.length + 1}`;
 
-  if (st1.activeIdx >= 0) saveCurrentMessages(ctx);
+  // ponytail: messages in per-session stores — no saveCurrentMessages needed
   ctx.flushReasoning(); ctx.flushText(); ctx.clearPendingToolCards();
 
   const sid = data.id || sessionId;
@@ -750,6 +675,8 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     sessions: [...st1.sessions, { id: sid, label }],
     activeIdx: st1.sessions.length,
   });
+  // ponytail: create per-session messages store
+  msgStoreFor(ctx.storeId, sid).getState().setMessages([]);
   if (typeof data.tokensUsed === 'number') {
     ctx.setTotalTokensUsed(data.tokensUsed);
     getChatStore(ctx.storeId).sess.getState().setSessionTokens(sid, data.tokensUsed);
@@ -791,28 +718,30 @@ export async function deleteSessionFile(ctx: SessionContext, projectPath: string
 /** Walk through active agent's session array and build ChatMessage[] + turnPairs. */
 function renderRestoredSession(ctx: SessionContext): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
+  const sid = sessions[activeIdx]?.id;
+  if (sid == null) return;
+  const agent = agentHandles.get(agentKey(ctx.storeId, sid));
   if (!agent) return;
   _rebuildMessagesFromSession(ctx);
-  bumpChat(ctx.storeId);
+  bumpSession(ctx.storeId, sid);
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
 
-/** Populate ctx.getMessages()[] + turnPairs from active agent's getSession().
- *  Pure data rebuild — no DOM sync, no notices. */
+/** Populate the active session's per-session messages store + turnPairs from the
+ *  agent's getSession() raw messages. Pure data rebuild — no DOM, no notices. */
 export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const agent = agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1));
+  const sid = sessions[activeIdx]?.id;
+  if (sid == null) return;
+  const agent = agentHandles.get(agentKey(ctx.storeId, sid));
   if (!agent) return;
 
   const msgs = agent.getSession();
+  const rebuilt: ChatMessage[] = [];
 
-  // Reset messages and rebuild from session data
   resetMsgIdCounter();
-  ctx.setMessages([]);
   setTurnPairs(ctx.storeId, []);
 
-  // Index tool results by call_id so we can attach outputs to tool parts
   const toolResults = new Map<string, string>();
   for (const m of msgs) {
     if (m.role === 'tool' && m.tool_call_id) {
@@ -832,10 +761,9 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
 
     if (m.role === 'user') {
       if (m.content?.startsWith('<compacted-context>')) {
-        ctx.getMessages().push(createNoticeMessage('📋 上下文已压缩', 'info'));
+        rebuilt.push(createNoticeMessage('📋 上下文已压缩', 'info'));
         continue;
       }
-      // Finalize previous pair
       if (pendingUserText && pendingUserId) {
         getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
       }
@@ -843,7 +771,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
       pendingUserId = nextMsgId();
       pendingSessionIdx = idx;
       const um = createUserMessage(m.content || '', undefined, idx);
-      ctx.getMessages().push(um);
+      rebuilt.push(um);
       pendingUserId = um._id;
       continue;
     }
@@ -854,12 +782,10 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
       const am = createAssistantMessage(pendingUserId || '');
       am.status = 'done';
 
-      // Reasoning
       if (m.reasoning_content) {
         am.parts.push({ type: 'reasoning', text: m.reasoning_content });
       }
 
-      // Tool calls — output comes from matching tool-result messages
       if (m.tool_calls) {
         for (const tc of m.tool_calls) {
           am.parts.push({
@@ -875,14 +801,12 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
         }
       }
 
-      // Text content — always add if present, regardless of tool calls
       if (m.content) {
         am.parts.push({ type: 'text', text: m.content, finalised: true });
       }
 
-      ctx.getMessages().push(am);
+      rebuilt.push(am);
 
-      // Link to pending user turn
       if (pendingUserText) {
         getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
         pendingUserText = null;
@@ -891,10 +815,12 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
     }
   }
 
-  // Flush any trailing user message
   if (pendingUserText) {
     getTurnPairs(ctx.storeId).push({ userText: pendingUserText, userBubble: null, assistantBubble: null, sessionIndex: pendingSessionIdx });
   }
+
+  // ponytail: write to per-session store — the ONLY source of truth
+  msgStoreFor(ctx.storeId, sid).getState().setMessages(rebuilt);
 }
 
 // ── Turn retraction ──
@@ -934,31 +860,33 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
   return pair.userText;
 }
 
-/** Retract a single user message (and its assistant response) from the model + DOM. */
+/** Retract a single user message (and its assistant response) from the model. */
 export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void {
-  const msgs = ctx.getMessages();
+  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
+  const sid = sessions[activeIdx]?.id;
+  if (sid == null) return;
+
+  const msgs = msgStoreFor(ctx.storeId, sid).getState().messages;
   const idx = msgs.indexOf(msg as any as ChatMessage);
   if (idx >= 0) {
-    // Remove the user message and its assistant response
     const toRemove: number[] = [idx];
-    // Find the assistant that responded to this
     for (let i = idx + 1; i < msgs.length; i++) {
       const m = msgs[i];
       if (m.role === 'assistant' && (m as AssistantMessage).respondingTo === msg._id) {
         toRemove.push(i);
         break;
       } else if (m.role === 'user') {
-        break; // next user message → stop
+        break;
       }
     }
     for (const i of toRemove.reverse()) {
       msgs.splice(i, 1);
     }
+    msgStoreFor(ctx.storeId, sid).getState().setMessages([...msgs]);
+    bumpSession(ctx.storeId, sid);
   }
-  // Also retract from agent session
   if (msg.sessionIndex >= 0) {
-    const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-    agentHandles.get(agentKey(ctx.storeId, sessions[activeIdx]?.id ?? -1))?.retractTurnAt(msg.sessionIndex);
+    agentHandles.get(agentKey(ctx.storeId, sid))?.retractTurnAt(msg.sessionIndex);
   }
 }
 

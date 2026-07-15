@@ -1,28 +1,27 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Chat Stream — streaming render pipeline extracted from ChatPanel
-// Handles Agent event → DOM message bubble conversion: Text, Reasoning, ToolCall, etc.
-// All functions receive StreamContext as first parameter instead of accessing `this`.
+// Chat Stream — streaming render pipeline
+// ponytail: messages live in per-session stores (getMessagesStore(`${storeId}:${sid}`)).
+// No panel-level messages array, no sessionMessageModels cache, no manual sync.
+// Streaming writes directly to the session's store — always correct regardless of
+// which tab is active.
 
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { iconHtml } from './icons';
-import { bumpChat } from './chat-store';
+import { bumpChat, msgStoreFor, bumpSession, getChatStore } from './chat-store';
 import { autoTitleSessionIfDefault } from './chat-session';
-import { getChatStore } from './chat-store';
 import type { StarGraph } from './graph';
 import type {
   ChatMessage,
   UserMessage,
   AssistantMessage,
-  AssistantPart,
   MessageId,
   FileAttachment,
 } from './message-model';
 import {
-  nextMsgId,
   createUserMessage,
   createAssistantMessage,
   createNoticeMessage,
@@ -40,14 +39,15 @@ type TurnPair = {
 // ── StreamContext ──────────────────────────────────────────
 
 export interface StreamContext {
-  /** Store ID for panel-scoped state isolation. */
   storeId: string;
 
-  // ── 消息数组 ──
-  getMessages: () => ChatMessage[];
-  setMessages: (msgs: ChatMessage[]) => void;
+  // ── Per-session messages stores (ponytail: single source of truth) ──
+  getSessionMessages: (sid: number) => ChatMessage[];
+  getActiveMessages: () => ChatMessage[];
+  setSessionMessages: (sid: number, msgs: ChatMessage[]) => void;
+  bumpSessionMessages: (sid: number) => void;
 
-  // ── 流式状态 ──
+  // ── Streaming state (panel-level — one stream per panel) ──
   getStreamingAssistantId: () => MessageId | null;
   setStreamingAssistantId: (id: MessageId | null) => void;
   getUserScrolledUp: () => boolean;
@@ -64,7 +64,7 @@ export interface StreamContext {
   // ── Graph ──
   getStarGraph: () => StarGraph | null;
 
-  // ── 回调（ChatPanel methods not extracted）──
+  // ── Callbacks ──
   updateFooter: () => void;
   setLastUsageText: (s: string) => void;
   addNotice: (text: string, level?: string) => void;
@@ -80,90 +80,105 @@ export interface StreamContext {
   sendMessage: () => Promise<void>;
   _updateTokens: (tokensUsed: number) => void;
 
-  // ── 项目路径 ──
   getProjectPath: () => string;
-
-  // ── 运行状态 ──
   getRunning: () => boolean;
   getAbortCtrl: () => AbortController | null;
   setAbortCtrl: (c: AbortController | null) => void;
-
-  // ── 展开的推理 ──
   getExpandedReasoning: () => Set<number>;
 }
 
-// ── Session cache routing ──────────────────────────────────
-// ponytail: streaming events write to sessionMessageModels directly,
-// not to the active messages array. This prevents tab-switch leaks
-// because the correct session's cache is the write target regardless
-// of which tab is currently active.
+// ── Session routing ───────────────────────────────────────
+// ponytail: resolve which session owns the streaming assistant.
+// Strategy:
+//   1. If assistantId is known → scan session stores for it (O(sessions), ≤10)
+//   2. If no assistant yet → check pendingStreamingSession (set by sendMessage before agent.run)
+//   3. Fallback → active session
+// This prevents the race where user switches tabs after sendMessage but before
+// the first text event arrives (streamingAssistantId still null at that point).
 
-interface StreamingTarget {
+interface SessionTarget {
   sessionId: number;
-  isActive: boolean;
   messages: ChatMessage[];
-  /** Persist to cache; sync to active array + trigger re-render if active. */
-  commit(storeId: string, setActive: (msgs: ChatMessage[]) => void): void;
+  isActive: boolean;
 }
 
-function _resolveStreamingTarget(ctx: StreamContext, assistantId: MessageId | null): StreamingTarget | null {
-  const sess = getChatStore(ctx.storeId).sess;
-  const { sessionMessageModels, sessionStreamingIds, sessions, activeIdx } = sess.getState();
+/** Track which session started the current streaming run.
+ *  Set by sendMessage (or sendAgentText/runGoal) before agent.run(),
+ *  cleared in _finaliseStreamingAssistant. */
+const _pendingStreamingSessions = new Map<string, number>();
+
+export function setPendingStreamingSession(storeId: string, sessionId: number): void {
+  _pendingStreamingSessions.set(storeId, sessionId);
+}
+
+function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null): SessionTarget | null {
+  const sessStore = getChatStore(ctx.storeId).sess;
+  const { sessions, activeIdx } = sessStore.getState();
   const activeSid = sessions[activeIdx]?.id;
 
-  // Find which session owns this streaming assistant
-  let ownerSid: number | undefined;
+  // 1) Known assistant → find its owner session
   if (assistantId) {
-    for (const [key, val] of Object.entries(sessionStreamingIds)) {
-      if (val === assistantId) { ownerSid = Number(key); break; }
+    for (const s of sessions) {
+      const msgs = ctx.getSessionMessages(s.id);
+      if (msgs.some(m => m._id === assistantId)) {
+        return { sessionId: s.id, messages: msgs, isActive: s.id === activeSid };
+      }
     }
   }
-  // Fall back to active session if no tracking found
-  const targetSid = ownerSid ?? activeSid;
-  if (targetSid == null) return null;
 
-  const msgs = sessionMessageModels[targetSid] || [];
-  const isActive = targetSid === activeSid;
+  // 2) No assistant yet → use the session that started the run
+  const pendingSid = _pendingStreamingSessions.get(ctx.storeId);
+  if (pendingSid != null) {
+    const msgs = ctx.getSessionMessages(pendingSid);
+    return { sessionId: pendingSid, messages: msgs, isActive: pendingSid === activeSid };
+  }
 
-  return {
-    sessionId: targetSid,
-    isActive,
-    messages: msgs,
-    commit(storeId, setActive) {
-      sess.getState().setSessionMessageModels(targetSid, msgs);
-      if (isActive) {
-        setActive(msgs);
-        bumpChat(storeId);
-      }
-    },
-  };
+  // 3) Last resort: active session
+  if (activeSid != null) {
+    return {
+      sessionId: activeSid,
+      messages: ctx.getActiveMessages(),
+      isActive: true,
+    };
+  }
+  return null;
 }
 
 // ── Streaming assistant helper ─────────────────────────────
 
 function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   const id = ctx.getStreamingAssistantId();
-  const target = _resolveStreamingTarget(ctx, id);
-  const msgs = target ? target.messages : ctx.getMessages();
+  const target = _resolveSessionTarget(ctx, id);
+  if (!target) {
+    // ponytail: no session → can't render. Shouldn't happen (panel always has ≥1 session).
+    return createAssistantMessage('');
+  }
+
+  const msgs = target.messages;
 
   if (id) {
     const found = msgs.find(m => m.role === 'assistant' && m._id === id) as AssistantMessage | undefined;
     if (found) return found;
   }
-  // Create a new one — find the last user message to link to
+
   const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
   const assistant = createAssistantMessage(lastUser?._id ?? '');
   msgs.push(assistant);
   ctx.setStreamingAssistantId(assistant._id);
-  if (target) target.commit(ctx.storeId, (m) => ctx.setMessages(m));
+
+  // Persist + bump the session's store
+  ctx.setSessionMessages(target.sessionId, [...msgs]);
+  ctx.bumpSessionMessages(target.sessionId);
   return assistant;
 }
 
 /** Push a notice message to the log. */
 export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
   const sid = ctx.getStreamingAssistantId();
-  const target = _resolveStreamingTarget(ctx, sid);
-  const msgs = target ? target.messages : ctx.getMessages();
+  const target = _resolveSessionTarget(ctx, sid);
+  if (!target) return;
+
+  const msgs = target.messages;
   if (sid) {
     const assistIdx = msgs.findIndex(
       (m) => m.role === 'assistant' && (m as AssistantMessage)._id === sid,
@@ -176,11 +191,11 @@ export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info
   } else {
     msgs.push(createNoticeMessage(text, level));
   }
-  if (target) target.commit(ctx.storeId, (m) => ctx.setMessages(m));
+  ctx.setSessionMessages(target.sessionId, [...msgs]);
   _scheduleSync(ctx);
 }
 
-// ── Public notice (thin wrapper) ──
+// ── Public notice ──
 
 export function addNotice(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
   _addNoticeMessage(ctx, text, level);
@@ -190,11 +205,12 @@ export function addNotice(ctx: StreamContext, text: string, level: 'info' | 'war
 // _finaliseStreamingAssistant
 // ═══════════════════════════════════════════════════════════
 
-/** Mark the current streaming assistant as done and start a new turn. */
+/** Mark the current streaming assistant as done. */
 export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
-  const target = _resolveStreamingTarget(ctx, sid);
-  const msgs = target ? target.messages : ctx.getMessages();
+  const target = _resolveSessionTarget(ctx, sid);
+  const msgs = target ? target.messages : ctx.getActiveMessages();
+
   const assistant = msgs.find(
     (m) => m.role === 'assistant' && m._id === sid,
   ) as AssistantMessage | undefined;
@@ -204,39 +220,37 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
       if (part.type === 'text') (part as any).finalised = true;
     }
   }
-  // Flush ALL pending render gates BEFORE clearing _streamingAssistantId.
+
+  // Flush pending render
   const rafId = ctx.getSyncRafId();
   if (rafId !== null) {
     cancelAnimationFrame(rafId);
     ctx.setSyncRafId(null);
   }
-  // Always run one final render while _streamingAssistantId is still set
-  if (sid) {
-    if (target) target.commit(ctx.storeId, (m) => ctx.setMessages(m));
-    else bumpChat(ctx.storeId);
+
+  // Final bump while streamingAssistantId is still set
+  if (sid && target) {
+    ctx.setSessionMessages(target.sessionId, [...msgs]);
+    ctx.bumpSessionMessages(target.sessionId);
+  } else if (sid) {
+    bumpChat(ctx.storeId);
   }
+
   ctx.setStreamingAssistantId(null);
-  // Also clear any stale session-level streaming IDs pointing to this assistant.
-  if (sid) {
-    const sess = getChatStore(ctx.storeId).sess;
-    const ids = sess.getState().sessionStreamingIds;
-    for (const [key, val] of Object.entries(ids)) {
-      if (val === sid) sess.getState().setSessionStreamingId(Number(key), null);
-    }
-  }
+  // ponytail: clear pending — the next run will set its own via setPendingStreamingSession
+  _pendingStreamingSessions.delete(ctx.storeId);
 }
 
 // ═══════════════════════════════════════════════════════════
-// Streaming bump — commits session cache + triggers re-render
+// Streaming bump — trigger re-render for the streaming session
 // ═══════════════════════════════════════════════════════════
 
-/** Commit the streaming target's session cache and bump if it's the active session. */
 function _streamingBump(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
-  const target = _resolveStreamingTarget(ctx, sid);
+  const target = _resolveSessionTarget(ctx, sid);
   if (target) {
-    // Update session cache from mutated messages array (parts were mutated in-place)
-    target.commit(ctx.storeId, (m) => ctx.setMessages(m));
+    ctx.setSessionMessages(target.sessionId, [...target.messages]);
+    ctx.bumpSessionMessages(target.sessionId);
   } else {
     bumpChat(ctx.storeId);
   }
@@ -246,7 +260,6 @@ function _streamingBump(ctx: StreamContext): void {
 // _scheduleSync
 // ═══════════════════════════════════════════════════════════
 
-/** rAF-throttled sync — avoids O(n²) re-render on high-frequency streams. */
 export function _scheduleSync(ctx: StreamContext): void {
   if (ctx.getSyncRafId() !== null) return;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -256,7 +269,6 @@ export function _scheduleSync(ctx: StreamContext): void {
     _streamingBump(ctx);
   });
   ctx.setSyncRafId(rafId);
-  // Safety net: if rAF is lost (tab hidden / OS suspend), force render after 500ms.
   timeoutId = setTimeout(() => {
     if (timeoutId !== null) { timeoutId = null; }
     ctx.setSyncRafId(null);
@@ -357,31 +369,30 @@ export function appendUserBubble(
     size: f.size,
   }));
   const userMsg = createUserMessage(text, fileAttachments.length > 0 ? fileAttachments : undefined);
-  ctx.getMessages().push(userMsg);
+
+  const msgs = ctx.getActiveMessages();
+  msgs.push(userMsg);
+  const sessStore = getChatStore(ctx.storeId).sess;
+  const st = sessStore.getState();
+  const activeSid = st.sessions[st.activeIdx]?.id;
+  if (activeSid != null) {
+    ctx.setSessionMessages(activeSid, [...msgs]);
+    // ponytail: bump via bumpSession so React (subscribed to per-session store) re-renders
+    if (ctx.bumpSessionMessages) ctx.bumpSessionMessages(activeSid);
+  }
 
   const pair = ctx.getTurnPairs()[ctx.getTurnPairs().length - 1];
   if (pair) pair.userBubble = null;
-
-  // Sync active session cache so switchSession/restoreMessages picks it up
-  const sess = getChatStore(ctx.storeId).sess;
-  const st = sess.getState();
-  const activeSid = st.sessions[st.activeIdx]?.id;
-  if (activeSid != null) {
-    sess.getState().setSessionMessageModels(activeSid, [...ctx.getMessages()]);
-  }
-  bumpChat(ctx.storeId);
 }
 
 export function addTurnSep(_ctx: StreamContext): void {
-  // No-op with the new message model — visual separation is handled
-  // by margins/padding on .msg-bubble elements via CSS.
+  // No-op with the new message model — visual separation is CSS-only.
 }
 
 // ═══════════════════════════════════════════════════════════
 // Turn lifecycle
 // ═══════════════════════════════════════════════════════════
 
-/** Finalize current assistant bubble — link to latest turnPair, reset streaming state. */
 export function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
   _streamingBump(ctx);

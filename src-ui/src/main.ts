@@ -36,7 +36,9 @@ async function loadFileViewer(): Promise<void> {
     _FileViewer = mod.FileViewer;
   }
 }
-function FV(): any { return _FileViewer; }
+function FV(): any {
+  return _FileViewer;
+}
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 
 // ── Worker layout helper ──
@@ -59,17 +61,15 @@ function buildEdgePairs(graph: any): Array<[number, number]> {
   const pairs: Array<[number, number]> = [];
   for (const e of edges) {
     // 通过节点ID查找对应的数组索引
-    const s = nodeIdx.get(e.source), t = nodeIdx.get(e.target);
+    const s = nodeIdx.get(e.source),
+      t = nodeIdx.get(e.target);
     // 仅当源节点和目标节点均存在时才保留该边
     if (s !== undefined && t !== undefined) pairs.push([s, t]);
   }
   return pairs;
 }
 
-function layoutViaWorker(
-  nodeCount: number,
-  pairs: Array<[number, number]>,
-): Promise<Float32Array> {
+function layoutViaWorker(nodeCount: number, pairs: Array<[number, number]>): Promise<Float32Array> {
   return new Promise((resolve) => {
     try {
       const worker = new Worker(new URL('./ui/layout.worker.ts', import.meta.url), { type: 'module' });
@@ -115,7 +115,8 @@ function updateStatusBadge(): void {
   if (!badge) {
     badge = document.createElement('span');
     badge.id = 'status-log-badge';
-    badge.style.cssText = 'margin-left:6px;cursor:pointer;font-size:10px;padding:0 4px;border-radius:3px;background:#333;color:#888';
+    badge.style.cssText =
+      'margin-left:6px;cursor:pointer;font-size:10px;padding:0 4px;border-radius:3px;background:#333;color:#888';
     badge.textContent = String(statusLog.length);
     badge.onclick = toggleStatusLog;
     statusText.parentElement?.insertBefore(badge, statusText.nextSibling);
@@ -125,25 +126,35 @@ function updateStatusBadge(): void {
 
 function toggleStatusLog(): void {
   let panel = document.getElementById('status-log-panel');
-  if (panel) { panel.remove(); return; }
+  if (panel) {
+    panel.remove();
+    return;
+  }
 
   panel = document.createElement('div');
   panel.id = 'status-log-panel';
-  panel.style.cssText = 'position:fixed;bottom:28px;right:8px;width:420px;max-height:300px;overflow-y:auto;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.5)';
-  panel.innerHTML = statusLog.map((m, i) =>
-    `<div style="padding:2px 0;border-bottom:1px solid #222;color:${i === statusLog.length - 1 ? '#ccc' : '#666'}">${escapeHtml(m)}</div>`
-  ).join('');
+  panel.style.cssText =
+    'position:fixed;bottom:28px;right:8px;width:420px;max-height:300px;overflow-y:auto;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.5)';
+  panel.innerHTML = statusLog
+    .map(
+      (m, i) =>
+        `<div style="padding:2px 0;border-bottom:1px solid #222;color:${i === statusLog.length - 1 ? '#ccc' : '#666'}">${escapeHtml(m)}</div>`,
+    )
+    .join('');
   panel.onclick = (e) => e.stopPropagation();
   document.body.appendChild(panel);
   // Click outside to dismiss
   setTimeout(() => {
-    const dismiss = () => { panel?.remove(); document.removeEventListener('click', dismiss); };
+    const dismiss = () => {
+      panel?.remove();
+      document.removeEventListener('click', dismiss);
+    };
     document.addEventListener('click', dismiss);
   }, 0);
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 const tbPath = document.getElementById('tb-path')!;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
@@ -189,11 +200,11 @@ async function pickFolder(): Promise<string | null> {
 // switchWorkspace — unified entry point
 // ═══════════════════════════════════════════════════════════════
 
-async function switchWorkspace(
-  path?: string,
-  opts?: { skipAnalysis?: boolean; cachedGraph?: any },
-): Promise<void> {
-  if (_switching) { statusText.textContent = '正在切换工作区，请稍候…'; return; }
+async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: any }): Promise<void> {
+  if (_switching) {
+    statusText.textContent = '正在切换工作区，请稍候…';
+    return;
+  }
   _switching = true;
   try {
     const folder = path || (await pickFolder());
@@ -219,8 +230,12 @@ async function switchWorkspace(
 
     // Create new — pass callbacks immediately so progress events during
     // Workspace.open (analyze + render) push visible status updates.
-    const onStatusChange = (msg: string) => { pushStatus(msg); };
-    const onLoadingChange = (loading: boolean) => { setLoading(loading, loading ? folder : undefined); };
+    const onStatusChange = (msg: string) => {
+      pushStatus(msg);
+    };
+    const onLoadingChange = (loading: boolean) => {
+      setLoading(loading, loading ? folder : undefined);
+    };
     let ws: Workspace;
     try {
       console.log('[switchWorkspace] calling Workspace.open...');
@@ -238,16 +253,26 @@ async function switchWorkspace(
     workspace = ws;
     await notifyAllPanels(ws);
 
-    const nodeCount = Array.isArray(ws.graphData.nodes) ? ws.graphData.nodes.length : Object.keys(ws.graphData.nodes || {}).length;
-    const genTime = ws.graphData.meta?.generated_at ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString() : '';
+    const nodeCount = Array.isArray(ws.graphData.nodes)
+      ? ws.graphData.nodes.length
+      : Object.keys(ws.graphData.nodes || {}).length;
+    const genTime = ws.graphData.meta?.generated_at
+      ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString()
+      : '';
     statusText.textContent = `✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`;
     log.info('main', 'project loaded', {
       nodes: nodeCount,
-      edges: Array.isArray(ws.graphData.edges) ? ws.graphData.edges.length : Object.keys(ws.graphData.edges || {}).length,
+      edges: Array.isArray(ws.graphData.edges)
+        ? ws.graphData.edges.length
+        : Object.keys(ws.graphData.edges || {}).length,
     });
     setLoading(false);
 
-    try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[switchWorkspace] setupAgent failed:', e); }
+    try {
+      await ws.setupAgent(chatPanel, checkPanel);
+    } catch (e) {
+      console.error('[switchWorkspace] setupAgent failed:', e);
+    }
 
     chatPanel.setProjectPath(folder);
     chatPanel.autoRestoreLastSession(folder).catch(() => {});
@@ -266,10 +291,20 @@ function setLoading(active: boolean, folder?: string): void {
 
 function resetCheckPanelState(): void {
   checkPanel.update({
-    passed: true, timestamp: '', changed_files: [], total_changed_files: 0,
-    l5_violations: [], l4_violations: [], l3_violations: [], l2_violations: [],
-    passed_checks: [], blast_radius: 0, cross_community_edges: 0,
-    new_cycles: 0, new_thread_conflicts: 0, api_signature_changes: 0,
+    passed: true,
+    timestamp: '',
+    changed_files: [],
+    total_changed_files: 0,
+    l5_violations: [],
+    l4_violations: [],
+    l3_violations: [],
+    l2_violations: [],
+    passed_checks: [],
+    blast_radius: 0,
+    cross_community_edges: 0,
+    new_cycles: 0,
+    new_thread_conflicts: 0,
+    api_signature_changes: 0,
   });
   clearCheckBadge();
 }
@@ -301,7 +336,7 @@ async function notifyAllPanels(ws: Workspace): Promise<void> {
   await loadFileViewer();
   FV().get().setProjectPath(ws.path);
   if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().load(ws.path);
-  window.dispatchEvent(new CustomEvent('workspace:switched'));
+  bus.emit('workspace:switched');
 }
 
 // ── Check (thin wrapper) ──
@@ -313,16 +348,22 @@ async function runCheck(): Promise<void> {
 // ── Search ──
 
 function doSearch(): void {
-  const query = searchInput.value.trim(); if (!query) return;
+  const query = searchInput.value.trim();
+  if (!query) return;
   const found = starGraph.focusNode(query);
   searchInput.blur(); // ponytail: 搜完释放焦点，恢复键盘快捷键
-  if (!found) { statusText.textContent = `未找到 "${query}"`; setTimeout(() => { if (statusText.textContent === `未找到 "${query}"`) statusText.textContent = '就绪'; }, 2000); }
+  if (!found) {
+    statusText.textContent = `未找到 "${query}"`;
+    setTimeout(() => {
+      if (statusText.textContent === `未找到 "${query}"`) statusText.textContent = '就绪';
+    }, 2000);
+  }
 }
 
 // ── Icon setup ──
 
 function setupIcons(): void {
-  document.querySelectorAll('[data-icon]').forEach(el => {
+  document.querySelectorAll('[data-icon]').forEach((el) => {
     const iconName = (el as HTMLElement).dataset['icon']!;
     const svgStr = iconSvg(iconName);
     el.insertAdjacentHTML('afterbegin', svgStr);
@@ -345,8 +386,14 @@ async function setupPlaceholderAgent(): Promise<void> {
   // previous project leaking into the placeholder's read_file / list_directory calls.
   await rpc('workspace_activate', { path: '' }).catch(() => {});
   const ws = Workspace.placeholder();
-  ws.onStatusChange = (msg) => { pushStatus(msg); };
-  try { await ws.setupAgent(chatPanel, checkPanel); } catch (e) { console.error('[init] setupAgent failed:', e); }
+  ws.onStatusChange = (msg) => {
+    pushStatus(msg);
+  };
+  try {
+    await ws.setupAgent(chatPanel, checkPanel);
+  } catch (e) {
+    console.error('[init] setupAgent failed:', e);
+  }
 }
 
 // ── Init ──
@@ -369,7 +416,9 @@ async function init(): Promise<void> {
       const parts = (payload as string).split('|');
       if (parts.length === 2) {
         chatPanel.open();
-        chatPanel.ask(`分析从 ${parts[0]} 到 ${parts[1]} 的依赖路径。请分析这条依赖链的架构合理性、风险点、以及如果修改起点的潜在影响范围。`);
+        chatPanel.ask(
+          `分析从 ${parts[0]} 到 ${parts[1]} 的依赖路径。请分析这条依赖链的架构合理性、风险点、以及如果修改起点的潜在影响范围。`,
+        );
       }
     }
   });
@@ -403,40 +452,67 @@ async function init(): Promise<void> {
     };
     const APP_CTRL_KEYS = new Set(['l', 'd', 'e']);
     const APP_CTRL_KEYS_EXTRA = new Set(['`', ',']);
-    window.addEventListener('keydown', (e) => {
-      const key = e.key.toLowerCase();
-      const mod = e.ctrlKey || e.metaKey;
-      const shift = e.shiftKey;
-      const alt = e.altKey;
-      if (isEditing()) {
-        if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'z', 'y', 'a']).has(key)) return;
-        if (mod && !alt && ['r', 'p', 's', 'u', 'o', 'n'].includes(key)) { e.preventDefault(); return; }
-        if (key === 'f5' || key === 'f12') { e.preventDefault(); return; }
-        if (alt && (key === 'arrowleft' || key === 'arrowright')) { e.preventDefault(); return; }
-        return;
-      }
-            // App-specific shortcuts
-      if (mod && !shift && !alt && APP_CTRL_KEYS.has(key)) return;
-      if (mod && !shift && !alt && APP_CTRL_KEYS_EXTRA.has(key)) return;
-      // Pass-through: standard browser copy/paste/select-all/undo/redo
-      if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'a', 'z', 'y']).has(key)) return;
-      if (!mod && !alt && !shift && (key === 'f' || key === 'escape' || key === 'b')) return;
-      if (['f1', 'f3', 'f4', 'f5', 'f6', 'f7', 'f10', 'f11', 'f12'].includes(key)) { e.preventDefault(); return; }
-      if (mod && !alt) { e.preventDefault(); return; }
-      if (alt) { e.preventDefault(); return; }
-      if (key === 'backspace') { e.preventDefault(); return; }
-    }, { capture: true });
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        const key = e.key.toLowerCase();
+        const mod = e.ctrlKey || e.metaKey;
+        const shift = e.shiftKey;
+        const alt = e.altKey;
+        if (isEditing()) {
+          if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'z', 'y', 'a']).has(key)) return;
+          if (mod && !alt && ['r', 'p', 's', 'u', 'o', 'n'].includes(key)) {
+            e.preventDefault();
+            return;
+          }
+          if (key === 'f5' || key === 'f12') {
+            e.preventDefault();
+            return;
+          }
+          if (alt && (key === 'arrowleft' || key === 'arrowright')) {
+            e.preventDefault();
+            return;
+          }
+          return;
+        }
+        // App-specific shortcuts
+        if (mod && !shift && !alt && APP_CTRL_KEYS.has(key)) return;
+        if (mod && !shift && !alt && APP_CTRL_KEYS_EXTRA.has(key)) return;
+        // Pass-through: standard browser copy/paste/select-all/undo/redo
+        if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'a', 'z', 'y']).has(key)) return;
+        if (!mod && !alt && !shift && (key === 'f' || key === 'escape' || key === 'b')) return;
+        if (['f1', 'f3', 'f4', 'f5', 'f6', 'f7', 'f10', 'f11', 'f12'].includes(key)) {
+          e.preventDefault();
+          return;
+        }
+        if (mod && !alt) {
+          e.preventDefault();
+          return;
+        }
+        if (alt) {
+          e.preventDefault();
+          return;
+        }
+        if (key === 'backspace') {
+          e.preventDefault();
+          return;
+        }
+      },
+      { capture: true },
+    );
   })();
 
   setupIcons();
 
   // ── Sandbox health check ──
-  rpc<string>('sandbox_status').then(raw => {
-    const s = JSON.parse(raw);
-    if (s.degraded) {
-      console.warn(`[sandbox] ⚠ DEGRADED: ${s.reason} — permission engine is the only barrier`);
-    }
-  }).catch(() => {});
+  rpc<string>('sandbox_status')
+    .then((raw) => {
+      const s = JSON.parse(raw);
+      if (s.degraded) {
+        console.warn(`[sandbox] ⚠ DEGRADED: ${s.reason} — permission engine is the only barrier`);
+      }
+    })
+    .catch(() => {});
 
   // Chat panel
   chatPanel = new ChatPanel(document.body);
@@ -456,37 +532,41 @@ async function init(): Promise<void> {
   timelinePanel = new TimelinePanel(document.body);
 
   // Hotspots
-   hotspotsPanel = new HotspotsPanel(document.body);
-   hotspotsPanel.setGraph(starGraph);
+  hotspotsPanel = new HotspotsPanel(document.body);
+  hotspotsPanel.setGraph(starGraph);
 
-   // Dataflow panel (floating window)
-   dataflowPanel = new DataflowPanel(document.body);
+  // Dataflow panel (floating window)
+  dataflowPanel = new DataflowPanel(document.body);
 
-   // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
-   dataflowPanel.onParseQuery = async (nl: string): Promise<string[]> => {
-     try {
-       if (!workspace?.prov) return [];
-       const gen = workspace.prov.stream(new AbortController().signal, {
-         messages: [{
-           role: 'user',
-           content: `Extract code symbol names (functions, classes, modules, variables) from this query. Return ONLY a JSON array of strings, nothing else. If no symbols found, return [].\n\nQuery: "${nl}"`,
-         }],
-         tools: [],
-         temperature: 0,
-         max_tokens: 200,
-       });
-       const { ChunkType } = await import('./provider/types');
-       const parts: string[] = [];
-       for await (const chunk of gen) {
-         if (chunk.type === ChunkType.Text && chunk.text) parts.push(chunk.text);
-       }
-       const text = parts.join('').trim();
-       // Extract JSON array from response
-       const match = text.match(/\[[\s\S]*\]/);
-       if (match) return JSON.parse(match[0]);
-       return [];
-     } catch { return []; }
-   };
+  // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
+  dataflowPanel.onParseQuery = async (nl: string): Promise<string[]> => {
+    try {
+      if (!workspace?.prov) return [];
+      const gen = workspace.prov.stream(new AbortController().signal, {
+        messages: [
+          {
+            role: 'user',
+            content: `Extract code symbol names (functions, classes, modules, variables) from this query. Return ONLY a JSON array of strings, nothing else. If no symbols found, return [].\n\nQuery: "${nl}"`,
+          },
+        ],
+        tools: [],
+        temperature: 0,
+        max_tokens: 200,
+      });
+      const { ChunkType } = await import('./provider/types');
+      const parts: string[] = [];
+      for await (const chunk of gen) {
+        if (chunk.type === ChunkType.Text && chunk.text) parts.push(chunk.text);
+      }
+      const text = parts.join('').trim();
+      // Extract JSON array from response
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) return JSON.parse(match[0]);
+      return [];
+    } catch {
+      return [];
+    }
+  };
 
   // ── AppShell wiring — replaces bus commands with explicit dispatch ──
   // Register all panels so shell knows who's open
@@ -499,10 +579,13 @@ async function init(): Promise<void> {
   // Wire navigation / highlight / agent-query commands
   shell.wire({
     navigateToNode: (name) => starGraph.focusNode(name),
-    navigateToFile: async (path, line) => { await loadFileViewer(); FV().get().open(path, { line }); },
-    highlightFile:   (path) => starGraph.highlightFile(path),
+    navigateToFile: async (path, line) => {
+      await loadFileViewer();
+      FV().get().open(path, { line });
+    },
+    highlightFile: (path) => starGraph.highlightFile(path),
     highlightFolder: (path) => starGraph.highlightFolder(path),
-    clearHighlight:  ()    => starGraph.clearFileHighlight(),
+    clearHighlight: () => starGraph.clearFileHighlight(),
     queryAgent: (question) => {
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
       chatPanel.ask(question);
@@ -516,7 +599,10 @@ async function init(): Promise<void> {
   });
 
   bus.on('check:result', ({ passed, violations }: { passed: boolean; violations: number }) => {
-    if (passed) { clearCheckBadge(); return; }
+    if (passed) {
+      clearCheckBadge();
+      return;
+    }
     setCheckBadge(violations);
   });
 
@@ -534,13 +620,12 @@ async function init(): Promise<void> {
     const hideRight = checkPanel.isOpen() || ConstraintsPanel.get().isOpen();
     leftTabs.style.display = hideLeft ? 'none' : '';
     rightTabs.style.display = hideRight ? 'none' : '';
-    leftTabs.querySelectorAll('.dock-tab').forEach(t => {
+    leftTabs.querySelectorAll('.dock-tab').forEach((t) => {
       const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'timeline' && timelinePanel.isOpen())
-        || (p === 'hotspots' && hotspotsPanel.isOpen());
+      const active = (p === 'timeline' && timelinePanel.isOpen()) || (p === 'hotspots' && hotspotsPanel.isOpen());
       t.classList.toggle('active', !!active);
     });
-    rightTabs.querySelectorAll('.dock-tab').forEach(t => {
+    rightTabs.querySelectorAll('.dock-tab').forEach((t) => {
       const p = (t as HTMLElement).dataset['panel'];
       const active = (p === 'check' && checkPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
       t.classList.toggle('active', !!active);
@@ -609,7 +694,10 @@ async function init(): Promise<void> {
       btnDiff.innerHTML = `${iconSvg('diff')} 变更`;
       statusText.textContent = '已清除变更着色';
     } else {
-      if (!workspace?.path) { statusText.textContent = '请先打开项目'; return; }
+      if (!workspace?.path) {
+        statusText.textContent = '请先打开项目';
+        return;
+      }
       try {
         const beforePath = `${workspace.path}/hologram_before.json`;
         const diffJson = await rpc<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
@@ -646,7 +734,7 @@ async function init(): Promise<void> {
 
   // Settings
   const settingsPanel = SettingsPanel.get();
-    settingsPanel.setOnSave(async () => {
+  settingsPanel.setOnSave(async () => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph.resize();
     if (workspace) {
@@ -654,7 +742,9 @@ async function init(): Promise<void> {
       await chatPanel.saveActiveSession(workspace.path).catch(() => {});
       await workspace.setupAgent(chatPanel, checkPanel);
       if (workspace?.agent) {
-        await chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[settings] autoRestoreLastSession failed:', e));
+        await chatPanel
+          .autoRestoreLastSession(workspace.path)
+          .catch((e) => console.error('[settings] autoRestoreLastSession failed:', e));
       }
     }
   });
@@ -665,16 +755,20 @@ async function init(): Promise<void> {
       await chatPanel.saveActiveSession(workspace.path).catch(() => {});
       await workspace.setupAgent(chatPanel, checkPanel);
       if (workspace?.agent) {
-        await chatPanel.autoRestoreLastSession(workspace.path).catch(e => console.error('[mode-change] autoRestoreLastSession failed:', e));
+        await chatPanel
+          .autoRestoreLastSession(workspace.path)
+          .catch((e) => console.error('[mode-change] autoRestoreLastSession failed:', e));
       }
     }
   });
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
-  btnSettings.addEventListener('click', () => { settingsPanel.toggle(); });
+  btnSettings.addEventListener('click', () => {
+    settingsPanel.toggle();
+  });
 
   // ── Window controls (decorations:false — custom title bar) ──
   // ponytail: 绕过所有 import，直接调 __TAURI_INTERNALS__ IPC — 跟 bridge.ts 同一条路
-  const _winLabel: string = ((window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label) || 'main';
+  const _winLabel: string = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label || 'main';
   function _winCmd(cmd: string): void {
     const t = (window as any).__TAURI_INTERNALS__;
     if (!t) return;
@@ -691,7 +785,9 @@ async function init(): Promise<void> {
       const ok = await t.invoke('plugin:window|is_maximized', { label: _winLabel });
       btnMaximize.innerHTML = ok ? _maxIcon.maximized : _maxIcon.normal;
       btnMaximize.title = ok ? '还原' : '最大化';
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
   }
   btnMaximize.addEventListener('click', () => {
     _winCmd('toggle_maximize');
@@ -734,10 +830,12 @@ async function init(): Promise<void> {
       updateTabs();
     }
     if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault(); btnDiff.click();
+      e.preventDefault();
+      btnDiff.click();
     }
     if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault(); settingsPanel.toggle();
+      e.preventDefault();
+      settingsPanel.toggle();
     }
   });
 
@@ -748,12 +846,19 @@ async function init(): Promise<void> {
 
   // Re-analyze — runs analysis in-place without workspace switch
   btnReanalyze.addEventListener('click', async () => {
-    if (_switching) { statusText.textContent = '正在切换工作区，请稍候…'; return; }
+    if (_switching) {
+      statusText.textContent = '正在切换工作区，请稍候…';
+      return;
+    }
     const ws = workspace;
-    if (!ws?.path) { statusText.textContent = '请先打开项目'; return; }
+    if (!ws?.path) {
+      statusText.textContent = '请先打开项目';
+      return;
+    }
     btnReanalyze.disabled = true;
     const lbl = btnReanalyze.querySelector('.btn-label');
-    if (lbl) lbl.textContent = '分析中…'; else btnReanalyze.textContent = '分析中…';
+    if (lbl) lbl.textContent = '分析中…';
+    else btnReanalyze.textContent = '分析中…';
     statusText.textContent = '重新分析中…';
     try {
       console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
@@ -769,7 +874,9 @@ async function init(): Promise<void> {
       console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(ws.graphData.nodes || {}).length);
       starGraph.render(ws.graphData);
       console.log('[reanalyze] step 4: render done');
-      const nc = Array.isArray(ws.graphData.nodes) ? ws.graphData.nodes.length : Object.keys(ws.graphData.nodes || {}).length;
+      const nc = Array.isArray(ws.graphData.nodes)
+        ? ws.graphData.nodes.length
+        : Object.keys(ws.graphData.nodes || {}).length;
       statusText.textContent = `✨ ${nc} 节点已就绪`;
       console.log('[reanalyze] step 5: done');
     } catch (e: any) {
@@ -778,38 +885,61 @@ async function init(): Promise<void> {
     } finally {
       btnReanalyze.disabled = false;
       const lbl = btnReanalyze.querySelector('.btn-label');
-      if (lbl) lbl.textContent = '重分析'; else btnReanalyze.textContent = '重分析';
+      if (lbl) lbl.textContent = '重分析';
+      else btnReanalyze.textContent = '重分析';
     }
   });
 
   searchBtn.addEventListener('click', doSearch);
-  searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doSearch();
+  });
 
   // ponytail: 点 graph 画布时释放搜索框焦点，Three.js canvas 不会自动抢焦点
-  graphEl.addEventListener('pointerdown', () => { if (document.activeElement === searchInput) searchInput.blur(); });
+  graphEl.addEventListener('pointerdown', () => {
+    if (document.activeElement === searchInput) searchInput.blur();
+  });
 
   // Fold / Reset camera
-  btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });
-  btnResetCam.addEventListener('click', () => { starGraph.resetCamera(); });
+  btnFold.addEventListener('click', () => {
+    starGraph.toggleFold();
+    updateFoldBtn();
+  });
+  btnResetCam.addEventListener('click', () => {
+    starGraph.resetCamera();
+  });
   window.addEventListener('keydown', (e) => {
     if (isEditing()) return;
-    if ((e.key === 'f' || e.key === 'F')) { starGraph.toggleFold(); updateFoldBtn(); }
-    if ((e.key === 'r' || e.key === 'R')) { starGraph.resetCamera(); }
-    if (e.key === '?') { toggleShortcuts(); }
+    if (e.key === 'f' || e.key === 'F') {
+      starGraph.toggleFold();
+      updateFoldBtn();
+    }
+    if (e.key === 'r' || e.key === 'R') {
+      starGraph.resetCamera();
+    }
+    if (e.key === '?') {
+      toggleShortcuts();
+    }
     if (e.key === 'Escape') {
       if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
-      else if (timelinePanel.isOpen()) { timelinePanel.close(); updateTabs(); }
-      else if (hotspotsPanel.isOpen()) { hotspotsPanel.close(); updateTabs(); }
-      else if (checkPanel.isOpen()) { checkPanel.close(); updateTabs(); }
-      else if (chatPanel.isOpen()) { chatPanel.close(); updateTabs(); }
-      else if (FV() && FV().get().isOpen) FV().get().close();
+      else if (timelinePanel.isOpen()) {
+        timelinePanel.close();
+        updateTabs();
+      } else if (hotspotsPanel.isOpen()) {
+        hotspotsPanel.close();
+        updateTabs();
+      } else if (checkPanel.isOpen()) {
+        checkPanel.close();
+        updateTabs();
+      } else if (chatPanel.isOpen()) {
+        chatPanel.close();
+        updateTabs();
+      } else if (FV() && FV().get().isOpen) FV().get().close();
       else starGraph.clearAgentHighlight();
     }
   });
   function updateFoldBtn(): void {
-    btnFold.innerHTML = starGraph.isFolded
-      ? `${iconSvg('fold')} 展开`
-      : `${iconSvg('fold')} 折叠`;
+    btnFold.innerHTML = starGraph.isFolded ? `${iconSvg('fold')} 展开` : `${iconSvg('fold')} 折叠`;
   }
 
   // Shortcuts overlay
@@ -830,7 +960,9 @@ async function init(): Promise<void> {
       if (shortcutsOverlay.style.display !== 'none') shortcutsOverlay.style.display = 'none';
     }, 12000);
   });
-  shortcutsOverlay.querySelector('.so-close')?.addEventListener('click', () => { shortcutsOverlay.style.display = 'none'; });
+  shortcutsOverlay.querySelector('.so-close')?.addEventListener('click', () => {
+    shortcutsOverlay.style.display = 'none';
+  });
   const btnShortcuts = document.getElementById('btn-shortcuts') as HTMLButtonElement;
   btnShortcuts.addEventListener('click', () => toggleShortcuts());
 
@@ -847,7 +979,8 @@ async function init(): Promise<void> {
       // No cached graph
     }
     if (!graph) {
-      welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
+      welcome.classList.remove('hidden');
+      graphEl.classList.add('hidden');
       setLoading(false);
       // Set up agent without workspace context (general chat only)
       await setupPlaceholderAgent();
@@ -877,10 +1010,13 @@ async function init(): Promise<void> {
       // analyze_project here — it races with runCheck's analyze fallback and blocks workspace switches.
       return;
     }
-  } catch { /* no cache */ }
+  } catch {
+    /* no cache */
+  }
 
   // No cached graph — show welcome
-  welcome.classList.remove('hidden'); graphEl.classList.add('hidden');
+  welcome.classList.remove('hidden');
+  graphEl.classList.add('hidden');
   setLoading(false);
   await setupPlaceholderAgent();
 }

@@ -1,11 +1,10 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Session store — session lifecycle + message model cache.
-// Split from chat-store.ts (god store → domain stores).
+// Session store — session lifecycle.
+// Messages live in per-session stores: getMessagesStore(`${storeId}:${sessionId}`)
 
 import { create } from 'zustand';
-import type { ChatMessage } from './message-model';
 
 export interface ChatSessionMeta {
   id: number;
@@ -16,17 +15,12 @@ interface SessionStore {
   sessions: ChatSessionMeta[];
   activeIdx: number;
   sessionTokens: Record<number, number>;
-  sessionMessageModels: Record<number, ChatMessage[]>;
-  /** Track streaming assistant per session so tab-switch doesn't orphan it. */
-  sessionStreamingIds: Record<number, string>;
   nextSessionId: number;
   msgIdSeq: number;
 
   setSessions: (sessions: ChatSessionMeta[]) => void;
   setActiveIdx: (idx: number) => void;
   setSessionTokens: (id: number, count: number) => void;
-  setSessionMessageModels: (id: number, models: ChatMessage[]) => void;
-  setSessionStreamingId: (sessionId: number, streamingId: string | null) => void;
   removeSession: (id: number) => void;
   setNextSessionId: (id: number) => void;
   setMsgIdSeq: (seq: number) => void;
@@ -39,8 +33,6 @@ function createSessionStoreImpl() {
     sessions: [],
     activeIdx: -1,
     sessionTokens: {},
-    sessionMessageModels: {},
-    sessionStreamingIds: {},
     nextSessionId: 1,
     msgIdSeq: 0,
 
@@ -48,16 +40,10 @@ function createSessionStoreImpl() {
     setActiveIdx: (activeIdx) => set({ activeIdx }),
     setSessionTokens: (id, count) =>
       set((s) => ({ sessionTokens: { ...s.sessionTokens, [id]: count } })),
-    setSessionMessageModels: (id, models) =>
-      set((s) => ({ sessionMessageModels: { ...s.sessionMessageModels, [id]: models } })),
-    setSessionStreamingId: (id, streamingId) =>
-      set((s) => ({ sessionStreamingIds: { ...s.sessionStreamingIds, [id]: streamingId ?? '' } })),
     removeSession: (id) =>
       set((s) => {
         const { [id]: _, ...restTokens } = s.sessionTokens;
-        const { [id]: __, ...restModels } = s.sessionMessageModels;
-        const { [id]: ___, ...restStreaming } = s.sessionStreamingIds;
-        return { sessionTokens: restTokens, sessionMessageModels: restModels, sessionStreamingIds: restStreaming };
+        return { sessionTokens: restTokens };
       }),
     setNextSessionId: (nextSessionId) => set({ nextSessionId }),
     setMsgIdSeq: (msgIdSeq) => set({ msgIdSeq }),
@@ -91,9 +77,6 @@ export function getActiveSessionId(storeId?: string): number | null {
   return sessions[activeIdx]?.id ?? null;
 }
 export function getSessionTokens(storeId?: string): Record<number, number> { return _store(storeId).sessionTokens; }
-export function getSessionMessageModels(storeId?: string): Record<number, ChatMessage[]> {
-  return _store(storeId).sessionMessageModels;
-}
 export function getNextSessionId(storeId?: string): number { return _store(storeId).nextSessionId; }
 export function getMsgIdSeq(storeId?: string): number { return _store(storeId).msgIdSeq; }
 

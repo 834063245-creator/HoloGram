@@ -8,7 +8,10 @@
   "scripts": {
     "dev": "vite",
     "dev:mock": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && biome ci . && vite build",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "check": "biome ci .",
     "preview": "vite preview",
     "test": "vitest run"
   },
@@ -33,6 +36,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@webgpu/types": "^0.1.70",

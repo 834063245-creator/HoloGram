@@ -15,40 +15,63 @@ import { dbg } from './debug';
 // ── Known event signatures ──
 
 export interface BusEvents {
-  'agent:event':        [ev: import('../agent/agent-types').AgentEvent];
-  'agent:diag':         [d: { text: string; ready: boolean }];
-  'agent:progress':     [data: { step: number; toolName: string }];
+  'agent:event': [ev: import('../agent/agent-types').AgentEvent];
+  'agent:diag': [d: { text: string; ready: boolean }];
+  'agent:progress': [data: { step: number; toolName: string }];
   'agent:tool-started': [data: { toolName: string; args: Record<string, unknown> }];
-  'agent:tool-done':    [data: { toolName: string; args: Record<string, unknown>; output: string }];
-  'agent:thinking':     [data: { text?: string }];
-  'agent:focus-changed':[data: { nodeNames: string[]; toolName: string }];
-  'agent:permission-request': [data: { id: string; toolName: string; description: string; args: Record<string, unknown> }];
+  'agent:tool-done': [data: { toolName: string; args: Record<string, unknown>; output: string }];
+  'agent:thinking': [data: { text?: string }];
+  'agent:focus-changed': [data: { nodeNames: string[]; toolName: string }];
+  'agent:permission-request': [
+    data: { id: string; toolName: string; description: string; args: Record<string, unknown> },
+  ];
   'agent:permission-response': [data: { id: string; allow: boolean; remember: boolean }];
   'agent:shell-output': [data: { sessionId?: number; output: string; done?: boolean }];
 
-  'graph:node-clicked': [data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }];
-  'graph:path-selected': [data: { from: { name: string; id: string; type: string }; to: { name: string; id: string; type: string }; pathLength: number; pathNames: string[] }];
+  'graph:node-clicked': [
+    data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string },
+  ];
+  'graph:path-selected': [
+    data: {
+      from: { name: string; id: string; type: string };
+      to: { name: string; id: string; type: string };
+      pathLength: number;
+      pathNames: string[];
+    },
+  ];
   'graph:region-selected': [data: { nodeNames: string[]; nodeCount: number }];
-  'graph:show-prompt':  [data: { title: string; question: string }];
+  'graph:show-prompt': [data: { title: string; question: string }];
 
-  'chat:turn-done':     [];
+  'chat:turn-done': [];
 
-  'prompt:ask':         [data: { id: string; question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean; callback: (answer: string[] | null) => void }];
+  'prompt:ask': [
+    data: {
+      id: string;
+      question: string;
+      header: string;
+      options: { label: string; description: string }[];
+      multiSelect: boolean;
+      callback: (answer: string[] | null) => void;
+    },
+  ];
 
-  'check:result':       [data: { passed: boolean; violations: number }];
-  'check:history':      [data: { checkData: any; timestamp: string }];
+  'check:result': [data: { passed: boolean; violations: number }];
+  'check:history': [data: { checkData: any; timestamp: string }];
 
-  'highlight:file':     [filePath: string];
-  'highlight:folder':   [filePath: string];
-  'highlight:clear':    [];
-  'navigate:file':      [filePath: string];
+  'highlight:file': [filePath: string];
+  'highlight:folder': [filePath: string];
+  'highlight:clear': [];
+  'navigate:file': [filePath: string];
 
-  'timeline:refresh':   [];
-  'lang:changed':       [data: { lang: string }];
+  'timeline:refresh': [];
+  'lang:changed': [data: { lang: string }];
 
-  'git:committed':      [data: { message: string; output: string }];
-  'git:pushed':         [];
-  'git:pulled':         [];
+  'git:committed': [data: { message: string; output: string }];
+  'git:pushed': [];
+  'git:pulled': [];
+
+  'workspace:switched': [];
+  'dataflow:saved': [];
 }
 
 type Handler = (...args: any[]) => void;
@@ -84,8 +107,11 @@ class EventBus {
     const bus = this._resolve();
     const key = this._key(event);
     const list = bus.handlers.get(key);
-    if (list) { list.push(handler); }
-    else { bus.handlers.set(key, [handler]); }
+    if (list) {
+      list.push(handler);
+    } else {
+      bus.handlers.set(key, [handler]);
+    }
   }
 
   off<E extends keyof BusEvents>(event: E, handler: (...args: BusEvents[E]) => void): void;
@@ -109,7 +135,11 @@ class EventBus {
     const list = bus.handlers.get(key);
     if (list) {
       for (const h of list) {
-        try { h(...args); } catch (e) { console.error(`[EventBus] ${key} handler error:`, e); }
+        try {
+          h(...args);
+        } catch (e) {
+          console.error(`[EventBus] ${key} handler error:`, e);
+        }
       }
     }
   }
@@ -139,4 +169,3 @@ export const bus = new EventBus();
 //   shell.notifyPanelChanged() / navigateToNode() / navigateToFile()
 //   shell.highlightFile() / highlightFolder() / clearHighlight()
 //   shell.queryAgent()
-

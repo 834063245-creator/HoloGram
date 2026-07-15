@@ -52,7 +52,8 @@ import { ChatMessagesPanel } from './react/ChatMessages';
 import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
 import {
   getChatStore,
-  getChatMessages, setChatMessages, bumpChat,
+  msgStoreFor, msgStoreForActive, bumpSession,
+  bumpChat,
   getStreamingAssistantId, getUserScrolledUp, getExpandedReasoningSet,
 } from './chat-store';
 
@@ -92,10 +93,17 @@ export class ChatPanel {
   // Streaming state
   private starGraph: StarGraph | null = null;
 
-  // ── New: data-driven message model (replaces currentBubble + manual DOM) ──
-  // ⚡ Zustand store-backed — getter/setter routes through chat-store.ts
-  private get messages(): ChatMessage[] { return getChatMessages(this.panelId); }
-  private set messages(msgs: ChatMessage[]) { setChatMessages(msgs, this.panelId); }
+  // ── New: data-driven message model — reads/writes per-session store ──
+  // ponytail: no panel-level messages array. Each session owns its messages-store
+  // instance. React subscribes to the active session's store directly.
+  private get messages(): ChatMessage[] {
+    const store = msgStoreForActive(this.panelId);
+    return store?.getState().messages ?? [];
+  }
+  private set messages(msgs: ChatMessage[]) {
+    const store = msgStoreForActive(this.panelId);
+    if (store) store.getState().setMessages(msgs);
+  }
   // ⚡ streamingAssistantId / userScrolledUp → chat-store.ts
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
@@ -505,12 +513,7 @@ export class ChatPanel {
       sessionTabs: this.sessionTabs,
       tabBar: this.tabBar,
       getProjectPath: () => getChatStore(storeId).panel.getState().projectPath,
-      // agentFactory removed — use Session.getAgentFactory(storeId) directly
-      getMessages: () => getChatMessages(storeId),
-      setMessages: (msgs) => { setChatMessages(msgs, storeId); },
-      getStreamingAssistantId: () => getChatStore(storeId).msg.getState().streamingAssistantId,
-      setStreamingAssistantId: (id) => { getChatStore(storeId).msg.getState().setStreamingAssistantId(id); },
-      // ⚡ Zustand store triggers React re-render on mutation
+      // ponytail: messages in per-session stores — no ctx.getMessages() needed
       flushReasoning: () => {},
       flushText: () => {},
       clearPendingToolCards: () => {},
@@ -668,8 +671,18 @@ export class ChatPanel {
     const storeId = this.panelId;
     return {
       storeId,
-      getMessages: () => getChatMessages(storeId),
-      setMessages: (msgs) => { setChatMessages(msgs, storeId); },
+      // ponytail: messages live in per-session stores, not panel-level messages-store
+      getSessionMessages: (sid: number) => msgStoreFor(storeId, sid).getState().messages,
+      getActiveMessages: () => {
+        const s = msgStoreForActive(storeId);
+        return s?.getState().messages ?? [];
+      },
+      setSessionMessages: (sid: number, msgs: ChatMessage[]) => {
+        msgStoreFor(storeId, sid).getState().setMessages(msgs);
+      },
+      bumpSessionMessages: (sid: number) => {
+        msgStoreFor(storeId, sid).getState().bump();
+      },
       getStreamingAssistantId: () => getStreamingAssistantId(storeId),
       setStreamingAssistantId: (id) => { getChatStore(storeId).msg.getState().setStreamingAssistantId(id); },
       getUserScrolledUp: () => getUserScrolledUp(storeId),
@@ -1106,6 +1119,14 @@ export class ChatPanel {
       this.renderAttachments();
     }
 
+    // Track which session started this run — so streaming events route correctly
+    // even if the user switches tabs before the first text event arrives.
+    {
+      const sessStore = getChatStore(this.panelId).sess.getState();
+      const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
+      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+    }
+
     // Run agent
     try {
       await this.agent.run(signal, focusPrefix + text);
@@ -1172,48 +1193,20 @@ export class ChatPanel {
   // ⚡ migrated to ExecutionState.onChange callback in constructor
 
   // ═══════════════════════════════════════════════════════
-  // Data-driven message model — replaces manual DOM append
+  // Data-driven message model — delegated to chat-stream.ts
   // ═══════════════════════════════════════════════════════
 
-  /** Get the assistant message currently being streamed, or create one. */
-  private _streamingAssistant(): AssistantMessage {
-    if (getChatStore(this.panelId).msg.getState().streamingAssistantId) {
-      const found = this.messages.find(
-        (m) => m.role === 'assistant' && m._id === getChatStore(this.panelId).msg.getState().streamingAssistantId,
-      );
-      if (found) return found as AssistantMessage;
-    }
-    // Create a new one — find the last user message to link to
-    const lastUser = [...this.messages].reverse().find((m) => m.role === 'user');
-    const assistant = createAssistantMessage(lastUser?._id ?? '');
-    this.messages.push(assistant);
-    getChatStore(this.panelId).msg.getState().setStreamingAssistantId(assistant._id);
-    return assistant;
-  }
+  // ponytail: _streamingAssistant() and _updateTokens() deleted — dead code that
+  // wrote to a panel-level messages array that no longer exists. All streaming
+  // writes go through chat-stream.ts → per-session stores.
 
-  /** Update token usage on the current assistant. */
-  private _updateTokens(tokensUsed: number): void {
-    getChatStore(this.panelId).panel.getState().totalTokensUsed += tokensUsed;
-    const assistant = this._streamingAssistant();
-    assistant.tokensUsed = (assistant.tokensUsed || 0) + tokensUsed;
-  }
-
-  /** Push a notice message to the log.
-   *  ponytail: insert BEFORE the streaming assistant (if any) so the incremental
-   *  render path in _doSyncMessagesToDOM stays active. If the notice is at the
-   *  tail, lastMsg.role !== 'assistant' and every rAF frame does a full rebuild. */
   private _addNoticeMessage(text: string, level: 'info' | 'warn' | 'error'): void {
     Stream._addNoticeMessage(this._streamCtx(), text, level);
   }
 
-  /** Mark the current streaming assistant as done and start a new turn. */
   private _finaliseStreamingAssistant(): void { Stream._finaliseStreamingAssistant(this._streamCtx()); }
 
-  // ── Expanded reasoning blocks (survives DOM replacement during streaming) ──
   private _expandedReasoning = new Set<number>();
-
-  // ⚡ React handles scrolling internally
-  // ⚡ React handles scrolling internally
 
   // ── Event Sink — render Agent events to DOM (NEW data-driven path) ──
 

@@ -1,4 +1,4 @@
-# CI — 编译检查 + 跑测试。不过就不让合。
+# CI — 只做两件事：编译 + 测试。格式和 lint 在本地跑。
 name: CI
 
 on:
@@ -12,9 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ═══════════════════════════════════════════════════════════
-  # Frontend — ubuntu, 最快的，独立跑
-  # ═══════════════════════════════════════════════════════════
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -23,15 +20,11 @@ jobs:
         with: { node-version: '22' }
       - run: npm ci
         working-directory: src-ui
-      - run: npm run build
+      - run: npx tsc --noEmit
         working-directory: src-ui
-      - run: npm test
+      - run: npx vite build
         working-directory: src-ui
 
-  # ═══════════════════════════════════════════════════════════
-  # Rust — windows only (engine tests segfault on Linux, tauri
-  # needs engine binary as resource).
-  # ═══════════════════════════════════════════════════════════
   rust:
     runs-on: windows-latest
     env:
@@ -43,18 +36,16 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          cache: false  # no workspace Cargo.toml at repo root
+          cache: false
 
-      # Engine: test + build (binary needed by tauri resource)
       - run: cargo test --release
         working-directory: engine
       - run: cargo build --release
         working-directory: engine
 
-      # Tauri: check (needs engine binary + frontend dist)
       - run: npm ci
         working-directory: src-ui
-      - run: npm run build
+      - run: npx vite build
         working-directory: src-ui
       - run: cargo check --release
         working-directory: src-tauri

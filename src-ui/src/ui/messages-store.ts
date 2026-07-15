@@ -49,6 +49,11 @@ function createMessagesStoreImpl() {
 }
 
 // ── Per-panel registry ──
+// ⚠️ INVARIANT: Every panel must have its OWN store instance via this Map.
+// NEVER add module-level `let`/`const` state outside this Map — that state
+// would be shared across panels and cause cross-panel message leaks.
+// BROKE BEFORE: 6+ commits (1f7fc04 → c927dd2) fixing cross-panel streaming leaks
+// caused by agents adding global state instead of per-panel state.
 
 const stores = new Map<string, MessagesStoreApi>();
 const DEFAULT_ID = '__default__';

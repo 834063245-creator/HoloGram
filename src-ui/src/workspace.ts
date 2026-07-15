@@ -20,7 +20,15 @@ import { bumpChat, getChatStore } from './ui/chat-store';
 import type { SubAgentPart } from './ui/message-model';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
-import { ToolRegistry, createCodingTools, createSubAgentTool, createAgentStopAllTool, createAgentMessageTool, agentInvoke, type ToolExecutor } from './agent/tool';
+import {
+  ToolRegistry,
+  createCodingTools,
+  createSubAgentTool,
+  createAgentStopAllTool,
+  createAgentMessageTool,
+  agentInvoke,
+  type ToolExecutor,
+} from './agent/tool';
 import { SubAgentPool, type SubAgentHandle } from './agent/coordinator';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { MemoryManager, createMemoryTools } from './agent/memory';
@@ -29,11 +37,29 @@ import { auraShutdown } from './agent/aura-memory';
 import { memoryBundleIngest } from './agent/memory-bundle-client';
 import { TaskManager, createTaskTools } from './agent/task';
 import { initLogger, log } from './agent/logger';
-import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex, PreflightHookRegistry, createGraphPreflightHook, buildGraphSnapshot, createStateReadHook, createStatePreflightHook } from './agent/hooks';
+import {
+  HookRegistry,
+  createGraphContextHook,
+  createGraphContext,
+  buildFileNodeIndex,
+  PreflightHookRegistry,
+  createGraphPreflightHook,
+  buildGraphSnapshot,
+  createStateReadHook,
+  createStatePreflightHook,
+} from './agent/hooks';
 import type { GraphContext } from './agent/hooks';
 import { refreshGitStatus, refreshTimeline, buildTurnStartBlock } from './agent/state-inject';
 import { SkillRegistry, createSkillTool } from './agent/skills';
-import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
+import {
+  loadSettings,
+  saveSettings,
+  getActiveProvider,
+  defaultPricing,
+  CHAT_MODES,
+  restoreSecrets,
+  persistSecrets,
+} from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import type { Tool } from './agent/tool';
 
@@ -106,7 +132,7 @@ export class Workspace {
   // ── View state ──
   diffActive: boolean = false;
 
-    // ── Agent & memory ──
+  // ── Agent & memory ──
   agent: Agent | null = null;
   prov: Provider | null = null;
   registry: ToolRegistry | null = null;
@@ -124,7 +150,7 @@ export class Workspace {
   // ── Check state ──
   checkRunning: boolean = false;
   checkPending: boolean = false;
-    checkTimer: ReturnType<typeof setTimeout> | null = null;
+  checkTimer: ReturnType<typeof setTimeout> | null = null;
   private _checkPanel: CheckPanel | null = null;
 
   // ── Agent setup guards ──
@@ -144,7 +170,9 @@ export class Workspace {
   /** Preflight GraphContext — stored so engine snapshot can be refreshed after writes. */
   _preflightCtx: GraphContext | null = null;
 
-  get active(): boolean { return this._active; }
+  get active(): boolean {
+    return this._active;
+  }
 
   // ── UI callbacks (set by main.ts) ──
   onStatusChange: ((msg: string) => void) | null = null;
@@ -186,37 +214,30 @@ export class Workspace {
     // 1. Register workspace with backend
     ws.onStatusChange?.('正在初始化引擎...');
     console.log('[Workspace.open] step 1: workspace_activate...');
-    await rpc('workspace_activate', { path }).catch((e) => { console.error('[Workspace.open] workspace_activate failed:', e); });
+    await rpc('workspace_activate', { path }).catch((e) => {
+      console.error('[Workspace.open] workspace_activate failed:', e);
+    });
     console.log('[Workspace.open] step 1: done');
     initLogger(path);
 
     // 2. Wire progress listeners (scoped to this workspace)
     let currentPhase = '';
-    const unlistenProgress = await listen<{ current: number; total: number; file: string }>(
-      'analyze-progress',
-      (e) => {
-        if (!ws._active) return;
-        const { current, total, file } = e.payload;
-        const basename = file.replace(/.*[/\\]/, '');
-        ws.onStatusChange?.(`${currentPhase ? currentPhase + ' — ' : ''}[${current}/${total}] ${basename}`);
-      },
-    );
-    const unlistenPhase = await listen<{ phase: string; message: string }>(
-      'analyze-phase',
-      (e) => {
-        if (!ws._active) return;
-        currentPhase = e.payload.message || e.payload.phase;
-        ws.onStatusChange?.(currentPhase);
-      },
-    );
-    const unlistenHeartbeat = await listen<{ label: string; elapsed: string }>(
-      'analyze-heartbeat',
-      (e) => {
-        if (!ws._active) return;
-        const { label, elapsed } = e.payload;
-        ws.onStatusChange?.(`${label} (${elapsed}...)`);
-      },
-    );
+    const unlistenProgress = await listen<{ current: number; total: number; file: string }>('analyze-progress', (e) => {
+      if (!ws._active) return;
+      const { current, total, file } = e.payload;
+      const basename = file.replace(/.*[/\\]/, '');
+      ws.onStatusChange?.(`${currentPhase ? currentPhase + ' — ' : ''}[${current}/${total}] ${basename}`);
+    });
+    const unlistenPhase = await listen<{ phase: string; message: string }>('analyze-phase', (e) => {
+      if (!ws._active) return;
+      currentPhase = e.payload.message || e.payload.phase;
+      ws.onStatusChange?.(currentPhase);
+    });
+    const unlistenHeartbeat = await listen<{ label: string; elapsed: string }>('analyze-heartbeat', (e) => {
+      if (!ws._active) return;
+      const { label, elapsed } = e.payload;
+      ws.onStatusChange?.(`${label} (${elapsed}...)`);
+    });
 
     try {
       if (opts?.skipAnalysis && opts.cachedGraph) {
@@ -249,7 +270,10 @@ export class Workspace {
         ]);
         ws.fileGraphData = JSON.parse(stripLineNumbers(raw));
         console.log('[Workspace.open] step 3: done');
-      } catch (e) { console.log('[Workspace.open] step 3: failed', e); ws.fileGraphData = null; }
+      } catch (e) {
+        console.log('[Workspace.open] step 3: failed', e);
+        ws.fileGraphData = null;
+      }
 
       // 4. Render — defer to next macrotask so DOM status updates paint first.
       // ponytail: _renderImpl runs heavy sync prep (Map/Array builds for N nodes)
@@ -264,7 +288,11 @@ export class Workspace {
       ws._initialRenderActive = true;
       setTimeout(async () => {
         console.log('[Workspace.open] render starting');
-        try { await starGraph.render(ws.graphData); } catch { /* render handles its own errors */ }
+        try {
+          await starGraph.render(ws.graphData);
+        } catch {
+          /* render handles its own errors */
+        }
         ws._initialRenderActive = false;
         // Run initial check to establish baseline — also schedules subsequent checks via doGraphUpdate
         ws.runCheck(checkPanel);
@@ -294,21 +322,37 @@ export class Workspace {
               ws.graphData = JSON.parse(raw);
               try {
                 const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
-                ws.fileGraphData = JSON.parse(stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })));
-              } catch { /* file graph may not exist yet */ }
+                ws.fileGraphData = JSON.parse(
+                  stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })),
+                );
+              } catch {
+                /* file graph may not exist yet */
+              }
               ws.doGraphUpdate(starGraph, checkPanel, summary.diff);
               bus.emit('timeline:refresh');
-            } catch { /* get_full_graph failed */ }
+            } catch {
+              /* get_full_graph failed */
+            }
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       });
       ws._unlisteners.push(unlistenGraphUpdated);
 
       // Agent tool-done → auto-trigger briefings when files may have changed
       const FILE_MODIFY_TOOLS = new Set([
-        'write_file', 'edit_file', 'delete_file', 'rename_file', 'move_file',
-        'git_commit', 'git_stage', 'git_push', 'git_pull',
-        'run_shell', 'rename_symbol',
+        'write_file',
+        'edit_file',
+        'delete_file',
+        'rename_file',
+        'move_file',
+        'git_commit',
+        'git_stage',
+        'git_push',
+        'git_pull',
+        'run_shell',
+        'rename_symbol',
       ]);
       const onToolDone = (evt: { toolName: string }) => {
         if (FILE_MODIFY_TOOLS.has(evt.toolName)) {
@@ -321,38 +365,36 @@ export class Workspace {
       bus.on('agent:tool-done', onToolDone);
       ws._unlisteners.push(() => bus.off('agent:tool-done', onToolDone));
 
-      const unlistenAnalysisComplete = await listen<string>(
-        'analysis-complete',
-        async (event) => {
-          if (!ws._active) return;
+      const unlistenAnalysisComplete = await listen<string>('analysis-complete', async (event) => {
+        if (!ws._active) return;
+        try {
+          const summary = JSON.parse(event.payload);
+          if (!isSamePath(ws.path, summary.path)) return;
+          const raw = await rpc<string>('get_full_graph');
+          ws.graphData = JSON.parse(raw);
           try {
-            const summary = JSON.parse(event.payload);
-            if (!isSamePath(ws.path, summary.path)) return;
-            const raw = await rpc<string>('get_full_graph');
-            ws.graphData = JSON.parse(raw);
-            try {
-              const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
-              ws.fileGraphData = JSON.parse(stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })));
-            } catch { /* will be regenerated by watcher */ }
-            // Use diff for incremental update if available, otherwise full render
-            ws.doGraphUpdate(starGraph, checkPanel, summary.diff);
-            bus.emit('timeline:refresh');
-          } catch (e) {
-            console.error('[analysis-complete] failed to reload graph:', e);
+            const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
+            ws.fileGraphData = JSON.parse(
+              stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })),
+            );
+          } catch {
+            /* will be regenerated by watcher */
           }
-        },
-      );
+          // Use diff for incremental update if available, otherwise full render
+          ws.doGraphUpdate(starGraph, checkPanel, summary.diff);
+          bus.emit('timeline:refresh');
+        } catch (e) {
+          console.error('[analysis-complete] failed to reload graph:', e);
+        }
+      });
       ws._unlisteners.push(unlistenAnalysisComplete);
 
-      const unlistenAnalysisFailed = await listen<{ path: string; error: string }>(
-        'analysis-failed',
-        (event) => {
-          if (!ws._active) return;
-          if (!isSamePath(ws.path, event.payload.path)) return;
-          const short = (event.payload.error || '未知错误').slice(0, 80);
-          ws.onStatusChange?.(`⚠️ 后台分析失败: ${short}`);
-        },
-      );
+      const unlistenAnalysisFailed = await listen<{ path: string; error: string }>('analysis-failed', (event) => {
+        if (!ws._active) return;
+        if (!isSamePath(ws.path, event.payload.path)) return;
+        const short = (event.payload.error || '未知错误').slice(0, 80);
+        ws.onStatusChange?.(`⚠️ 后台分析失败: ${short}`);
+      });
       ws._unlisteners.push(unlistenAnalysisFailed);
 
       // Clean up progress listeners (they only live during initial analysis)
@@ -360,10 +402,11 @@ export class Workspace {
       unlistenPhase();
       unlistenHeartbeat();
       console.log('[Workspace.open] all done, returning workspace');
-
     } catch (err: any) {
       console.error('[Workspace.open] FAILED:', err);
-      unlistenProgress(); unlistenPhase(); unlistenHeartbeat();
+      unlistenProgress();
+      unlistenPhase();
+      unlistenHeartbeat();
       ws.onStatusChange?.(`分析失败: ${err}`);
       ws.onLoadingChange?.(false);
       throw err;
@@ -380,14 +423,26 @@ export class Workspace {
     this._active = false;
 
     // Save chat sessions
-    try { await chatPanel.saveActiveSession(this.path); } catch { /* ignore */ }
+    try {
+      await chatPanel.saveActiveSession(this.path);
+    } catch {
+      /* ignore */
+    }
 
     // Stop watcher and clear backend state
-    try { await rpc('workspace_deactivate'); } catch { /* ignore */ }
+    try {
+      await rpc('workspace_deactivate');
+    } catch {
+      /* ignore */
+    }
 
     // Remove all event listeners
     for (const unlisten of this._unlisteners) {
-      try { unlisten(); } catch { /* ignore */ }
+      try {
+        unlisten();
+      } catch {
+        /* ignore */
+      }
     }
     this._unlisteners = [];
 
@@ -395,7 +450,11 @@ export class Workspace {
     // Stop all running sub-agents before clearing
     this.subAgentPool.stopAll();
     this.agent = null;
-    try { await auraShutdown(); } catch { /* ignore */ }
+    try {
+      await auraShutdown();
+    } catch {
+      /* ignore */
+    }
     this.memoryManager = null;
 
     // Clear timers
@@ -410,7 +469,10 @@ export class Workspace {
   // ═══════════════════════════════════════════════════════════════
 
   async setupAgent(chatPanel: ChatPanel, checkPanel: CheckPanel): Promise<void> {
-    if (this.agentSetupRunning) { this.agentSetupPending = true; return; }
+    if (this.agentSetupRunning) {
+      this.agentSetupPending = true;
+      return;
+    }
     this.agentSetupRunning = true;
     try {
       await this._setupAgentInner(chatPanel, checkPanel);
@@ -445,11 +507,28 @@ export class Workspace {
     // Load memories (global + project)
     let memorySection = '';
     let globalDir: string | undefined;
-    try { globalDir = await rpc<string>('get_global_memory_dir'); } catch { /* ignore */ }
+    try {
+      globalDir = await rpc<string>('get_global_memory_dir');
+    } catch {
+      /* ignore */
+    }
     this.memoryManager = new MemoryManager(this.path, globalDir);
     this.memoryManager.initAura().catch(() => {}); // fire-and-forget, best-effort
     const graphNodes = extractGraphNodeNames(this.graphData);
-    try { memorySection = await this.memoryManager.loadPromptSection(graphNodes); } catch (e) { console.error('[setupAgent] loadPromptSection failed:', e); }
+    try {
+      memorySection = await this.memoryManager.loadPromptSection(graphNodes);
+    } catch (e) {
+      console.error('[setupAgent] loadPromptSection failed:', e);
+    }
+
+    // Load project conventions (CLAUDE.md) — same file Claude Code reads
+    let claudeMdSection = '';
+    try {
+      const filesPath = `${this.path}/CLAUDE.md`;
+      claudeMdSection = await rpc<string>('read_file_content', { filePath: filesPath });
+    } catch {
+      /* file missing is fine */
+    }
 
     // Init skill registry (hot-loads on first Skill tool call)
     this.skillRegistry = new SkillRegistry(this.path);
@@ -465,9 +544,7 @@ export class Workspace {
         );
         if (records.length > 0) {
           this.onStatusChange?.(`[记忆场] 召回 ${records.length} 条`);
-          const lines = records.map(r =>
-            `- [${r.tags?.join(',') || 'ref'}] ${r.content.slice(0, 200)}`
-          );
+          const lines = records.map((r) => `- [${r.tags?.join(',') || 'ref'}] ${r.content.slice(0, 200)}`);
           memoryBundleSection = `### 语义记忆\n${lines.join('\n')}`;
         } else {
           this.onStatusChange?.(`[记忆场] 在线但无数据 — 存一条记忆后生效`);
@@ -481,7 +558,7 @@ export class Workspace {
     }
     // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条
     if (memorySection.trim()) {
-      const memLines = memorySection.split('\n').filter(l => l.startsWith('- ')).length;
+      const memLines = memorySection.split('\n').filter((l) => l.startsWith('- ')).length;
       const globalCount = this.memoryManager?.scopes?.().includes('global') ? ' (含全局)' : '';
       this.onStatusChange?.(`[记忆] 已注入 ${memLines} 条${globalCount}`);
     }
@@ -489,11 +566,17 @@ export class Workspace {
     const prov: Provider =
       active.kind === 'anthropic'
         ? createAnthropicProvider({
-            name: active.name, apiKey: active.apiKey, baseUrl: active.baseUrl,
-            model: active.model, thinking: active.thinking || undefined,
+            name: active.name,
+            apiKey: active.apiKey,
+            baseUrl: active.baseUrl,
+            model: active.model,
+            thinking: active.thinking || undefined,
           })
         : createOpenAIProvider({
-            name: active.name, apiKey: active.apiKey, baseUrl: active.baseUrl, model: active.model,
+            name: active.name,
+            apiKey: active.apiKey,
+            baseUrl: active.baseUrl,
+            model: active.model,
             disableThinking: settings.agent?.disableThinking,
           });
 
@@ -506,7 +589,9 @@ export class Workspace {
         return typeof result === 'string' ? result : JSON.stringify(result);
       };
       const schemas = await loadHologramSchemas();
-      for (const tool of schemas.map(s => mcpSchemaToTool(s, holoExec))) { registry.register(tool); }
+      for (const tool of schemas.map((s) => mcpSchemaToTool(s, holoExec))) {
+        registry.register(tool);
+      }
       dbg('setupAgent', `${schemas.length} hologram tools registered (dynamic)`);
 
       // dataflow_save / dataflow_query — Tauri commands, not MCP tools
@@ -518,7 +603,11 @@ export class Workspace {
           type: 'object',
           properties: {
             query: { type: 'string', description: '用户原始查询，用于面板列表展示和后续检索' },
-            content: { type: 'string', description: '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。' },
+            content: {
+              type: 'string',
+              description:
+                '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。',
+            },
             exploreResult: { type: 'string', description: 'explore_deps 返回的完整 JSON 字符串（可选）' },
             dataflowResult: { type: 'string', description: 'trace_dataflow 返回的完整 JSON 字符串（可选）' },
           },
@@ -527,7 +616,7 @@ export class Workspace {
         readOnly: () => false,
         execute: async (args) => {
           const result = await agentInvoke('dataflow_save', args);
-          window.dispatchEvent(new CustomEvent('dataflow:saved'));
+          bus.emit('dataflow:saved');
           return result;
         },
       });
@@ -538,7 +627,10 @@ export class Workspace {
         parameters: () => ({
           type: 'object',
           properties: {
-            traceId: { type: 'string', description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。' },
+            traceId: {
+              type: 'string',
+              description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。',
+            },
             list: { type: 'boolean', description: '传 true 返回轻量摘要列表（不传 traceId 时默认开启）' },
           },
         }),
@@ -547,18 +639,24 @@ export class Workspace {
       });
     }
 
-        // Coding tools
+    // Coding tools
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
       if (name === 'run_shell' && args['runInBackground']) {
         const taskId = await agentInvoke<string>('run_shell', args);
         let done = false;
         while (!done) {
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise((r) => setTimeout(r, 300));
           try {
             const status: any = await agentInvoke<any>('bash_output', { taskId });
             if (status.output && onProgress) onProgress(status.output);
-            if (status.done) { done = true; return status.output || '(无输出)'; }
-          } catch { done = true; return '(后台任务已结束)'; }
+            if (status.done) {
+              done = true;
+              return status.output || '(无输出)';
+            }
+          } catch {
+            done = true;
+            return '(后台任务已结束)';
+          }
         }
         return '';
       }
@@ -573,7 +671,9 @@ export class Workspace {
             if (event.payload.streamId !== streamId) return;
             fullOutput += event.payload.chunk;
             onProgress(event.payload.chunk);
-          }).then(fn => { unsubOutput = fn; });
+          }).then((fn) => {
+            unsubOutput = fn;
+          });
           listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (event) => {
             if (event.payload.streamId !== streamId) return;
             unsubOutput?.();
@@ -585,8 +685,10 @@ export class Workspace {
             } else {
               resolve(fullOutput || '(无输出)');
             }
-          }).then(fn => { unsubDone = fn; });
-          agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }).catch(e => {
+          }).then((fn) => {
+            unsubDone = fn;
+          });
+          agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }).catch((e) => {
             unsubOutput?.();
             unsubDone?.();
             resolve(`错误: ${e}`);
@@ -596,7 +698,9 @@ export class Workspace {
       const result = await agentInvoke<string>(name, args);
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
-    for (const tool of createCodingTools(codingExec, prov)) { registry.register(tool); }
+    for (const tool of createCodingTools(codingExec, prov)) {
+      registry.register(tool);
+    }
 
     // Aliases — short names for high-frequency tools
     registry.alias('read_file', 'read_file_content');
@@ -609,7 +713,9 @@ export class Workspace {
 
     // Memory tools
     if (this.memoryManager) {
-      for (const tool of createMemoryTools(this.memoryManager)) { registry.register(tool); }
+      for (const tool of createMemoryTools(this.memoryManager)) {
+        registry.register(tool);
+      }
     }
 
     // Compaction stats tool — ponytail: extracted helper, used in both main agent and factory
@@ -623,22 +729,26 @@ export class Workspace {
           contextWindow: agent.getContextWindow(),
         }),
         async () => agent.loadCompactionConfig(),
-      )) { reg.register(tool); }
+      )) {
+        reg.register(tool);
+      }
     };
     if (this.agent) {
       registerCompactionTools(this.agent, registry);
     }
 
     // Task tracking tools
-    for (const tool of createTaskTools(this.taskManager)) { registry.register(tool); }
+    for (const tool of createTaskTools(this.taskManager)) {
+      registry.register(tool);
+    }
 
     const pricing = defaultPricing(active.kind, active.model);
     const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
 
-    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection);
+    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection, claudeMdSection);
     const agentOpts = settings.agent || {};
 
-    const mode = CHAT_MODES.find(m => m.id === agentOpts.chatMode) || CHAT_MODES[0];
+    const mode = CHAT_MODES.find((m) => m.id === agentOpts.chatMode) || CHAT_MODES[0];
     const temperature = mode.temperature;
     const contextWindow = agentOpts.contextWindow ?? 0;
 
@@ -661,12 +771,16 @@ export class Workspace {
       },
       onSubAgentBump: () => bumpChat(this._storeId),
       execState: chatPanel['_exec'],
-      onSessionPersisted: (_sid: string, messages: Array<{role: string; content: unknown}>) => {
+      onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
         // Fire-and-forget: ingest session into memory bundle
         // If bundle is unreachable, this silently fails — nothing is blocked.
         memoryBundleIngest(
-          messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
-          'holo', _sid,
+          messages.map((m) => ({
+            role: m.role,
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          })),
+          'holo',
+          _sid,
         ).catch(() => {});
         // Refresh state caches for next turn + inject system-reminder
         (async () => {
@@ -678,7 +792,9 @@ export class Workspace {
           }
         })().catch(() => {});
       },
-      pricing, temperature, contextWindow,
+      pricing,
+      temperature,
+      contextWindow,
       maxTokens: active.maxTokens ?? 0,
     });
 
@@ -694,28 +810,30 @@ export class Workspace {
       // Wire pool completion → UI events + task-notification injection
       pool.setOnDone((handle: SubAgentHandle, callId?: string) => {
         // Inject result back into parent as task-notification
-        const resultText = handle.status === 'failed'
-          ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
-          : `[子 Agent 完成: ${handle.description}] ${(handle.result || '').slice(0, 500)}`;
+        const resultText =
+          handle.status === 'failed'
+            ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
+            : `[子 Agent 完成: ${handle.description}] ${(handle.result || '').slice(0, 500)}`;
         agentRef.injectTaskNotification(resultText);
       });
 
       // Wire pool reference into Agent for cascade abort / stopAll
       agentRef.setSubAgentPool(pool);
 
-            registry.register(createSubAgentTool(
-        async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
+      registry.register(
+        createSubAgentTool(async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
           const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
           const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
           return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
-        },
-        pool,
-      ));
+        }, pool),
+      );
       // Register batch stop tool
       registry.register(createAgentStopAllTool(() => pool));
       // Register agent message tool
       registry.register(createAgentMessageTool(pool));
-    } catch (e) { console.error('[setupAgent] sub-agent tool registration failed:', e); }
+    } catch (e) {
+      console.error('[setupAgent] sub-agent tool registration failed:', e);
+    }
 
     // Wire tool schemas to UI panel — dynamic, not hardcoded
     chatPanel.setToolSchemas(registry.schemas());
@@ -752,7 +870,10 @@ export class Workspace {
     {
       const mm = this.memoryManager;
       const hookCtx = this.graphData
-        ? (() => { const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(this.graphData); return createGraphContext(fileIndex, fanIn, fanOut); })()
+        ? (() => {
+            const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(this.graphData);
+            return createGraphContext(fileIndex, fanIn, fanOut);
+          })()
         : null;
       const ws = this;
       chatPanel.setAgentFactory(async () => {
@@ -762,8 +883,20 @@ export class Workspace {
         if (!act.apiKey || act.apiKey.trim() === '') return null;
         const p: Provider =
           act.kind === 'anthropic'
-            ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
-            : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, disableThinking: s.agent?.disableThinking });
+            ? createAnthropicProvider({
+                name: act.name,
+                apiKey: act.apiKey,
+                baseUrl: act.baseUrl,
+                model: act.model,
+                thinking: act.thinking || undefined,
+              })
+            : createOpenAIProvider({
+                name: act.name,
+                apiKey: act.apiKey,
+                baseUrl: act.baseUrl,
+                model: act.model,
+                disableThinking: s.agent?.disableThinking,
+              });
         const r = new ToolRegistry();
         const factoryExec: ToolExecutor = async (name, args) => {
           const result = await agentInvoke<string>(name, args);
@@ -775,7 +908,7 @@ export class Workspace {
             const result = await rpc<string>('hologram_call', { tool: name, args });
             return typeof result === 'string' ? result : JSON.stringify(result);
           };
-          for (const tool of schemas.map(s => mcpSchemaToTool(s, holoExec))) r.register(tool);
+          for (const tool of schemas.map((s) => mcpSchemaToTool(s, holoExec))) r.register(tool);
           // dataflow_save / dataflow_query — Tauri commands, not MCP tools
           r.register({
             name: () => 'dataflow_save',
@@ -785,7 +918,11 @@ export class Workspace {
               type: 'object',
               properties: {
                 query: { type: 'string', description: '用户原始查询，用于面板列表展示和后续检索' },
-                content: { type: 'string', description: '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。' },
+                content: {
+                  type: 'string',
+                  description:
+                    '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。',
+                },
                 exploreResult: { type: 'string', description: 'explore_deps 返回的完整 JSON 字符串（可选）' },
                 dataflowResult: { type: 'string', description: 'trace_dataflow 返回的完整 JSON 字符串（可选）' },
               },
@@ -794,7 +931,7 @@ export class Workspace {
             readOnly: () => false,
             execute: async (args) => {
               const result = await agentInvoke('dataflow_save', args);
-              window.dispatchEvent(new CustomEvent('dataflow:saved'));
+              bus.emit('dataflow:saved');
               return result;
             },
           });
@@ -805,7 +942,10 @@ export class Workspace {
             parameters: () => ({
               type: 'object',
               properties: {
-                traceId: { type: 'string', description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。' },
+                traceId: {
+                  type: 'string',
+                  description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。',
+                },
                 list: { type: 'boolean', description: '传 true 返回轻量摘要列表（不传 traceId 时默认开启）' },
               },
             }),
@@ -826,10 +966,21 @@ export class Workspace {
         for (const tool of createTaskTools(new TaskManager())) r.register(tool);
         let memSection = '';
         if (mm) {
-          try { memSection = await mm.loadPromptSection(graphNodes); } catch { /* ignore */ }
+          try {
+            memSection = await mm.loadPromptSection(graphNodes);
+          } catch {
+            /* ignore */
+          }
+        }
+        // Load project conventions — same CLAUDE.md that Claude Code reads
+        let claudeMd = '';
+        try {
+          claudeMd = await rpc<string>('read_file_content', { filePath: `${ws.path}/CLAUDE.md` });
+        } catch {
+          /* file missing is fine */
         }
         const snap = ws.graphData ? buildGraphSnapshot(ws.graphData) : '';
-        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap), {
+        const newAgent = new Agent(p, r, buildSystemPrompt(ws, memSection, snap, '', claudeMd), {
           eventSink: chatPanel.eventSink,
           onSubAgentSpawn: (part: SubAgentPart) => {
             const msgs = getChatStore(this._storeId).msg.getState().messages;
@@ -864,14 +1015,13 @@ export class Workspace {
         // Sub-agent tool — uses workspace pool for timeout/abort safety
         {
           const agentRef = newAgent;
-          r.register(createSubAgentTool(
-            async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
+          r.register(
+            createSubAgentTool(async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
               const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
               const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
               return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
-            },
-            ws.subAgentPool,
-          ));
+            }, ws.subAgentPool),
+          );
         }
         // Compaction stats tool
         registerCompactionTools(newAgent, r);
@@ -887,8 +1037,14 @@ export class Workspace {
   async runCheck(checkPanel: CheckPanel): Promise<void> {
     if (!this.path) return;
     this._checkPanel = checkPanel; // store for scheduleCheck
-    if (this.checkRunning) { this.checkPending = true; return; }
-    if (this.checkTimer) { clearTimeout(this.checkTimer); this.checkTimer = null; }
+    if (this.checkRunning) {
+      this.checkPending = true;
+      return;
+    }
+    if (this.checkTimer) {
+      clearTimeout(this.checkTimer);
+      this.checkTimer = null;
+    }
 
     this.checkRunning = true;
     this.checkPending = false;
@@ -900,8 +1056,11 @@ export class Workspace {
         checkPanel.loadAndRenderGate(this.path).catch(() => {});
         bus.emit('timeline:refresh');
         // Notify toolbar so it can show violation badge
-        const cnt = (result.l5_violations?.length||0) + (result.l4_violations?.length||0)
-          + (result.l3_violations?.length||0) + (result.l2_violations?.length||0);
+        const cnt =
+          (result.l5_violations?.length || 0) +
+          (result.l4_violations?.length || 0) +
+          (result.l3_violations?.length || 0) +
+          (result.l2_violations?.length || 0);
         bus.emit('check:result', { passed: result.passed, violations: cnt });
         // Push status-bar notification — visible even when check panel is closed
         if (!result.passed) {
@@ -919,7 +1078,10 @@ export class Workspace {
       if (this.checkPending) {
         this.checkPending = false;
         if (this.checkTimer) clearTimeout(this.checkTimer);
-        this.checkTimer = setTimeout(() => { this.checkTimer = null; if (!this.checkRunning) this.runCheck(this._checkPanel!); }, 2000);
+        this.checkTimer = setTimeout(() => {
+          this.checkTimer = null;
+          if (!this.checkRunning) this.runCheck(this._checkPanel!);
+        }, 2000);
       }
     }
   }
@@ -940,23 +1102,34 @@ export class Workspace {
 
   doGraphUpdate(starGraph: StarGraph, checkPanel: CheckPanel, diff?: any): void {
     if (!this.graphData) return;
-    const nodeCount = Array.isArray(this.graphData.nodes) ? this.graphData.nodes.length : Object.keys(this.graphData.nodes || {}).length;
+    const nodeCount = Array.isArray(this.graphData.nodes)
+      ? this.graphData.nodes.length
+      : Object.keys(this.graphData.nodes || {}).length;
     // ponytail: incremental path — no clearGraph, no camera reset, local layout relax on new nodes
     if (diff && starGraph.hasGraph) {
-      starGraph.applyGraphDiff(diff, this.graphData).then(() => {
-        this.onStatusChange?.(`已增量更新 (${nodeCount} 节点)`);
-        this.runCheck(checkPanel);
-      }).catch((e) => {
-        console.error('[doGraphUpdate] incremental failed, falling back to full render:', e);
-        starGraph.render(this.graphData);
-        this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
-        if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
-        this.runCheck(checkPanel);
-      });
+      starGraph
+        .applyGraphDiff(diff, this.graphData)
+        .then(() => {
+          this.onStatusChange?.(`已增量更新 (${nodeCount} 节点)`);
+          this.runCheck(checkPanel);
+        })
+        .catch((e) => {
+          console.error('[doGraphUpdate] incremental failed, falling back to full render:', e);
+          starGraph.render(this.graphData);
+          this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
+          if (this.diffActive) {
+            starGraph.clearDiff();
+            this.diffActive = false;
+          }
+          this.runCheck(checkPanel);
+        });
     } else {
       starGraph.render(this.graphData);
       this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
-      if (this.diffActive) { starGraph.clearDiff(); this.diffActive = false; }
+      if (this.diffActive) {
+        starGraph.clearDiff();
+        this.diffActive = false;
+      }
       this.runCheck(checkPanel);
     }
   }
@@ -975,7 +1148,9 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
       rpc<string>('hologram_call', { tool: 'fragile_modules', args: { limit: 15 } }),
       rpc<string>('hologram_call', { tool: 'detect_cycles', args: { mode: 'all' } }),
       rpc<string>('hologram_call', { tool: 'project_health', args: { path: projectPath, days: 30 } }),
-      rpc<string>('hologram_call', { tool: 'arch_blindspots', args: { filter: 'all' } }).catch(() => '{"blindspots":[]}'),
+      rpc<string>('hologram_call', { tool: 'arch_blindspots', args: { filter: 'all' } }).catch(
+        () => '{"blindspots":[]}',
+      ),
     ]);
 
     // ── Fragility (分析引擎) ──
@@ -1016,7 +1191,15 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
     const lspHotspots: Array<{ file: string; symbol: string; callers: number }> = [];
     for (const r of fragilityRanks.slice(0, 5)) {
       if (r.score > 100) {
-        lspHotspots.push({ file: r.file, symbol: r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '', callers: Math.round(r.score / 10) });
+        lspHotspots.push({
+          file: r.file,
+          symbol:
+            r.file
+              .split('/')
+              .pop()
+              ?.replace(/\.[^.]+$/, '') || '',
+          callers: Math.round(r.score / 10),
+        });
       }
     }
 
@@ -1042,13 +1225,19 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
             .map(([symbol, count]) => ({ symbol, count }));
           if (sorted.length > 0) lspCallers.set(r.file, sorted);
         }
-      } catch { /* per-file LSP can fail silently */ }
+      } catch {
+        /* per-file LSP can fail silently */
+      }
     }
 
     // ── Semantic neighbors: search_symbols on top fragile module names ──
     const semanticNeighbors = new Map<string, Array<{ name: string; file: string }>>();
     for (const r of fragilityRanks.slice(0, 3)) {
-      const symbol = r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+      const symbol =
+        r.file
+          .split('/')
+          .pop()
+          ?.replace(/\.[^.]+$/, '') || '';
       if (!symbol) continue;
       try {
         const searchRaw = await rpc<string>('hologram_call', {
@@ -1062,7 +1251,9 @@ async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefr
           .slice(0, 3)
           .map((s: any) => ({ name: s.name || '', file: s.location || s.file || '' }));
         if (neighbors.length > 0) semanticNeighbors.set(r.file, neighbors);
-      } catch { /* search can fail silently */ }
+      } catch {
+        /* search can fail silently */
+      }
     }
 
     // ── Baseline / drift ──
@@ -1127,14 +1318,16 @@ function extractGraphNodeNames(graphData: unknown): string[] | undefined {
   const nodes = gd.nodes;
   if (!nodes) return undefined;
   if (Array.isArray(nodes)) {
-    return nodes.map((n: unknown) => {
-      if (typeof n === 'string') return n;
-      if (typeof n === 'object' && n !== null) {
-        const obj = n as Record<string, unknown>;
-        return String(obj.id || obj.name || obj.file || '');
-      }
-      return '';
-    }).filter(Boolean);
+    return nodes
+      .map((n: unknown) => {
+        if (typeof n === 'string') return n;
+        if (typeof n === 'object' && n !== null) {
+          const obj = n as Record<string, unknown>;
+          return String(obj.id || obj.name || obj.file || '');
+        }
+        return '';
+      })
+      .filter(Boolean);
   }
   if (typeof nodes === 'object') {
     return Object.keys(nodes as Record<string, unknown>);
@@ -1142,7 +1335,13 @@ function extractGraphNodeNames(graphData: unknown): string[] | undefined {
   return undefined;
 }
 
-export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapshot = '', memoryBundleSection = ''): string {
+export function buildSystemPrompt(
+  ws: Workspace,
+  memorySection = '',
+  graphSnapshot = '',
+  memoryBundleSection = '',
+  claudeMdSection = '',
+): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
@@ -1154,8 +1353,6 @@ export function buildSystemPrompt(ws: Workspace, memorySection = '', graphSnapsh
 身份：你是一个代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断。
 语言：始终用中文回复。代码和文件名用原样标记。
 行为：诚实——不确定的事不说。工具返回空结果不要编造。提示用户可能需要加载项目。`;
-
-
 
     if (memorySection.trim()) {
       prompt += `\n\n## 记忆库\n${memorySection}\n\n> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。`;
@@ -1375,7 +1572,8 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 ${memorySection.trim() || '暂无。'}
 
 > ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。
-${memoryBundleSection ? `\n## 语义记忆场\n${memoryBundleSection}\n` : ''}`;
+${memoryBundleSection ? `\n## 语义记忆场\n${memoryBundleSection}\n` : ''}
+${claudeMdSection ? `\n## 项目约定（来自 CLAUDE.md）\n${claudeMdSection}\n` : ''}`;
 }
 
 // ═══════════════════════════════════════════════════════════════

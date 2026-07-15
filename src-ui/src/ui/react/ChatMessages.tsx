@@ -25,6 +25,7 @@ import {
 } from '../message-model';
 import { bumpChat } from '../chat-store';
 import { getMessagesStore } from '../messages-store';
+import { getSessionStore } from '../session-store';
 
 import { useStore } from 'zustand';
 
@@ -655,7 +656,19 @@ const ChatMessagesApp: React.FC<{
   scrollContainer?: HTMLElement;
   storeId: string;
 }> = ({ callbacks, scrollContainer, storeId }) => {
-  const msgStore = useMemo(() => getMessagesStore(storeId), [storeId]);
+  // ponytail: messages live in per-session stores — subscribe to the active session's store.
+  // React re-renders automatically on session switch because activeSessionId changes.
+  const sessStore = useMemo(() => getSessionStore(storeId), [storeId]);
+  const activeSessionId = useStore(sessStore, (s) => {
+    const active = s.sessions[s.activeIdx];
+    return active?.id ?? null;
+  });
+  const msgStore = useMemo(() =>
+    activeSessionId != null
+      ? getMessagesStore(`${storeId}:${activeSessionId}`)
+      : getMessagesStore(`${storeId}:__empty__`),
+    [storeId, activeSessionId],
+  );
   const messages = useStore(msgStore, (s) => s.messages);
   const version = useStore(msgStore, (s) => s.version);
 
