@@ -924,6 +924,7 @@ export class ChatMessagesPanel {
 
   setCallbacks(cbs: ChatMessagesCallbacks): void {
     this._callbacks = cbs;
+    this._render();
   }
 
   constructor(container: HTMLElement, storeId: string) {

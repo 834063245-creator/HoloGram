@@ -5,13 +5,17 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write  # action-gh-release 需要写权限创建 Release
+
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with: { node-version: '22' }
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { toolchain: stable }
 

@@ -123,9 +123,6 @@ export class ChatPanel {
   private footerClickCleanup: (() => void) | null = null;
   // ⚡ lastAgentDiag → chat-store.ts
 
-  // ── New: progress bar (item 3) ──
-  private progressBar: HTMLElement | null = null;
-
   // ── New: @ autocomplete (item 5) ──
   private atPopup: HTMLElement | null = null;
   private atFileCache: { data: string; ts: number } | null = null;
@@ -335,22 +332,11 @@ export class ChatPanel {
       if (exec.isRunning) {
         this.inputArea.placeholder = 'Agent 思考中… 可直接输入消息插入对话';
         this._updateStatusBar('thinking', '分析中…');
-        if (!this.progressBar) {
-          this.progressBar = document.createElement('div');
-          this.progressBar.className = 'chat-progress';
-          this.progressBar.innerHTML =
-            '<span class="chat-progress-label">准备中…</span><div class="chat-progress-bar"><div class="chat-progress-fill"></div></div>';
-          this.headerEl.after(this.progressBar);
-        }
       } else {
         this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
         this.inputArea.focus();
         this._updateStatusBar('idle');
         this._promptShelf?.dismiss(); // ⚡ dismiss ask/permission on stop
-        if (this.progressBar) {
-          this.progressBar.remove();
-          this.progressBar = null;
-        }
         this.panel.classList.remove('chat-pill-running');
       }
     };
@@ -367,13 +353,6 @@ export class ChatPanel {
     // ── Receive Agent events via panel-scoped bus — prevents cross-panel leaks ──
     this._bus.on('agent:event', (ev: AgentEvent) => this.renderEvent(ev));
     this.setupGraphClickHandler();
-    // ── Agent progress feedback (item 3) ──
-    this._bus.on('agent:progress', (data: { step: number; toolName: string }) => {
-      if (!this.progressBar || !this._activeExec().isRunning) return;
-      const label = this.progressBar.querySelector('.chat-progress-label');
-      if (label)
-        label.textContent = data.step > 0 ? `步骤 ${data.step}  ·  ${data.toolName}` : `正在执行 ${data.toolName}`;
-    });
   }
 
   // ── Public API ──
@@ -725,9 +704,6 @@ export class ChatPanel {
       },
       setSessionTabs: (el) => {
         this.sessionTabs = el;
-      },
-      setProgressBar: (el) => {
-        this.progressBar = el;
       },
       setPillBadge: (el) => {
         this.pillBadge = el;

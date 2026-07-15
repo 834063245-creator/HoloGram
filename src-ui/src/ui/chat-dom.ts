@@ -75,7 +75,6 @@ export interface DomContext {
   setFooterEl: (el: HTMLElement) => void;
   setHeaderEl: (el: HTMLElement) => void;
   setSessionTabs: (el: HTMLElement) => void;
-  setProgressBar: (el: HTMLElement) => void;
   setPillBadge: (el: HTMLElement) => void;
   setTabBar: (el: HTMLElement) => void;
   setTabContent: (el: HTMLElement) => void;
