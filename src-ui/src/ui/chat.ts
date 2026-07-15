@@ -111,6 +111,8 @@ export class ChatPanel {
   // ⚡ streamingAssistantId / userScrolledUp → chat-store.ts
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
+  // File attachments (dragged/selected files)
+  private attachedFiles: { path: string; name: string; size: number }[] = [];
   private attachPillsEl: HTMLElement | null = null;
 
   // ⚡ panelMode → chat-store.ts
