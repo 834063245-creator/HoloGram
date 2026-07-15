@@ -336,8 +336,8 @@ export class TimelinePanel {
   }
 
   toggle(): void {
-    this._toggleRef.current?.();
     this._open = !this._open;
+    this._toggleRef.current?.();
   }
   isOpen(): boolean {
     return this._open;
@@ -345,8 +345,8 @@ export class TimelinePanel {
 
   close(): void {
     if (this._open) {
-      this._toggleRef.current?.();
       this._open = false;
+      this._toggleRef.current?.();
     }
   }
 
