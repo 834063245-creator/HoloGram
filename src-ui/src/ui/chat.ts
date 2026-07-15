@@ -328,10 +328,11 @@ export class ChatPanel {
         this.refreshHint();
       }
     });
-    // ⚡ ExecutionState → UI sync: full state → DOM binding
-    this._exec.onChange(() => {
+    // ⚡ ExecutionState → UI sync: subscribe to active session's execState, re-bind on session switch
+    let _execUnsub: (() => void) | null = null;
+    const _onExecChange = (exec: ExecStateInstance) => {
       this._updateStopButton();
-      if (this._activeExec().isRunning) {
+      if (exec.isRunning) {
         this.inputArea.placeholder = 'Agent 思考中… 可直接输入消息插入对话';
         this._updateStatusBar('thinking', '分析中…');
         if (!this.progressBar) {
@@ -352,7 +353,16 @@ export class ChatPanel {
         }
         this.panel.classList.remove('chat-pill-running');
       }
-    });
+    };
+    const _bindExecState = () => {
+      if (_execUnsub) { _execUnsub(); _execUnsub = null; }
+      const exec = this._activeExec();
+      _execUnsub = exec.onChange(() => _onExecChange(exec));
+      _onExecChange(exec); // initial sync
+    };
+    _bindExecState();
+    // Re-bind when user switches active session
+    getChatStore(this.panelId).sess.subscribe(() => _bindExecState());
     // ── Detect graph interaction to auto-dismiss the panel ──
     // ── Receive Agent events via panel-scoped bus — prevents cross-panel leaks ──
     this._bus.on('agent:event', (ev: AgentEvent) => this.renderEvent(ev));
@@ -1499,7 +1509,7 @@ export class ChatPanel {
 
   /** Is ANY agent (main or sub) currently working? Delegates to ExecutionState. */
   private _isBusy(): boolean {
-    return this._exec.isBusy;
+    return this._activeExec().isBusy;
   }
 
   /** Sync stop button visibility to _isBusy() truth — call whenever state may have changed. */

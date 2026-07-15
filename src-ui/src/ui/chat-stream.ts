@@ -313,6 +313,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       if (ev.tool) {
         applyEventToParts(_streamingAssistant(ctx).parts, ev);
         _streamingBump(ctx);
+        ctx._updateStatusBar('thinking', '分析中…');
       }
       break;
 
