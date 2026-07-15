@@ -643,6 +643,12 @@ export class Workspace {
     }
 
     // Coding tools
+    // ── Active shell stream cleanups ──
+    // Keys are streamIds; values are unlisten functions.
+    // Cleaned up on new shell start, shell:done, or agentInvoke error.
+    const _shellCleanups = new Map<string, Array<() => void>>();
+    const SHELL_DONE_TIMEOUT_MS = 600_000; // 10 min — matches Rust max timeout
+
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
       if (name === 'run_shell' && args['runInBackground']) {
         const taskId = await agentInvoke<string>('run_shell', args);
@@ -666,36 +672,77 @@ export class Workspace {
       // ── Streaming shell: real-time output via Tauri events ──
       if (name === 'exec_command' && onProgress && !args['runInBackground']) {
         const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        return new Promise<string>((resolve) => {
+
+        // Clean up stale listeners from abandoned Promises (e.g. agent abort)
+        for (const cleanups of _shellCleanups.values()) {
+          for (const fn of cleanups) fn();
+        }
+        _shellCleanups.clear();
+
+        return new Promise<string>(async (resolve) => {
           let fullOutput = '';
-          let unsubOutput: (() => void) | null = null;
-          let unsubDone: (() => void) | null = null;
-          listen<{ streamId: string; chunk: string }>('shell:output', (event) => {
-            if (event.payload.streamId !== streamId) return;
-            fullOutput += event.payload.chunk;
-            onProgress(event.payload.chunk);
-          }).then((fn) => {
-            unsubOutput = fn;
-          });
-          listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (event) => {
-            if (event.payload.streamId !== streamId) return;
-            unsubOutput?.();
-            unsubDone?.();
-            if (event.payload.error) {
-              resolve(`[exit code: ${event.payload.exitCode}]\n${event.payload.error}`);
-            } else if (event.payload.exitCode !== 0) {
-              resolve(`[exit code: ${event.payload.exitCode}]\n${fullOutput}`);
-            } else {
-              resolve(fullOutput || '(无输出)');
+          let doneTimer: ReturnType<typeof setTimeout> | null = null;
+          let settled = false;
+
+          const cleanup = () => {
+            if (doneTimer !== null) {
+              clearTimeout(doneTimer);
+              doneTimer = null;
             }
-          }).then((fn) => {
-            unsubDone = fn;
-          });
-          agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }).catch((e) => {
-            unsubOutput?.();
-            unsubDone?.();
-            resolve(`错误: ${e}`);
-          });
+            const fns = _shellCleanups.get(streamId);
+            if (fns) {
+              for (const fn of fns) fn();
+              _shellCleanups.delete(streamId);
+            }
+          };
+
+          const resolveOnce = (value: string) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(value);
+          };
+
+          // await both listen() so unsub fns are set before any event can fire
+          const unsubOutput = await listen<{ streamId: string; kind: string; chunk: string }>(
+            'shell:output',
+            (event) => {
+              if (event.payload.streamId !== streamId) return;
+              fullOutput += event.payload.chunk;
+              onProgress(event.payload.chunk);
+            },
+          );
+
+          const unsubDone = await listen<{ streamId: string; exitCode: number; error?: string }>(
+            'shell:done',
+            (event) => {
+              if (event.payload.streamId !== streamId) return;
+              if (event.payload.error) {
+                resolveOnce(`[exit code: ${event.payload.exitCode}]\n${event.payload.error}`);
+              } else if (event.payload.exitCode !== 0) {
+                resolveOnce(`[exit code: ${event.payload.exitCode}]\n${fullOutput}`);
+              } else {
+                resolveOnce(fullOutput || '(无输出)');
+              }
+            },
+          );
+
+          _shellCleanups.set(streamId, [unsubOutput, unsubDone]);
+
+          // Timeout guard: if shell:done never fires (Rust thread crashed etc.)
+          doneTimer = setTimeout(() => {
+            resolveOnce(
+              `[exit code: -1]\n错误: shell 超时 (${SHELL_DONE_TIMEOUT_MS / 1000}s)，未收到 shell:done 事件`,
+            );
+          }, SHELL_DONE_TIMEOUT_MS);
+
+          try {
+            await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId });
+            // Streaming path: Rust returns {"status":"started"} immediately.
+            // We wait for shell:done (or timeout) to resolve.
+          } catch (e: any) {
+            resolveOnce(`错误: ${e}`);
+          }
         });
       }
       const result = await agentInvoke<string>(name, args);

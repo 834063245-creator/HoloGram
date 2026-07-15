@@ -14,6 +14,7 @@ pub enum NodeKind {
     Module,    // namespace / package
     File,      // source file module
     Interface, // interface / trait / type alias
+    Variable,  // variable / constant / field
     Medium,    // storage / IO
     Temporal,  // async / timer
 }
@@ -27,6 +28,7 @@ impl NodeKind {
             NodeKind::Module => "module",
             NodeKind::File => "file",
             NodeKind::Interface => "interface",
+            NodeKind::Variable => "variable",
             NodeKind::Medium => "medium",
             NodeKind::Temporal => "temporal",
         }

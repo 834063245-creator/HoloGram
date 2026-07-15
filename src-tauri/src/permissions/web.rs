@@ -50,6 +50,7 @@ mod tests {
             source: RuleSource::System,
             behavior: Behavior::Deny,
             value: parse_rule_value("WebFetch(0.0.0.0:*)"),
+            danger: None,
         });
         let r = check("http://0.0.0.0:8080/status", &rules);
         assert!(matches!(r, PermissionResult::Deny { .. }));

@@ -56,3 +56,16 @@
 (call_expression
   function: (scoped_identifier
     name: (identifier) @name)) @call
+
+;; ── Variables ──
+(static_item) @var
+(const_item) @var
+
+;; ── Writes ──
+(assignment_expression) @write
+(compound_assignment_expr) @write
+
+;; ── Usage ──
+(identifier) @usage
+(type_identifier) @usage
+(field_identifier) @usage

@@ -37,3 +37,16 @@
 ;; ── JSX calls (TSX grammar only) ──
 (jsx_self_closing_element) @call
 (jsx_opening_element) @call
+
+;; ── Variables ──
+(lexical_declaration) @var
+(variable_declaration) @var
+
+;; ── Writes ──
+(assignment_expression) @write
+
+;; ── Throws ──
+(throw_statement) @throws
+
+;; ── Usage ──
+(identifier) @usage

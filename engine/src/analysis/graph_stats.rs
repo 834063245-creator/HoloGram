@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub fn graph_summary(graph: &Graph) -> serde_json::Value {
     let mut sym=0; let mut med=0; let mut tmp=0;
     for n in graph.nodes.values() {
-        match n.kind { NodeKind::Symbol|NodeKind::Function|NodeKind::Class|NodeKind::Module|NodeKind::File|NodeKind::Interface=>{sym+=1}
+        match n.kind { NodeKind::Symbol|NodeKind::Function|NodeKind::Class|NodeKind::Module|NodeKind::File|NodeKind::Interface|NodeKind::Variable=>{sym+=1}
             NodeKind::Medium=>{med+=1}
             NodeKind::Temporal=>{tmp+=1} }
     }
@@ -26,7 +26,7 @@ pub fn graph_summary(graph: &Graph) -> serde_json::Value {
 pub fn graph_summary_from_index(idx: &MemoryIndex) -> serde_json::Value {
     let mut sym=0; let mut med=0; let mut tmp=0;
     for n in idx.nodes_iter() {
-        match n.kind { NodeKind::Symbol|NodeKind::Function|NodeKind::Class|NodeKind::Module|NodeKind::File|NodeKind::Interface=>{sym+=1}
+        match n.kind { NodeKind::Symbol|NodeKind::Function|NodeKind::Class|NodeKind::Module|NodeKind::File|NodeKind::Interface|NodeKind::Variable=>{sym+=1}
             NodeKind::Medium=>{med+=1}
             NodeKind::Temporal=>{tmp+=1} }
     }

@@ -124,7 +124,6 @@ impl Engine {
         set_progress("动态调度合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let syn_edges = synthesize_dynamic_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = syn_edges, "[engine] dynamic dispatch edges synthesized");
         eprintln!("[engine] stage: dynamic-dispatch done in {:.1}s ({} edges)",
             stage_start.elapsed().as_secs_f64(), syn_edges);
         stage_timings.push(StageTiming {
@@ -132,15 +131,11 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", syn_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 5.1. React synthesis
         set_progress("React合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let react_edges = synthesize_react_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = react_edges, "[engine] React edges synthesized");
         eprintln!("[engine] stage: react-synthesis done in {:.1}s ({} edges)",
             stage_start.elapsed().as_secs_f64(), react_edges);
         stage_timings.push(StageTiming {
@@ -148,15 +143,11 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", react_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 5.2. Vue synthesis
         set_progress("Vue合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let vue_edges = synthesize_vue_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = vue_edges, "[engine] Vue edges synthesized");
         eprintln!("[engine] stage: vue-synthesis done in {:.1}s ({} edges)",
             stage_start.elapsed().as_secs_f64(), vue_edges);
         stage_timings.push(StageTiming {
@@ -164,15 +155,11 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", vue_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 5.5. DI / Reflection detection
         set_progress("DI/反射检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let di_edges = detect_di_reflection(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = di_edges, "[engine] DI/reflection edges synthesized");
         eprintln!("[engine] stage: di-reflection done in {:.1}s ({} edges)",
             stage_start.elapsed().as_secs_f64(), di_edges);
         stage_timings.push(StageTiming {
@@ -180,15 +167,11 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", di_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 5.6. Dynamic import detection
         set_progress("动态导入检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let dyn_imp_edges = detect_dynamic_imports(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = dyn_imp_edges, "[engine] dynamic import markers created");
         eprintln!("[engine] stage: dynamic-import done in {:.1}s ({} markers)",
             stage_start.elapsed().as_secs_f64(), dyn_imp_edges);
         stage_timings.push(StageTiming {
@@ -196,15 +179,11 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} markers", dyn_imp_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 5.7. Eval / dynamic code detection
         set_progress("Eval检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let eval_edges = detect_eval(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = eval_edges, "[engine] eval markers created");
         eprintln!("[engine] stage: eval done in {:.1}s ({} markers)",
             stage_start.elapsed().as_secs_f64(), eval_edges);
         stage_timings.push(StageTiming {
@@ -212,15 +191,11 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} markers", eval_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 5.8. Cross-language call detection
         set_progress("跨语言调用检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let xlang_edges = detect_cross_lang_calls(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
-        info!(count = xlang_edges, "[engine] cross-language call markers created");
         eprintln!("[engine] stage: cross-lang done in {:.1}s ({} markers)",
             stage_start.elapsed().as_secs_f64(), xlang_edges);
         stage_timings.push(StageTiming {
@@ -228,32 +203,40 @@ impl Engine {
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} markers", xlang_edges),
         });
-        if cancel.load(Ordering::Relaxed) {
-            return Err("分析已被新的重分析请求取消".to_string());
-        }
 
         // 6. Dataflow — now on-demand via query_file_dataflow().
         // Pipeline no longer precomputes dataflow edges at graph build time.
         // Agent tools call the query engine directly when tracing variables.
 
         // ── 5.9 Extract source snippets for vector index ──
-        // ponytail: uses parse_cache (file→source) + node ID prefix matching
-        // instead of per-node locations. Node IDs encode file path:
-        //   "src.main.handle_payment" → file "src/main.py"
+        // ponytail: build module→source index first (O(F)), then single-pass nodes
+        // (O(N×D) where D = module depth). Was O(F×N) — 1060 files × 26293 nodes = 27.8M iters.
         set_progress("源码片段提取", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let mut snippets_extracted = 0usize;
-        for (file_path, (source, _)) in result.parse_cache.iter() {
-            let module_id = crate::path_utils::normalize_path(file_path)
-                .replace(['/', '\\'], ".");
-            for (_, node) in result.graph.nodes.iter_mut() {
-                if node.snippet.is_some() { continue; }
-                // Check if this node belongs to this file (node ID starts with module_id)
-                if node.id == module_id || node.id.starts_with(&format!("{module_id}.")) {
+        // Build file index: module_id → source (clone to release parse_cache borrow)
+        let file_map: std::collections::HashMap<String, String> = result.parse_cache.iter()
+            .map(|(fp, (src, _))| {
+                let mid = crate::path_utils::normalize_path(fp)
+                    .replace(['/', '\\'], ".");
+                (mid, src.clone())
+            })
+            .collect();
+        // Single pass over nodes — try node.id as module prefix, progressively strip
+        for (_, node) in result.graph.nodes.iter_mut() {
+            if node.snippet.is_some() { continue; }
+            let mut key: &str = node.id.as_str();
+            loop {
+                if let Some(source) = file_map.get(key) {
                     if let Some(snippet) = crate::vector::extract_snippet(source, &node.name, &node.kind) {
                         node.snippet = Some(snippet);
                         snippets_extracted += 1;
                     }
+                    break;
+                }
+                match key.rfind('.') {
+                    Some(pos) => key = &key[..pos],
+                    None => break,
                 }
             }
         }

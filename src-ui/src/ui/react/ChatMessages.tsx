@@ -239,8 +239,14 @@ const ReasoningBlock: React.FC<{
 
 // ── Tool card ──
 
-const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = React.memo(
-  ({ part, expanded, onToggle }) => {
+// ponytail: NOT wrapped in React.memo — part-mutator mutates ToolCallPart in-place
+// (tr.status = 'error'), so the object reference never changes. React.memo
+// would block re-renders when tool status transitions (e.g. pending→running→done/error).
+const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = ({
+  part,
+  expanded,
+  onToggle,
+}) => {
     const icon =
       part.status === 'running'
         ? svgIcon('dot')
@@ -289,8 +295,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         )}
       </div>
     );
-  },
-);
+  };
 
 // ── Tool summary ──
 

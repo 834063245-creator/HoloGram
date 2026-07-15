@@ -31,6 +31,10 @@ pub struct PermissionRule {
     pub source: RuleSource,
     pub behavior: Behavior,
     pub value: RuleValue,
+    /// If set, the frontend renders a red danger card with this label (e.g. "ForceRecursiveRoot").
+    /// Only meaningful for Ask rules. Tool-level Ask (bash.rs::check) supplies this natively;
+    /// system rules can carry it to avoid short-circuiting at step ② with danger: None.
+    pub danger: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -76,20 +80,7 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
         "WebFetch(0.0.0.0:*)",
     ];
     let ask_patterns = &[
-        // Critical bash commands — tool-level Ask delegates to bash.rs::check()
-        // which returns Ask { danger: Some(...) } for red ASK card display
-        "Bash(rm -rf /*)",
-        "Bash(curl * | sh)",
-        "Bash(curl * | bash)",
-        "Bash(wget * | sh)",
-        "Bash(wget * | bash)",
-        "Bash(> /dev/*)",
-        "Bash(dd of=/dev/*)",
-        "Bash(mkfs*)",
-        "Bash(shutdown*)",
-        "Bash(reboot*)",
-        "Bash(halt*)",
-        // High-risk ops
+        // High-risk ops — no danger label needed (plain ask card).
         "Bash(git push --force main)",
         "Bash(git push --force master)",
         "Git(push)",
@@ -101,6 +92,22 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
         "WebFetch(localhost:*)",
         "WebFetch(127.0.0.1:*)",
     ];
+    // Critical bash commands — carry a danger label for red ASK card.
+    // When the system ask rule (step ②) matches these, the danger propagates
+    // directly without needing bash.rs::check() at step ③.
+    let danger_ask_patterns: &[(&str, &str)] = &[
+        ("Bash(rm -rf /*)", "ForceRecursiveRoot"),
+        ("Bash(curl * | sh)", "PipeToShell"),
+        ("Bash(curl * | bash)", "PipeToShell"),
+        ("Bash(wget * | sh)", "PipeToShell"),
+        ("Bash(wget * | bash)", "PipeToShell"),
+        ("Bash(> /dev/*)", "WriteDev"),
+        ("Bash(dd of=/dev/*)", "WriteDev"),
+        ("Bash(mkfs*)", "DiskFormat"),
+        ("Bash(shutdown*)", "SystemPower"),
+        ("Bash(reboot*)", "SystemPower"),
+        ("Bash(halt*)", "SystemPower"),
+    ];
 
     let mut rules = Vec::new();
     for p in deny_patterns {
@@ -108,6 +115,7 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
             source: RuleSource::System,
             behavior: Behavior::Deny,
             value: parse_rule_value(p),
+            danger: None,
         });
     }
     for p in ask_patterns {
@@ -115,6 +123,15 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
             source: RuleSource::System,
             behavior: Behavior::Ask,
             value: parse_rule_value(p),
+            danger: None,
+        });
+    }
+    for (p, danger) in danger_ask_patterns {
+        rules.push(PermissionRule {
+            source: RuleSource::System,
+            behavior: Behavior::Ask,
+            value: parse_rule_value(p),
+            danger: Some(danger.to_string()),
         });
     }
     rules
@@ -147,6 +164,7 @@ pub fn load_project_rules(project_root: &Path) -> Vec<PermissionRule> {
                         source: RuleSource::Project,
                         behavior: behavior.clone(),
                         value: parse_rule_value(s),
+                        danger: None,
                     });
                 }
             }
@@ -384,6 +402,7 @@ mod tests {
             source: RuleSource::System,
             behavior: Behavior::Deny,
             value: parse_rule_value("Bash"),
+            danger: None,
         };
         assert!(rule.matches("Bash", None));
         assert!(rule.matches("Bash", Some("anything")));
@@ -396,6 +415,7 @@ mod tests {
             source: RuleSource::System,
             behavior: Behavior::Allow,
             value: parse_rule_value("Bash(npm test:*)"),
+            danger: None,
         };
         assert!(rule.matches("Bash", Some("npm test --filter=foo")));
         assert!(!rule.matches("Bash", Some("cargo build")));

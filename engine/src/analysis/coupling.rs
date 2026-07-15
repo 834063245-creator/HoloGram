@@ -30,8 +30,8 @@ pub fn compute_coupling(graph: &mut Graph) {
                     _ => 2, // L2: cross-package
                 }
             }
-            EdgeKind::Reads | EdgeKind::Writes | EdgeKind::Shares => 3, // L3: data
-            EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences => 4, // L4: temporal
+            EdgeKind::Reads | EdgeKind::Writes | EdgeKind::Shares | EdgeKind::Usage => 3, // L3: data
+            EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences | EdgeKind::Throws => 4, // L4: temporal
         };
     }
 }

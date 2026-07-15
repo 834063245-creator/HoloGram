@@ -244,6 +244,7 @@ impl SqliteDb {
                     "module" => NodeKind::Module,
                     "file" => NodeKind::File,
                     "interface" => NodeKind::Interface,
+                    "variable" => NodeKind::Variable,
                     "medium" => NodeKind::Medium,
                     "temporal" => NodeKind::Temporal,
                     _ => NodeKind::Symbol,
@@ -308,9 +309,9 @@ impl SqliteDb {
     // ── bulk write (full analysis + incremental) ──
 
     /// Replace all graph data in SQLite with the given nodes and edges.
-    /// Uses a single transaction with performance pragmas; rolls back on failure
-    /// so existing data is preserved if anything goes wrong.
+    /// Uses chunked multi-row INSERT with FTS triggers disabled during bulk load.
     /// ponytail: synchronous=NORMAL is safe in WAL mode.
+    /// SQLite param limit is 999; nodes have 11 cols → 90 rows/chunk, edges 6 cols → 166 rows/chunk.
     pub fn bulk_replace_all(
         &self,
         nodes: &[&Node],
@@ -319,8 +320,6 @@ impl SqliteDb {
         let tx = self.conn.unchecked_transaction()
             .map_err(|e| format!("tx: {}", e))?;
 
-        // Boost cache for bulk write (safe inside transaction).
-        // ponytail: synchronous & foreign_keys can't change inside a tx — set in open().
         tx.execute_batch("PRAGMA cache_size=-50000;")
             .map_err(|e| format!("pragma cache: {}", e))?;
 
@@ -328,35 +327,84 @@ impl SqliteDb {
         tx.execute_batch("DELETE FROM edges; DELETE FROM nodes;")
             .map_err(|e| format!("delete: {}", e))?;
 
-        // Insert nodes
-        for node in nodes {
-            let (px, py, pz) = match node.position {
-                Some([x, y, z]) => (Some(x as f64), Some(y as f64), Some(z as f64)),
-                None => (None, None, None),
-            };
-            let props = serde_json::to_string(&node.properties).unwrap_or_else(|_| "{}".into());
-            tx.execute(
-                "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    node.id, node.name, node.kind.as_str(), node.location, props,
-                    node.out_degree as i64, node.in_degree as i64,
-                    px, py, pz, node.community_id.map(|v| v as i64),
-                ],
-            ).map_err(|e| format!("insert node {}: {}", node.id, e))?;
+        // Drop FTS triggers during bulk insert — rebuild FTS at the end.
+        tx.execute_batch("DROP TRIGGER IF EXISTS nodes_ai;
+                          DROP TRIGGER IF EXISTS nodes_ad;
+                          DROP TRIGGER IF EXISTS nodes_au;")
+            .map_err(|e| format!("drop fts triggers: {}", e))?;
+
+        // ── Chunked node insert ──
+        const NODE_CHUNK: usize = 80; // 11 cols × 80 = 880 params, safe under 999
+        let node_sql = "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id) VALUES ";
+        for chunk in nodes.chunks(NODE_CHUNK) {
+            let mut sql = String::with_capacity(node_sql.len() + chunk.len() * 80);
+            sql.push_str(node_sql);
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 11);
+            for (i, node) in chunk.iter().enumerate() {
+                if i > 0 { sql.push_str(", "); }
+                let b = 1 + i * 11;
+                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                    b, b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10));
+                let (px, py, pz) = match node.position {
+                    Some([x, y, z]) => (Some(x as f64), Some(y as f64), Some(z as f64)),
+                    None => (None, None, None),
+                };
+                let props = serde_json::to_string(&node.properties).unwrap_or_else(|_| "{}".into());
+                params.push(Box::new(node.id.clone()));
+                params.push(Box::new(node.name.clone()));
+                params.push(Box::new(node.kind.as_str().to_string()));
+                params.push(Box::new(node.location.clone()));
+                params.push(Box::new(props));
+                params.push(Box::new(node.out_degree as i64));
+                params.push(Box::new(node.in_degree as i64));
+                params.push(Box::new(px));
+                params.push(Box::new(py));
+                params.push(Box::new(pz));
+                params.push(Box::new(node.community_id.map(|v| v as i64)));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            tx.execute(&sql, param_refs.as_slice())
+                .map_err(|e| format!("insert node chunk: {}", e))?;
         }
 
-        // Insert edges
-        for &(source, target, kind, coupling_depth, temporal_delay_sec) in edges {
-            let id = format!("{}::{}::{}", source, target, kind.as_str());
-            tx.execute(
-                "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, source, target, kind.as_str(), coupling_depth as i64, temporal_delay_sec],
-            ).map_err(|e| format!("insert edge {}: {}", id, e))?;
+        // ── Chunked edge insert ──
+        const EDGE_CHUNK: usize = 150; // 6 cols × 150 = 900 params
+        let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec) VALUES ";
+        for chunk in edges.chunks(EDGE_CHUNK) {
+            let mut sql = String::with_capacity(edge_sql.len() + chunk.len() * 60);
+            sql.push_str(edge_sql);
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 6);
+            for (i, &(source, target, kind, coupling_depth, temporal_delay_sec)) in chunk.iter().enumerate() {
+                if i > 0 { sql.push_str(", "); }
+                let b = 1 + i * 6;
+                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{})", b, b+1, b+2, b+3, b+4, b+5));
+                params.push(Box::new(format!("{}::{}::{}", source, target, kind.as_str())));
+                params.push(Box::new(source.to_string()));
+                params.push(Box::new(target.to_string()));
+                params.push(Box::new(kind.as_str().to_string()));
+                params.push(Box::new(coupling_depth as i64));
+                params.push(Box::new(temporal_delay_sec));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            tx.execute(&sql, param_refs.as_slice())
+                .map_err(|e| format!("insert edge chunk: {}", e))?;
         }
 
-        // Restore default cache size before commit
+        // ── Rebuild FTS and recreate triggers ──
+        tx.execute_batch(
+            "INSERT INTO fts_nodes(fts_nodes) VALUES('rebuild');
+             CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
+                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+             END;
+             CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
+                 INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+             END;
+             CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
+                 INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+             END;",
+        ).map_err(|e| format!("rebuild fts: {}", e))?;
+
         tx.execute_batch("PRAGMA cache_size=-2000;")
             .map_err(|e| format!("pragma restore: {}", e))?;
 
@@ -591,6 +639,8 @@ fn edge_kind_from_str(s: &str) -> Result<EdgeKind, String> {
         "triggers" => Ok(EdgeKind::Triggers),
         "awaits" => Ok(EdgeKind::Awaits),
         "sequences" => Ok(EdgeKind::Sequences),
+        "usage" => Ok(EdgeKind::Usage),
+        "throws" => Ok(EdgeKind::Throws),
         other => Err(format!("unknown edge kind: '{}'", other)),
     }
 }

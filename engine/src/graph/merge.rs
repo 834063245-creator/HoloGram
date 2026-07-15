@@ -43,6 +43,8 @@ fn edge_kind_id(k: &EdgeKind) -> u8 {
         EdgeKind::Triggers => 7,
         EdgeKind::Awaits => 8,
         EdgeKind::Sequences => 9,
+        EdgeKind::Usage => 10,
+        EdgeKind::Throws => 11,
     }
 }
 

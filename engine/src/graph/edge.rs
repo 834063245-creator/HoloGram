@@ -20,6 +20,9 @@ pub enum EdgeKind {
     Triggers,
     Awaits,
     Sequences,
+    /// Graph edges: usage references, exception throws
+    Usage,
+    Throws,
 }
 
 impl EdgeKind {
@@ -35,6 +38,8 @@ impl EdgeKind {
             "triggers" => Some(EdgeKind::Triggers),
             "awaits" => Some(EdgeKind::Awaits),
             "sequences" => Some(EdgeKind::Sequences),
+            "usage" => Some(EdgeKind::Usage),
+            "throws" => Some(EdgeKind::Throws),
             _ => None,
         }
     }
@@ -51,10 +56,12 @@ impl EdgeKind {
             EdgeKind::Triggers => "triggers",
             EdgeKind::Awaits => "awaits",
             EdgeKind::Sequences => "sequences",
+            EdgeKind::Usage => "usage",
+            EdgeKind::Throws => "throws",
         }
     }
 
-    /// CSR storage: pack EdgeKind into u8 (0–9).
+    /// CSR storage: pack EdgeKind into u8 (0–11).
     pub fn to_u8(self) -> u8 {
         match self {
             EdgeKind::Imports => 0,
@@ -67,6 +74,8 @@ impl EdgeKind {
             EdgeKind::Triggers => 7,
             EdgeKind::Awaits => 8,
             EdgeKind::Sequences => 9,
+            EdgeKind::Usage => 10,
+            EdgeKind::Throws => 11,
         }
     }
 
@@ -83,6 +92,8 @@ impl EdgeKind {
             7 => EdgeKind::Triggers,
             8 => EdgeKind::Awaits,
             9 => EdgeKind::Sequences,
+            10 => EdgeKind::Usage,
+            11 => EdgeKind::Throws,
             _ => EdgeKind::Calls, // ponytail: default to Calls for forward compat
         }
     }
@@ -188,19 +199,19 @@ mod tests {
 
     #[test]
     fn test_all_edge_kinds_covered() {
-        // All 10 edge kinds should have distinct string representations
+        // All 12 edge kinds should have distinct string representations
         let all = [
             EdgeKind::Imports, EdgeKind::Calls, EdgeKind::Inherits,
             EdgeKind::Defines, EdgeKind::Reads, EdgeKind::Writes,
             EdgeKind::Shares, EdgeKind::Triggers, EdgeKind::Awaits,
-            EdgeKind::Sequences,
+            EdgeKind::Sequences, EdgeKind::Usage, EdgeKind::Throws,
         ];
         let strs: Vec<&str> = all.iter().map(|k| k.as_str()).collect();
         // All unique
         let mut sorted = strs.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), 10, "all edge kinds must have unique strings");
+        assert_eq!(sorted.len(), 12, "all edge kinds must have unique strings");
     }
 
     #[test]

@@ -33,3 +33,16 @@
 ;; ── Calls ──
 (call_expression) @call
 (new_expression) @call
+
+;; ── Variables ──
+(lexical_declaration) @var
+(variable_declaration) @var
+
+;; ── Writes ──
+(assignment_expression) @write
+
+;; ── Throws ──
+(throw_statement) @throws
+
+;; ── Usage ──
+(identifier) @usage

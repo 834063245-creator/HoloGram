@@ -206,6 +206,8 @@ fn process_query(
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut counter = 0u32;
+    // Per-scope dedup for USAGE edges — skip repeat references to same name
+    let mut usage_seen: HashSet<String> = HashSet::new();
 
     let file_id = normalize_path(file_path);
     // ponytail: include extension in module_id so CrossFileResolver can match
@@ -268,7 +270,8 @@ fn process_query(
         for capture in qmatch.captures {
             let cn: &str = &query.capture_names()[capture.index as usize];
             match cn {
-                "fn" | "class" | "interface" | "call" | "import" | "inherit" => {
+                "fn" | "class" | "interface" | "call" | "import" | "inherit"
+                | "var" | "write" | "throws" | "usage" => {
                     primary_cap = Some((cn, capture.node));
                 }
                 "trait_name" => {
@@ -498,6 +501,100 @@ fn process_query(
                 }
             }
 
+            "var" => {
+                // Module-level variable/constant → Variable node
+                let name = match node
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source_bytes).ok())
+                {
+                    Some(n) => n.to_string(),
+                    None => {
+                        // No name field — try left-hand side of assignment
+                        let left = node.child_by_field_name("left")
+                            .and_then(|l| l.utf8_text(source_bytes).ok())
+                            .map(|s| s.to_string());
+                        match left {
+                            Some(s) => s,
+                            None => continue,
+                        }
+                    }
+                };
+                if name.is_empty() { continue; }
+                let nid = format!("{}.{}", module_id, name);
+                if created_ids.contains(&nid) { continue; }
+                created_ids.insert(nid.clone());
+                counter += 1;
+                edges.push(Edge::new(
+                    format!("def_{}_{}", file_id, counter),
+                    &module_id, &nid, EdgeKind::Defines,
+                ));
+                let mut n = Node::new(&nid, &name, NodeKind::Variable);
+                n.location = Some(format!("{}:{}", file_path, node.start_position().row + 1));
+                nodes.push(n);
+            }
+
+            "write" => {
+                // Assignment → WRITES edge from enclosing scope to target
+                let left = node.child_by_field_name("left");
+                let target = match left {
+                    Some(l) => l.utf8_text(source_bytes).ok().map(|s| s.to_string()),
+                    None => node
+                        .child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source_bytes).ok())
+                        .map(|s| s.to_string()),
+                };
+                let name = match target {
+                    Some(n) => n,
+                    None => continue,
+                };
+                if name.is_empty() { continue; }
+                let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
+                counter += 1;
+                edges.push(Edge::new(
+                    format!("write_{}_{}", file_id, counter),
+                    scope_id, &name, EdgeKind::Writes,
+                ));
+            }
+
+            "throws" => {
+                // raise/throw → THROWS edge from enclosing scope to exception type
+                let exc_name = extract_throw_target(&node, source_bytes);
+                let name = match exc_name {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
+                counter += 1;
+                edges.push(Edge::new(
+                    format!("throw_{}_{}", file_id, counter),
+                    scope_id, &name, EdgeKind::Throws,
+                ));
+            }
+
+            "usage" => {
+                // identifier/attribute reference → USAGE edge from enclosing scope
+                let name = node.utf8_text(source_bytes).ok().map(|s| s.to_string());
+                let name = match name {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let lang_ext = file_path.rsplit('.').next().unwrap_or("");
+                // Skip single-char, builtins, definition sites, parameter declarations
+                if name.len() <= 1 || is_skip_name(&name) || is_builtin_for_ext(&name, lang_ext)
+                    || is_definition_site(&node, source_bytes) || is_param_decl(&node, source_bytes)
+                {
+                    continue;
+                }
+                let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
+                let dedup_key = format!("{}:{}", scope_id, name);
+                if !usage_seen.insert(dedup_key) { continue; }
+                counter += 1;
+                edges.push(Edge::new(
+                    format!("use_{}_{}", file_id, counter),
+                    scope_id, &name, EdgeKind::Usage,
+                ));
+            }
+
             _ => {}
         }
     }
@@ -547,51 +644,160 @@ fn resolve_fn(
 }
 
 /// Extract the call target name from a call/new/JSX node.
-fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    match node.kind() {
-        "call_expression" => {
-            let func = node.child_by_field_name("function")?;
-            match func.kind() {
-                "member_expression" => {
-                    // a.b.c() → extract "c"
-                    func.child_by_field_name("property")
-                        .and_then(|p| p.utf8_text(source).ok())
-                        .map(|s| s.to_string())
-                }
-                "field_expression" => {
-                    // Rust: v.len() → extract "len"
-                    func.child_by_field_name("field")
-                        .and_then(|f| f.utf8_text(source).ok())
-                        .map(|s| s.to_string())
-                }
-                "identifier" => func.utf8_text(source).ok().map(|s| s.to_string()),
-                "import" => Some("import".to_string()),
+/// Extract the function/method name from a function field child node.
+/// Handles member_expression (a.b.c → "c"), field_expression (v.len → "len"),
+/// attribute (obj.method → "method"), and plain identifiers.
+fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    match func.kind() {
+        "member_expression" => func
+            .child_by_field_name("property")
+            .and_then(|p| p.utf8_text(source).ok())
+            .map(|s| s.to_string()),
+        "field_expression" => func
+            .child_by_field_name("field")
+            .and_then(|f| f.utf8_text(source).ok())
+            .map(|s| s.to_string()),
+        "attribute" => {
+            // Python: obj.method() → extract "method" from attribute.object.method
+            let attr = func
+                .child_by_field_name("attribute")
+                .and_then(|a| a.utf8_text(source).ok())
+                .map(|s| s.to_string());
+            let obj = func
+                .child_by_field_name("object")
+                .and_then(|o| o.utf8_text(source).ok());
+            match (obj, attr) {
+                (Some(o), Some(a)) if !o.is_empty() => Some(format!("{}.{}", o, a)),
+                (_, Some(a)) => Some(a),
                 _ => func.utf8_text(source).ok().map(|s| s.to_string()),
             }
         }
-        "new_expression" => {
-            let ctor = node.child_by_field_name("constructor")?;
-            if ctor.kind() == "member_expression" {
-                ctor.child_by_field_name("property")
-                    .and_then(|p| p.utf8_text(source).ok())
-                    .map(|s| s.to_string())
-            } else {
-                ctor.utf8_text(source).ok().map(|s| s.to_string())
+        "selector_expression" => {
+            // Dart: a.b.c() → walk chain to leaf
+            let mut cur = func;
+            loop {
+                let field = cur.child_by_field_name("field");
+                let obj = cur.child_by_field_name("object");
+                if let (Some(f), Some(o)) = (field, obj) {
+                    if o.kind() == "selector_expression" {
+                        cur = o;
+                        continue;
+                    }
+                    return f.utf8_text(source).ok().map(|s| s.to_string());
+                }
+                return cur.utf8_text(source).ok().map(|s| s.to_string());
             }
         }
-        "macro_invocation" => {
-            // Rust: println!("hello") → extract "println"
-            node.child_by_field_name("macro")
-                .and_then(|m| m.utf8_text(source).ok())
+        "identifier" | "simple_identifier" => func.utf8_text(source).ok().map(|s| s.to_string()),
+        "import" => Some("import".to_string()),
+        "dot" => {
+            // Elixir: Mod.func() → extract rightmost
+            func.child_by_field_name("right")
+                .and_then(|r| r.utf8_text(source).ok())
                 .map(|s| s.to_string())
+                .or_else(|| func.utf8_text(source).ok().map(|s| s.to_string()))
         }
-        "jsx_self_closing_element" | "jsx_opening_element" | "jsx_opening_tag" => {
-            node.child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source).ok())
-                .map(|s| s.to_string())
-        }
-        _ => None,
+        _ => func.utf8_text(source).ok().map(|s| s.to_string()),
     }
+}
+
+fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    // ── Nodes with a "function" field ──
+    const FUNC_FIELD_NODES: &[&str] = &[
+        "call_expression", "call", "function_call",
+        "invocation_expression", "method_invocation",
+        "selector", "command_call", "builtin_function",
+        "constructor_expression", "generic_function",
+        "navigation_expression", "with_statement",
+    ];
+    let nk = node.kind();
+    if FUNC_FIELD_NODES.iter().any(|&s| s == nk) {
+        // ponytail: Ruby "call" nodes have "method" field, not "function".
+        // Don't early-return None — fall through to the Ruby handler below.
+        if let Some(result) = node
+            .child_by_field_name("function")
+            .and_then(|f| extract_func_field_name(f, source))
+        {
+            return Some(result);
+        }
+        // Fall through for Ruby "call" (no "function" field)
+    }
+
+    // ── Nodes with a "name" or "constructor" field ──
+    if nk == "object_creation_expression" || nk == "new_expression" {
+        let ctor = node.child_by_field_name("constructor")
+            .or_else(|| node.child_by_field_name("name"))?;
+        if ctor.kind() == "member_expression" {
+            return ctor
+                .child_by_field_name("property")
+                .and_then(|p| p.utf8_text(source).ok())
+                .map(|s| s.to_string());
+        }
+        return ctor.utf8_text(source).ok().map(|s| s.to_string());
+    }
+
+    // ── Ruby: "method" + optional "receiver" fields ──
+    if nk == "call" {
+        if let Some(method) = node.child_by_field_name("method") {
+            let m = method.utf8_text(source).ok()?.to_string();
+            if let Some(recv) = node.child_by_field_name("receiver") {
+                if let Ok(r) = recv.utf8_text(source) {
+                    if !r.is_empty() {
+                        return Some(format!("{}.{}", r, m));
+                    }
+                }
+            }
+            return Some(m);
+        }
+    }
+
+    // ── Rust macro_invocation ──
+    if nk == "macro_invocation" {
+        return node
+            .child_by_field_name("macro")
+            .and_then(|m| m.utf8_text(source).ok())
+            .map(|s| s.to_string());
+    }
+
+    // ── JSX ──
+    if matches!(nk, "jsx_self_closing_element" | "jsx_opening_element" | "jsx_opening_tag") {
+        return node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(|s| s.to_string());
+    }
+
+    // ── Bash: command — first named child is the command name ──
+    if nk == "command" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.is_named() {
+                return child.utf8_text(source).ok().map(|s| s.to_string());
+            }
+        }
+    }
+
+    // ── Elixir: dot → rightmost, binary_operator → operator text ──
+    if nk == "dot" {
+        return node
+            .child_by_field_name("right")
+            .and_then(|r| r.utf8_text(source).ok())
+            .map(|s| s.to_string());
+    }
+    if nk == "binary_operator" {
+        return node
+            .child_by_field_name("operator")
+            .and_then(|op| op.utf8_text(source).ok())
+            .map(|s| s.to_string());
+    }
+
+    // ── Functional families: first child is the callee ──
+    if matches!(nk, "apply" | "application_expression" | "exp_apply" | "list" | "list_lit" | "applicative") {
+        let first = node.child(0)?;
+        return extract_func_field_name(first, source);
+    }
+
+    None
 }
 
 /// Extract the first string argument from a call expression (for require/import).
@@ -605,6 +811,148 @@ fn extract_first_string_arg(node: &tree_sitter::Node, source: &[u8]) -> Option<S
         }
     }
     None
+}
+
+/// Extract exception class name from throw/raise node.
+fn extract_throw_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    // Named children after the throw/raise keyword are the exception type
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.is_named() && child.kind() != "throw" && child.kind() != "raise" {
+            return child.utf8_text(source).ok().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Check if identifier is at a definition site (should NOT create USAGE edge).
+/// ponytail: only skip (a) name-field definitions, (b) identifiers inside import/export
+/// statements (bindings, not usage references). Everything else — including function
+/// arguments and non-callee identifiers inside call expressions — gets a USAGE edge.
+fn is_definition_site(node: &tree_sitter::Node, _source: &[u8]) -> bool {
+    if let Some(parent) = node.parent() {
+        // Case 1: identifier IS the "name" field of its parent → definition site
+        if let Some(name_field) = parent.child_by_field_name("name") {
+            if name_field.id() == node.id() {
+                return true;
+            }
+        }
+        // Case 2: identifier is inside an import/export statement → binding, not usage
+        // Walk up but stop at scope boundaries; ONLY check for import/export ancestors.
+        let mut cur = Some(parent);
+        while let Some(p) = cur {
+            let k = p.kind();
+            if k.contains("import") || k.contains("export") {
+                return true;
+            }
+            // Stop at scope boundary — don't walk past function/class/module
+            if k.contains("function") || k.contains("class") || k.contains("method")
+                || k == "lambda" || k == "arrow_function" || k == "module"
+                || k == "block" || k == "statement_block" || k == "source_file"
+                || k == "program" || k == "module" || k == "translation_unit"
+            {
+                break;
+            }
+            cur = p.parent();
+        }
+    }
+    false
+}
+
+/// Check if identifier is inside a parameter declaration (function signature).
+fn is_param_decl(node: &tree_sitter::Node, _source: &[u8]) -> bool {
+    let mut cur = Some(node.clone());
+    while let Some(p) = cur.and_then(|n| n.parent()) {
+        let k = p.kind();
+        if k.contains("parameter") || k.contains("param") { return true; }
+        // Stop at function/class boundary
+        if k.contains("function") || k.contains("class") || k.contains("method")
+            || k == "lambda" || k == "arrow_function" || k == "module"
+        {
+            break;
+        }
+        cur = Some(p);
+    }
+    false
+}
+
+/// Per-language builtin/common name blacklist for USAGE edge filtering.
+fn is_builtin_for_ext(name: &str, ext: &str) -> bool {
+    match ext {
+        "py" | "pyi" => matches!(
+            name,
+            "True" | "False" | "None" | "self" | "cls"
+                | "print" | "len" | "range" | "str" | "int" | "float" | "bool"
+                | "list" | "dict" | "tuple" | "set" | "frozenset"
+                | "type" | "isinstance" | "issubclass" | "super"
+                | "Exception" | "ValueError" | "TypeError" | "KeyError"
+                | "IndexError" | "AttributeError" | "RuntimeError" | "StopIteration"
+                | "map" | "filter" | "zip" | "enumerate" | "sorted" | "reversed"
+                | "any" | "all" | "min" | "max" | "sum" | "abs" | "round"
+                | "open" | "iter" | "next" | "hasattr" | "getattr" | "setattr"
+                | "staticmethod" | "classmethod" | "property"
+                | "os" | "sys" | "re" | "json" | "datetime" | "logging"
+                | "__name__" | "__file__" | "__init__" | "__str__" | "__repr__"
+        ),
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" => matches!(
+            name,
+            "console" | "window" | "document" | "globalThis" | "undefined" | "null"
+                | "true" | "false" | "this" | "super" | "arguments"
+                | "parseInt" | "parseFloat" | "isNaN" | "isFinite"
+                | "JSON" | "Math" | "Object" | "Array" | "String" | "Number" | "Boolean"
+                | "Map" | "Set" | "Date" | "RegExp" | "Promise" | "Symbol"
+                | "Error" | "TypeError" | "SyntaxError" | "ReferenceError"
+                | "Buffer" | "process" | "module" | "exports" | "require"
+                | "setTimeout" | "setInterval" | "clearTimeout" | "clearInterval"
+                | "fetch" | "async" | "await" | "yield"
+        ),
+        "rs" => matches!(
+            name,
+            "true" | "false" | "self" | "Self" | "None" | "Ok" | "Err" | "Some"
+                | "println" | "print" | "format" | "dbg" | "panic" | "todo" | "unimplemented"
+                | "vec" | "Vec" | "String" | "str" | "Option" | "Result" | "Box"
+                | "HashMap" | "HashSet" | "Iterator" | "Clone" | "Copy" | "Debug"
+                | "Drop" | "Default" | "std" | "core" | "alloc"
+                | "i32" | "i64" | "u32" | "u64" | "f32" | "f64" | "bool" | "usize" | "isize"
+        ),
+        "go" => matches!(
+            name,
+            "true" | "false" | "nil" | "iota"
+                | "fmt" | "Println" | "Printf" | "Sprintf" | "Errorf"
+                | "string" | "int" | "int32" | "int64" | "float32" | "float64"
+                | "bool" | "byte" | "rune" | "error"
+                | "make" | "new" | "len" | "cap" | "append" | "copy" | "delete"
+                | "panic" | "recover" | "defer" | "close"
+                | "context" | "os" | "io" | "http" | "json"
+        ),
+        "java" => matches!(
+            name,
+            "true" | "false" | "null" | "this" | "super"
+                | "System" | "out" | "err" | "in"
+                | "String" | "Integer" | "Long" | "Double" | "Float" | "Boolean"
+                | "List" | "Map" | "Set" | "ArrayList" | "HashMap" | "HashSet"
+                | "Optional" | "Stream" | "Collectors" | "Objects"
+                | "Override" | "Deprecated" | "SuppressWarnings"
+        ),
+        "rb" => matches!(
+            name,
+            "true" | "false" | "nil" | "self"
+                | "puts" | "print" | "p" | "pp" | "gets" | "raise" | "require"
+                | "Array" | "Hash" | "String" | "Symbol" | "Integer" | "Float"
+                | "Enumerable" | "each" | "map" | "select" | "reduce" | "inject"
+                | "attr_accessor" | "attr_reader" | "attr_writer" | "include" | "extend"
+        ),
+        "php" => matches!(
+            name,
+            "true" | "false" | "null" | "this" | "self" | "static" | "parent"
+                | "echo" | "print" | "isset" | "empty" | "unset" | "array" | "list"
+                | "count" | "strlen" | "sprintf" | "explode" | "implode"
+                | "array_map" | "array_filter" | "array_merge" | "array_keys"
+                | "json_encode" | "json_decode" | "file_get_contents" | "file_put_contents"
+        ),
+        // Single-char identifiers are always noise
+        _ => name.len() <= 1,
+    }
 }
 
 /// Noise names to skip in call edges.

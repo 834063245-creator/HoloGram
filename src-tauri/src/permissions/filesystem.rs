@@ -244,6 +244,7 @@ mod tests {
             source: RuleSource::Project,
             behavior: Behavior::Allow,
             value: parse_rule_value("Read(C:/Windows/System32/**)"),
+            danger: None,
         });
         let r = check_read_permission("C:\\Windows\\System32\\notepad.exe", &s, &rules, None);
         assert!(
@@ -316,6 +317,7 @@ mod tests {
             source: RuleSource::System,
             behavior: Behavior::Deny,
             value: parse_rule_value("Edit(.hologram/**)"),
+            danger: None,
         });
         let r = check_write_permission(
             &root.join(".hologram/settings.json").to_string_lossy(),

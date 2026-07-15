@@ -142,6 +142,7 @@ impl PermissionContext {
             source: rule::RuleSource::Session,
             behavior,
             value: rule::parse_rule_value(rule_str),
+            danger: None,
         };
         if let Ok(mut rules) = self.rules.write() {
             rules.add_rule(new_rule);
@@ -311,7 +312,7 @@ pub fn has_permission_to_use_tool(
                     rule: suggestion_rule,
                     behavior: "allow".into(),
                 }],
-                danger: None,
+                danger: rule.danger.clone(),
             };
         }
     } // rules lock dropped
