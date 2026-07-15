@@ -502,7 +502,10 @@ fn process_query(
             }
 
             "var" => {
-                // Module-level variable/constant → Variable node
+                // Variable/constant → Variable node (scope-qualified).
+                // ponytail: scope to enclosing function/class so `x = 1` inside
+                // `foo()` creates `module.foo.x`, not `module.x`. This avoids
+                // cross-function name collisions and matches cbm's scoping.
                 let name = match node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
@@ -520,13 +523,14 @@ fn process_query(
                     }
                 };
                 if name.is_empty() { continue; }
-                let nid = format!("{}.{}", module_id, name);
+                let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
+                let nid = format!("{}.{}", scope_id, name);
                 if created_ids.contains(&nid) { continue; }
                 created_ids.insert(nid.clone());
                 counter += 1;
                 edges.push(Edge::new(
                     format!("def_{}_{}", file_id, counter),
-                    &module_id, &nid, EdgeKind::Defines,
+                    scope_id, &nid, EdgeKind::Defines,
                 ));
                 let mut n = Node::new(&nid, &name, NodeKind::Variable);
                 n.location = Some(format!("{}:{}", file_path, node.start_position().row + 1));
@@ -534,7 +538,8 @@ fn process_query(
             }
 
             "write" => {
-                // Assignment → WRITES edge from enclosing scope to target
+                // Assignment → WRITES edge from enclosing scope to variable.
+                // Target uses scope-qualified name to match Variable node.
                 let left = node.child_by_field_name("left");
                 let target = match left {
                     Some(l) => l.utf8_text(source_bytes).ok().map(|s| s.to_string()),
@@ -549,10 +554,11 @@ fn process_query(
                 };
                 if name.is_empty() { continue; }
                 let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
+                let qualified = format!("{}.{}", scope_id, name);
                 counter += 1;
                 edges.push(Edge::new(
                     format!("write_{}_{}", file_id, counter),
-                    scope_id, &name, EdgeKind::Writes,
+                    scope_id, &qualified, EdgeKind::Writes,
                 ));
             }
 
