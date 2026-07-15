@@ -321,16 +321,17 @@ export class PromptShelfController {
 
   /** Dismiss current prompt (cancels pending Promise). */
   dismiss(): void {
-    if (this._pendingResolver) {
-      this._pendingResolver(null);
-    }
     this._dismissCurrent();
     this._render();
   }
 
+  /** Clear current prompt and resolve the pending Promise with null (cancelled).
+   *  This prevents silent Promise leaks when a second prompt supersedes the first. */
   private _dismissCurrent(): void {
+    const prev = this._pendingResolver;
     this._active = null;
     this._pendingResolver = null;
+    prev?.(null);
   }
 
   private _render(): void {
@@ -339,13 +340,15 @@ export class PromptShelfController {
         prompt: this._active,
         onResolveAsk: (answer) => {
           const r = this._pendingResolver;
-          this._dismissCurrent();
+          this._active = null;
+          this._pendingResolver = null;
           this._render();
           r?.(answer);
         },
         onResolvePerm: (result) => {
           const r = this._pendingResolver;
-          this._dismissCurrent();
+          this._active = null;
+          this._pendingResolver = null;
           this._render();
           r?.(result);
         },
