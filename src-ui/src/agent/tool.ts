@@ -4,9 +4,7 @@
 // Tool 系统 — Tool 接口 + Registry 注册表 + Hologram 工具定义
 
 import { rpc } from '../bridge';
-import type { Provider, ToolSchema } from '../provider/types';
-import { ChunkType } from '../provider/types';
-import { bus } from '../ui/events';
+import type { ToolSchema } from '../provider/types';
 
 // ---- Tool 接口 ----
 
