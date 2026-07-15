@@ -26,6 +26,8 @@ export interface PermissionPrompt {
   toolName: string;
   reason: string;
   subject: string;
+  /** 高危操作标签，如 "ForceRecursiveRoot"。有值时显示红色警告卡片 */
+  danger?: string;
 }
 
 export type PromptData = AskPrompt | PermissionPrompt;
@@ -215,10 +217,11 @@ const PermCard: React.FC<{
   }, [onResolve]);
 
   return (
-    <div className="prompt-shelf__card" role="dialog" aria-modal="false">
+    <div className={`prompt-shelf__card${prompt.danger ? ' prompt-shelf__card--danger' : ''}`} role="dialog" aria-modal="false">
       <div className="prompt-shelf__head">
-        <span className="prompt-shelf__tag">
-          <span dangerouslySetInnerHTML={{ __html: svgIcon('lock', 10) }} /> 权限
+        <span className={`prompt-shelf__tag${prompt.danger ? ' prompt-shelf__tag--danger' : ''}`}>
+          <span dangerouslySetInnerHTML={{ __html: svgIcon('lock', 10) }} />
+          {prompt.danger ? ` 危险操作 · ${prompt.danger}` : ' 权限'}
         </span>
         <span className="prompt-shelf__question">{prompt.toolName}</span>
       </div>
