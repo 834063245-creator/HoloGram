@@ -69,8 +69,10 @@ impl IncrementalUpdater {
         old_index: &MemoryIndex,
         project_root: &Path,
         db: &SqliteDb,
-    ) -> Result<(MemoryIndex, usize), String> {
+        ) -> Result<(MemoryIndex, usize), String> {
         let mut new_index = Self::clone_index_for_update(old_index);
+        // Flush pending edges from clone into CSR so recompute_edge_count works
+        new_index.flush_pending();
         let mut total_errors = 0usize;
         let old_edge_count = old_index.edge_count();
 
@@ -162,9 +164,6 @@ impl IncrementalUpdater {
         }
 
         // ── Validate ──
-        // ponytail: always validate edge count, not just on parse errors.
-        // Clean parses can still lose edges from diff mismatches or cross-file
-        // repair gaps. Reject if >5% edge loss (was: only checked on errors, 15%).
         let new_edge_count = new_index.recompute_edge_count();
         if (new_edge_count as f64) < (old_edge_count as f64) * 0.95 {
             return Err(format!(

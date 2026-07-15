@@ -90,10 +90,18 @@ impl ParallelParser {
             &source,
         );
 
-        // Tag nodes with file location
-        let location = path.to_string_lossy().to_string();
+        // Normalise location to forward-slash format so file_index lookups match.
+        // Adapter already sets `file:line`; only fill in for nodes missing location.
+        let norm_path = path.to_string_lossy().replace('\\', "/");
         for node in &mut nodes {
-            node.location = Some(location.clone());
+            if node.location.is_none() {
+                node.location = Some(norm_path.clone());
+            } else {
+                // Replace backslashes in adapter-set location
+                if let Some(ref loc) = node.location {
+                    node.location = Some(loc.replace('\\', "/"));
+                }
+            }
         }
 
         Some(FileData {

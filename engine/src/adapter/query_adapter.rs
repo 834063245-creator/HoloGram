@@ -425,25 +425,51 @@ fn process_query(
             }
 
             "import" => {
-                // ponytail: only create import edge if the node has a "source" field
-                // (import x from 'y' or export {x} from 'y'). Skip export declarations
-                // without a source (export function, export const, etc.) and use
-                // node text only for Rust use_declaration (which has no source field).
+                // ponytail: handler for @import captures.
+                // JS/TS: node has "source" field ("import x from 'y'")
+                // Python import_from_statement: "module_name" field ("from X import Y")
+                // Python import_statement: children contain dotted_name ("import X")
+                // Rust: use_declaration text (e.g. "use std::collections::HashMap")
                 let raw_target = match node.child_by_field_name("source")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
                 {
                     Some(s) => s.to_string(),
                     None => {
-                        // For nodes without a source field, check if it's a declaration
-                        // (export const/function/class) — these should not create import edges.
                         let kind = node.kind();
                         if kind == "export_statement" {
                             continue; // named export, not a re-export — skip
                         }
-                        // Rust use_declaration or other import-like node: use full text
-                        node.utf8_text(source_bytes).ok()
-                            .map(|s| s.to_string())
-                            .unwrap_or_default()
+                        // Python: from X import Y
+                        if kind == "import_from_statement" {
+                            match node.child_by_field_name("module_name")
+                                .and_then(|n| n.utf8_text(source_bytes).ok())
+                            {
+                                Some(name) => name.to_string(),
+                                None => continue,
+                            }
+                        } else if kind == "import_statement" {
+                            // Python: import X → one edge per dotted_name child
+                            let mut cursor = node.walk();
+                            for child in node.children(&mut cursor) {
+                                if child.kind() == "dotted_name" {
+                                    if let Ok(name) = child.utf8_text(source_bytes) {
+                                        counter += 1;
+                                        let mut e = Edge::new(
+                                            format!("imp_{}_{}", file_id, counter),
+                                            &module_id, name, EdgeKind::Imports,
+                                        );
+                                        e.cross_file = true;
+                                        edges.push(e);
+                                    }
+                                }
+                            }
+                            continue; // already emitted edges
+                        } else {
+                            // Rust use_declaration or other import-like node: use full text
+                            node.utf8_text(source_bytes).ok()
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        }
                     }
                 };
                 if raw_target.is_empty() {
@@ -615,7 +641,7 @@ fn emit_class_inherits(
         found = true;
     }
 
-    // Walk children for extends_clause / implements_clause / class_heritage
+    // Walk children for extends_clause / implements_clause / class_heritage / argument_list
     let mut cursor = class_node.walk();
     for child in class_node.children(&mut cursor) {
         match child.kind() {
@@ -629,6 +655,23 @@ fn emit_class_inherits(
                     if gc.kind() == "extends_clause" || gc.kind() == "implements_clause" {
                         emit_inherits_from_clause(&gc, source, nid, module_id, file_id, counter, edges);
                         found = true;
+                    }
+                }
+            }
+            // Python: class Foo(Bar) → argument_list contains base class identifiers
+            "argument_list" => {
+                let mut ac = child.walk();
+                for gc in child.children(&mut ac) {
+                    if gc.kind() == "identifier" {
+                        if let Ok(name) = gc.utf8_text(source) {
+                            *counter += 1;
+                            let target = format!("{}.{}", module_id, name);
+                            edges.push(Edge::new(
+                                format!("inh_{}_{}", file_id, counter),
+                                nid, &target, EdgeKind::Inherits,
+                            ));
+                            found = true;
+                        }
                     }
                 }
             }

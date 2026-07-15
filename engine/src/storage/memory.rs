@@ -88,6 +88,14 @@ pub struct MemoryIndex {
     synthesized_edges: HashSet<(u32, u32)>,
 }
 
+/// Extract file path from a location string like "C:/file.py:10" or "C:\file.py:10".
+/// Normalises backslashes and drive letter so all index lookups match.
+fn extract_file_path(loc: &str) -> String {
+    let parts: Vec<&str> = loc.rsplitn(2, ':').collect();
+    let raw = if parts.len() == 2 { parts[1] } else { parts[0] };
+    raw.replace('\\', "/")
+}
+
 impl MemoryIndex {
     // ── helpers: dense index ──
 
@@ -591,9 +599,9 @@ impl MemoryIndex {
     fn index_node_file(&mut self, handle: u32, node: &Node) {
         if self.has_aux_indexes {
             if let Some(ref loc) = node.location {
-                let file = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
+                let file = extract_file_path(loc);
                 self.file_index
-                    .entry(file.to_string())
+                    .entry(file)
                     .or_default()
                     .push(handle);
             }
@@ -613,9 +621,9 @@ impl MemoryIndex {
                 .or_default()
                 .push(handle);
             if let Some(ref loc) = node.location {
-                let file = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
+                let file = extract_file_path(loc);
                 self.file_index
-                    .entry(file.to_string())
+                    .entry(file)
                     .or_default()
                     .push(handle);
             }
@@ -638,8 +646,9 @@ impl MemoryIndex {
     }
 
     pub fn get_nodes_by_file(&self, file: &str) -> Vec<String> {
+        let normalized = file.replace('\\', "/");
         self.file_index
-            .get(file)
+            .get(&normalized)
             .map(|handles| handles.iter().map(|&h| self.get_str(h).to_string()).collect())
             .unwrap_or_default()
     }
@@ -1106,8 +1115,8 @@ impl MemoryIndex {
                     handles.retain(|&h| h != handle);
                 }
                 if let Some(ref loc) = node.location {
-                    let file = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
-                    if let Some(handles) = self.file_index.get_mut(file) {
+                    let file = extract_file_path(loc);
+                    if let Some(handles) = self.file_index.get_mut(&file) {
                         handles.retain(|&h| h != handle);
                     }
                 }
