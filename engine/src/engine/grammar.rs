@@ -13,7 +13,10 @@ pub static GRAMMAR_LOADER: std::sync::LazyLock<GrammarLoader> =
         // Core languages — statically linked via Cargo deps
         loader.register_static(tree_sitter_python::LANGUAGE.into(), "python", &["py","pyi","pyx"]);
         loader.register_static(tree_sitter_javascript::LANGUAGE.into(), "javascript", &["js","jsx","mjs","cjs"]);
-        loader.register_static(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), "typescript", &["ts","tsx","mts","cts"]);
+        loader.register_static(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), "typescript", &["ts","mts","cts"]);
+        // ponytail: LANGUAGE_TSX is a separate grammar with JSX support.
+        // tree-sitter-typescript 0.23 provides it alongside LANGUAGE_TYPESCRIPT.
+        loader.register_static(tree_sitter_typescript::LANGUAGE_TSX.into(), "tsx", &["tsx"]);
         loader.register_static(tree_sitter_go::LANGUAGE.into(), "go", &["go"]);
         loader.register_static(tree_sitter_rust::LANGUAGE.into(), "rust", &["rs"]);
         loader.register_static(tree_sitter_java::LANGUAGE.into(), "java", &["java"]);

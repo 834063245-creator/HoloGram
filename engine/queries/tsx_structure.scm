@@ -1,0 +1,39 @@
+;; TSX Structure Queries — for .tsx files only
+;; Uses tree-sitter-typescript LANGUAGE_TSX grammar with JSX support.
+;;
+;; Captures:
+;;   @fn        → function-like nodes
+;;   @class     → class/enum declarations
+;;   @interface → interface/type alias
+;;   @call      → call/new/JSX expressions
+;;   @import    → import/export statements
+
+;; ── Function definitions ──
+(function_declaration) @fn
+(generator_function_declaration) @fn
+(function_expression) @fn
+(method_definition) @fn
+(arrow_function) @fn
+
+;; ── Variable declarators (Rust checks if value is function-like) ──
+(variable_declarator) @fn
+
+;; ── Class / enum ──
+(class_declaration) @class
+(enum_declaration) @class
+
+;; ── Interface / type alias ──
+(interface_declaration) @interface
+(type_alias_declaration) @interface
+
+;; ── Imports / exports ──
+(import_statement) @import
+(export_statement) @import
+
+;; ── Calls ──
+(call_expression) @call
+(new_expression) @call
+
+;; ── JSX calls (TSX grammar only) ──
+(jsx_self_closing_element) @call
+(jsx_opening_element) @call
