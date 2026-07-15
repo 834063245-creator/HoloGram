@@ -207,6 +207,9 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
     assistant.status = 'done';
     for (const part of assistant.parts) {
       if (part.type === 'text') (part as any).finalised = true;
+      if (part.type === 'tool' && ((part as any).status === 'running' || (part as any).status === 'pending')) {
+        (part as any).status = 'error';
+      }
     }
   }
 
