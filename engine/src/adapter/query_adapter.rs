@@ -37,6 +37,17 @@ fn find_scope<'a>(pos: usize, scopes: &'a [Scope]) -> Option<&'a str> {
         .map(|s| s.name.as_str())
 }
 
+/// Find the scope that strictly contains a node (start < node_start),
+/// excluding the node's own scope. Used for @fn/@class where the
+/// declaration IS the scope boundary.
+fn find_enclosing_scope<'a>(node_start: usize, scopes: &'a [Scope]) -> Option<&'a str> {
+    scopes
+        .iter()
+        .rev()
+        .find(|s| s.start < node_start && node_start < s.end)
+        .map(|s| s.name.as_str())
+}
+
 // ── Import path resolution ──
 
 fn resolve_import_path(import_path: &str, current_file: &str) -> String {
@@ -222,28 +233,37 @@ fn process_query(
     let root = tree.root_node();
     let source_bytes = source.as_bytes();
 
-    // ── Phase 1: collect scope boundaries ──
+    // ── Phase 1: collect scope boundaries with correct nesting ──
+    // ponytail: push (node, parent_scope_name) pairs so nested
+    // functions/classes get scope-qualified names (e.g. module.as_view.view
+    // not module.view). This is required so find_scope returns the correct
+    // enclosing scope for @fn/@class/@var/@call attribution.
     let mut scopes: Vec<Scope> = Vec::new();
     {
-        let mut stack: Vec<tree_sitter::Node> = vec![root];
-        while let Some(node) = stack.pop() {
+        let mut stack: Vec<(tree_sitter::Node, String)> = vec![(root, module_id.clone())];
+        while let Some((node, parent_scope)) = stack.pop() {
             let kind = node.kind();
             let is_func = func_kinds.contains(&kind);
             let is_class = class_kinds.contains(&kind);
-            if is_func || is_class {
+            let scope_name = if is_func || is_class {
                 let name = node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| format!("<anon@{}>", node.start_position().row + 1));
+                let qualified = format!("{}.{}", parent_scope, name);
                 scopes.push(Scope {
-                    name: format!("{}.{}", module_id, name),
+                    name: qualified.clone(),
                     start: node.start_byte(),
                     end: node.end_byte(),
                 });
-            }
-            for child in node.children(&mut node.walk()) {
-                stack.push(child);
+                qualified
+            } else {
+                parent_scope.clone()
+            };
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                stack.push((child, scope_name.clone()));
             }
         }
     }
@@ -297,7 +317,11 @@ fn process_query(
                     Some(n) => n,
                     None => continue, // anonymous callback — skip
                 };
-                let nid = format!("{}.{}", module_id, name);
+                // ponytail: use enclosing scope so nested fns get correct path
+                // (e.g. module.as_view.view not module.view).
+                let scope_id = find_enclosing_scope(node.start_byte(), &scopes)
+                    .unwrap_or(&module_id);
+                let nid = format!("{}.{}", scope_id, name);
                 if created_ids.contains(&nid) {
                     continue;
                 }
@@ -305,7 +329,7 @@ fn process_query(
                 counter += 1;
                 edges.push(Edge::new(
                     format!("def_{}_{}", file_id, counter),
-                    &module_id,
+                    scope_id,
                     &nid,
                     EdgeKind::Defines,
                 ));
@@ -327,7 +351,9 @@ fn process_query(
                     Some(n) => n,
                     None => continue,
                 };
-                let nid = format!("{}.{}", module_id, name);
+                let scope_id = find_enclosing_scope(node.start_byte(), &scopes)
+                    .unwrap_or(&module_id);
+                let nid = format!("{}.{}", scope_id, name);
                 if created_ids.contains(&nid) {
                     continue;
                 }
@@ -335,7 +361,7 @@ fn process_query(
                 counter += 1;
                 edges.push(Edge::new(
                     format!("def_{}_{}", file_id, counter),
-                    &module_id,
+                    scope_id,
                     &nid,
                     EdgeKind::Defines,
                 ));
@@ -1038,6 +1064,12 @@ fn emit_class_inherits(
 
     // Last resort: scan class source text for extends/implements patterns
     if !found {
+        // Skip — already handled by the main walk above
+    }
+    // ponytail: last resort disabled — it was producing garbage edges
+    // by scanning class body text for "extends"/"implements" keywords.
+    #[allow(unreachable_code)]
+    if false {
         if let Ok(text) = class_node.utf8_text(source) {
             for keyword in &["extends", "implements"] {
                 if let Some(pos) = text.find(keyword) {
@@ -1452,5 +1484,94 @@ mod tests {
         let fid = &file_node.unwrap().id;
         assert!(fid.contains("src"), "file_id should contain dir, got '{}'", fid);
         assert!(fid.contains("ui"), "file_id should contain subdir, got '{}'", fid);
+    }
+
+    /// Diagnostic: parse a real file and dump all nodes and edges.
+    /// Run with: cargo test -p hologram-engine -- inspect_real_file --nocapture
+    #[test]
+    fn inspect_real_file() {
+        let path = r"D:\django\django\views\generic\base.py";
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("SKIP: cannot read {path}: {e}"); return; }
+        };
+        let lang = match crate::engine::GRAMMAR_LOADER.get("py") {
+            Some(l) => l,
+            None => { eprintln!("SKIP: no Python grammar"); return; }
+        };
+
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(&source, None).unwrap();
+
+        let query_src = include_str!("../../queries/python_structure.scm");
+        let (nodes, edges) = process_query(
+            &tree, &source, path, query_src,
+            &lang,
+            &["function_definition", "lambda"],
+            &["class_definition"],
+        );
+
+        // ── Summary ──
+        let mut nk: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for n in &nodes { *nk.entry(format!("{:?}", n.kind)).or_default() += 1; }
+        let mut ek: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for e in &edges { *ek.entry(format!("{:?}", e.kind)).or_default() += 1; }
+
+        println!("=== {path} ===");
+        println!("Nodes: {}  Edges: {}", nodes.len(), edges.len());
+        println!("Node kinds: {:?}", nk);
+        println!("Edge kinds: {:?}", ek);
+
+        // ── Nodes sorted by kind ──
+        println!("\n=== NODES ===");
+        for n in &nodes {
+            let cf = if n.location.as_deref() == Some(path) { "" } else { " [REMOTE]" };
+            println!("  [{:?}] id={} name={}{}", n.kind, n.id, n.name, cf);
+        }
+
+        // ── Edges grouped by kind ──
+        println!("\n=== EDGES (Calls) ===");
+        for e in &edges {
+            if matches!(e.kind, crate::graph::EdgeKind::Calls) {
+                println!("  {} -> {}", e.source, e.target);
+            }
+        }
+        println!("\n=== EDGES (Usage) ===");
+        for e in &edges {
+            if matches!(e.kind, crate::graph::EdgeKind::Usage) {
+                println!("  {} -> {}", e.source, e.target);
+            }
+        }
+        println!("\n=== EDGES (Imports) ===");
+        for e in &edges {
+            if matches!(e.kind, crate::graph::EdgeKind::Imports) {
+                println!("  {} -> {}", e.source, e.target);
+            }
+        }
+        println!("\n=== EDGES (Inherits) ===");
+        for e in &edges {
+            if matches!(e.kind, crate::graph::EdgeKind::Inherits) {
+                println!("  {} -> {}", e.source, e.target);
+            }
+        }
+        println!("\n=== EDGES (Defines) ===");
+        for e in &edges {
+            if matches!(e.kind, crate::graph::EdgeKind::Defines) {
+                println!("  {} -> {}", e.source, e.target);
+            }
+        }
+        println!("\n=== EDGES (Writes) ===");
+        for e in &edges {
+            if matches!(e.kind, crate::graph::EdgeKind::Writes) {
+                println!("  {} -> {}", e.source, e.target);
+            }
+        }
+        println!("\n=== EDGES (Other) ===");
+        for e in &edges {
+            if !matches!(e.kind, crate::graph::EdgeKind::Calls | crate::graph::EdgeKind::Usage | crate::graph::EdgeKind::Imports | crate::graph::EdgeKind::Inherits | crate::graph::EdgeKind::Defines | crate::graph::EdgeKind::Writes) {
+                println!("  [{:?}] {} -> {}", e.kind, e.source, e.target);
+            }
+        }
     }
 }
