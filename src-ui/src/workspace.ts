@@ -38,7 +38,9 @@ import type { Tool } from './agent/tool';
 import {
   agentInvoke,
   createAgentMessageTool,
+  createAgentStatusTool,
   createAgentStopAllTool,
+  createAgentStopTool,
   createCodingTools,
   createSubAgentTool,
   type ToolExecutor,
@@ -57,7 +59,7 @@ import {
 } from './settings';
 import type { ChatPanel } from './ui/chat';
 import { stripLineNumbers } from './ui/chat-session';
-import { bumpChat, getChatStore } from './ui/chat-store';
+import { msgStoreForActive } from './ui/chat-store';
 import type { CheckPanel, CheckResult } from './ui/check';
 import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
@@ -760,7 +762,9 @@ export class Workspace {
     this.agent = new Agent(prov, registry, systemPrompt, {
       eventSink: chatPanel.eventSink,
       onSubAgentSpawn: (part: SubAgentPart) => {
-        const msgs = getChatStore(this._storeId).msg.getState().messages;
+        const store = msgStoreForActive(this._storeId);
+        if (!store) return;
+        const msgs = store.getState().messages;
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
           if (m.role === 'assistant' && (m as any).status === 'streaming') {
@@ -768,9 +772,9 @@ export class Workspace {
             break;
           }
         }
-        bumpChat(this._storeId);
+        store.getState().bump();
       },
-      onSubAgentBump: () => bumpChat(this._storeId),
+      onSubAgentBump: () => msgStoreForActive(this._storeId)?.getState().bump(),
       execState: chatPanel['_exec'],
       onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
         // Fire-and-forget: ingest session into memory bundle
@@ -828,9 +832,10 @@ export class Workspace {
           return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
         }, pool),
       );
-      // Register batch stop tool
+      // Register agent management tools
       registry.register(createAgentStopAllTool(() => pool));
-      // Register agent message tool
+      registry.register(createAgentStopTool(pool));
+      registry.register(createAgentStatusTool(pool));
       registry.register(createAgentMessageTool(pool));
     } catch (e) {
       console.error('[setupAgent] sub-agent tool registration failed:', e);
@@ -984,7 +989,9 @@ export class Workspace {
         const newAgent = new Agent(p, r, buildSystemPrompt(this, memSection, snap, '', claudeMd), {
           eventSink: chatPanel.eventSink,
           onSubAgentSpawn: (part: SubAgentPart) => {
-            const msgs = getChatStore(this._storeId).msg.getState().messages;
+            const store = msgStoreForActive(this._storeId);
+            if (!store) return;
+            const msgs = store.getState().messages;
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i];
               if (m.role === 'assistant' && (m as any).status === 'streaming') {
@@ -992,9 +999,9 @@ export class Workspace {
                 break;
               }
             }
-            bumpChat(this._storeId);
+            store.getState().bump();
           },
-          onSubAgentBump: () => bumpChat(this._storeId),
+          onSubAgentBump: () => msgStoreForActive(this._storeId)?.getState().bump(),
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,
