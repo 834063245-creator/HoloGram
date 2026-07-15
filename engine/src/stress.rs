@@ -15,6 +15,7 @@
 //!   engine --stress-suite          Run small→medium→large comparison
 //!   engine --stress-real <path>    Benchmark a real project (3 iterations)
 //!   engine --stress-real <path> <N>  Benchmark N iterations
+//!   engine --stress-full <path> <N>  Full pipeline: structure + Dataflow + LSP
 
 use std::fs;
 use std::io::Write;
@@ -595,6 +596,337 @@ fn count_source_files(root: &Path) -> usize {
         }
     }
     count
+}
+
+/// Collect source file paths in a project directory.
+fn collect_source_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let exts = ["py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
+        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
+        "cs","swift","dart","scala","sc","hs","html","htm","css"];
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_str().unwrap_or("");
+            !matches!(name, ".git" | ".hologram" | "node_modules" | "__pycache__"
+                | "target" | ".venv" | "venv" | "dist" | "build" | ".next" | ".nuxt")
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() { continue; }
+        if let Some(ext) = entry.path().extension() {
+            if exts.contains(&ext.to_str().unwrap_or("")) {
+                files.push(entry.path().to_path_buf());
+            }
+        }
+    }
+    files
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Full pipeline benchmark: structure + Dataflow + LSP
+// ═══════════════════════════════════════════════════════════════
+
+/// Benchmark the full analysis pipeline: structure analysis (Engine::analyze)
+/// + dataflow analysis (query_dataflow_files) + LSP warm (warm_blocking).
+pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&str]) -> StressReport {
+    let root = project_path.to_path_buf();
+    let file_count = count_source_files(&root);
+
+    eprintln!("══ HoloGram Full-Pipeline Benchmark ══");
+    eprintln!("Project: {}", root.display());
+    eprintln!("Source files: {}  |  Iterations: {}", file_count, iterations);
+    eprintln!("Pipeline: Structure + Dataflow + LSP warm");
+    eprintln!();
+
+    // Gather source files once (walkdir is fast, negligible in timing)
+    let source_files = collect_source_files(&root);
+    eprintln!("Collected {} source files for dataflow", source_files.len());
+
+    let all_extra_names: [&str; 2] = ["Dataflow", "LSP Warm"];
+
+    // Per-iteration: structure stages + dataflow + LSP
+    let mut all_stage_names: Vec<String> = Vec::new();
+    let mut all_timings: Vec<Vec<f64>> = Vec::new();
+    let mut all_totals: Vec<f64> = Vec::new();
+    let mut node_count = 0;
+    let mut edge_count = 0;
+    let mut community_count = 0;
+    let mut peak_rss = 0.0_f64;
+
+    for i in 0..iterations {
+        let iter_start = Instant::now();
+        let mut engine = Engine::new();
+        engine.init(&root).expect("engine init failed");
+
+        // Phase 1: structure pipeline
+        let result = engine.analyze(&root).expect("analysis failed");
+        let struct_elapsed = iter_start.elapsed().as_secs_f64();
+
+        // Phase 2: Dataflow
+        let df_start = Instant::now();
+        let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&source_files);
+        let df_scopes: usize = df_results.iter()
+            .filter_map(|r| r.result.as_ref().ok())
+            .map(|df| df.scopes.len()).sum();
+        let df_shared: usize = df_results.iter()
+            .filter_map(|r| r.result.as_ref().ok())
+            .map(|df| df.shared.len()).sum();
+        let df_success = df_results.iter().filter(|r| r.result.is_ok()).count();
+        let df_elapsed = df_start.elapsed().as_secs_f64();
+
+        // Phase 3: LSP warm
+        let lsp_start = Instant::now();
+        let (lsp_started, lsp_failed) = if ext_filter.is_empty() {
+            crate::lsp_manager::LspManager::warm_blocking(&root.to_string_lossy())
+        } else {
+            crate::lsp_manager::LspManager::warm_blocking_filtered(&root.to_string_lossy(), ext_filter)
+        };
+        let lsp_elapsed = lsp_start.elapsed().as_secs_f64();
+
+        let iter_elapsed = iter_start.elapsed().as_secs_f64();
+
+        // Build stage timings
+        if all_stage_names.is_empty() {
+            // First iteration: copy structure stage names, then append extras
+            all_stage_names = result.stage_timings.iter().map(|s| s.name.clone()).collect();
+            all_stage_names.extend(all_extra_names.iter().map(|s| s.to_string()));
+        }
+
+        let mut stage_times: Vec<f64> = Vec::with_capacity(all_stage_names.len());
+        // Structure stages — use the detail from result (fresh each iter)
+        for s in &result.stage_timings {
+            stage_times.push(s.elapsed_secs);
+        }
+        // Extra stages
+        stage_times.push(df_elapsed);
+        stage_times.push(lsp_elapsed);
+
+        all_timings.push(stage_times);
+        all_totals.push(iter_elapsed);
+
+        node_count = result.node_count;
+        edge_count = result.edge_count;
+        community_count = result.community_count;
+
+        let rss = get_rss_mb();
+        if rss > peak_rss { peak_rss = rss; }
+
+        eprintln!(
+            "  iter {}/{}:  struct {:.2}s + df {:.2}s ({} scopes, {} shared, {}/{} files) + lsp {:.2}s ({} ok, {} fail)  = {:.2}s total  RSS: {:.0} MB",
+            i + 1, iterations,
+            struct_elapsed,
+            df_elapsed, df_scopes, df_shared, df_success, df_results.len(),
+            lsp_elapsed, lsp_started, lsp_failed,
+            iter_elapsed, rss
+        );
+    }
+
+    // Compute min/mean/max per stage
+    let stage_count = all_stage_names.len();
+    let mut summary_stages: Vec<StageTiming> = Vec::with_capacity(stage_count);
+
+    for si in 0..stage_count {
+        let mut times: Vec<f64> = all_timings.iter().map(|t| t[si]).collect();
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min_t = times.first().copied().unwrap_or(0.0);
+        let max_t = times.last().copied().unwrap_or(0.0);
+        let mean_t = times.iter().sum::<f64>() / times.len() as f64;
+
+        let range_pct = if mean_t > 0.0 { (max_t - min_t) / mean_t * 100.0 } else { 0.0 };
+        let detail = if iterations > 1 && range_pct > 5.0 {
+            format!("mean={:.2}s  min={:.2}s  max={:.2}s", mean_t, min_t, max_t)
+        } else {
+            String::new()
+        };
+
+        summary_stages.push(StageTiming {
+            name: all_stage_names[si].clone(),
+            elapsed_secs: mean_t,
+            detail,
+        });
+    }
+
+    let mean_total = all_totals.iter().sum::<f64>() / all_totals.len() as f64;
+
+    let label = format!("{} ({}) — FULL", root.file_name().unwrap_or_default().to_string_lossy(), root.display());
+
+    let report = StressReport {
+        label,
+        file_count,
+        symbol_count: 0,
+        stages: summary_stages,
+        total_secs: mean_total,
+        peak_rss_mb: peak_rss,
+        node_count,
+        edge_count,
+        community_count,
+        iterations,
+    };
+
+    println!();
+    report.print();
+
+    if iterations > 1 {
+        let mut sorted_totals = all_totals.clone();
+        sorted_totals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min_t = sorted_totals.first().copied().unwrap_or(0.0);
+        let max_t = sorted_totals.last().copied().unwrap_or(0.0);
+        let range_pct = if mean_total > 0.0 { (max_t - min_t) / mean_total * 100.0 } else { 0.0 };
+        println!("Stability: total time {:.2}s–{:.2}s, range {:.1}% of mean",
+            min_t, max_t, range_pct);
+        println!();
+    }
+
+    report
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Dataflow-only benchmark
+// ═══════════════════════════════════════════════════════════════
+
+pub fn run_stress_dataflow(project_path: &Path, iterations: usize) -> StressReport {
+    let root = project_path.to_path_buf();
+    let source_files = collect_source_files(&root);
+    let file_count = source_files.len();
+
+    eprintln!("══ HoloGram Dataflow-Only Benchmark ══");
+    eprintln!("Project: {}", root.display());
+    eprintln!("Source files: {}  |  Iterations: {}", file_count, iterations);
+    eprintln!();
+
+    let mut all_times: Vec<f64> = Vec::new();
+    let mut peak_rss = 0.0_f64;
+    let mut last_scopes = 0;
+    let mut last_shared = 0;
+    let mut last_success = 0;
+
+    for i in 0..iterations {
+        let start = Instant::now();
+        let results = crate::analysis::dataflow_engine::query_dataflow_files(&source_files);
+        let elapsed = start.elapsed().as_secs_f64();
+
+        let scopes: usize = results.iter()
+            .filter_map(|r| r.result.as_ref().ok()).map(|df| df.scopes.len()).sum();
+        let shared: usize = results.iter()
+            .filter_map(|r| r.result.as_ref().ok()).map(|df| df.shared.len()).sum();
+        let success = results.iter().filter(|r| r.result.is_ok()).count();
+
+        all_times.push(elapsed);
+        last_scopes = scopes;
+        last_shared = shared;
+        last_success = success;
+
+        let rss = get_rss_mb();
+        if rss > peak_rss { peak_rss = rss; }
+
+        eprintln!("  iter {}/{}:  {:.2}s  ({} scopes, {} shared vars, {}/{} files)  RSS: {:.0} MB",
+            i + 1, iterations, elapsed, scopes, shared, success, file_count, rss);
+    }
+
+    let mean = all_times.iter().sum::<f64>() / all_times.len() as f64;
+
+    let label = format!("{} (Dataflow)", root.file_name().unwrap_or_default().to_string_lossy());
+    let report = StressReport {
+        label,
+        file_count,
+        symbol_count: 0,
+        stages: vec![StageTiming {
+            name: "Dataflow".into(),
+            elapsed_secs: mean,
+            detail: format!("{} scopes, {} shared, {}/{} files", last_scopes, last_shared, last_success, file_count),
+        }],
+        total_secs: mean,
+        peak_rss_mb: peak_rss,
+        node_count: 0, edge_count: 0, community_count: 0,
+        iterations,
+    };
+
+    println!();
+    report.print();
+
+    if iterations > 1 {
+        let mut sorted = all_times.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!("Stability: {:.2}s–{:.2}s, range {:.1}% of mean",
+            sorted.first().copied().unwrap_or(0.0), sorted.last().copied().unwrap_or(0.0),
+            if mean > 0.0 { (sorted.last().unwrap() - sorted.first().unwrap()) / mean * 100.0 } else { 0.0 });
+        println!();
+    }
+
+    report
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LSP-only benchmark
+// ═══════════════════════════════════════════════════════════════
+
+pub fn run_stress_lsp(project_path: &Path, iterations: usize, ext_filter: &[&str]) -> StressReport {
+    let root = project_path.to_path_buf();
+    let filter_label = if ext_filter.is_empty() { "all".to_string() } else { ext_filter.join(",") };
+
+    eprintln!("══ HoloGram LSP-Only Benchmark ══");
+    eprintln!("Project: {}", root.display());
+    eprintln!("Iterations: {}  |  Languages: {}", iterations, filter_label);
+    eprintln!();
+
+    let mut all_times: Vec<f64> = Vec::new();
+    let mut all_started = Vec::new();
+    let mut all_failed = Vec::new();
+    let mut peak_rss = 0.0_f64;
+
+    for i in 0..iterations {
+        let start = Instant::now();
+        let (started, failed) = crate::lsp_manager::LspManager::warm_blocking_filtered(
+            &root.to_string_lossy(), ext_filter,
+        );
+        let elapsed = start.elapsed().as_secs_f64();
+
+        all_times.push(elapsed);
+        all_started.push(started);
+        all_failed.push(failed);
+
+        let rss = get_rss_mb();
+        if rss > peak_rss { peak_rss = rss; }
+
+        eprintln!("  iter {}/{}:  {:.2}s  ({} ok, {} fail)  RSS: {:.0} MB",
+            i + 1, iterations, elapsed, started, failed, rss);
+    }
+
+    let mean = all_times.iter().sum::<f64>() / all_times.len() as f64;
+    let avg_started = all_started.iter().sum::<usize>() / all_started.len().max(1);
+    let avg_failed = all_failed.iter().sum::<usize>() / all_failed.len().max(1);
+
+    let label = format!("{} (LSP)", root.file_name().unwrap_or_default().to_string_lossy());
+    let report = StressReport {
+        label,
+        file_count: 0,
+        symbol_count: 0,
+        stages: vec![StageTiming {
+            name: "LSP Warm".into(),
+            elapsed_secs: mean,
+            detail: format!("{} started, {} failed", avg_started, avg_failed),
+        }],
+        total_secs: mean,
+        peak_rss_mb: peak_rss,
+        node_count: 0, edge_count: 0, community_count: 0,
+        iterations,
+    };
+
+    println!();
+    report.print();
+
+    if iterations > 1 {
+        let mut sorted = all_times.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!("Stability: {:.2}s–{:.2}s, range {:.1}% of mean",
+            sorted.first().copied().unwrap_or(0.0), sorted.last().copied().unwrap_or(0.0),
+            if mean > 0.0 { (sorted.last().unwrap() - sorted.first().unwrap()) / mean * 100.0 } else { 0.0 });
+        println!();
+    }
+
+    report
 }
 
 // ═══════════════════════════════════════════════════════════════

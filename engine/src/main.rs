@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let is_stress = std::env::args().any(|a| a == "--stress" || a == "--stress-real" || a == "--stress-suite");
+    let is_stress = std::env::args().any(|a| a == "--stress" || a == "--stress-real" || a == "--stress-full" || a == "--stress-dataflow" || a == "--stress-lsp" || a == "--stress-suite");
     let n_threads = if is_stress { n_cores } else { n_cores.saturating_sub(1).max(1) };
     rayon::ThreadPoolBuilder::new()
         .num_threads(n_threads)
@@ -55,6 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  engine.exe --stress <size>    Run stress test (small|medium|large|xlarge|<N>)");
         println!("  engine.exe --stress-suite     Run full stress suite (small→large)");
         println!("  engine.exe --stress-real <path> [N]  Benchmark real project (default 3 iterations)");
+        println!("  engine.exe --stress-full <path> [N]  Full pipeline: structure + Dataflow + LSP");
+        println!("  engine.exe --stress-dataflow <path> [N]  Dataflow-only benchmark");
+        println!("  engine.exe --stress-lsp <path> [N] [ext]  LSP-only benchmark (ext: py,rs,ts,go,...)");
         println!("  engine.exe --version          Print version and copyright");
         println!("  engine.exe --help             Show this help");
         return Ok(());
@@ -86,6 +89,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
         stress::run_stress_real(&root, iterations);
+        return Ok(());
+    }
+    // ── Full pipeline benchmark (structure + Dataflow + LSP) ──
+    if let Some(pos) = args.iter().position(|a| a == "--stress-full") {
+        let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
+        let iterations: usize = args.get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3);
+        let ext_filter: Vec<String> = args.get(pos + 3)
+            .map(|s| s.split(',').map(|e| e.trim().to_string()).collect())
+            .unwrap_or_default();
+        let ext_slice: Vec<&str> = ext_filter.iter().map(|s| s.as_str()).collect();
+        let root = PathBuf::from(path_str);
+        if !root.exists() {
+            eprintln!("[stress] Project path not found: {}", path_str);
+            std::process::exit(1);
+        }
+        stress::run_stress_full(&root, iterations, &ext_slice);
+        return Ok(());
+    }
+    // ── Dataflow-only benchmark ──
+    if let Some(pos) = args.iter().position(|a| a == "--stress-dataflow") {
+        let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
+        let iterations: usize = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3);
+        let root = PathBuf::from(path_str);
+        if !root.exists() { eprintln!("[stress] Project path not found: {}", path_str); std::process::exit(1); }
+        stress::run_stress_dataflow(&root, iterations);
+        return Ok(());
+    }
+    // ── LSP-only benchmark ──
+    if let Some(pos) = args.iter().position(|a| a == "--stress-lsp") {
+        let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
+        let iterations: usize = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3);
+        // Optional language filter: comma-separated extensions, e.g. "py,rs"
+        let ext_filter: Vec<String> = args.get(pos + 3)
+            .map(|s| s.split(',').map(|e| e.trim().to_string()).collect())
+            .unwrap_or_default();
+        let ext_slice: Vec<&str> = ext_filter.iter().map(|s| s.as_str()).collect();
+        let root = PathBuf::from(path_str);
+        if !root.exists() { eprintln!("[stress] Project path not found: {}", path_str); std::process::exit(1); }
+        stress::run_stress_lsp(&root, iterations, &ext_slice);
         return Ok(());
     }
     if args.iter().any(|a| a == "--stress-suite") {

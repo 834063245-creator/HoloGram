@@ -472,6 +472,71 @@ impl LspManager {
         }
     }
 
+    /// Warm the pool synchronously — blocks until ALL servers are started
+    /// or failed. Returns (started_count, failed_count). Used by stress tests.
+    pub fn warm_blocking(project_root: &str) -> (usize, usize) {
+        Self::warm_blocking_filtered(project_root, &[])
+    }
+
+    /// Warm the pool synchronously, only starting servers whose extension
+    /// list overlaps with `ext_filter`. If `ext_filter` is empty, starts all.
+    pub fn warm_blocking_filtered(project_root: &str, ext_filter: &[&str]) -> (usize, usize) {
+        let mgr = Self::global();
+        *mgr.project_root.write().unwrap() = Some(project_root.to_string());
+        *mgr.initialized.write().unwrap() = true;
+
+        let root = project_root.to_string();
+        let mut handles = Vec::new();
+
+        for cfg in SERVER_CONFIGS {
+            // Apply extension filter if non-empty
+            if !ext_filter.is_empty() {
+                let has_match = ext_filter.iter()
+                    .any(|e| cfg.extensions.contains(e));
+                if !has_match { continue; }
+            }
+
+            let root = Self::resolve_workspace_root(&root, cfg.config_marker);
+            let cmd = cfg.command;
+            let cfg: &'static LspServerConfig = cfg;
+            let handle = std::thread::spawn(move || {
+                match Self::spawn_server(cfg, &root) {
+                    Ok(process) => {
+                        tracing::info!(cmd, "[lsp_manager] server started (blocking)");
+                        mgr.pool
+                            .write()
+                            .unwrap()
+                            .insert(cmd, Arc::new(Mutex::new(Some(process))));
+                        mgr.last_warm_errors.write().unwrap().remove(cmd);
+                        Ok(cmd)
+                    }
+                    Err(e) => {
+                        let diagnosed = Self::diagnose_error(cmd, &e);
+                        let err_msg = format!("spawn+init {}: {}", cmd, diagnosed);
+                        tracing::error!(cmd, err = %diagnosed, "[lsp_manager] server unavailable (blocking)");
+                        mgr.last_warm_errors
+                            .write()
+                            .unwrap()
+                            .insert(cmd.to_string(), err_msg);
+                        Err(cmd)
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        let mut started = 0;
+        let mut failed = 0;
+        for h in handles {
+            match h.join().unwrap() {
+                Ok(_) => started += 1,
+                Err(_) => failed += 1,
+            }
+        }
+
+        (started, failed)
+    }
+
     /// Find the correct workspace root for an LSP server.
     /// Searches for any of the config_marker files in the project root,
     /// then one level of subdirectories. Returns the directory containing
