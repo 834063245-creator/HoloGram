@@ -447,6 +447,7 @@ export class ChatPanel {
     toolName: string,
     reason: string,
     subject: string,
+    danger?: string,
   ): Promise<{ allow: boolean; remember: boolean }> {
     // Ensure panel is open
     if (getChatStore(this.panelId).panel.getState().panelMode !== 'panel') {
@@ -464,6 +465,7 @@ export class ChatPanel {
         toolName,
         reason,
         subject: subject || '',
+        danger,
       }),
     );
   }

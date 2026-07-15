@@ -233,12 +233,13 @@ pub(crate) async fn check_permission(
     match has_permission_to_use_tool(tool, ctx) {
         PermissionDecision::Allow => Ok(()),
         PermissionDecision::Deny { reason } => Err(reason),
-        PermissionDecision::Ask { request_id, reason, suggestions } => {
+        PermissionDecision::Ask { request_id, reason, suggestions, danger } => {
             let _ = app.emit("permission-ask", serde_json::json!({
                 "requestId": request_id,
                 "tool": tool.name(),
                 "path": tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                 "reason": reason,
+                "danger": danger,
                 "suggestions": suggestions.iter().map(|s| serde_json::json!({
                     "rule": s.rule,
                     "behavior": s.behavior,

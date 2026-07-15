@@ -61,6 +61,7 @@ pub fn check_read_permission(
                         behavior: "allow".into(),
                     },
                 ],
+                danger: None,
             };
         }
     }
@@ -80,6 +81,7 @@ pub fn check_read_permission(
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         };
     }
 
@@ -98,6 +100,7 @@ pub fn check_read_permission(
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         }
     }
 }
@@ -131,6 +134,7 @@ pub fn check_write_permission(
                         behavior: "allow".into(),
                     },
                 ],
+                danger: None,
             };
         }
     };
@@ -160,6 +164,7 @@ pub fn check_write_permission(
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         };
     }
 
@@ -178,6 +183,7 @@ pub fn check_write_permission(
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         };
     }
 

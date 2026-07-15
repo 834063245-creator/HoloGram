@@ -70,6 +70,8 @@ pub enum PermissionResult {
     Ask {
         reason: String,
         suggestions: Vec<PermissionUpdate>,
+        /// "critical" = 高危操作，前端显示红色警告卡片
+        danger: Option<String>,
     },
     Passthrough,
 }
@@ -82,6 +84,7 @@ pub enum PermissionDecision {
         request_id: String,
         reason: String,
         suggestions: Vec<PermissionUpdate>,
+        danger: Option<String>,
     },
 }
 
@@ -308,6 +311,7 @@ pub fn has_permission_to_use_tool(
                     rule: suggestion_rule,
                     behavior: "allow".into(),
                 }],
+                danger: None,
             };
         }
     } // rules lock dropped
@@ -326,11 +330,13 @@ pub fn has_permission_to_use_tool(
         PermissionResult::Ask {
             reason,
             suggestions,
+            danger,
         } => {
             return PermissionDecision::Ask {
                 request_id: gen_ask_id(),
                 reason,
                 suggestions,
+                danger,
             };
         }
         PermissionResult::Allow => {
@@ -470,9 +476,9 @@ mod smoke {
         ));
     }
 
-    /// 场景 4: exec_command "rm -rf /" → Deny（Critical 危险命令，不弹窗直接拒绝）
+    /// 场景 4: exec_command "rm -rf /" → Ask（Critical 危险命令，弹红色警告卡片确认）
     #[test]
-    fn s4_bash_rm_rf_root_denied() {
+    fn s4_bash_rm_rf_root_ask() {
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
         let tool = BashTool {
@@ -480,7 +486,7 @@ mod smoke {
         };
         assert!(matches!(
             has_permission_to_use_tool(&tool, &ctx),
-            PermissionDecision::Deny { .. }
+            PermissionDecision::Ask { .. }
         ));
     }
 

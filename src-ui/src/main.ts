@@ -430,9 +430,10 @@ async function init(): Promise<void> {
       tool: string;
       path: string;
       reason: string;
+      danger?: string;
       suggestions: Array<{ rule: string; behavior: string }>;
     };
-    chatPanel.showPermissionCard(p.tool, p.reason, p.path).then((result) => {
+    chatPanel.showPermissionCard(p.tool, p.reason, p.path, p.danger).then((result) => {
       rpc('permission_ask_response', {
         requestId: p.requestId,
         allow: result.allow,

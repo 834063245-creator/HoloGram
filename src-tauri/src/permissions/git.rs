@@ -30,6 +30,7 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         };
     }
 
@@ -50,6 +51,7 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         },
     }
 }

@@ -30,6 +30,7 @@ pub fn check(url: &str, rules: &PermissionRules) -> PermissionResult {
                     behavior: "allow".into(),
                 },
             ],
+            danger: None,
         };
     }
 
