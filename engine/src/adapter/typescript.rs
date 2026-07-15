@@ -189,11 +189,21 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str, file_path
                 let field = if node.kind() == "new_expression" { "constructor" } else { "function" };
                 if let Some(func) = node.child_by_field_name(field) {
                     if let Ok(name) = func.utf8_text(source.as_bytes()) {
-                        // ALL calls create edges — no filter.
-                        // The old filter (only dot-method or uppercase calls) was
-                        // discarding >90% of function calls in TypeScript codebases.
+                        // For member expressions (a.b.c()), extract only the last
+                        // property to match function definitions. Without this,
+                        // `getChatStore(x).input.getState()` creates a calls edge
+                        // targeting "getChatStore(x).input.getState" — never matches.
+                        let call_target =
+                            if func.kind() == "member_expression" {
+                                func.child_by_field_name("property")
+                                    .and_then(|p| p.utf8_text(source.as_bytes()).ok())
+                                    .map(|c| c.to_string())
+                                    .unwrap_or_else(|| name.to_string())
+                            } else {
+                                name.to_string()
+                            };
                         edge_counter += 1;
-                        let mut e = Edge::new(format!("call_{}_{}", file_id, edge_counter), &scope_id, name, EdgeKind::Calls);
+                        let mut e = Edge::new(format!("call_{}_{}", file_id, edge_counter), &scope_id, &call_target, EdgeKind::Calls);
                         e.cross_file = true;
                         e.coupling_depth = 1;
                         edges.push(e);
