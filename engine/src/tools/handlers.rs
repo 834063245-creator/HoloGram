@@ -1159,9 +1159,14 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     let kind_label = kind_str.to_string();
     let kinds: Vec<&str> = kind_str.split(',').map(|s| s.trim()).collect();
     ToolResponse::Success(with_store(|idx| {
+        // ponytail: in_degree counts ALL edge types (defines+calls+imports+inherits).
+        // Every function has ≥1 defines edge from its parent module, so in_degree==0
+        // never matches functions — only orphan symbols. in_degree≤1 catches functions
+        // whose sole incoming edge is their own defines (nobody calls/imports them).
+        // False positives possible for event handlers / callback registrations.
         let mut candidates: Vec<&Node> = idx
             .nodes_iter()
-            .filter(|n| n.in_degree == 0 && kinds.iter().any(|k| n.kind.as_str() == *k))
+            .filter(|n| n.in_degree <= 1 && kinds.iter().any(|k| n.kind.as_str() == *k))
             .collect();
         candidates.sort_by_key(|n| std::cmp::Reverse(n.out_degree));
         candidates.truncate(limit);
