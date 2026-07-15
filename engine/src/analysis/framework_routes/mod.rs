@@ -47,18 +47,6 @@ use frameworks::laravel::*;
 use frameworks::phoenix::*;
 #[cfg(test)]
 use frameworks::actix::*;
-#[cfg(test)]
-use frameworks::aspnet::*;
-#[cfg(test)]
-use frameworks::sinatra::*;
-#[cfg(test)]
-use frameworks::fiber::*;
-#[cfg(test)]
-use frameworks::fastify::*;
-#[cfg(test)]
-use frameworks::slim::*;
-#[cfg(test)]
-use frameworks::rocket::*;
 
 /// Scan the project for framework routes and inject them into the graph.
 /// Uses the parse cache from Step 1 when available to avoid re-reading + re-parsing.

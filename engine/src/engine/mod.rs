@@ -687,7 +687,6 @@ pub fn engine_try_incremental(
 mod tests {
     use super::*;
     use serde_json::json;
-    use crate::pipeline::runner::analyze_project;
     #[test]
     fn test_engine_new_uninitialized() {
         let engine = Engine::new();
