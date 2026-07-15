@@ -404,8 +404,8 @@ fn all_schemas() -> &'static [ToolSchema] {
         },
         // ── Analysis ──
         ToolSchema {
-            name: "fragile_modules",
-            description: "Top N most coupled modules ranked by L4 encapsulation violation density. High score = lots of hidden temporal/async coupling. Use to find refactoring priorities or assess codebase health. Not a bug list — well-designed hubs (auth, config) rank high by design.",
+                        name: "fragile_modules",
+            description: "Top N most coupled modules ranked by structural fan-in/fan-out and coupling depth. High score = core hub with many dependents (well-designed hubs naturally rank high). For data-flow coupling (reads/writes) and temporal coupling (triggers/awaits), use trace_dataflow or async_edges.",
             params: &[p!("limit", "integer", "Number of top fragile modules to return (default 5)")],
             required: &[],
             read_only: true,

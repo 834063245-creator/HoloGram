@@ -249,11 +249,7 @@ pub(crate) fn handler_delayed(args: &Value) -> ToolResponse {
 pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
     let limit = get_usize(args, "limit", 5).max(1);
     ToolResponse::Success(with_store(|idx| {
-        // ── Step 1: Aggregate graph structure scores per file ──
-        // Walk all nodes, group by file (from location), sum fan + coupling penalty.
         let mut file_scores: std::collections::HashMap<String, (f64, usize)> = std::collections::HashMap::new();
-        let mut file_l3: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut file_l4: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for node in idx.nodes_iter() {
             let loc = match node.location.as_ref() {
                 Some(l) => l.replace('\\', "/"),
@@ -263,25 +259,12 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
 
             let out_raw = idx.outgoing(&node.id, None);
             let incoming_raw = idx.incoming(&node.id, None);
-            // Skip synthesized edges (heuristic channels) for structural scoring
             let out: Vec<_> = out_raw.into_iter()
                 .filter(|(tgt, _, _, _)| !idx.is_edge_synthesized(&node.id, tgt))
                 .collect();
             let incoming: Vec<_> = incoming_raw.into_iter()
                 .filter(|(src, _, _, _)| !idx.is_edge_synthesized(src, &node.id))
                 .collect();
-
-            // Count L3/L4 edges for this node
-            let l3 = out.iter().filter(|(_, _, d, _)| *d == 3).count()
-                   + incoming.iter().filter(|(_, _, d, _)| *d == 3).count();
-            let l4 = out.iter().filter(|(_, _, d, _)| *d == 4).count()
-                   + incoming.iter().filter(|(_, _, d, _)| *d == 4).count();
-            if l3 > 0 {
-                *file_l3.entry(file_path.clone()).or_default() += l3;
-            }
-            if l4 > 0 {
-                *file_l4.entry(file_path.clone()).or_default() += l4;
-            }
 
             let fan = (out.len() + incoming.len()) as f64;
             let coupling_penalty: f64 = out.iter()
@@ -295,7 +278,6 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
                 .or_insert((node_score, 1));
         }
 
-        // ── Step 2: Score and format ──
         let mut scored: Vec<(f64, String, usize)> = Vec::new();
         for (file, (struct_score, node_count)) in &file_scores {
             let avg_struct = struct_score / (*node_count as f64).max(1.0);
@@ -306,20 +288,20 @@ pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
 
         let result: Vec<serde_json::Value> = scored.iter().map(|(score, file, nodes)| {
             let short_name = file.rsplit('/').next().unwrap_or(file).to_string();
-            let l3 = file_l3.get(file).copied().unwrap_or(0);
-            let l4 = file_l4.get(file).copied().unwrap_or(0);
             json!({
                 "module": short_name,
                 "file": file,
                 "fragility_score": format!("{:.1}", score),
-                "l3_edges": l3,
-                "l4_edges": l4,
                 "node_count": nodes,
-                "_score_breakdown": format!("struct={:.1} l3={} l4={}", score, l3, l4),
+                "_score_breakdown": format!("struct={:.1}", score),
             })
         }).collect();
 
-        json!({"fragile_modules": result, "limit": limit})
+        json!({
+            "fragile_modules": result,
+            "limit": limit,
+            "_note": "排名基于 L1/L2 结构耦合（Imports/Calls/Defines）。L3/L4 时序和数据耦合由数据流引擎按需计算，用 trace_dataflow 或 async_edges 查询。"
+        })
     }))
 }
 

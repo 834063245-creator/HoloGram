@@ -85,7 +85,7 @@ const HOLOG_TOOLS: HologToolDef[] = [
   },
   {
     name: 'fragile_modules',
-    desc: 'L4 脆弱模块排行榜：按封装违规密度排序，分数越高 = 越多的时序耦合和隐藏依赖。',
+    desc: '结构耦合排行榜：按出/入度和耦合深度排序，分数越高 = 核心枢纽。L3/L4 数据流和时序耦合用 trace_dataflow 或 async_edges 查询。',
     params: pp({ limit: { type: 'integer', description: '返回前 N 个脆弱模块（默认 5）' } }),
   },
   {
@@ -114,7 +114,7 @@ const HOLOG_TOOLS: HologToolDef[] = [
   },
   {
     name: 'arch_blindspots',
-    desc: '架构盲点雷达：L4 封装违规 + 无锁并发 + LLM 反馈循环。filter: all / L4 / thread / cycle。',
+    desc: '架构边界检查：循环依赖检测。L4 时序违规走数据流引擎（trace_dataflow/async_edges）。filter: all / L4 / thread / cycle。',
     params: pp({
       filter: { type: 'string', enum: ['all', 'L4', 'thread', 'cycle'], description: '边界类型过滤（默认 all）' },
     }),
