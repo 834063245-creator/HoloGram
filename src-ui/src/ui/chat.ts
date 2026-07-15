@@ -52,9 +52,13 @@ import { ChatMessagesPanel } from './react/ChatMessages';
 import { PromptShelfController, type AskPrompt, type PermissionPrompt } from './react/PromptShelf';
 import {
   getChatStore,
-  msgStoreFor, msgStoreForActive, bumpSession,
+  msgStoreFor,
+  msgStoreForActive,
+  bumpSession,
   bumpChat,
-  getStreamingAssistantId, getUserScrolledUp, getExpandedReasoningSet,
+  getStreamingAssistantId,
+  getUserScrolledUp,
+  getExpandedReasoningSet,
 } from './chat-store';
 
 // ── Constants ──
@@ -107,8 +111,6 @@ export class ChatPanel {
   // ⚡ streamingAssistantId / userScrolledUp → chat-store.ts
   /** rAF handle for batching streaming DOM updates (avoid destroying click targets mid-interaction). */
   private _syncRafId: number | null = null;
-  // File attachments (dragged/selected files)
-  private attachedFiles: { path: string; name: string; size: number }[] = [];
   private attachPillsEl: HTMLElement | null = null;
 
   // ⚡ panelMode → chat-store.ts
@@ -120,11 +122,6 @@ export class ChatPanel {
   private _onTrailToggle: (() => void) | null = null;
   private footerClickCleanup: (() => void) | null = null;
   // ⚡ lastAgentDiag → chat-store.ts
-
-  // ── New: input history navigation (item 1) ──
-  private inputHistory: string[] = [];
-  private historyIdx = 0;
-  private draftText = '';
 
   // ── New: progress bar (item 3) ──
   private progressBar: HTMLElement | null = null;
@@ -148,9 +145,6 @@ export class ChatPanel {
   // ── Prompt shelf (React-based) — ask_user + permission cards ──
   private _promptShelf: PromptShelfController | null = null;
 
-
-
-
   // ── New: agent panel tabs + status bar ──
   // ⚡ activeTab → chat-store.ts
   private tabBar!: HTMLElement;
@@ -164,11 +158,15 @@ export class ChatPanel {
   private statusTokens!: HTMLElement;
   // ⚡ toolUsage / toolHistory / toolSchemas → chat-store.ts
 
-  setToolSchemas(schemas: ToolSchema[]): void { getChatStore(this.panelId).panel.getState().setToolSchemas(schemas); }
+  setToolSchemas(schemas: ToolSchema[]): void {
+    getChatStore(this.panelId).panel.getState().setToolSchemas(schemas);
+  }
 
   private hintText(): string {
     const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
-    return getChatStore(this.panelId).panel.getState().lastAgentDiag ? `${base}\n\n诊断: ${getChatStore(this.panelId).panel.getState().lastAgentDiag}` : base;
+    return getChatStore(this.panelId).panel.getState().lastAgentDiag
+      ? `${base}\n\n诊断: ${getChatStore(this.panelId).panel.getState().lastAgentDiag}`
+      : base;
   }
 
   private refreshHint(): void {
@@ -178,9 +176,15 @@ export class ChatPanel {
     }
   }
 
-  setOnOpenSettings(fn: () => void): void { this.onOpenSettings = fn; }
-  setOnModeChange(fn: () => void): void { this._onModeChange = fn; }
-  setOnTrailToggle(fn: () => void): void { this._onTrailToggle = fn; }
+  setOnOpenSettings(fn: () => void): void {
+    this.onOpenSettings = fn;
+  }
+  setOnModeChange(fn: () => void): void {
+    this._onModeChange = fn;
+  }
+  setOnTrailToggle(fn: () => void): void {
+    this._onTrailToggle = fn;
+  }
 
   /** Panel-scoped event sink for agent events — prevents cross-panel leaks. */
   get eventSink(): (ev: AgentEvent) => void {
@@ -190,7 +194,9 @@ export class ChatPanel {
   get progressSink(): (data: { step: number; toolName: string }) => void {
     return (data: { step: number; toolName: string }) => this._bus.emit('agent:progress', data);
   }
-  setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void { Session.setAgentFactory(this.panelId, fn); }
+  setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void {
+    Session.setAgentFactory(this.panelId, fn);
+  }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -212,7 +218,10 @@ export class ChatPanel {
         if (this.starGraph) this.starGraph.focusNode(nodeName);
       },
       onEditUserMessage: (msg) => {
-        if (this._activeExec().isRunning) { this.addNotice('Agent 正在运行，请先停止再编辑', 'warn'); return; }
+        if (this._activeExec().isRunning) {
+          this.addNotice('Agent 正在运行，请先停止再编辑', 'warn');
+          return;
+        }
         this.inputArea.value = msg.text;
         this.inputArea.style.height = 'auto';
         this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
@@ -221,15 +230,21 @@ export class ChatPanel {
         this._retractUserMessage(msg);
       },
       onResendUserMessage: (msg) => {
-        if (this._activeExec().isRunning) { this.addNotice('Agent 正在运行，请先停止再重发', 'warn'); return; }
+        if (this._activeExec().isRunning) {
+          this.addNotice('Agent 正在运行，请先停止再重发', 'warn');
+          return;
+        }
         this.inputArea.value = msg.text;
         this._retractUserMessage(msg);
         this.sendMessage();
       },
       onRetryAssistant: (assistant) => {
-        if (this._activeExec().isRunning) { this.addNotice('Agent 正在运行，请先停止再重试', 'warn'); return; }
-        const userMsg = this.messages.find(m => m.role === 'user' && m._id === assistant.respondingTo);
-        const userText = (userMsg && 'text' in userMsg) ? (userMsg as any).text as string : '';
+        if (this._activeExec().isRunning) {
+          this.addNotice('Agent 正在运行，请先停止再重试', 'warn');
+          return;
+        }
+        const userMsg = this.messages.find((m) => m.role === 'user' && m._id === assistant.respondingTo);
+        const userText = userMsg && 'text' in userMsg ? ((userMsg as any).text as string) : '';
         if (!userText) return;
         this.inputArea.value = '';
         const signal = this._activeExec().start();
@@ -237,8 +252,19 @@ export class ChatPanel {
         const agent = this.agent;
         if (!agent) return;
         const sessIdx = agent.getSession().length;
-        Session.getTurnPairs(this.panelId).push({ userText, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
-        agent.run(signal, userText)
+        Session.getTurnPairs(this.panelId).push({
+          userText,
+          userBubble: null,
+          assistantBubble: null,
+          sessionIndex: sessIdx,
+        });
+        {
+          const sessStore = getChatStore(this.panelId).sess.getState();
+          const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
+          if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+        }
+        agent
+          .run(signal, userText)
           .catch((err: any) => {
             if (!err.message?.includes('aborted')) {
               this.addNotice(`重试失败: ${err.message || String(err)}`, 'error');
@@ -253,24 +279,48 @@ export class ChatPanel {
     // ── Prompt shelf: unified ask_user + permission cards (above input) ──
     this._promptShelf = new PromptShelfController(this.panel);
     // ── ask_user tool → prompt shelf ──
-    bus.on('prompt:ask', (data: {
-      id: string; question: string; header: string;
-      options: { label: string; description: string }[]; multiSelect: boolean;
-      callback: (answer: string[] | null) => void;
-    }) => {
-      if (!this._promptShelf) { data.callback(null); return; }
-      this._promptShelf.showAsk({
-        type: 'ask', id: data.id,
-        question: data.question, header: data.header,
-        options: data.options, multiSelect: data.multiSelect,
-      }).then(data.callback);
-    });
+    bus.on(
+      'prompt:ask',
+      (data: {
+        id: string;
+        question: string;
+        header: string;
+        options: { label: string; description: string }[];
+        multiSelect: boolean;
+        callback: (answer: string[] | null) => void;
+      }) => {
+        if (!this._promptShelf) {
+          data.callback(null);
+          return;
+        }
+        this._promptShelf
+          .showAsk({
+            type: 'ask',
+            id: data.id,
+            question: data.question,
+            header: data.header,
+            options: data.options,
+            multiSelect: data.multiSelect,
+          })
+          .then(data.callback);
+      },
+    );
     // ── Track user focus — file viewer / file tree / graph selection ──
-    bus.on('highlight:file', (filePath: string) => { getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null }); });
-    bus.on('navigate:file', (filePath: string) => { getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null }); });
-    bus.on('graph:node-clicked', (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
-      getChatStore(this.panelId).panel.setState({ userFocusNode: { name: data.nodeName, location: data.location || undefined }, userFocusFile: null });
+    bus.on('highlight:file', (filePath: string) => {
+      getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null });
     });
+    bus.on('navigate:file', (filePath: string) => {
+      getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null });
+    });
+    bus.on(
+      'graph:node-clicked',
+      (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
+        getChatStore(this.panelId).panel.setState({
+          userFocusNode: { name: data.nodeName, location: data.location || undefined },
+          userFocusFile: null,
+        });
+      },
+    );
     // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
       getChatStore(this.panelId).panel.setState({ lastAgentDiag: d.text });
@@ -311,9 +361,8 @@ export class ChatPanel {
     this._bus.on('agent:progress', (data: { step: number; toolName: string }) => {
       if (!this.progressBar || !this._activeExec().isRunning) return;
       const label = this.progressBar.querySelector('.chat-progress-label');
-      if (label) label.textContent = data.step > 0
-        ? `步骤 ${data.step}  ·  ${data.toolName}`
-        : `正在执行 ${data.toolName}`;
+      if (label)
+        label.textContent = data.step > 0 ? `步骤 ${data.step}  ·  ${data.toolName}` : `正在执行 ${data.toolName}`;
     });
   }
 
@@ -349,8 +398,12 @@ export class ChatPanel {
     this.addNotice('已连接到当前项目', 'info');
   }
 
-  getAgent(): ChatAgentHandle | null { return this.agent; }
-  setStarGraph(g: StarGraph): void { this.starGraph = g; }
+  getAgent(): ChatAgentHandle | null {
+    return this.agent;
+  }
+  setStarGraph(g: StarGraph): void {
+    this.starGraph = g;
+  }
   setProjectPath(p: string): void {
     // ponytail: clear user focus when project changes — stale node/file refs
     // from the old workspace would misdirect the agent's tool calls.
@@ -362,10 +415,18 @@ export class ChatPanel {
 
   toggle(): void {
     switch (getChatStore(this.panelId).panel.getState().panelMode) {
-      case 'pill':  this.summonPanel(); break;
-      case 'input': this.summonPanel(); break;
-      case 'panel': this.collapseToInput(); break;
-      case 'hud':   this.restoreFromHud(); break;
+      case 'pill':
+        this.summonPanel();
+        break;
+      case 'input':
+        this.summonPanel();
+        break;
+      case 'panel':
+        this.collapseToInput();
+        break;
+      case 'hud':
+        this.restoreFromHud();
+        break;
     }
   }
 
@@ -377,7 +438,9 @@ export class ChatPanel {
   ask(question: string): void {
     // Only summon if not already in panel/hud mode — avoids GSAP conflict with
     // the DOM mutations from sendMessage (bubble render, tool cards, etc.)
-    const alreadyOpen = getChatStore(this.panelId).panel.getState().panelMode== 'panel' || getChatStore(this.panelId).panel.getState().panelMode== 'hud';
+    const alreadyOpen =
+      getChatStore(this.panelId).panel.getState().panelMode == 'panel' ||
+      getChatStore(this.panelId).panel.getState().panelMode == 'hud';
     if (!alreadyOpen) {
       this.summonPanel();
     }
@@ -412,20 +475,28 @@ export class ChatPanel {
         toolName,
         reason,
         subject: subject || '',
-      })
+      }),
     );
   }
 
   close(): void {
     // Panel/HUD → input; input → pill
-    if (getChatStore(this.panelId).panel.getState().panelMode== 'panel' || getChatStore(this.panelId).panel.getState().panelMode== 'hud') {
+    if (
+      getChatStore(this.panelId).panel.getState().panelMode == 'panel' ||
+      getChatStore(this.panelId).panel.getState().panelMode == 'hud'
+    ) {
       this.collapseToInput();
-    } else if (getChatStore(this.panelId).panel.getState().panelMode== 'input') {
+    } else if (getChatStore(this.panelId).panel.getState().panelMode == 'input') {
       this.collapseToPill();
     }
   }
 
-  isOpen(): boolean { return getChatStore(this.panelId).panel.getState().panelMode== 'panel' || getChatStore(this.panelId).panel.getState().panelMode== 'hud'; }
+  isOpen(): boolean {
+    return (
+      getChatStore(this.panelId).panel.getState().panelMode == 'panel' ||
+      getChatStore(this.panelId).panel.getState().panelMode == 'hud'
+    );
+  }
 
   // ── Tab switching ──
 
@@ -469,15 +540,39 @@ export class ChatPanel {
     if (name.startsWith('hologram_')) return true; // memory / legacy tools
     if (!ChatPanel._holoTools) {
       ChatPanel._holoTools = new Set([
-        'explore_deps', 'search_symbols', 'get_neighbors', 'trace_impact',
-        'find_dep_path', 'inspect_symbol', 'symbol_history', 'get_community',
-        'cluster_report', 'async_edges', 'fragile_modules', 'detect_cycles',
-        'thread_conflicts', 'coupling_report', 'project_timeline', 'arch_blindspots',
-        'graph_summary', 'graph_diff', 'analyze_project', 'preflight_check',
-        'validate_project', 'project_health', 'rename_symbol', 'engine_status',
-        'check_boundaries', 'find_unused', 'trace_dataflow',
-        'resolve_call', 'infer_type', 'find_implementations', 'find_references',
-        'dataflow_save', 'dataflow_query',
+        'explore_deps',
+        'search_symbols',
+        'get_neighbors',
+        'trace_impact',
+        'find_dep_path',
+        'inspect_symbol',
+        'symbol_history',
+        'get_community',
+        'cluster_report',
+        'async_edges',
+        'fragile_modules',
+        'detect_cycles',
+        'thread_conflicts',
+        'coupling_report',
+        'project_timeline',
+        'arch_blindspots',
+        'graph_summary',
+        'graph_diff',
+        'analyze_project',
+        'preflight_check',
+        'validate_project',
+        'project_health',
+        'rename_symbol',
+        'engine_status',
+        'check_boundaries',
+        'find_unused',
+        'trace_dataflow',
+        'resolve_call',
+        'infer_type',
+        'find_implementations',
+        'find_references',
+        'dataflow_save',
+        'dataflow_query',
       ]);
     }
     return ChatPanel._holoTools.has(name);
@@ -522,13 +617,26 @@ export class ChatPanel {
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       updateFooter: () => this.updateFooter(),
       getTotalTokensUsed: () => getChatStore(storeId).panel.getState().totalTokensUsed,
-      setTotalTokensUsed: (n) => { getChatStore(storeId).panel.getState().setTotalTokensUsed(n); },
-      clearToolUsage: () => { getChatStore(storeId).panel.getState().clearToolUsage(); },
-      clearToolHistory: () => { getChatStore(storeId).panel.getState().clearToolHistory(); },
+      setTotalTokensUsed: (n) => {
+        getChatStore(storeId).panel.getState().setTotalTokensUsed(n);
+      },
+      clearToolUsage: () => {
+        getChatStore(storeId).panel.getState().clearToolUsage();
+      },
+      clearToolHistory: () => {
+        getChatStore(storeId).panel.getState().clearToolHistory();
+      },
       getLastUsageText: () => getChatStore(storeId).panel.getState().lastUsageText,
-      setLastUsageText: (s) => { getChatStore(storeId).panel.setState({ lastUsageText: s }); },
+      setLastUsageText: (s) => {
+        getChatStore(storeId).panel.setState({ lastUsageText: s });
+      },
       getLastAgentDiag: () => getChatStore(storeId).panel.getState().lastAgentDiag,
-      clearInputHistory: () => { this.inputHistory = []; this.historyIdx = 0; this.draftText = ''; },
+      clearInputHistory: () => {
+        const s = getChatStore(storeId).input.getState();
+        s.setInputHistory([]);
+        s.setInputHistoryIdx(-1);
+        s.setDraftText('');
+      },
       getStarGraph: () => this.starGraph,
     };
   }
@@ -537,9 +645,13 @@ export class ChatPanel {
   private _animCtx(): Anim.AnimContext {
     return {
       panel: this.panel,
-      requestFocus: () => { this.inputArea.focus(); },
+      requestFocus: () => {
+        this.inputArea.focus();
+      },
       getMode: () => getChatStore(this.panelId).panel.getState().panelMode,
-      setMode: (m) => { getChatStore(this.panelId).panel.getState().setPanelMode(m); },
+      setMode: (m) => {
+        getChatStore(this.panelId).panel.getState().setPanelMode(m);
+      },
       getRunning: () => this._activeExec().isRunning,
       execState: this._exec,
       getProjectPath: () => getChatStore(this.panelId).panel.getState().projectPath,
@@ -576,56 +688,149 @@ export class ChatPanel {
       toggleHistory: () => this.toggleHistory(),
       closeHistory: () => this.closeHistory(),
       // ponytail: getters — live reads, not snapshots
-      get running() { return self._activeExec().isRunning; },
+      get running() {
+        return self._activeExec().isRunning;
+      },
       // DOM element setters
-      setPanel: (el) => { this.panel = el; },
-      setMsgList: (el) => { this.msgList = el; },
-      setInputArea: (el) => { this.inputArea = el; },
-      setSendBtn: (el) => { this.sendBtn = el; },
-      setStopBtn: (el) => { this.stopBtn = el; },
-      setFooterEl: (el) => { this.footerEl = el; },
-      setHeaderEl: (el) => { this.headerEl = el; },
-      setSessionTabs: (el) => { this.sessionTabs = el; },
-      setProgressBar: (el) => { this.progressBar = el; },
-      setPillBadge: (el) => { this.pillBadge = el; },
-      setTabBar: (el) => { this.tabBar = el; },
-      setTabContent: (el) => { this.tabContent = el; },
-      setChatPanel: (el) => { this.chatPanel = el; },
-      setToolsPanel: (el) => { this.toolsPanel = el; },
-      setContextPanel: (el) => { this.contextPanel = el; },
-      setStatusBar: (el) => { this.statusBar = el; },
-      setStatusDot: (el) => { this.statusDot = el; },
-      setStatusText: (el) => { this.statusText = el; },
-      setStatusTokens: (el) => { this.statusTokens = el; },
-      setAttachPillsEl: (el) => { this.attachPillsEl = el; },
-      setGraphClickCleanup: (fn) => { this.graphClickCleanup = fn; },
-      setFooterClickCleanup: (fn) => { this.footerClickCleanup = fn; },
+      setPanel: (el) => {
+        this.panel = el;
+      },
+      setMsgList: (el) => {
+        this.msgList = el;
+      },
+      setInputArea: (el) => {
+        this.inputArea = el;
+      },
+      setSendBtn: (el) => {
+        this.sendBtn = el;
+      },
+      setStopBtn: (el) => {
+        this.stopBtn = el;
+      },
+      setFooterEl: (el) => {
+        this.footerEl = el;
+      },
+      setHeaderEl: (el) => {
+        this.headerEl = el;
+      },
+      setSessionTabs: (el) => {
+        this.sessionTabs = el;
+      },
+      setProgressBar: (el) => {
+        this.progressBar = el;
+      },
+      setPillBadge: (el) => {
+        this.pillBadge = el;
+      },
+      setTabBar: (el) => {
+        this.tabBar = el;
+      },
+      setTabContent: (el) => {
+        this.tabContent = el;
+      },
+      setChatPanel: (el) => {
+        this.chatPanel = el;
+      },
+      setToolsPanel: (el) => {
+        this.toolsPanel = el;
+      },
+      setContextPanel: (el) => {
+        this.contextPanel = el;
+      },
+      setStatusBar: (el) => {
+        this.statusBar = el;
+      },
+      setStatusDot: (el) => {
+        this.statusDot = el;
+      },
+      setStatusText: (el) => {
+        this.statusText = el;
+      },
+      setStatusTokens: (el) => {
+        this.statusTokens = el;
+      },
+      setAttachPillsEl: (el) => {
+        this.attachPillsEl = el;
+      },
+      setGraphClickCleanup: (fn) => {
+        this.graphClickCleanup = fn;
+      },
+      setFooterClickCleanup: (fn) => {
+        this.footerClickCleanup = fn;
+      },
       // DOM getters
       getPanel: () => this.panel,
       getInputArea: () => this.inputArea,
       // Slash panel — migrated to React
-      get _slashController() { return self._slashController; },
-      get atPopup() { return self.atPopup; },
-      setAtPopup: (el) => { self.atPopup = el; },
-      get atIdx() { return self.atIdx; },
-      setAtIdx: (n) => { self.atIdx = n; },
-      get atFileCache() { return self.atFileCache; },
-      setAtFileCache: (c) => { self.atFileCache = c; },
+      get _slashController() {
+        return self._slashController;
+      },
+      get atPopup() {
+        return self.atPopup;
+      },
+      setAtPopup: (el) => {
+        self.atPopup = el;
+      },
+      get atIdx() {
+        return self.atIdx;
+      },
+      setAtIdx: (n) => {
+        self.atIdx = n;
+      },
+      get atFileCache() {
+        return self.atFileCache;
+      },
+      setAtFileCache: (c) => {
+        self.atFileCache = c;
+      },
       // Settings
-      get onOpenSettings() { return self.onOpenSettings; },
-      get _onModeChange() { return self._onModeChange; },
-      get _onTrailToggle() { return self._onTrailToggle; },
+      get onOpenSettings() {
+        return self.onOpenSettings;
+      },
+      get _onModeChange() {
+        return self._onModeChange;
+      },
+      get _onTrailToggle() {
+        return self._onTrailToggle;
+      },
       // Tool — live from Zustand store
-      get _toolSchemas() { return getChatStore(self.panelId).panel.getState().toolSchemas; },
-      get toolUsage() { return getChatStore(self.panelId).panel.getState().toolUsage; },
-      get toolHistory() { return getChatStore(self.panelId).panel.getState().toolHistory; },
-      // Input history — getters keep buildDOM keydown handler live
-      get inputHistory() { return self.inputHistory; },
-      setInputHistory: (h) => { self.inputHistory = h; },
-      get historyIdx() { return self.historyIdx; },
-      setHistoryIdx: (n) => { self.historyIdx = n; },
-      get draftText() { return self.draftText; },
-      setDraftText: (s) => { self.draftText = s; },
+      get _toolSchemas() {
+        return getChatStore(self.panelId).panel.getState().toolSchemas;
+      },
+      get toolUsage() {
+        return getChatStore(self.panelId).panel.getState().toolUsage;
+      },
+      get toolHistory() {
+        return getChatStore(self.panelId).panel.getState().toolHistory;
+      },
+      // Input state — routed to input-store (Zustand, per-panel)
+      get inputHistory() {
+        return getChatStore(self.panelId).input.getState().inputHistory;
+      },
+      setInputHistory: (h) => {
+        getChatStore(self.panelId).input.setState({ inputHistory: h });
+      },
+      get historyIdx() {
+        return getChatStore(self.panelId).input.getState().inputHistoryIdx;
+      },
+      setHistoryIdx: (n) => {
+        getChatStore(self.panelId).input.setState({ inputHistoryIdx: n });
+      },
+      get draftText() {
+        return getChatStore(self.panelId).input.getState().draftText;
+      },
+      setDraftText: (s) => {
+        getChatStore(self.panelId).input.setState({ draftText: s });
+      },
+      get attachedFiles() {
+        return getChatStore(self.panelId).input.getState().attachedFiles;
+      },
+      addAttachedFile: (f) => {
+        getChatStore(self.panelId).input.getState().addAttachedFile(f);
+      },
+      removeAttachedFile: (idx) => {
+        getChatStore(self.panelId).input.getState().removeAttachedFile(idx);
+      },
       // Callbacks
       handleAtInput: () => this.handleAtInput(),
       handleSlashInput: () => this.handleSlashInput(),
@@ -646,18 +851,33 @@ export class ChatPanel {
       refreshHint: () => this.refreshHint(),
       getLastAgentDiag: () => getChatStore(this.panelId).panel.getState().lastAgentDiag,
       // State — live from Zustand store
-      get _lastAgentState() { return getChatStore(self.panelId).panel.getState().lastAgentState; },
-      get lastUsageText() { return getChatStore(self.panelId).panel.getState().lastUsageText; },
-      get totalTokensUsed() { return getChatStore(self.panelId).panel.getState().totalTokensUsed; },
+      get _lastAgentState() {
+        return getChatStore(self.panelId).panel.getState().lastAgentState;
+      },
+      get lastUsageText() {
+        return getChatStore(self.panelId).panel.getState().lastUsageText;
+      },
+      get totalTokensUsed() {
+        return getChatStore(self.panelId).panel.getState().totalTokensUsed;
+      },
       // ponytail: _expandedReasoning bridges store array→Set; kept snapshot for now since
       // it's only consumed via toggleReasoning callback, not read directly from ctx
       _expandedReasoning: new Set(getChatStore(this.panelId).msg.getState().expandedReasoning),
-      get _activeTab() { return getChatStore(self.panelId).panel.getState().activeTab; },
-      get attachedFiles() { return self.attachedFiles; },
-      get historyPanel() { return self.historyPanel; },
-      setHistoryPanel: (el) => { self.historyPanel = el; },
-      get historyOpen() { return self.historyOpen; },
-      setHistoryOpen: (v) => { self.historyOpen = v; },
+      get _activeTab() {
+        return getChatStore(self.panelId).panel.getState().activeTab;
+      },
+      get historyPanel() {
+        return self.historyPanel;
+      },
+      setHistoryPanel: (el) => {
+        self.historyPanel = el;
+      },
+      get historyOpen() {
+        return self.historyOpen;
+      },
+      setHistoryOpen: (v) => {
+        self.historyOpen = v;
+      },
       toolCategory: (name) => ChatPanel.toolCategory(name),
       // Session persistence callbacks
       listSavedSessions: (p) => this.listSavedSessions(p),
@@ -684,32 +904,51 @@ export class ChatPanel {
         msgStoreFor(storeId, sid).getState().bump();
       },
       getStreamingAssistantId: () => getStreamingAssistantId(storeId),
-      setStreamingAssistantId: (id) => { getChatStore(storeId).msg.getState().setStreamingAssistantId(id); },
+      setStreamingAssistantId: (id) => {
+        getChatStore(storeId).msg.getState().setStreamingAssistantId(id);
+      },
       getUserScrolledUp: () => getUserScrolledUp(storeId),
-      setUserScrolledUp: (v) => { getChatStore(storeId).msg.getState().setUserScrolledUp(v); },
+      setUserScrolledUp: (v) => {
+        getChatStore(storeId).msg.getState().setUserScrolledUp(v);
+      },
       getSyncRafId: () => this._syncRafId,
-      setSyncRafId: (id) => { this._syncRafId = id; },
+      setSyncRafId: (id) => {
+        this._syncRafId = id;
+      },
       getTurnPairs: () => Session.getTurnPairs(this.panelId),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
       updateFooter: () => this.updateFooter(),
-      setLastUsageText: (s) => { getChatStore(storeId).panel.getState().setLastUsageText(s); },
+      setLastUsageText: (s) => {
+        getChatStore(storeId).panel.getState().setLastUsageText(s);
+      },
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
-      bumpPillBadge: () => { getChatStore(storeId).panel.getState().bumpPillEventCount(); },
+      bumpPillBadge: () => {
+        getChatStore(storeId).panel.getState().bumpPillEventCount();
+      },
       animateBubbleIn: (el, delay) => this.animateBubbleIn(el, delay),
-      setRunning: (_r: boolean) => { /* migrated to execState */ },
+      setRunning: (_r: boolean) => {
+        /* migrated to execState */
+      },
       abort: () => this.abort(),
       _updateStatusBar: (s, d) => this._updateStatusBar(s, d),
-      _recordToolUsage: (n, a) => { getChatStore(storeId).panel.getState().addToolUsage(n, a); },
+      _recordToolUsage: (n, a) => {
+        getChatStore(storeId).panel.getState().addToolUsage(n, a);
+      },
       _retractUserMessage: (m) => this._retractUserMessage(m),
       retractTurn: (i) => this.retractTurn(i),
       sendMessage: () => this.sendMessage(),
-      _updateTokens: (n) => { getChatStore(storeId).panel.getState().setTotalTokensUsed(n); },
+      _updateTokens: (n) => {
+        getChatStore(storeId).panel.getState().setTotalTokensUsed(n);
+      },
       getProjectPath: () => getChatStore(storeId).panel.getState().projectPath,
       getRunning: () => this._activeExec().isRunning,
-      getAbortCtrl: () => this._activeExec().abortSignal ? { signal: this._activeExec().abortSignal } as AbortController : null,
-      setAbortCtrl: (_c: any) => { /* managed by execState */ },
+      getAbortCtrl: () =>
+        this._activeExec().abortSignal ? ({ signal: this._activeExec().abortSignal } as AbortController) : null,
+      setAbortCtrl: (_c: any) => {
+        /* managed by execState */
+      },
       getExpandedReasoning: () => getExpandedReasoningSet(storeId),
     };
   }
@@ -807,27 +1046,53 @@ export class ChatPanel {
 
   // ── Session management (delegated to chat-session.ts) ──
 
-  private renderSessionTabs(): void { Session.renderSessionTabs(this._sessionCtx()); }
-  private switchSession(idx: number): void { Session.switchSession(this._sessionCtx(), idx); }
-  private closeSession(idx: number): void { Session.closeSession(this._sessionCtx(), idx); }
-  private async createNewSession(): Promise<void> { return Session.createNewSession(this._sessionCtx()); }
+  private renderSessionTabs(): void {
+    Session.renderSessionTabs(this._sessionCtx());
+  }
+  private switchSession(idx: number): void {
+    Session.switchSession(this._sessionCtx(), idx);
+  }
+  private closeSession(idx: number): void {
+    Session.closeSession(this._sessionCtx(), idx);
+  }
+  private async createNewSession(): Promise<void> {
+    return Session.createNewSession(this._sessionCtx());
+  }
 
   // ── Session persistence (delegated to chat-session.ts) ──
 
-  async saveActiveSession(projectPath: string): Promise<void> { return Session.saveActiveSession(this._sessionCtx(), projectPath); }
-  async autoRestoreLastSession(projectPath: string): Promise<void> { return Session.autoRestoreLastSession(this._sessionCtx(), projectPath); }
-  async listSavedSessions(projectPath: string): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> { return Session.listSavedSessions(this._sessionCtx(), projectPath); }
-  async loadSessionFromDisk(projectPath: string, sessionId: number): Promise<void> { return Session.loadSessionFromDisk(this._sessionCtx(), projectPath, sessionId); }
-  async deleteSessionFile(projectPath: string, sessionId: number): Promise<void> { return Session.deleteSessionFile(this._sessionCtx(), projectPath, sessionId); }
+  async saveActiveSession(projectPath: string): Promise<void> {
+    return Session.saveActiveSession(this._sessionCtx(), projectPath);
+  }
+  async autoRestoreLastSession(projectPath: string): Promise<void> {
+    return Session.autoRestoreLastSession(this._sessionCtx(), projectPath);
+  }
+  async listSavedSessions(
+    projectPath: string,
+  ): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
+    return Session.listSavedSessions(this._sessionCtx(), projectPath);
+  }
+  async loadSessionFromDisk(projectPath: string, sessionId: number): Promise<void> {
+    return Session.loadSessionFromDisk(this._sessionCtx(), projectPath, sessionId);
+  }
+  async deleteSessionFile(projectPath: string, sessionId: number): Promise<void> {
+    return Session.deleteSessionFile(this._sessionCtx(), projectPath, sessionId);
+  }
 
   // ── Turn retraction (delegated to chat-session.ts) ──
 
-  private retractTurn(idx: number): string | null { return Session.retractTurn(this._sessionCtx(), idx); }
-  private _retractUserMessage(msg: UserMessage): void { Session._retractUserMessage(this._sessionCtx(), msg); }
+  private retractTurn(idx: number): string | null {
+    return Session.retractTurn(this._sessionCtx(), idx);
+  }
+  private _retractUserMessage(msg: UserMessage): void {
+    Session._retractUserMessage(this._sessionCtx(), msg);
+  }
 
   // ── Export (delegated to chat-session.ts) ──
 
-  private async exportSession(): Promise<void> { return Session.exportSession(this._sessionCtx()); }
+  private async exportSession(): Promise<void> {
+    return Session.exportSession(this._sessionCtx());
+  }
 
   // ── History panel — browse saved conversation files ──
 
@@ -910,7 +1175,10 @@ export class ChatPanel {
    *  @param displayLabel If set, shows this as a user bubble (for slash commands) */
   private sendAgentText(text: string, displayLabel?: string): void {
     if (!this.agent || this._activeExec().isRunning) return;
-    if (Session.hasRunningBackgroundSession(this.panelId)) { this.addNotice('有后台会话运行中，请等待完成', 'info'); return; }
+    if (Session.hasRunningBackgroundSession(this.panelId)) {
+      this.addNotice('有后台会话运行中，请等待完成', 'info');
+      return;
+    }
     const signal = this._activeExec().start();
 
     // Reset auto-scroll for this new turn
@@ -920,60 +1188,92 @@ export class ChatPanel {
     if (hint) hint.remove();
 
     if (displayLabel) {
-      Session.getTurnPairs(this.panelId).push({ userText: displayLabel, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
+      Session.getTurnPairs(this.panelId).push({
+        userText: displayLabel,
+        userBubble: null,
+        assistantBubble: null,
+        sessionIndex: this.agent.nextInsertIndex,
+      });
       this.appendUserBubble(displayLabel);
     }
 
-    this.agent.run(signal, text).then(() => {
-      // Success
-    }).catch((err: any) => {
-      if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
-        this.addNotice('已中止', 'info');
-      } else if (err.message?.includes('paused after')) {
-        this.addNotice(err.message, 'warn');
-      } else {
-        this.addNotice(`错误: ${err.message || err}`, 'error');
-      }
-    }).finally(() => {
-      this._activeExec().done();
-      this.finishTurn();
-      bus.emit('chat:turn-done', {});
-    });
+    {
+      const sessStore = getChatStore(this.panelId).sess.getState();
+      const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
+      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+    }
+    this.agent
+      .run(signal, text)
+      .then(() => {
+        // Success
+      })
+      .catch((err: any) => {
+        if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
+          this.addNotice('已中止', 'info');
+        } else if (err.message?.includes('paused after')) {
+          this.addNotice(err.message, 'warn');
+        } else {
+          this.addNotice(`错误: ${err.message || err}`, 'error');
+        }
+      })
+      .finally(() => {
+        this._activeExec().done();
+        this.finishTurn();
+        bus.emit('chat:turn-done', {});
+      });
   }
 
   /** Run a goal autonomously — Agent keeps going until done or failed.
    *  ponytail: same UI scaffolding as sendAgentText, but calls runGoal instead of run. */
   private runGoal(goal: string): void {
     if (!this.agent || this._activeExec().isRunning) return;
-    if (Session.hasRunningBackgroundSession(this.panelId)) { this.addNotice('有后台会话运行中，请等待完成', 'info'); return; }
+    if (Session.hasRunningBackgroundSession(this.panelId)) {
+      this.addNotice('有后台会话运行中，请等待完成', 'info');
+      return;
+    }
     const signal = this._activeExec().start();
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
 
     const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
     if (hint) hint.remove();
 
-    Session.getTurnPairs(this.panelId).push({ userText: `/goal ${goal}`, userBubble: null, assistantBubble: null, sessionIndex: this.agent.nextInsertIndex });
+    Session.getTurnPairs(this.panelId).push({
+      userText: `/goal ${goal}`,
+      userBubble: null,
+      assistantBubble: null,
+      sessionIndex: this.agent.nextInsertIndex,
+    });
     this.appendUserBubble(`🎯 ${goal}`);
 
-
-    this.agent.runGoal(signal, goal).then((result) => {
-      this.addNotice(
-        result.status === 'completed' ? `✅ 目标达成: ${result.summary.slice(0, 120)}` :
-        result.status === 'failed' ? `❌ 目标失败: ${result.summary.slice(0, 120)}` :
-        '目标被中断',
-        result.status === 'completed' ? 'info' : 'warn',
-      );
-    }).catch((err: any) => {
-      if (err.message?.includes('aborted')) {
-        this.addNotice('目标执行已中止', 'info');
-      } else {
-        this.addNotice(`目标错误: ${err.message || err}`, 'error');
-      }
-    }).finally(() => {
-      this._activeExec().done();
-      this.finishTurn();
-      bus.emit('chat:turn-done', {});
-    });
+    {
+      const sessStore = getChatStore(this.panelId).sess.getState();
+      const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
+      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+    }
+    this.agent
+      .runGoal(signal, goal)
+      .then((result) => {
+        this.addNotice(
+          result.status === 'completed'
+            ? `✅ 目标达成: ${result.summary.slice(0, 120)}`
+            : result.status === 'failed'
+              ? `❌ 目标失败: ${result.summary.slice(0, 120)}`
+              : '目标被中断',
+          result.status === 'completed' ? 'info' : 'warn',
+        );
+      })
+      .catch((err: any) => {
+        if (err.message?.includes('aborted')) {
+          this.addNotice('目标执行已中止', 'info');
+        } else {
+          this.addNotice(`目标错误: ${err.message || err}`, 'error');
+        }
+      })
+      .finally(() => {
+        this._activeExec().done();
+        this.finishTurn();
+        bus.emit('chat:turn-done', {});
+      });
   }
 
   private async sendMessage(): Promise<void> {
@@ -998,8 +1298,11 @@ export class ChatPanel {
         const fact = text.slice('/remember '.length).trim();
         this.inputArea.value = '';
         this.inputArea.style.height = 'auto';
-        if (!fact) { this.addNotice('用法: /remember 要记住的内容', 'info'); return; }
-        import('../agent/memory.js').then(m => m.authorizeFactSave());
+        if (!fact) {
+          this.addNotice('用法: /remember 要记住的内容', 'info');
+          return;
+        }
+        import('../agent/memory.js').then((m) => m.authorizeFactSave());
         this.sendAgentText(
           `请将以下事实保存到记忆库：${fact}\n\n使用 hologram_memory_save 工具。选择合适的 type（user/feedback/project/reference），起一个简短的 kebab-case 名称，写清楚 description。`,
           `/remember ${fact}`,
@@ -1010,7 +1313,10 @@ export class ChatPanel {
         const goal = text.slice('/goal '.length).trim();
         this.inputArea.value = '';
         this.inputArea.style.height = 'auto';
-        if (!goal) { this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info'); return; }
+        if (!goal) {
+          this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
+          return;
+        }
         this.runGoal(goal);
         return;
       }
@@ -1037,17 +1343,21 @@ export class ChatPanel {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
       // Push input history
-      this.inputHistory.push(text);
-      this.historyIdx = this.inputHistory.length;
-      this.draftText = '';
+      getChatStore(this.panelId).input.getState().pushInputHistory(text);
+      getChatStore(this.panelId).input.setState({ draftText: '' });
       // Show panel if collapsed
-      if (getChatStore(this.panelId).panel.getState().panelMode== 'input') this.summonPanel();
+      if (getChatStore(this.panelId).panel.getState().panelMode == 'input') this.summonPanel();
       const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
       if (hint) hint.remove();
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
-      Session.getTurnPairs(this.panelId).push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+      Session.getTurnPairs(this.panelId).push({
+        userText: text,
+        userBubble: null,
+        assistantBubble: null,
+        sessionIndex: sessIdx,
+      });
       this.appendUserBubble(text);
-        return;
+      return;
     }
     // ⚡ Block new runs if ANY background session still has an agent running.
     // Two agents streaming simultaneously would interleave events and cross sessions.
@@ -1066,14 +1376,13 @@ export class ChatPanel {
     }
 
     // If we're in the floating input bar, summon the full panel before sending
-    if (getChatStore(this.panelId).panel.getState().panelMode== 'input') {
+    if (getChatStore(this.panelId).panel.getState().panelMode == 'input') {
       this.summonPanel();
     }
 
     // Push input history (item 1)
-    this.inputHistory.push(text);
-    this.historyIdx = this.inputHistory.length;
-    this.draftText = '';
+    getChatStore(this.panelId).input.getState().pushInputHistory(text);
+    getChatStore(this.panelId).input.setState({ draftText: '' });
 
     this.inputArea.value = '';
     this.inputArea.style.height = 'auto';
@@ -1085,10 +1394,16 @@ export class ChatPanel {
 
     // Turn pair for retry (item 4) — sessionIndex is where user msg will land
     const sessIdx = this.agent.getSession().length;
-    Session.getTurnPairs(this.panelId).push({ userText: text, userBubble: null, assistantBubble: null, sessionIndex: sessIdx });
+    Session.getTurnPairs(this.panelId).push({
+      userText: text,
+      userBubble: null,
+      assistantBubble: null,
+      sessionIndex: sessIdx,
+    });
 
     // User bubble (original text, focus context is for Agent eyes only)
-    const filesSnapshot = [...this.attachedFiles];
+    const files = getChatStore(this.panelId).input.getState().attachedFiles;
+    const filesSnapshot = [...files];
     this.appendUserBubble(text, filesSnapshot);
 
     // Build focus context prefix — tells Agent what the user is looking at
@@ -1105,17 +1420,20 @@ export class ChatPanel {
     }
 
     // Attached files — expose paths so Agent can read them
-    if (this.attachedFiles.length > 0) {
+    if (files.length > 0) {
       focusPrefix += '用户附加了以下文件：\n';
-      for (const f of this.attachedFiles) {
-        const sizeStr = f.size < 1024 ? `${f.size} B` :
-          f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
-          `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
+      for (const f of files) {
+        const sizeStr =
+          f.size < 1024
+            ? `${f.size} B`
+            : f.size < 1024 * 1024
+              ? `${(f.size / 1024).toFixed(1)} KB`
+              : `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
         focusPrefix += `- \`${f.path}\` (${sizeStr})\n`;
       }
       focusPrefix += '你可以用 read_file 读取这些文件。\n\n';
       // Clear attachments after sending
-      this.attachedFiles = [];
+      getChatStore(this.panelId).input.getState().clearAttachedFiles();
       this.renderAttachments();
     }
 
@@ -1136,7 +1454,10 @@ export class ChatPanel {
       } else if (err.message?.includes('paused after')) {
         this.addNotice(err.message, 'warn');
       } else {
-        this.addNotice(`错误: ${err.message || String(err)}。发送任意消息重试，或输入 /compact 压缩上下文，或输入 /new 新建会话`, 'error');
+        this.addNotice(
+          `错误: ${err.message || String(err)}。发送任意消息重试，或输入 /compact 压缩上下文，或输入 /new 新建会话`,
+          'error',
+        );
       }
     } finally {
       this._activeExec().done();
@@ -1148,16 +1469,16 @@ export class ChatPanel {
 
   private abort(): void {
     if (!this._activeExec().isRunning) return;
-    
+
     // ⚡ 统一状态管理：停止主Agent + 级联子Agent + 清权限队列
     this._activeExec().stop();
     this.agent?.cascadeAbort(); // agent-specific cleanup (isolation worktrees, etc.)
-    
+
     // DOM-specific cleanup (execState doesn't own UI)
     this.inputArea.disabled = false;
     this.inputArea.placeholder = '输入消息… (Enter 发送, Shift+Enter 换行)';
     this.addNotice('正在中止…', 'info');
-    
+
     // 安全超时：3 秒内若 Agent 没响应，强制复位
     const safety = setTimeout(() => {
       if (this._activeExec().isRunning) {
@@ -1204,13 +1525,17 @@ export class ChatPanel {
     Stream._addNoticeMessage(this._streamCtx(), text, level);
   }
 
-  private _finaliseStreamingAssistant(): void { Stream._finaliseStreamingAssistant(this._streamCtx()); }
+  private _finaliseStreamingAssistant(): void {
+    Stream._finaliseStreamingAssistant(this._streamCtx());
+  }
 
   private _expandedReasoning = new Set<number>();
 
   // ── Event Sink — render Agent events to DOM (NEW data-driven path) ──
 
-  private renderEvent(ev: AgentEvent): void { Stream.renderEvent(this._streamCtx(), ev); }
+  private renderEvent(ev: AgentEvent): void {
+    Stream.renderEvent(this._streamCtx(), ev);
+  }
 
   // ── Text (streaming via data-driven message model) ──
 
@@ -1248,8 +1573,10 @@ export class ChatPanel {
     if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '…';
 
     const thinking = active?.thinking ? ' · 思考' : '';
-    const usageStr = getChatStore(this.panelId).panel.getState().lastUsageText ? ` · ${getChatStore(this.panelId).panel.getState().lastUsageText}` : '';
-    const mode = CHAT_MODES.find(m => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
+    const usageStr = getChatStore(this.panelId).panel.getState().lastUsageText
+      ? ` · ${getChatStore(this.panelId).panel.getState().lastUsageText}`
+      : '';
+    const mode = CHAT_MODES.find((m) => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
 
     // Token bar (item 12)
     let tokenBarHtml = '';
@@ -1321,7 +1648,7 @@ export class ChatPanel {
       }
     };
     document.addEventListener('click', handler);
-    this.footerClickCleanup = handler as unknown as (() => void);
+    this.footerClickCleanup = handler as unknown as () => void;
 
     // Attach file button
     this.footerEl.querySelector('.chat-attach-btn')?.addEventListener('click', () => {
@@ -1370,7 +1697,7 @@ export class ChatPanel {
 
   // ── Mode selector popup ──
 
-  private _buildModePopup(currentMode: typeof CHAT_MODES[0]): void {
+  private _buildModePopup(currentMode: (typeof CHAT_MODES)[0]): void {
     const badge = this.footerEl.querySelector('#chat-mode-badge') as HTMLElement;
     if (!badge) return;
 
@@ -1380,12 +1707,14 @@ export class ChatPanel {
 
     const popup = document.createElement('div');
     popup.className = 'chat-mode-popup';
-    popup.innerHTML = CHAT_MODES.map(m => `
+    popup.innerHTML = CHAT_MODES.map(
+      (m) => `
       <button class="chat-mode-item${m.id === currentMode.id ? ' active' : ''}" data-mode="${m.id}">
         <span class="chat-mode-item-label">${m.label}</span>
         <span class="chat-mode-item-desc">${m.description}</span>
       </button>
-    `).join('');
+    `,
+    ).join('');
 
     this.footerEl.appendChild(popup);
 
@@ -1394,7 +1723,7 @@ export class ChatPanel {
       popup.classList.toggle('open');
     });
 
-    popup.querySelectorAll('.chat-mode-item').forEach(item => {
+    popup.querySelectorAll('.chat-mode-item').forEach((item) => {
       item.addEventListener('click', () => {
         const modeId = (item as HTMLElement).dataset['mode'] as string;
         const s = loadSettings();
@@ -1405,7 +1734,7 @@ export class ChatPanel {
         // ponytail: use DOM toast instead of addNotice to avoid feeding back into
         // the message render cycle (updateFooter → _buildModePopup → addNotice →
         // _addNoticeMessage → _syncMessagesToDOM / _scheduleSync → render).
-        const modeLabel = CHAT_MODES.find(m => m.id === modeId)?.label || modeId;
+        const modeLabel = CHAT_MODES.find((m) => m.id === modeId)?.label || modeId;
         this._showFooterToast(`模式已切换为 "${modeLabel}"`);
       });
     });
@@ -1422,15 +1751,23 @@ export class ChatPanel {
 
   // ── Helpers ──
 
-  private appendUserBubble(text: string, files?: { path: string; name: string; size: number }[], skipActions?: boolean): void {
+  private appendUserBubble(
+    text: string,
+    files?: { path: string; name: string; size: number }[],
+    skipActions?: boolean,
+  ): void {
     Stream.appendUserBubble(this._streamCtx(), text, files, skipActions);
   }
 
   /** Finalize current assistant bubble — link to latest turnPair, reset streaming state.
    *  Called at TurnStarted boundaries (including mid-run inserts) and at run end. */
-  private finishCurrentTurn(): void { Stream.finishCurrentTurn(this._streamCtx()); }
+  private finishCurrentTurn(): void {
+    Stream.finishCurrentTurn(this._streamCtx());
+  }
 
-  private finishTurn(): void { Stream.finishTurn(this._streamCtx()); }
+  private finishTurn(): void {
+    Stream.finishTurn(this._streamCtx());
+  }
 
   // ── @ file reference autocomplete (item 5) ──
 
@@ -1503,17 +1840,20 @@ export class ChatPanel {
     }
 
     // Filter by query (substring match)
-    const filtered = query
-      ? allItems.filter(item => item.name.toLowerCase().includes(query))
-      : allItems;
+    const filtered = query ? allItems.filter((item) => item.name.toLowerCase().includes(query)) : allItems;
 
     const top = filtered.slice(0, 10);
-    this.atPopup.innerHTML = top.length > 0
-      ? top.map((item, i) => `<div class="at-item${i === 0 ? ' active' : ''}">
+    this.atPopup.innerHTML =
+      top.length > 0
+        ? top
+            .map(
+              (item, i) => `<div class="at-item${i === 0 ? ' active' : ''}">
           <span class="at-kind">${escapeHtml(item.kind)}</span>
           <span>${escapeHtml(item.name)}</span>
-        </div>`).join('')
-      : '<div class="at-item" style="opacity:0.4">无匹配结果</div>';
+        </div>`,
+            )
+            .join('')
+        : '<div class="at-item" style="opacity:0.4">无匹配结果</div>';
 
     this.atPopup.classList.toggle('open', top.length > 0);
   }
@@ -1550,7 +1890,15 @@ export class ChatPanel {
     }
     if (atIdx < 0) return;
 
-    const token = kind === '节点' ? `\`${name}\`` : `[@${name.split('/').pop()?.replace(/\.\w+$/, '') || name}](${name})`;
+    const token =
+      kind === '节点'
+        ? `\`${name}\``
+        : `[@${
+            name
+              .split('/')
+              .pop()
+              ?.replace(/\.\w+$/, '') || name
+          }](${name})`;
     this.inputArea.value = val.slice(0, atIdx) + token + val.slice(cursorPos);
     this.atPopup.classList.remove('open');
     this.inputArea.focus();
@@ -1563,10 +1911,8 @@ export class ChatPanel {
   private _initSlashPanel(): void {
     CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
     this._wireCommandHandlers();
-    this._slashController = new SlashPanelController(
-      this.panel,
-      CommandRegistry.instance.getAll(),
-      (cmd) => this._executeCommand(cmd),
+    this._slashController = new SlashPanelController(this.panel, CommandRegistry.instance.getAll(), (cmd) =>
+      this._executeCommand(cmd),
     );
   }
 
@@ -1575,29 +1921,36 @@ export class ChatPanel {
     const reg = CommandRegistry.instance;
     // Update local-action commands that need ChatPanel instance
     const override = (id: string, handler: () => void) => {
-      const idx = DEFAULT_COMMANDS.findIndex(c => c.id === id);
+      const idx = DEFAULT_COMMANDS.findIndex((c) => c.id === id);
       if (idx >= 0 && DEFAULT_COMMANDS[idx].action.type === 'local') {
         (DEFAULT_COMMANDS[idx].action as any).handler = handler;
       }
     };
-    override('new', () => { this.inputArea.value = ''; this.inputArea.style.height = 'auto'; this.newSession(); });
+    override('new', () => {
+      this.inputArea.value = '';
+      this.inputArea.style.height = 'auto';
+      this.newSession();
+    });
     override('compact', () => {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
       if (!this.agent) return;
       this.appendUserBubble('/compact');
-        this.addNotice('正在压缩上下文…', 'info');
+      this.addNotice('正在压缩上下文…', 'info');
       const ctrl = new AbortController();
-      this.agent.compactNow(ctrl.signal).then(() => {
-        this.messages = [];
-        resetMsgIdCounter(this.panelId);
-        getChatStore(this.panelId).msg.getState().setStreamingAssistantId(null);
-        this.msgList.innerHTML = '';
-        Session._rebuildMessagesFromSession(this._sessionCtx());
-        this._chatMessages?.bump();
-      }).catch((err) => {
-        this.addNotice(`压缩失败: ${err.message}`, 'error');
-      });
+      this.agent
+        .compactNow(ctrl.signal)
+        .then(() => {
+          this.messages = [];
+          resetMsgIdCounter(this.panelId);
+          getChatStore(this.panelId).msg.getState().setStreamingAssistantId(null);
+          this.msgList.innerHTML = '';
+          Session._rebuildMessagesFromSession(this._sessionCtx());
+          this._chatMessages?.bump();
+        })
+        .catch((err) => {
+          this.addNotice(`压缩失败: ${err.message}`, 'error');
+        });
     });
     override('export', () => this.exportSession());
     override('trail', () => {
@@ -1685,7 +2038,11 @@ export class ChatPanel {
   private _bumpPillBadge(): void {
     if (getChatStore(this.panelId).panel.getState().panelMode !== 'pill') return;
     getChatStore(this.panelId).panel.getState().pillEventCount++;
-    this.pillBadge.textContent = String(getChatStore(this.panelId).panel.getState().pillEventCount > 99 ? '99+' : getChatStore(this.panelId).panel.getState().pillEventCount);
+    this.pillBadge.textContent = String(
+      getChatStore(this.panelId).panel.getState().pillEventCount > 99
+        ? '99+'
+        : getChatStore(this.panelId).panel.getState().pillEventCount,
+    );
     this.pillBadge.classList.add('show');
   }
 

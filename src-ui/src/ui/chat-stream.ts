@@ -169,6 +169,9 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   // Persist + bump the session's store
   ctx.setSessionMessages(target.sessionId, [...msgs]);
   ctx.bumpSessionMessages(target.sessionId);
+  // ponytail: assistant ID is now established — future events can find it via
+  // session store scan. Pending is no longer needed.
+  _pendingStreamingSessions.delete(ctx.storeId);
   return assistant;
 }
 
@@ -237,8 +240,10 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
 
   ctx.setStreamingAssistantId(null);
-  // ponytail: clear pending — the next run will set its own via setPendingStreamingSession
-  _pendingStreamingSessions.delete(ctx.storeId);
+  // ponytail: do NOT clear pending here. TurnStarted fires _finaliseStreamingAssistant
+  // BEFORE the first Text event creates the new assistant. If the user switches tabs
+  // in that window, pending is the only clue _resolveSessionTarget has. Clear pending
+  // in _streamingAssistant after the assistant ID is established.
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -95,7 +95,13 @@ export interface DomContext {
   getInputArea: () => HTMLTextAreaElement;
 
   // Slash panel — migrated to React SlashPanelController
-  _slashController: { show(query?: string): void; hide(): void; navigate(delta: number): boolean; select(): CommandDef | null; visible: boolean } | null;
+  _slashController: {
+    show(query?: string): void;
+    hide(): void;
+    navigate(delta: number): boolean;
+    select(): CommandDef | null;
+    visible: boolean;
+  } | null;
 
   // @ autocomplete
   atPopup: HTMLElement | null;
@@ -159,6 +165,8 @@ export interface DomContext {
 
   // ── 文件附件 ──
   attachedFiles: { path: string; name: string; size: number }[];
+  addAttachedFile: (file: { path: string; name: string; size: number }) => void;
+  removeAttachedFile: (idx: number) => void;
 
   // 历史面板状态
   historyPanel: HTMLElement | null;
@@ -170,7 +178,9 @@ export interface DomContext {
   toolCategory: (name: string) => 'read' | 'write' | 'exec' | 'holo';
 
   // Session persistence callbacks (for openHistory)
-  listSavedSessions: (projectPath: string) => Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>>;
+  listSavedSessions: (
+    projectPath: string,
+  ) => Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>>;
   loadSessionFromDisk: (projectPath: string, sessionId: number) => Promise<void>;
   deleteSessionFile: (projectPath: string, sessionId: number) => Promise<void>;
 }
@@ -296,9 +306,7 @@ export function buildDOM(ctx: DomContext): void {
   const hint = document.createElement('div');
   hint.className = 'chat-hint';
   hint.id = `chat-hint-${ctx.panelId}`;
-  hint.textContent = ctx.getAgent()
-    ? '向我提问代码库的问题，或直接聊天'
-    : ctx.hintText();
+  hint.textContent = ctx.getAgent() ? '向我提问代码库的问题，或直接聊天' : ctx.hintText();
   msgList.appendChild(hint);
 
   tabContent.appendChild(chatPanel);
@@ -367,10 +375,25 @@ export function buildDOM(ctx: DomContext): void {
     }
     // ── / slash panel keyboard nav ──
     if (ctx._slashController?.visible) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); ctx.navigateSlashPanel(1); return; }
-      if (e.key === 'ArrowUp')   { e.preventDefault(); ctx.navigateSlashPanel(-1); return; }
-      if (e.key === 'Enter')     { e.preventDefault(); ctx.selectSlashItem(); return; }
-      if (e.key === 'Escape')    { ctx.hideSlashPanel(); return; }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        ctx.navigateSlashPanel(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        ctx.navigateSlashPanel(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        ctx.selectSlashItem();
+        return;
+      }
+      if (e.key === 'Escape') {
+        ctx.hideSlashPanel();
+        return;
+      }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -525,35 +548,47 @@ export function switchTab(ctx: DomContext, tab: 'chat' | 'tools' | 'context'): v
   store.setActiveTab(tab);
 
   // Update tab buttons
-  ctx.getPanel().querySelectorAll('.chat-panel-tab').forEach(btn => {
-    const el = btn as HTMLElement;
-    el.classList.toggle('active', el.dataset['tab'] === tab);
-  });
+  ctx
+    .getPanel()
+    .querySelectorAll('.chat-panel-tab')
+    .forEach((btn) => {
+      const el = btn as HTMLElement;
+      el.classList.toggle('active', el.dataset['tab'] === tab);
+    });
 
   // Update panels
-  ctx.getPanel().querySelectorAll('.chat-tab-panel').forEach(p => {
-    const el = p as HTMLElement;
-    el.classList.toggle('active', el.dataset['panel'] === tab);
-  });
+  ctx
+    .getPanel()
+    .querySelectorAll('.chat-tab-panel')
+    .forEach((p) => {
+      const el = p as HTMLElement;
+      el.classList.toggle('active', el.dataset['panel'] === tab);
+    });
 
   // Render on switch
   if (tab === 'tools') renderToolsView(ctx);
   else if (tab === 'context') renderContextView(ctx);
 }
 
-export function _updateStatusBar(ctx: DomContext, state: 'idle' | 'thinking' | 'running' | 'error', detail?: string): void {
+export function _updateStatusBar(
+  ctx: DomContext,
+  state: 'idle' | 'thinking' | 'running' | 'error',
+  detail?: string,
+): void {
   getChatStore(ctx.panelId).panel.getState().setLastAgentState(state);
   const panel = ctx.getPanel();
   const dot = panel.querySelector('.chat-status-dot') as HTMLElement;
   if (dot) dot.className = 'chat-status-dot ' + state;
   const text = panel.querySelector('.chat-status-text') as HTMLElement;
   if (text) {
-    const statusLabel = detail || (state === 'idle' ? '就绪' : state === 'thinking' ? '思考中…' : state === 'running' ? '执行工具' : '错误');
+    const statusLabel =
+      detail ||
+      (state === 'idle' ? '就绪' : state === 'thinking' ? '思考中…' : state === 'running' ? '执行工具' : '错误');
     text.textContent = statusLabel;
   }
   // Update model in status
   const settings = loadSettings();
-  const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
+  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
   const modelEl = panel.querySelector(`#chat-status-model-${ctx.panelId}`) as HTMLElement;
   if (modelEl && active) {
     let ml = active.model || '';
@@ -574,9 +609,14 @@ export function renderToolsView(ctx: DomContext): void {
   const schemas = s.toolSchemas || [];
   const usage = s.toolUsage || {};
   const history = s.toolHistory || [];
-  const tools = schemas.length > 0
-    ? schemas.map((t: any) => ({ name: t.name, desc: (t.description||'').split('\n')[0].slice(0,60), cat: ctx.toolCategory(t.name) }))
-    : [];
+  const tools =
+    schemas.length > 0
+      ? schemas.map((t: any) => ({
+          name: t.name,
+          desc: (t.description || '').split('\n')[0].slice(0, 60),
+          cat: ctx.toolCategory(t.name),
+        }))
+      : [];
 
   const maxUsage = Math.max(1, ...Object.values(usage));
 
@@ -589,8 +629,12 @@ export function renderToolsView(ctx: DomContext): void {
     html += `<div class="chat-tool-card tool-cat-${t.cat}" title="${t.name} — ${t.desc}">
       <div class="chat-tool-card-name">${t.name}</div>
       <div class="chat-tool-card-desc">${t.desc}</div>
-      ${count > 0 ? `<div class="chat-tool-card-meta"><span>${count} 次调用</span></div>
-      <div class="tool-usage-bar"><div class="tool-usage-fill" style="width:${pct}%"></div></div>` : ''}
+      ${
+        count > 0
+          ? `<div class="chat-tool-card-meta"><span>${count} 次调用</span></div>
+      <div class="tool-usage-bar"><div class="tool-usage-fill" style="width:${pct}%"></div></div>`
+          : ''
+      }
     </div>`;
   }
   html += '</div>';
@@ -618,7 +662,7 @@ export function renderContextView(ctx: DomContext): void {
   // ponytail: read tokens/usage from the live store, not from stale ctx snapshot
   const s = getChatStore(ctx.panelId).panel.getState();
   const settings = loadSettings();
-  const active = settings.providers.find(p => p.name === settings.activeProvider) || settings.providers[0];
+  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
   const ctxWin = settings.agent?.contextWindow || 0;
   const tokensUsed = s.totalTokensUsed;
   const pct = ctxWin > 0 ? Math.min((tokensUsed / ctxWin) * 100, 100) : 0;
@@ -650,7 +694,7 @@ export function renderContextView(ctx: DomContext): void {
   html += '<div class="chat-context-section">';
   html += '<div class="chat-context-section-label">系统提示词</div>';
   const agent = ctx.getAgent();
-  const sysMsg = agent?.getSession()?.find(m => m.role === 'system');
+  const sysMsg = agent?.getSession()?.find((m) => m.role === 'system');
   if (sysMsg?.content) {
     html += `<pre class="chat-context-system-prompt">${escapeHtml(sysMsg.content)}</pre>`;
   } else {
@@ -661,7 +705,7 @@ export function renderContextView(ctx: DomContext): void {
   // Session stats
   html += '<div class="chat-context-section">';
   html += '<div class="chat-context-section-label">会话统计</div>';
-  const msgCount = agent?.getSession()?.filter(m => m.role !== 'system').length || 0;
+  const msgCount = agent?.getSession()?.filter((m) => m.role !== 'system').length || 0;
   const turnCount = Session.getTurnPairs(ctx.panelId).length;
   const toolTotal = Object.values(s.toolUsage || {}).reduce((a: number, b: any) => a + b, 0);
   html += `<div style="font-family:var(--font-mono);font-size: calc(11px * var(--font-scale));color:rgba(145,180,225,0.55);display:flex;gap:16px">
@@ -684,13 +728,16 @@ let _historyPanel: HTMLElement | null = null;
 let _historyCloseTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function toggleHistory(ctx: DomContext): void {
-  if (_historyPanel) { closeHistory(ctx); return; }
+  if (_historyPanel) {
+    closeHistory(ctx);
+    return;
+  }
   openHistory(ctx);
 }
 
 export function openHistory(ctx: DomContext): void {
   // ponytail: HMR resets module vars but leaves DOM orphans — sweep first
-  document.body.querySelectorAll('.chat-history-backdrop, .chat-history-panel').forEach(el => el.remove());
+  document.body.querySelectorAll('.chat-history-backdrop, .chat-history-panel').forEach((el) => el.remove());
   closeHistory(ctx); // ensure clean state
 
   // ── Backdrop — full viewport, closes on click ──
@@ -724,18 +771,22 @@ export function openHistory(ctx: DomContext): void {
   // ── Section: 当前打开 ──
   const memorySessions = Session.getSessions(ctx.panelId);
   if (memorySessions.length > 0) {
-    renderSection(list, `当前打开 (${memorySessions.length})`, memorySessions.map((s, i) => {
-      const msgCount = s.agent.getSession().filter(m => m.role !== 'system').length;
-      return {
-        label: s.label,
-        subtitle: `消息: ${msgCount}`,
-        active: i === Session.getActiveIdx(ctx.panelId),
-        onClick: () => {
-          if (i !== Session.getActiveIdx(ctx.panelId)) ctx.switchSession(i);
-          closeHistory(ctx);
-        },
-      };
-    }));
+    renderSection(
+      list,
+      `当前打开 (${memorySessions.length})`,
+      memorySessions.map((s, i) => {
+        const msgCount = s.agent.getSession().filter((m) => m.role !== 'system').length;
+        return {
+          label: s.label,
+          subtitle: `消息: ${msgCount}`,
+          active: i === Session.getActiveIdx(ctx.panelId),
+          onClick: () => {
+            if (i !== Session.getActiveIdx(ctx.panelId)) ctx.switchSession(i);
+            closeHistory(ctx);
+          },
+        };
+      }),
+    );
   }
 
   // ── Section: 磁盘存档 ──
@@ -756,39 +807,46 @@ export function openHistory(ctx: DomContext): void {
       setTimeout(() => reject(new Error('history list timeout')), SESSION_LOAD_TIMEOUT),
     );
 
-    Promise.race([ctx.listSavedSessions(projectPath), timeoutP]).then(sessions => {
-      if (!_historyPanel) return;
-      loading.remove();
+    Promise.race([ctx.listSavedSessions(projectPath), timeoutP])
+      .then((sessions) => {
+        if (!_historyPanel) return;
+        loading.remove();
 
-      if (sessions.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'chat-history-entry';
-        empty.textContent = '暂无存档';
-        list.appendChild(empty);
-        return;
-      }
+        if (sessions.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'chat-history-entry';
+          empty.textContent = '暂无存档';
+          list.appendChild(empty);
+          return;
+        }
 
-      sessions.forEach(s => {
-        const already = memorySessions.findIndex(t => t.id === s.id);
-        const entry = buildHistoryEntry(
-          s.label,
-          `${s.msgCount} 条消息${s.savedAt ? ' · ' + new Date(s.savedAt).toLocaleString('zh-CN') : ''}`,
-          () => {
-            closeHistory(ctx);
-            if (already >= 0) { ctx.switchSession(already); }
-            else { ctx.loadSessionFromDisk(projectPath, s.id); }
-          },
-          already >= 0 && already === Session.getActiveIdx(ctx.panelId),
-          () => {
-            if (confirm(`删除会话 "${s.label}"？`)) {
-              ctx.deleteSessionFile(projectPath, s.id);
-              entry.remove();
-            }
-          },
-        );
-        list.appendChild(entry);
+        sessions.forEach((s) => {
+          const already = memorySessions.findIndex((t) => t.id === s.id);
+          const entry = buildHistoryEntry(
+            s.label,
+            `${s.msgCount} 条消息${s.savedAt ? ' · ' + new Date(s.savedAt).toLocaleString('zh-CN') : ''}`,
+            () => {
+              closeHistory(ctx);
+              if (already >= 0) {
+                ctx.switchSession(already);
+              } else {
+                ctx.loadSessionFromDisk(projectPath, s.id);
+              }
+            },
+            already >= 0 && already === Session.getActiveIdx(ctx.panelId),
+            () => {
+              if (confirm(`删除会话 "${s.label}"？`)) {
+                ctx.deleteSessionFile(projectPath, s.id);
+                entry.remove();
+              }
+            },
+          );
+          list.appendChild(entry);
+        });
+      })
+      .catch(() => {
+        if (_historyPanel) loading.textContent = '加载超时，请重试';
       });
-    }).catch(() => { if (_historyPanel) loading.textContent = '加载超时，请重试'; });
   }
 
   panel.appendChild(list);
@@ -797,9 +855,18 @@ export function openHistory(ctx: DomContext): void {
 }
 
 export function closeHistory(ctx: DomContext): void {
-  if (_historyBackdrop) { _historyBackdrop.remove(); _historyBackdrop = null; }
-  if (_historyPanel) { _historyPanel.remove(); _historyPanel = null; }
-  if (_historyCloseTimer) { clearTimeout(_historyCloseTimer); _historyCloseTimer = null; }
+  if (_historyBackdrop) {
+    _historyBackdrop.remove();
+    _historyBackdrop = null;
+  }
+  if (_historyPanel) {
+    _historyPanel.remove();
+    _historyPanel = null;
+  }
+  if (_historyCloseTimer) {
+    clearTimeout(_historyCloseTimer);
+    _historyCloseTimer = null;
+  }
   ctx.setHistoryOpen(false);
 }
 
@@ -813,7 +880,7 @@ function renderSection(
   hdr.className = 'chat-history-section';
   hdr.textContent = heading;
   list.appendChild(hdr);
-  entries.forEach(e => {
+  entries.forEach((e) => {
     list.appendChild(buildHistoryEntry(e.label, e.subtitle, e.onClick, e.active));
   });
 }
@@ -841,7 +908,10 @@ export function buildHistoryEntry(
     delBtn.className = 'chat-history-del';
     delBtn.innerHTML = '×';
     delBtn.title = '删除此会话';
-    delBtn.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onDelete();
+    });
     entry.appendChild(delBtn);
   }
 
@@ -862,19 +932,24 @@ export function renderAttachments(ctx: DomContext): void {
     return;
   }
   pillsEl.style.display = 'flex';
-  pillsEl.innerHTML = ctx.attachedFiles.map((f, i) => {
-    const sizeStr = f.size < 1024 ? `${f.size} B` :
-      f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` :
-      `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
-    return `<span class="attach-pill" title="${f.path}">
+  pillsEl.innerHTML = ctx.attachedFiles
+    .map((f, i) => {
+      const sizeStr =
+        f.size < 1024
+          ? `${f.size} B`
+          : f.size < 1024 * 1024
+            ? `${(f.size / 1024).toFixed(1)} KB`
+            : `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
+      return `<span class="attach-pill" title="${f.path}">
       <span class="attach-pill-icon">${iconHtml('file', 10)}</span>
       <span class="attach-pill-name">${f.name}</span>
       <span class="attach-pill-size">${sizeStr}</span>
       <span class="attach-pill-remove" data-idx="${i}">×</span>
     </span>`;
-  }).join('');
+    })
+    .join('');
   // Wire remove buttons
-  pillsEl.querySelectorAll('.attach-pill-remove').forEach(el => {
+  pillsEl.querySelectorAll('.attach-pill-remove').forEach((el) => {
     const idx = parseInt((el as HTMLElement).dataset['idx'] || '');
     el.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -884,14 +959,13 @@ export function renderAttachments(ctx: DomContext): void {
 }
 
 export function removeAttachedFile(ctx: DomContext, idx: number): void {
-  ctx.attachedFiles.splice(idx, 1);
+  ctx.removeAttachedFile(idx);
   renderAttachments(ctx);
 }
 
 export function addAttachedFile(ctx: DomContext, path: string, name: string, size: number): void {
-  // deduplicate
-  if (ctx.attachedFiles.some(f => f.path === path)) return;
-  ctx.attachedFiles.push({ path, name, size });
+  if (ctx.attachedFiles.some((f) => f.path === path)) return;
+  ctx.addAttachedFile({ path, name, size });
   renderAttachments(ctx);
 }
 
