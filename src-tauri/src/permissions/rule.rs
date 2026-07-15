@@ -73,6 +73,11 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
         "Edit(~/.bashrc)",
         "Edit(~/.zshrc)",
         "Edit(~/.profile)",
+        "WebFetch(0.0.0.0:*)",
+    ];
+    let ask_patterns = &[
+        // Critical bash commands — tool-level Ask delegates to bash.rs::check()
+        // which returns Ask { danger: Some(...) } for red ASK card display
         "Bash(rm -rf /*)",
         "Bash(curl * | sh)",
         "Bash(curl * | bash)",
@@ -84,9 +89,7 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
         "Bash(shutdown*)",
         "Bash(reboot*)",
         "Bash(halt*)",
-        "WebFetch(0.0.0.0:*)",
-    ];
-    let ask_patterns = &[
+        // High-risk ops
         "Bash(git push --force main)",
         "Bash(git push --force master)",
         "Git(push)",
