@@ -59,6 +59,8 @@ export interface AgentOptions {
   onSubAgentBump?: () => void;
   /** Execution state instance. Falls back to global execState if not provided. */
   execState?: ExecStateInstance;
+  /** Session store for Agent-level fire-and-forget persistence. */
+  sessionStore?: SessionStore;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -168,7 +170,6 @@ export class Agent {
     tools: ToolRegistry,
     systemPrompt: string,
     opts: AgentOptions = {},
-    sessionStore?: SessionStore,
   ) {
     this.prov = prov;
     this.tools = tools;
@@ -187,7 +188,7 @@ export class Agent {
     this._execState = opts.execState ?? execState;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
-    this.sessionStore = sessionStore || null;
+    this.sessionStore = opts.sessionStore || null;
     this._onSessionPersisted = opts.onSessionPersisted;
 
     this.session = [];
@@ -247,7 +248,7 @@ export class Agent {
     const msgs = await sessionStore.load(sessionId);
     if (msgs.length === 0) return null;
 
-    const agent = new Agent(prov, tools, '', { ...opts, sessionId }, sessionStore);
+    const agent = new Agent(prov, tools, '', { ...opts, sessionId, sessionStore });
     // Restore system prompt at position 0
     if (systemPrompt) {
       if (msgs.length > 0 && msgs[0].role === 'system') {
@@ -534,13 +535,9 @@ ${goal}
       try {
         await this.runLoop(signal);
       } catch (e: any) {
-        this._saveSession(); // save before exit on error
         if (e?.message === 'aborted') return { status: 'aborted', summary: '被中断' };
         return { status: 'failed', summary: `执行异常: ${e?.message || e}` };
       }
-
-      // Persist after each successful iteration — survives crash between rounds
-      this._saveSession();
 
       const last = this._lastAssistantContent();
       if (!last) {
@@ -683,7 +680,6 @@ ${goal}
       });
 
       if (calls.length === 0 && this._pendingInserts.length === 0) {
-        this._saveSession();
         return;
       }
 
@@ -716,9 +712,6 @@ ${goal}
           output: r?.output || '',
         });
       }
-
-      // Save session after each complete turn (fire-and-forget)
-      this._saveSession();
 
       // Compact if needed before next turn
       this.maybeCompact(usage);

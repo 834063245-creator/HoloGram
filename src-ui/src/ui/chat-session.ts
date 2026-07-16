@@ -336,9 +336,7 @@ export function closeSession(ctx: SessionContext, idx: number): void {
 
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
-    saveActiveSession(ctx, projectPath).catch((e: unknown) => {
-      console.error('[chat] closeSession save failed:', e);
-    });
+    scheduleAutoSave(ctx, projectPath);
   }
 }
 
@@ -477,6 +475,23 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   } catch {
     /* non-critical */
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Debounced auto-save — coalesces rapid-fire save triggers into
+// one write per 500ms window. Explicit saves (deactivate, settings
+// reinit) should call saveActiveSession directly.
+// ═══════════════════════════════════════════════════════════════
+
+let _autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const AUTO_SAVE_DELAY_MS = 500;
+
+export function scheduleAutoSave(ctx: SessionContext, projectPath: string): void {
+  if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(() => {
+    _autoSaveTimer = null;
+    saveActiveSession(ctx, projectPath).catch(() => {});
+  }, AUTO_SAVE_DELAY_MS);
 }
 
 /** Restore the last active session on project open.

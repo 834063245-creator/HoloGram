@@ -648,6 +648,7 @@ export class ChatPanel {
       closeHistory: () => this.closeHistory(),
       hideSlashPanel: () => this._hideSlashPanel(),
       saveActiveSession: (p) => this.saveActiveSession(p),
+      scheduleAutoSave: (p) => Session.scheduleAutoSave(this._sessionCtx(), p),
     };
   }
 
@@ -905,6 +906,7 @@ export class ChatPanel {
       },
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
+      scheduleAutoSave: (p) => Session.scheduleAutoSave(this._sessionCtx(), p),
       bumpPillBadge: () => {
         getChatStore(storeId).panel.getState().bumpPillEventCount();
       },
@@ -1045,6 +1047,9 @@ export class ChatPanel {
   async saveActiveSession(projectPath: string): Promise<void> {
     return Session.saveActiveSession(this._sessionCtx(), projectPath);
   }
+  scheduleAutoSave(projectPath: string): void {
+    Session.scheduleAutoSave(this._sessionCtx(), projectPath);
+  }
   async autoRestoreLastSession(projectPath: string): Promise<void> {
     return Session.autoRestoreLastSession(this._sessionCtx(), projectPath);
   }
@@ -1144,12 +1149,6 @@ export class ChatPanel {
   }
 
   // ── Send ──
-
-  private newSession(): void {
-    if (!this.agent) return;
-    // Create new session via Session — doesn't abort running session anymore
-    this.createNewSession();
-  }
 
   /** Send an instruction to the agent, optionally showing a user bubble.
    *  @param text The instruction sent to the agent
@@ -1833,7 +1832,7 @@ export class ChatPanel {
     override('new', () => {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
-      this.newSession();
+      this.createNewSession();
     });
     override('compact', () => {
       this.inputArea.value = '';

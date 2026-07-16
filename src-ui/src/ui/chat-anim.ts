@@ -36,6 +36,7 @@ export interface AnimContext {
   closeHistory: () => void;
   hideSlashPanel: () => void;
   saveActiveSession: (projectPath: string) => Promise<void>;
+  scheduleAutoSave: (projectPath: string) => void;
 }
 
 // ── Constants ──
@@ -341,7 +342,7 @@ export function collapseToInput(ctx: AnimContext): void {
 
   if (ctx.execState.isRunning) ctx.panel.classList.add('chat-pill-running');
   if (ctx.getProjectPath() && ctx.getActiveIdx() >= 0) {
-    ctx.saveActiveSession(ctx.getProjectPath()).catch(() => {});
+    ctx.scheduleAutoSave(ctx.getProjectPath());
   }
   // ponytail: don't cancel pending permissions while agent is running —
   // sub-agents may be mid-write and the dialog is their only path through.
@@ -389,7 +390,7 @@ export function collapseToPill(ctx: AnimContext): void {
   });
 
   if (ctx.getProjectPath() && ctx.getActiveIdx() >= 0) {
-    ctx.saveActiveSession(ctx.getProjectPath()).catch(() => {});
+    ctx.scheduleAutoSave(ctx.getProjectPath());
   }
   if (!ctx.execState.isRunning) ctx.execState.resetPermQueue();
   ctx.closeHistory();

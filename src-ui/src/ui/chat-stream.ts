@@ -59,6 +59,7 @@ export interface StreamContext {
   setLastUsageText: (s: string) => void;
   addNotice: (text: string, level?: string) => void;
   saveActiveSession: (path: string) => Promise<void>;
+  scheduleAutoSave: (path: string) => void;
   bumpPillBadge: () => void;
   animateBubbleIn: (el: HTMLElement, delay?: number) => any;
   setRunning: (r: boolean) => void;
@@ -403,6 +404,6 @@ export function finishTurn(ctx: StreamContext): void {
   autoTitleSessionIfDefault(ctx.storeId);
   const pp = ctx.getProjectPath();
   if (pp) {
-    ctx.saveActiveSession(pp).catch(() => {});
+    ctx.scheduleAutoSave(pp);
   }
 }

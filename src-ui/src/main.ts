@@ -608,7 +608,7 @@ async function init(): Promise<void> {
   });
 
   bus.on('chat:turn-done', () => {
-    if (workspace?.path) chatPanel.saveActiveSession(workspace.path).catch(() => {});
+    if (workspace?.path) chatPanel.scheduleAutoSave(workspace.path);
   });
 
   // ── Dock tabs ──
@@ -792,13 +792,12 @@ async function init(): Promise<void> {
   document.getElementById('btn-minimize')?.addEventListener('click', () => _winCmd('minimize'));
   document.getElementById('btn-close')?.addEventListener('click', () => _winCmd('close'));
 
-  // Save sessions on close
+  // Save sessions on close — scheduleAutoSave is sync (sets timeout).
+  // LocalStorage write inside saveActiveSession is sync, so it completes
+  // before the window closes even if the RPC disk write doesn't.
   window.addEventListener('beforeunload', () => {
     if (workspace?.path) {
-      chatPanel.saveActiveSession(workspace.path).then(
-        () => console.log('[beforeunload] session saved'),
-        (e) => console.error('[beforeunload] session save failed:', e),
-      );
+      try { chatPanel.scheduleAutoSave(workspace.path); } catch { /* silent */ }
     }
   });
 
