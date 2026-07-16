@@ -782,7 +782,14 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     getChatStore(ctx.storeId).sess.getState().setSessionTokens(sid, 0);
   }
   renderSessionTabs(ctx);
-  renderRestoredSession(ctx);
+
+  try {
+    renderRestoredSession(ctx);
+  } catch (e) {
+    console.error('[chat] loadSessionFromDisk: render 崩溃', e);
+    ctx.addNotice(`会话已加载但渲染失败: ${label}`, 'error');
+  }
+
   ctx.setLastUsageText('');
   ctx.updateFooter();
   ctx.addNotice(`已加载: ${label}`, 'info');

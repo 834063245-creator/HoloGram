@@ -24,7 +24,7 @@ vi.mock('../src/bridge', () => ({
 // ── Mock DOM-heavy libs that don't matter for session logic ──
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
+vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) } }));
 vi.mock('../src/ui/app-shell', () => ({
   shell: { register: vi.fn(), notifyPanelChanged: vi.fn(), wire: vi.fn(), navigateToFile: vi.fn() },
 }));

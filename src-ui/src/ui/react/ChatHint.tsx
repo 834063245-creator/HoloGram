@@ -5,17 +5,30 @@
 // Auto-subscribes to panel store and active session messages store.
 // Disappears automatically when messages arrive or agent is configured.
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from 'zustand';
-import { getChatStore, msgStoreForActive } from '../chat-store';
+import { getChatStore, msgStoreFor } from '../chat-store';
+
+// ponytail: stable reference so the selector below never returns a fresh []
+// which would trigger an infinite loop via useSyncExternalStore.
+const EMPTY_MSGS: never[] = [];
 
 function ChatHint({ panelId }: { panelId: string }) {
   const panelStore = getChatStore(panelId).panel;
+  const sessStore = getChatStore(panelId).sess;
   const lastAgentDiag = useStore(panelStore, (s) => s.lastAgentDiag);
 
-  const msgStore = msgStoreForActive(panelId);
-  const messages = useStore(msgStore ?? panelStore, (s) => ('messages' in s ? (s as any).messages : []));
+  // Subscribe to session store — re-renders when sessions change (new/load/switch/close).
+  const activeSid = useStore(sessStore, (s) => s.sessions[s.activeIdx]?.id ?? null);
+
+  const msgStore = useMemo(
+    () => (activeSid != null ? msgStoreFor(panelId, activeSid) : null),
+    [panelId, activeSid],
+  );
+  const messages = useStore(msgStore ?? panelStore, (s) =>
+    'messages' in s ? (s as any).messages : EMPTY_MSGS,
+  );
 
   // Only show when messages list is empty
   if (!Array.isArray(messages) || messages.length > 0) return null;
