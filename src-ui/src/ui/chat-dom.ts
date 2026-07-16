@@ -138,9 +138,6 @@ export interface DomContext {
   // 滚动
   // 滚动 — React handles internally
 
-  // 提示
-  hintText: () => string;
-  refreshHint: () => void;
 
   // 最后代理诊断
   getLastAgentDiag: () => string;
@@ -290,13 +287,6 @@ export function buildDOM(ctx: DomContext): void {
   const msgList = document.createElement('div');
   msgList.className = 'chat-messages';
   chatPanel.appendChild(msgList);
-
-  // Welcome hint
-  const hint = document.createElement('div');
-  hint.className = 'chat-hint';
-  hint.id = `chat-hint-${ctx.panelId}`;
-  hint.textContent = ctx.getAgent() ? '向我提问代码库的问题，或直接聊天' : ctx.hintText();
-  msgList.appendChild(hint);
 
   tabContent.appendChild(chatPanel);
 

@@ -55,6 +55,7 @@ import { ChatMessagesPanel } from './react/ChatMessages';
 import { type AskPrompt, type PermissionPrompt, PromptShelfController } from './react/PromptShelf';
 import { FooterController } from './react/ChatFooter';
 import { AtAutocompleteController } from './react/AtAutocomplete';
+import { ChatHintController } from './react/ChatHint';
 import { SlashPanelController } from './react/SlashPanel';
 
 // ── Constants ──
@@ -129,6 +130,9 @@ export class ChatPanel {
   // ── @ autocomplete (React-based) ──
   private _atAutocomplete!: AtAutocompleteController;
 
+  // ── Hint (React-based) ──
+  private _chatHint!: ChatHintController;
+
   // ── Messages (React-based) ──
   private _chatMessages: ChatMessagesPanel | null = null;
 
@@ -150,20 +154,6 @@ export class ChatPanel {
 
   setToolSchemas(schemas: ToolSchema[]): void {
     getChatStore(this.panelId).panel.getState().setToolSchemas(schemas);
-  }
-
-  private hintText(): string {
-    const base = '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
-    return getChatStore(this.panelId).panel.getState().lastAgentDiag
-      ? `${base}\n\n诊断: ${getChatStore(this.panelId).panel.getState().lastAgentDiag}`
-      : base;
-  }
-
-  private refreshHint(): void {
-    const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
-    if (hint && !this.agent) {
-      hint.textContent = this.hintText();
-    }
   }
 
   setOnOpenSettings(fn: () => void): void {
@@ -194,6 +184,7 @@ export class ChatPanel {
     this._initSlashPanel();
     this._initFooter();
     this._initAtAutocomplete();
+    this._initChatHint();
 
     // ⚡ React-based message list — own container, shared messages array
     const reactRoot = document.createElement('div');
@@ -313,9 +304,6 @@ export class ChatPanel {
     // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
       getChatStore(this.panelId).panel.setState({ lastAgentDiag: d.text });
-      if (!d.ready && this.isOpen()) {
-        this.refreshHint();
-      }
     });
     // ⚡ ExecutionState → UI sync: subscribe to active session's execState, re-bind on session switch
     let _execUnsub: (() => void) | null = null;
@@ -812,8 +800,6 @@ export class ChatPanel {
       toggleToolCard: (card) => this.toggleToolCard(card),
       killPanelTweens: () => this.killPanelTweens(),
       setupResize: (handle) => this.setupResize(handle),
-      hintText: () => this.hintText(),
-      refreshHint: () => this.refreshHint(),
       getLastAgentDiag: () => getChatStore(this.panelId).panel.getState().lastAgentDiag,
       // State — live from Zustand store
       get _lastAgentState() {
@@ -1147,9 +1133,6 @@ export class ChatPanel {
     // Reset auto-scroll for this new turn
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
 
-    const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
-    if (hint) hint.remove();
-
     if (displayLabel) {
       Session.getTurnPairs(this.panelId).push({
         userText: displayLabel,
@@ -1196,9 +1179,6 @@ export class ChatPanel {
     }
     const signal = this._activeExec().start();
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
-
-    const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
-    if (hint) hint.remove();
 
     Session.getTurnPairs(this.panelId).push({
       userText: `/goal ${goal}`,
@@ -1310,8 +1290,6 @@ export class ChatPanel {
       getChatStore(this.panelId).input.setState({ draftText: '' });
       // Show panel if collapsed
       if (getChatStore(this.panelId).panel.getState().panelMode == 'input') this.summonPanel();
-      const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
-      if (hint) hint.remove();
       // Track turn pair (sessionIndex valid: queued messages are applied at safe boundary)
       Session.getTurnPairs(this.panelId).push({
         userText: text,
@@ -1350,10 +1328,6 @@ export class ChatPanel {
     this.inputArea.value = '';
     this.inputArea.style.height = 'auto';
     const signal = this._activeExec().start();
-
-    // Remove hint if present
-    const hint = this.panel.querySelector('.chat-hint') as HTMLElement | null;
-    if (hint) hint.remove();
 
     // Turn pair for retry (item 4) — sessionIndex is where user msg will land
     const sessIdx = this.agent.getSession().length;
@@ -1619,6 +1593,10 @@ export class ChatPanel {
       this.inputArea.value = val.slice(0, atIdx) + token + val.slice(cursorPos);
       this.inputArea.focus();
     });
+  }
+
+  private _initChatHint(): void {
+    this._chatHint = new ChatHintController(this.msgList.parentElement!, this.panelId);
   }
 
   /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */
