@@ -5,7 +5,6 @@
 // 纯 DOM 渲染，EventSink → 消息气泡 / 工具卡片 / 思考折叠
 // Agent 引擎 (agent.ts) 已完整，此文件只管"把事件画到屏幕上"
 
-import DOMPurify from 'dompurify';
 import type gsap from 'gsap';
 import hljs from 'highlight.js';
 import type { AgentEvent } from '../agent/agent-types';
@@ -35,12 +34,9 @@ import {
 } from './chat-store';
 // ── Extracted stream rendering (Agent events → DOM messages) ──
 import * as Stream from './chat-stream';
-// ── Extracted static utility functions ──
-import { escapeHtml } from './chat-utils';
 import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from './command-registry';
 import { bus } from './events';
 import type { StarGraph } from './graph';
-import { iconHtml } from './icons';
 // ── New message model (data-driven render) ──
 import {
   type AssistantMessage,
@@ -82,7 +78,6 @@ export class ChatPanel {
   private inputArea!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
-  private footerEl!: HTMLElement;
   private headerEl!: HTMLElement;
   private sessionTabs!: HTMLElement;
 
@@ -121,15 +116,6 @@ export class ChatPanel {
   // ⚡ lastUsageText / projectPath / lastAgentDiag → chat-store.ts
   private onOpenSettings: (() => void) | null = null;
   private _onTrailToggle: (() => void) | null = null;
-  private footerClickCleanup: (() => void) | null = null;
-  // ⚡ lastAgentDiag → chat-store.ts
-
-  // ── New: @ autocomplete (item 5) ──
-  private atPopup: HTMLElement | null = null;
-  private atFileCache: { data: string; ts: number } | null = null;
-  private atIdx = 0;
-
-  // ⚡ totalTokensUsed → chat-store.ts
 
   // ⚡ pillEventCount / lastAgentState → chat-store.ts
   private pillBadge!: HTMLElement;
@@ -715,9 +701,6 @@ export class ChatPanel {
       setStopBtn: (el) => {
         this.stopBtn = el;
       },
-      setFooterEl: (el) => {
-        this.footerEl = el;
-      },
       setHeaderEl: (el) => {
         this.headerEl = el;
       },
@@ -760,33 +743,12 @@ export class ChatPanel {
       setGraphClickCleanup: (fn) => {
         this.graphClickCleanup = fn;
       },
-      setFooterClickCleanup: (fn) => {
-        this.footerClickCleanup = fn;
-      },
       // DOM getters
       getPanel: () => this.panel,
       getInputArea: () => this.inputArea,
       // Slash panel — migrated to React
       get _slashController() {
         return self._slashController;
-      },
-      get atPopup() {
-        return self.atPopup;
-      },
-      setAtPopup: (el) => {
-        self.atPopup = el;
-      },
-      get atIdx() {
-        return self.atIdx;
-      },
-      setAtIdx: (n) => {
-        self.atIdx = n;
-      },
-      get atFileCache() {
-        return self.atFileCache;
-      },
-      setAtFileCache: (c) => {
-        self.atFileCache = c;
       },
       // Settings
       get onOpenSettings() {
@@ -1620,8 +1582,7 @@ export class ChatPanel {
 
   // ── Slash inline panel (item 14, registry-driven) ──
 
-  /** Create slash panel once in constructor. Mounted to `this.panel` so
-   *  updateFooter's innerHTML wipe doesn't touch it. Anchored via position:absolute. */
+  /** Create slash panel once in constructor. Anchored to panel. */
   private _initSlashPanel(): void {
     CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
     this._wireCommandHandlers();

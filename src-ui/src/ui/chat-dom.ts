@@ -72,7 +72,6 @@ export interface DomContext {
   setInputArea: (el: HTMLTextAreaElement) => void;
   setSendBtn: (el: HTMLButtonElement) => void;
   setStopBtn: (el: HTMLButtonElement) => void;
-  setFooterEl: (el: HTMLElement) => void;
   setHeaderEl: (el: HTMLElement) => void;
   setSessionTabs: (el: HTMLElement) => void;
   setPillBadge: (el: HTMLElement) => void;
@@ -87,7 +86,6 @@ export interface DomContext {
   setStatusTokens: (el: HTMLElement) => void;
   setAttachPillsEl: (el: HTMLElement) => void;
   setGraphClickCleanup: (fn: (() => void) | null) => void;
-  setFooterClickCleanup: (fn: (() => void) | null) => void;
 
   // DOM getters (for reading back elements set by buildDOM)
   getPanel: () => HTMLElement;
@@ -101,14 +99,6 @@ export interface DomContext {
     select(): CommandDef | null;
     visible: boolean;
   } | null;
-
-  // @ autocomplete
-  atPopup: HTMLElement | null;
-  setAtPopup: (el: HTMLElement | null) => void;
-  atIdx: number;
-  setAtIdx: (n: number) => void;
-  atFileCache: { data: string; ts: number } | null;
-  setAtFileCache: (c: { data: string; ts: number } | null) => void;
 
   // Settings
   onOpenSettings: (() => void) | null;
@@ -365,7 +355,7 @@ export function buildDOM(ctx: DomContext): void {
         return;
       }
       if (e.key === 'Escape') {
-        ctx.atPopup?.classList.remove('open');
+        // React popup auto-hides on next input change
         return;
       }
     }
