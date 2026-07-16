@@ -49,7 +49,6 @@ import {
 import { listen, rpc } from './bridge';
 import { createAnthropicProvider } from './provider/anthropic';
 import {
-  CHAT_MODES,
   defaultPricing,
   getActiveProvider,
   loadSettings,
@@ -798,8 +797,7 @@ export class Workspace {
     const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection, claudeMdSection);
     const agentOpts = settings.agent || {};
 
-    const mode = CHAT_MODES.find((m) => m.id === agentOpts.chatMode) || CHAT_MODES[0];
-    const temperature = mode.temperature;
+    const temperature = agentOpts.temperature ?? 0.7;
     const contextWindow = agentOpts.contextWindow ?? 0;
 
     // ponytail: permission rules evaluated in Rust, dialog rendered inline in chat panel

@@ -750,18 +750,6 @@ async function init(): Promise<void> {
     }
   });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
-  chatPanel.setOnModeChange(async () => {
-    if (workspace) {
-      // Save current conversation BEFORE re-initializing agent — avoids data loss
-      await chatPanel.saveActiveSession(workspace.path).catch(() => {});
-      await workspace.setupAgent(chatPanel, checkPanel);
-      if (workspace?.agent) {
-        await chatPanel
-          .autoRestoreLastSession(workspace.path)
-          .catch((e) => console.error('[mode-change] autoRestoreLastSession failed:', e));
-      }
-    }
-  });
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
   btnSettings.addEventListener('click', () => {
     settingsPanel.toggle();

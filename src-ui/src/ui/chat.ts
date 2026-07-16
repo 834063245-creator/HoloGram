@@ -15,7 +15,7 @@ import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
 import { rpc } from '../bridge';
 import type { ToolSchema } from '../provider/types';
-import { CHAT_MODES, loadSettings, saveSettings } from '../settings';
+import { loadSettings, saveSettings } from '../settings';
 // ── Extracted animations (GSAP-powered panel mode morphing) ──
 import * as Anim from './chat-anim';
 // ── Extracted DOM construction and event wiring ──
@@ -118,7 +118,6 @@ export class ChatPanel {
 
   // ⚡ lastUsageText / projectPath / lastAgentDiag → chat-store.ts
   private onOpenSettings: (() => void) | null = null;
-  private _onModeChange: (() => void) | null = null;
   private _onTrailToggle: (() => void) | null = null;
   private footerClickCleanup: (() => void) | null = null;
   // ⚡ lastAgentDiag → chat-store.ts
@@ -175,9 +174,6 @@ export class ChatPanel {
 
   setOnOpenSettings(fn: () => void): void {
     this.onOpenSettings = fn;
-  }
-  setOnModeChange(fn: () => void): void {
-    this._onModeChange = fn;
   }
   setOnTrailToggle(fn: () => void): void {
     this._onTrailToggle = fn;
@@ -774,9 +770,6 @@ export class ChatPanel {
       // Settings
       get onOpenSettings() {
         return self.onOpenSettings;
-      },
-      get _onModeChange() {
-        return self._onModeChange;
       },
       get _onTrailToggle() {
         return self._onTrailToggle;
@@ -1535,22 +1528,6 @@ export class ChatPanel {
     Stream.addNotice(this._streamCtx(), text, level);
   }
 
-  /** Show a lightweight DOM toast in the footer (does NOT go through message model).
-   *  Used for UI-only notifications (e.g. mode switch) to avoid feeding back into
-   *  the render cycle via addNotice → _addNoticeMessage → _scheduleSync. */
-  private _showFooterToast(text: string): void {
-    const toast = document.createElement('div');
-    toast.className = 'chat-footer-toast';
-    toast.textContent = text;
-    this.footerEl.appendChild(toast);
-    // Trigger CSS transition
-    requestAnimationFrame(() => toast.classList.add('visible'));
-    setTimeout(() => {
-      toast.classList.remove('visible');
-      setTimeout(() => toast.remove(), 300);
-    }, 2000);
-  }
-
   // ── Footer — model badge, slash commands, usage ──
 
   private updateFooter(): void {
@@ -1564,8 +1541,6 @@ export class ChatPanel {
     const usageStr = getChatStore(this.panelId).panel.getState().lastUsageText
       ? ` · ${getChatStore(this.panelId).panel.getState().lastUsageText}`
       : '';
-    const mode = CHAT_MODES.find((m) => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
-
     // Token bar (item 12)
     let tokenBarHtml = '';
     const ctxWin = settings.agent?.contextWindow || 0;
@@ -1586,9 +1561,6 @@ export class ChatPanel {
         <button class="chat-model-badge chat-model-clickable" title="点击切换模型 · ${active?.name} / ${active?.model}">
           ${iconHtml('agent', 10)} ${modelLabel}${thinking}
         </button>
-        <button class="chat-mode-badge" id="chat-mode-badge" title="切换模式 · 当前: ${mode.label}">
-          ${iconHtml('agent', 10)} ${mode.label}
-        </button>
         ${tokenBarHtml}
         <span class="chat-usage-badge">${usageStr}</span>
       </div>
@@ -1599,8 +1571,6 @@ export class ChatPanel {
         </button>
         <button class="chat-session-add chat-attach-btn" title="附加文件">${iconHtml('file-plus', 13)}</button>
       </div>`);
-
-    this._buildModePopup(mode);
 
     // ── Slash panel: React-based, created once in _initSlashPanel, just hide on rebuild ──
     this._slashController?.hide();
@@ -1681,60 +1651,6 @@ export class ChatPanel {
 
   private renderAttachments(): void {
     Dom.renderAttachments(this._domCtx());
-  }
-
-  // ── Mode selector popup ──
-
-  private _buildModePopup(currentMode: (typeof CHAT_MODES)[0]): void {
-    const badge = this.footerEl.querySelector('#chat-mode-badge') as HTMLElement;
-    if (!badge) return;
-
-    // Remove any existing popup
-    const existing = this.footerEl.querySelector('.chat-mode-popup');
-    if (existing) existing.remove();
-
-    const popup = document.createElement('div');
-    popup.className = 'chat-mode-popup';
-    popup.innerHTML = CHAT_MODES.map(
-      (m) => `
-      <button class="chat-mode-item${m.id === currentMode.id ? ' active' : ''}" data-mode="${m.id}">
-        <span class="chat-mode-item-label">${m.label}</span>
-        <span class="chat-mode-item-desc">${m.description}</span>
-      </button>
-    `,
-    ).join('');
-
-    this.footerEl.appendChild(popup);
-
-    badge.addEventListener('click', (e) => {
-      e.stopPropagation();
-      popup.classList.toggle('open');
-    });
-
-    popup.querySelectorAll('.chat-mode-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const modeId = (item as HTMLElement).dataset['mode'] as string;
-        const s = loadSettings();
-        s.agent.chatMode = modeId as any;
-        saveSettings(s);
-        popup.classList.remove('open');
-        this._onModeChange?.();
-        // ponytail: use DOM toast instead of addNotice to avoid feeding back into
-        // the message render cycle (updateFooter → _buildModePopup → addNotice →
-        // _addNoticeMessage → _syncMessagesToDOM / _scheduleSync → render).
-        const modeLabel = CHAT_MODES.find((m) => m.id === modeId)?.label || modeId;
-        this._showFooterToast(`模式已切换为 "${modeLabel}"`);
-      });
-    });
-
-    // Close on outside click
-    const handler = (e: MouseEvent) => {
-      if (!popup.contains(e.target as Node) && e.target !== badge) {
-        popup.classList.remove('open');
-      }
-    };
-    document.addEventListener('click', handler);
-    // Cleanup old handler when popup is destroyed (next updateFooter wipes it)
   }
 
   // ── Helpers ──

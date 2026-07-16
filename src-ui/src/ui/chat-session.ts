@@ -9,7 +9,7 @@ import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
-import { CHAT_MODES, loadSettings } from '../settings';
+import { loadSettings } from '../settings';
 import type { ChatSessionMeta } from './chat-store';
 import { bumpChat, bumpSession, getChatStore, msgStoreFor, msgStoreForActive } from './chat-store';
 import { iconHtml } from './icons';
@@ -1007,12 +1007,11 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
   const msgs = agent.getSession();
   const settings = loadSettings();
   const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
-  const mode = CHAT_MODES.find((m) => m.id === (settings.agent?.chatMode || 'general')) || CHAT_MODES[0];
   const now = new Date();
   const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   let md = `# HoloGram 会话 — ${dateStr}\n`;
-  md += `> 模型: ${active?.model || 'unknown'} · 模式: ${mode.label} · 总 token: ${ctx.getTotalTokensUsed().toLocaleString()}\n\n`;
+  md += `> 模型: ${active?.model || 'unknown'} · 总 token: ${ctx.getTotalTokensUsed().toLocaleString()}\n\n`;
 
   for (const m of msgs) {
     if (m.role === 'system') continue;

@@ -112,7 +112,6 @@ export interface DomContext {
 
   // Settings
   onOpenSettings: (() => void) | null;
-  _onModeChange: (() => void) | null;
   _onTrailToggle: (() => void) | null;
 
   // Tool
