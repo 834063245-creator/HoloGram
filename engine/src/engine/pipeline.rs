@@ -279,10 +279,6 @@ impl Engine {
             }
         }
 
-        let node_count = result.graph.node_count();
-        let edge_count = result.graph.edge_count();
-        let elapsed = started_at.elapsed().as_secs_f64();
-
         // 7.5. Build semantic vector index (fire-and-forget in background)
         // ponytail: uses nodes with snippets populated in step 5.9.
         // Runs on a background thread — doesn't block pipeline completion.
@@ -310,6 +306,11 @@ impl Engine {
         let graph_nodes = std::mem::take(&mut result.graph.nodes);
         let graph_edges = std::mem::take(&mut result.graph.edges);
         let idx = MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
+        // Use deduped counts from MemoryIndex — raw Graph has duplicate edges
+        // from multi-stage synthesis that get collapsed during dedup.
+        let node_count = idx.node_count();
+        let edge_count = idx.edge_count();
+        let elapsed = started_at.elapsed().as_secs_f64();
 
         {
             let store_guard = self
@@ -347,7 +348,7 @@ impl Engine {
         };
 
         info!(
-            "[engine] analysis done: {} nodes, {} edges in {:.1}s",
+            "[engine] analysis done: {} nodes, {} edges (deduped) in {:.1}s",
             node_count, edge_count, elapsed
         );
 
