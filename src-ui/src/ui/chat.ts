@@ -57,6 +57,7 @@ import {
 } from './message-model';
 import { ChatMessagesPanel } from './react/ChatMessages';
 import { type AskPrompt, type PermissionPrompt, PromptShelfController } from './react/PromptShelf';
+import { FooterController } from './react/ChatFooter';
 import { SlashPanelController } from './react/SlashPanel';
 
 // ── Constants ──
@@ -135,6 +136,9 @@ export class ChatPanel {
   // ── Slash panel (React-based) ──
   private _slashController: SlashPanelController | null = null;
 
+  // ── Footer (React-based) ──
+  private _footerController!: FooterController;
+
   // ── Messages (React-based) ──
   private _chatMessages: ChatMessagesPanel | null = null;
 
@@ -198,6 +202,7 @@ export class ChatPanel {
     this._exec = createExecState();
     this.buildDOM();
     this._initSlashPanel();
+    this._initFooter();
 
     // ⚡ React-based message list — own container, shared messages array
     const reactRoot = document.createElement('div');
@@ -349,6 +354,16 @@ export class ChatPanel {
     // ── Receive Agent events via panel-scoped bus — prevents cross-panel leaks ──
     this._bus.on('agent:event', (ev: AgentEvent) => this.renderEvent(ev));
     this.setupGraphClickHandler();
+    // ── Drag-and-drop files onto the chat panel ──
+    this.panel.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    this.panel.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleFileDrop(e);
+    });
   }
 
   // ── Public API ──
@@ -1522,101 +1537,12 @@ export class ChatPanel {
     Stream.addNotice(this._streamCtx(), text, level);
   }
 
-  // ── Footer — model badge, slash commands, usage ──
+  // ── Footer — React-based, auto-subscribes to panel store ──
 
   private updateFooter(): void {
-    const settings = loadSettings();
-    const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
-
-    let modelLabel = active?.model || 'unknown';
-    if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '…';
-
-    const thinking = active?.thinking ? ' · 思考' : '';
-    const usageStr = getChatStore(this.panelId).panel.getState().lastUsageText
-      ? ` · ${getChatStore(this.panelId).panel.getState().lastUsageText}`
-      : '';
-    // Token bar (item 12)
-    let tokenBarHtml = '';
-    const ctxWin = settings.agent?.contextWindow || 0;
-    if (ctxWin > 0 && getChatStore(this.panelId).panel.getState().totalTokensUsed > 0) {
-      const pct = Math.min((getChatStore(this.panelId).panel.getState().totalTokensUsed / ctxWin) * 100, 100);
-      let cls = '';
-      if (pct >= 90) cls = 'danger';
-      else if (pct >= 80) cls = 'warn';
-      const labelK = `${(getChatStore(this.panelId).panel.getState().totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k`;
-      tokenBarHtml = `<div class="chat-token-bar-wrap" title="上下文窗口用量">
-        <span>${labelK}</span>
-        <div class="chat-token-bar"><div class="chat-token-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
-      </div>`;
-    }
-
-    this.footerEl.innerHTML = DOMPurify.sanitize(`
-      <div class="chat-footer-left">
-        <button class="chat-model-badge chat-model-clickable" title="点击切换模型 · ${active?.name} / ${active?.model}">
-          ${iconHtml('agent', 10)} ${modelLabel}${thinking}
-        </button>
-        ${tokenBarHtml}
-        <span class="chat-usage-badge">${usageStr}</span>
-      </div>
-      <div class="chat-footer-right">
-        <button class="chat-shortcuts-btn" data-tooltip="Ctrl+L    打开/关闭面板&#10;Enter     发送 (输入框)&#10;Shift+Enter  换行&#10;Esc       关闭面板&#10;Ctrl+Y    始终允许 (权限)&#10;↑↓        历史导航 (输入框)">${iconHtml('keyboard', 13)}</button>
-        <button class="chat-slash-trigger" title="命令菜单">
-          ${iconHtml('code', 12)}<span class="chat-slash-label">/</span>
-        </button>
-        <button class="chat-session-add chat-attach-btn" title="附加文件">${iconHtml('file-plus', 13)}</button>
-      </div>`);
-
-    // ── Slash panel: React-based, created once in _initSlashPanel, just hide on rebuild ──
-    this._slashController?.hide();
-
-    // Model badge click → open settings
-    this.footerEl.querySelector('.chat-model-clickable')?.addEventListener('click', () => {
-      this.onOpenSettings?.();
-    });
-
-    // / button → focus input + trigger inline panel
-    const trigger = this.footerEl.querySelector('.chat-slash-trigger') as HTMLElement;
-    trigger?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.inputArea.focus();
-      const val = this.inputArea.value;
-      const pos = this.inputArea.selectionStart || 0;
-      if (!val || pos === val.length) {
-        this.inputArea.value = val + '/';
-        this.inputArea.setSelectionRange((val + '/').length, (val + '/').length);
-      }
-      this.inputArea.style.height = 'auto';
-      this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
-      this.inputArea.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-
-    // Close panel on outside click
-    if (this.footerClickCleanup) {
-      document.removeEventListener('click', this.footerClickCleanup as unknown as EventListener);
-    }
-    const handler = (e: MouseEvent) => {
-      if (this._slashController?.visible && e.target !== trigger && !this.inputArea.contains(e.target as Node)) {
-        this._slashController.hide();
-      }
-    };
-    document.addEventListener('click', handler);
-    this.footerClickCleanup = handler as unknown as () => void;
-
-    // Attach file button
-    this.footerEl.querySelector('.chat-attach-btn')?.addEventListener('click', () => {
-      this.openFilePicker();
-    });
-
-    // Drag-and-drop files onto the chat panel
-    this.panel.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-    this.panel.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleFileDrop(e);
-    });
+    // React component subscribes to panel store — token usage + model badge
+    // auto-update. refresh() only needed on settings change to pick up model name.
+    this._footerController?.refresh();
   }
 
   // ── File attachments ──
@@ -1812,6 +1738,26 @@ export class ChatPanel {
     this._slashController = new SlashPanelController(this.panel, CommandRegistry.instance.getAll(), (cmd) =>
       this._executeCommand(cmd),
     );
+  }
+
+  private _initFooter(): void {
+    const slashTrigger = () => {
+      this.inputArea.focus();
+      const val = this.inputArea.value;
+      const pos = this.inputArea.selectionStart || 0;
+      if (!val || pos === val.length) {
+        this.inputArea.value = val + '/';
+        this.inputArea.setSelectionRange((val + '/').length, (val + '/').length);
+      }
+      this.inputArea.style.height = 'auto';
+      this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+      this.inputArea.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    this._footerController = new FooterController(this.panel, this.panelId, {
+      onOpenSettings: () => this.onOpenSettings?.(),
+      onTriggerSlash: slashTrigger,
+      onAttachFile: () => this.openFilePicker(),
+    });
   }
 
   /** Wire local handlers for commands that need `this` context (new/compact/trail/export). */

@@ -467,11 +467,6 @@ export function buildDOM(ctx: DomContext): void {
   inputWrap.append(inputArea, sendBtn, stopBtn);
   panel.appendChild(inputWrap);
 
-  // Input footer — model badge, slash commands, usage
-  const footerEl = document.createElement('div');
-  footerEl.className = 'chat-footer';
-  panel.appendChild(footerEl);
-
   // ── Pill core — optical sapphire reticle ──
   const pillStar = document.createElement('div');
   pillStar.className = 'chat-pill-star';
@@ -520,7 +515,6 @@ export function buildDOM(ctx: DomContext): void {
   ctx.setInputArea(inputArea);
   ctx.setSendBtn(sendBtn);
   ctx.setStopBtn(stopBtn);
-  ctx.setFooterEl(footerEl);
   ctx.setHeaderEl(headerEl);
   ctx.setSessionTabs(sessionTabs);
   ctx.setPillBadge(pillBadge);
