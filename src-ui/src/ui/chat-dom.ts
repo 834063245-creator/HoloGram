@@ -133,8 +133,9 @@ export interface DomContext {
   hideSlashPanel: () => void;
   navigateSlashPanel: (dir: number) => void;
   selectSlashItem: () => void;
-  updateAtSelection: () => void;
-  confirmAtSelection: () => void;
+  atNavigate?: (delta: number) => void;
+  atSelect?: () => void;
+  atOpen?: () => boolean;
   expandToInput: () => void;
   restoreFromHud: () => void;
   fadeToHud: () => void;
@@ -347,27 +348,24 @@ export function buildDOM(ctx: DomContext): void {
   inputArea.rows = 2;
   inputArea.addEventListener('keydown', (e) => {
     // ── @ popup keyboard nav ──
-    if (ctx.atPopup?.classList.contains('open')) {
+    if (ctx.atOpen?.()) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        const items = ctx.atPopup.querySelectorAll('.at-item');
-        ctx.setAtIdx(Math.min(ctx.atIdx + 1, items.length - 1));
-        ctx.updateAtSelection();
+        ctx.atNavigate?.(1);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        ctx.setAtIdx(Math.max(ctx.atIdx - 1, 0));
-        ctx.updateAtSelection();
+        ctx.atNavigate?.(-1);
         return;
       }
       if (e.key === 'Enter') {
         e.preventDefault();
-        ctx.confirmAtSelection();
+        ctx.atSelect?.();
         return;
       }
       if (e.key === 'Escape') {
-        ctx.atPopup.classList.remove('open');
+        ctx.atPopup?.classList.remove('open');
         return;
       }
     }

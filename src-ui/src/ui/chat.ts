@@ -58,6 +58,7 @@ import {
 import { ChatMessagesPanel } from './react/ChatMessages';
 import { type AskPrompt, type PermissionPrompt, PromptShelfController } from './react/PromptShelf';
 import { FooterController } from './react/ChatFooter';
+import { AtAutocompleteController } from './react/AtAutocomplete';
 import { SlashPanelController } from './react/SlashPanel';
 
 // ── Constants ──
@@ -139,6 +140,9 @@ export class ChatPanel {
   // ── Footer (React-based) ──
   private _footerController!: FooterController;
 
+  // ── @ autocomplete (React-based) ──
+  private _atAutocomplete!: AtAutocompleteController;
+
   // ── Messages (React-based) ──
   private _chatMessages: ChatMessagesPanel | null = null;
 
@@ -203,6 +207,7 @@ export class ChatPanel {
     this.buildDOM();
     this._initSlashPanel();
     this._initFooter();
+    this._initAtAutocomplete();
 
     // ⚡ React-based message list — own container, shared messages array
     const reactRoot = document.createElement('div');
@@ -834,8 +839,9 @@ export class ChatPanel {
       hideSlashPanel: () => this._hideSlashPanel(),
       navigateSlashPanel: (dir) => this._navigateSlashPanel(dir),
       selectSlashItem: () => this._selectSlashItem(),
-      updateAtSelection: () => this.updateAtSelection(),
-      confirmAtSelection: () => this.confirmAtSelection(),
+      atNavigate: (d) => this._atNavigate(d),
+      atSelect: () => this._atSelect(),
+      atOpen: () => this._atOpen,
       expandToInput: () => this.expandToInput(),
       restoreFromHud: () => this.restoreFromHud(),
       fadeToHud: () => this.fadeToHud(),
@@ -1593,139 +1599,23 @@ export class ChatPanel {
     Stream.finishTurn(this._streamCtx());
   }
 
-  // ── @ file reference autocomplete (item 5) ──
+  // ── @ file reference autocomplete (React-based) ──
 
-  private async handleAtInput(): Promise<void> {
-    const val = this.inputArea.value;
-    const cursorPos = this.inputArea.selectionStart || 0;
-    // Find last @ that starts a token (preceded by space or line start, only ASCII @)
-    const textBefore = val.slice(0, cursorPos);
-    const atIdx = (() => {
-      for (let i = textBefore.length - 1; i >= 0; i--) {
-        if (textBefore[i] === '@' && (i === 0 || textBefore[i - 1] === ' ' || textBefore[i - 1] === '\n')) {
-          // Ensure it's ASCII @ (not Chinese full-width)
-          return i;
-        }
-      }
-      return -1;
-    })();
-
-    if (atIdx < 0) {
-      if (this.atPopup) this.atPopup.classList.remove('open');
-      return;
-    }
-
-    const query = textBefore.slice(atIdx + 1).toLowerCase();
-    await this.buildAtPopup(query);
-    this.atIdx = 0;
-    this.updateAtSelection();
-  }
-
-  private async buildAtPopup(query: string): Promise<void> {
-    if (!this.atPopup) {
-      this.atPopup = document.createElement('div');
-      this.atPopup.className = 'chat-at-popup';
-      this.panel.querySelector('.chat-input-area')?.appendChild(this.atPopup);
-    }
-
-    // Cache glob results for 30s
-    const CACHE_TTL = 30000;
-    if (!this.atFileCache || Date.now() - this.atFileCache.ts > CACHE_TTL) {
-      try {
-        const data = await rpc<string>('glob', {
-          pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',
-          path: getChatStore(this.panelId).panel.getState().projectPath || '.',
-        });
-        this.atFileCache = { data, ts: Date.now() };
-      } catch {
-        // glob failed — use empty list
-        this.atFileCache = { data: '[]', ts: Date.now() };
-      }
-    }
-
-    // Parse cached results
-    let files: string[] = [];
-    try {
-      const parsed = JSON.parse(this.atFileCache.data);
-      files = (parsed.results || []).map((r: any) => r.path).slice(0, 100);
-    } catch {}
-
-    // Also get node names from starGraph
-    const nodeNames = this.starGraph?.getNodeNames?.() || [];
-
-    // Build combined results
-    const allItems: Array<{ kind: string; name: string }> = [];
-    for (const f of files) {
-      const base = f.replace(/\\/g, '/').split('/').pop() || f;
-      allItems.push({ kind: '文件', name: f });
-    }
-    for (const n of nodeNames) {
-      allItems.push({ kind: '节点', name: n });
-    }
-
-    // Filter by query (substring match)
-    const filtered = query ? allItems.filter((item) => item.name.toLowerCase().includes(query)) : allItems;
-
-    const top = filtered.slice(0, 10);
-    this.atPopup.innerHTML =
-      top.length > 0
-        ? top
-            .map(
-              (item, i) => `<div class="at-item${i === 0 ? ' active' : ''}">
-          <span class="at-kind">${escapeHtml(item.kind)}</span>
-          <span>${escapeHtml(item.name)}</span>
-        </div>`,
-            )
-            .join('')
-        : '<div class="at-item" style="opacity:0.4">无匹配结果</div>';
-
-    this.atPopup.classList.toggle('open', top.length > 0);
-  }
-
-  private updateAtSelection(): void {
-    if (!this.atPopup) return;
-    const items = this.atPopup.querySelectorAll('.at-item');
-    items.forEach((item, i) => {
-      item.classList.toggle('active', i === this.atIdx);
-    });
-  }
-
-  private confirmAtSelection(): void {
-    if (!this.atPopup || !this.atPopup.classList.contains('open')) return;
-    const items = this.atPopup.querySelectorAll('.at-item');
-    const selected = items[this.atIdx];
-    if (!selected) return;
-
-    const kindEl = selected.querySelector('.at-kind');
-    const kind = kindEl?.textContent || '';
-    const nameEl = selected.querySelector('span:last-child');
-    const name = nameEl?.textContent || '';
-
-    // Find the @ position before cursor
+  private handleAtInput(): void {
     const val = this.inputArea.value;
     const cursorPos = this.inputArea.selectionStart || 0;
     const textBefore = val.slice(0, cursorPos);
-    let atIdx = -1;
-    for (let i = textBefore.length - 1; i >= 0; i--) {
-      if (textBefore[i] === '@' && (i === 0 || textBefore[i - 1] === ' ' || textBefore[i - 1] === '\n')) {
-        atIdx = i;
-        break;
-      }
-    }
-    if (atIdx < 0) return;
+    this._atAutocomplete.update(textBefore, cursorPos);
+  }
 
-    const token =
-      kind === '节点'
-        ? `\`${name}\``
-        : `[@${
-            name
-              .split('/')
-              .pop()
-              ?.replace(/\.\w+$/, '') || name
-          }](${name})`;
-    this.inputArea.value = val.slice(0, atIdx) + token + val.slice(cursorPos);
-    this.atPopup.classList.remove('open');
-    this.inputArea.focus();
+  private _atNavigate(delta: number): void {
+    this._atAutocomplete.navigate(delta);
+  }
+  private _atSelect(): void {
+    this._atAutocomplete.select();
+  }
+  private get _atOpen(): boolean {
+    return this._atAutocomplete?.open ?? false;
   }
 
   // ── Slash inline panel (item 14, registry-driven) ──
@@ -1757,6 +1647,16 @@ export class ChatPanel {
       onOpenSettings: () => this.onOpenSettings?.(),
       onTriggerSlash: slashTrigger,
       onAttachFile: () => this.openFilePicker(),
+    });
+  }
+
+  private _initAtAutocomplete(): void {
+    this._atAutocomplete = new AtAutocompleteController(this.panel, this.panelId);
+    this._atAutocomplete.setOnSelect((atIdx, token) => {
+      const val = this.inputArea.value;
+      const cursorPos = this.inputArea.selectionStart || 0;
+      this.inputArea.value = val.slice(0, atIdx) + token + val.slice(cursorPos);
+      this.inputArea.focus();
     });
   }
 
