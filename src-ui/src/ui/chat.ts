@@ -1467,24 +1467,19 @@ export class ChatPanel {
         this.addNotice('已强制中止（超时）', 'warn');
       }
     }, 3000);
-    // 如果 Agent 正常响应了，取消安全超时
-    const poll = setInterval(() => {
-      if (!this._exec.isBusy) {
+    // Zustand 订阅代替 setInterval 轮询 — 状态变为 idle 时自动取消超时
+    const exec = this._activeExec();
+    const unsub = exec.onChange(() => {
+      if (!exec.isBusy) {
         clearTimeout(safety);
-        clearInterval(poll);
+        unsub();
       }
-    }, 200);
-    this._updateStopButton();
+    });
   }
 
-  /** Is ANY agent (main or sub) currently working? Delegates to ExecutionState. */
-  private _isBusy(): boolean {
-    return this._activeExec().isBusy;
-  }
-
-  /** Sync stop button visibility to _isBusy() truth — call whenever state may have changed. */
+  /** Sync stop button visibility — call whenever state may have changed. */
   private _updateStopButton(): void {
-    const busy = this._isBusy();
+    const busy = this._activeExec().isBusy;
     this.stopBtn.classList.toggle('hidden', !busy);
     if (!busy) {
       this.sendBtn.classList.remove('hidden');

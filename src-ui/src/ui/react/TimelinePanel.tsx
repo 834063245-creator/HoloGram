@@ -100,11 +100,11 @@ function TimelineApp({
 
   toggleRef.current = () => {
     setOpen((prev) => !prev);
-    shell.notifyPanelChanged();
   };
 
   useEffect(() => {
     panelRef.current?.classList.toggle('tl-open', open);
+    shell.notifyPanelChanged();
   }, [open]);
 
   const refresh = useCallback(async () => {
@@ -316,7 +316,6 @@ export class TimelinePanel {
   private _root: Root;
   private _mount: HTMLElement;
   private _path: string | null = null;
-  private _open = false;
   private _toggleRef: { current: (() => void) | null } = { current: null };
 
   constructor(container: HTMLElement) {
@@ -336,16 +335,14 @@ export class TimelinePanel {
   }
 
   toggle(): void {
-    this._open = !this._open;
     this._toggleRef.current?.();
   }
   isOpen(): boolean {
-    return this._open;
+    return this._mount.querySelector('#timeline-panel')?.classList.contains('tl-open') ?? false;
   }
 
   close(): void {
-    if (this._open) {
-      this._open = false;
+    if (this.isOpen()) {
       this._toggleRef.current?.();
     }
   }
