@@ -10,6 +10,7 @@ import { rpc } from '../../bridge';
 import { cacheCheckResult } from '../../agent/state-inject';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
+import { basename, escapeHtml } from './helpers';
 import { iconHtml } from '../icons';
 
 interface Violation {
@@ -76,11 +77,6 @@ interface GateData {
   medium_risk: number;
   low_risk: number;
   error?: string;
-}
-
-function basename(path: string): string {
-  const parts = path.replace(/\\/g, '/').split('/');
-  return parts[parts.length - 1] || path;
 }
 
 function fmtTime(iso: string): string {
@@ -537,15 +533,6 @@ export class CheckPanelController {
     const { createRoot } = await import('react-dom/client');
     if (!this._root) this._root = createRoot(this._panel);
 
-    // Load gate check asynchronously if we have a path and it's the current view
-    let gateData: GateData | null = null;
-    if (projectPath && !histOverride) {
-      try {
-        const json = await rpc<string>('hologram_gate_check', { path: projectPath, moduleFile: null });
-        gateData = JSON.parse(json) as GateData;
-      } catch { /* optional */ }
-    }
-
     const result = this._lastResult;
 
     this._root.render(
@@ -556,16 +543,5 @@ export class CheckPanelController {
         getResult: () => result,
       }),
     );
-
-    // Store gate data for subsequent renders
-    if (gateData) {
-      this._injectGate(gateData);
-    }
-  }
-
-  /** Inject gate data into the rendered React tree after async load. */
-  private _injectGate(data: GateData): void {
-    // For simplicity, re-render with gate data preloaded.
-    // In practice, gate data is loaded during initial render.
   }
 }

@@ -9,6 +9,7 @@ import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
 import type { StarGraph } from '../graph';
+import { basename } from './helpers';
 import { iconHtml } from '../icons';
 
 interface HotspotItem {
@@ -37,11 +38,6 @@ const SEVERITY_CLASS: Record<number, string> = {
   5: 'hs-sev-critical',
 };
 
-function basename(path: string): string {
-  const parts = path.replace(/\\/g, '/').split('/');
-  return parts[parts.length - 1] || path;
-}
-
 function fmtTime(iso: string): string {
   if (!iso) return '';
   try {
@@ -59,7 +55,8 @@ const HotspotsPanelApp: React.FC<{
   path: string | null;
   starGraph: StarGraph | null;
   onClose: () => void;
-}> = ({ path, starGraph, onClose }) => {
+  onHotspotsLoaded?: (hs: HotspotItem[]) => void;
+}> = ({ path, starGraph, onClose, onHotspotsLoaded }) => {
   const [hotspots, setHotspots] = useState<HotspotItem[]>([]);
   const [loading, setLoading] = useState(false);
   const loadedPath = useRef<string | null>(null);
@@ -73,6 +70,7 @@ const HotspotsPanelApp: React.FC<{
       .then((json) => {
         const data = JSON.parse(json) as HotspotsData;
         setHotspots(data.hotspots || []);
+        onHotspotsLoaded?.(data.hotspots || []);
       })
       .catch((err) => {
         console.error('Hotspots refresh failed:', err);
@@ -184,6 +182,7 @@ export class HotspotsPanelController {
   private _container: HTMLDivElement;
   private _panel: HTMLDivElement;
   private _root: import('react-dom/client').Root | null = null;
+  private _hotspots: HotspotItem[] = [];
 
   constructor(container: HTMLElement) {
     this._container = document.createElement('div');
@@ -239,9 +238,7 @@ export class HotspotsPanelController {
   }
 
   getHotspots(): HotspotItem[] {
-    // State lives in the React tree; controller doesn't own it.
-    // Callers should use this for read-only inspection only.
-    return [];
+    return this._hotspots;
   }
 
   destroy(): void {
@@ -260,6 +257,7 @@ export class HotspotsPanelController {
         path: this._path,
         starGraph: this._starGraph,
         onClose: () => this.close(),
+        onHotspotsLoaded: (hs) => { this._hotspots = hs; },
       }),
     );
   }

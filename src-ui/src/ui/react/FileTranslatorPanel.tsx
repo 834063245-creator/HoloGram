@@ -11,6 +11,7 @@ import { createAnthropicProvider } from '../../provider/anthropic';
 import { createOpenAIProvider } from '../../provider/openai';
 import { ChunkType } from '../../provider/types';
 import { getActiveProvider, loadSettings, type ProviderSettings } from '../../settings';
+import { escapeAttr } from './helpers';
 import { iconHtml } from '../icons';
 import '../file-translator.css';
 
@@ -61,10 +62,6 @@ function relativeTime(iso: string): string {
 
 function calcMaxTokens(lineCount: number, isSelection: boolean): number {
   return isSelection ? 8192 : 32768;
-}
-
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function alignLines(modelLines: TranslationLine[], codeLines: string[]): TranslationLine[] {
@@ -225,16 +222,16 @@ const FileTranslatorApp: React.FC<{
 
   const renderColumnsHtml = useCallback((l: TranslationLine[]) => {
     const codeHtml = l.map((ln, i) =>
-      `<div class="ft-code-line" data-line="${i}"><span class="ft-ln">${i + 1}</span><span class="ft-ct">${escHtml(ln.code)}</span></div>`
+      `<div class="ft-code-line" data-line="${i}"><span class="ft-ln">${i + 1}</span><span class="ft-ct">${escapeAttr(ln.code)}</span></div>`
     ).join('');
     const humanHtml = l.map((ln, i) =>
-      `<div class="ft-human-line" data-line="${i}"><span class="ft-ct">${escHtml(ln.human) || '<span style="opacity:0.3">—</span>'}</span></div>`
+      `<div class="ft-human-line" data-line="${i}"><span class="ft-ct">${escapeAttr(ln.human) || '<span style="opacity:0.3">—</span>'}</span></div>`
     ).join('');
     const auditHtml = l.map((ln, i) => {
       if (!ln.audit_type) return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-dash">—</span></div>`;
       const tagMap: Record<string, string> = { bug: '致命', risk: '风险', smell: '坏味道', ok: '正确' };
       const tagLabel = tagMap[ln.audit_type] || ln.audit_type;
-      return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-tag ft-${ln.audit_type}">${tagLabel}</span><span class="ft-audit-text">${escHtml(ln.audit)}</span></div>`;
+      return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-tag ft-${ln.audit_type}">${tagLabel}</span><span class="ft-audit-text">${escapeAttr(ln.audit)}</span></div>`;
     }).join('');
     return { codeHtml, humanHtml, auditHtml };
   }, []);

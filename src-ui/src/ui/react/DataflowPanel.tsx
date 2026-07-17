@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { shell } from '../app-shell';
 import { bus } from '../events';
+import { escapeHtml } from './helpers';
 import { iconHtml } from '../icons';
 
 interface TraceSummary {
@@ -19,10 +20,6 @@ interface TraceSummary {
 }
 
 // ── Helpers ──
-
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function fmtTime(iso: string): string {
   if (!iso) return '';
@@ -36,7 +33,7 @@ function fmtTime(iso: string): string {
 }
 
 function inlineMd(text: string): string {
-  return esc(text)
+  return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
     .replace(/\*(.+?)\*/g, '<i>$1</i>')
     .replace(/`(.+?)`/g, '<code class="df-md-inline-code">$1</code>')
@@ -59,7 +56,7 @@ function renderMd(text: string): string {
         const codeLines = lines.slice(1);
         const lastIdx = codeLines.findIndex((l) => l.trim() === '```');
         const code = lastIdx >= 0 ? codeLines.slice(0, lastIdx) : codeLines;
-        return `<pre class="df-md-code">${esc(code.join('\n'))}</pre>`;
+        return `<pre class="df-md-code">${escapeHtml(code.join('\n'))}</pre>`;
       }
       if (first.startsWith('## ')) return `<h3 class="df-md-h3">${inlineMd(first.slice(3))}</h3>`;
       if (first.startsWith('### ')) return `<h4 class="df-md-h4">${inlineMd(first.slice(4))}</h4>`;
@@ -113,8 +110,8 @@ function renderEngineExplore(explore: any): string {
   if (flow?.path) {
     const steps = flow.path || [];
     const rows = steps.map((s: any) => {
-      if (s.edge) return `<div class="df-flow-edge"><span class="df-flow-arrow">↓</span><span class="df-flow-ekind">${esc(s.edge)}</span></div>`;
-      return `<div class="df-flow-node"><span class="df-flow-kind">${esc(s.kind || '')}</span><span class="df-flow-name">${esc(s.name || '')}</span><span class="df-flow-loc">${esc(s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—')}</span></div>`;
+      if (s.edge) return `<div class="df-flow-edge"><span class="df-flow-arrow">↓</span><span class="df-flow-ekind">${escapeHtml(s.edge)}</span></div>`;
+      return `<div class="df-flow-node"><span class="df-flow-kind">${escapeHtml(s.kind || '')}</span><span class="df-flow-name">${escapeHtml(s.name || '')}</span><span class="df-flow-loc">${escapeHtml(s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—')}</span></div>`;
     }).join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">数据流路径 (${Math.floor(steps.length / 2) + 1} 节点, ${Math.floor(steps.length / 2)} 跳)</div><div class="df-flow">${rows}</div></div>`);
   }
@@ -123,15 +120,15 @@ function renderEngineExplore(explore: any): string {
   if (relKeys.length) {
     const rows = relKeys.map((kind) => {
       const edges = relationships[kind] || [];
-      const items = edges.slice(0, 30).map((e: any) => `<div class="df-rel-item"><span class="df-rel-src">${esc(e.source)}</span> → <span class="df-rel-tgt">${esc(e.target)}</span></div>`).join('');
+      const items = edges.slice(0, 30).map((e: any) => `<div class="df-rel-item"><span class="df-rel-src">${escapeHtml(e.source)}</span> → <span class="df-rel-tgt">${escapeHtml(e.target)}</span></div>`).join('');
       const more = edges.length > 30 ? `<div class="df-table-more">…及其他 ${edges.length - 30} 条</div>` : '';
-      return `<div class="df-rel-group"><div class="df-rel-kind">${esc(kind)} (${edges.length})</div>${items}${more}</div>`;
+      return `<div class="df-rel-group"><div class="df-rel-kind">${escapeHtml(kind)} (${edges.length})</div>${items}${more}</div>`;
     }).join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">关系</div>${rows}</div>`);
   }
 
   if (sourceCode.length) {
-    const snippets = sourceCode.slice(0, 8).map((s: any) => `<div class="df-src-item"><div class="df-src-loc">${esc(s.file || '')}${s.line ? ':' + s.line : ''}</div><pre class="df-src-code">${esc(s.code || '')}</pre></div>`).join('');
+    const snippets = sourceCode.slice(0, 8).map((s: any) => `<div class="df-src-item"><div class="df-src-loc">${escapeHtml(s.file || '')}${s.line ? ':' + s.line : ''}</div><pre class="df-src-code">${escapeHtml(s.code || '')}</pre></div>`).join('');
     const more = sourceCode.length > 8 ? `<div class="df-table-more">…及其他 ${sourceCode.length - 8} 个片段</div>` : '';
     parts.push(`<div class="df-section"><div class="df-section-hdr">源码 (${sourceCode.length})</div>${snippets}${more}</div>`);
   }
@@ -139,8 +136,8 @@ function renderEngineExplore(explore: any): string {
   const deps = blastRadius.dependents || [];
   const tests = blastRadius.tests || [];
   if (deps.length || tests.length) {
-    const depItems = deps.slice(0, 20).map((d: any) => `<div class="df-br-item">${esc(d.name)} <span class="df-br-loc">${esc(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`).join('');
-    const testItems = tests.slice(0, 10).map((t: any) => `<div class="df-br-item df-br-test">🧪 ${esc(t.name)} <span class="df-br-loc">${esc(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`).join('');
+    const depItems = deps.slice(0, 20).map((d: any) => `<div class="df-br-item">${escapeHtml(d.name)} <span class="df-br-loc">${escapeHtml(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`).join('');
+    const testItems = tests.slice(0, 10).map((t: any) => `<div class="df-br-item df-br-test">🧪 ${escapeHtml(t.name)} <span class="df-br-loc">${escapeHtml(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`).join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">影响范围</div>
       ${deps.length ? `<div class="df-br-sub">依赖者 (${deps.length})</div>${depItems}${deps.length > 20 ? `<div class="df-table-more">…及其他 ${deps.length - 20} 个</div>` : ''}` : ''}
       ${tests.length ? `<div class="df-br-sub">相关测试 (${tests.length})</div>${testItems}${tests.length > 10 ? `<div class="df-table-more">…及其他 ${tests.length - 10} 个</div>` : ''}` : ''}</div>`);
@@ -151,7 +148,7 @@ function renderEngineExplore(explore: any): string {
     const rows = alertKeys.map((k) => {
       const v = alerts[k];
       const display = Array.isArray(v) ? `${v.length} 项` : String(v);
-      return `<div class="df-alert-row"><span class="df-alert-key">${esc(k)}</span>: ${esc(display)}</div>`;
+      return `<div class="df-alert-row"><span class="df-alert-key">${escapeHtml(k)}</span>: ${escapeHtml(display)}</div>`;
     }).join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">架构提醒</div>${rows}</div>`);
   }
@@ -165,31 +162,31 @@ function renderEngineDataflow(dfResult: any): string {
   let html = `<div class="df-section"><div class="df-section-hdr">数据流引擎 (tree-sitter)</div>`;
   for (const r of results) {
     if (r.error) {
-      html += `<div class="df-df-file"><span class="df-df-fname">${esc(r.file)}</span> <span class="df-meta-hint">${esc(r.error)}</span></div>`;
+      html += `<div class="df-df-file"><span class="df-df-fname">${escapeHtml(r.file)}</span> <span class="df-meta-hint">${escapeHtml(r.error)}</span></div>`;
       continue;
     }
     const scopes: any[] = r.scopes || [];
     const shared: any[] = r.shared || [];
     if (scopes.length === 0 && shared.length === 0) continue;
-    html += `<div class="df-df-file"><div class="df-df-fname">${esc(r.file)}</div>`;
+    html += `<div class="df-df-file"><div class="df-df-fname">${escapeHtml(r.file)}</div>`;
     if (scopes.length > 0) {
       html += `<table class="df-df-table"><thead><tr><th>函数</th><th>读取</th><th>写入</th><th>触发</th><th>异步/回调</th><th>调用序列</th></tr></thead><tbody>`;
       for (const s of scopes) {
-        html += `<tr><td class="df-df-scope">${esc(s.name)}</td>
-          <td>${(s.reads || []).map(esc).join(', ') || '—'}</td>
-          <td>${(s.writes || []).map(esc).join(', ') || '—'}</td>
-          <td>${(s.triggers || []).map(esc).join(', ') || '—'}</td>
-          <td>${(s.awaits_callbacks || []).map(esc).join(', ') || '—'}</td>
-          <td>${(s.sequence_calls || []).map(esc).join(', ') || '—'}</td></tr>`;
+        html += `<tr><td class="df-df-scope">${escapeHtml(s.name)}</td>
+          <td>${(s.reads || []).map(escapeHtml).join(', ') || '—'}</td>
+          <td>${(s.writes || []).map(escapeHtml).join(', ') || '—'}</td>
+          <td>${(s.triggers || []).map(escapeHtml).join(', ') || '—'}</td>
+          <td>${(s.awaits_callbacks || []).map(escapeHtml).join(', ') || '—'}</td>
+          <td>${(s.sequence_calls || []).map(escapeHtml).join(', ') || '—'}</td></tr>`;
       }
       html += `</tbody></table>`;
     }
     if (shared.length > 0) {
       html += `<div class="df-df-shared-hdr">共享变量</div>`;
       for (const sh of shared) {
-        html += `<div class="df-df-shared"><span class="df-df-var">${esc(sh.var)}</span>
-          <span class="df-df-rw">读: ${(sh.readers || []).map(esc).join(', ') || '—'}</span>
-          <span class="df-df-rw">写: ${(sh.writers || []).map(esc).join(', ') || '—'}</span></div>`;
+        html += `<div class="df-df-shared"><span class="df-df-var">${escapeHtml(sh.var)}</span>
+          <span class="df-df-rw">读: ${(sh.readers || []).map(escapeHtml).join(', ') || '—'}</span>
+          <span class="df-df-rw">写: ${(sh.writers || []).map(escapeHtml).join(', ') || '—'}</span></div>`;
       }
     }
     html += `</div>`;
@@ -277,9 +274,9 @@ const DataflowPanelApp: React.FC<{
       const parts: string[] = [];
       const timeStr = fmtTime(trace.createdAt);
       parts.push(`<div class="df-trace-meta-bar">
-        <span class="df-trace-meta-q">${esc(trace.query || '')}</span>
+        <span class="df-trace-meta-q">${escapeHtml(trace.query || '')}</span>
         <span class="df-trace-meta-t">${timeStr}</span>
-        <span class="df-trace-meta-id">${esc(trace.traceId || '')}</span>
+        <span class="df-trace-meta-id">${escapeHtml(trace.traceId || '')}</span>
       </div>`);
       if (content) parts.push(`<div class="df-trace-body">${renderMd(content)}</div>`);
       if (exploreResult || dataflowResult) {
@@ -465,9 +462,10 @@ const DataflowPanelApp: React.FC<{
                 >
                   <div className="df-hist-query">
                     {t.query.length > 50 ? t.query.slice(0, 50) + '\u2026' : t.query}
-                    {t.hasContent
-                      ? ' <span class="df-trace-agent-badge">Agent</span>'
-                      : ' <span class="df-trace-engine-badge">引擎</span>'}
+                    {' '}
+                    <span className={t.hasContent ? 'df-trace-agent-badge' : 'df-trace-engine-badge'}>
+                      {t.hasContent ? 'Agent' : '引擎'}
+                    </span>
                   </div>
                   <div className="df-hist-sub">{fmtTime(t.createdAt)}</div>
                   <button

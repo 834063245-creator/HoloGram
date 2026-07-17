@@ -504,12 +504,7 @@ export class ConstraintsPanelController {
 
   private async _render(): Promise<void> {
     const { createRoot } = await import('react-dom/client');
-    // Always mount fresh so data re-loads
-    if (this._root) {
-      this._root.unmount();
-      this._root = null;
-    }
-    this._root = createRoot(this._panel);
+    if (!this._root) this._root = createRoot(this._panel);
     this._root.render(
       React.createElement(ConstraintsPanelApp, {
         key: Date.now(),
