@@ -22,13 +22,17 @@ use serde_json::{json, Value};
 // LSP server process handle
 // ═══════════════════════════════════════════════════════════════
 
+/// Default LSP request timeout.
+const LSP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 struct LspProcess {
     process: Child,
     stdin: ChildStdin,
-    reader: BufReader<std::process::ChildStdout>,
+    reader: Option<BufReader<std::process::ChildStdout>>,
     #[allow(dead_code)]
     stderr: Option<std::process::ChildStderr>,
     next_id: u64,
+    timeout: std::time::Duration,
 }
 
 impl LspProcess {
@@ -47,18 +51,47 @@ impl LspProcess {
         self.stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
         self.stdin.flush().map_err(|e| format!("flush: {}", e))?;
 
-        // Read responses, skipping server-to-client notifications until
-        // we get the matching id. LSP servers send diagnostics/log messages
-        // asynchronously between request/response cycles.
-        loop {
-            let (resp_id, response) = self.read_one_message()?;
-            if resp_id == Some(id) {
-                if let Some(err) = response.get("error") {
-                    return Err(format!("LSP error: {}", err));
+        // Read responses in a spawned thread so we can enforce a timeout.
+        // LSP servers send diagnostics/log notifications asynchronously
+        // between request/response cycles — skip those, wait for our id.
+        let mut reader = self.reader.take()
+            .ok_or("LSP reader lost (previous call timed out) — server will be recreated")?;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = loop {
+                match Self::read_one_message(&mut reader) {
+                    Ok((resp_id, response)) => {
+                        if resp_id == Some(id) {
+                            if let Some(err) = response.get("error") {
+                                break Err(format!("LSP error: {}", err));
+                            }
+                            break Ok(response);
+                        }
+                        // notification or stale response → skip
+                    }
+                    Err(e) => break Err(format!("LSP read error: {}", e)),
                 }
-                return Ok(response);
+            };
+            let _ = tx.send((reader, result));
+        });
+
+        match rx.recv_timeout(self.timeout) {
+            Ok((reader_back, result)) => {
+                self.reader = Some(reader_back);
+                result
             }
-            // else: server notification (no id) or stale response → skip
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Thread still alive but we're done waiting.
+                // Reader is lost — next call fails → get_or_warm_server recreates.
+                Err(format!(
+                    "LSP timeout after {:?} waiting for {}(id {})",
+                    self.timeout, method, id,
+                ))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("LSP reader thread panicked".to_string())
+            }
         }
     }
 
@@ -74,11 +107,12 @@ impl LspProcess {
     }
 
     /// Read a single JSON-RPC message and return its (id, body).
-    fn read_one_message(&mut self) -> Result<(Option<u64>, Value), String> {
+    /// Static so it can be called from the timeout thread without borrowing self.
+    fn read_one_message(reader: &mut BufReader<std::process::ChildStdout>) -> Result<(Option<u64>, Value), String> {
         let mut content_length: Option<usize> = None;
         loop {
             let mut line = String::new();
-            let n = self.reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
+            let n = reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
             if n == 0 {
                 // EOF — server exited without sending headers
                 break;
@@ -98,7 +132,7 @@ impl LspProcess {
         let len = content_length.ok_or("missing Content-Length")?;
         let mut body_buf = vec![0u8; len];
         use std::io::Read;
-        self.reader.get_mut().read_exact(&mut body_buf).map_err(|e| format!("read body: {}", e))?;
+        reader.get_mut().read_exact(&mut body_buf).map_err(|e| format!("read body: {}", e))?;
         let msg: Value = serde_json::from_slice(&body_buf).map_err(|e| format!("parse: {}", e))?;
         let id = msg.get("id").and_then(|v| v.as_u64());
         Ok((id, msg))
@@ -714,9 +748,10 @@ impl LspManager {
         let mut process = LspProcess {
             process: child,
             stdin,
-            reader: BufReader::new(stdout),
+            reader: Some(BufReader::new(stdout)),
             stderr,
             next_id: 0,
+            timeout: LSP_TIMEOUT,
         };
 
         process.initialize(root)?;
@@ -750,6 +785,23 @@ impl LspManager {
     }
 
     /// Resolve a call at (file, line, column) using an LSP server.
+    /// Lock the server, run f, and if f fails clear the pool entry so the
+    /// next call warms a fresh process.
+    fn with_process<T>(
+        server_arc: &Arc<Mutex<Option<LspProcess>>>,
+        f: impl FnOnce(&mut LspProcess) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
+        let process = guard.as_mut().ok_or("server not running")?;
+        match f(process) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                *guard = None; // kill broken process, force recreate next call
+                Err(e)
+            }
+        }
+    }
+
     /// Returns the definition location, or Err if no server available.
     pub fn resolve_definition(
         file_path: &str,
@@ -762,12 +814,7 @@ impl LspManager {
         if !*mgr.initialized.read().unwrap() {
             return Err("LSP pool not initialized".into());
         }
-
         let server_arc = Self::get_or_warm_server(ext)?;
-
-        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
-        let process = guard.as_mut().ok_or("server not running")?;
-
         let abs_path = if PathBuf::from(file_path).is_absolute() {
             file_path.to_string()
         } else {
@@ -776,16 +823,12 @@ impl LspManager {
             format!("{}/{}", root, file_path)
         };
         let uri = format!("file:///{}", abs_path.replace('\\', "/"));
-
-        // Find language ID
-        let lang_id = SERVER_CONFIGS
-            .iter()
-            .find(|c| c.extensions.contains(&ext))
-            .map(|c| c.language_id)
-            .unwrap_or(ext);
-
-        let _ = process.open_file(&uri, source, lang_id);
-        process.definition(&uri, line, column)
+        let lang_id = SERVER_CONFIGS.iter().find(|c| c.extensions.contains(&ext)).map(|c| c.language_id).unwrap_or(ext);
+        let source = source.to_string();
+        Self::with_process(&server_arc, |process| {
+            let _ = process.open_file(&uri, &source, lang_id);
+            process.definition(&uri, line, column)
+        })
     }
 
     /// Resolve the type at (file, line, column) via hover.
@@ -798,10 +841,11 @@ impl LspManager {
     ) -> Result<String, String> {
         let (uri, lang_id) = Self::prepare(file_path, ext)?;
         let server_arc = Self::get_or_warm_server(ext)?;
-        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
-        let process = guard.as_mut().ok_or("server not running")?;
-        let _ = process.open_file(&uri, source, &lang_id);
-        process.hover(&uri, line, column)
+        let source = source.to_string();
+        Self::with_process(&server_arc, |process| {
+            let _ = process.open_file(&uri, &source, &lang_id);
+            process.hover(&uri, line, column)
+        })
     }
 
     /// Find all implementations of the interface/trait at (file, line, column).
@@ -814,10 +858,11 @@ impl LspManager {
     ) -> Result<Vec<LspLocation>, String> {
         let (uri, lang_id) = Self::prepare(file_path, ext)?;
         let server_arc = Self::get_or_warm_server(ext)?;
-        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
-        let process = guard.as_mut().ok_or("server not running")?;
-        let _ = process.open_file(&uri, source, &lang_id);
-        process.implementation(&uri, line, column)
+        let source = source.to_string();
+        Self::with_process(&server_arc, |process| {
+            let _ = process.open_file(&uri, &source, &lang_id);
+            process.implementation(&uri, line, column)
+        })
     }
 
     /// Find all references to the symbol at (file, line, column).
@@ -830,10 +875,11 @@ impl LspManager {
     ) -> Result<Vec<LspLocation>, String> {
         let (uri, lang_id) = Self::prepare(file_path, ext)?;
         let server_arc = Self::get_or_warm_server(ext)?;
-        let mut guard = server_arc.lock().map_err(|e| format!("lock: {}", e))?;
-        let process = guard.as_mut().ok_or("server not running")?;
-        let _ = process.open_file(&uri, source, &lang_id);
-        process.references(&uri, line, column)
+        let source = source.to_string();
+        Self::with_process(&server_arc, |process| {
+            let _ = process.open_file(&uri, &source, &lang_id);
+            process.references(&uri, line, column)
+        })
     }
 
     /// Helper: resolve uri + lang_id from file path and ext.
@@ -979,4 +1025,55 @@ mod tests {
         assert!(covered.contains(&"php"));
         assert!(covered.contains(&"kt"));
     }
+
+    // ── helpers ──
+
+
+    /// Spawn cmd that hangs for 60s — used for timeout test.
+    fn spawn_hanging_process() -> LspProcess {
+        let mut child = Command::new("cmd")
+            .args(&["/c", "ping -n 60 127.0.0.1 > nul"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cmd timeout");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        LspProcess {
+            process: child,
+            stdin,
+            reader: Some(BufReader::new(stdout)),
+            stderr: None,
+            next_id: 0,
+            timeout: std::time::Duration::from_secs(2),
+        }
+    }
+
+    // ── timeout ──
+
+    #[test]
+    fn test_send_request_timeout() {
+        let mut process = spawn_hanging_process();
+        let start = std::time::Instant::now();
+        let result = process.send_request(
+            "textDocument/references",
+            json!({"textDocument":{"uri":"file:///x.rs"},"position":{"line":0,"character":0}}),
+        );
+        let elapsed = start.elapsed();
+        // Should not hang — must return within 5s (timeout is set to 2s)
+        assert!(elapsed < std::time::Duration::from_secs(5),
+            "send_request should not block forever, took {:?}, result: {:?}", elapsed, result);
+        assert!(result.is_err(), "expected error from hanging process, got {:?}", result);
+    }
+
+    // ── E2E: real rust-analyzer ──
+
+    // NOTE: a rust-analyzer E2E test was attempted but is unreliable in CI:
+    // cargo check timing varies wildly per machine. The timeout mechanism is
+    // proven by test_send_request_timeout; real LSP calls are exercised by
+    // every engine run (indexing + agent queries via MCP tools).
+
 }
