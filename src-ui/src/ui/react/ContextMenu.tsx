@@ -1,0 +1,171 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+// ContextMenu — React portal-based right-click context menu.
+// Renders at mouse position, auto-dismisses on outside click / Escape.
+
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+
+export interface ContextMenuItem {
+  label: string;
+  action: () => void;
+  disabled?: boolean;
+  separator?: boolean; // render a divider before this item
+}
+
+interface Props {
+  items: ContextMenuItem[];
+  x: number;
+  y: number;
+  onDismiss: () => void;
+}
+
+const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss }) => {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x: rawX, y: rawY });
+
+  // Adjust position to stay within viewport
+  useEffect(() => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let x = rawX;
+    let y = rawY;
+    if (x + 180 > vw) x = vw - 185;
+    if (y + items.length * 28 + 20 > vh) y = vh - items.length * 28 - 25;
+    setPos({ x: Math.max(2, x), y: Math.max(2, y) });
+  }, [rawX, rawY, items.length]);
+
+  // Dismiss on outside click / Escape
+  useEffect(() => {
+    const onDown = (ev: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(ev.target as Node)) {
+        onDismiss();
+      }
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') onDismiss();
+    };
+    // Defer listener registration so the triggering right-click doesn't immediately dismiss
+    const id = setTimeout(() => {
+      document.addEventListener('pointerdown', onDown, true);
+      document.addEventListener('keydown', onKey);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [onDismiss]);
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="ctx-menu"
+      style={{
+        position: 'fixed',
+        zIndex: 200,
+        left: pos.x,
+        top: pos.y,
+        background: 'var(--panel-bg, rgba(4,12,28,0.96))',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        border: '1px solid rgba(60,100,180,0.3)',
+        borderRadius: 6,
+        padding: 4,
+        minWidth: 160,
+        boxShadow: '0 0 0 1px rgba(60,100,180,0.05), 0 12px 36px rgba(0,0,0,0.5)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 'calc(11px * var(--font-scale))',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      {items.map((item, i) => (
+        <React.Fragment key={i}>
+          {item.separator && (
+            <div style={{ height: 1, background: 'rgba(60,100,180,0.15)', margin: '3px 6px' }} />
+          )}
+          <div
+            className="ctx-menu-item"
+            style={{
+              padding: '5px 10px',
+              borderRadius: 3,
+              cursor: item.disabled ? 'default' : 'pointer',
+              color: item.disabled
+                ? 'var(--text-muted, rgba(120,145,170,0.48))'
+                : 'var(--starlight-dim, #c3daf8)',
+              whiteSpace: 'nowrap',
+              userSelect: 'none',
+            }}
+            onMouseEnter={(e) => {
+              if (!item.disabled) {
+                (e.currentTarget as HTMLDivElement).style.background = 'rgba(22,36,54,0.7)';
+                (e.currentTarget as HTMLDivElement).style.color = 'var(--starlight, #e2edff)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = '';
+              (e.currentTarget as HTMLDivElement).style.color = item.disabled
+                ? 'var(--text-muted, rgba(120,145,170,0.35))'
+                : 'var(--starlight-dim, #c3daf8)';
+            }}
+            onClick={
+              item.disabled
+                ? undefined
+                : (ev) => {
+                    ev.stopPropagation();
+                    onDismiss();
+                    item.action();
+                  }
+            }
+          >
+            {item.label}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>,
+    document.body,
+  );
+};
+
+// ── Module-level API (kept as thin wrapper) ──
+
+let _activeRoot: import('react-dom/client').Root | null = null;
+let _activeContainer: HTMLDivElement | null = null;
+
+function dismiss(): void {
+  if (_activeRoot) {
+    _activeRoot.unmount();
+    _activeRoot = null;
+  }
+  if (_activeContainer) {
+    _activeContainer.remove();
+    _activeContainer = null;
+  }
+}
+
+export function showContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
+  dismiss();
+
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  _activeContainer = container;
+
+  // Dynamic import to avoid circular deps: this module is imported synchronously,
+  // but createRoot needs react-dom/client which we lazy-load here.
+  import('react-dom/client').then(({ createRoot }) => {
+    // Guard: another menu may have been opened while we were importing
+    if (_activeContainer !== container) return;
+    const root = createRoot(container);
+    _activeRoot = root;
+    root.render(
+      React.createElement(ContextMenuApp, {
+        items,
+        x: e.clientX,
+        y: e.clientY,
+        onDismiss: dismiss,
+      }),
+    );
+  });
+}

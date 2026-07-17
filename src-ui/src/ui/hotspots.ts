@@ -1,243 +1,46 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Hotspots Panel — 复发热点检测（P6）
-// 同一文件多次触发 L4 警报 → 星图着色升级
+// Hotspots Panel — thin wrapper, rendering delegated to React HotspotsPanel.tsx.
+// Public API unchanged for main.ts compatibility.
 
-import DOMPurify from 'dompurify';
-import { rpc } from '../bridge';
-import { askAgent } from './agent-visualizer';
-import { shell } from './app-shell';
 import type { StarGraph } from './graph';
-import { iconHtml } from './icons';
-
-interface HotspotItem {
-  file: string;
-  count: number;
-  last_details: {
-    description: string;
-    level: number;
-    line: number;
-    timestamp: string;
-  };
-  recent_timestamps: string[];
-}
-
-interface HotspotsData {
-  hotspots: HotspotItem[];
-  total_check_events: number;
-  days: number;
-  min_count: number;
-}
-
-const PANEL_ID = 'hotspots-panel';
-
-const SEVERITY_CLASS: Record<number, string> = {
-  2: 'hs-sev-low',
-  3: 'hs-sev-mid',
-  4: 'hs-sev-high',
-  5: 'hs-sev-critical',
-};
+import { HotspotsPanelController } from './react/HotspotsPanel';
 
 export class HotspotsPanel {
-  private panel!: HTMLElement;
-  private content!: HTMLElement;
-  private openState = false;
-  private hotspots: HotspotItem[] = [];
-  private loading = false;
-  private path: string | null = null;
-  private starGraph: StarGraph | null = null;
+  private _ctrl: HotspotsPanelController;
 
   constructor(container: HTMLElement) {
-    this.buildDOM(container);
+    this._ctrl = new HotspotsPanelController(container);
   }
+
+  // ── Public API (unchanged) ──
 
   setGraph(sg: StarGraph): void {
-    this.starGraph = sg;
+    this._ctrl.setGraph(sg);
   }
-
-  private buildDOM(container: HTMLElement): void {
-    this.panel = document.createElement('div');
-    this.panel.id = PANEL_ID;
-
-    // Corner brackets
-    const brackets = document.createElement('div');
-    brackets.className = 'corner-brackets';
-    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
-    this.panel.appendChild(brackets);
-
-    // Header
-    const header = document.createElement('div');
-    header.className = 'hs-header-row';
-    const title = document.createElement('span');
-    title.className = 'hs-title';
-    title.textContent = '复发热点';
-    header.appendChild(title);
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'tl-close';
-    closeBtn.innerHTML = '&#x2715;';
-    closeBtn.title = '收起';
-    closeBtn.addEventListener('click', () => this.close());
-    header.appendChild(closeBtn);
-    this.panel.appendChild(header);
-
-    // Content area
-    this.content = document.createElement('div');
-    this.content.className = 'hs-content';
-
-    this.panel.appendChild(this.content);
-    container.appendChild(this.panel);
-  }
-
-  // ── Public API ──
 
   setProjectPath(path: string | null): void {
-    this.path = path;
-    this.hotspots = [];
-    if (path) this.refresh();
-  }
-
-  async refresh(): Promise<void> {
-    if (!this.path || this.loading) return;
-    this.loading = true;
-
-    try {
-      const json = await rpc<string>('hologram_hotspots', {
-        days: 30,
-        min_count: 2,
-      });
-      const data = JSON.parse(json) as HotspotsData;
-      this.hotspots = data.hotspots || [];
-      const count = this.hotspots.length;
-      if (this.openState) this.render();
-      // Auto-open if hotspots found
-      if (count > 0 && !this.openState) this.open();
-    } catch (err) {
-      console.error('Hotspots refresh failed:', err);
-    } finally {
-      this.loading = false;
-    }
+    this._ctrl.setProjectPath(path);
   }
 
   toggle(): void {
-    this.openState = !this.openState;
-    if (this.openState) {
-      this.panel.classList.add('hs-open');
-      this.render();
-    } else {
-      this.panel.classList.remove('hs-open');
-      this.starGraph?.clearHotspots();
-    }
-    shell.notifyPanelChanged();
-  }
-
-  isOpen(): boolean {
-    return this.openState;
+    this._ctrl.toggle();
   }
 
   open(): void {
-    if (!this.openState) this.toggle();
+    this._ctrl.open();
   }
 
   close(): void {
-    if (this.openState) this.toggle();
+    this._ctrl.close();
   }
 
-  getHotspots(): HotspotItem[] {
-    return this.hotspots;
+  isOpen(): boolean {
+    return this._ctrl.isOpen();
   }
 
-  private render(): void {
-    if (this.hotspots.length === 0) {
-      this.content.innerHTML = `<div class="hs-empty">暂无复发热点。项目运行一段时间后，同一文件多次触发 L4 警报时会出现在这里。</div>`;
-      return;
-    }
-
-    let html = '';
-
-    for (const hs of this.hotspots) {
-      const fn = basename(hs.file);
-      const sevClass = SEVERITY_CLASS[hs.last_details.level] || 'hs-sev-mid';
-      const desc = hs.last_details.description
-        ? hs.last_details.description.length > 60
-          ? hs.last_details.description.slice(0, 60) + '…'
-          : hs.last_details.description
-        : '';
-      const line = hs.last_details.line ? `:${hs.last_details.line}` : '';
-      const lastTs = hs.recent_timestamps[0] ? fmtTime(hs.recent_timestamps[0]) : '';
-      const countClass = hs.count >= 5 ? 'hs-count-critical' : hs.count >= 3 ? 'hs-count-warn' : '';
-
-      html += `<div class="hs-item" data-file="${escapeHtml(hs.file)}">`;
-      html += `<div class="hs-file-row">`;
-      html += `<span class="hs-count ${countClass}">${hs.count}×</span>`;
-      html += `<span class="hs-file">${escapeHtml(fn)}</span>`;
-      html += `<span class="hs-line">${escapeHtml(line)}</span>`;
-      html += `</div>`;
-      if (desc) html += `<div class="hs-desc ${sevClass}">${escapeHtml(desc)}</div>`;
-      if (lastTs) html += `<div class="hs-time">最近: ${lastTs}</div>`;
-      html += `<button class="hs-ask-btn" title="问 Agent 关于这个热点">${iconHtml('agent', 10)}</button>`;
-      html += `</div>`;
-    }
-
-    this.content.innerHTML = DOMPurify.sanitize(html);
-
-    // Wire click → navigate to file on star graph
-    this.content.querySelectorAll('.hs-item').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        const target = e.target as HTMLElement;
-        if (target.closest('.hs-ask-btn')) return;
-        const file = (el as HTMLElement).dataset['file'] || '';
-        if (file) {
-          shell.navigateToFile(file);
-          // Also highlight on graph
-          this.starGraph?.highlightHotspots(this.hotspots);
-        }
-      });
-    });
-
-    // Wire "Ask Agent" buttons
-    this.content.querySelectorAll('.hs-ask-btn').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const item = (el as HTMLElement).closest('.hs-item') as HTMLElement;
-        if (!item) return;
-        const file = item.dataset['file'] || '';
-        const hs = this.hotspots.find((h) => h.file === file);
-        if (!hs) return;
-        const context = [
-          `复发热点: ${basename(file)}`,
-          `复发次数: ${hs.count}× L4 封装穿透`,
-          hs.last_details.description ? `最近描述: ${hs.last_details.description}` : '',
-        ]
-          .filter(Boolean)
-          .join(' | ');
-        askAgent(`分析这个复发热点: ${context}`);
-      });
-    });
-
-    // Highlight on graph
-    this.starGraph?.highlightHotspots(this.hotspots);
+  getHotspots(): any[] {
+    return this._ctrl.getHotspots();
   }
-}
-
-// ── Helpers ──
-
-function basename(path: string): string {
-  const parts = path.replace(/\\/g, '/').split('/');
-  return parts[parts.length - 1] || path;
-}
-
-function fmtTime(iso: string): string {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch {
-    return iso.slice(0, 16);
-  }
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
