@@ -2328,6 +2328,7 @@ export class StarGraph {
   async render(graph: GraphJSON): Promise<void> {
     try {
       await this._renderImpl(graph);
+      bus.emit('graph:rendered');
     } catch (e) {
       console.error('[StarGraph] render crashed:', e);
       this._renderInProgress = false;

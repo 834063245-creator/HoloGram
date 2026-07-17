@@ -21,6 +21,13 @@ const MAX_BUFFER = 50;
 const FLUSH_MS = 2000;
 
 export async function initLogger(projectPath: string): Promise<void> {
+  // Flush any remaining logs from the old workspace, then clear old timer
+  if (flushTimer) {
+    clearInterval(flushTimer);
+    flushTimer = null;
+  }
+  await flush();
+
   try {
     logPath = `${projectPath}/.hologram/logs/ui.log`;
   } catch {

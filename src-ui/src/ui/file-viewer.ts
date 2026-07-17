@@ -821,17 +821,7 @@ export class FileViewer {
       if (!confirmed) return;
     }
 
-    // LSP: notify server that document is closed
-    const lang = tab.model.getLanguageId();
-    const sid = lspSessions.get(lang);
-    if (sid) didClose(sid, tab.model.uri.toString());
-
-    tab.model.dispose();
-    if (tab.diffModels) {
-      tab.diffModels.original.dispose();
-      tab.diffModels.modified.dispose();
-    }
-    this.tabs.splice(idx, 1);
+    this._disposeTab(idx);
 
     if (this.tabs.length === 0) {
       this.closeAll();
@@ -847,11 +837,39 @@ export class FileViewer {
     this.switchTab(this.activeIdx);
   }
 
+  /** Dispose a tab's editor resources without confirm dialog or UI update. */
+  private _disposeTab(idx: number): void {
+    if (idx < 0 || idx >= this.tabs.length) return;
+    const tab = this.tabs[idx];
+
+    // LSP: notify server that document is closed
+    const lang = tab.model.getLanguageId();
+    const sid = lspSessions.get(lang);
+    if (sid) didClose(sid, tab.model.uri.toString());
+
+    tab.model.dispose();
+    if (tab.diffModels) {
+      tab.diffModels.original.dispose();
+      tab.diffModels.modified.dispose();
+    }
+    this.tabs.splice(idx, 1);
+  }
+
   // ── Public API ──
 
   setProjectPath(path: string | null): void {
     if (this.projectPath && this.projectPath !== path) {
       stopAllLsp().catch(() => {});
+      // Close all tabs from old workspace — they reference paths that don't exist in the new one
+      for (let i = this.tabs.length - 1; i >= 0; i--) {
+        this._disposeTab(i);
+      }
+      this.tabs = [];
+      this.activeIdx = -1;
+      this.tabBar.innerHTML = '';
+      this.showNormalEditor();
+      this.el.classList.remove('fv-open');
+      this.state.open = false;
     }
     this.projectPath = path;
   }

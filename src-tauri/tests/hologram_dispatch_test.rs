@@ -183,5 +183,5 @@ fn hologram_tools_list_impl() -> String {
 }
 
 fn hologram_call_impl(tool: &str, args: &Value) -> String {
-    ToolRegistry::dispatch(tool, args).to_string()
+    ToolRegistry::dispatch(tool, args, &Value::Null).to_string()
 }

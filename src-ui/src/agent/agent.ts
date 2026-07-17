@@ -711,7 +711,20 @@ ${goal}
         tool_calls: calls,
       });
 
+      const runningSubs = this.runningSubAgentCount();
       if (calls.length === 0 && this._pendingInserts.length === 0) {
+        if (runningSubs > 0) {
+          // Sub-agents still running — don't exit yet. Results arrive via
+          // pool.onDone → injectTaskNotification → _pendingInserts, and are
+          // consumed by _applyPendingInserts() at the top of the loop.
+          this._sink({
+            kind: EventKind.Notice,
+            level: 'info',
+            text: `等待 ${runningSubs} 个子Agent 完成…`,
+          });
+          await this._subAgentPool?.awaitAll();
+          continue;
+        }
         return;
       }
 

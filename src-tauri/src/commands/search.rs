@@ -4,6 +4,27 @@
 
 use hologram_engine::pipeline::discovery::is_ignored_path;
 
+/// Expand brace expressions in a glob pattern.
+/// "**/*.{ts,rs}" → ["**/*.ts", "**/*.rs"]
+/// Supports nested braces: "a/{b,c}/{d,e}" expands correctly.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    if let Some(start) = pattern.find('{') {
+        if let Some(end) = pattern[start..].find('}') {
+            let end = start + end;
+            let prefix = &pattern[..start];
+            let suffix = &pattern[end + 1..];
+            let alternatives: Vec<&str> = pattern[start + 1..end].split(',').collect();
+            let mut result = Vec::new();
+            for alt in &alternatives {
+                let expanded = format!("{}{}{}", prefix, alt, suffix);
+                result.extend(expand_braces(&expanded));
+            }
+            return result;
+        }
+    }
+    vec![pattern.to_string()]
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn search_code(
@@ -252,8 +273,11 @@ pub(crate) async fn glob(
     let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
     let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?;
 
-    let glob_pattern = glob::Pattern::new(&pattern)
-        .map_err(|e| format!("无效的 glob 模式: {}", e))?;
+    // Expand brace expressions ({a,b,c}) — the glob crate doesn't support them.
+    let expanded = expand_braces(&pattern);
+    let glob_patterns: Vec<glob::Pattern> = expanded.iter()
+        .map(|p| glob::Pattern::new(p).map_err(|e| format!("无效的 glob 模式 '{}': {}", p, e)))
+        .collect::<Result<Vec<_>, _>>()?;
     let pat = pattern.clone();
 
     tokio::task::spawn_blocking(move || {
@@ -282,7 +306,7 @@ pub(crate) async fn glob(
             let rel = entry_path.strip_prefix(&root).unwrap_or(entry_path);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
 
-            if glob_pattern.matches(&rel_str) {
+            if glob_patterns.iter().any(|gp| gp.matches(&rel_str)) {
                 results.push(crate::utils::GlobEntry {
                     path: entry_path.to_string_lossy().to_string(),
                     name: rel.file_name()
@@ -300,4 +324,54 @@ pub(crate) async fn glob(
             "results": results,
         }).to_string())
     }).await.map_err(|e| format!("glob 任务失败: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_expand_braces_simple() {
+        let result = expand_braces("**/*.{ts,rs}");
+        assert_eq!(result, vec!["**/*.ts", "**/*.rs"]);
+    }
+
+    #[test]
+    fn test_expand_braces_no_brace() {
+        let result = expand_braces("**/*.ts");
+        assert_eq!(result, vec!["**/*.ts"]);
+    }
+
+    #[test]
+    fn test_expand_braces_many_extensions() {
+        let result = expand_braces("**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}");
+        assert_eq!(result.len(), 13);
+        assert!(result.contains(&"**/*.ts".to_string()));
+        assert!(result.contains(&"**/*.json".to_string()));
+        assert!(result.contains(&"**/*.yaml".to_string()));
+    }
+
+    #[test]
+    fn test_expand_braces_nested() {
+        let result = expand_braces("a/{b,c}/{d,e}");
+        assert_eq!(result, vec!["a/b/d", "a/b/e", "a/c/d", "a/c/e"]);
+    }
+
+    #[test]
+    fn test_expand_braces_single_alternative() {
+        let result = expand_braces("src/{x}");
+        assert_eq!(result, vec!["src/x"]);
+    }
+
+    #[test]
+    fn test_expand_braces_empty_braces() {
+        let result = expand_braces("src/{}");
+        assert_eq!(result, vec!["src/"]);
+    }
+
+    #[test]
+    fn test_expand_braces_at_start() {
+        let result = expand_braces("{a,b}.ts");
+        assert_eq!(result, vec!["a.ts", "b.ts"]);
+    }
 }

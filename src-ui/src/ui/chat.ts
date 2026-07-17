@@ -301,6 +301,10 @@ export class ChatPanel {
         });
       },
     );
+    // Feed visible node names to @ autocomplete after every full render
+    bus.on('graph:rendered', () => {
+      if (this.starGraph) this._atAutocomplete?.setNodeNames(this.starGraph.getNodeNames());
+    });
     // ── Listen for Agent diagnostics so we can show WHY agent isn't ready ──
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
       getChatStore(this.panelId).panel.setState({ lastAgentDiag: d.text });

@@ -58,7 +58,7 @@ function AtAutocomplete({
   const [activeIdx, setActiveIdx] = useState(0);
   const [loading, setLoading] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
-  const cacheRef = useRef<{ data: string; ts: number } | null>(null);
+  const cacheRef = useRef<{ data: string; ts: number; path: string } | null>(null);
 
   const atPos = findAtTrigger(textBefore);
   const query = atPos >= 0 ? textBefore.slice(atPos + 1).toLowerCase() : '';
@@ -79,13 +79,13 @@ function AtAutocomplete({
       // Use cached glob results
       try {
         let cache = cacheRef.current;
-        if (!cache || Date.now() - cache.ts > CACHE_TTL) {
-          const projectPath = getChatStore(panelId).panel.getState().projectPath || '.';
+        const projectPath = getChatStore(panelId).panel.getState().projectPath || '.';
+        if (!cache || Date.now() - cache.ts > CACHE_TTL || cache.path !== projectPath) {
           const data = await rpc<string>('glob', {
             pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',
             path: projectPath,
           });
-          cache = { data, ts: Date.now() };
+          cache = { data, ts: Date.now(), path: projectPath };
           cacheRef.current = cache;
         }
 
