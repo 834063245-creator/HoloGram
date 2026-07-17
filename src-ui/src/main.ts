@@ -425,7 +425,7 @@ async function init(): Promise<void> {
   });
 
   // ── Backend permission-ask → frontend inline chat card bridge ──
-  const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'rename_file', 'rename_symbol', 'move_file', 'git_stage']);
+  const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage']);
   await listen('permission-ask', (event: any) => {
     const p = event.payload as {
       requestId: string;

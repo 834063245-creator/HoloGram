@@ -9,7 +9,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from 'zustand';
 import { iconHtml } from '../icons';
-import { loadSettings } from '../../settings';
+import { loadSettings, saveSettings } from '../../settings';
 import { getChatStore } from '../chat-store';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
 
@@ -100,9 +100,15 @@ function ChatModebar({ panelId }: { panelId: string }) {
 
   const setCollaboration = useCallback((mode: CollaborationMode) => {
     panelStore.getState().setCollaborationMode(mode);
+    const s = loadSettings();
+    s.agent = { ...s.agent, collaborationMode: mode };
+    saveSettings(s);
   }, [panelStore]);
   const setPermission = useCallback((mode: PermissionMode) => {
     panelStore.getState().setPermissionMode(mode);
+    const s = loadSettings();
+    s.agent = { ...s.agent, permissionMode: mode };
+    saveSettings(s);
   }, [panelStore]);
 
   return (

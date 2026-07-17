@@ -509,12 +509,20 @@ export class Workspace {
     };
   }
 
+  /** Plan-mode tool registry: shallow-copies only read-only tools from the given registry. */
+  private _planRegistry(base: ToolRegistry): ToolRegistry {
+    const out = new ToolRegistry();
+    for (const t of base.filterReadOnly()) out.register(t);
+    return out;
+  }
+
   /** Read mode state from the panel store. Falls back to normal/ask. */
   private _modeState(): { collaborationMode: 'normal' | 'plan'; permissionMode: 'ask' | 'auto' | 'yolo' } {
     try {
       const ps = getPanelStore(this._storeId).getState();
       return { collaborationMode: ps.collaborationMode as any, permissionMode: ps.permissionMode as any };
-    } catch {
+    } catch (e) {
+      console.warn('[Workspace] _modeState failed, falling back to normal/ask:', e);
       return { collaborationMode: 'normal', permissionMode: 'ask' };
     }
   }
@@ -846,7 +854,7 @@ export class Workspace {
 
     // Plan mode: use read-only-only tool registry
     const effectiveRegistry = mode.collaborationMode === 'plan'
-      ? (() => { const r = new ToolRegistry(); for (const t of registry.filterReadOnly()) r.register(t); return r; })()
+      ? this._planRegistry(registry)
       : registry;
 
     // ponytail: permission rules evaluated in Rust, dialog rendered inline in chat panel
@@ -1070,7 +1078,7 @@ export class Workspace {
         const mode = this._modeState();
         const sysPrompt = buildSystemPrompt(this, memSection, snap, '', claudeMd, mode.collaborationMode);
         const effR = mode.collaborationMode === 'plan'
-          ? (() => { const rr = new ToolRegistry(); for (const t of r.filterReadOnly()) rr.register(t); return rr; })()
+          ? this._planRegistry(r)
           : r;
         const newAgent = new Agent(p, effR, sysPrompt, {
           ...this._subAgentCallbacks(chatPanel),
@@ -1438,6 +1446,9 @@ export function buildSystemPrompt(
 
     if (memorySection.trim()) {
       prompt += `\n\n## 记忆库\n${memorySection}\n\n> ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。`;
+    }
+    if (collaborationMode === 'plan') {
+      prompt += `\n\n## 规划模式（当前激活）\n你处于规划模式。只能使用只读工具分析代码和设计方案，不能执行任何修改操作。\n- 用 \`ask_user\` 向用户确认方案\n- 方案确定后，让用户切换到正常模式再执行\n- 不要调用任何写工具`;
     }
     return prompt;
   }
