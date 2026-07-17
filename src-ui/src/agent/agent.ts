@@ -118,8 +118,10 @@ export class Agent {
   // can resolve worktree paths via forward_map_path.
   _isolationId?: string;
 
-  // Goal loop safety: max iterations before forced termination
-  private static readonly MAX_GOAL_ITERATIONS = 20;
+  // Goal loop safety: hard ceiling before forced termination (shouldn't trigger normally)
+  private static readonly MAX_GOAL_ITERATIONS = 100;
+  // Stall detection: consecutive rounds with no tool calls → agent stuck in analysis paralysis
+  private static readonly MAX_STALL_ROUNDS = 3;
 
   // PreToolUse hooks — enrich tool results with graph context
   private hooks: HookRegistry | null = null;
@@ -524,6 +526,8 @@ ${goal}
     this.session.push({ role: 'user', content: goalPrompt });
     this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
 
+    let stallRounds = 0;
+
     for (let iter = 0; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
       bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
 
@@ -549,16 +553,38 @@ ${goal}
         return { status: 'failed', summary: last };
       }
 
+      // ── Stall detection: consecutive rounds with no tool calls → stuck ──
+      const hasToolCalls = this._lastAssistantHasToolCalls();
+      const subAgentsRunning = (this._subAgentPool?.runningCount ?? 0) > 0;
+      if (!hasToolCalls && !subAgentsRunning) {
+        stallRounds++;
+        if (stallRounds >= Agent.MAX_STALL_ROUNDS) {
+          this._sink({
+            kind: EventKind.Notice,
+            level: 'warn',
+            text: `[目标] 连续 ${stallRounds} 轮无实际行动，Agent 可能陷入分析瘫痪，终止`,
+          });
+          return {
+            status: 'failed',
+            summary: `连续 ${stallRounds} 轮未执行任何工具调用或委派子Agent。目标可能过于模糊或超出能力范围。请拆分目标为更具体的步骤。`,
+          };
+        }
+      } else {
+        stallRounds = 0;
+      }
+
       // Goal in progress — auto-continue
-      const poolSummary = this._subAgentPool?.summary() || '';
-      const pendingHint =
-        this._subAgentPool && this._subAgentPool.runningCount > 0
-          ? `\n⚠️ 仍有 ${this._subAgentPool.runningCount} 个子Agent运行中，等待结果到达后再规划下一步。`
+      const pendingHint = subAgentsRunning
+        ? `\n⚠️ 仍有 ${this._subAgentPool!.runningCount} 个子Agent运行中，等待结果到达后再规划下一步。`
+        : '';
+      const stallHint =
+        stallRounds > 0
+          ? `\n⚠️ 已连续 ${stallRounds}/${Agent.MAX_STALL_ROUNDS} 轮无实际行动。必须调用工具或委派子Agent，禁止只输出文字分析。`
           : '';
       this.session.push({
         role: 'user',
         content: `<system-reminder>
-目标未完成。已完成 ${iter + 1}/${Agent.MAX_GOAL_ITERATIONS} 轮。${pendingHint}
+目标未完成。已完成 ${iter + 1} 轮。${pendingHint}${stallHint}
 
 如果目标尚未达成: 规划下一步（不重复已完成步骤）→ agent_spawn 委派 → 验证结果。
 如果目标已全部达成: 输出 [GOAL_COMPLETE] 并附摘要。
@@ -569,14 +595,14 @@ ${goal}
       });
       this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 第 ${iter + 1} 轮完成，继续…` });
     }
-    // Max iterations reached — forced termination
+    // Max iterations reached — forced termination (hard ceiling, shouldn't trigger in normal use)
     if (!signal.aborted) {
       this._sink({
         kind: EventKind.Notice,
         level: 'warn',
-        text: `[目标] 达到最大迭代 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止`,
+        text: `[目标] 达到硬上限 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止`,
       });
-      return { status: 'failed', summary: `达到最大迭代次数 ${Agent.MAX_GOAL_ITERATIONS}。请拆分目标为更小单元。` };
+      return { status: 'failed', summary: `达到硬上限 ${Agent.MAX_GOAL_ITERATIONS} 轮。请拆分目标为更小单元。` };
     }
 
     return { status: 'aborted', summary: '目标被中断' };
@@ -590,6 +616,17 @@ ${goal}
       }
     }
     return '';
+  }
+
+  /** Check whether the last assistant message had tool_calls (vs pure text). */
+  private _lastAssistantHasToolCalls(): boolean {
+    const session = this.getSession();
+    for (let i = session.length - 1; i >= 0; i--) {
+      if (session[i].role === 'assistant') {
+        return (session[i].tool_calls?.length ?? 0) > 0;
+      }
+    }
+    return false;
   }
 
   /** Drive the tool loop without adding a user message. Used by fork children
