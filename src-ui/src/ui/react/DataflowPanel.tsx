@@ -422,9 +422,7 @@ const DataflowPanelApp: React.FC<{
         onPointerDown={onDragStart}
       >
         <span className="df-panel-title">数据流</span>
-        <button className="df-panel-close" onPointerDown={(e) => e.stopPropagation()} onClick={onClose}>
-          {iconHtml('close', 15)}
-        </button>
+        <button className="df-panel-close" onPointerDown={(e) => e.stopPropagation()} onClick={onClose} dangerouslySetInnerHTML={{ __html: iconHtml('close', 15) }} />
       </div>
 
       {/* Body */}
@@ -442,9 +440,7 @@ const DataflowPanelApp: React.FC<{
         >
           <div className="df-trace-list-hdr">
             <span>已存追踪 ({traces.length})</span>
-            <button className="df-hist-clear" onClick={loadTraceList}>
-              {iconHtml('search', 11)} 刷新
-            </button>
+            <button className="df-hist-clear" onClick={loadTraceList} dangerouslySetInnerHTML={{ __html: `${iconHtml('search', 11)} 刷新` }} />
           </div>
           <div className="df-hist-list" style={{ flex: 1, overflow: 'auto' }}>
             {traces.length === 0 ? (
@@ -495,9 +491,7 @@ const DataflowPanelApp: React.FC<{
                 }
               }}
             />
-            <button className="df-query-btn" onClick={() => doExplore(exploreQuery.trim())}>
-              {iconHtml('search', 13)} 探索
-            </button>
+            <button className="df-query-btn" onClick={() => doExplore(exploreQuery.trim())} dangerouslySetInnerHTML={{ __html: `${iconHtml('search', 13)} 探索` }} />
           </div>
         </div>
 

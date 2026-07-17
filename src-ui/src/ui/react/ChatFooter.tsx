@@ -119,7 +119,8 @@ function ChatModebar({ panelId }: { panelId: string }) {
           onClick={() => setCollaboration(collaborationMode === 'plan' ? 'normal' : 'plan')}
           title={collaborationMode === 'plan' ? '退出规划模式' : '规划模式：只读分析，不执行修改'}
         >
-          📋 规划
+          <span className="chat-modebar__icon" dangerouslySetInnerHTML={{ __html: iconHtml('plan', 11) }} />
+          <span>规划</span>
         </button>
       </div>
       <div className="chat-modebar-right">

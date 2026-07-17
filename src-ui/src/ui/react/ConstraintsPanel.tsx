@@ -246,9 +246,7 @@ const ConstraintsPanelApp: React.FC<{
         {items.map((item) => (
           <span key={item} className="cs-tag">
             {item}
-            <button className="cs-tag-rm" onClick={() => handleRemoveItem(listKey, item)}>
-              {iconHtml('close', 8)}
-            </button>
+            <button className="cs-tag-rm" onClick={() => handleRemoveItem(listKey, item)} dangerouslySetInnerHTML={{ __html: iconHtml('close', 8) }} />
           </span>
         ))}
       </div>
@@ -260,9 +258,7 @@ const ConstraintsPanelApp: React.FC<{
           onChange={(e) => setAddValues((prev) => ({ ...prev, [listKey]: e.target.value }))}
           onKeyDown={(e) => e.key === 'Enter' && handleAddItem(listKey)}
         />
-        <button className="cs-add-btn" onClick={() => handleAddItem(listKey)}>
-          {iconHtml('plus', 10)}
-        </button>
+        <button className="cs-add-btn" onClick={() => handleAddItem(listKey)} dangerouslySetInnerHTML={{ __html: iconHtml('plus', 10) }} />
       </div>
     </div>
   );
@@ -405,9 +401,7 @@ const ConstraintsPanelApp: React.FC<{
                   : `${iconHtml('save', 10)} 保存`,
             }}
           />
-          <button className="cs-btn cs-btn-reset" onClick={handleReset} disabled={!dirty}>
-            {iconHtml('reset', 10)} 重置
-          </button>
+          <button className="cs-btn cs-btn-reset" onClick={handleReset} disabled={!dirty} dangerouslySetInnerHTML={{ __html: `${iconHtml('reset', 10)} 重置` }} />
         </div>
       </div>
     </>

@@ -344,6 +344,12 @@ const icons: Record<string, IconDef> = {
     label: '等待',
     path: '<path d="M6 3 L12 3 L9 8 L12 13 L6 13 L9 8 Z"/><line x1="5" y1="15" x2="13" y2="15"/>',
   },
+
+  // ── Plan / Blueprint ──
+  plan: {
+    label: '规划',
+    path: '<rect x="3" y="2" width="12" height="14" rx="1"/><line x1="5" y1="6" x2="13" y2="6"/><line x1="5" y1="9" x2="13" y2="9"/><line x1="5" y1="12" x2="10" y2="12"/><line x1="8" y1="6" x2="8" y2="12"/>',
+  },
 };
 
 /**
