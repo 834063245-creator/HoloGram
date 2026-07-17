@@ -11,6 +11,7 @@ import { useStore } from 'zustand';
 import { iconHtml } from '../icons';
 import { loadSettings } from '../../settings';
 import { getChatStore } from '../chat-store';
+import type { CollaborationMode, PermissionMode } from '../panel-store';
 
 // ── Types ──
 
@@ -90,6 +91,58 @@ function ChatFooterRight({ callbacks }: { callbacks: FooterCallbacks }) {
   );
 }
 
+// ── Mode bar ──
+
+function ChatModebar({ panelId }: { panelId: string }) {
+  const panelStore = getChatStore(panelId).panel;
+  const collaborationMode = useStore(panelStore, (s) => s.collaborationMode);
+  const permissionMode = useStore(panelStore, (s) => s.permissionMode);
+
+  const setCollaboration = useCallback((mode: CollaborationMode) => {
+    panelStore.getState().setCollaborationMode(mode);
+  }, [panelStore]);
+  const setPermission = useCallback((mode: PermissionMode) => {
+    panelStore.getState().setPermissionMode(mode);
+  }, [panelStore]);
+
+  return (
+    <div className="chat-modebar">
+      <div className="chat-modebar-left">
+        <button
+          className={`chat-modebar__btn${collaborationMode === 'plan' ? ' chat-modebar__btn--active' : ''}`}
+          onClick={() => setCollaboration(collaborationMode === 'plan' ? 'normal' : 'plan')}
+          title={collaborationMode === 'plan' ? '退出规划模式' : '规划模式：只读分析，不执行修改'}
+        >
+          📋 规划
+        </button>
+      </div>
+      <div className="chat-modebar-right">
+        <button
+          className={`chat-modebar__seg${permissionMode === 'ask' ? ' chat-modebar__seg--active' : ''}`}
+          onClick={() => setPermission('ask')}
+          title="每个写操作都询问确认"
+        >
+          🛡 询问
+        </button>
+        <button
+          className={`chat-modebar__seg${permissionMode === 'auto' ? ' chat-modebar__seg--active' : ''}`}
+          onClick={() => setPermission('auto')}
+          title="常规编辑自动批准，危险命令仍询问"
+        >
+          ✓ 自动
+        </button>
+        <button
+          className={`chat-modebar__seg chat-modebar__seg--yolo${permissionMode === 'yolo' ? ' chat-modebar__seg--active' : ''}`}
+          onClick={() => setPermission('yolo')}
+          title="全部自动批准（危险！）"
+        >
+          ⚠ YOLO
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Full footer component ──
 
 function ChatFooterInner({ panelId, callbacks, _forceVersion }: {
@@ -101,8 +154,11 @@ function ChatFooterInner({ panelId, callbacks, _forceVersion }: {
   void _forceVersion;
   return (
     <>
-      <ChatFooter panelId={panelId} callbacks={callbacks} />
-      <ChatFooterRight callbacks={callbacks} />
+      <ChatModebar panelId={panelId} />
+      <div className="chat-footer-row">
+        <ChatFooter panelId={panelId} callbacks={callbacks} />
+        <ChatFooterRight callbacks={callbacks} />
+      </div>
     </>
   );
 }

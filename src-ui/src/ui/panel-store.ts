@@ -10,6 +10,8 @@ import type { ToolSchema } from '../provider/types';
 export type PanelMode = 'pill' | 'input' | 'panel' | 'hud';
 export type AgentTab = 'chat' | 'tools' | 'context';
 export type AgentState = 'idle' | 'thinking' | 'running' | 'error';
+export type CollaborationMode = 'normal' | 'plan';
+export type PermissionMode = 'ask' | 'auto' | 'yolo';
 
 interface ToolHistoryEntry {
   name: string;
@@ -34,8 +36,12 @@ interface PanelStore {
   historyOpen: boolean;
   toolFilter: string;
   contextFilter: string;
+  collaborationMode: CollaborationMode;
+  permissionMode: PermissionMode;
 
   setPanelMode: (mode: PanelMode) => void;
+  setCollaborationMode: (mode: CollaborationMode) => void;
+  setPermissionMode: (mode: PermissionMode) => void;
   setActiveTab: (tab: AgentTab) => void;
   setProjectPath: (path: string) => void;
   setToolSchemas: (schemas: ToolSchema[]) => void;
@@ -75,8 +81,12 @@ function createPanelStoreImpl() {
     historyOpen: false,
     toolFilter: '',
     contextFilter: '',
+    collaborationMode: 'normal' as CollaborationMode,
+    permissionMode: 'ask' as PermissionMode,
 
     setPanelMode: (panelMode) => set({ panelMode }),
+    setCollaborationMode: (collaborationMode) => set({ collaborationMode }),
+    setPermissionMode: (permissionMode) => set({ permissionMode }),
     setActiveTab: (activeTab) => set({ activeTab }),
     setProjectPath: (projectPath) => set({ projectPath }),
     setToolSchemas: (toolSchemas) => set({ toolSchemas }),

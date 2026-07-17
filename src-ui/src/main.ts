@@ -12,6 +12,7 @@ import { initLogger, log } from './agent/logger';
 import { isMockMode, listen, rpc } from './bridge';
 import { setLang, t } from './i18n';
 import { loadSettings, saveSettings } from './settings';
+import { getPanelStore } from './ui/panel-store';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
 import { ChatPanel } from './ui/chat';
@@ -424,6 +425,7 @@ async function init(): Promise<void> {
   });
 
   // ── Backend permission-ask → frontend inline chat card bridge ──
+  const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'rename_file', 'rename_symbol', 'move_file', 'git_stage']);
   await listen('permission-ask', (event: any) => {
     const p = event.payload as {
       requestId: string;
@@ -433,6 +435,18 @@ async function init(): Promise<void> {
       danger?: string;
       suggestions: Array<{ rule: string; behavior: string }>;
     };
+
+    // Permission mode bypass: yolo → all auto, auto → safe edits only
+    const permMode = getPanelStore(chatPanel.panelId).getState().permissionMode;
+    if (permMode === 'yolo' || (permMode === 'auto' && AUTO_WHITELIST.has(p.tool))) {
+      rpc('permission_ask_response', {
+        requestId: p.requestId,
+        allow: true,
+        remember: false,
+      });
+      return;
+    }
+
     chatPanel.showPermissionCard(p.tool, p.reason, p.path, p.danger).then((result) => {
       rpc('permission_ask_response', {
         requestId: p.requestId,

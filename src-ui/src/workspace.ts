@@ -61,6 +61,7 @@ import { stripLineNumbers } from './ui/chat-session';
 import { msgStoreForActive } from './ui/chat-store';
 import type { CheckPanel, CheckResult } from './ui/check';
 import { bus } from './ui/events';
+import { getPanelStore } from './ui/panel-store';
 import type { StarGraph } from './ui/graph';
 import type { SubAgentPart } from './ui/message-model';
 
@@ -487,10 +488,52 @@ export class Workspace {
     }
   }
 
+  /** DRY helper — sub-agent spawn callbacks shared across Agent construction sites. */
+  private _subAgentCallbacks(chatPanel: ChatPanel) {
+    const storeId = this._storeId;
+    return {
+      onSubAgentSpawn: (part: SubAgentPart) => {
+        const store = msgStoreForActive(storeId);
+        if (!store) return;
+        const msgs = store.getState().messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.role === 'assistant' && (m as any).status === 'streaming') {
+            (m as any).parts.push(part);
+            break;
+          }
+        }
+        store.getState().bump();
+      },
+      onSubAgentBump: () => msgStoreForActive(storeId)?.getState().bump(),
+    };
+  }
+
+  /** Read mode state from the panel store. Falls back to normal/ask. */
+  private _modeState(): { collaborationMode: 'normal' | 'plan'; permissionMode: 'ask' | 'auto' | 'yolo' } {
+    try {
+      const ps = getPanelStore(this._storeId).getState();
+      return { collaborationMode: ps.collaborationMode as any, permissionMode: ps.permissionMode as any };
+    } catch {
+      return { collaborationMode: 'normal', permissionMode: 'ask' };
+    }
+  }
+
   private async _setupAgentInner(chatPanel: ChatPanel, _checkPanel: CheckPanel): Promise<void> {
     this._storeId = chatPanel.panelId;
     let settings = loadSettings();
     settings = await restoreSecrets(settings);
+
+    // Initialize mode state from saved preferences
+    const sAgent = settings.agent || {};
+    const ps = getPanelStore(this._storeId).getState();
+    if (sAgent.collaborationMode && ps.collaborationMode === 'normal') {
+      ps.setCollaborationMode(sAgent.collaborationMode);
+    }
+    if (sAgent.permissionMode && ps.permissionMode === 'ask') {
+      ps.setPermissionMode(sAgent.permissionMode);
+    }
+
     const active = getActiveProvider(settings);
 
     const diag = `[Agent] provider=${active.name} keyLen=${(active.apiKey || '').length}`;
@@ -793,33 +836,26 @@ export class Workspace {
 
     const pricing = defaultPricing(active.kind, active.model);
     const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
+    const mode = this._modeState();
 
-    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection, claudeMdSection);
+    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection, claudeMdSection, mode.collaborationMode);
     const agentOpts = settings.agent || {};
 
     const temperature = agentOpts.temperature ?? 0.7;
     const contextWindow = agentOpts.contextWindow ?? 0;
 
+    // Plan mode: use read-only-only tool registry
+    const effectiveRegistry = mode.collaborationMode === 'plan'
+      ? (() => { const r = new ToolRegistry(); for (const t of registry.filterReadOnly()) r.register(t); return r; })()
+      : registry;
+
     // ponytail: permission rules evaluated in Rust, dialog rendered inline in chat panel
 
     this.prov = prov;
-    this.registry = registry;
-    this.agent = new Agent(prov, registry, systemPrompt, {
+    this.registry = effectiveRegistry;
+    this.agent = new Agent(prov, effectiveRegistry, systemPrompt, {
+      ...this._subAgentCallbacks(chatPanel),
       eventSink: chatPanel.eventSink,
-      onSubAgentSpawn: (part: SubAgentPart) => {
-        const store = msgStoreForActive(this._storeId);
-        if (!store) return;
-        const msgs = store.getState().messages;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.role === 'assistant' && (m as any).status === 'streaming') {
-            (m as any).parts.push(part);
-            break;
-          }
-        }
-        store.getState().bump();
-      },
-      onSubAgentBump: () => msgStoreForActive(this._storeId)?.getState().bump(),
       execState: chatPanel['_exec'],
       onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
         // Fire-and-forget: ingest session into memory bundle
@@ -1031,22 +1067,14 @@ export class Workspace {
           /* file missing is fine */
         }
         const snap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
-        const newAgent = new Agent(p, r, buildSystemPrompt(this, memSection, snap, '', claudeMd), {
+        const mode = this._modeState();
+        const sysPrompt = buildSystemPrompt(this, memSection, snap, '', claudeMd, mode.collaborationMode);
+        const effR = mode.collaborationMode === 'plan'
+          ? (() => { const rr = new ToolRegistry(); for (const t of r.filterReadOnly()) rr.register(t); return rr; })()
+          : r;
+        const newAgent = new Agent(p, effR, sysPrompt, {
+          ...this._subAgentCallbacks(chatPanel),
           eventSink: chatPanel.eventSink,
-          onSubAgentSpawn: (part: SubAgentPart) => {
-            const store = msgStoreForActive(this._storeId);
-            if (!store) return;
-            const msgs = store.getState().messages;
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              const m = msgs[i];
-              if (m.role === 'assistant' && (m as any).status === 'streaming') {
-                (m as any).parts.push(part);
-                break;
-              }
-            }
-            store.getState().bump();
-          },
-          onSubAgentBump: () => msgStoreForActive(this._storeId)?.getState().bump(),
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
           contextWindow: s.agent?.contextWindow,
@@ -1394,6 +1422,7 @@ export function buildSystemPrompt(
   graphSnapshot = '',
   memoryBundleSection = '',
   claudeMdSection = '',
+  collaborationMode: 'normal' | 'plan' = 'normal',
 ): string {
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
@@ -1626,7 +1655,8 @@ ${memorySection.trim() || '暂无。'}
 
 > ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。
 ${memoryBundleSection ? `\n## 语义记忆场\n${memoryBundleSection}\n` : ''}
-${claudeMdSection ? `\n## 项目约定（来自 CLAUDE.md）\n${claudeMdSection}\n` : ''}`;
+${claudeMdSection ? `\n## 项目约定（来自 CLAUDE.md）\n${claudeMdSection}\n` : ''}
+${collaborationMode === 'plan' ? `\n## 规划模式（当前激活）\n你处于规划模式。只能使用只读工具分析代码和设计方案，不能执行任何修改操作。\n- 用 \`ask_user\` 向用户确认方案\n- 方案确定后，让用户切换到正常模式再执行\n- 不要调用任何写工具` : ''}`;
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -1438,15 +1438,83 @@
 /* Chat footer — model badge + slash commands */
 .chat-footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 10px;
+  flex-direction: column;
+  padding: 0;
   flex-shrink: 0;
   border-top: 1px solid rgba(40, 60, 100, 0.1);
   font-family: var(--font-mono);
   font-size: calc(8px * var(--font-scale));
   position: relative;
   overflow: visible;
+}
+
+/* Mode bar — collaboration + permission toggles */
+.chat-modebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  border-bottom: 1px solid rgba(40, 60, 100, 0.08);
+}
+.chat-modebar-left {
+  display: flex;
+  gap: 4px;
+}
+.chat-modebar-right {
+  display: flex;
+  gap: 2px;
+}
+.chat-modebar__btn {
+  padding: 1px 8px;
+  font-family: var(--font-mono);
+  font-size: calc(7px * var(--font-scale));
+  color: var(--text-dim);
+  background: rgba(15, 25, 42, 0.4);
+  border: 1px solid rgba(40, 60, 100, 0.2);
+  cursor: pointer;
+  transition: all var(--snap);
+}
+.chat-modebar__btn:hover {
+  color: var(--signal-bright);
+  border-color: rgba(60, 100, 180, 0.35);
+}
+.chat-modebar__btn--active {
+  color: #7eb8ff;
+  background: rgba(30, 60, 110, 0.35);
+  border-color: rgba(80, 140, 220, 0.5);
+}
+.chat-modebar__seg {
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: calc(7px * var(--font-scale));
+  color: var(--text-dim);
+  background: rgba(15, 25, 42, 0.4);
+  border: 1px solid rgba(40, 60, 100, 0.2);
+  cursor: pointer;
+  transition: all var(--snap);
+}
+.chat-modebar__seg:hover {
+  color: var(--signal-bright);
+  border-color: rgba(60, 100, 180, 0.35);
+}
+.chat-modebar__seg--active {
+  color: var(--signal-bright);
+  background: rgba(25, 45, 75, 0.5);
+  border-color: rgba(60, 110, 190, 0.4);
+}
+.chat-modebar__seg--yolo.chat-modebar__seg--active {
+  color: #ff9e6d;
+  background: rgba(120, 40, 20, 0.3);
+  border-color: rgba(200, 80, 40, 0.5);
+}
+
+/* Legacy single-row footer (info row) */
+.chat-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  flex-shrink: 0;
 }
 .chat-footer-left {
   display: flex;
@@ -1541,7 +1609,7 @@
 /* ── Slash command popup (anchored to .chat-panel, floats above footer) ── */
 .chat-slash-panel {
   position: absolute;
-  bottom: 36px;
+  bottom: 60px;
   left: 8px;
   right: 8px;
   z-index: 60;

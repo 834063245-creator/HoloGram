@@ -54,7 +54,7 @@ import {
 
 // ── Re-export types ──
 
-export type { AgentState, AgentTab, PanelMode } from './panel-store';
+export type { AgentState, AgentTab, CollaborationMode, PanelMode, PermissionMode } from './panel-store';
 export type { ChatSessionMeta } from './session-store';
 
 // ── ChatStore handles — direct sub-store access ──

@@ -19,6 +19,10 @@ export interface AgentSettings {
   contextWindow: number;
   /** DeepSeek: 禁用深度思考 (default false = auto). */
   disableThinking?: boolean;
+  /** 默认协作模式 */
+  collaborationMode?: 'normal' | 'plan';
+  /** 默认权限模式 */
+  permissionMode?: 'ask' | 'auto' | 'yolo';
 }
 
 interface DisplaySettings {
