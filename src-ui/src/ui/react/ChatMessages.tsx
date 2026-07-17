@@ -767,6 +767,12 @@ const ChatMessagesApp: React.FC<{
   const lastMsgCount = useRef(0);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
+  // Reset stick-to-bottom when switching sessions — don't inherit the
+  // scroll position (and stickRef=false) from the previous session.
+  useEffect(() => {
+    stickRef.current = true;
+  }, [activeSessionId, storeId]);
+
   // Resolve the actual scrollable element (outer reactRoot, not the inner React div)
   const scrollEl = scrollContainer ?? listRef.current;
 
