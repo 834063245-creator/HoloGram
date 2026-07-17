@@ -33,6 +33,7 @@ interface PendingAgent {
   callId?: string; // tool call ID for event correlation
   finished?: boolean; // guard against double-finish (timeout + promise race)
   abortController: AbortController; // ⚡ R4 fix: allows stopAll() to abort the actual runFn
+  onDone?: SubAgentDoneCallback; // per-spawn done callback (priority over pool-global)
 }
 
 export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
@@ -79,6 +80,7 @@ export class SubAgentPool {
     onMessage?: (msg: string) => void,
     callId?: string,
     timeoutMs?: number,
+    onDone?: SubAgentDoneCallback,
   ): string | null {
     // Idempotency: duplicate callId → return existing
     if (callId) {
@@ -104,7 +106,7 @@ export class SubAgentPool {
 
     const abortController = new AbortController(); // ⚡ R4 fix
     const promise = new Promise<string>((resolve) => {
-      this.agents.set(id, { handle, resolve, onMessage, callId, abortController });
+      this.agents.set(id, { handle, resolve, onMessage, callId, abortController, onDone });
     });
 
     const cleanup = () => {
@@ -132,7 +134,9 @@ export class SubAgentPool {
         this._addCompleted(pending.handle);
         pending.resolve(text);
         this.agents.delete(id);
-        if (this.onDone) this.onDone(pending.handle, pending.callId);
+        // Per-spawn onDone takes priority; fall back to pool-global onDone
+        const doneCb = pending.onDone ?? this.onDone;
+        if (doneCb) doneCb(pending.handle, pending.callId);
       }
     };
 

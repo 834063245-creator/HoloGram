@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
+import type { SubAgentHandle, SubAgentDoneCallback } from '../coordinator';
 import type { Tool } from "../tool";
 
 
@@ -17,7 +18,11 @@ export type SubAgentSpawner = (
   signal?: AbortSignal, // ⚡ R4 fix: coordinator abort signal
 ) => Promise<{ text: string; err?: string }>;
 
-export function createSubAgentTool(spawner: SubAgentSpawner, pool: import('../coordinator').SubAgentPool): Tool {
+export function createSubAgentTool(
+  spawner: SubAgentSpawner,
+  pool: import('../coordinator').SubAgentPool,
+  onSubDone?: SubAgentDoneCallback,
+): Tool {
   return {
     name: () => 'agent_spawn',
     description: () =>
@@ -71,6 +76,8 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: import('../co
           onProgress?.(chunk);
         },
         callId,
+        undefined, // timeoutMs — use pool default
+        onSubDone,
       );
       if (spawnId) {
         subSignal = pool.getSubSignal(spawnId);
