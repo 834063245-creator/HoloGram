@@ -308,7 +308,7 @@ fn resolve_name(
 
     // ── Strategy 4: normalize path separators ──
     // Handles "::" in Rust paths and mixed "./\" in import targets
-    let normalized = name.replace("::", ".").replace('\\', ".").replace('/', ".");
+    let normalized = name.replace("::", ".").replace(['\\', '/'], ".");
     if normalized != *name {
         let short_norm = short_name(&normalized);
         if let Some(candidates) = name_index.get(&short_norm) {

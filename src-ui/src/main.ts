@@ -541,7 +541,7 @@ async function init(): Promise<void> {
   chatPanel.setOnTrailToggle(() => agentViz?.toggleTrail());
 
   // Graph interaction
-  new GraphInteraction();
+  const _graphInteraction = new GraphInteraction(); // ponytail: side-effect constructor, event bus listeners
 
   // Timeline
   timelinePanel = new TimelinePanel(document.body);

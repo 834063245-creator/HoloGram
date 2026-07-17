@@ -80,7 +80,7 @@ pub(crate) async fn dataflow_query(
     let mut entries: Vec<_> = fs::read_dir(&dir)
         .map_err(|e| format!("读取目录失败: {e}"))?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
             let created = meta.modified().ok()?;

@@ -152,10 +152,7 @@ impl Tool for GitTool {
         // First check the repo path is readable
         let rules = ctx.read_rules();
         let path_check = filesystem::check_read_permission(&self.repo_path, &ctx.sandbox, &rules, None);
-        match path_check {
-            PermissionResult::Deny { .. } => return path_check,
-            _ => {}
-        }
+        if let PermissionResult::Deny { .. } = path_check { return path_check }
         // Then check the git subcommand
         git::check(&self.subcommand, &rules)
     }

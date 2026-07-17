@@ -16,7 +16,7 @@ pub fn classify_cycles(graph: &Graph) -> serde_json::Value {
 pub fn classify_cycles_from_index(idx: &MemoryIndex) -> serde_json::Value {
     let raw_cycles = detect_cycles_from_index(idx);
     let nodes: Vec<(&str, &crate::graph::Node)> = idx.nodes_iter().map(|n| (n.id.as_str(), n)).collect();
-    classify_cycles_inner(nodes.into_iter().map(|(id, n)| (id, n)), &raw_cycles)
+    classify_cycles_inner(nodes.into_iter(), &raw_cycles)
 }
 
 fn classify_cycles_inner<'a>(

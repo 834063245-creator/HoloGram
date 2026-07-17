@@ -177,9 +177,7 @@ fn extract_js_callback(
     let mut mc = func.walk();
     let func_children: Vec<_> = func.children(&mut mc).collect();
 
-    let prop_name = func_children.iter()
-        .filter(|c| c.kind() == "property_identifier")
-        .last()
+    let prop_name = func_children.iter().rfind(|c| c.kind() == "property_identifier")
         .map(|c| c.utf8_text(source.as_bytes()).unwrap_or("").to_string())?;
 
     if !methods.contains(prop_name.as_str()) {

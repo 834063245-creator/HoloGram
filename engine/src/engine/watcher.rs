@@ -110,7 +110,7 @@ impl Engine {
                             );
                             is_src && !is_ignored
                         };
-                        if !event.paths.iter().any(|p| is_tracked(p)) {
+                        if !event.paths.iter().any(&is_tracked) {
                             continue;
                         }
 

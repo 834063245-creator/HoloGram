@@ -32,6 +32,12 @@ pub struct SignalGenerator {
     matcher: PatternMatcher,
 }
 
+impl Default for SignalGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SignalGenerator {
     pub fn new() -> Self { Self { matcher: PatternMatcher::new() } }
 

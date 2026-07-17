@@ -113,7 +113,7 @@ function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): l
     filterText: item.filterText,
     insertText: insertText ?? item.insertText ?? item.label,
     range,
-    ...(item.additionalTextEdits || item.command ? {} : {}),
+
   } as languages.CompletionItem;
 }
 

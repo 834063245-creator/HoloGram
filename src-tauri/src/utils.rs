@@ -11,7 +11,6 @@ use tracing_appender::non_blocking::WorkerGuard;
 use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::graph::Graph;
-use serde_json;
 use crate::os_sandbox;
 use crate::workspace;
 use crate::permissions;
@@ -551,7 +550,7 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
     let _ = engine_api::engine_read_graph(|g| save_baseline(&root, g));
     // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
-    let _ = regenerate_file_graph(&path);
+    let _ = regenerate_file_graph(path);
 
     // Record timeline event (mirrors engine binary's handle_analyze)
     let _ = engine_api::engine_record_timeline(
@@ -924,7 +923,7 @@ pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String
     let file_graph: serde_json::Value = serde_json::json!({
         "nodes": file_nodes.iter().map(|(f, ids)| serde_json::json!({
             "id": f,
-            "name": f.split('/').last().unwrap_or(f),
+            "name": f.split('/').next_back().unwrap_or(f),
             "type": "file",
             "location": f,
             "symbol_count": ids.len(),

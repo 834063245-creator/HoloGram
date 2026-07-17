@@ -150,11 +150,11 @@ fn has_suspicious_windows_path(path_str: &str) -> bool {
     for (i, &b) in bytes.iter().enumerate() {
         if b == b':' {
             // Position 1: "C:\..." drive letter
-            if i == 1 && bytes.get(i.wrapping_sub(1)).map_or(false, |b| b.is_ascii_alphabetic()) {
+            if i == 1 && bytes.get(i.wrapping_sub(1)).is_some_and(|b| b.is_ascii_alphabetic()) {
                 continue;
             }
             // Position 5: "\\?\C:\..." long path drive letter
-            if i == 5 && path_str.starts_with("\\\\?\\") && bytes.get(4).map_or(false, |b| b.is_ascii_alphabetic()) {
+            if i == 5 && path_str.starts_with("\\\\?\\") && bytes.get(4).is_some_and(|b| b.is_ascii_alphabetic()) {
                 continue;
             }
             // Any other colon is suspicious (ADS)

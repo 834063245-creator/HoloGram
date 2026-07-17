@@ -1360,7 +1360,7 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                         || func_text.ends_with(".put") || func_text.ends_with(".delete")
                         || func_text.ends_with(".patch")
                     {
-                        let obj = func_text.rsplitn(2, '.').nth(1).unwrap_or("");
+                        let obj = func_text.rsplit_once('.').map(|x| x.0).unwrap_or("");
                         if obj == "axios" || obj == "got" || obj == "superagent" {
                             marker = format!("<cross-lang:http:{}>", func_text);
                         }
@@ -1482,9 +1482,9 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                 }
 
                 // http.Get / http.Post / http.NewRequest — HTTP bridge
-                if func.kind() == "selector_expression" {
-                    if func_text.ends_with(".Get") || func_text.ends_with(".Post")
-                        || func_text.ends_with(".Do") || func_text.ends_with(".NewRequest")
+                if func.kind() == "selector_expression"
+                    && (func_text.ends_with(".Get") || func_text.ends_with(".Post")
+                        || func_text.ends_with(".Do") || func_text.ends_with(".NewRequest"))
                     {
                         let marker = format!("<cross-lang:http:{}>", func_text);
                         let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
@@ -1499,7 +1499,6 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                             added += 1;
                         }
                     }
-                }
             }
         }
 

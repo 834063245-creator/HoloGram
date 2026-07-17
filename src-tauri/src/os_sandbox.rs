@@ -253,11 +253,10 @@ pub mod imp {
             r"C:\Program Files (x86)\Git\bin\bash.exe",
         ];
         for path in &bash_candidates {
-            if std::path::Path::new(path).exists() {
-                if smoke_test_bash(path) {
+            if std::path::Path::new(path).exists()
+                && smoke_test_bash(path) {
                     return Shell::Bash(path.to_string());
                 }
-            }
         }
         if let Ok(output) = std::process::Command::new("where")
             .arg("git")

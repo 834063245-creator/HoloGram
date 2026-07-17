@@ -186,7 +186,7 @@ fn synthesize_pinia(graph: &mut Graph, file: &str, source: &str) -> usize {
 }
 
 fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
-    for (_id, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if matches!(node.kind, NodeKind::Function | NodeKind::Class | NodeKind::File) {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {

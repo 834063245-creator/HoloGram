@@ -233,7 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if req_owned.starts_with("cycle") {
                 handle_simple("cycle", req_owned.trim(), |g, _| json!(detect_cycles(g)))
             } else if req_owned.starts_with("coupling_report:") {
-                handle_simple("coupling_report:", req_owned.trim(), |g, a| coupling_report(g, a))
+                handle_simple("coupling_report:", req_owned.trim(), coupling_report)
             } else if req_owned.starts_with("graph_summary") {
                 handle_simple("graph_summary", req_owned.trim(), |g, _| graph_summary(g))
             } else if req_owned.starts_with("community_report") {
@@ -417,7 +417,7 @@ fn handle_check(request: &str) -> Vec<u8> {
     }
 
     // Auto-analyze if no graph loaded
-    if hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0).unwrap_or(false) == false {
+    if !hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0).unwrap_or(false) {
         let _ = hologram_engine::engine::engine_init(&root);
         let _ = hologram_engine::engine::engine_analyze(&root);
     }
@@ -446,7 +446,7 @@ fn handle_check(request: &str) -> Vec<u8> {
         };
         let props = check_timeline_props(&result);
         let _ = hologram_engine::engine::engine_record_timeline_with_props(
-            &event_type, None::<&str>, &summary, &props,
+            event_type, None::<&str>, &summary, &props,
         );
     }
 

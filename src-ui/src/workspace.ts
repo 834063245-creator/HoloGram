@@ -734,7 +734,8 @@ export class Workspace {
         }
         _shellCleanups.clear();
 
-        return new Promise<string>(async (resolve) => {
+        return new Promise<string>((resolve) => {
+          void (async () => {
           let fullOutput = '';
           let doneTimer: ReturnType<typeof setTimeout> | null = null;
           let settled = false;
@@ -798,7 +799,8 @@ export class Workspace {
           } catch (e: any) {
             resolveOnce(`错误: ${e}`);
           }
-        });
+        })();
+      });
       }
       const result = await agentInvoke<string>(name, args);
       return typeof result === 'string' ? result : JSON.stringify(result);

@@ -450,7 +450,7 @@ pub fn query_file_dataflow(
     let mut captures = cursor.captures(&query, root, source_bytes);
     while let Some((qmatch, cap_idx)) = captures.next() {
         let capture = &qmatch.captures[*cap_idx];
-        let cap_name: &str = &query.capture_names()[capture.index as usize];
+        let cap_name: &str = query.capture_names()[capture.index as usize];
         let node = capture.node;
         let start = node.start_byte();
         let name = extract_name(&node, source);
@@ -509,7 +509,7 @@ pub fn query_file_dataflow(
             CapKind::Read => {
                 if write_offsets.contains(&cap.start) { continue; }
                 if config.is_skip_name(&cap.name) { continue; }
-                if !cap.name.chars().next().map_or(false, |c| c.is_lowercase()) { continue; }
+                if !cap.name.chars().next().is_some_and(|c| c.is_lowercase()) { continue; }
                 scope_reads.entry(scope_id.clone()).or_default().insert(cap.name.clone());
             }
             CapKind::TriggerCall => {
@@ -543,7 +543,7 @@ pub fn query_file_dataflow(
         for v in read_vars {
             if seen.contains(v) { continue; }
             let is_shared = module_vars.contains(v)
-                || var_to_writers.get(v.as_str()).map_or(false, |w| {
+                || var_to_writers.get(v.as_str()).is_some_and(|w| {
                     w.len() > 1 || !w.contains(scope_id.as_str())
                 });
             if is_shared {

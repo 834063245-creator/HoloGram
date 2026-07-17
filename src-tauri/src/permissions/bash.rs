@@ -404,7 +404,7 @@ pub fn check(
     // PowerShell injection can hide in any segment of a piped command.
     let segments = split_pipeline(command);
     let targets: Vec<&str> = if segments.len() > 1 {
-        segments.iter().map(|s| *s).collect()
+        segments.to_vec()
     } else {
         vec![command]
     };
@@ -557,7 +557,7 @@ fn suspicious_command_heuristic(command: &str) -> Option<String> {
     // ── 2. Super-long single "word" without recognisable structure ──
     // A command with >2000 chars and very few spaces/semicolons/pipes
     // is unlikely to be a legitimate shell command
-    let separators = trimmed.matches(|c: char| c == ' ' || c == ';' || c == '|' || c == '&').count();
+    let separators = trimmed.matches([' ', ';', '|', '&']).count();
     if len > 2000 && separators < 5 {
         return Some(format!(
             "命令过长（{} 字符）且缺少可辨识的结构，需用户确认",

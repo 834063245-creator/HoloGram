@@ -926,7 +926,7 @@ export class GraphFold {
         tc = this.host.nodeCommMap.get(d.t);
       if (!sc && !tc) continue;
       if (sc === tc) continue;
-      const key = [sc || '', tc || ''].sort().join('::') + `::${d.edgeType}::${d.direction}`;
+      const key = [sc || '', tc || ''].sort((a, b) => a.localeCompare(b)).join('::') + `::${d.edgeType}::${d.direction}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const gs = sc ? this.galaxyMeta.find((g) => g.id === sc) : null;
@@ -973,7 +973,7 @@ export class GraphFold {
       const gs = this.galaxyMeta.find((g) => g.id === sc);
       const gt = this.galaxyMeta.find((g) => g.id === tc);
       if (!gs || !gt) continue;
-      const key = [sc, tc].sort().join('::');
+      const key = [sc, tc].sort((a, b) => a.localeCompare(b)).join('::');
       if (seen.has(key)) continue;
       seen.add(key);
       this.crossFlowSegments.push({

@@ -899,12 +899,10 @@ impl MemoryIndex {
             // Pending edges (always check)
             if has_pending {
                 for &(src, tgt, kind, _, _) in &self.pending_adds {
-                    if src == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
-                        if visited.insert(tgt) { queue.push_back((tgt, depth + 1)); }
-                    }
-                    if tgt == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
-                        if visited.insert(src) { queue.push_back((src, depth + 1)); }
-                    }
+                    if src == cur_handle && !self.pending_removes.contains(&(src, tgt, kind))
+                        && visited.insert(tgt) { queue.push_back((tgt, depth + 1)); }
+                    if tgt == cur_handle && !self.pending_removes.contains(&(src, tgt, kind))
+                        && visited.insert(src) { queue.push_back((src, depth + 1)); }
                 }
             }
         }

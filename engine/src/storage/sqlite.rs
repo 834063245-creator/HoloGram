@@ -484,7 +484,7 @@ impl SqliteDb {
 
     pub fn fts_search(&self, query: &str, limit: usize) -> Result<Vec<String>, String> {
         // Sanitize: escape FTS5 special characters, use simple MATCH
-        let safe = query.replace('"', "").replace('\'', "");
+        let safe = query.replace(['"', '\''], "");
         let pattern = format!("\"{}\"", safe);
         let mut stmt = self
             .conn
@@ -496,10 +496,8 @@ impl SqliteDb {
             .query_map(params![pattern, limit as i64], |row| row.get(0))
             .map_err(|e| format!("fts query: {}", e))?;
         let mut ids = Vec::new();
-        for row in rows {
-            if let Ok(id) = row {
-                ids.push(id);
-            }
+        for id in rows.flatten() {
+            ids.push(id);
         }
         Ok(ids)
     }
@@ -668,16 +666,14 @@ mod tests {
         let db = SqliteDb::open(&tmp).unwrap();
 
         // Write one node of each NodeKind variant
-        let all_kinds = vec![
-            NodeKind::Symbol,
+        let all_kinds = [NodeKind::Symbol,
             NodeKind::Function,
             NodeKind::Class,
             NodeKind::Module,
             NodeKind::File,
             NodeKind::Interface,
             NodeKind::Medium,
-            NodeKind::Temporal,
-        ];
+            NodeKind::Temporal];
         let nodes: Vec<Node> = all_kinds.iter()
             .map(|k| make_test_node(k.as_str(), *k))
             .collect();

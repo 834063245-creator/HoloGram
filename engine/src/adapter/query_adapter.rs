@@ -18,7 +18,7 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Parser, Query, QueryCursor};
 
 thread_local! {
-    static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = RefCell::new(None);
+    static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = const { RefCell::new(None) };
 }
 
 // ── Scope boundary (Phase 1) ──
@@ -29,7 +29,7 @@ struct Scope {
     end: usize,
 }
 
-fn find_scope<'a>(pos: usize, scopes: &'a [Scope]) -> Option<&'a str> {
+fn find_scope(pos: usize, scopes: &[Scope]) -> Option<&str> {
     scopes
         .iter()
         .rev() // last-declared scope wins (innermost)
@@ -40,7 +40,7 @@ fn find_scope<'a>(pos: usize, scopes: &'a [Scope]) -> Option<&'a str> {
 /// Find the scope that strictly contains a node (start < node_start),
 /// excluding the node's own scope. Used for @fn/@class where the
 /// declaration IS the scope boundary.
-fn find_enclosing_scope<'a>(node_start: usize, scopes: &'a [Scope]) -> Option<&'a str> {
+fn find_enclosing_scope(node_start: usize, scopes: &[Scope]) -> Option<&str> {
     scopes
         .iter()
         .rev()
@@ -178,7 +178,7 @@ impl LanguageAdapter for QueryStructureAdapter {
             let mut borrow = cell.borrow_mut();
             let reuse = borrow
                 .as_ref()
-                .map_or(false, |(_, _, cached_ext)| cached_ext == ext);
+                .is_some_and(|(_, _, cached_ext)| cached_ext == ext);
             if !reuse {
                 let mut p = Parser::new();
                 if p.set_language(&lang).is_err() {
@@ -223,7 +223,7 @@ fn process_query(
     let file_id = normalize_path(file_path);
     // ponytail: include extension in module_id so CrossFileResolver can match
     // import targets to module nodes. Match the format used by the old adapters.
-    let module_id = file_id.replace('/', ".").replace('\\', ".");
+    let module_id = file_id.replace(['/', '\\'], ".");
 
     // Module node
     let mut file_node = Node::new(&module_id, &file_id, NodeKind::File);
@@ -288,7 +288,7 @@ fn process_query(
         let mut trait_name: Option<String> = None;
         let mut type_name: Option<String> = None;
         for capture in qmatch.captures {
-            let cn: &str = &query.capture_names()[capture.index as usize];
+            let cn: &str = query.capture_names()[capture.index as usize];
             match cn {
                 "fn" | "class" | "interface" | "call" | "import" | "inherit"
                 | "var" | "write" | "throws" | "usage" => {
@@ -662,7 +662,7 @@ fn resolve_fn(
             .and_then(|n| n.utf8_text(source).ok())
             .map(|s| s.to_string());
         let value = node.child_by_field_name("value");
-        let is_fn = value.map_or(false, |v| {
+        let is_fn = value.is_some_and(|v| {
             let vk = v.kind();
             func_kinds.contains(&vk) || vk == "function_expression" || vk == "generator_function_expression"
         });
@@ -748,7 +748,7 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
         "scoped_call_expression", "nullsafe_member_call_expression",
     ];
     let nk = node.kind();
-    if FUNC_FIELD_NODES.iter().any(|&s| s == nk) {
+    if FUNC_FIELD_NODES.contains(&nk) {
         // Try "function" field first (JS/TS/Python/Rust/Go/Swift/C#/Scala)
         if let Some(result) = node
             .child_by_field_name("function")
@@ -914,7 +914,7 @@ fn is_definition_site(node: &tree_sitter::Node, _source: &[u8]) -> bool {
 
 /// Check if identifier is inside a parameter declaration (function signature).
 fn is_param_decl(node: &tree_sitter::Node, _source: &[u8]) -> bool {
-    let mut cur = Some(node.clone());
+    let mut cur = Some(*node);
     while let Some(p) = cur.and_then(|n| n.parent()) {
         let k = p.kind();
         if k.contains("parameter") || k.contains("param") { return true; }
@@ -1098,7 +1098,7 @@ fn emit_class_inherits(
                     // Extract up to '{' or end
                     let clause = after.split('{').next().unwrap_or(after);
                     for part in clause.split(',') {
-                        let name = part.trim().split_whitespace().next().unwrap_or("").trim();
+                        let name = part.split_whitespace().next().unwrap_or("").trim();
                         if !name.is_empty() && name != "{" && name != "}" {
                             let target_nid = format!("{}.{}", module_id, name);
                             *counter += 1;
@@ -1174,7 +1174,7 @@ fn extract_base_names_from_source(clause: &tree_sitter::Node, source: &[u8]) -> 
                 .trim_start_matches("implements ")
                 .trim_start_matches(':');
             for p in text.split(',') {
-                let t = p.trim().split_whitespace().next().unwrap_or("").trim();
+                let t = p.split_whitespace().next().unwrap_or("").trim();
                 if !t.is_empty() {
                     names.push(t.to_string());
                 }

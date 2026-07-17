@@ -90,7 +90,7 @@ pub fn detect_framework_routes(
         // Use parse cache when available; fall back to disk read
         let source_opt = parse_cache.get(&abs_key).map(|(s, _)| s.clone());
         let source: String;
-        let source_ref: &str;
+        
         if let Some(cached) = source_opt {
             source = cached;
         } else {
@@ -100,7 +100,7 @@ pub fn detect_framework_routes(
                 Err(_) => continue,
             }
         }
-        source_ref = &source;
+        let source_ref: &str = &source;
         if frameworks::django::is_django_url_file(file) {
             let routes = frameworks::django::detect_django_routes(file, source_ref);
             added += inject_routes(graph, &routes);
@@ -199,14 +199,13 @@ pub fn detect_framework_routes(
                 let routes = frameworks::slim::detect_slim_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
             }
-        } else if frameworks::rocket::is_rocket_candidate(file) {
-            if source_ref.contains("#[get(") || source_ref.contains("#[post(")
-                || source_ref.contains("#[put(") || source_ref.contains("#[delete(")
+        } else if frameworks::rocket::is_rocket_candidate(file)
+            && (source_ref.contains("#[get(") || source_ref.contains("#[post(")
+                || source_ref.contains("#[put(") || source_ref.contains("#[delete("))
             {
                 let routes = frameworks::rocket::detect_rocket_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
             }
-        }
     }
 
     added

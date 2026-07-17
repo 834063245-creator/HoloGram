@@ -31,6 +31,12 @@ pub struct ParallelParser {
     registry: AdapterRegistry,
 }
 
+impl Default for ParallelParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParallelParser {
     pub fn new() -> Self {
         Self {
@@ -136,7 +142,7 @@ mod tests {
         assert_eq!(results.len(), 2);
         // a.py should have 2 nodes (foo, Bar)
         let a = results.iter().find(|r| r.path.ends_with("a.py")).unwrap();
-        assert!(a.nodes.len() >= 1, "should extract at least 1 symbol from a.py");
+        assert!(!a.nodes.is_empty(), "should extract at least 1 symbol from a.py");
 
         let _ = fs::remove_dir_all(&tmp);
     }

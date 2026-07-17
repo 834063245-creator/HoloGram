@@ -50,7 +50,7 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
 
         // Extract handler: the atom after the path (starts with :)
         let handler = if let Some(atom_pos) = rest.rfind(':') {
-            rest[atom_pos..].split(|c: char| c == ',' || c == ' ' || c == ')')
+            rest[atom_pos..].split([',', ' ', ')'])
                 .next().unwrap_or("").trim_matches(':').to_string()
         } else { continue };
 

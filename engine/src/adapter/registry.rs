@@ -13,6 +13,12 @@ pub struct AdapterRegistry {
     ext_index: HashMap<String, usize>,
 }
 
+impl Default for AdapterRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdapterRegistry {
     pub fn new() -> Self {
         let mut registry = Self { adapters: Vec::new(), ext_index: HashMap::new() };

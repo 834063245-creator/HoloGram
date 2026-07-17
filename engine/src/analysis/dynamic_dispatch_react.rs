@@ -108,7 +108,7 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
 
     let render_id = {
         let mut rid = None;
-        for (_id, node) in &graph.nodes {
+        for node in graph.nodes.values() {
             if node.name == "render" && node.kind == NodeKind::Function {
                 if let Some(ref loc) = node.location {
                     if loc.starts_with(file) { rid = Some(node.id.clone()); break; }
@@ -289,7 +289,7 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
 
 /// Find the File node for the given file path.
 fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
-    for (_id, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if node.kind == NodeKind::File {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {
@@ -302,7 +302,7 @@ fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
 }
 
 fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
-    for (_id, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if matches!(node.kind, NodeKind::Function | NodeKind::Class | NodeKind::File) {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {

@@ -860,8 +860,7 @@
   background: rgba(4, 10, 22, 0.4);
   border-top: 1px solid rgba(40, 60, 100, 0.12);
   max-height: 240px;
-  overflow-y: auto;
-  overflow: hidden;
+  overflow: auto;
 }
 .msg-tool-card.tool-expanded .msg-tool-result {
   display: block;

@@ -162,7 +162,7 @@ fn parse_rules(rules_json: &serde_json::Value) -> Result<Vec<PolicyRule>, String
             kinds
                 .iter()
                 .filter_map(|k| k.as_str())
-                .filter_map(|k| EdgeKind::from_str(k))
+                .filter_map(EdgeKind::from_str)
                 .collect()
         } else {
             vec![EdgeKind::Imports] // default: check imports only

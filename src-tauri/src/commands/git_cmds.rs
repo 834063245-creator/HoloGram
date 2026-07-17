@@ -75,8 +75,7 @@ pub(crate) async fn git_status(
     let mut ahead = 0i32;
     let mut behind = 0i32;
     let first_line = branch_porcelain.lines().next().unwrap_or("");
-    if first_line.starts_with("## ") {
-        let header = &first_line[3..];
+    if let Some(header) = first_line.strip_prefix("## ") {
         if let Some(dot_pos) = header.find("...") {
             branch = header[..dot_pos].to_string();
             let rest = &header[dot_pos..];

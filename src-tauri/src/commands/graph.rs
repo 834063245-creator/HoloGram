@@ -172,7 +172,7 @@ pub(crate) async fn analyze_in_background(path: String, app: tauri::AppHandle) -
 
 #[tauri::command]
 pub(crate) fn engine_get_graph() -> Result<String, String> {
-    crate::utils::with_graph(|g| graph_summary(g))
+    crate::utils::with_graph(graph_summary)
 }
 
 #[tauri::command]

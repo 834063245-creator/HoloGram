@@ -253,7 +253,7 @@ fn tokenize(query: &str) -> Vec<String> {
 /// PascalCase: first char uppercase ASCII, at least 4 chars.
 fn is_pascal_case(s: &str) -> bool {
     s.len() >= 4
-        && s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+        && s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
@@ -268,7 +268,7 @@ fn disambiguate<'a>(candidates: &[&'a Node], pascal_tokens: &[String]) -> Vec<&'
     let in_context: Vec<&Node> = candidates.iter().filter(|n| {
         // Get the container: everything before the last :: in the qualified name.
         // The id typically looks like "src.module.ClassName.method"
-        let container = n.id.rsplitn(2, '.').nth(1).unwrap_or("");
+        let container = n.id.rsplit_once('.').map(|x| x.0).unwrap_or("");
         pascal_tokens.iter().any(|pt| {
             container.eq_ignore_ascii_case(pt)
                 || container.contains(pt.as_str())
@@ -306,13 +306,13 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
                 let to = &ctx.named_nodes[j];
                 if let Some(path) = bfs_path(ctx, &from.id, &to.id, edge_kind_filter.as_ref(), false)
                 {
-                    if best_path.as_ref().map_or(true, |p| path.len() > p.len()) {
+                    if best_path.as_ref().is_none_or(|p| path.len() > p.len()) {
                         best_path = Some(path);
                     }
                 }
                 if let Some(path) = bfs_path(ctx, &to.id, &from.id, edge_kind_filter.as_ref(), true)
                 {
-                    if best_path.as_ref().map_or(true, |p| path.len() > p.len()) {
+                    if best_path.as_ref().is_none_or(|p| path.len() > p.len()) {
                         best_path = Some(path);
                     }
                 }
@@ -383,7 +383,7 @@ fn scan_boundaries_at_breakpoints(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
 
         let language = guess_language(&file_path);
         let boundaries = crate::analysis::dynamic_boundaries::scan_dynamic_boundaries(
-            &content, &language, 1,
+            &content, language, 1,
         );
 
         for bm in boundaries {
@@ -459,8 +459,8 @@ fn bfs_path(
             if explore_count >= MAX_EXPLORE {
                 break;
             }
-            if let Some(ref ef) = edge_filter {
-                if edge.kind != **ef {
+            if let Some(ef) = edge_filter {
+                if edge.kind != *ef {
                     continue;
                 }
             }
@@ -477,8 +477,8 @@ fn bfs_path(
             if explore_count >= MAX_EXPLORE {
                 break;
             }
-            if let Some(ref ef) = edge_filter {
-                if edge.kind != **ef {
+            if let Some(ef) = edge_filter {
+                if edge.kind != *ef {
                     continue;
                 }
             }

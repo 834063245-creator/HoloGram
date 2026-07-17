@@ -89,9 +89,9 @@ pub(crate) async fn hologram_run_check(
                 format!("简报未通过：{} 条违规", violation_count)
             };
             let props = check_timeline_props(&result);
-            if engine_api::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props).is_err() {
+            if engine_api::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props).is_err() {
                 let _ = engine_api::engine_init(&root);
-                let _ = engine_api::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
+                let _ = engine_api::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props);
             }
         }
 
@@ -107,7 +107,7 @@ pub(crate) async fn hologram_record_event(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_record_event", &state)?;
-    let _ = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         engine_api::engine_record_timeline(&event_type, file.as_deref(), &summary)
             .map_err(|e| format!("时间轴写入失败: {}", e))
     }).await.map_err(|e| format!("时间轴写入失败: {}", e))??;

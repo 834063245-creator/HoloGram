@@ -120,7 +120,7 @@ pub(crate) async fn search_code(
             if skip_extensions.iter().any(|skip| ext == *skip || name.ends_with(skip)) {
                 continue;
             }
-            if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) {
+            if !extensions.is_empty() && !extensions.contains(&ext) {
                 continue;
             }
             let fp_str = fp.to_string_lossy().to_string();

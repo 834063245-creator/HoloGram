@@ -153,7 +153,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     // ── Dataflow: run on changed_files for L3/L4 signals ──
     let df_counts: Option<DataflowSignalCounts> = if !changed_files.is_empty() {
         let paths: Vec<std::path::PathBuf> = changed_files.iter()
-            .map(|f| std::path::PathBuf::from(f))
+            .map(std::path::PathBuf::from)
             .collect();
         let df_results = query_dataflow_files(&paths);
         let mut l3_shared = 0usize; let mut l3_reads = 0usize; let mut l3_writes = 0usize;

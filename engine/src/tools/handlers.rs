@@ -38,8 +38,8 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
             "node": node_to_value(&node),
             "neighbor_count": nb.len(),
             "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
-            "incoming": incoming.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
-            "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
+            "incoming": incoming.iter().map(edge_to_value).collect::<Vec<_>>(),
+            "outgoing": outgoing.iter().map(edge_to_value).collect::<Vec<_>>(),
         })
     }) {
         Ok(value) if value.get("error").is_none() => return ToolResponse::Success(value),
@@ -555,7 +555,7 @@ pub(crate) fn handler_search(args: &Value) -> ToolResponse {
             let mut out = json!({
                 "query": query_str,
                 "count": results.len(),
-                "results": results.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
+                "results": results.iter().map(node_to_value).collect::<Vec<_>>(),
                 "engine": "fts5",
             });
             // append vector results if available
@@ -607,7 +607,7 @@ pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     for (slot_key, distance) in results.keys.iter().zip(results.distances.iter()) {
         let slot = *slot_key as usize;
         if slot < slot_data.len() {
-            let similarity = 1.0 - (*distance as f32).min(2.0).max(0.0);
+            let similarity = 1.0 - (*distance).min(2.0).max(0.0);
             hits.push((slot_data[slot].clone(), similarity));
         }
     }
@@ -649,7 +649,7 @@ pub(crate) fn handler_explore(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_graph_summary(_args: &Value) -> ToolResponse {
-    ToolResponse::Success(with_store(|idx| graph_summary_from_index(idx)))
+    ToolResponse::Success(with_store(graph_summary_from_index))
 }
 
 pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {
@@ -679,7 +679,7 @@ pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {
             .map(|(display_idx, (cid, node_ids))| {
                 let truncated = node_ids.len() > max_nodes;
                 let shown: Vec<_> = node_ids.iter().take(max_nodes).cloned().collect();
-                let label = derive_comm_label(&node_ids, idx);
+                let label = derive_comm_label(node_ids, idx);
                 json!({
                     "id": format!("comm_{}", cid),
                     "size": node_ids.len(),
@@ -723,7 +723,7 @@ pub(crate) fn handler_diff(args: &Value) -> ToolResponse {
                 });
             }
         };
-        let diff = before.diff(&after);
+        let diff = before.diff(after);
         let added_nodes: Vec<_> = diff.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
         let removed_nodes: Vec<_> = diff.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
         let modified_nodes: Vec<_> = diff.modified_nodes.iter().map(|(old, new)| json!({
@@ -776,14 +776,11 @@ pub(crate) fn handler_analyze(args: &Value) -> ToolResponse {
     std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
-            match engine::engine_analyze(&root_clone) {
-                Ok(_) => {
-                    engine::with_engine(|eng| {
-                        eng.stop_watcher();
-                        eng.start_watcher(root_clone.clone(), None::<Box<dyn Fn(String) + Send + 'static>>);
-                    });
-                }
-                Err(_) => {}
+            if engine::engine_analyze(&root_clone).is_ok() {
+                engine::with_engine(|eng| {
+                    eng.stop_watcher();
+                    eng.start_watcher(root_clone.clone(), None::<Box<dyn Fn(String) + Send + 'static>>);
+                });
             }
         })
         .ok();
@@ -969,7 +966,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
     };
     if let Err(e) = engine::engine_write(|idx| {
         for nid in &matched_ids {
-            idx.rename_node_name(nid, &new_name);
+            idx.rename_node_name(nid, new_name);
         }
     }) {
         return ToolResponse::Degraded {

@@ -29,7 +29,7 @@ pub(crate) fn detect_rocket_routes(file: &str, source: &str) -> Vec<DetectedRout
         if t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("async fn ") {
             if let Some((m, p)) = pending.take() {
                 let handler = t.trim_start_matches("pub ").trim_start_matches("async ").trim_start_matches("fn ")
-                    .split(|c: char| c == '(' || c == '<' || c == ' ').next().unwrap_or("<handler>").to_string();
+                    .split(['(', '<', ' ']).next().unwrap_or("<handler>").to_string();
                 if !handler.is_empty() {
                     result.push((m, format!("/{}", p.trim_matches('/')), handler, file.to_string(), li + 1));
                 }

@@ -10,8 +10,8 @@ use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use crate::path_utils::normalize_path;
 
 thread_local! {
-    static TS_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
-    static JS_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
+    static TS_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
+    static JS_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
 }
 
 /// Combined JavaScript / TypeScript / TSX adapter.
@@ -19,6 +19,12 @@ thread_local! {
 pub struct TypeScriptAdapter {
     ts_lang: Language,
     js_lang: Language,
+}
+
+impl Default for TypeScriptAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TypeScriptAdapter {

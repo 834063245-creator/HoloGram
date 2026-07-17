@@ -308,7 +308,7 @@ impl Engine {
                 .as_ref()
                 .ok_or_else(|| "Engine not initialized — call init() first".to_string())?;
 
-            store.read(|idx| graph_from_index(idx))
+            store.read(graph_from_index)
         };
         Ok(f(&graph))
     }

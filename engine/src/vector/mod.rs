@@ -132,7 +132,7 @@ impl CodeVectorIndex {
         for (slot_key, distance) in results.keys.iter().zip(results.distances.iter()) {
             let slot = *slot_key as usize;
             if slot < slots.len() {
-                let similarity = 1.0 - (*distance as f32).min(2.0).max(0.0);
+                let similarity = 1.0 - (*distance).min(2.0).max(0.0);
                 output.push((slots[slot].clone(), similarity));
             }
         }

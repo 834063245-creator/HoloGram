@@ -12,12 +12,18 @@ use tree_sitter::{Language, Parser};
 thread_local! {
     // ponytail: cached (Parser, Language, ext). Language is stored so GRAMMAR_LOADER
     // RwLock is hit only once per extension per thread, not once per file.
-    static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = RefCell::new(None);
+    static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = const { RefCell::new(None) };
 }
 
 /// Generic tree-sitter adapter covering all languages beyond Python and JS/TS.
 /// Each language is matched explicitly due to inconsistent crate APIs.
 pub struct TreeSitterAdapter;
+
+impl Default for TreeSitterAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TreeSitterAdapter {
     pub fn new() -> Self { Self }
@@ -30,7 +36,7 @@ impl TreeSitterAdapter {
             // RwLock<HashMap> — 1468 files × 6 threads contending = memory barrier storm.
             // Cache Language in TL_PARSER so GRAMMAR_LOADER is called once per extension
             // per thread (~10 calls total instead of 1468×6).
-            let reuse = borrow.as_ref().map_or(false, |(_, _, cached_ext)| cached_ext == ext);
+            let reuse = borrow.as_ref().is_some_and(|(_, _, cached_ext)| cached_ext == ext);
             if !reuse {
                 let lang = match GRAMMAR_LOADER.get(ext) {
                     Some(l) => l,
@@ -349,7 +355,7 @@ pub fn add(a: i32, b: i32) -> i32 {
         let a = TreeSitterAdapter;
         let (nodes, edges, _) = a.analyze("main.go", "");
         // Should have the module node at minimum
-        assert!(nodes.len() >= 1, "should have at least module node");
+        assert!(!nodes.is_empty(), "should have at least module node");
         assert!(edges.is_empty());
     }
 
