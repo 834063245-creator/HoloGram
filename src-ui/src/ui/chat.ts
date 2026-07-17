@@ -1175,6 +1175,52 @@ export class ChatPanel {
 
   /** Run a goal autonomously — Agent keeps going until done or failed.
    *  ponytail: same UI scaffolding as sendAgentText, but calls runGoal instead of run. */
+  /** Resume a previously paused goal. */
+  private runGoalResume(): void {
+    if (!this.agent || this._activeExec().isRunning) return;
+    const signal = this._activeExec().start();
+    getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
+
+    Session.getTurnPairs(this.panelId).push({
+      userText: '/goal resume',
+      userBubble: null,
+      assistantBubble: null,
+      sessionIndex: this.agent.nextInsertIndex,
+    });
+    this.appendUserBubble('🔄 恢复目标');
+
+    {
+      const sessStore = getChatStore(this.panelId).sess.getState();
+      const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
+      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+    }
+    this.agent
+      .resumeGoal(signal)
+      .then((result) => {
+        if (result.status === 'completed') {
+          this.addNotice(`✅ 目标达成: ${result.summary.slice(0, 120)}`, 'info');
+        } else if (result.status === 'paused') {
+          this.addNotice(`⏸️ ${result.summary}`, 'info');
+        } else if (result.status === 'failed') {
+          this.addNotice(`❌ 目标失败: ${result.summary.slice(0, 120)}`, 'warn');
+        } else {
+          this.addNotice('目标被中断', 'warn');
+        }
+      })
+      .catch((err: any) => {
+        if (err.message?.includes('aborted')) {
+          this.addNotice('目标恢复已中止', 'info');
+        } else {
+          this.addNotice(`目标恢复错误: ${err.message || err}`, 'error');
+        }
+      })
+      .finally(() => {
+        this._activeExec().done();
+        this.finishTurn();
+        bus.emit('chat:turn-done', {});
+      });
+  }
+
   private runGoal(goal: string): void {
     if (!this.agent || this._activeExec().isRunning) return;
     if (Session.hasRunningBackgroundSession(this.panelId)) {
@@ -1200,14 +1246,15 @@ export class ChatPanel {
     this.agent
       .runGoal(signal, goal)
       .then((result) => {
-        this.addNotice(
-          result.status === 'completed'
-            ? `✅ 目标达成: ${result.summary.slice(0, 120)}`
-            : result.status === 'failed'
-              ? `❌ 目标失败: ${result.summary.slice(0, 120)}`
-              : '目标被中断',
-          result.status === 'completed' ? 'info' : 'warn',
-        );
+        if (result.status === 'completed') {
+          this.addNotice(`✅ 目标达成: ${result.summary.slice(0, 120)}`, 'info');
+        } else if (result.status === 'paused') {
+          this.addNotice(`⏸️ ${result.summary}`, 'info');
+        } else if (result.status === 'failed') {
+          this.addNotice(`❌ 目标失败: ${result.summary.slice(0, 120)}`, 'warn');
+        } else {
+          this.addNotice('目标被中断', 'warn');
+        }
       })
       .catch((err: any) => {
         if (err.message?.includes('aborted')) {
@@ -1260,6 +1307,10 @@ export class ChatPanel {
         const goal = text.slice('/goal '.length).trim();
         this.inputArea.value = '';
         this.inputArea.style.height = 'auto';
+        if (goal === 'resume') {
+          this.runGoalResume();
+          return;
+        }
         if (!goal) {
           this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
           return;

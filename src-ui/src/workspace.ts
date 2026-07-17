@@ -12,6 +12,7 @@
 // Switching workspaces is atomic: old.deactivate() → new = Workspace.open() → assign.
 
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
+import { AgentStore } from './agent/agent-store';
 import { auraShutdown } from './agent/aura-memory';
 import { type CompactionConfig, createCompactionTools } from './agent/compaction-model';
 import { type SubAgentHandle, SubAgentPool } from './agent/coordinator';
@@ -142,6 +143,7 @@ export class Workspace {
   memoryManager: MemoryManager | null = null;
   taskManager: TaskManager = new TaskManager();
   skillRegistry: SkillRegistry | null = null;
+  agentStore: AgentStore | null = null;
 
   // ── Sub-agent pool ──
   subAgentPool = new SubAgentPool();
@@ -452,6 +454,10 @@ export class Workspace {
     // Clear agent & memory
     // Stop all running sub-agents before clearing
     this.subAgentPool.stopAll();
+    // Persist agent state before clearing
+    if (this.agent) {
+      this.agent.saveState('done').catch(() => {});
+    }
     this.agent = null;
     try {
       await auraShutdown();
@@ -588,6 +594,9 @@ export class Workspace {
     } catch {
       /* file missing is fine */
     }
+
+    // Init agent state persistence
+    this.agentStore = new AgentStore(this.path);
 
     // Init skill registry (hot-loads on first Skill tool call)
     this.skillRegistry = new SkillRegistry(this.path);
@@ -849,6 +858,8 @@ export class Workspace {
     this.prov = prov;
     this.registry = effectiveRegistry;
     this.agent = new Agent(prov, effectiveRegistry, systemPrompt, {
+      agentId: 'main',
+      parentId: null,
       eventSink: chatPanel.eventSink,
       execState: chatPanel['_exec'],
       onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
@@ -880,6 +891,7 @@ export class Workspace {
 
     // Load persisted auto-tune config (fire-and-forget)
     this.agent.setCompactionConfigPath(this.path);
+    this.agent.setAgentStore(this.agentStore);
     this.agent.applyAutoTuneConfig().catch(() => {});
 
     // Sub-agent tool — with async pool for fire-and-forget spawn
@@ -1086,6 +1098,7 @@ export class Workspace {
           ? this._planRegistry(r)
           : r;
         const newAgent = new Agent(p, effR, sysPrompt, {
+          agentId: 'main',
           eventSink: chatPanel.eventSink,
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
@@ -1093,6 +1106,7 @@ export class Workspace {
           maxTokens: act.maxTokens ?? 0,
         });
         newAgent.setCompactionConfigPath(this.path);
+        newAgent.setAgentStore(this.agentStore!);
         newAgent.applyAutoTuneConfig().catch(() => {});
         if (hookCtx) {
           const hooks = new HookRegistry();

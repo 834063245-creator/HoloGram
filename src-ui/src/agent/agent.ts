@@ -23,6 +23,7 @@ import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
+import { type AgentRecord, type AgentStore, type GoalState } from './agent-store';
 import { createSubAgentSink } from './subagent-sink';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
@@ -48,6 +49,10 @@ export interface AgentOptions {
   onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
   /** Sub-agent nesting depth (0 = root, 1 = first fork). Auto-incremented. */
   subagentDepth?: number;
+  /** Unique agent identifier. Auto-generated if not provided. */
+  agentId?: string;
+  /** ID of the agent that spawned this one. null for main agent. */
+  parentId?: string | null;
   /** Custom event sink. When set, Agent emits here instead of the global bus.
    *  Used by sub-agents to capture output into SubAgentPart. */
   eventSink?: (ev: AgentEvent) => void;
@@ -110,6 +115,11 @@ export class Agent {
   // Sub-agent depth tracking: 0 = root, 1 = first fork, 2 = grandchild, etc.
   private _subagentDepth = 0;
   private static readonly MAX_SUBAGENT_DEPTH = 3;
+
+  // Agent identity — persisted for lifecycle tracking, session recovery, lineage
+  readonly id: string;
+  readonly parentId: string | null;
+  private agentStore: AgentStore | null = null;
 
   // Isolation ID for sub-agents — injected into tool args so Rust backend
   // can resolve worktree paths via forward_map_path.
@@ -183,6 +193,8 @@ export class Agent {
     this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
     this._subagentDepth = opts.subagentDepth ?? 0;
+    this.id = opts.agentId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.parentId = opts.parentId ?? null;
     this._execState = opts.execState ?? execState;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
@@ -385,6 +397,29 @@ export class Agent {
     return this._subAgentPool?.runningCount ?? 0;
   }
 
+  // ── Agent identity & persistence ──
+
+  /** Wire persistence store. Main agent gets this from Workspace;
+   *  sub-agents inherit the same store from their parent. */
+  setAgentStore(store: AgentStore): void {
+    this.agentStore = store;
+  }
+
+  /** Persist current state + session to disk. Best-effort — never throws. */
+  async saveState(status: AgentRecord['status'] = 'running'): Promise<void> {
+    if (!this.agentStore) return;
+    try {
+      await this.agentStore.save(this.id, {
+        parentId: this.parentId,
+        description: this.id === 'main' ? '主Agent' : `子Agent (depth ${this._subagentDepth})`,
+        status,
+        subagentDepth: this._subagentDepth,
+      }, this.session);
+    } catch {
+      /* persistence is best-effort — never block the agent loop */
+    }
+  }
+
   /** Apply queued inserts at a safe boundary (top of loop, after tool results committed). */
   private _applyPendingInserts(): void {
     if (this._pendingInserts.length === 0) return;
@@ -465,6 +500,8 @@ export class Agent {
     if (this._onSessionPersisted) {
       try { this._onSessionPersisted(this.sessionId, this.session); } catch { /* best-effort */ }
     }
+    // Persist agent state after each completed turn
+    this.saveState('running').catch(() => {});
   }
 
   // ══════════════════════════════════════════════════════
@@ -472,17 +509,37 @@ export class Agent {
   // ══════════════════════════════════════════════════════
 
   /** Run a goal autonomously: plan → delegate to sub-agents → verify → repeat.
-   *  Keeps going until the goal is achieved or confirmed impossible.
-   *  The model drives the loop; sub-agents (via agent_spawn) do the concrete work
-   *  with clean contexts, preventing long-context drift and hallucination.
+   *  Automatically resumes from a previously paused goal if one exists for this agent
+   *  and the goal text matches. On user interrupt, saves a checkpoint and returns
+   *  'paused' instead of 'aborted' — continue with resumeGoal().
    *
    *  ponytail: serial by design. Parallel is an optimization, not a correctness
    *  requirement — serial sub-agent spawns guarantee no file conflicts. */
   async runGoal(
     signal: AbortSignal,
     goal: string,
-  ): Promise<{ status: 'completed' | 'failed' | 'aborted'; summary: string }> {
-    const goalPrompt = `<goal>
+  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+    // Check if resuming a paused goal (same goal text + same agent)
+    let resume: GoalState | null = null;
+    if (this.agentStore) {
+      const saved = await this.agentStore.loadGoal(this.id);
+      if (saved && saved.status === 'paused' && saved.goal === goal) {
+        resume = saved;
+        // Reload session from disk — it was saved when paused
+        const data = await this.agentStore.load(this.id);
+        if (data?.messages && data.messages.length > 0) {
+          this.session = data.messages;
+          this._execState.bumpVersion();
+        }
+      }
+    }
+
+    const startIter = resume?.iteration ?? 0;
+    let stallRounds = resume?.stallRounds ?? 0;
+
+    // Push goal prompt only on fresh start (not resume)
+    if (!resume) {
+      const goalPrompt = `<goal>
 ## 总体目标
 ${goal}
 
@@ -504,19 +561,66 @@ ${goal}
 
 现在开始。
 </goal>`;
+      this.session.push({ role: 'user', content: goalPrompt });
+      this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
+    } else {
+      // Resume: push a short context note so the model knows it's resuming
+      this.session.push({
+        role: 'user',
+        content: `<system-reminder>
+目标恢复执行 (第 ${startIter + 1} 轮)。已完成 ${startIter} 轮。
 
-    this.session.push({ role: 'user', content: goalPrompt });
-    this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
+直接继续下一步——规划→委派→验证。不要复盘已完成的工作。
+如果目标已全部达成，输出 [GOAL_COMPLETE]。
+如果遇到无法克服的障碍，输出 [GOAL_FAILED]。
 
-    let stallRounds = 0;
+禁止反问用户。禁止只分析不行动。
+</system-reminder>`,
+      });
+      this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 从第 ${startIter + 1} 轮恢复…` });
+    }
 
-    for (let iter = 0; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
+    for (let iter = startIter; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
       bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
+
+      // ── Checkpoint before each runLoop — records where we are so pause can resume ──
+      // ponytail: sessionBefore lets us strip partial turn messages on abort.
+      const sessionBefore = this.session.length;
+      if (this.agentStore) {
+        await this.agentStore.saveGoal(this.id, {
+          goal,
+          iteration: iter,
+          stallRounds,
+          status: 'active',
+          createdAt: resume?.createdAt ?? Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
 
       try {
         await this.runLoop(signal);
       } catch (e: any) {
-        if (e?.message === 'aborted') return { status: 'aborted', summary: '被中断' };
+        if (e?.message === 'aborted') {
+          // ── Pause: strip partial turn, save, return paused ──
+          this.session = this.session.slice(0, sessionBefore);
+          if (this.agentStore) {
+            await this.agentStore.saveGoal(this.id, {
+              goal,
+              iteration: iter,
+              stallRounds,
+              status: 'paused',
+              createdAt: resume?.createdAt ?? Date.now(),
+              updatedAt: Date.now(),
+            });
+            await this.saveState('running');
+          }
+          this._sink({
+            kind: EventKind.Notice,
+            level: 'info',
+            text: `[目标] 已暂停于第 ${iter + 1} 轮。使用 /goal resume 继续。`,
+          });
+          return { status: 'paused', summary: `已暂停于第 ${iter + 1}/${Agent.MAX_GOAL_ITERATIONS} 轮。使用 /goal resume 继续。` };
+        }
         return { status: 'failed', summary: `执行异常: ${e?.message || e}` };
       }
 
@@ -527,10 +631,13 @@ ${goal}
       }
 
       if (/\[GOAL_COMPLETE\]/i.test(last)) {
+        // Delete goal checkpoint on clean completion
+        this.agentStore?.deleteGoal(this.id).catch(() => {});
         this._sink({ kind: EventKind.Notice, level: 'info', text: '✅ 目标达成' });
         return { status: 'completed', summary: last };
       }
       if (/\[GOAL_FAILED\]/i.test(last)) {
+        this.agentStore?.deleteGoal(this.id).catch(() => {});
         this._sink({ kind: EventKind.Notice, level: 'warn', text: '❌ 目标失败' });
         return { status: 'failed', summary: last };
       }
@@ -541,6 +648,7 @@ ${goal}
       if (!hasToolCalls && !subAgentsRunning) {
         stallRounds++;
         if (stallRounds >= Agent.MAX_STALL_ROUNDS) {
+          this.agentStore?.deleteGoal(this.id).catch(() => {});
           this._sink({
             kind: EventKind.Notice,
             level: 'warn',
@@ -579,6 +687,7 @@ ${goal}
     }
     // Max iterations reached — forced termination (hard ceiling, shouldn't trigger in normal use)
     if (!signal.aborted) {
+      this.agentStore?.deleteGoal(this.id).catch(() => {});
       this._sink({
         kind: EventKind.Notice,
         level: 'warn',
@@ -588,6 +697,22 @@ ${goal}
     }
 
     return { status: 'aborted', summary: '目标被中断' };
+  }
+
+  /** Resume the last paused goal for this agent. Returns same shape as runGoal.
+   *  Thin wrapper — loads the goal text from AgentStore and calls runGoal. */
+  async resumeGoal(
+    signal: AbortSignal,
+  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+    if (!this.agentStore) {
+      return { status: 'failed', summary: 'Agent 持久化存储未初始化' };
+    }
+    const saved = await this.agentStore.loadGoal(this.id);
+    if (!saved || saved.status !== 'paused') {
+      return { status: 'failed', summary: '没有可恢复的目标。使用 /goal 创建新目标。' };
+    }
+    this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 恢复: ${saved.goal.slice(0, 60)}…` });
+    return this.runGoal(signal, saved.goal);
   }
 
   private _lastAssistantContent(): string {
@@ -1456,9 +1581,15 @@ ${subTools
       subagentDepth: this._subagentDepth + 1,
       contextWindow: this.contextWindow,
       eventSink: subSink,
+      agentId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      parentId: this.id,
     });
     if (isolationId) {
       subAgent._isolationId = isolationId;
+    }
+    // Inherit persistence store from parent
+    if (this.agentStore) {
+      subAgent.setAgentStore(this.agentStore);
     }
 
     let subAgentSucceeded = false;
@@ -1466,11 +1597,38 @@ ${subTools
       // Fork and fresh both use run() — fork has its own system prompt + stripped tools
       await subAgent.run(signal, mode === 'fork' ? prompt : '开始执行。');
       subAgentSucceeded = true;
-      // Extract the last assistant message as the result
+
+      // ── Summary distillation — ensure sub-agent handoff is useful ──
+      // ponytail: single continuation turn for sub-200-char summaries.
+      // Most sub-agents already produce >200 chars; this is a safety net for the
+      // "好的，完成了" cases. Kimi-Code uses a configurable summary policy;
+      // we hardcode 200 chars because this is a desktop app, not a server.
+      const CONTEXT_LINE_LIMIT = 300; // semi-arbitrary: above 300, summary is meaningful
       const session = subAgent.getSession();
-      const lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
-      return { text: lastAssistant?.content || '(子 Agent 没有生成回复)' };
+      let lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
+      let summary = lastAssistant?.content || '';
+
+      if (summary.length < CONTEXT_LINE_LIMIT) {
+        try {
+          const expandPrompt =
+            'Please expand your summary: describe exactly what you did, which files you read or modified, what you verified (build/tests), and the outcome. Use at least 200 characters.';
+          await subAgent.run(signal, expandPrompt);
+          const expandedSession = subAgent.getSession();
+          const expanded = [...expandedSession].reverse().find((m) => m.role === 'assistant');
+          if (expanded?.content && expanded.content.length > summary.length) {
+            lastAssistant = expanded;
+            summary = expanded.content;
+          }
+        } catch {
+          /* distillation failed — return original summary */
+        }
+      }
+
+      // Persist sub-agent state
+      subAgent.saveState('done').catch(() => {});
+      return { text: summary || '(子 Agent 没有生成回复)' };
     } catch (e: any) {
+      subAgent.saveState('failed').catch(() => {});
       return { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
       subPart.status = subAgentSucceeded ? 'done' : 'error';
