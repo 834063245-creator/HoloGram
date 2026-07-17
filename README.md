@@ -10,7 +10,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-400%2B%20total-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-700%2B%20total-brightgreen" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows-blue" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
@@ -415,7 +415,7 @@ Agent 功能需要你自己配置 LLM API key（支持 Anthropic / OpenAI 兼容
 ## 👩‍💻 开发
 
 ```bash
-cd engine && cargo test              # 363+ Rust tests
+cd engine && cargo test              # 473+ Rust tests
 cd engine && cargo build --release   # 编译引擎
 cargo tauri build                    # 打包桌面应用
 cd src-ui && npm run build           # 类型检查 + 打包前端
@@ -488,5 +488,5 @@ HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)
 
 <p align="center">
   <br/>
-  <em>Built with ❤️ and Rust. One person, ~76,000 lines of code, 215 source files, 26 languages, 400+ tests.</em>
+  <em>Built with ❤️ and Rust. One person, ~94,000 lines of code, 257 source files, 26 languages, 700+ tests.</em>
 </p>
