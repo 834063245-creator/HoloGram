@@ -37,7 +37,7 @@ export interface TooltipHost {
   edgeDataList: EdgeData[];
   deg: number[];
   _nodeCount: number;
-  _analysis: { blastMode: boolean; _pathSource: number; clearPath(): void; startBlastMode(idx: number): void };
+  _analysis: { blastMode: boolean; startBlastMode(idx: number): void };
   _lensActive: boolean;
 
   // 场景
@@ -58,12 +58,6 @@ export class GraphTooltip {
   tooltipEl!: HTMLDivElement;
   detailCard!: HTMLDivElement;
   selectedIdx = -1;
-
-  // ── Select rect ──
-  _selectRectEl!: HTMLDivElement;
-  _selecting = false;
-  _selectStart = new THREE.Vector2();
-  _selectEnd = new THREE.Vector2();
 
   // ── Prompt bar ──
   _promptBarEl!: HTMLDivElement;
@@ -327,88 +321,6 @@ export class GraphTooltip {
     if (left < 10) left = 10;
     this.detailCard.style.left = `${left}px`;
     this.detailCard.style.top = `${top}px`;
-  }
-
-  // ── Select rect ──────────────────────────────────────────
-
-  setupSelectRect(): void {
-    this._selectRectEl = document.createElement('div');
-    this._selectRectEl.id = 'graph-select-rect';
-    this._selectRectEl.style.cssText =
-      'position:absolute;z-index:18;pointer-events:none;display:none;' +
-      'border:1px solid rgba(100,180,255,0.7);' +
-      'background:rgba(60,140,240,0.08);' +
-      'box-shadow:inset 0 0 20px rgba(80,160,255,0.15);';
-    this.host.container.appendChild(this._selectRectEl);
-  }
-
-  _showSelectRect(): void {
-    this._selectRectEl.style.display = '';
-    this._updateSelectRect();
-  }
-
-  _updateSelectRect(): void {
-    const rect = this.host.container.getBoundingClientRect();
-    const x1 = Math.min(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const y1 = Math.min(this._selectStart.y, this._selectEnd.y) - rect.top;
-    const x2 = Math.max(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const y2 = Math.max(this._selectStart.y, this._selectEnd.y) - rect.top;
-    this._selectRectEl.style.left = `${x1}px`;
-    this._selectRectEl.style.top = `${y1}px`;
-    this._selectRectEl.style.width = `${x2 - x1}px`;
-    this._selectRectEl.style.height = `${y2 - y1}px`;
-  }
-
-  _hideSelectRect(): void {
-    this._selectRectEl.style.display = 'none';
-  }
-
-  _handleRegionSelect(
-    _nodeCount: number,
-    nodePositions: Float32Array,
-    graphNodes: GraphNode[],
-    _coreScales: Float32Array,
-    camera: THREE.Camera,
-    container: HTMLElement,
-    highlightNodeNames: (names: string[], colorHex?: string) => void,
-    clearAgentHighlight: () => void,
-    _analysis: { blastMode: boolean; _pathSource: number },
-    _lensActive: boolean,
-  ): void {
-    const rect = container.getBoundingClientRect();
-    const sx1 = Math.min(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const sy1 = Math.min(this._selectStart.y, this._selectEnd.y) - rect.top;
-    const sx2 = Math.max(this._selectStart.x, this._selectEnd.x) - rect.left;
-    const sy2 = Math.max(this._selectStart.y, this._selectEnd.y) - rect.top;
-    const minDim = 8;
-    if (sx2 - sx1 < minDim || sy2 - sy1 < minDim) return;
-
-    const halfW = rect.width * 0.5;
-    const halfH = rect.height * 0.5;
-    const nodeNames: string[] = [];
-
-    for (let i = 0; i < _nodeCount; i++) {
-      if (!(_coreScales[i] > 0)) continue;
-      this._tmpVec3.set(nodePositions[i * 3], nodePositions[i * 3 + 1], nodePositions[i * 3 + 2]);
-      this._tmpVec3.project(camera);
-      if (this._tmpVec3.z > 1) continue;
-      const sx = this._tmpVec3.x * halfW + halfW;
-      const sy = -this._tmpVec3.y * halfH + halfH;
-      if (sx >= sx1 && sx <= sx2 && sy >= sy1 && sy <= sy2) {
-        nodeNames.push(graphNodes[i].name);
-      }
-    }
-
-    if (nodeNames.length === 0) return;
-
-    bus.emit('graph:region-selected', { nodeNames, nodeCount: nodeNames.length });
-
-    highlightNodeNames(nodeNames.slice(0, 30), '#60a0ff');
-    setTimeout(() => {
-      if (!_analysis.blastMode && _analysis._pathSource < 0 && !_lensActive) {
-        clearAgentHighlight();
-      }
-    }, 2500);
   }
 
   // ── Prompt bar ───────────────────────────────────────────

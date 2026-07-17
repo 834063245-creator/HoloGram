@@ -334,7 +334,6 @@ export class StarGraph {
     this.setupHover();
     this._tooltip.setupTooltip();
     this._tooltip.setupDetailCard();
-    this._tooltip.setupSelectRect();
     this._tooltip.setupPromptBar();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
@@ -373,54 +372,15 @@ export class StarGraph {
     canvas.addEventListener('pointerdown', (e: PointerEvent) => {
       pointerDown.set(e.clientX, e.clientY);
       pointerDragged = false;
-      // ponytail: prevent browser text-selection drag on canvas
       e.preventDefault();
-      // Step 3: Alt+left-drag → rectangle selection
-      if (e.altKey && e.button === 0) {
-        this._tooltip._selecting = true;
-        this._tooltip._selectStart.set(e.clientX, e.clientY);
-        this._tooltip._selectEnd.set(e.clientX, e.clientY);
-        this._tooltip._showSelectRect();
-        this.controls.enabled = false;
-        e.stopPropagation();
-      }
     });
     canvas.addEventListener('pointermove', (e: PointerEvent) => {
-      if (this._tooltip._selecting) {
-        this._tooltip._selectEnd.set(e.clientX, e.clientY);
-        this._tooltip._updateSelectRect();
-        return;
-      }
       if (Math.abs(e.clientX - pointerDown.x) > 4 || Math.abs(e.clientY - pointerDown.y) > 4) {
         pointerDragged = true;
       }
     });
     canvas.addEventListener('pointerup', (e: PointerEvent) => {
-      // Step 3: Alt+drag selection complete
-      if (this._tooltip._selecting) {
-        this._tooltip._selecting = false;
-        this._tooltip._hideSelectRect();
-        this.controls.enabled = true;
-        this._tooltip._handleRegionSelect(
-          this._nodeCount,
-          this.nodePositions,
-          this.graphNodes,
-          this._coreScales,
-          this.camera,
-          this.container,
-          this.highlightNodeNames.bind(this),
-          this.clearAgentHighlight.bind(this),
-          { blastMode: this._analysis.blastMode, _pathSource: this._analysis._pathSource },
-          this._lensActive,
-        );
-        return;
-      }
       if (pointerDragged) return;
-      // Step 3: Shift+click → quick path mode
-      if (e.shiftKey) {
-        this._analysis._handleShiftClick(e);
-        return;
-      }
       this.onClick(e);
     });
     // Prevent browser context menu on canvas
@@ -433,21 +393,6 @@ export class StarGraph {
         }
         if (this._tooltip._promptBarEl?.style.display === 'flex') {
           this._tooltip._hidePrompt();
-          return;
-        }
-        if (this._tooltip._selecting) {
-          this._tooltip._selecting = false;
-          this._tooltip._hideSelectRect();
-          this.controls.enabled = true;
-          return;
-        }
-        if (this._analysis._shiftSourceIdx >= 0) {
-          this._analysis._clearShiftPath();
-          return;
-        }
-        if (this._analysis._pathSource >= 0) {
-          this._analysis.clearPath();
-          e.stopImmediatePropagation();
           return;
         }
         if (this._fold.enteredSubCommunityId) {
@@ -1215,7 +1160,6 @@ export class StarGraph {
   /** Clear all Agent-triggered highlights (path + node highlight). */
   clearAgentHighlight(): void {
     this._clearAgentHighlightState();
-    this._analysis.clearPath();
     // Also restore any file highlight if active
     if (this._fileHighlight) {
       this._applyFileHighlight();
@@ -2172,16 +2116,7 @@ export class StarGraph {
       this.focusActive = false;
       this.focusNodeIdx = -1;
     }
-    if (this._analysis._pathSource >= 0 && this._deadIndices.has(this._analysis._pathSource)) {
-      this._analysis._pathSource = -1;
-      this._analysis._pathNodes.clear();
-      this._analysis._pathEdges.clear();
-    }
-    if (this._analysis._pathTarget >= 0 && this._deadIndices.has(this._analysis._pathTarget)) {
-      this._analysis._pathTarget = -1;
-      this._analysis._pathNodes.clear();
-      this._analysis._pathEdges.clear();
-    }
+
 
     // 10. Re-apply diff overlay if active (new nodes might be in the diff set)
     if (this.diffActive && this.diffAddedIds.size + this.diffRemovedIds.size + this.diffModifiedIds.size > 0) {
@@ -2877,12 +2812,6 @@ export class StarGraph {
     this._fold._subCommByNodeIdx.clear();
     this._fold._savedGalaxyMeta = null;
     this._fold.hideGalaxyTitle();
-    this._analysis._pathSource = -1;
-    this._analysis._pathTarget = -1;
-    this._analysis._pathNodes.clear();
-    this._analysis._pathEdges.clear();
-    this._analysis._shiftSourceIdx = -1;
-    this._tooltip._selecting = false;
     this._tooltip._hidePrompt();
     for (const d of this._fold.galaxyLabelDivs) d.remove();
     this._fold.galaxyLabelDivs = [];
@@ -3495,9 +3424,7 @@ export class StarGraph {
       mouseOnCanvas ||
       this.hoveredIdx >= 0 ||
       this.focusProgress > 0 ||
-      this._analysis.blastMode ||
-      this._analysis._pathSource >= 0 ||
-      this._tooltip._selecting;
+      this._analysis.blastMode;
     if (isActive) {
       this._idleCounter = 0;
     } else {
@@ -3721,7 +3648,6 @@ export class StarGraph {
     this._tooltip.tooltipEl?.remove();
     this.labelsContainer?.remove();
     this._tooltip.detailCard?.remove();
-    this._tooltip._selectRectEl?.remove();
     this._tooltip._promptBarEl?.remove();
   }
 }
