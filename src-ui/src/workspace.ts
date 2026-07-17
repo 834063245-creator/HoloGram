@@ -488,26 +488,6 @@ export class Workspace {
     }
   }
 
-  /** DRY helper — sub-agent spawn callbacks shared across Agent construction sites. */
-  private _subAgentCallbacks(chatPanel: ChatPanel) {
-    const storeId = this._storeId;
-    return {
-      onSubAgentSpawn: (part: SubAgentPart) => {
-        const store = msgStoreForActive(storeId);
-        if (!store) return;
-        const msgs = store.getState().messages;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.role === 'assistant' && (m as any).status === 'streaming') {
-            (m as any).parts.push(part);
-            break;
-          }
-        }
-        store.getState().bump();
-      },
-      onSubAgentBump: () => msgStoreForActive(storeId)?.getState().bump(),
-    };
-  }
 
   /** Plan-mode tool registry: shallow-copies only read-only tools from the given registry. */
   private _planRegistry(base: ToolRegistry): ToolRegistry {
@@ -529,6 +509,31 @@ export class Workspace {
 
   private async _setupAgentInner(chatPanel: ChatPanel, _checkPanel: CheckPanel): Promise<void> {
     this._storeId = chatPanel.panelId;
+
+    // Sub-agent event subscriptions — Agent emits events, Workspace handles UI updates
+    {
+      const onSpawn = ({ part }: { part: SubAgentPart }) => {
+        const store = msgStoreForActive(this._storeId);
+        if (!store) return;
+        const msgs = store.getState().messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.role === 'assistant' && (m as any).status === 'streaming') {
+            (m as any).parts.push(part);
+            break;
+          }
+        }
+        store.getState().bump();
+      };
+      const onBump = () => msgStoreForActive(this._storeId)?.getState().bump();
+      bus.on('subagent:spawn', onSpawn);
+      bus.on('subagent:bump', onBump);
+      this._unlisteners.push(() => {
+        bus.off('subagent:spawn', onSpawn);
+        bus.off('subagent:bump', onBump);
+      });
+    }
+
     let settings = loadSettings();
     settings = await restoreSecrets(settings);
 
@@ -862,7 +867,6 @@ export class Workspace {
     this.prov = prov;
     this.registry = effectiveRegistry;
     this.agent = new Agent(prov, effectiveRegistry, systemPrompt, {
-      ...this._subAgentCallbacks(chatPanel),
       eventSink: chatPanel.eventSink,
       execState: chatPanel['_exec'],
       onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
@@ -1081,7 +1085,6 @@ export class Workspace {
           ? this._planRegistry(r)
           : r;
         const newAgent = new Agent(p, effR, sysPrompt, {
-          ...this._subAgentCallbacks(chatPanel),
           eventSink: chatPanel.eventSink,
           pricing: defaultPricing(act.kind, act.model),
           temperature: s.agent?.temperature,
