@@ -33,7 +33,7 @@ vi.mock('three/examples/jsm/postprocessing/EffectComposer.js', () => ({
 }));
 
 vi.mock('three/examples/jsm/postprocessing/RenderPass.js', () => ({
-  RenderPass: () => {},
+  RenderPass: function (this: any, _scene: any, _camera: any) {},
 }));
 
 vi.mock('three/examples/jsm/postprocessing/UnrealBloomPass.js', () => ({

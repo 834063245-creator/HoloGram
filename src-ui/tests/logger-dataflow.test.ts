@@ -15,9 +15,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock Tauri invoke BEFORE importing the module under test
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
+// 顶层 mockRpc 供 vi.mock 工厂闭包引用；vi.mock 是 hoisted 的，可拦截动态 import()
+const mockRpc = vi.fn();
+
+vi.mock('../src/bridge', () => ({
+  rpc: (...args: any[]) => mockRpc(...args),
+  listen: vi.fn(),
+  isMockMode: () => false,
 }));
 
 describe('Logger 数据流链路验证', () => {
@@ -26,9 +30,11 @@ describe('Logger 数据流链路验证', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockRpc.mockResolvedValue('ok');
     // 重置模块缓存以确保每次测试从干净的 logBuffer 开始
     vi.resetModules();
-    // 动态导入以确保 mock 先生效
+
+    // 动态导入 — vi.mock 已拦截 bridge，logger 内部 await import('../bridge') 会拿到 mock
     const mod = await import('../src/agent/logger.js');
     log = mod.log;
     initLogger = mod.initLogger;
@@ -52,10 +58,9 @@ describe('Logger 数据流链路验证', () => {
     // 我们无法直接读私有变量，但通过 flush 的间接行为来验证
     // 验证：flush 应该被 write 内部的 >= MAX_BUFFER 条件触发
     // 这里 4 条 < 50，所以不会自动 flush —— 证明 buffer 在积累
-    const { invoke } = await import('@tauri-apps/api/core');
     // 4 条日志 < MAX_BUFFER(50)，不会触发自动 flush
-    // 因此 invoke 不应该被调用
-    expect(invoke).not.toHaveBeenCalled();
+    // 因此 rpc 不应该被调用
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('write → 达到阈值 → 自动触发 flush', async () => {
@@ -65,10 +70,12 @@ describe('Logger 数据流链路验证', () => {
     for (let i = 0; i < 50; i++) {
       log.info('mod', `msg ${i}`);
     }
+    // flush() 是 fire-and-forget 异步，等一个 tick
+    await new Promise((r) => setTimeout(r, 10));
 
-    const { invoke } = await import('@tauri-apps/api/core');
     // 第 50 条写入时，logBuffer.length >= MAX_BUFFER → write 内部调用 flush
-    expect(invoke).toHaveBeenCalledWith(
+    // flush → appendToFile → rpc('log_append', { path, content })
+    expect(mockRpc).toHaveBeenCalledWith(
       'log_append',
       expect.objectContaining({
         path: expect.stringContaining('ui.log'),
@@ -90,11 +97,12 @@ describe('Logger 数据流链路验证', () => {
     for (let i = 0; i < 48; i++) {
       log.debug('mod', `batch msg ${i}`);
     }
+    // flush() 是 fire-and-forget 异步，等一个 tick
+    await new Promise((r) => setTimeout(r, 10));
 
-    const { invoke } = await import('@tauri-apps/api/core');
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
 
-    const callArgs = (invoke as any).mock.calls[0];
+    const callArgs = mockRpc.mock.calls[0];
     const content: string = callArgs[1].content;
     const lines = content.trim().split('\n');
     // 2 条手动 + 48 条循环 = 50 条，flush 将其全部 splice 出来
@@ -124,9 +132,10 @@ describe('Logger 数据流链路验证', () => {
     for (let i = 0; i < 49; i++) {
       log.info('fill', `padding ${i}`);
     }
+    // flush() 是 fire-and-forget 异步，等一个 tick
+    await new Promise((r) => setTimeout(r, 10));
 
-    const { invoke } = await import('@tauri-apps/api/core');
-    const content: string = (invoke as any).mock.calls[0][1].content;
+    const content: string = mockRpc.mock.calls[0][1].content;
     const allEntries = content
       .trim()
       .split('\n')
@@ -147,5 +156,76 @@ describe('Logger 数据流链路验证', () => {
     expect(targetEntry!.level).toBe('error');
     expect(targetEntry!.ctx).toEqual({ userId: 'u123', retry: 3 });
     expect(targetEntry!.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  });
+});
+
+describe('Logger 工作区切换', () => {
+  let initLogger: any;
+  let log: any;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockRpc.mockResolvedValue('ok');
+    vi.resetModules();
+
+    const mod = await import('../src/agent/logger.js');
+    log = mod.log;
+    initLogger = mod.initLogger;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('initLogger 切换工作区时先 flush 旧缓冲再创建新 timer', async () => {
+    // 工作区 A：写入几条日志，不触发自动 flush（< 50）
+    await initLogger('/project-a');
+    log.info('mod', 'msg from A');
+
+    const callCountAfterA = mockRpc.mock.calls.length;
+
+    // 工作区 B：initLogger 应该先 flush 旧缓冲
+    await initLogger('/project-b');
+
+    // 旧缓冲（包含 "msg from A"）应该在 initLogger 内部被 flush 到 project-a 的日志文件
+    expect(mockRpc).toHaveBeenCalledTimes(callCountAfterA + 1);
+    const lastCall = mockRpc.mock.calls[callCountAfterA];
+    expect(lastCall[0]).toBe('log_append');
+    expect(lastCall[1].path).toContain('/project-a/.hologram/logs/ui.log');
+    expect(lastCall[1].content).toContain('msg from A');
+  });
+
+  it('initLogger 切换工作区时清除旧 setInterval', async () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+
+    await initLogger('/project-a');
+    // 此时 setInterval 已经被调用过 1 次
+    expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+    await initLogger('/project-b');
+    // 第二次 initLogger 应该先 clearInterval
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+
+    clearIntervalSpy.mockRestore();
+  });
+
+  it('initLogger 后日志写入新工作区路径', async () => {
+    await initLogger('/project-a');
+    mockRpc.mockClear();
+
+    await initLogger('/project-b');
+
+    // 手动触发 flush 并等待完成：写满 50 条 → write() 内部调 flush()
+    for (let i = 0; i < 50; i++) {
+      log.info('mod', `msg ${i}`);
+    }
+    // flush() 是 fire-and-forget（内部 appendToFile 是 async），等一个 tick
+    await new Promise((r) => setTimeout(r, 10));
+
+    // 验证写入的是 project-b 的日志路径
+    const calls = mockRpc.mock.calls.filter((c: any) => c[0] === 'log_append');
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const lastLogCall = calls[calls.length - 1];
+    expect(lastLogCall[1].path).toContain('/project-b/.hologram/logs/ui.log');
   });
 });

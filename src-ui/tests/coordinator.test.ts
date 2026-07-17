@@ -135,4 +135,73 @@ describe('SubAgentPool', () => {
     const second = pool.pollCompleted();
     expect(second.length).toBe(0);
   });
+
+  // ═══════════════════════════════════════════════════════
+  // awaitAll — used by agent.runLoop to wait for sub-agents
+  // ═══════════════════════════════════════════════════════
+
+  it('awaitAll blocks until all agents complete', async () => {
+    const pool = new SubAgentPool();
+    const start = Date.now();
+    pool.spawn('a', fakeRun('result-a', 50));
+    pool.spawn('b', fakeRun('result-b', 80));
+    pool.spawn('c', fakeRun('result-c', 30));
+
+    const results = await pool.awaitAll();
+
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(70); // slowest was 80ms
+    expect(results.length).toBe(3);
+    expect(results.map((r) => r.status)).toEqual([
+      SubAgentStatus.Completed,
+      SubAgentStatus.Completed,
+      SubAgentStatus.Completed,
+    ]);
+  });
+
+  it('awaitAll returns immediately when no agents running', async () => {
+    const pool = new SubAgentPool();
+    const results = await pool.awaitAll();
+    expect(results.length).toBe(0);
+  });
+
+  it('awaitAll includes previously completed agents', async () => {
+    const pool = new SubAgentPool();
+    pool.spawn('quick', fakeRun('done', 10));
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Don't poll — awaitAll should still return them
+    const results = await pool.awaitAll();
+    expect(results.length).toBe(1);
+    expect(results[0].result).toBe('done');
+  });
+
+  // ═══════════════════════════════════════════════════════
+  // Idempotency — duplicate callId returns existing agent
+  // ═══════════════════════════════════════════════════════
+
+  it('spawn with same callId returns existing agent ID', () => {
+    const pool = new SubAgentPool();
+    const id1 = pool.spawn('task', fakeRun('done', 5000), undefined, 'call-001');
+    const id2 = pool.spawn('duplicate', fakeRun('ignored', 10), undefined, 'call-001');
+
+    expect(id2).toBe(id1);
+    expect(pool.runningCount).toBe(1);
+  });
+
+  it('spawn with same callId returns completed agent ID only for running agents', async () => {
+    // NOTE: Idempotency by callId currently only works for running agents.
+    // Completed handles don't store callId — tracking completed callIds is a
+    // separate feature that can be added to SubAgentPool if needed.
+    const pool = new SubAgentPool();
+    const id1 = pool.spawn('task', fakeRun('done', 10), undefined, 'call-002');
+    await new Promise((r) => setTimeout(r, 30));
+    pool.pollCompleted();
+
+    // After pollCompleted, the agent is gone from both agents and completed maps.
+    // A new spawn with the same callId will create a NEW agent.
+    const id2 = pool.spawn('duplicate', fakeRun('result', 10), undefined, 'call-002');
+    expect(id2).not.toBe(id1); // new ID — completed handles don't track callId
+    expect(pool.runningCount).toBe(1); // new agent spawned
+  });
 });

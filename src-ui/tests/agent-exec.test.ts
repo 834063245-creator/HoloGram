@@ -4,10 +4,10 @@
 // "outside project directory" 且不弹 Ask。谁把 isAgent 改回 _agent，这俩测试就挂。
 import { describe, expect, it, vi } from 'vitest';
 
-// agentInvoke (tool.ts) 跨模块 import bridge.invoke → mock 这里拦截真实 Tauri 调用
-const mockInvoke = vi.fn();
+// agentInvoke (tool.ts) 跨模块 import bridge.rpc → mock 这里拦截真实 Tauri 调用
+const mockRpc = vi.fn();
 vi.mock('../src/bridge', () => ({
-  invoke: (...args: any[]) => mockInvoke(...args),
+  rpc: (...args: any[]) => mockRpc(...args),
   listen: vi.fn(),
   isMockMode: () => false,
 }));
@@ -18,21 +18,21 @@ import { agentInvoke } from '../src/agent/tool';
 
 describe('agentInvoke camelCase contract', () => {
   it('injects isAgent:true (not _agent) to match Rust is_agent param', async () => {
-    mockInvoke.mockReset();
-    mockInvoke.mockResolvedValue('ok');
+    mockRpc.mockReset();
+    mockRpc.mockResolvedValue('ok');
     await agentInvoke('read_file_content', { filePath: 'C:/outside/x.txt' });
-    expect(mockInvoke).toHaveBeenCalledTimes(1);
-    const [name, payload] = mockInvoke.mock.calls[0];
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    const [name, payload] = mockRpc.mock.calls[0];
     expect(name).toBe('read_file_content');
     expect(payload).toEqual({ filePath: 'C:/outside/x.txt', isAgent: true });
     expect(payload).not.toHaveProperty('_agent');
   });
 
   it('passes arbitrary args through alongside isAgent', async () => {
-    mockInvoke.mockReset();
-    mockInvoke.mockResolvedValue(0);
+    mockRpc.mockReset();
+    mockRpc.mockResolvedValue(0);
     await agentInvoke<number>('git_log', { path: 'D:/proj', count: 5 });
-    const [, payload] = mockInvoke.mock.calls[0];
+    const [, payload] = mockRpc.mock.calls[0];
     expect(payload).toEqual({ path: 'D:/proj', count: 5, isAgent: true });
   });
 });
