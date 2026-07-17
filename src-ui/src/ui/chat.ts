@@ -1701,15 +1701,18 @@ export class ChatPanel {
     } else if (!textBefore.includes('/')) {
       this._hideSlashPanel();
     }
-    // If user continues typing after / (e.g. "/mem"), still filter
+    // If user continues typing after / (e.g. "/mem"), still filter —
+    // but only when / is at line start or after a space (not mid-word like URLs)
     else {
       const slashIdx = textBefore.lastIndexOf('/');
-      const query = textBefore.slice(slashIdx + 1);
+      if (slashIdx > 0 && textBefore[slashIdx - 1] !== ' ') {
+        this._hideSlashPanel();
+        return;
+      }
+      const query = textBefore.slice(slashIdx + 1).trimStart();
       if (query.length > 0) {
         this._showSlashPanel(query);
       } else {
-        // Slash exists but no query (e.g. multi-slash paths like "a/b/" or just "/")
-        // Keep panel open but show all commands — prevents ghost-panel state
         this._showSlashPanel('');
       }
     }

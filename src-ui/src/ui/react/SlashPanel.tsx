@@ -67,7 +67,7 @@ const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[]; onComm
       },
     }));
 
-    if (!visible) return null;
+    if (!visible || filtered.length === 0) return null;
 
     const groups = new Map<string, CommandDef[]>();
     for (const cmd of filtered) {
