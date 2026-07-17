@@ -571,7 +571,8 @@ export class Workspace {
       /* ignore */
     }
     this.memoryManager = new MemoryManager(this.path, globalDir);
-    this.memoryManager.initAura().catch(() => {}); // fire-and-forget, best-effort
+    // Start Aura init early — runs in parallel with file I/O below
+    const auraReady = this.memoryManager.initAura();
     const graphNodes = extractGraphNodeNames(this.graphData);
     try {
       memorySection = await this.memoryManager.loadPromptSection(graphNodes);
@@ -591,29 +592,8 @@ export class Workspace {
     // Init skill registry (hot-loads on first Skill tool call)
     this.skillRegistry = new SkillRegistry(this.path);
 
-    // ── AuraSDK semantic recall ──
-    let memoryBundleSection = '';
-    try {
-      if (this.memoryManager?.auraReady) {
-        const projectName = this.path.split(/[/\\]/).pop() || 'project';
-        const records = await this.memoryManager.auraSemanticRecall(
-          `项目 ${projectName} 的相关记忆、架构决策、最近工作`,
-          10,
-        );
-        if (records.length > 0) {
-          this.onStatusChange?.(`[记忆场] 召回 ${records.length} 条`);
-          const lines = records.map((r) => `- [${r.tags?.join(',') || 'ref'}] ${r.content.slice(0, 200)}`);
-          memoryBundleSection = `### 语义记忆\n${lines.join('\n')}`;
-        } else {
-          this.onStatusChange?.(`[记忆场] 在线但无数据 — 存一条记忆后生效`);
-        }
-      } else {
-        this.onStatusChange?.(`[记忆场] ❌ AuraSDK 未初始化`);
-      }
-    } catch (e) {
-      console.warn('[setupAgent] AuraSDK recall failed:', e);
-      this.onStatusChange?.(`[记忆场] ❌ 异常: ${String(e).slice(0, 40)}`);
-    }
+    // ponytail: AuraSDK per-turn recall — no startup recall, hook fires on each user message
+    await auraReady;
     // ponytail: 记忆注入可观测性 — 启动时打印加载了多少条
     if (memorySection.trim()) {
       const memLines = memorySection.split('\n').filter((l) => l.startsWith('- ')).length;
@@ -853,7 +833,7 @@ export class Workspace {
     const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
     const mode = this._modeState();
 
-    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, memoryBundleSection, claudeMdSection, mode.collaborationMode);
+    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, claudeMdSection, mode.collaborationMode);
     const agentOpts = settings.agent || {};
 
     const temperature = agentOpts.temperature ?? 0.7;
@@ -958,6 +938,25 @@ export class Workspace {
       preflightHooks.register(createStatePreflightHook());
       this.agent.setPreflightHooks(preflightHooks);
       this._preflightCtx = ctx; // stash for post-write snapshot refresh
+
+      // Per-turn AuraSDK recall — fires before each user message
+      if (this.memoryManager) {
+        const mm = this.memoryManager;
+        this.agent.setPreRunHook(async (input: string) => {
+          if (!mm.auraReady) return null;
+          try {
+            const records = await mm.auraSemanticRecall(input, 5);
+            if (records.length === 0) return null;
+            const lines = records.map((r) => {
+              const tagStr = r.tags?.length ? `[${r.tags.join(', ')}] ` : '';
+              return `- ${tagStr}${r.content.slice(0, 250)}`;
+            });
+            return `AuraSDK 语义记忆召回（当前问题的相关历史记忆，仅供参考——文件记忆更权威）：\n${lines.join('\n')}`;
+          } catch {
+            return null;
+          }
+        });
+      }
     }
 
     // Cold-start: prime state caches (git status, timeline)
@@ -1082,7 +1081,7 @@ export class Workspace {
         }
         const snap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
         const mode = this._modeState();
-        const sysPrompt = buildSystemPrompt(this, memSection, snap, '', claudeMd, mode.collaborationMode);
+        const sysPrompt = buildSystemPrompt(this, memSection, snap, claudeMd, mode.collaborationMode);
         const effR = mode.collaborationMode === 'plan'
           ? this._planRegistry(r)
           : r;
@@ -1433,7 +1432,6 @@ export function buildSystemPrompt(
   ws: Workspace,
   memorySection = '',
   graphSnapshot = '',
-  memoryBundleSection = '',
   claudeMdSection = '',
   collaborationMode: 'normal' | 'plan' = 'normal',
 ): string {
@@ -1685,7 +1683,6 @@ ${collaborationMode === 'plan' ? `| 用户问 | 用这个工具 |
 ${memorySection.trim() || '暂无。'}
 
 > ⚠️ 记忆是写入时的快照。引用的文件名、函数名、路径可能已过时。基于记忆推荐任何文件或函数前，先用 glob/grep 确认它仍然存在。发现过时记忆 → 调 hologram_memory_save 更新或 hologram_memory_delete 删除。
-${memoryBundleSection ? `\n## 语义记忆场\n${memoryBundleSection}\n` : ''}
 ${claudeMdSection ? `\n## 项目约定（来自 CLAUDE.md）\n${claudeMdSection}\n` : ''}
 ${collaborationMode === 'plan' ? `\n## 规划模式（当前激活）\n你处于规划模式。只能使用只读工具分析代码和设计方案，不能执行任何修改操作。\n- 用 \`ask_user\` 向用户确认方案\n- 方案确定后，让用户切换到正常模式再执行\n- 不要调用任何写工具` : ''}`;
 }

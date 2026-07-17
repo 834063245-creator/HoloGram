@@ -22,7 +22,6 @@ import { type ExecStateInstance, execState } from './execution-state';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
-import type { SessionStore } from './session-store';
 import { StreamingToolExecutor } from './streaming-executor';
 import { createSubAgentSink } from './subagent-sink';
 import type { Tool } from './tool';
@@ -54,8 +53,6 @@ export interface AgentOptions {
   eventSink?: (ev: AgentEvent) => void;
   /** Execution state instance. Falls back to global execState if not provided. */
   execState?: ExecStateInstance;
-  /** Session store for Agent-level fire-and-forget persistence. */
-  sessionStore?: SessionStore;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -129,6 +126,11 @@ export class Agent {
   // Preflight hooks — warn before destructive writes (edit_file / write_file)
   private preflightHooks: PreflightHookRegistry | null = null;
 
+  // Pre-run hook — called before each user message is pushed to session.
+  // Returns optional context text to inject as <system-reminder> before the message.
+  // Set by workspace for per-turn AuraSDK semantic recall.
+  private _preRunHook: ((input: string) => Promise<string | null>) | null = null;
+
   // Storm breaker — detect repetitive failing tool calls
   private stormSig = '';
   private stormCount = 0;
@@ -155,7 +157,6 @@ export class Agent {
 
   // Session persistence
   sessionId: string;
-  private sessionStore: SessionStore | null = null;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
 
   // Compaction cost model tracker
@@ -185,7 +186,6 @@ export class Agent {
     this._execState = opts.execState ?? execState;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
-    this.sessionStore = opts.sessionStore || null;
     this._onSessionPersisted = opts.onSessionPersisted;
 
     this.session = [];
@@ -209,6 +209,13 @@ export class Agent {
     this.preflightHooks = hooks;
   }
 
+  /** Set a hook that fires before each user message enters the session.
+   *  Returns optional context injected as <system-reminder> before the message.
+   *  Used for per-turn AuraSDK semantic memory recall. */
+  setPreRunHook(hook: (input: string) => Promise<string | null>): void {
+    this._preRunHook = hook;
+  }
+
   // ---- Public API ----
 
   getSession(): Message[] {
@@ -218,44 +225,6 @@ export class Agent {
   setSession(msgs: Message[]): void {
     this.session = msgs;
     this._execState.bumpVersion();
-  }
-
-  /** Fire-and-forget session save — never blocks the agent loop. */
-  private _saveSession(): void {
-    if (!this.sessionStore) return;
-    this.sessionStore.save(this.sessionId, this.session).catch(() => {});
-    if (this._onSessionPersisted) {
-      try {
-        this._onSessionPersisted(this.sessionId, this.session);
-      } catch {
-        /* best-effort */
-      }
-    }
-  }
-
-  /** Resume from a persisted session. Returns null if session not found or empty. */
-  static async resume(
-    prov: Provider,
-    tools: ToolRegistry,
-    systemPrompt: string,
-    sessionId: string,
-    sessionStore: SessionStore,
-    opts: AgentOptions = {},
-  ): Promise<Agent | null> {
-    const msgs = await sessionStore.load(sessionId);
-    if (msgs.length === 0) return null;
-
-    const agent = new Agent(prov, tools, '', { ...opts, sessionId, sessionStore });
-    // Restore system prompt at position 0
-    if (systemPrompt) {
-      if (msgs.length > 0 && msgs[0].role === 'system') {
-        msgs[0] = { role: 'system', content: systemPrompt };
-      } else {
-        msgs.unshift({ role: 'system', content: systemPrompt });
-      }
-    }
-    agent.setSession(msgs);
-    return agent;
   }
 
   getLastUsage(): Usage | undefined {
@@ -481,8 +450,21 @@ export class Agent {
 
   /** Run one turn: append user input, drive the tool loop. */
   async run(signal: AbortSignal, input: string): Promise<void> {
+    // Per-turn hook: AuraSDK semantic recall on the user's query
+    if (this._preRunHook) {
+      try {
+        const recallCtx = await this._preRunHook(input);
+        if (recallCtx) {
+          this.session.push({ role: 'user', content: `<system-reminder>\n${recallCtx}\n</system-reminder>` });
+        }
+      } catch { /* pre-run hook failure is non-fatal */ }
+    }
     this.session.push({ role: 'user', content: input });
-    return this.runLoop(signal);
+    await this.runLoop(signal);
+    // Fire onSessionPersisted callback (memory bundle ingest, git refresh, turn-start block)
+    if (this._onSessionPersisted) {
+      try { this._onSessionPersisted(this.sessionId, this.session); } catch { /* best-effort */ }
+    }
   }
 
   // ══════════════════════════════════════════════════════

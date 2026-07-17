@@ -16,7 +16,7 @@
 import { rpc } from '../bridge';
 import { bus } from '../ui/events';
 import type { AuraRecord } from './aura-memory';
-import { auraCount, auraInit, auraRecall, auraRecallText, auraShutdown, auraStore } from './aura-memory';
+import { auraCount, auraInit, auraRecall, auraShutdown, auraStore } from './aura-memory';
 import type { Tool } from './tool';
 
 // ── Fact-save authorization (self-consuming sentinel) ──
@@ -108,15 +108,38 @@ export class MemoryManager {
   }
 
   /** Run AuraSDK semantic recall against a natural-language query.
-   *  Returns scored records. Gracefully falls back to empty array if Aura is down. */
+   *  Returns scored records, filtered to remove records whose source memory
+   *  has been deleted. Gracefully falls back to empty array if Aura is down. */
   async auraSemanticRecall(query: string, topK: number = 20): Promise<AuraRecord[]> {
     if (!this._auraReady) return [];
     try {
-      return await auraRecall(query, topK);
+      const records = await auraRecall(query, topK);
+      return await this._filterOrphaned(records);
     } catch (e) {
       console.warn('[aura] recall failed:', e);
       return [];
     }
+  }
+
+  /** Filter out Aura records whose source memory file no longer exists.
+   *  Records without a [memory:NAME] marker (pre-migration) are kept. */
+  private async _filterOrphaned(records: AuraRecord[]): Promise<AuraRecord[]> {
+    if (records.length === 0) return records;
+    // Collect all active memory names across all scopes (with .md extension for direct lookup)
+    const active = new Set<string>();
+    for (const scope of this.scopes()) {
+      try {
+        const entries = await this.list(scope);
+        for (const e of entries) active.add(e.name + '.md');
+      } catch { /* scope not ready yet */ }
+    }
+    if (active.size === 0) return records; // can't verify, keep all
+    const markerRe = /^\[memory:([^\]]+)\]/;
+    return records.filter((r) => {
+      const m = r.content.match(markerRe);
+      if (!m) return true; // no marker → pre-migration record, keep
+      return active.has(m[1] + '.md');
+    });
   }
 
   /** Get Aura record count. */
@@ -423,7 +446,8 @@ export class MemoryManager {
     // Dual-write to AuraSDK for semantic retrieval
     if (this._auraReady) {
       const tagList = [type, confidence, scope];
-      auraStore(`${description}\n\n${content}`, 0, tagList, scope).catch((e: unknown) => {
+      // ponytail: prefix with [memory:NAME] marker so recall can detect orphaned records
+      auraStore(`[memory:${name}] ${description}\n\n${content}`, 0, tagList, scope).catch((e: unknown) => {
         console.warn('[aura] dual-write failed:', e);
       });
     }
@@ -659,6 +683,45 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           '',
           mf.content,
         ].join('\n');
+      },
+    },
+    {
+      name: () => 'hologram_memory_search',
+      description: () =>
+        '语义搜索记忆库（AuraSDK SDR 引擎）。用自然语言描述你想要的上下文，返回最相关的记忆文本。\n' +
+        '适合：不确定是否有相关记忆时先搜一下、需要跨记忆关联信息、当前问题需要历史决策上下文。\n' +
+        '注意：搜索结果基于语义相似度，不一定精确匹配关键词。空结果 = 确实没有相关记忆。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
+          },
+          topK: {
+            type: 'number',
+            description: '返回条数上限（默认 10）。',
+          },
+        },
+        required: ['query'],
+      }),
+      readOnly: () => true,
+      execute: async (args) => {
+        const query = args.query as string;
+        const topK = (args.topK as number) || 10;
+        const records = await mm.auraSemanticRecall(query, topK);
+        if (records.length === 0) {
+          const count = await mm.auraRecordCount();
+          return count > 0
+            ? `未找到与 "${query}" 语义相关的记忆（记忆库共 ${count} 条）。尝试换一种表述。`
+            : '记忆库为空。用 hologram_memory_save 存一条记忆后即可语义搜索。';
+        }
+        const lines = records.map((r) => {
+          const tagStr = r.tags?.length ? ` [${r.tags.join(', ')}]` : '';
+          const scoreStr = ` (相关度: ${(r.score * 100).toFixed(0)}%)`;
+          return `-${tagStr}${scoreStr}\n  ${r.content.slice(0, 300)}`;
+        });
+        return `### 语义搜索: "${query}"\n找到 ${records.length} 条相关记忆:\n\n${lines.join('\n\n')}`;
       },
     },
     {

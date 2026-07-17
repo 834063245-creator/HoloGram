@@ -436,6 +436,10 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   const agent = agentHandles.get(agentKey(ctx.storeId, sMeta.id));
   if (!agent) return;
 
+  const messages = agent.getSession();
+  // Don't persist empty sessions (only system prompt, no user messages)
+  if (!messages.some((m) => m.role !== 'system')) return;
+
   // ponytail: messages are already in per-session store — no saveCurrentMessages needed
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(sMeta.id, ctx.getTotalTokensUsed());
 
@@ -443,7 +447,7 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
     id: sMeta.id,
     label: sMeta.label,
     savedAt: new Date().toISOString(),
-    messages: agent.getSession(),
+    messages,
     tokensUsed: ctx.getTotalTokensUsed(),
   };
 
