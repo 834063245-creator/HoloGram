@@ -9,7 +9,8 @@ import type gsap from 'gsap';
 import hljs from 'highlight.js';
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
-import type { ChatAgentHandle } from '../agent/chat-agent-handle';
+import type { ChatAgentHandle, GoalRunResult } from '../agent/chat-agent-handle';
+import { GoalManager, type GoalRecord } from '../agent/goal-manager';
 
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
 import { rpc } from '../bridge';
@@ -136,6 +137,10 @@ export class ChatPanel {
   // ── Messages (React-based) ──
   private _chatMessages: ChatMessagesPanel | null = null;
 
+  // ── Goal status strip ──
+  private _goalStrip: HTMLElement | null = null;
+  private _goalStripRecord: GoalRecord | null = null;
+
   // ── Prompt shelf (React-based) — ask_user + permission cards ──
   private _promptShelf: PromptShelfController | null = null;
 
@@ -191,6 +196,9 @@ export class ChatPanel {
     reactRoot.className = 'chat-messages';
     this.msgList.style.display = 'none';
     this.msgList.parentElement?.insertBefore(reactRoot, this.msgList);
+    // ── Goal status strip — 目标状态条(消息列表上方,goal:state 驱动显隐) ──
+    this._goalStrip = this._buildGoalStrip();
+    this.msgList.parentElement?.insertBefore(this._goalStrip, reactRoot);
     this._chatMessages = new ChatMessagesPanel(reactRoot, this.panelId);
     this._chatMessages.setCallbacks({
       onCopyText: (text) => navigator.clipboard.writeText(text).catch(() => {}),
@@ -309,6 +317,10 @@ export class ChatPanel {
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
       getChatStore(this.panelId).panel.setState({ lastAgentDiag: d.text });
     });
+    // ── Goal strip:状态迁移驱动显隐;切换工作区后重载 ──
+    bus.on('goal:state', (record: GoalRecord) => this._updateGoalStrip(record));
+    bus.on('workspace:switched', () => this._refreshGoalStrip());
+    this._refreshGoalStrip();
     // ⚡ ExecutionState → UI sync: subscribe to active session's execState, re-bind on session switch
     let _execUnsub: (() => void) | null = null;
     const _onExecChange = (exec: ExecStateInstance) => {
@@ -1127,6 +1139,80 @@ export class ChatPanel {
    *  @param text The instruction sent to the agent
    *  @param displayLabel If set, shows this as a user bubble (for slash commands) */
   private sendAgentText(text: string, displayLabel?: string): void {
+    this._runAgentTurn({
+      userText: displayLabel,
+      bubbleLabel: displayLabel,
+      drive: (signal) => this.agent!.run(signal, text),
+    });
+  }
+
+  /** Resume a previously paused goal. */
+  private runGoalResume(): void {
+    this._runAgentTurn({
+      userText: '/goal resume',
+      bubbleLabel: '🔄 恢复目标',
+      drive: (signal) => this.agent!.resumeGoal(signal),
+      onResult: (r) => this._notifyGoalResult(r),
+    });
+  }
+
+  private runGoal(goal: string): void {
+    this._runAgentTurn({
+      userText: `/goal ${goal}`,
+      bubbleLabel: `🎯 ${goal}`,
+      drive: (signal) => this.agent!.runGoal(signal, goal),
+      onResult: (r) => this._notifyGoalResult(r),
+    });
+  }
+
+  /** /goal status — 显示活体目标 + 最近历史。 */
+  private async showGoalStatus(): Promise<void> {
+    const path = getChatStore(this.panelId).panel.getState().projectPath;
+    if (!path) return;
+    const mgr = new GoalManager(path);
+    const active = await mgr.getActive();
+    const history = (await mgr.list()).filter((r) => r.status !== 'active' && r.status !== 'paused');
+    if (!active && history.length === 0) {
+      this.addNotice('当前没有目标。用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
+      return;
+    }
+    if (active) {
+      const label = active.status === 'paused' ? '已暂停' : '进行中';
+      const hint = active.status === 'paused' ? ' — /goal resume 继续' : '';
+      this.addNotice(`🎯 ${active.text.slice(0, 60)} · ${label} · 第 ${active.iteration + 1} 轮${hint}`, 'info');
+    }
+    for (const r of history.slice(-3).reverse()) {
+      const icon = r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : '🚫';
+      this.addNotice(`${icon} ${r.text.slice(0, 50)} — ${(r.summary || r.status).slice(0, 60)}`, 'info');
+    }
+  }
+
+  /** /goal cancel — 取消活体目标(运行中需先停止)。 */
+  private async cancelGoal(): Promise<void> {
+    const path = getChatStore(this.panelId).panel.getState().projectPath;
+    if (!path) return;
+    if (this._activeExec().isRunning) {
+      this.addNotice('目标运行中 — 请先点击停止(或状态条上的暂停),再 /goal cancel', 'warn');
+      return;
+    }
+    const mgr = new GoalManager(path);
+    const active = await mgr.getActive();
+    if (!active) {
+      this.addNotice('没有可取消的目标', 'info');
+      return;
+    }
+    await mgr.cancel(active.id);
+    this.addNotice(`🚫 已取消目标: ${active.text.slice(0, 50)}`, 'info');
+  }
+
+  /** Shared scaffolding for agent turns — sendAgentText / runGoal / runGoalResume converge here.
+   *  守卫、exec signal、滚动重置、turn pair、用户气泡、pending session、finally 收尾。 */
+  private _runAgentTurn(opts: {
+    userText?: string;
+    bubbleLabel?: string;
+    drive: (signal: AbortSignal) => Promise<GoalRunResult | void>;
+    onResult?: (result: GoalRunResult) => void;
+  }): void {
     if (!this.agent || this._activeExec().isRunning) return;
     if (Session.hasRunningBackgroundSession(this.panelId)) {
       this.addNotice('有后台会话运行中，请等待完成', 'info');
@@ -1137,14 +1223,16 @@ export class ChatPanel {
     // Reset auto-scroll for this new turn
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
 
-    if (displayLabel) {
+    if (opts.userText) {
       Session.getTurnPairs(this.panelId).push({
-        userText: displayLabel,
+        userText: opts.userText,
         userBubble: null,
         assistantBubble: null,
         sessionIndex: this.agent.nextInsertIndex,
       });
-      this.appendUserBubble(displayLabel);
+    }
+    if (opts.bubbleLabel) {
+      this.appendUserBubble(opts.bubbleLabel);
     }
 
     {
@@ -1152,10 +1240,10 @@ export class ChatPanel {
       const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
       if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
     }
-    this.agent
-      .run(signal, text)
-      .then(() => {
-        // Success
+    opts
+      .drive(signal)
+      .then((result) => {
+        if (result) opts.onResult?.(result);
       })
       .catch((err: any) => {
         if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
@@ -1173,101 +1261,67 @@ export class ChatPanel {
       });
   }
 
-  /** Run a goal autonomously — Agent keeps going until done or failed.
-   *  ponytail: same UI scaffolding as sendAgentText, but calls runGoal instead of run. */
-  /** Resume a previously paused goal. */
-  private runGoalResume(): void {
-    if (!this.agent || this._activeExec().isRunning) return;
-    const signal = this._activeExec().start();
-    getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
-
-    Session.getTurnPairs(this.panelId).push({
-      userText: '/goal resume',
-      userBubble: null,
-      assistantBubble: null,
-      sessionIndex: this.agent.nextInsertIndex,
-    });
-    this.appendUserBubble('🔄 恢复目标');
-
-    {
-      const sessStore = getChatStore(this.panelId).sess.getState();
-      const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
-      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+  private _notifyGoalResult(result: GoalRunResult): void {
+    if (result.status === 'completed') {
+      this.addNotice(`✅ 目标达成: ${result.summary.slice(0, 120)}`, 'info');
+    } else if (result.status === 'paused') {
+      this.addNotice(`⏸️ ${result.summary}`, 'info');
+    } else if (result.status === 'failed') {
+      this.addNotice(`❌ 目标失败: ${result.summary.slice(0, 120)}`, 'warn');
+    } else {
+      this.addNotice('目标被中断', 'warn');
     }
-    this.agent
-      .resumeGoal(signal)
-      .then((result) => {
-        if (result.status === 'completed') {
-          this.addNotice(`✅ 目标达成: ${result.summary.slice(0, 120)}`, 'info');
-        } else if (result.status === 'paused') {
-          this.addNotice(`⏸️ ${result.summary}`, 'info');
-        } else if (result.status === 'failed') {
-          this.addNotice(`❌ 目标失败: ${result.summary.slice(0, 120)}`, 'warn');
-        } else {
-          this.addNotice('目标被中断', 'warn');
-        }
-      })
-      .catch((err: any) => {
-        if (err.message?.includes('aborted')) {
-          this.addNotice('目标恢复已中止', 'info');
-        } else {
-          this.addNotice(`目标恢复错误: ${err.message || err}`, 'error');
-        }
-      })
-      .finally(() => {
-        this._activeExec().done();
-        this.finishTurn();
-        bus.emit('chat:turn-done', {});
-      });
   }
 
-  private runGoal(goal: string): void {
-    if (!this.agent || this._activeExec().isRunning) return;
-    if (Session.hasRunningBackgroundSession(this.panelId)) {
-      this.addNotice('有后台会话运行中，请等待完成', 'info');
+  // ── Goal status strip ──
+
+  private _buildGoalStrip(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'goal-strip';
+    el.style.display = 'none';
+    el.innerHTML =
+      '<span class="goal-strip-icon">🎯</span>' +
+      '<span class="goal-strip-text"></span>' +
+      '<span class="goal-strip-meta"></span>' +
+      '<button type="button" class="goal-strip-btn" data-act="pause">暂停</button>' +
+      '<button type="button" class="goal-strip-btn" data-act="resume">恢复</button>' +
+      '<button type="button" class="goal-strip-btn goal-strip-btn-danger" data-act="cancel">取消</button>';
+    el.querySelector('[data-act="pause"]')!.addEventListener('click', () => this.abort());
+    el.querySelector('[data-act="resume"]')!.addEventListener('click', () => this.runGoalResume());
+    el.querySelector('[data-act="cancel"]')!.addEventListener('click', () => this.cancelGoal());
+    return el;
+  }
+
+  private _updateGoalStrip(record: GoalRecord): void {
+    if (record.status === 'active' || record.status === 'paused') {
+      this._goalStripRecord = record;
+    } else if (this._goalStripRecord?.id === record.id) {
+      this._goalStripRecord = null; // 终态 — 收起状态条
+    }
+    this._renderGoalStrip();
+  }
+
+  private async _refreshGoalStrip(): Promise<void> {
+    const path = getChatStore(this.panelId).panel.getState().projectPath;
+    if (!path) return;
+    this._goalStripRecord = await new GoalManager(path).getActive();
+    this._renderGoalStrip();
+  }
+
+  private _renderGoalStrip(): void {
+    const el = this._goalStrip;
+    if (!el) return;
+    const rec = this._goalStripRecord;
+    if (!rec) {
+      el.style.display = 'none';
       return;
     }
-    const signal = this._activeExec().start();
-    getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
-
-    Session.getTurnPairs(this.panelId).push({
-      userText: `/goal ${goal}`,
-      userBubble: null,
-      assistantBubble: null,
-      sessionIndex: this.agent.nextInsertIndex,
-    });
-    this.appendUserBubble(`🎯 ${goal}`);
-
-    {
-      const sessStore = getChatStore(this.panelId).sess.getState();
-      const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
-      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
-    }
-    this.agent
-      .runGoal(signal, goal)
-      .then((result) => {
-        if (result.status === 'completed') {
-          this.addNotice(`✅ 目标达成: ${result.summary.slice(0, 120)}`, 'info');
-        } else if (result.status === 'paused') {
-          this.addNotice(`⏸️ ${result.summary}`, 'info');
-        } else if (result.status === 'failed') {
-          this.addNotice(`❌ 目标失败: ${result.summary.slice(0, 120)}`, 'warn');
-        } else {
-          this.addNotice('目标被中断', 'warn');
-        }
-      })
-      .catch((err: any) => {
-        if (err.message?.includes('aborted')) {
-          this.addNotice('目标执行已中止', 'info');
-        } else {
-          this.addNotice(`目标错误: ${err.message || err}`, 'error');
-        }
-      })
-      .finally(() => {
-        this._activeExec().done();
-        this.finishTurn();
-        bus.emit('chat:turn-done', {});
-      });
+    el.style.display = 'flex';
+    el.querySelector('.goal-strip-text')!.textContent = rec.text.length > 40 ? `${rec.text.slice(0, 40)}…` : rec.text;
+    const label = rec.status === 'paused' ? '已暂停' : '进行中';
+    el.querySelector('.goal-strip-meta')!.textContent = `${label} · 第 ${rec.iteration + 1} 轮`;
+    (el.querySelector('[data-act="pause"]') as HTMLElement).style.display = rec.status === 'active' ? '' : 'none';
+    (el.querySelector('[data-act="resume"]') as HTMLElement).style.display = rec.status === 'paused' ? '' : 'none';
   }
 
   private async sendMessage(): Promise<void> {
@@ -1303,19 +1357,23 @@ export class ChatPanel {
         );
         return;
       }
-      if (text.startsWith('/goal ')) {
-        const goal = text.slice('/goal '.length).trim();
+      if (text === '/goal' || text.startsWith('/goal ')) {
+        const arg = text === '/goal' ? '' : text.slice('/goal '.length).trim();
         this.inputArea.value = '';
         this.inputArea.style.height = 'auto';
-        if (goal === 'resume') {
+        if (arg === '' || arg === 'status') {
+          this.showGoalStatus();
+          return;
+        }
+        if (arg === 'resume') {
           this.runGoalResume();
           return;
         }
-        if (!goal) {
-          this.addNotice('用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
+        if (arg === 'cancel') {
+          this.cancelGoal();
           return;
         }
-        this.runGoal(goal);
+        this.runGoal(arg);
         return;
       }
       // Look up simple commands in registry

@@ -31,15 +31,6 @@ export interface AgentLoadResult {
   messages: Message[];
 }
 
-export interface GoalState {
-  goal: string;
-  iteration: number;
-  stallRounds: number;
-  status: 'active' | 'paused';
-  createdAt: number;
-  updatedAt: number;
-}
-
 const INDEX_FILE = 'index.json';
 
 // ── AgentStore ──
@@ -59,10 +50,6 @@ export class AgentStore {
 
   private sessionPath(id: string): string {
     return `${this.baseDir}/${id}/session.json`;
-  }
-
-  private goalPath(id: string): string {
-    return `${this.baseDir}/${id}/goal.json`;
   }
 
   private indexPath(): string {
@@ -176,39 +163,6 @@ export class AgentStore {
       } catch {
         /* index write is best-effort */
       }
-    }
-  }
-
-  // ── Goal persistence ──
-
-  /** Save goal state for an agent. */
-  async saveGoal(agentId: string, state: GoalState): Promise<void> {
-    await this.ensureAgentDir(agentId);
-    await rpc('write_file_content', {
-      filePath: this.goalPath(agentId),
-      content: JSON.stringify({ ...state, updatedAt: Date.now() }, null, 2),
-    });
-  }
-
-  /** Load goal state. Returns null when no goal exists. */
-  async loadGoal(agentId: string): Promise<GoalState | null> {
-    await this.ensureDir();
-    try {
-      const raw = await rpc<string>('read_file_content', {
-        filePath: this.goalPath(agentId),
-      });
-      return JSON.parse(stripNums(raw)) as GoalState;
-    } catch {
-      return null;
-    }
-  }
-
-  /** Delete goal state. */
-  async deleteGoal(agentId: string): Promise<void> {
-    try {
-      await rpc('delete_file_or_dir', { path: this.goalPath(agentId) });
-    } catch {
-      /* best effort */
     }
   }
 

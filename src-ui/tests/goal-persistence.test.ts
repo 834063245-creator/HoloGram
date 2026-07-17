@@ -16,7 +16,8 @@ vi.mock('../src/ui/events', () => ({
 }));
 
 import { Agent } from '../src/agent/agent';
-import { AgentStore, type GoalState } from '../src/agent/agent-store';
+import { AgentStore } from '../src/agent/agent-store';
+import { GoalManager } from '../src/agent/goal-manager';
 import { ToolRegistry } from '../src/agent/tool';
 import type { Tool } from '../src/agent/tool';
 import type { Chunk, Provider, ToolCall } from '../src/provider/types';
@@ -74,68 +75,45 @@ function makeAgent(prov?: Provider): Agent {
   return new Agent(prov ?? steppedProvider([[DONE]]), reg, 'system', { agentId: 'test-agent' });
 }
 
-function mockRpcForStore(files: Record<string, string | Error> = {}): void {
+/** Live in-memory FS(同 rpc 面,状态真实流转) */
+function mockLiveFs(initial: Record<string, string> = {}): Map<string, string> {
+  const files = new Map<string, string>(Object.entries(initial));
   rpcMock.mockReset();
   rpcMock.mockImplementation(async (method: string, params: Record<string, unknown>) => {
     if (method === 'create_directory') return null;
-    if (method === 'write_file_content') return '(mock: file saved)';
-    if (method === 'read_file_content') {
-      const fp = params.filePath as string;
-      const v = files[fp];
-      if (v instanceof Error) throw v;
-      if (v !== undefined) return v;
-      throw new Error(`ENOENT: ${fp}`);
+    if (method === 'write_file_content') {
+      files.set(params.filePath as string, params.content as string);
+      return '(mock: file saved)';
     }
-    if (method === 'delete_file_or_dir') return null;
+    if (method === 'read_file_content') {
+      const v = files.get(params.filePath as string);
+      if (v === undefined) throw new Error(`ENOENT: ${params.filePath}`);
+      return v;
+    }
+    if (method === 'delete_file_or_dir') {
+      const p = params.path as string;
+      for (const k of [...files.keys()]) {
+        if (k === p || k.startsWith(p + '/')) files.delete(k);
+      }
+      return null;
+    }
     if (method === 'list_directory') return '[]';
     throw new Error(`unexpected rpc: ${method}`);
   });
+  return files;
 }
 
-// ── AgentStore goal CRUD ──
-
-describe('AgentStore goal CRUD', () => {
-  beforeEach(() => mockRpcForStore());
-
-  it('saveGoal + loadGoal round-trip', async () => {
-    const store = new AgentStore('/proj');
-    const gs: GoalState = { goal: 'fix auth', iteration: 3, stallRounds: 0, status: 'active', createdAt: 1000, updatedAt: 2000 };
-    await store.saveGoal('a1', gs);
-
-    const saved = JSON.stringify({ ...gs, updatedAt: expect.any(Number) }, null, 2);
-    mockRpcForStore({ '/proj/.hologram/agents/a1/goal.json': saved });
-
-    const loaded = await store.loadGoal('a1');
-    expect(loaded).not.toBeNull();
-    expect(loaded!.goal).toBe('fix auth');
-    expect(loaded!.iteration).toBe(3);
-    expect(loaded!.status).toBe('active');
-  });
-
-  it('loadGoal returns null on missing file', async () => {
-    const store = new AgentStore('/proj');
-    expect(await store.loadGoal('a1')).toBeNull();
-  });
-
-  it('loadGoal handles cat -n line numbers', async () => {
-    const gs: GoalState = { goal: 'refactor', iteration: 0, stallRounds: 0, status: 'paused', createdAt: 100, updatedAt: 200 };
-    const numbered = JSON.stringify(gs, null, 2).split('\n').map((l, i) => `${i + 1}\t${l}`).join('\n');
-    mockRpcForStore({ '/proj/.hologram/agents/a1/goal.json': numbered });
-    expect((await new AgentStore('/proj').loadGoal('a1'))!.goal).toBe('refactor');
-  });
-
-  it('deleteGoal removes the file', async () => {
-    mockRpcForStore({ '/proj/.hologram/agents/a1/goal.json': '{}', '/proj/.hologram/agents/index.json': '[]' });
-    const store = new AgentStore('/proj');
-    await store.deleteGoal('a1');
-    const deleted = rpcMock.mock.calls.filter((c: any[]) => c[0] === 'delete_file_or_dir');
-    expect(deleted.some((c: any[]) => (c[1].path as string).endsWith('goal.json'))).toBe(true);
-  });
-});
+function wireGoals(agent: Agent): GoalManager {
+  const gm = new GoalManager('/proj');
+  agent.setGoalManager(gm);
+  return gm;
+}
 
 // ── Agent identity ──
 
 describe('Agent identity', () => {
+  beforeEach(() => mockLiveFs());
+
   it('auto-generates agent ID matching agent-timestamp pattern', () => {
     const reg = new ToolRegistry(); reg.register(dummyTool());
     const a = new Agent(steppedProvider([[DONE]]), reg, 'sys');
@@ -160,122 +138,263 @@ describe('Agent identity', () => {
   });
 });
 
-// ── Goal loop integration ──
+// ── Goal loop(GoalManager 驱动) ──
 
 describe('Goal loop', () => {
-  let store: AgentStore;
-  let saveGoalSpy: ReturnType<typeof vi.spyOn>;
-  let deleteGoalSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => mockLiveFs());
 
-  beforeEach(() => {
-    mockRpcForStore();
-    store = new AgentStore('/proj');
-    saveGoalSpy = vi.spyOn(store, 'saveGoal');
-    deleteGoalSpy = vi.spyOn(store, 'deleteGoal');
-  });
-
-  it('checkpoints goal and deletes on completion', async () => {
+  it('goal_report 上报完成 — 主通道,记录存为历史', async () => {
     const provider = steppedProvider([
       toolChunks('checking files', { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/x.txt"}' }),
-      textChunks('[GOAL_COMPLETE] 修复完成，全部测试通过。'),
+      toolChunks('', { id: 'c2', name: 'goal_report', arguments: '{"status":"completed","summary":"修好了"}' }),
+      [DONE], // goal_report 后下一轮为空 → runLoop 返回
     ]);
     const agent = makeAgent(provider);
-    agent.setAgentStore(store);
+    const gm = wireGoals(agent);
     vi.spyOn(agent, 'saveState').mockResolvedValue(undefined);
 
     const result = await agent.runGoal(new AbortController().signal, 'fix auth bug');
 
     expect(result.status).toBe('completed');
-    expect(saveGoalSpy).toHaveBeenCalled();
-    // First checkpoint should be at iter 0 with status 'active'
-    const checkpointCalls = saveGoalSpy.mock.calls.filter((c) => c[1].status === 'active');
-    expect(checkpointCalls.length).toBeGreaterThanOrEqual(1);
-    expect(checkpointCalls[0][1].iteration).toBe(0);
-    // Goal deleted on clean completion
-    expect(deleteGoalSpy).toHaveBeenCalled();
+    expect(result.summary).toBe('修好了');
+    const [rec] = await gm.list();
+    expect(rec.status).toBe('completed');
+    expect(rec.summary).toBe('修好了');
   });
 
-  it('[GOAL_FAILED] triggers deleteGoal', async () => {
+  it('[GOAL_COMPLETE] 文本标记 — fallback 兼容旧会话', async () => {
     const provider = steppedProvider([
-      textChunks('[GOAL_FAILED] 缺少必要的 API 密钥，无法继续。'),
+      toolChunks('working', { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/x.txt"}' }),
+      textChunks('[GOAL_COMPLETE] 修复完成,全部测试通过。'),
     ]);
     const agent = makeAgent(provider);
-    agent.setAgentStore(store);
+    const gm = wireGoals(agent);
+    vi.spyOn(agent, 'saveState').mockResolvedValue(undefined);
+
+    const result = await agent.runGoal(new AbortController().signal, 'fix auth bug');
+
+    expect(result.status).toBe('completed');
+    expect(result.summary).toContain('[GOAL_COMPLETE]');
+    const [rec] = await gm.list();
+    expect(rec.status).toBe('completed');
+  });
+
+  it('[GOAL_FAILED] → failed,记录保留可查', async () => {
+    const provider = steppedProvider([
+      textChunks('[GOAL_FAILED] 缺少必要的 API 密钥,无法继续。'),
+    ]);
+    const agent = makeAgent(provider);
+    const gm = wireGoals(agent);
 
     const result = await agent.runGoal(new AbortController().signal, 'impossible goal');
     expect(result.status).toBe('failed');
-    expect(deleteGoalSpy).toHaveBeenCalled();
+    const [rec] = await gm.list();
+    expect(rec.status).toBe('failed');
+    expect(rec.summary).toContain('API');
   });
 
-  it('stall detection fails and deletes goal', async () => {
-    // 3 iterations with no tool calls → stall
+  it('连续无工具调用 → 停滞判失败', async () => {
     const provider = steppedProvider([
       textChunks('分析中...需要更多信息。'),
       textChunks('继续分析...依赖关系复杂。'),
       textChunks('深入研究...缺少上下文。'),
-      textChunks('不会到这里'), // shouldn't reach
+      textChunks('不会到这里'),
     ]);
     const agent = makeAgent(provider);
-    agent.setAgentStore(store);
+    wireGoals(agent);
 
     const result = await agent.runGoal(new AbortController().signal, 'vague goal');
     expect(result.status).toBe('failed');
     expect(result.summary).toContain('轮未执行任何工具调用');
-    expect(deleteGoalSpy).toHaveBeenCalled();
+  });
+
+  it('每轮迭代都快照到 goal 专属槽', async () => {
+    // 纯文本轮结束一次迭代(工具调用会让 runLoop 继续,同属一轮)
+    const provider = steppedProvider([
+      textChunks('推进中'),
+      textChunks('继续推进'),
+      textChunks('[GOAL_COMPLETE] done'),
+    ]);
+    const agent = makeAgent(provider);
+    const gm = wireGoals(agent);
+    const saveSpy = vi.spyOn(gm, 'saveSession');
+    vi.spyOn(agent, 'saveState').mockResolvedValue(undefined);
+
+    await agent.runGoal(new AbortController().signal, 'snapshot check');
+    // 3 轮迭代,每轮至少一次快照
+    expect(saveSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    const [rec] = await gm.list();
+    const snap = await gm.loadSession(rec.id);
+    expect(snap).not.toBeNull();
+    expect(JSON.stringify(snap)).toContain('<goal>');
   });
 });
 
 // ── Goal resume ──
 
 describe('Goal resume', () => {
-  beforeEach(() => mockRpcForStore());
+  beforeEach(() => mockLiveFs());
 
-  it('resumeGoal fails when no paused goal', async () => {
-    const store = new AgentStore('/proj');
+  it('无 GoalManager → failed', async () => {
+    const result = await makeAgent().resumeGoal(new AbortController().signal);
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('目标管理器未初始化');
+  });
+
+  it('无活体目标 → failed', async () => {
     const agent = makeAgent();
-    agent.setAgentStore(store);
+    wireGoals(agent);
     const result = await agent.resumeGoal(new AbortController().signal);
     expect(result.status).toBe('failed');
     expect(result.summary).toContain('没有可恢复的目标');
   });
 
-  it('resumeGoal fails without AgentStore', async () => {
-    const result = await makeAgent().resumeGoal(new AbortController().signal);
-    expect(result.status).toBe('failed');
-    expect(result.summary).toContain('存储未初始化');
-  });
-
-  it('resumeGoal loads paused state and continues', async () => {
-    const store = new AgentStore('/proj');
-    vi.spyOn(store, 'loadGoal').mockResolvedValue({
-      goal: 'fix auth', iteration: 2, stallRounds: 0,
-      status: 'paused', createdAt: 1000, updatedAt: 2000,
-    });
-    vi.spyOn(store, 'load').mockResolvedValue({
-      record: { id: 'test-agent', parentId: null, description: '', status: 'running', createdAt: 0, updatedAt: 0, subagentDepth: 0 },
-      messages: [
-        { role: 'system', content: 'sys' },
-        { role: 'user', content: 'session data' },
-      ],
-    });
-
-    const provider = steppedProvider([
-      textChunks('[GOAL_COMPLETE] auth refactored, all tests green.'),
-    ]);
-    const agent = makeAgent(provider);
-    agent.setAgentStore(store);
+  it('崩溃遗留的 active 记录可直接恢复(Bug 3 回归)', async () => {
+    const agent = makeAgent(steppedProvider([textChunks('[GOAL_COMPLETE] 接上完成。')]));
+    const gm = wireGoals(agent);
+    // 模拟崩溃遗留:status 还是 active,快照已在槽里
+    const rec = await gm.create('crash goal');
+    await gm.saveSession(rec.id, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'crash context 关键现场' },
+    ] as any[]);
 
     const result = await agent.resumeGoal(new AbortController().signal);
     expect(result.status).toBe('completed');
-    expect(result.summary).toContain('[GOAL_COMPLETE]');
+    // 快照已载入,且重注了完整 <goal> 提示词(Bug 2 回归)
+    const session = agent.getSession();
+    expect(session.some((m) => m.content === 'crash context 关键现场')).toBe(true);
+    expect(session.some((m) => typeof m.content === 'string' && m.content.includes('<goal>'))).toBe(true);
   });
 });
 
-// ── Summary distillation ──
+// ── Pause session isolation(Bug 1 核心回归) ──
 
-describe('Summary distillation', () => {
-  it('context line threshold is 300 chars', () => {
-    expect(300).toBeGreaterThan(50);
-    expect(300).toBeLessThan(1000);
+describe('Pause session isolation', () => {
+  beforeEach(() => mockLiveFs());
+
+  function pauseProvider(afterPause: () => Chunk[]): Provider {
+    let callCount = 0;
+    let abortReady: () => void;
+    (pauseProvider as any)._ready = new Promise<void>((r) => { abortReady = r; });
+    return {
+      name: () => 'mock',
+      stream: async function* (signal: AbortSignal) {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: ChunkType.Text, text: 'step 1' };
+          yield { type: ChunkType.ToolCall, tool_call: { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/a.txt"}' } };
+          yield USG; yield DONE;
+        } else if (callCount === 2) {
+          yield DONE; // 空轮 → runLoop 返回,第 0 轮迭代完成
+        } else if (callCount === 3) {
+          yield { type: ChunkType.Text, text: 'step 2' };
+          yield { type: ChunkType.ToolCall, tool_call: { id: 'c2', name: 'read_file_content', arguments: '{"filePath":"/b.txt"}' } };
+          yield USG;
+          abortReady();
+          while (!signal.aborted) await new Promise((r) => setTimeout(r, 5));
+          yield DONE;
+        } else {
+          for (const c of afterPause()) {
+            if (signal.aborted) break;
+            yield c;
+          }
+        }
+      },
+    };
+  }
+
+  it('暂停快照进 goal 槽;普通聊天覆盖不了 goal 现场(Bug 1 回归)', async () => {
+    const provider = pauseProvider(() => textChunks('好的,收到'));
+    const agent = makeAgent(provider);
+    const gm = wireGoals(agent);
+    agent.setAgentStore(new AgentStore('/proj'));
+
+    const ctrl = new AbortController();
+    const resultP = agent.runGoal(ctrl.signal, 'test goal');
+    await (pauseProvider as any)._ready;
+    ctrl.abort();
+
+    const result = await resultP;
+    expect(result.status).toBe('paused');
+    // 内存 session 清成 [system](沿用隔离语义)
+    expect(agent.getSession().length).toBe(1);
+    expect(agent.getSession()[0].role).toBe('system');
+
+    // goal 现场在 goal 槽里
+    const [rec] = await gm.list();
+    expect(rec.status).toBe('paused');
+    const snapBefore = JSON.stringify(await gm.loadSession(rec.id));
+    expect(snapBefore).toContain('<goal>');
+
+    // 暂停后来一句普通聊天 — 旧架构这一句话就把 goal 现场毁了
+    await agent.run(new AbortController().signal, '你好');
+    // run() 里的 saveState 是 fire-and-forget,等它落盘
+    await new Promise((r) => setTimeout(r, 20));
+
+    // 普通聊天写它自己的槽(应有),goal 槽纹丝不动(关键断言)
+    const mainSlot = await new AgentStore('/proj').load('test-agent');
+    expect(JSON.stringify(mainSlot?.messages)).toContain('你好');
+    const snapAfter = JSON.stringify(await gm.loadSession(rec.id));
+    expect(snapAfter).toBe(snapBefore);
+    expect(snapAfter).not.toContain('你好');
+  });
+
+  it('流中途中断(BodyStreamBuffer 式错误)也算暂停(暂停误判失败 回归)', async () => {
+    let callCount = 0;
+    let abortReady: () => void;
+    const ready = new Promise<void>((r) => { abortReady = r; });
+    const provider: Provider = {
+      name: () => 'mock',
+      stream: async function* (signal: AbortSignal) {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: ChunkType.Text, text: 'step 1' };
+          yield { type: ChunkType.ToolCall, tool_call: { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/a.txt"}' } };
+          yield USG; yield DONE;
+        } else if (callCount === 2) {
+          yield DONE; // 空轮 → 第 0 轮迭代完成
+        } else {
+          // 第 1 轮:流中途被掐断 — fetch 风格 abort 错误,不是 'aborted'
+          yield { type: ChunkType.Text, text: 'partial' };
+          abortReady();
+          while (!signal.aborted) await new Promise((r) => setTimeout(r, 5));
+          throw new Error('BodyStreamBuffer was aborted');
+        }
+      },
+    };
+    const agent = makeAgent(provider);
+    const gm = wireGoals(agent);
+
+    const ctrl = new AbortController();
+    const resultP = agent.runGoal(ctrl.signal, 'stream abort goal');
+    await ready;
+    ctrl.abort();
+
+    const result = await resultP;
+    expect(result.status).toBe('paused');
+    const [rec] = await gm.list();
+    expect(rec.status).toBe('paused');
+  });
+
+  it('暂停 → 闲聊 → 恢复:现场还在,目标重注,跑到完成(Bug 1+2 回归)', async () => {
+    const provider = pauseProvider(() => textChunks('[GOAL_COMPLETE] 恢复后搞定。'));
+    const agent = makeAgent(provider);
+    wireGoals(agent);
+
+    const ctrl = new AbortController();
+    const resultP = agent.runGoal(ctrl.signal, 'test goal');
+    await (pauseProvider as any)._ready;
+    ctrl.abort();
+    expect((await resultP).status).toBe('paused');
+
+    // 闲聊一句再恢复
+    await agent.run(new AbortController().signal, '在吗');
+    const resumed = await agent.resumeGoal(new AbortController().signal);
+
+    expect(resumed.status).toBe('completed');
+    expect(resumed.summary).toContain('[GOAL_COMPLETE]');
+    const session = agent.getSession();
+    expect(session.some((m) => typeof m.content === 'string' && m.content.includes('<goal>'))).toBe(true);
   });
 });

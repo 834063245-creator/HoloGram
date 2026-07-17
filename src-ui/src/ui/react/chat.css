@@ -2909,3 +2909,53 @@
 .check-content::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ── Goal status strip ── */
+.goal-strip {
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  margin: 4px 8px;
+  font-family: var(--font-hud);
+  font-size: calc(11px * var(--font-scale));
+  color: var(--text-dim);
+  border: 1px solid var(--starlight-dim);
+  border-radius: 8px;
+  background: rgba(120, 160, 255, 0.06);
+}
+.goal-strip-icon {
+  flex: none;
+}
+.goal-strip-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.goal-strip-meta {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--font-scale));
+  color: var(--text-dim);
+}
+.goal-strip-btn {
+  flex: none;
+  padding: 1px 8px;
+  font-size: calc(10px * var(--font-scale));
+  font-family: var(--font-hud);
+  color: var(--signal);
+  background: transparent;
+  border: 1px solid var(--signal);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.goal-strip-btn:hover {
+  opacity: 1;
+}
+.goal-strip-btn-danger {
+  color: var(--fail);
+  border-color: var(--fail);
+}

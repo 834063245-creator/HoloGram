@@ -7,15 +7,18 @@
 
 import type { Message } from '../provider/types';
 
+/** 目标运行结果 — runGoal / resumeGoal 的统一返回 */
+export type GoalRunResult = { status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string };
+
 export interface ChatAgentHandle {
   /** 发起一轮对话：附加用户消息，驱动工具循环 */
   run(signal: AbortSignal, input: string): Promise<void>;
 
   /** 自主多轮目标执行。status 新增 'paused' — 用户中断时保存检查点，可通过 resumeGoal 继续。 */
-  runGoal(signal: AbortSignal, goal: string): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }>;
+  runGoal(signal: AbortSignal, goal: string): Promise<GoalRunResult>;
 
-  /** 恢复上次暂停的目标 */
-  resumeGoal(signal: AbortSignal): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }>;
+  /** 恢复暂停(或崩溃遗留)的目标;不传 id 时恢复唯一活体目标 */
+  resumeGoal(signal: AbortSignal, id?: string): Promise<GoalRunResult>;
 
   /** 手动触发上下文压缩，返回摘要文本 */
   compactNow(signal: AbortSignal): Promise<string>;

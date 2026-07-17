@@ -13,6 +13,7 @@
 
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { AgentStore } from './agent/agent-store';
+import { GoalManager } from './agent/goal-manager';
 import { auraShutdown } from './agent/aura-memory';
 import { type CompactionConfig, createCompactionTools } from './agent/compaction-model';
 import { type SubAgentHandle, SubAgentPool } from './agent/coordinator';
@@ -144,6 +145,7 @@ export class Workspace {
   taskManager: TaskManager = new TaskManager();
   skillRegistry: SkillRegistry | null = null;
   agentStore: AgentStore | null = null;
+  goalManager: GoalManager | null = null;
 
   // ── Sub-agent pool ──
   subAgentPool = new SubAgentPool();
@@ -597,6 +599,12 @@ export class Workspace {
 
     // Init agent state persistence
     this.agentStore = new AgentStore(this.path);
+    // Init goal lifecycle store — 旧格式迁移 + 崩溃孤儿接管,必须先于任何 /goal 新建
+    this.goalManager = new GoalManager(this.path);
+    this.goalManager
+      .migrateLegacy()
+      .then(() => this.goalManager!.adoptOrphans())
+      .catch(() => {});
 
     // Init skill registry (hot-loads on first Skill tool call)
     this.skillRegistry = new SkillRegistry(this.path);
@@ -829,156 +837,24 @@ export class Workspace {
         reg.register(tool);
       }
     };
-    if (this.agent) {
-      registerCompactionTools(this.agent, registry);
-    }
-
     // Task tracking tools
     for (const tool of createTaskTools(this.taskManager)) {
       registry.register(tool);
     }
 
-    const pricing = defaultPricing(active.kind, active.model);
-    const graphSnap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
-    const mode = this._modeState();
-
-    const systemPrompt = buildSystemPrompt(this, memorySection, graphSnap, claudeMdSection, mode.collaborationMode);
-    const agentOpts = settings.agent || {};
-
-    const temperature = agentOpts.temperature ?? 0.7;
-    const contextWindow = agentOpts.contextWindow ?? 0;
-
-    // Plan mode: use read-only-only tool registry
-    const effectiveRegistry = mode.collaborationMode === 'plan'
-      ? this._planRegistry(registry)
-      : registry;
-
-    // ponytail: permission rules evaluated in Rust, dialog rendered inline in chat panel
-
+    // ── Store shared state (Agent creation moved to factory below) ──
     this.prov = prov;
-    this.registry = effectiveRegistry;
-    this.agent = new Agent(prov, effectiveRegistry, systemPrompt, {
-      agentId: 'main',
-      parentId: null,
-      eventSink: chatPanel.eventSink,
-      execState: chatPanel['_exec'],
-      onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
-        // Fire-and-forget: ingest session into memory bundle
-        // If bundle is unreachable, this silently fails — nothing is blocked.
-        memoryBundleIngest(
-          messages.map((m) => ({
-            role: m.role,
-            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-          })),
-          'holo',
-          _sid,
-        ).catch(() => {});
-        // Refresh state caches for next turn + inject system-reminder
-        (async () => {
-          await refreshGitStatus(this.path);
-          await refreshTimeline(this.path);
-          const block = buildTurnStartBlock();
-          if (block && this.agent) {
-            this.agent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`);
-          }
-        })().catch(() => {});
-      },
-      pricing,
-      temperature,
-      contextWindow,
-      maxTokens: active.maxTokens ?? 0,
-    });
-
-    // Load persisted auto-tune config (fire-and-forget)
-    this.agent.setCompactionConfigPath(this.path);
-    this.agent.setAgentStore(this.agentStore);
-    this.agent.applyAutoTuneConfig().catch(() => {});
-
-    // Sub-agent tool — with async pool for fire-and-forget spawn
-    try {
-      const agentRef = this.agent;
-      const pool = this.subAgentPool;
-
-      // Wire pool completion → UI events + task-notification injection
-      pool.setOnDone((handle: SubAgentHandle, callId?: string) => {
-        // Inject result back into parent as task-notification
-        const resultText =
-          handle.status === 'failed'
-            ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
-            : `[子 Agent 完成: ${handle.description}] ${(handle.result || '').slice(0, 500)}`;
-        agentRef.injectTaskNotification(resultText);
-      });
-
-      // Wire pool reference into Agent for cascade abort / stopAll
-      agentRef.setSubAgentPool(pool);
-
-      registry.register(
-        createSubAgentTool(async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
-          const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
-          const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
-          return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
-        }, pool),
-      );
-      // Register agent management tools
-      registry.register(createAgentStopAllTool(() => pool));
-      registry.register(createAgentStopTool(pool));
-      registry.register(createAgentStatusTool(pool));
-      registry.register(createAgentMessageTool(pool));
-    } catch (e) {
-      console.error('[setupAgent] sub-agent tool registration failed:', e);
-    }
+    this.registry = registry;  // plan-mode filtering handled per-session in factory
 
     // Wire tool schemas to UI panel — dynamic, not hardcoded
     chatPanel.setToolSchemas(registry.schemas());
-
-    // Graph context hooks
-    if (this.graphData) {
-      const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(this.graphData);
-      const ctx = createGraphContext(fileIndex, fanIn, fanOut);
-      // Fire-and-forget: load engine snapshot (fragility, cycles, health)
-      // into ctx.engine for enriched preflight warnings
-      loadEngineSnapshot(ctx, this.path).catch(() => {});
-      const hooks = new HookRegistry();
-      hooks.register(createGraphContextHook(ctx));
-      // State hooks: LSP diagnostics + git blame on read, check feedback on write
-      hooks.register(createStateReadHook(this.path));
-      this.agent.setHooks(hooks);
-
-      // Preflight: warn before edit_file / write_file
-      const preflightHooks = new PreflightHookRegistry();
-      preflightHooks.register(createGraphPreflightHook(ctx));
-      preflightHooks.register(createStatePreflightHook());
-      this.agent.setPreflightHooks(preflightHooks);
-      this._preflightCtx = ctx; // stash for post-write snapshot refresh
-
-      // Per-turn AuraSDK recall — fires before each user message
-      if (this.memoryManager) {
-        const mm = this.memoryManager;
-        this.agent.setPreRunHook(async (input: string) => {
-          if (!mm.auraReady) return null;
-          try {
-            const records = await mm.auraSemanticRecall(input, 5);
-            if (records.length === 0) return null;
-            const lines = records.map((r) => {
-              const tagStr = r.tags?.length ? `[${r.tags.join(', ')}] ` : '';
-              return `- ${tagStr}${r.content.slice(0, 250)}`;
-            });
-            return `AuraSDK 语义记忆召回（当前问题的相关历史记忆，仅供参考——文件记忆更权威）：\n${lines.join('\n')}`;
-          } catch {
-            return null;
-          }
-        });
-      }
-    }
 
     // Cold-start: prime state caches (git status, timeline)
     refreshGitStatus(this.path).catch(() => {});
     refreshTimeline(this.path).catch(() => {});
 
-    this.onStatusChange?.('[Agent] ✅ 已就绪');
-    chatPanel.setAgent(this.agent);
-
-    // Agent factory for new sessions
+    // ── Agent factory — single source of truth for Agent creation ──
+    // Used for both initial agent and new-session creation.
     {
       const mm = this.memoryManager;
       const hookCtx = this.graphData
@@ -988,127 +864,99 @@ export class Workspace {
           })()
         : null;
 
-      chatPanel.setAgentFactory(async () => {
+      const factory = async (): Promise<Agent | null> => {
         let s = loadSettings();
         s = await restoreSecrets(s);
         const act = getActiveProvider(s);
         if (!act.apiKey || act.apiKey.trim() === '') return null;
-        const p: Provider =
-          act.kind === 'anthropic'
-            ? createAnthropicProvider({
-                name: act.name,
-                apiKey: act.apiKey,
-                baseUrl: act.baseUrl,
-                model: act.model,
-                thinking: act.thinking || undefined,
-              })
-            : createOpenAIProvider({
-                name: act.name,
-                apiKey: act.apiKey,
-                baseUrl: act.baseUrl,
-                model: act.model,
-                disableThinking: s.agent?.disableThinking,
-              });
+
+        // Clone shared tool registry — all workspace-level tools
         const r = new ToolRegistry();
-        const factoryExec: ToolExecutor = async (name, args) => {
-          const result = await agentInvoke<string>(name, args);
-          return typeof result === 'string' ? result : JSON.stringify(result);
-        };
-        if (this.graphData) {
-          const schemas = await loadHologramSchemas();
-          const holoExec: ToolExecutor = async (name, args) => {
-            const result = await rpc<string>('hologram_call', { tool: name, args });
-            return typeof result === 'string' ? result : JSON.stringify(result);
-          };
-          for (const tool of schemas.map((s) => mcpSchemaToTool(s, holoExec))) r.register(tool);
-          // dataflow_save / dataflow_query — Tauri commands, not MCP tools
-          r.register({
-            name: () => 'dataflow_save',
-            description: () =>
-              '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。content 是你写的结构化追踪报告（markdown），会直接渲染给用户。query 是用户原始问题，用于索引。一次追踪调一次 save。',
-            parameters: () => ({
-              type: 'object',
-              properties: {
-                query: { type: 'string', description: '用户原始查询，用于面板列表展示和后续检索' },
-                content: {
-                  type: 'string',
-                  description:
-                    '追踪报告内容（markdown）。描述完整数据流链路、节点角色（entry/buffer/consumer/sink）、关键变量、文件位置。会原样渲染给用户。',
-                },
-                exploreResult: { type: 'string', description: 'explore_deps 返回的完整 JSON 字符串（可选）' },
-                dataflowResult: { type: 'string', description: 'trace_dataflow 返回的完整 JSON 字符串（可选）' },
-              },
-              required: ['query', 'content'],
-            }),
-            readOnly: () => false,
-            execute: async (args) => {
-              const result = await agentInvoke('dataflow_save', args);
-              bus.emit('dataflow:saved');
-              return result;
+        for (const t of this.registry!.all()) r.register(t);
+
+        // Sub-agent tools — per-Agent lifecycle, wired via agentRef indirection
+        const agentRef = { current: null as Agent | null };
+        r.register(
+          createSubAgentTool(
+            async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
+              const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
+              const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
+              return agentRef.current!.spawnSubAgent(merged, description, prompt, onProgress, mode);
             },
-          });
-          r.register({
-            name: () => 'dataflow_query',
-            description: () =>
-              '查询已保存的数据流追踪结果。traceId 为空时列出所有已存追踪的摘要（traceId/query/createdAt）。传 traceId 加载完整追踪内容。用于回顾之前的分析结论、对比变更前后的数据流。',
-            parameters: () => ({
-              type: 'object',
-              properties: {
-                traceId: {
-                  type: 'string',
-                  description: '追踪 ID（如 df_20260705T143000000）。不传则列出所有已存追踪摘要。',
-                },
-                list: { type: 'boolean', description: '传 true 返回轻量摘要列表（不传 traceId 时默认开启）' },
-              },
-            }),
-            readOnly: () => true,
-            execute: (args) => agentInvoke('dataflow_query', args),
-          });
-        }
-        for (const tool of createCodingTools(factoryExec, p)) r.register(tool);
-        r.alias('read_file', 'read_file_content');
-        // ponytail: symbol_history / cluster_report now first-class — no aliases needed
-        if (this.skillRegistry) {
-          r.register(createSkillTool(this.skillRegistry));
-        }
-        if (mm) {
-          for (const tool of createMemoryTools(mm)) r.register(tool);
-        }
-        // Sub-agents get their own task manager (per-agent scope)
-        for (const tool of createTaskTools(new TaskManager())) r.register(tool);
+            this.subAgentPool,
+            (handle) => {
+              const resultText =
+                handle.status === 'failed'
+                  ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
+                  : `[子 Agent 完成: ${handle.description}] ${(handle.result || '').slice(0, 500)}`;
+              agentRef.current?.injectTaskNotification(resultText);
+            },
+          ),
+        );
+        r.register(createAgentStopAllTool(() => this.subAgentPool));
+        r.register(createAgentStopTool(this.subAgentPool));
+        r.register(createAgentStatusTool(this.subAgentPool));
+        r.register(createAgentMessageTool(this.subAgentPool));
+
+        // Build system prompt (per-session, with memory section)
         let memSection = '';
         if (mm) {
           try {
+            const graphNodes = this.graphData ? extractGraphNodeNames(this.graphData) : undefined;
             memSection = await mm.loadPromptSection(graphNodes);
-          } catch {
-            /* ignore */
-          }
+          } catch { /* ignore */ }
         }
-        // Load project conventions — same CLAUDE.md that Claude Code reads
         let claudeMd = '';
         try {
           claudeMd = await rpc<string>('read_file_content', { filePath: `${this.path}/CLAUDE.md` });
-        } catch {
-          /* file missing is fine */
-        }
+        } catch { /* file missing is fine */ }
+
         const snap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
         const mode = this._modeState();
         const sysPrompt = buildSystemPrompt(this, memSection, snap, claudeMd, mode.collaborationMode);
-        const effR = mode.collaborationMode === 'plan'
-          ? this._planRegistry(r)
-          : r;
-        const newAgent = new Agent(p, effR, sysPrompt, {
+        const effR = mode.collaborationMode === 'plan' ? this._planRegistry(r) : r;
+
+        const agentOpts = s.agent || {};
+        const newAgent = new Agent(this.prov!, effR, sysPrompt, {
           agentId: 'main',
+          parentId: null,
           eventSink: chatPanel.eventSink,
+          execState: chatPanel['_exec'],
+          onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
+            memoryBundleIngest(
+              messages.map((m) => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+              })),
+              'holo',
+              _sid,
+            ).catch(() => {});
+            (async () => {
+              await refreshGitStatus(this.path);
+              await refreshTimeline(this.path);
+              const block = buildTurnStartBlock();
+              if (block) newAgent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`);
+            })().catch(() => {});
+          },
           pricing: defaultPricing(act.kind, act.model),
-          temperature: s.agent?.temperature,
-          contextWindow: s.agent?.contextWindow,
+          temperature: agentOpts.temperature ?? 0.7,
+          contextWindow: agentOpts.contextWindow ?? 0,
           maxTokens: act.maxTokens ?? 0,
         });
+
         newAgent.setCompactionConfigPath(this.path);
         newAgent.setAgentStore(this.agentStore!);
+        newAgent.setGoalManager(this.goalManager!);
         newAgent.applyAutoTuneConfig().catch(() => {});
+        newAgent.setSubAgentPool(this.subAgentPool);
+        agentRef.current = newAgent; // wire for sub-agent notifications + spawn
+
+        // Compaction stats tool (needs Agent reference)
+        registerCompactionTools(newAgent, r);
+
+        // Graph context hooks
         if (hookCtx) {
+          loadEngineSnapshot(hookCtx, this.path).catch(() => {});
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));
           hooks.register(createStateReadHook(this.path));
@@ -1117,23 +965,40 @@ export class Workspace {
           preflightHooks.register(createGraphPreflightHook(hookCtx));
           preflightHooks.register(createStatePreflightHook());
           newAgent.setPreflightHooks(preflightHooks);
-          loadEngineSnapshot(hookCtx, this.path).catch(() => {});
+          this._preflightCtx = hookCtx;
+
+          // Per-turn AuraSDK recall
+          if (mm) {
+            newAgent.setPreRunHook(async (input: string) => {
+              if (!mm.auraReady) return null;
+              try {
+                const records = await mm.auraSemanticRecall(input, 5);
+                if (records.length === 0) return null;
+                const lines = records.map((r) => {
+                  const tagStr = r.tags?.length ? `[${r.tags.join(', ')}] ` : '';
+                  return `- ${tagStr}${r.content.slice(0, 250)}`;
+                });
+                return `AuraSDK 语义记忆召回（当前问题的相关历史记忆，仅供参考——文件记忆更权威）：\n${lines.join('\n')}`;
+              } catch {
+                return null;
+              }
+            });
+          }
         }
-        // Sub-agent tool — uses workspace pool for timeout/abort safety
-        {
-          const agentRef = newAgent;
-          r.register(
-            createSubAgentTool(async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
-              const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
-              const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
-              return agentRef.spawnSubAgent(merged, description, prompt, onProgress, mode);
-            }, this.subAgentPool),
-          );
-        }
-        // Compaction stats tool
-        registerCompactionTools(newAgent, r);
+
         return newAgent;
-      });
+      };
+
+      // Register for future new-session creation
+      chatPanel.setAgentFactory(factory);
+
+      // Create initial agent immediately
+      const initialAgent = await factory();
+      if (initialAgent) {
+        this.agent = initialAgent;
+        chatPanel.setAgent(initialAgent);
+        this.onStatusChange?.('[Agent] ✅ 已就绪');
+      }
     }
   }
 

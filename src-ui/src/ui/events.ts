@@ -28,6 +28,8 @@ export interface BusEvents {
   'agent:permission-response': [data: { id: string; allow: boolean; remember: boolean }];
   'agent:shell-output': [data: { sessionId?: number; output: string; done?: boolean }];
 
+  'goal:state': [record: import('../agent/goal-manager').GoalRecord];
+
   'graph:node-clicked': [
     data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string },
   ];

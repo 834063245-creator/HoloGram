@@ -23,7 +23,8 @@ import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
-import { type AgentRecord, type AgentStore, type GoalState } from './agent-store';
+import { type AgentRecord, type AgentStore } from './agent-store';
+import { GoalManager, type GoalRecord } from './goal-manager';
 import { createSubAgentSink } from './subagent-sink';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
@@ -120,6 +121,7 @@ export class Agent {
   readonly id: string;
   readonly parentId: string | null;
   private agentStore: AgentStore | null = null;
+  private goalManager: GoalManager | null = null;
 
   // Isolation ID for sub-agents — injected into tool args so Rust backend
   // can resolve worktree paths via forward_map_path.
@@ -405,6 +407,10 @@ export class Agent {
     this.agentStore = store;
   }
 
+  setGoalManager(mgr: GoalManager): void {
+    this.goalManager = mgr;
+  }
+
   /** Persist current state + session to disk. Best-effort — never throws. */
   async saveState(status: AgentRecord['status'] = 'running'): Promise<void> {
     if (!this.agentStore) return;
@@ -508,112 +514,129 @@ export class Agent {
   // Goal Loop — autonomous multi-turn execution
   // ══════════════════════════════════════════════════════
 
-  /** Run a goal autonomously: plan → delegate to sub-agents → verify → repeat.
-   *  Automatically resumes from a previously paused goal if one exists for this agent
-   *  and the goal text matches. On user interrupt, saves a checkpoint and returns
-   *  'paused' instead of 'aborted' — continue with resumeGoal().
-   *
-   *  ponytail: serial by design. Parallel is an optimization, not a correctness
-   *  requirement — serial sub-agent spawns guarantee no file conflicts. */
+  /** Run a goal autonomously: plan → act → verify → repeat until goal_report.
+   *  Always starts a NEW goal — single-slot semantics cancel any live one
+   *  (resume is a separate path: resumeGoal). State lives in GoalManager
+   *  (.hologram/goals/{id}/), fully isolated from the chat session slot —
+   *  casual chat can no longer clobber the goal checkpoint. */
   async runGoal(
     signal: AbortSignal,
     goal: string,
   ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
-    // Check if resuming a paused goal (same goal text + same agent)
-    let resume: GoalState | null = null;
-    if (this.agentStore) {
-      const saved = await this.agentStore.loadGoal(this.id);
-      if (saved && saved.status === 'paused' && saved.goal === goal) {
-        resume = saved;
-        // Reload session from disk — it was saved when paused
-        const data = await this.agentStore.load(this.id);
-        if (data?.messages && data.messages.length > 0) {
-          this.session = data.messages;
-          this._execState.bumpVersion();
-        }
-      }
+    if (!this.goalManager) {
+      return { status: 'failed', summary: '目标管理器未初始化' };
+    }
+    const record = await this.goalManager.create(goal);
+    this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${record.text.slice(0, 60)}…` });
+    const report = this._registerGoalReportTool();
+    try {
+      return await this._goalLoop(signal, record, false, report);
+    } finally {
+      this.tools.unregister('goal_report');
+    }
+  }
+
+  /** Resume the live goal (paused, or a crash-orphaned active record). Same return shape as runGoal. */
+  async resumeGoal(
+    signal: AbortSignal,
+    id?: string,
+  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+    if (!this.goalManager) {
+      return { status: 'failed', summary: '目标管理器未初始化' };
+    }
+    const record = id ? await this.goalManager.get(id) : await this.goalManager.getActive();
+    if (!record || (record.status !== 'paused' && record.status !== 'active')) {
+      return { status: 'failed', summary: '没有可恢复的目标。使用 /goal 创建新目标。' };
+    }
+    // ponytail: an 'active' record reaching here is a crash leftover (a live loop is
+    // blocked by the UI's isRunning guard) — adopt it like a paused one.
+    const snapshot = await this.goalManager.loadSession(record.id);
+    if (snapshot && snapshot.length > 0) {
+      this.session = snapshot;
+      this._execState.bumpVersion();
+    }
+    this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 恢复: ${record.text.slice(0, 60)}…` });
+    const report = this._registerGoalReportTool();
+    try {
+      return await this._goalLoop(signal, record, true, report);
+    } finally {
+      this.tools.unregister('goal_report');
+    }
+  }
+
+  /** Register goal_report for the duration of one goal loop. Caller unregisters in finally.
+   *  完成判定的主通道：模型显式上报，不再只靠正文正则。普通对话拿不到这个工具。 */
+  private _registerGoalReportTool(): { called: boolean; status: 'completed' | 'failed'; summary: string } {
+    const report = { called: false, status: 'completed' as 'completed' | 'failed', summary: '' };
+    const goalReportTool: Tool = {
+      name: () => 'goal_report',
+      description: () =>
+        '目标模式专用：确认目标已达成、或确认无法达成时调用，调用后目标循环结束。' +
+        'status=completed 时 summary 写完成摘要；status=failed 时 summary 写阻塞原因。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['completed', 'failed'] },
+          summary: { type: 'string' },
+        },
+        required: ['status', 'summary'],
+      }),
+      readOnly: () => true,
+      execute: async (args: Record<string, unknown>) => {
+        report.called = true;
+        report.status = args.status === 'failed' ? 'failed' : 'completed';
+        report.summary = typeof args.summary === 'string' ? args.summary : '';
+        return `目标状态已记录: ${report.status}`;
+      },
+    };
+    this.tools.register(goalReportTool);
+    return report;
+  }
+
+  /** The shared goal loop — fresh runs and resumes converge here.
+   *  ponytail: serial by design. Parallel is an optimization, not a correctness
+   *  requirement — serial sub-agent spawns guarantee no file conflicts. */
+  private async _goalLoop(
+    signal: AbortSignal,
+    record: GoalRecord,
+    isResume: boolean,
+    report: { called: boolean; status: 'completed' | 'failed'; summary: string },
+  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+    const mgr = this.goalManager!;
+    let stallRounds = record.stallRounds;
+
+    // 重注完整目标提示词 — 新建与恢复都走这里。恢复时不能指望快照里
+    // 还留着原文（可能已被压缩），重复出现的 <goal> 块是可接受的代价。
+    this.session.push({ role: 'user', content: this._goalPrompt(record, isResume) });
+    if (isResume) {
+      this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 从第 ${record.iteration + 1} 轮恢复…` });
     }
 
-    const startIter = resume?.iteration ?? 0;
-    let stallRounds = resume?.stallRounds ?? 0;
-
-    // Push goal prompt only on fresh start (not resume)
-    if (!resume) {
-      const goalPrompt = `<goal>
-## 总体目标
-${goal}
-
-## 执行模式
-你是目标驱动的执行Agent，会持续工作直到目标达成。你不会在中间停下来等用户。
-
-## 执行规则
-1. **规划** — 把目标分解为连续的、可验证的具体步骤
-2. **委派** — 每个具体步骤（改代码、跑命令、查文件、搜索）使用 \`agent_spawn\` fork 模式委派子Agent执行。子Agent有干净上下文，只做一件事，返回结果
-3. **验证** — 每步完成后检查结果。正确→继续下一步，错误→分析原因→修正指令→重新委派
-4. **循环** — 持续 规划→委派→验证→下一步，直到目标全部达成
-5. **不要反问** — 不要在中间停下来问用户"要继续吗"。直接继续
-6. **完成信号** — 目标达成时输出 \`[GOAL_COMPLETE]\` 并附摘要。无法达成时输出 \`[GOAL_FAILED]\` 并说明阻塞原因
-
-## 禁止
-- 输出纯文本分析后停止（分析完必须进入下一步行动）
-- 反复分析同一问题而不行动
-- 在子Agent完成后跳过验证直接声明完成
-
-现在开始。
-</goal>`;
-      this.session.push({ role: 'user', content: goalPrompt });
-      this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标模式] ${goal.slice(0, 60)}…` });
-    } else {
-      // Resume: push a short context note so the model knows it's resuming
-      this.session.push({
-        role: 'user',
-        content: `<system-reminder>
-目标恢复执行 (第 ${startIter + 1} 轮)。已完成 ${startIter} 轮。
-
-直接继续下一步——规划→委派→验证。不要复盘已完成的工作。
-如果目标已全部达成，输出 [GOAL_COMPLETE]。
-如果遇到无法克服的障碍，输出 [GOAL_FAILED]。
-
-禁止反问用户。禁止只分析不行动。
-</system-reminder>`,
-      });
-      this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 从第 ${startIter + 1} 轮恢复…` });
-    }
-
-    for (let iter = startIter; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
+    for (let iter = record.iteration; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
       bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
 
-      // ── Checkpoint before each runLoop — records where we are so pause can resume ──
+      // ── 检查点:记录 + 对话现场快照进 goal 专属槽 ──
       // ponytail: sessionBefore lets us strip partial turn messages on abort.
       const sessionBefore = this.session.length;
-      if (this.agentStore) {
-        await this.agentStore.saveGoal(this.id, {
-          goal,
-          iteration: iter,
-          stallRounds,
-          status: 'active',
-          createdAt: resume?.createdAt ?? Date.now(),
-          updatedAt: Date.now(),
-        });
-      }
+      await mgr.update(record.id, { iteration: iter, stallRounds, status: 'active' });
+      await mgr.saveSession(record.id, this.session);
 
       try {
         await this.runLoop(signal);
       } catch (e: any) {
-        if (e?.message === 'aborted') {
-          // ── Pause: strip partial turn, save, return paused ──
+        // ponytail: 中断有多种冒泡形式 — runLoop 步骤边界抛 'aborted',
+        // 流式 fetch 被掐断时抛 'BodyStreamBuffer was aborted' 之类的原始错误。
+        // 用户意图是暂停,以 signal 为准,不认错误消息文本。
+        if (signal.aborted || e?.message === 'aborted') {
+          // ── 暂停:裁剪未完成轮次,快照进 goal 槽,记录转 paused ──
           this.session = this.session.slice(0, sessionBefore);
-          if (this.agentStore) {
-            await this.agentStore.saveGoal(this.id, {
-              goal,
-              iteration: iter,
-              stallRounds,
-              status: 'paused',
-              createdAt: resume?.createdAt ?? Date.now(),
-              updatedAt: Date.now(),
-            });
-            await this.saveState('running');
-          }
+          await mgr.update(record.id, { status: 'paused', iteration: iter, stallRounds });
+          await mgr.saveSession(record.id, this.session);
+          // Clear goal context from in-memory session so normal chat doesn't auto-continue.
+          // Full context lives in the goal slot; /goal resume restores it from there.
+          this.session = this.session.length > 0 && this.session[0].role === 'system'
+            ? [this.session[0]]
+            : [];
           this._sink({
             kind: EventKind.Notice,
             level: 'info',
@@ -621,23 +644,36 @@ ${goal}
           });
           return { status: 'paused', summary: `已暂停于第 ${iter + 1}/${Agent.MAX_GOAL_ITERATIONS} 轮。使用 /goal resume 继续。` };
         }
+        await mgr.update(record.id, { status: 'failed', summary: `执行异常: ${e?.message || e}` });
         return { status: 'failed', summary: `执行异常: ${e?.message || e}` };
+      }
+
+      // ── 完成判定:goal_report 优先,正文标记为旧会话 fallback ──
+      if (report.called) {
+        const summary = report.summary || this._lastAssistantContent();
+        await mgr.update(record.id, { status: report.status, summary });
+        this._sink({
+          kind: EventKind.Notice,
+          level: report.status === 'completed' ? 'info' : 'warn',
+          text: report.status === 'completed' ? '✅ 目标达成' : '❌ 目标失败',
+        });
+        return { status: report.status, summary };
       }
 
       const last = this._lastAssistantContent();
       if (!last) {
+        await mgr.update(record.id, { status: 'failed', summary: '模型未产出响应' });
         this._sink({ kind: EventKind.Notice, level: 'error', text: '目标执行异常: 模型未产出响应' });
         return { status: 'failed', summary: '模型未产出响应' };
       }
 
       if (/\[GOAL_COMPLETE\]/i.test(last)) {
-        // Delete goal checkpoint on clean completion
-        this.agentStore?.deleteGoal(this.id).catch(() => {});
+        await mgr.update(record.id, { status: 'completed', summary: last });
         this._sink({ kind: EventKind.Notice, level: 'info', text: '✅ 目标达成' });
         return { status: 'completed', summary: last };
       }
       if (/\[GOAL_FAILED\]/i.test(last)) {
-        this.agentStore?.deleteGoal(this.id).catch(() => {});
+        await mgr.update(record.id, { status: 'failed', summary: last });
         this._sink({ kind: EventKind.Notice, level: 'warn', text: '❌ 目标失败' });
         return { status: 'failed', summary: last };
       }
@@ -648,16 +684,14 @@ ${goal}
       if (!hasToolCalls && !subAgentsRunning) {
         stallRounds++;
         if (stallRounds >= Agent.MAX_STALL_ROUNDS) {
-          this.agentStore?.deleteGoal(this.id).catch(() => {});
+          const summary = `连续 ${stallRounds} 轮未执行任何工具调用或委派子Agent。目标可能过于模糊或超出能力范围。请拆分目标为更具体的步骤。`;
+          await mgr.update(record.id, { status: 'failed', summary, stallRounds });
           this._sink({
             kind: EventKind.Notice,
             level: 'warn',
             text: `[目标] 连续 ${stallRounds} 轮无实际行动，Agent 可能陷入分析瘫痪，终止`,
           });
-          return {
-            status: 'failed',
-            summary: `连续 ${stallRounds} 轮未执行任何工具调用或委派子Agent。目标可能过于模糊或超出能力范围。请拆分目标为更具体的步骤。`,
-          };
+          return { status: 'failed', summary };
         }
       } else {
         stallRounds = 0;
@@ -676,9 +710,9 @@ ${goal}
         content: `<system-reminder>
 目标未完成。已完成 ${iter + 1} 轮。${pendingHint}${stallHint}
 
-如果目标尚未达成: 规划下一步（不重复已完成步骤）→ agent_spawn 委派 → 验证结果。
-如果目标已全部达成: 输出 [GOAL_COMPLETE] 并附摘要。
-如果遇到无法克服的障碍: 输出 [GOAL_FAILED] 并说明原因。
+如果目标尚未达成: 规划下一步（不重复已完成步骤）→ 执行或 agent_spawn 委派 → 验证结果。
+如果目标已全部达成: 调用 goal_report(status="completed", summary=…) 上报。
+如果遇到无法克服的障碍: 调用 goal_report(status="failed", summary=…) 说明原因。
 
 禁止反问用户。禁止只分析不行动。
 </system-reminder>`,
@@ -687,32 +721,47 @@ ${goal}
     }
     // Max iterations reached — forced termination (hard ceiling, shouldn't trigger in normal use)
     if (!signal.aborted) {
-      this.agentStore?.deleteGoal(this.id).catch(() => {});
+      const summary = `达到硬上限 ${Agent.MAX_GOAL_ITERATIONS} 轮。请拆分目标为更小单元。`;
+      await mgr.update(record.id, { status: 'failed', summary });
       this._sink({
         kind: EventKind.Notice,
         level: 'warn',
         text: `[目标] 达到硬上限 (${Agent.MAX_GOAL_ITERATIONS} 轮)，强制终止`,
       });
-      return { status: 'failed', summary: `达到硬上限 ${Agent.MAX_GOAL_ITERATIONS} 轮。请拆分目标为更小单元。` };
+      return { status: 'failed', summary };
     }
 
     return { status: 'aborted', summary: '目标被中断' };
   }
 
-  /** Resume the last paused goal for this agent. Returns same shape as runGoal.
-   *  Thin wrapper — loads the goal text from AgentStore and calls runGoal. */
-  async resumeGoal(
-    signal: AbortSignal,
-  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
-    if (!this.agentStore) {
-      return { status: 'failed', summary: 'Agent 持久化存储未初始化' };
-    }
-    const saved = await this.agentStore.loadGoal(this.id);
-    if (!saved || saved.status !== 'paused') {
-      return { status: 'failed', summary: '没有可恢复的目标。使用 /goal 创建新目标。' };
-    }
-    this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 恢复: ${saved.goal.slice(0, 60)}…` });
-    return this.runGoal(signal, saved.goal);
+  /** Full goal prompt — injected on BOTH fresh start and resume, so the model
+   *  never depends on the original prompt surviving inside the snapshot. */
+  private _goalPrompt(record: GoalRecord, isResume: boolean): string {
+    const resumeNote = isResume
+      ? `\n## 恢复执行\n这是恢复后的第 ${record.iteration + 1} 轮（此前已推进 ${record.iteration} 轮，对话现场已从快照恢复）。直接继续下一步，不要复盘已完成的工作。\n`
+      : '';
+    return `<goal>
+## 总体目标
+${record.text}
+${resumeNote}
+## 执行模式
+你是目标驱动的执行Agent，会持续工作直到目标达成。你不会在中间停下来等用户。
+
+## 执行规则
+1. **规划** — 把目标分解为连续的、可验证的具体步骤
+2. **执行** — 小步骤（几次工具调用内能完成）直接自己做；大步骤（多文件改动、独立子任务）用 \`agent_spawn\` fork 模式委派子Agent。子Agent有干净上下文，只做一件事，返回结果
+3. **验证** — 每步完成后检查结果。正确→继续下一步，错误→分析原因→修正指令→重做
+4. **循环** — 持续 规划→执行→验证→下一步，直到目标全部达成
+5. **不要反问** — 不要在中间停下来问用户"要继续吗"。直接继续
+6. **完成信号** — 判定目标已达成时调用 \`goal_report(status="completed", summary="完成摘要")\`；确认无法达成时调用 \`goal_report(status="failed", summary="阻塞原因")\`
+
+## 禁止
+- 输出纯文本分析后停止（分析完必须进入下一步行动）
+- 反复分析同一问题而不行动
+- 未验证结果就直接上报完成
+
+现在开始。
+</goal>`;
   }
 
   private _lastAssistantContent(): string {

@@ -199,7 +199,7 @@ export const DEFAULT_COMMANDS: CommandDef[] = [
   {
     id: 'goal',
     label: '自主目标',
-    description: 'Agent 自主循环直到完成目标',
+    description: 'Agent 自主循环直到完成目标;/goal · /goal resume · /goal status · /goal cancel',
     group: '会话',
     shortcut: '/goal',
     action: { type: 'fill', text: '/goal ' },
