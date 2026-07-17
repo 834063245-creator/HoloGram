@@ -133,11 +133,11 @@ function AtAutocomplete({
   if (!visible || (items.length === 0 && !loading)) return null;
 
       return (
-    <div ref={popupRef} className={`chat-at-popup${visible && items.length > 0 ? ' open' : ''}`}>
-      {loading && items.length === 0 ? (
-        <div className="at-item" style={{ opacity: 0.4 }}>加载中…</div>
-      ) : items.length === 0 ? (
-        <div className="at-item" style={{ opacity: 0.4 }}>无匹配结果</div>
+    <div ref={popupRef} className={`chat-at-popup${visible && (items.length > 0 || loading) ? ' open' : ''}`}>
+              {loading && items.length === 0 ? (
+          <div className="at-loading" style={{ opacity: 0.4 }}>加载中…</div>
+        ) : items.length === 0 ? (
+          <div className="at-empty" style={{ opacity: 0.4 }}>无匹配结果</div>
       ) : (
         items.map((item, i) => (
           <div
@@ -228,9 +228,8 @@ export class AtAutocompleteController {
 
   /** Keyboard navigation — arrow up/down. Call from input keydown handler. */
   navigate(delta: number): void {
-    const el = this._mount.querySelector('.chat-at-popup.open') as HTMLElement;
-    if (!el) return;
-    const items = el.querySelectorAll('.at-item');
+    // Only navigate when there are actual items (not loading/empty state)
+    const items = this._mount.querySelectorAll('.chat-at-popup.open .at-item');
     if (items.length === 0) return;
     // Find current active
     let idx = 0;
@@ -245,9 +244,7 @@ export class AtAutocompleteController {
 
   /** Select the currently highlighted item. Returns selected item or null. */
   select(): { kind: string; name: string } | null {
-    const el = this._mount.querySelector('.chat-at-popup.open') as HTMLElement;
-    if (!el) return null;
-    const active = el.querySelector('.at-item.active');
+    const active = this._mount.querySelector('.chat-at-popup.open .at-item.active');
     if (!active) return null;
     const kindEl = active.querySelector('.at-kind');
     const nameEl = active.querySelector('span:last-child');
@@ -257,9 +254,9 @@ export class AtAutocompleteController {
     return item;
   }
 
-  /** Whether the popup is visible. */
+  /** Whether the popup has selectable items (not loading/empty). */
   get open(): boolean {
-    return !!this._mount.querySelector('.chat-at-popup.open');
+    return !!this._mount.querySelector('.chat-at-popup.open .at-item');
   }
 
   destroy(): void {

@@ -1798,6 +1798,15 @@
   background: rgba(30, 55, 100, 0.3);
   color: var(--starlight-dim);
 }
+/* Loading / empty states — same layout as at-item but non-interactive */
+.at-loading,
+.at-empty {
+  font-size: calc(10px * var(--font-scale));
+  padding: 4px 8px;
+  color: rgba(145, 180, 225, 0.4);
+  font-family: var(--font-body);
+  white-space: nowrap;
+}
 .at-item .at-kind {
   font-family: var(--font-mono);
   font-size: calc(8px * var(--font-scale));
