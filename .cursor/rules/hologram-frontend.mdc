@@ -29,7 +29,8 @@ alwaysApply: false
 - 这四个迁移文件的 `noDescendingSpecificity`/`noImportantStyles`  biome 规则已按文件关闭（biome.json overrides：存量类契约原样保留）
 - 字体：Fraunces（展示）/ JetBrains Mono（数据）/ Noto Sans SC（正文），fontsource 自托管（`app/fonts.ts`）；**Orbitron 已退役**
 - `--font-scale` 是唯一保留的非 obs 变量（settings.display.fontScale 运行时注入）
-- 星图氛围：刻度盘+黄道椭圆在 WebGL（`ui/graph-scene.ts buildGraticule`，facade 按图半径 scale）；DOM 装饰层（#space/#scanlines/#vignette）已删除
+- 表面语言（P6 起）：中性发丝线 + 圆角玻璃 + 黄铜点缀（聚焦/Agent/签名）；蓝色只做信息点缀——**不要回退到大面积蓝边/蓝辉光 HUD**
+- 氛围层：index.html 的 `#vig`（暗角）+ `#grain`（颗粒）；**不做表盘/黄道椭圆**（P5 3D 版已被用户否决删除）
 
 ## 保留逻辑层（勿动）
 
