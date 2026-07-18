@@ -1,7 +1,8 @@
 # HoloGram 前端「观测台」重构 — Handoff
 
-> 交接时间：2026-07-19 · 上一棒：P0 → P5 已完成并全部入库，**重构竣工**
+> 交接时间：2026-07-19 · 上一棒：P0 → P6 已完成并全部入库
 > **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`。
+> **下一棒**：视觉深化 P7 系列 —— 按 `docs/agents/visual-deepening-plan.md` 施工（唯一事实来源），分支 `feature/observatory-visual`。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
 ## 一、已完成（9 个 commit，全部在 main）

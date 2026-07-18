@@ -12,7 +12,9 @@
 | P2′-2b | 六个 React 控制器内联为组件，删 Controller 包装 | ✅ `c0a169a` |
 | P3 | `panels/`（panel-def + DockPanel + FileTranslatorPortal）、`ui/dock-store`/`dock-config`/`overlay-store`、六面板收编 | ✅ `350845d` |
 | P4 | `ui/graph.ts` 拆解（facade 保 API，golden 测试先行） | ✅ `6e3a6e1` |
-| P5 | 视觉识别收尾（删旧 CSS 三大件、Orbitron 退役、星图氛围） | ✅ 本阶段 |
+| P5 | 视觉识别收尾（删旧 CSS 三大件、Orbitron 退役、星图氛围） | ✅ `2455111` |
+| P6 | 视觉深化（蓝色中和、聊天/面板表面原型化、氛围层） | ✅ `5570feb` |
+| P7 | 全面视觉重构（消息流/面板内部/浮层/表单/FileViewer） | ⬜ 见 `docs/agents/visual-deepening-plan.md` |
 
 ## 约定
 
