@@ -297,7 +297,7 @@ export class GraphFocusController {
     this.host._flushOverrideAttrs();
     this.host.focusSubgraphActive = true;
     const node = this.host.graphNodes[idx];
-    this.host.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.host.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
+    this.host.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 12)}<span class="fb-name">${t('focus.title')} · ${node.name}</span><span class="fb-meta">${this.host.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} · ${t('focus.exit')}</span>`;
     this.host.focusSubgraphBanner.style.display = 'flex';
     this.flyToNode(idx);
   }

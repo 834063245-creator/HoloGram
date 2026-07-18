@@ -305,7 +305,7 @@ const ConstraintsPanelApp: React.FC<{
 
   if (!data) {
     return (
-      <div style={{ color: 'var(--text-muted)', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>加载中…</div>
+      <div style={{ color: 'var(--obs-text-2)', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>加载中…</div>
     );
   }
 
@@ -318,7 +318,7 @@ const ConstraintsPanelApp: React.FC<{
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '8px 12px',
-          borderBottom: '1px solid var(--panel-edge, rgba(48,60,80,0.4))',
+          borderBottom: '1px solid var(--obs-line, rgba(48,60,80,0.4))',
           flexShrink: 0,
         }}
       >
@@ -326,7 +326,7 @@ const ConstraintsPanelApp: React.FC<{
           style={{
             fontSize: 'calc(13px * var(--font-scale))',
             fontWeight: 600,
-            color: 'var(--signal, #7eb8ff)',
+            color: 'var(--obs-blue, #7eb8ff)',
             letterSpacing: '0.5px',
           }}
           dangerouslySetInnerHTML={{ __html: `${iconHtml('constraints', 12)} 约束配置` }}
@@ -336,16 +336,16 @@ const ConstraintsPanelApp: React.FC<{
             className="cs-ask-btn"
             title="问 Agent 关于当前约束配置"
             style={headerBtnStyle}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--signal, #7eb8ff)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted, #4a5568)')}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--obs-blue, #7eb8ff)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--obs-text-2, #4a5568)')}
             onClick={handleAskAgent}
             dangerouslySetInnerHTML={{ __html: iconHtml('agent', 12) }}
           />
           <button
             className="cs-close-btn"
             style={headerBtnStyle}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--starlight-dim, #c9d1d9)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted, #4a5568)')}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--obs-text, #c9d1d9)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--obs-text-2, #4a5568)')}
             onClick={handleClose}
             dangerouslySetInnerHTML={{ __html: iconHtml('close', 14) }}
           />
@@ -421,7 +421,7 @@ const ConstraintsPanelApp: React.FC<{
             className="cs-btn cs-btn-save"
             style={
               saveFeedback === 'ok'
-                ? { color: 'var(--pass, #55aa55)' }
+                ? { color: 'var(--obs-pass, #55aa55)' }
                 : saveFeedback === 'err'
                   ? { color: 'var(--error, #e05555)' }
                   : {}
@@ -450,11 +450,11 @@ const headerBtnStyle: React.CSSProperties = {
   padding: 0,
   background: 'none',
   border: 'none',
-  color: 'var(--text-muted, #4a5568)',
+  color: 'var(--obs-text-2, #4a5568)',
   cursor: 'pointer',
   fontSize: 'calc(14px * var(--font-scale))',
   borderRadius: 4,
-  transition: 'color var(--snap, 0.12s)',
+  transition: 'color var(--obs-snap, 0.12s)',
 };
 
 // ── Helpers ──
@@ -491,10 +491,10 @@ export function ConstraintsPanel() {
         bottom: '28px',
         width: '340px',
         maxWidth: '90vw',
-        background: 'var(--panel-bg, rgba(6,12,24,0.97))',
-        backdropFilter: 'var(--blur, blur(14px))',
-        WebkitBackdropFilter: 'var(--blur, blur(14px))',
-        borderLeft: '1px solid var(--panel-edge, rgba(48,60,80,0.5))',
+        background: 'var(--obs-glass-hi, rgba(6,12,24,0.97))',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
+        borderLeft: '1px solid var(--obs-line, rgba(48,60,80,0.5))',
         zIndex: 16,
         display: 'flex',
         flexDirection: 'column',

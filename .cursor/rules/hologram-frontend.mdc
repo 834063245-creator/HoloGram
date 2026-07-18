@@ -6,24 +6,38 @@ alwaysApply: false
 
 # 前端 (`src-ui/`)
 
-> ⚠️ 「观测台」重构进行中——**以 `docs/frontend-refactor-handoff.md` 为唯一事实来源**（含阶段进度/铁律/契约速查）。
+> 「观测台」重构已竣工（P0→P5 全部入库）——交接文档：`docs/agents/frontend-refactor-handoff.md`（阶段记录/铁律/契约速查）。
 
 **入口：** `main.ts`（引导器：StarGraph + Workspace + 面板单例 + 动作注册 + `createRoot(<App/>)`）· `workspace.ts`（项目状态机）
 
-## 新架构（src/app/，重构落点）
+## 新架构（src/app/，单 React 根 + zustand）
 
 | 文件 | 职责 |
 |---|---|
-| `app/App.tsx` | 单 React 根：CommandBar/DockRail/StatusBar/CommandPalette(Ctrl+K)/ShortcutsOverlay/ChatBeacon |
+| `app/App.tsx` | 单 React 根：CommandBar/DockRail/StatusBar/CommandPalette(Ctrl+K)/ShortcutsOverlay/ChatBeacon/DockPanel |
 | `app/shell-store.ts` | chrome 唯一数据源（zustand） |
 | `app/actions.ts` | 动作注册表（React 认 id，main.ts 注入实现） |
 | `app/bridge-adapters.ts` | bus→store 适配（bus 冻结，app/** 不 import events.ts） |
 | `app/chat/chat-core.ts` | 无头 ChatCore：会话/流式/权限/goal 编排（原 ui/chat.ts） |
 | `app/chat/ChatBeacon.tsx` | 观测信标视图：pill→input→panel→hud 底部居中浮标 |
+| `app/panels/` | 六面板注册表 + DockPanel 容器 |
+
+## 样式体系（P5 起）
+
+- **全部样式只使用 `app/tokens.css` 的 `--obs-*` 变量**；旧 `base.css/chat.css/panels.css`（7300 行）已删除
+- 文件分布：`tokens.css`（token）· `foundation.css`（reset/body/#graph/Welcome）· `shell.css`（chrome）· `graph-chrome.css`（图例/聚焦横幅/tooltip/detail-card/file-viewer）· `chat/chat.css`（聊天全树）· `panels/dock-panels.css`（六面板）· 组件内 `prompt-shelf.css` / `file-translator.css`
+- 这四个迁移文件的 `noDescendingSpecificity`/`noImportantStyles`  biome 规则已按文件关闭（biome.json overrides：存量类契约原样保留）
+- 字体：Fraunces（展示）/ JetBrains Mono（数据）/ Noto Sans SC（正文），fontsource 自托管（`app/fonts.ts`）；**Orbitron 已退役**
+- `--font-scale` 是唯一保留的非 obs 变量（settings.display.fontScale 运行时注入）
+- 星图氛围：刻度盘+黄道椭圆在 WebGL（`ui/graph-scene.ts buildGraticule`，facade 按图半径 scale）；DOM 装饰层（#space/#scanlines/#vignette）已删除
 
 ## 保留逻辑层（勿动）
 
-`ui/chat-session.ts`（会话 CRUD/持久化）· `ui/chat-stream.ts`（Agent 事件→消息 store）· `ui/part-mutator.ts` · `agent/execution-state.ts` · `ui/graph.ts`（3657 行，**layout3D 参数锁定**，P4 拆解对象）
+`ui/chat-session.ts`（会话 CRUD/持久化）· `ui/chat-stream.ts`（Agent 事件→消息 store）· `ui/part-mutator.ts` · `agent/execution-state.ts` · `ui/graph-layout.ts`（**layout3D 参数锁定**）
+
+## StarGraph（P4 拆解后）
+
+`ui/graph.ts` ~770 行 facade（共享字段 + 公开 API 委托）+ 八模块：`graph-node-renderer` / `graph-edge-renderer` / `graph-labels` / `graph-highlight` / `graph-interaction-controller` / `graph-focus-controller` / `graph-scene-lifecycle` / `graph-diff-overlay`；布局钉板 `tests/ui/layout-golden.test.ts`。
 
 ## Agent ↔ 星图双向联动
 
@@ -42,7 +56,5 @@ alwaysApply: false
 
 ## 前端改动注意
 
-- chrome 样式只写 `app/tokens.css` 的 `--obs-*` 变量；旧 `base.css/chat.css/panels.css` 随重构退役（P5 删除，聊天类契约在删前须搬走）
-- 字体已自托管（`app/fonts.ts` fontsource），无 CDN 依赖
-- 改前端后：`cd src-ui && npm run build` 再 `cargo tauri build`；门禁还要 `npx vitest run` + `npx biome ci src/app`
-- `bridge.ts` 的 `invoke`/`listen` 封装 Tauri；`isMockMode` 用于无壳调试（浏览器 mock 可完整启动，支持无头截图验证）
+- 改前端后：`cd src-ui && npm run build` 再 `cargo tauri build`；门禁还要 `npx vitest run`（330）+ `npx biome ci src/app`（零问题）
+- `bridge.ts` 的 `invoke`/`listen` 封装 Tauri；`isMockMode` 用于无壳调试（浏览器 mock 可完整启动，支持无头截图验证；`scripts/cdp-shot.cjs` 可 CDP 交互截图）

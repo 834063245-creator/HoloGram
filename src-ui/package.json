@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",
-    "@fontsource-variable/orbitron": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/noto-sans-sc": "^5.2.9",
     "@fontsource/noto-serif-sc": "^5.2.9",

@@ -213,7 +213,11 @@ function ContextView({ core }: { core: ChatCore }) {
       <div className="chat-context-section">
         <div className="chat-context-section-label">当前模型</div>
         <div
-          style={{ fontFamily: 'var(--font-mono)', fontSize: 'calc(12px * var(--font-scale))', color: 'var(--signal)' }}
+          style={{
+            fontFamily: 'var(--obs-font-mono)',
+            fontSize: 'calc(12px * var(--font-scale))',
+            color: 'var(--obs-blue)',
+          }}
         >
           {active?.name || '未知'} / {active?.model || '未配置'}
           {active?.thinking ? ' · 思考模式' : ''}
@@ -231,7 +235,7 @@ function ContextView({ core }: { core: ChatCore }) {
         <div className="chat-context-section-label">会话统计</div>
         <div
           style={{
-            fontFamily: 'var(--font-mono)',
+            fontFamily: 'var(--obs-font-mono)',
             fontSize: 'calc(11px * var(--font-scale))',
             color: 'rgba(145,180,225,0.55)',
             display: 'flex',

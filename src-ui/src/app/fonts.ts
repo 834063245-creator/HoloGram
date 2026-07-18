@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 // P0：字体自托管 — Tauri 离线运行必需，替代 index.html 的 Google Fonts CDN。
-// 'Orbitron Variable' 为过渡依赖：旧 HUD 样式（base.css --font-hud）仍在使用，
-// P5 视觉识别落地时随旧样式一并移除。
+// P5：Orbitron 退役 — 展示字体 Fraunces / 数据 JetBrains Mono / 正文 Noto Sans SC。
 
 import '@fontsource-variable/fraunces/standard.css';
 import '@fontsource-variable/fraunces/standard-italic.css';
-import '@fontsource-variable/orbitron';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/600.css';

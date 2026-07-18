@@ -245,55 +245,55 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
   expanded,
   onToggle,
 }) => {
-    const icon =
-      part.status === 'running'
-        ? svgIcon('dot')
-        : part.status === 'done'
-          ? svgIcon('check-circle')
-          : part.status === 'error'
-            ? svgIcon('close')
-            : svgIcon('dot');
-    const toolDone = part.status === 'done' || part.status === 'error';
-    const badgeLabel =
-      part.status === 'running'
-        ? '执行中'
-        : part.status === 'done'
-          ? '完成'
-          : part.status === 'error'
-            ? '失败'
-            : '等待中';
-    const badgeCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
+  const icon =
+    part.status === 'running'
+      ? svgIcon('dot')
+      : part.status === 'done'
+        ? svgIcon('check-circle')
+        : part.status === 'error'
+          ? svgIcon('close')
+          : svgIcon('dot');
+  const toolDone = part.status === 'done' || part.status === 'error';
+  const badgeLabel =
+    part.status === 'running'
+      ? '执行中'
+      : part.status === 'done'
+        ? '完成'
+        : part.status === 'error'
+          ? '失败'
+          : '等待中';
+  const badgeCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
 
-    return (
-      <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${expanded ? ' tool-expanded' : ''}`}>
-        <div className="msg-tool-header" onClick={onToggle}>
-          <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
-          <span className="tool-name">{part.name}</span>
-          <span className="tool-args">
-            {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : part.args || ''}
-          </span>
-          <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
-        </div>
-        {expanded && part.output && (
-          <div className="msg-tool-result">
-            <pre>
-              <code>
-                {part.output.slice(0, 2000)}
-                {part.output.length > 2000 ? '\n…(截断)' : ''}
-              </code>
-            </pre>
-          </div>
-        )}
-        {expanded && part.err && (
-          <div className="msg-tool-result msg-tool-err">
-            <pre>
-              <code>{part.err}</code>
-            </pre>
-          </div>
-        )}
+  return (
+    <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${expanded ? ' tool-expanded' : ''}`}>
+      <div className="msg-tool-header" onClick={onToggle}>
+        <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
+        <span className="tool-name">{part.name}</span>
+        <span className="tool-args">
+          {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : part.args || ''}
+        </span>
+        <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
       </div>
-    );
-  };
+      {expanded && part.output && (
+        <div className="msg-tool-result">
+          <pre>
+            <code>
+              {part.output.slice(0, 2000)}
+              {part.output.length > 2000 ? '\n…(截断)' : ''}
+            </code>
+          </pre>
+        </div>
+      )}
+      {expanded && part.err && (
+        <div className="msg-tool-result msg-tool-err">
+          <pre>
+            <code>{part.err}</code>
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ── Tool summary ──
 
@@ -509,12 +509,12 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
       <div ref={bodyRef} className={`msg-sub-agent-body${expanded ? ' open' : ''}`}>
         {renderedParts}
         {part.parts.length === 0 && part.status === 'running' && (
-          <div className="msg-text" style={{ color: 'var(--text-faint)', padding: '8px 0' }}>
+          <div className="msg-text" style={{ color: 'var(--obs-text-3)', padding: '8px 0' }}>
             分析中…
           </div>
         )}
         {part.parts.length === 0 && part.status === 'error' && (
-          <div className="msg-text" style={{ color: 'var(--anomaly-red)', padding: '8px 0' }}>
+          <div className="msg-text" style={{ color: 'var(--obs-fail)', padding: '8px 0' }}>
             执行失败
           </div>
         )}

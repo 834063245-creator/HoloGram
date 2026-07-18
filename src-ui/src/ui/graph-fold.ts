@@ -908,7 +908,7 @@ export class GraphFold {
         .replace(/_/g, ' ');
       div.textContent = shortName.length > 24 ? shortName.slice(0, 22) + '\u2026' : shortName;
       div.style.cssText =
-        'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
+        'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--obs-text,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
       this.host.container.appendChild(div);
       div.dataset['galaxyIndex'] = String(gi);
       div.dataset['galaxyId'] = gm.id;
@@ -926,7 +926,8 @@ export class GraphFold {
         tc = this.host.nodeCommMap.get(d.t);
       if (!sc && !tc) continue;
       if (sc === tc) continue;
-      const key = [sc || '', tc || ''].sort((a, b) => a.localeCompare(b)).join('::') + `::${d.edgeType}::${d.direction}`;
+      const key =
+        [sc || '', tc || ''].sort((a, b) => a.localeCompare(b)).join('::') + `::${d.edgeType}::${d.direction}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const gs = sc ? this.galaxyMeta.find((g) => g.id === sc) : null;

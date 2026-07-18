@@ -30,5 +30,25 @@
       "semicolons": "always",
       "trailingCommas": "all"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "src/app/foundation.css",
+        "src/app/graph-chrome.css",
+        "src/app/chat/chat.css",
+        "src/app/panels/dock-panels.css"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noDescendingSpecificity": "off"
+          },
+          "complexity": {
+            "noImportantStyles": "off"
+          }
+        }
+      }
+    }
+  ]
 }

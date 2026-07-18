@@ -12,11 +12,11 @@
 | P2′-2b | 六个 React 控制器内联为组件，删 Controller 包装 | ✅ `c0a169a` |
 | P3 | `panels/`（panel-def + DockPanel + FileTranslatorPortal）、`ui/dock-store`/`dock-config`/`overlay-store`、六面板收编 | ✅ `350845d` |
 | P4 | `ui/graph.ts` 拆解（facade 保 API，golden 测试先行） | ✅ `6e3a6e1` |
-| P5 | 视觉识别收尾（删旧 CSS 三大件、Orbitron 退役、星图氛围） | ⬜ 下一棒 |
+| P5 | 视觉识别收尾（删旧 CSS 三大件、Orbitron 退役、星图氛围） | ✅ 本阶段 |
 
 ## 约定
 
 - 本目录新代码**不 import** `ui/events.ts`（bus 冻结，仅作引擎/图事件传输；chat-core 是编排层，豁免）；UI 状态一律走 zustand store。
-- 样式只使用 `tokens.css` 的 `--obs-*` 变量；不再追加到 `base.css`/`chat.css`/`panels.css`。
+- 样式只使用 `tokens.css` 的 `--obs-*` 变量；`base.css`/`chat.css`/`panels.css` 已删除（P5），样式现分布：`foundation.css` / `shell.css` / `graph-chrome.css` / `chat/chat.css` / `panels/dock-panels.css`。
 - 不碰 `ui/graph-layout.ts` 的任何布局参数。
-- 门禁：`npm run build` + `npx vitest run`（324）+ `npx biome ci src/app`（零问题）。
+- 门禁：`npm run build` + `npx vitest run`（330）+ `npx biome ci src/app`（零问题）。

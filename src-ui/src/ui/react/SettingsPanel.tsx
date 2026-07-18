@@ -5,7 +5,8 @@
 // Provider | Agent | Display | Languages 四个标签页。
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化。
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
@@ -513,7 +514,7 @@ const SettingsPanelApp: React.FC<{
                   max={2.0}
                   step={0.05}
                   value={settings.display.fontScale}
-                  style={{ flex: 1, height: 4, accentColor: 'var(--signal)' }}
+                  style={{ flex: 1, height: 4, accentColor: 'var(--obs-blue)' }}
                   onChange={(e) => {
                     const v = parseFloat(e.target.value);
                     setSettings((s) => ({ ...s, display: { ...s.display, fontScale: v } }));
@@ -523,9 +524,9 @@ const SettingsPanelApp: React.FC<{
                 <span
                   className="sp-fs-value"
                   style={{
-                    fontFamily: 'var(--font-mono)',
+                    fontFamily: 'var(--obs-font-mono)',
                     fontSize: 'calc(11px * var(--font-scale))',
-                    color: 'var(--signal)',
+                    color: 'var(--obs-blue)',
                     minWidth: 40,
                     textAlign: 'right',
                   }}
@@ -574,17 +575,17 @@ const SettingsPanelApp: React.FC<{
                     if (srv.available) {
                       icon = 'check-circle';
                       statusText = '运行中';
-                      color = 'var(--pass)';
+                      color = 'var(--obs-pass)';
                       rowClass = 'running';
                     } else if (installed) {
                       icon = 'alert-circle';
                       statusText = '已安装';
-                      color = 'var(--warn)';
+                      color = 'var(--obs-warn)';
                       rowClass = 'installed';
                     } else {
                       icon = 'close';
                       statusText = '未安装';
-                      color = 'var(--text-muted)';
+                      color = 'var(--obs-text-2)';
                       rowClass = '';
                     }
                     return (

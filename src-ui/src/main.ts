@@ -5,13 +5,13 @@
 // 三模式星图：minimal / standard / full — 独立实例，切换即重建
 // v4.1: Workspace 抽象 — 所有工作区状态统一管理
 
-import './ui/react/base.css';
-import './ui/react/chat.css';
-import './ui/react/panels.css';
 import './app/fonts';
 import './app/tokens.css';
+import './app/foundation.css';
+import './app/graph-chrome.css';
 import './app/shell.css';
-import './app/chat/beacon.css';
+import './app/chat/chat.css';
+import './app/panels/dock-panels.css';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { log } from './agent/logger';

@@ -160,10 +160,10 @@ export class FileViewer {
       height: `${this.state.height}px`,
       left: `${this.state.x}px`,
       top: `${this.state.y}px`,
-      background: 'var(--panel-bg, rgba(6, 12, 24, 0.97))',
-      backdropFilter: 'var(--blur, blur(14px))',
-      WebkitBackdropFilter: 'var(--blur, blur(14px))',
-      border: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.5))',
+      background: 'var(--obs-glass-hi, rgba(6, 12, 24, 0.97))',
+      backdropFilter: 'blur(8px)',
+      WebkitBackdropFilter: 'blur(8px)',
+      border: '1px solid var(--obs-line, rgba(48, 60, 80, 0.5))',
       borderRadius: '8px',
       boxShadow: '0 12px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(88,120,180,0.08) inset',
       flexDirection: 'column',
@@ -192,7 +192,7 @@ export class FileViewer {
       cursor: 'move',
       userSelect: 'none',
       background: 'rgba(14, 22, 38, 0.7)',
-      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.25))',
+      borderBottom: '1px solid var(--obs-line, rgba(48, 60, 80, 0.25))',
     });
 
     // Breadcrumb
@@ -205,8 +205,8 @@ export class FileViewer {
       flex: '1',
       overflow: 'hidden',
       fontSize: 'calc(10px * var(--font-scale))',
-      fontFamily: 'var(--font-mono, monospace)',
-      color: 'var(--text-muted)',
+      fontFamily: 'var(--obs-font-mono, monospace)',
+      color: 'var(--obs-text-2)',
       minWidth: '0',
     });
     this.header.appendChild(this.breadcrumb);
@@ -221,9 +221,9 @@ export class FileViewer {
       flexShrink: '0',
     });
     for (const { id, icon, tip, colorVar } of [
-      { id: 'agent', icon: 'agent', tip: '问 Agent 分析当前文件', colorVar: 'var(--signal, #7eb8ff)' },
-      { id: 'translate', icon: 'translate', tip: '翻译当前文件', colorVar: 'var(--nebula, #a088e0)' },
-      { id: 'close', icon: 'close', tip: '关闭', colorVar: 'var(--text-muted)' },
+      { id: 'agent', icon: 'agent', tip: '问 Agent 分析当前文件', colorVar: 'var(--obs-blue, #7eb8ff)' },
+      { id: 'translate', icon: 'translate', tip: '翻译当前文件', colorVar: '#a088e0' },
+      { id: 'close', icon: 'close', tip: '关闭', colorVar: 'var(--obs-text-2)' },
     ]) {
       const btn = document.createElement('button');
       btn.className = `fv-title-btn`;
@@ -236,7 +236,7 @@ export class FileViewer {
         border: 'none',
         cursor: 'pointer',
         background: 'none',
-        color: 'var(--text-muted)',
+        color: 'var(--obs-text-2)',
         borderRadius: '4px',
         display: 'flex',
         alignItems: 'center',
@@ -248,7 +248,7 @@ export class FileViewer {
         btn.style.background = 'rgba(255,255,255,0.05)';
       });
       btn.addEventListener('mouseleave', () => {
-        btn.style.color = 'var(--text-muted)';
+        btn.style.color = 'var(--obs-text-2)';
         btn.style.background = 'none';
       });
       if (id === 'agent') {
@@ -295,10 +295,10 @@ export class FileViewer {
     });
 
     const btnDefs: [string, string, string, () => void][] = [
-      ['save', '保存 (Ctrl+S)', 'var(--starlight-dim)', () => this.saveActiveTab()],
-      ['undo', '撤销 (Ctrl+Z)', 'var(--text-muted)', () => this.editor.trigger('', 'undo', null)],
-      ['redo', '重做 (Ctrl+Y)', 'var(--text-muted)', () => this.editor.trigger('', 'redo', null)],
-      ['search', '查找 (Ctrl+F)', 'var(--text-muted)', () => this.editor.getAction('actions.find')?.run()],
+      ['save', '保存 (Ctrl+S)', 'var(--obs-text)', () => this.saveActiveTab()],
+      ['undo', '撤销 (Ctrl+Z)', 'var(--obs-text-2)', () => this.editor.trigger('', 'undo', null)],
+      ['redo', '重做 (Ctrl+Y)', 'var(--obs-text-2)', () => this.editor.trigger('', 'redo', null)],
+      ['search', '查找 (Ctrl+F)', 'var(--obs-text-2)', () => this.editor.getAction('actions.find')?.run()],
     ];
 
     for (const [icon, tip, _color, action] of btnDefs) {
@@ -312,18 +312,18 @@ export class FileViewer {
         border: 'none',
         cursor: 'pointer',
         background: 'none',
-        color: 'var(--text-muted)',
+        color: 'var(--obs-text-2)',
         borderRadius: '3px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       });
       btn.addEventListener('mouseenter', () => {
-        btn.style.color = 'var(--starlight-dim)';
+        btn.style.color = 'var(--obs-text)';
         btn.style.background = 'rgba(255,255,255,0.04)';
       });
       btn.addEventListener('mouseleave', () => {
-        btn.style.color = 'var(--text-muted)';
+        btn.style.color = 'var(--obs-text-2)';
         btn.style.background = 'none';
       });
       btn.addEventListener('click', action);
@@ -347,18 +347,18 @@ export class FileViewer {
       border: 'none',
       cursor: 'pointer',
       background: 'none',
-      color: 'var(--text-muted)',
+      color: 'var(--obs-text-2)',
       borderRadius: '3px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
     });
     fmtBtn.addEventListener('mouseenter', () => {
-      fmtBtn.style.color = 'var(--signal, #7eb8ff)';
+      fmtBtn.style.color = 'var(--obs-blue, #7eb8ff)';
       fmtBtn.style.background = 'rgba(255,255,255,0.04)';
     });
     fmtBtn.addEventListener('mouseleave', () => {
-      fmtBtn.style.color = 'var(--text-muted)';
+      fmtBtn.style.color = 'var(--obs-text-2)';
       fmtBtn.style.background = 'none';
     });
     fmtBtn.addEventListener('click', () => this.editor.getAction('editor.action.formatDocument')?.run());
@@ -380,18 +380,18 @@ export class FileViewer {
       border: 'none',
       cursor: 'pointer',
       background: 'none',
-      color: 'var(--text-muted)',
+      color: 'var(--obs-text-2)',
       borderRadius: '3px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
     });
     previewBtn.addEventListener('mouseenter', () => {
-      previewBtn.style.color = 'var(--nebula, #a088e0)';
+      previewBtn.style.color = '#a088e0';
       previewBtn.style.background = 'rgba(255,255,255,0.04)';
     });
     previewBtn.addEventListener('mouseleave', () => {
-      previewBtn.style.color = 'var(--text-muted)';
+      previewBtn.style.color = 'var(--obs-text-2)';
       previewBtn.style.background = 'none';
     });
     previewBtn.addEventListener('click', () => this.togglePreview());
@@ -413,7 +413,7 @@ export class FileViewer {
       overflowX: 'auto',
       overflowY: 'hidden',
       background: 'rgba(8, 14, 26, 0.6)',
-      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
+      borderBottom: '1px solid var(--obs-line, rgba(48, 60, 80, 0.3))',
       minHeight: '30px',
     });
 
@@ -433,7 +433,7 @@ export class FileViewer {
       overflow: 'auto',
       display: 'none',
       padding: '24px 32px',
-      color: 'var(--starlight-dim, #c8d6e5)',
+      color: 'var(--obs-text, #c8d6e5)',
       fontSize: 'calc(13px * var(--font-scale))',
       lineHeight: '1.7',
       fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif)',
@@ -454,8 +454,8 @@ export class FileViewer {
       background: 'rgba(8, 14, 26, 0.8)',
       borderTop: '1px solid rgba(48, 60, 80, 0.3)',
       fontSize: 'calc(10px * var(--font-scale))',
-      fontFamily: 'var(--font-mono, monospace)',
-      color: 'var(--text-muted)',
+      fontFamily: 'var(--obs-font-mono, monospace)',
+      color: 'var(--obs-text-2)',
     });
 
     // Left: LSP status + language
@@ -623,13 +623,13 @@ export class FileViewer {
         padding: '0 10px',
         cursor: 'pointer',
         fontSize: 'calc(11px * var(--font-scale))',
-        fontFamily: 'var(--font-mono, monospace)',
+        fontFamily: 'var(--obs-font-mono, monospace)',
         whiteSpace: 'nowrap',
         flexShrink: '0',
         maxWidth: '170px',
         borderTop: isActive ? '2px solid rgba(80, 140, 220, 0.7)' : '2px solid transparent',
         background: isActive ? 'rgba(22, 40, 70, 0.55)' : 'transparent',
-        color: isActive ? 'var(--starlight, #e6edf3)' : 'var(--text-muted)',
+        color: isActive ? 'var(--obs-text, #e6edf3)' : 'var(--obs-text-2)',
         borderRadius: '3px 3px 0 0',
       });
 
@@ -745,7 +745,7 @@ export class FileViewer {
       span.style.cssText = 'cursor:pointer;padding:0 2px;border-radius:2px;';
       span.title = parts.slice(0, i + 1).join('/');
       span.addEventListener('mouseenter', () => {
-        span.style.color = 'var(--signal, #7eb8ff)';
+        span.style.color = 'var(--obs-blue, #7eb8ff)';
         span.style.background = 'rgba(80,140,220,0.12)';
       });
       span.addEventListener('mouseleave', () => {
@@ -1194,7 +1194,7 @@ export class FileViewer {
       const isPreview = tab.viewMode === 'preview';
       btn.innerHTML = isPreview ? iconHtml('edit', 12) : iconHtml('eye', 12);
       btn.title = isPreview ? '返回编辑模式' : '切换预览';
-      btn.style.color = isPreview ? 'var(--nebula, #a088e0)' : 'var(--text-muted)';
+      btn.style.color = isPreview ? '#a088e0' : 'var(--obs-text-2)';
     } else {
       btn.style.display = 'none';
     }
@@ -1240,7 +1240,7 @@ export class FileViewer {
   }
 
   private async renderImagePreview(filePath: string): Promise<void> {
-    this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">加载中...</div>`;
+    this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--obs-text-2);">加载中...</div>`;
     try {
       const b64 = await rpc<string>('read_file_base64', { filePath });
       const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
@@ -1257,7 +1257,7 @@ export class FileViewer {
       const mime = mimeMap[ext] || 'image/png';
       this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:200px;"><img src="data:${mime};base64,${b64}" alt="${filePath.replace(/\\/g, '/').split('/').pop()}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;box-shadow:0 4px 24px rgba(0,0,0,0.4);" /></div>`;
     } catch (err: any) {
-      this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">⚠ 无法加载图片: ${String(err)}</div>`;
+      this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--obs-text-2);">⚠ 无法加载图片: ${String(err)}</div>`;
     }
   }
 

@@ -252,27 +252,27 @@ export class GraphTooltip {
     this.detailCard.querySelector('.dc-name')!.textContent = node.name;
 
     const kindColors: Record<string, string> = {
-      symbol: 'var(--signal)',
-      function: 'var(--signal)',
-      method: 'var(--signal)',
-      class: 'var(--signal)',
-      module: 'var(--signal)',
-      variable: 'var(--signal)',
-      interface: 'var(--signal)',
-      constant: 'var(--signal)',
-      medium: 'var(--sol)',
-      file: 'var(--sol)',
-      database: 'var(--sol)',
-      cache: 'var(--sol)',
-      queue: 'var(--sol)',
-      temporal: 'var(--nebula)',
-      thread: 'var(--nebula)',
-      timer: 'var(--nebula)',
-      trigger: 'var(--nebula)',
+      symbol: 'var(--obs-blue)',
+      function: 'var(--obs-blue)',
+      method: 'var(--obs-blue)',
+      class: 'var(--obs-blue)',
+      module: 'var(--obs-blue)',
+      variable: 'var(--obs-blue)',
+      interface: 'var(--obs-blue)',
+      constant: 'var(--obs-blue)',
+      medium: 'var(--obs-brass)',
+      file: 'var(--obs-brass)',
+      database: 'var(--obs-brass)',
+      cache: 'var(--obs-brass)',
+      queue: 'var(--obs-brass)',
+      temporal: '#a088e0',
+      thread: '#a088e0',
+      timer: '#a088e0',
+      trigger: '#a088e0',
     };
     const kindEl = this.detailCard.querySelector('.dc-kind') as HTMLElement;
     kindEl.textContent = TYPE_LABELS[kind] || kind.toUpperCase();
-    kindEl.style.color = kindColors[kind] || 'var(--signal)';
+    kindEl.style.color = kindColors[kind] || 'var(--obs-blue)';
     const degEl = this.detailCard.querySelector('.dc-degree') as HTMLElement;
     degEl.textContent = `度 ${deg[idx]}${deg[idx] >= 10 ? ' · Hub 节点' : ''}`;
 
@@ -331,12 +331,12 @@ export class GraphTooltip {
     this._promptBarEl.style.cssText =
       'position:absolute;z-index:19;top:12px;left:50%;transform:translateX(-50%);' +
       'display:none;align-items:center;gap:10px;padding:8px 14px;' +
-      'background:var(--panel-bg,rgba(4,12,28,0.94));' +
+      'background:var(--obs-glass-hi,rgba(4,12,28,0.94));' +
       'backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);' +
       'border:1px solid rgba(60,100,180,0.3);' +
       'border-radius:6px;' +
       'box-shadow:0 0 0 1px rgba(60,100,180,0.05),0 12px 36px rgba(0,0,0,0.5);' +
-      'font-family:var(--font-mono);font-size: calc(10px * var(--font-scale));color:var(--starlight-dim,#c3daf8);white-space:nowrap;' +
+      'font-family:var(--obs-font-mono);font-size: calc(10px * var(--font-scale));color:var(--obs-text,#c3daf8);white-space:nowrap;' +
       'opacity:0;transition:opacity 0.16s;';
     this._promptTitleEl = document.createElement('span');
     this._promptTitleEl.style.cssText = 'max-width:420px;overflow:hidden;text-overflow:ellipsis;';
@@ -344,19 +344,19 @@ export class GraphTooltip {
     this._promptBtnEl = document.createElement('button');
     this._promptBtnEl.textContent = 'Ask Agent';
     this._promptBtnEl.style.cssText =
-      'font-family:var(--font-hud);font-size: calc(8px * var(--font-scale));font-weight:600;' +
+      'font-family:var(--obs-font-mono);font-size: calc(8px * var(--font-scale));font-weight:600;' +
       'letter-spacing:0.5px;text-transform:uppercase;' +
       'padding:3px 8px;border-radius:2px;cursor:pointer;' +
-      'transition:all var(--snap);' +
+      'transition:all var(--obs-snap);' +
       'border:1px solid rgba(140,100,200,0.25);' +
-      'background:rgba(12,22,36,0.6);color:var(--nebula,#a088e0);';
+      'background:rgba(12,22,36,0.6);color:#a088e0;';
     this._promptBtnEl.addEventListener('mouseenter', () => {
       this._promptBtnEl.style.background = 'rgba(22,36,54,0.7)';
-      this._promptBtnEl.style.color = 'var(--starlight-dim,#c3daf8)';
+      this._promptBtnEl.style.color = 'var(--obs-text,#c3daf8)';
     });
     this._promptBtnEl.addEventListener('mouseleave', () => {
       this._promptBtnEl.style.background = 'rgba(12,22,36,0.6)';
-      this._promptBtnEl.style.color = 'var(--nebula,#a088e0)';
+      this._promptBtnEl.style.color = '#a088e0';
     });
     this._promptBtnEl.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -370,9 +370,9 @@ export class GraphTooltip {
     dismissBtn.innerHTML = iconHtml('close', 11);
     dismissBtn.style.cssText =
       'padding:2px 4px;border:none;background:none;color:rgba(120,160,215,0.5);' +
-      'cursor:pointer;font-size: calc(11px * var(--font-scale));line-height:0;transition:color var(--snap);';
+      'cursor:pointer;font-size: calc(11px * var(--font-scale));line-height:0;transition:color var(--obs-snap);';
     dismissBtn.addEventListener('mouseenter', () => {
-      dismissBtn.style.color = 'var(--starlight-dim,#c3daf8)';
+      dismissBtn.style.color = 'var(--obs-text,#c3daf8)';
     });
     dismissBtn.addEventListener('mouseleave', () => {
       dismissBtn.style.color = 'rgba(120,160,215,0.5)';

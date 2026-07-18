@@ -5,6 +5,7 @@
 // Does NOT cover the full app — only legend, focus banner, color/scale labels.
 
 const TRANS: Record<string, { zh: string; en: string }> = {
+  'legend.title': { zh: '图例', en: 'LEGEND' },
   'legend.node': { zh: '节点', en: 'NODE' },
   'legend.edge': { zh: '连线', en: 'EDGE' },
   'legend.symbol': { zh: '代码实体', en: 'Code' },

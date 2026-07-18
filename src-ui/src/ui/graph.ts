@@ -23,7 +23,7 @@ import { setLang, t } from '../i18n';
 import { bus } from './events';
 import { gpuLayout } from './gpu-layout';
 import { type AnalysisHost, GraphAnalysis } from './graph-analysis';
-import { BG_COLOR, hexToCSS } from './graph-colors';
+import { BG_COLOR } from './graph-colors';
 import { type DiffOverlayHost, GraphDiffOverlay } from './graph-diff-overlay';
 import { type EdgeRendererHost, GraphEdgeRenderer } from './graph-edge-renderer';
 import { type FocusHost, GraphFocusController } from './graph-focus-controller';
@@ -42,6 +42,7 @@ import { GraphSceneLifecycle, type LifecycleHost } from './graph-scene-lifecycle
 import { createSpikeTexture } from './graph-textures';
 import { GraphTooltip, type TooltipHost } from './graph-tooltip';
 import type { CommunityData, EdgeData, GraphDiffJson, GraphJSON, GraphNode } from './graph-types';
+import { buildLegend as buildLegendUI } from './graph-ui';
 import { iconHtml } from './icons';
 
 // ═══════════════════════════════════════════════════════════════
@@ -261,6 +262,7 @@ export class StarGraph {
     // if (mode === 'full') this.buildNebulaDust();
 
     if (true) this.buildHoloGrid();
+    this.graticule = Scene.buildGraticule(this.scene);
 
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
@@ -300,7 +302,7 @@ export class StarGraph {
       if (this.focusSubgraphActive && this.focusSubgraphIdx >= 0) {
         // Refresh focus banner text while staying in focus mode
         const node = this.graphNodes[this.focusSubgraphIdx];
-        this.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
+        this.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 12)}<span class="fb-name">${t('focus.title')} · ${node.name}</span><span class="fb-meta">${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} · ${t('focus.exit')}</span>`;
         this.focusSubgraphBanner.style.display = 'flex';
       }
     };
@@ -403,6 +405,9 @@ export class StarGraph {
   private holoGrid!: THREE.Mesh;
   private holoGridY = -60;
 
+  // ── P5 观测台刻度盘（单位半径几何，按图半径 scale）──────────
+  private graticule!: THREE.Group;
+
   private buildHoloGrid(): void {
     const result = buildHoloGridFX(this.scene);
     this.holoGrid = result.mesh;
@@ -411,6 +416,15 @@ export class StarGraph {
 
   private positionGrid(pos: Float32Array): void {
     this.holoGridY = positionGridFX(this.holoGrid, pos);
+    // 刻度盘随图半径缩放，贴在网格面上方（参考系仪器，不进 galaxyGroup）
+    let maxR = 0;
+    for (let i = 0; i < pos.length; i += 3) {
+      const r = Math.hypot(pos[i], pos[i + 2]);
+      if (r > maxR) maxR = r;
+    }
+    const R = Math.min(1600, Math.max(150, maxR * 1.35));
+    this.graticule.scale.set(R, R, R);
+    this.graticule.position.y = this.holoGridY + 2;
   }
 
   // ── Path finding — delegated to GraphAnalysis ──────────────
@@ -657,43 +671,16 @@ export class StarGraph {
     }
   }
 
-  // ── Legend (color key) ────────────────────────────────────
+  // ── Legend (color key) — 实现委托 graph-ui.buildLegend（P5 单源化）──
 
   private buildLegend(): void {
-    this.legendEl = document.createElement('div');
-    this.legendEl.id = 'graph-legend';
-    this.legendEl.style.display = 'none';
-    this.legendEl.innerHTML = `<div class="legend-section">
-        <div class="legend-title">${t('legend.node')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="function" title="${t('legend.function.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x4ad8c8)};color:${hexToCSS(0x4ad8c8)}"></span> ${t('legend.function')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="class" title="${t('legend.class.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x7fd84a)};color:${hexToCSS(0x7fd84a)}"></span> ${t('legend.class')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="module" title="${t('legend.module.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xd8d84a)};color:${hexToCSS(0xd8d84a)}"></span> ${t('legend.module')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="interface" title="${t('legend.interface.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xf0a850)};color:${hexToCSS(0xf0a850)}"></span> ${t('legend.interface')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="file" title="${t('legend.file.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> ${t('legend.file')}</div>
-        <div class="legend-row legend-node-row" data-node-filter="symbol" title="${t('legend.symbol.desc')}"><span class="legend-swatch" style="background:${hexToCSS(0x6ab0ff)};color:${hexToCSS(0x6ab0ff)}"></span> ${t('legend.symbol')}</div>
-      </div>
-      <div class="legend-section">
-        <div class="legend-title">${t('legend.edge')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="calls" title="${t('legend.calls.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x4a9adf)}"></span> ${t('legend.calls')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="imports" title="${t('legend.imports.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x4adfdf)}"></span> ${t('legend.imports')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="defines" title="${t('legend.defines.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0x4adf8a)}"></span> ${t('legend.defines')}</div>
-        <div class="legend-row legend-edge-row" data-edge-type="inherits" title="${t('legend.inherits.desc')}"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff66dd)}"></span> ${t('legend.inherits')}</div>
-      </div>`;
-    this.container.appendChild(this.legendEl);
-    this.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach((row) => {
-      row.style.cursor = 'pointer';
-      row.addEventListener('click', () => {
-        const et = row.dataset['edgeType'] || '';
-        this.setEdgeTypeFilter(this._edgeTypeFilter === et ? null : et);
-      });
-    });
-    this.legendEl.querySelectorAll<HTMLElement>('.legend-node-row').forEach((row) => {
-      row.style.cursor = 'pointer';
-      row.addEventListener('click', () => {
-        const nk = row.dataset['nodeFilter'] || '';
-        this.setNodeKindFilter(this._nodeKindFilter === nk ? null : nk);
-      });
-    });
+    this.legendEl = buildLegendUI(
+      this.container,
+      (et) => this.setEdgeTypeFilter(et),
+      (nk) => this.setNodeKindFilter(nk),
+      () => this._edgeTypeFilter,
+      () => this._nodeKindFilter,
+    );
   }
 
   // ── Focus subgraph (detail-card button triggered) ────────────

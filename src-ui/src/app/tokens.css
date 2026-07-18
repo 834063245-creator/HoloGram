@@ -10,6 +10,9 @@
   --obs-void: #05070d;
   --obs-void-deep: #030509;
 
+  /* 运行时字号缩放（settings.display.fontScale，main.ts 注入；默认 1） */
+  --font-scale: 1;
+
   /* 蚀刻玻璃 */
   --obs-glass: rgba(11, 15, 26, 0.62);
   --obs-glass-hi: rgba(14, 19, 32, 0.82);
@@ -47,8 +50,4 @@
   --obs-bar-h: 46px;
   --obs-status-h: 28px;
   --obs-rail-w: 46px;
-
-  /* ── 过渡覆盖：旧样式桥接，P5 删除 ────────────────────────── */
-  /* base.css 的 --font-hud 引用 CDN 的 "Orbitron"，改指自托管变量体 */
-  --font-hud: "Orbitron Variable", system-ui, sans-serif;
 }

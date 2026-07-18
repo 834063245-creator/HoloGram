@@ -67,7 +67,7 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
         zIndex: 200,
         left: pos.x,
         top: pos.y,
-        background: 'var(--panel-bg, rgba(4,12,28,0.96))',
+        background: 'var(--obs-glass-hi, rgba(4,12,28,0.96))',
         backdropFilter: 'blur(16px)',
         WebkitBackdropFilter: 'blur(16px)',
         border: '1px solid rgba(60,100,180,0.3)',
@@ -75,7 +75,7 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
         padding: 4,
         minWidth: 160,
         boxShadow: '0 0 0 1px rgba(60,100,180,0.05), 0 12px 36px rgba(0,0,0,0.5)',
-        fontFamily: 'var(--font-mono)',
+        fontFamily: 'var(--obs-font-mono)',
         fontSize: 'calc(11px * var(--font-scale))',
         display: 'flex',
         flexDirection: 'column',
@@ -83,32 +83,28 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
     >
       {items.map((item, i) => (
         <React.Fragment key={i}>
-          {item.separator && (
-            <div style={{ height: 1, background: 'rgba(60,100,180,0.15)', margin: '3px 6px' }} />
-          )}
+          {item.separator && <div style={{ height: 1, background: 'rgba(60,100,180,0.15)', margin: '3px 6px' }} />}
           <div
             className="ctx-menu-item"
             style={{
               padding: '5px 10px',
               borderRadius: 3,
               cursor: item.disabled ? 'default' : 'pointer',
-              color: item.disabled
-                ? 'var(--text-muted, rgba(120,145,170,0.48))'
-                : 'var(--starlight-dim, #c3daf8)',
+              color: item.disabled ? 'var(--obs-text-2, rgba(120,145,170,0.48))' : 'var(--obs-text, #c3daf8)',
               whiteSpace: 'nowrap',
               userSelect: 'none',
             }}
             onMouseEnter={(e) => {
               if (!item.disabled) {
                 (e.currentTarget as HTMLDivElement).style.background = 'rgba(22,36,54,0.7)';
-                (e.currentTarget as HTMLDivElement).style.color = 'var(--starlight, #e2edff)';
+                (e.currentTarget as HTMLDivElement).style.color = 'var(--obs-text, #e2edff)';
               }
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLDivElement).style.background = '';
               (e.currentTarget as HTMLDivElement).style.color = item.disabled
-                ? 'var(--text-muted, rgba(120,145,170,0.35))'
-                : 'var(--starlight-dim, #c3daf8)';
+                ? 'var(--obs-text-2, rgba(120,145,170,0.35))'
+                : 'var(--obs-text, #c3daf8)';
             }}
             onClick={
               item.disabled

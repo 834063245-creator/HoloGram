@@ -273,6 +273,27 @@ vi.mock('three', () => {
     },
     Group: class {
       children: any[] = [];
+      position = {
+        x: 0,
+        y: 0,
+        z: 0,
+        set(x: number, y: number, z: number) {
+          this.x = x;
+          this.y = y;
+          this.z = z;
+        },
+      };
+      scale = {
+        x: 1,
+        y: 1,
+        z: 1,
+        set(x: number, y: number, z: number) {
+          this.x = x;
+          this.y = y;
+          this.z = z;
+        },
+      };
+      renderOrder = 0;
       add(c: any) {
         this.children.push(c);
       }
@@ -333,6 +354,10 @@ vi.mock('three', () => {
     },
     CanvasTexture: class {
       dispose = vi.fn();
+    },
+    LineBasicMaterial: class {
+      constructor(_opts?: any) {}
+      dispose() {}
     },
     ACESFilmicToneMapping: 0,
     AdditiveBlending: 1,

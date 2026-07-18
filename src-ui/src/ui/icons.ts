@@ -360,7 +360,7 @@ const icons: Record<string, IconDef> = {
  */
 export function iconSvg(name: string, size = 15, cls = ''): string {
   const def = icons[name];
-  if (!def) return `<span style="color:var(--fail)">?</span>`;
+  if (!def) return `<span style="color:var(--obs-fail)">?</span>`;
   return `<svg class="hg-icon ${cls}" width="${size}" height="${size}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-label="${def.label}" role="img">${def.path}</svg>`;
 }
 
