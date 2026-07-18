@@ -54,6 +54,19 @@ class AppShell {
     return [...this._panels.keys()];
   }
 
+  /** 全部面板的开合快照 — P1 用于同步进 shell-store（DockRail 数据源） */
+  states(): Record<string, boolean> {
+    const out: Record<string, boolean> = {};
+    for (const [id, p] of this._panels) {
+      try {
+        out[id] = !!p.isOpen();
+      } catch {
+        out[id] = false;
+      }
+    }
+    return out;
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // Wiring (called once by main.ts during init)
   // ═══════════════════════════════════════════════════════════════

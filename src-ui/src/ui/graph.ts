@@ -14,6 +14,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { useShellStore } from '../app/shell-store';
 import { getLang, setLang, t } from '../i18n';
 import { shell } from './app-shell';
 import { bus } from './events';
@@ -2117,7 +2118,6 @@ export class StarGraph {
       this.focusNodeIdx = -1;
     }
 
-
     // 10. Re-apply diff overlay if active (new nodes might be in the diff set)
     if (this.diffActive && this.diffAddedIds.size + this.diffRemovedIds.size + this.diffModifiedIds.size > 0) {
       const saved = {
@@ -3338,12 +3338,8 @@ export class StarGraph {
 
   // ── Status ───────────────────────────────────────────────
 
+  // P1：状态写入 shell-store（StatusBar 遥测区），不再直接操作 DOM。
   private updateStatus(nodeCount: number, edgeCount: number, meta?: Record<string, unknown>): void {
-    const ns = document.getElementById('status-nodes'),
-      es = document.getElementById('status-edges'),
-      st = document.getElementById('status-text');
-    if (ns) ns.textContent = `${nodeCount} 节点`;
-    if (es) es.textContent = `${edgeCount} 边`;
     let sCount = 0,
       dCount = 0,
       tCount = 0;
@@ -3355,14 +3351,16 @@ export class StarGraph {
     const coup = (meta?.coupling || {}) as Record<string, number>;
     const l3 = coup.total_l3 || 0,
       l4 = coup.total_l4 || 0;
-    if (st) {
-      let text = `${nodeCount} 节点 · ${edgeCount} 边 · S${sCount} D${dCount} T${tCount}`;
-      if (l4 > 0) text += ` · ${iconHtml('block', 10)} L4×${l4}`;
-      else if (l3 > 0) text += ` · ${iconHtml('alert', 10)} L3×${l3}`;
-      if (this._fold.foldMode && this._fold.galaxyMeta.length > 0)
-        text += ` · ${iconHtml('galaxy', 10)} ${this._fold.galaxyMeta.length} 星座`;
-      st.innerHTML = text;
-    }
+    useShellStore.getState().setGraphStats({
+      nodes: nodeCount,
+      edges: edgeCount,
+      s: sCount,
+      d: dCount,
+      t: tCount,
+      l3,
+      l4,
+      galaxies: this._fold.foldMode && this._fold.galaxyMeta.length > 0 ? this._fold.galaxyMeta.length : 0,
+    });
   }
 
   // ── Full-FX: edge particle flow ──────────────────────────
@@ -3420,11 +3418,7 @@ export class StarGraph {
       this.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
     const mouseOnCanvas = this.mouse.x > -999;
     const isActive =
-      camMoved ||
-      mouseOnCanvas ||
-      this.hoveredIdx >= 0 ||
-      this.focusProgress > 0 ||
-      this._analysis.blastMode;
+      camMoved || mouseOnCanvas || this.hoveredIdx >= 0 || this.focusProgress > 0 || this._analysis.blastMode;
     if (isActive) {
       this._idleCounter = 0;
     } else {

@@ -10,22 +10,26 @@ import './ui/react/chat.css';
 import './ui/react/panels.css';
 import './app/fonts';
 import './app/tokens.css';
-import { initLogger, log } from './agent/logger';
-import { isMockMode, listen, rpc } from './bridge';
-import { setLang, t } from './i18n';
-import { loadSettings, saveSettings } from './settings';
+import './app/shell.css';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { log } from './agent/logger';
+import { App } from './app/App';
+import { registerActions } from './app/actions';
+import { useShellStore } from './app/shell-store';
+import { isMockMode, rpc } from './bridge';
+import { setLang } from './i18n';
+import { loadSettings } from './settings';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { ConstraintsPanel } from './ui/constraints';
 import { DataflowPanel } from './ui/dataflow-panel';
-import { dbg } from './ui/debug';
 import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { GraphInteraction } from './ui/graph-interaction';
 import { HotspotsPanel } from './ui/hotspots';
-import { iconSvg } from './ui/icons';
 import { getPanelStore } from './ui/panel-store';
 import { TimelinePanel } from './ui/react/TimelinePanel';
 import { SettingsPanel } from './ui/settings-panel';
@@ -100,77 +104,12 @@ function layoutViaWorker(nodeCount: number, pairs: Array<[number, number]>): Pro
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
-const statusText = document.getElementById('status-text')!;
 
-// ── Status log (ring buffer + expandable panel) ──
-const STATUS_LOG_MAX = 15;
-const statusLog: string[] = [];
-
+// ── Status — 写入 shell-store（P1：DOM 状态栏已移除，日志环在 store 里）──
 function pushStatus(msg: string): void {
-  statusLog.push(msg);
-  if (statusLog.length > STATUS_LOG_MAX) statusLog.shift();
-  statusText.textContent = msg;
-  updateStatusBadge();
+  useShellStore.getState().pushStatus(msg);
 }
-
-function updateStatusBadge(): void {
-  let badge = document.getElementById('status-log-badge') as HTMLElement | null;
-  if (!badge) {
-    badge = document.createElement('span');
-    badge.id = 'status-log-badge';
-    badge.style.cssText =
-      'margin-left:6px;cursor:pointer;font-size:10px;padding:0 4px;border-radius:3px;background:#333;color:#888';
-    badge.textContent = String(statusLog.length);
-    badge.onclick = toggleStatusLog;
-    statusText.parentElement?.insertBefore(badge, statusText.nextSibling);
-  }
-  badge.textContent = String(statusLog.length);
-}
-
-function toggleStatusLog(): void {
-  let panel = document.getElementById('status-log-panel');
-  if (panel) {
-    panel.remove();
-    return;
-  }
-
-  panel = document.createElement('div');
-  panel.id = 'status-log-panel';
-  panel.style.cssText =
-    'position:fixed;bottom:28px;right:8px;width:420px;max-height:300px;overflow-y:auto;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.5)';
-  panel.innerHTML = statusLog
-    .map(
-      (m, i) =>
-        `<div style="padding:2px 0;border-bottom:1px solid #222;color:${i === statusLog.length - 1 ? '#ccc' : '#666'}">${escapeHtml(m)}</div>`,
-    )
-    .join('');
-  panel.onclick = (e) => e.stopPropagation();
-  document.body.appendChild(panel);
-  // Click outside to dismiss
-  setTimeout(() => {
-    const dismiss = () => {
-      panel?.remove();
-      document.removeEventListener('click', dismiss);
-    };
-    document.addEventListener('click', dismiss);
-  }, 0);
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-const tbPath = document.getElementById('tb-path')!;
-const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
-const btnReanalyze = document.getElementById('btn-reanalyze') as HTMLButtonElement;
 const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButtonElement;
-const searchInput = document.getElementById('search-input') as HTMLInputElement;
-const searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
-const btnFold = document.getElementById('btn-fold') as HTMLButtonElement;
-const btnResetCam = document.getElementById('btn-reset-cam') as HTMLButtonElement;
-const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
-const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
-const btnTimeline = document.getElementById('btn-timeline') as HTMLButtonElement;
-const btnConstraints = document.getElementById('btn-constraints') as HTMLButtonElement;
 
 // ── State ──
 let workspace: Workspace | null = null;
@@ -205,7 +144,7 @@ async function pickFolder(): Promise<string | null> {
 
 async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: any }): Promise<void> {
   if (_switching) {
-    statusText.textContent = '正在切换工作区，请稍候…';
+    pushStatus('正在切换工作区，请稍候…');
     return;
   }
   _switching = true;
@@ -214,7 +153,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     if (!folder) return;
 
     if (workspace?.active && isSamePath(workspace.path, folder)) {
-      statusText.textContent = '已在当前工作区';
+      pushStatus('已在当前工作区');
       return;
     }
 
@@ -246,7 +185,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
       console.log('[switchWorkspace] Workspace.open returned');
     } catch (err: any) {
       console.error('[switchWorkspace] Workspace.open threw:', err);
-      statusText.textContent = `分析失败: ${err}`;
+      pushStatus(`分析失败: ${err}`);
       setLoading(false);
       throw err;
     }
@@ -262,7 +201,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     const genTime = ws.graphData.meta?.generated_at
       ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString()
       : '';
-    statusText.textContent = `✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`;
+    pushStatus(`✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`);
     log.info('main', 'project loaded', {
       nodes: nodeCount,
       edges: Array.isArray(ws.graphData.edges)
@@ -287,8 +226,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
 }
 
 function setLoading(active: boolean, folder?: string): void {
-  btnOpen.disabled = active;
-  btnOpen.innerHTML = active ? `${iconSvg('dot')} 分析中...` : `${iconSvg('folder-open')} 打开文件夹`;
+  useShellStore.getState().setAnalyzing(active ? 'open' : null);
   if (active) pushStatus(`正在分析 ${folder || ''}...`);
 }
 
@@ -309,30 +247,13 @@ function resetCheckPanelState(): void {
     new_thread_conflicts: 0,
     api_signature_changes: 0,
   });
-  clearCheckBadge();
-}
-
-function setCheckBadge(violations: number): void {
-  const existing = btnCheck.querySelector('.toolbar-badge');
-  if (existing) existing.remove();
-  if (violations <= 0) return;
-  const badge = document.createElement('span');
-  badge.className = 'toolbar-badge';
-  badge.textContent = `${violations}`;
-  btnCheck.appendChild(badge);
-}
-
-function clearCheckBadge(): void {
-  const existing = btnCheck.querySelector('.toolbar-badge');
-  if (existing) existing.remove();
+  useShellStore.getState().setViolations(0);
 }
 
 async function notifyAllPanels(ws: Workspace): Promise<void> {
-  tbPath.textContent = ws.path;
+  useShellStore.getState().setProjectPath(ws.path);
   welcome.classList.add('hidden');
   graphEl.classList.remove('hidden');
-  btnOpen.disabled = false;
-  btnOpen.innerHTML = `${iconSvg('folder-open')} 打开文件夹`;
   chatPanel.setProjectPath(ws.path);
   timelinePanel.setProjectPath(ws.path);
   hotspotsPanel.setProjectPath(ws.path);
@@ -350,37 +271,110 @@ async function runCheck(): Promise<void> {
 
 // ── Search ──
 
-function doSearch(): void {
-  const query = searchInput.value.trim();
-  if (!query) return;
-  const found = starGraph.focusNode(query);
-  searchInput.blur(); // ponytail: 搜完释放焦点，恢复键盘快捷键
+function doSearch(query: string): void {
+  const q = query.trim();
+  if (!q) return;
+  const found = starGraph.focusNode(q);
   if (!found) {
-    statusText.textContent = `未找到 "${query}"`;
+    pushStatus(`未找到 "${q}"`);
     setTimeout(() => {
-      if (statusText.textContent === `未找到 "${query}"`) statusText.textContent = '就绪';
+      const st = useShellStore.getState();
+      if (st.statusText === `未找到 "${q}"`) st.setStatusText('就绪');
     }, 2000);
   }
 }
 
-// ── Icon setup ──
+// ── Diff ──
 
-function setupIcons(): void {
-  document.querySelectorAll('[data-icon]').forEach((el) => {
-    const iconName = (el as HTMLElement).dataset['icon']!;
-    const svgStr = iconSvg(iconName);
-    el.insertAdjacentHTML('afterbegin', svgStr);
-    (el as HTMLElement).classList.add('toolbar-btn');
-    // Wrap existing text in a span so icon survives textContent changes
-    const textContent = el.childNodes.length > 1 ? el.childNodes[1]?.textContent || '' : '';
-    if (textContent.trim()) {
-      (el as HTMLElement).innerHTML = svgStr;
-      const label = document.createElement('span');
-      label.className = 'btn-label';
-      label.textContent = textContent.trim();
-      el.appendChild(label);
+let _diffActive = false;
+async function toggleDiff(): Promise<void> {
+  const store = useShellStore.getState();
+  if (_diffActive) {
+    starGraph.clearDiff();
+    _diffActive = false;
+    store.setDiffActive(false);
+    pushStatus('已清除变更着色');
+    return;
+  }
+  if (!workspace?.path) {
+    pushStatus('请先打开项目');
+    return;
+  }
+  try {
+    const beforePath = `${workspace.path}/hologram_before.json`;
+    const diffJson = await rpc<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
+    const diff = JSON.parse(diffJson);
+    if (diff.is_empty) {
+      pushStatus('已创建变更基线 · 再次分析后即可比较差异');
+    } else {
+      starGraph.showDiff(diff);
+      _diffActive = true;
+      store.setDiffActive(true);
+      pushStatus(
+        `+${diff.added_nodes?.length || 0} / -${diff.removed_nodes?.length || 0} / ~${diff.modified_nodes?.length || 0}`,
+      );
     }
-  });
+  } catch (err: any) {
+    pushStatus(`变更分析失败: ${err}`);
+  }
+}
+
+// ── Re-analyze — 原地重分析，不切换工作区 ──
+
+async function reanalyze(): Promise<void> {
+  if (_switching) {
+    pushStatus('正在切换工作区，请稍候…');
+    return;
+  }
+  const ws = workspace;
+  if (!ws?.path) {
+    pushStatus('请先打开项目');
+    return;
+  }
+  useShellStore.getState().setAnalyzing('reanalyze');
+  pushStatus('重新分析中…');
+  try {
+    console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
+    const raw = await rpc<string>('analyze_and_load', { path: ws.path, force: true });
+    console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
+    // Guard against workspace switch during the long await.
+    if (workspace !== ws) {
+      console.log('[reanalyze] workspace switched during analysis — discarding result');
+      pushStatus('工作区已切换，重分析已取消');
+      return;
+    }
+    ws.graphData = JSON.parse(raw);
+    console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(ws.graphData.nodes || {}).length);
+    starGraph.render(ws.graphData);
+    console.log('[reanalyze] step 4: render done');
+    const nc = Array.isArray(ws.graphData.nodes)
+      ? ws.graphData.nodes.length
+      : Object.keys(ws.graphData.nodes || {}).length;
+    pushStatus(`✨ ${nc} 节点已就绪`);
+    console.log('[reanalyze] step 5: done');
+  } catch (e: any) {
+    console.error('[reanalyze] FAILED:', e);
+    pushStatus(`重分析失败: ${e}`);
+  } finally {
+    useShellStore.getState().setAnalyzing(null);
+  }
+}
+
+// ── Esc 逐层关闭（快捷键经 useGlobalKeys → actions 分发到此）──
+
+function escLayer(): void {
+  if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
+  else if (timelinePanel.isOpen()) timelinePanel.close();
+  else if (hotspotsPanel.isOpen()) hotspotsPanel.close();
+  else if (checkPanel.isOpen()) checkPanel.close();
+  else if (chatPanel.isOpen()) chatPanel.close();
+  else if (FV() && FV().get().isOpen) FV().get().close();
+  else starGraph.clearAgentHighlight();
+}
+
+/** 面板开合快照 → shell-store（DockRail 数据源；shell.onPanelChanged 与动作末尾双驱动） */
+function syncPanels(): void {
+  useShellStore.getState().setPanels(shell.states());
 }
 // ── Helper: set up agent with placeholder workspace (no project loaded) ──
 async function setupPlaceholderAgent(): Promise<void> {
@@ -522,8 +516,6 @@ async function init(): Promise<void> {
     );
   })();
 
-  setupIcons();
-
   // ── Sandbox health check ──
   rpc<string>('sandbox_status')
     .then((raw) => {
@@ -615,142 +607,135 @@ async function init(): Promise<void> {
   // ── Bus notifications (pure notification — sender doesn't care who listens) ──
   bus.on('check:history', ({ checkData, timestamp }: { checkData: CheckResult; timestamp: string }) => {
     checkPanel.showHistory(checkData, timestamp);
-    updateTabs();
-  });
-
-  bus.on('check:result', ({ passed, violations }: { passed: boolean; violations: number }) => {
-    if (passed) {
-      clearCheckBadge();
-      return;
-    }
-    setCheckBadge(violations);
+    syncPanels();
   });
 
   bus.on('chat:turn-done', () => {
     if (workspace?.path) chatPanel.scheduleAutoSave(workspace.path);
   });
 
-  // ── Dock tabs ──
-  const leftTabs = document.getElementById('left-tabs')!;
-  const rightTabs = document.getElementById('right-tabs')!;
-  leftTabs.style.display = '';
-  rightTabs.style.display = '';
-  const updateTabs = () => {
-    const hideLeft = timelinePanel.isOpen() || hotspotsPanel.isOpen();
-    const hideRight = checkPanel.isOpen() || ConstraintsPanel.get().isOpen();
-    leftTabs.style.display = hideLeft ? 'none' : '';
-    rightTabs.style.display = hideRight ? 'none' : '';
-    leftTabs.querySelectorAll('.dock-tab').forEach((t) => {
-      const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'timeline' && timelinePanel.isOpen()) || (p === 'hotspots' && hotspotsPanel.isOpen());
-      t.classList.toggle('active', !!active);
-    });
-    rightTabs.querySelectorAll('.dock-tab').forEach((t) => {
-      const p = (t as HTMLElement).dataset['panel'];
-      const active = (p === 'check' && checkPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
-      t.classList.toggle('active', !!active);
-    });
-  };
-  shell.onPanelChanged = updateTabs;
+  // ── 面板开合快照 → shell-store（DockRail 唯一数据源）──
+  shell.onPanelChanged = syncPanels;
+  syncPanels();
 
-  // Left dock — timeline & hotspots
-  leftTabs.addEventListener('click', (e) => {
-    const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
-    if (!tab) return;
-    const p = tab.dataset['panel'];
-    const closeLeftSiblings = (except: string) => {
-      if (except !== 'timeline' && timelinePanel.isOpen()) timelinePanel.close();
-      if (except !== 'hotspots' && hotspotsPanel.isOpen()) hotspotsPanel.close();
-    };
-    if (p === 'timeline') {
-      closeLeftSiblings('timeline');
-      if (workspace?.path) timelinePanel.setProjectPath(workspace.path);
-      timelinePanel.toggle();
-    } else if (p === 'hotspots') {
-      closeLeftSiblings('hotspots');
-      if (workspace?.path) hotspotsPanel.setProjectPath(workspace.path);
-      hotspotsPanel.toggle();
-    }
-    updateTabs();
-  });
-
-  // Right dock — check & constraints
-  rightTabs.addEventListener('click', (e) => {
-    const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
-    if (!tab) return;
-    const p = tab.dataset['panel'];
-    if (p === 'check') {
-      if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-      if (workspace?.path) runCheck();
-      checkPanel.toggle();
-    } else if (p === 'constraints') {
-      if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
-      if (checkPanel.isOpen()) checkPanel.close();
-      ConstraintsPanel.get().toggle();
-    }
-    updateTabs();
-  });
-
-  btnCheck.addEventListener('click', () => {
-    if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-    checkPanel.toggle();
-    if (checkPanel.isOpen() && workspace?.path) runCheck();
-    // Clear badge on open — user has acknowledged
-    clearCheckBadge();
-    updateTabs();
-  });
-
-  // Dataflow panel (floating, independent of dock tabs)
-  document.getElementById('btn-dataflow')?.addEventListener('click', () => {
-    dataflowPanel.toggle();
-  });
-
-  // Diff
-  let _diffActive = false;
-  btnDiff.addEventListener('click', async () => {
-    if (_diffActive) {
-      starGraph.clearDiff();
-      _diffActive = false;
-      btnDiff.innerHTML = `${iconSvg('diff')} 变更`;
-      statusText.textContent = '已清除变更着色';
-    } else {
-      if (!workspace?.path) {
-        statusText.textContent = '请先打开项目';
-        return;
-      }
-      try {
-        const beforePath = `${workspace.path}/hologram_before.json`;
-        const diffJson = await rpc<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
-        const diff = JSON.parse(diffJson);
-        if (diff.is_empty) {
-          statusText.textContent = '已创建变更基线 · 再次分析后即可比较差异';
-        } else {
-          starGraph.showDiff(diff);
-          _diffActive = true;
-          btnDiff.innerHTML = `${iconSvg('diff')} 清除`;
-          statusText.textContent = `+${diff.added_nodes?.length || 0} / -${diff.removed_nodes?.length || 0} / ~${diff.modified_nodes?.length || 0}`;
-        }
-      } catch (err: any) {
-        statusText.textContent = `变更分析失败: ${err}`;
-      }
-    }
-  });
-
-  // Timeline
-  btnTimeline.addEventListener('click', () => {
-    if (workspace?.path) timelinePanel.setProjectPath(workspace.path);
-    if (hotspotsPanel.isOpen()) hotspotsPanel.close();
-    timelinePanel.toggle();
-    updateTabs();
-  });
-
-  // Constraints
-  btnConstraints.addEventListener('click', () => {
-    if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
-    if (checkPanel.isOpen()) checkPanel.close();
-    ConstraintsPanel.get().toggle();
-    updateTabs();
-  });
+  // ── 动作注册（CommandBar / 命令面板 / 全局快捷键统一入口）──
+  registerActions([
+    { id: 'open', group: '操作', label: '打开文件夹…', icon: 'folder-open', run: () => switchWorkspace() },
+    { id: 'reanalyze', group: '操作', label: '重新分析当前项目', icon: 'refresh', run: () => reanalyze() },
+    {
+      id: 'toggle-fold',
+      group: '操作',
+      label: '折叠 / 展开社区星系',
+      icon: 'fold',
+      kbd: 'F',
+      run: () => {
+        starGraph.toggleFold();
+        useShellStore.getState().setFolded(starGraph.isFolded);
+      },
+    },
+    {
+      id: 'reset-cam',
+      group: '操作',
+      label: '复位摄像机视角',
+      icon: 'reset-cam',
+      kbd: 'R',
+      run: () => starGraph.resetCamera(),
+    },
+    { id: 'toggle-diff', group: '操作', label: '变更回看着色', icon: 'diff', kbd: 'ctrl D', run: () => toggleDiff() },
+    { id: 'search', group: '操作', label: '搜索符号', icon: 'search', run: (q) => doSearch(q || '') },
+    {
+      id: 'panel.timeline',
+      group: '面板',
+      label: '面板：时间轴',
+      icon: 'timeline',
+      run: () => {
+        if (hotspotsPanel.isOpen()) hotspotsPanel.close();
+        if (workspace?.path) timelinePanel.setProjectPath(workspace.path);
+        timelinePanel.toggle();
+        syncPanels();
+      },
+    },
+    {
+      id: 'panel.hotspots',
+      group: '面板',
+      label: '面板：热点',
+      icon: 'fire',
+      run: () => {
+        if (timelinePanel.isOpen()) timelinePanel.close();
+        if (workspace?.path) hotspotsPanel.setProjectPath(workspace.path);
+        hotspotsPanel.toggle();
+        syncPanels();
+      },
+    },
+    {
+      id: 'panel.check',
+      group: '面板',
+      label: '面板：简报',
+      icon: 'check',
+      run: () => {
+        if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+        checkPanel.toggle();
+        if (checkPanel.isOpen() && workspace?.path) runCheck();
+        useShellStore.getState().setViolations(0); // 打开即视为已知晓
+        syncPanels();
+      },
+    },
+    {
+      id: 'panel.constraints',
+      group: '面板',
+      label: '面板：约束',
+      icon: 'constraints',
+      run: () => {
+        if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
+        if (checkPanel.isOpen()) checkPanel.close();
+        ConstraintsPanel.get().toggle();
+        syncPanels();
+      },
+    },
+    {
+      id: 'panel.dataflow',
+      group: '面板',
+      label: '面板：数据流',
+      icon: 'dataflow',
+      run: () => {
+        dataflowPanel.toggle();
+        syncPanels();
+      },
+    },
+    {
+      id: 'toggle-chat',
+      group: '面板',
+      label: '展开 / 折叠对话',
+      icon: 'chat',
+      kbd: 'ctrl L',
+      run: () => {
+        if (checkPanel.isOpen()) checkPanel.close();
+        if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+        chatPanel.toggle();
+        syncPanels();
+      },
+    },
+    {
+      id: 'toggle-settings',
+      group: '设置',
+      label: '设置…',
+      icon: 'settings',
+      kbd: 'ctrl ,',
+      run: () => SettingsPanel.get().toggle(),
+    },
+    {
+      id: 'toggle-shortcuts',
+      group: '设置',
+      label: '快捷键一览',
+      icon: 'info',
+      kbd: '?',
+      run: () => {
+        const st = useShellStore.getState();
+        st.setShortcutsOpen(!st.shortcutsOpen);
+      },
+    },
+    { id: 'esc-layer', group: '操作', label: '逐层关闭', icon: 'close', run: escLayer },
+  ]);
 
   // Settings
   const settingsPanel = SettingsPanel.get();
@@ -769,47 +754,6 @@ async function init(): Promise<void> {
     }
   });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
-  const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
-  btnSettings.addEventListener('click', () => {
-    settingsPanel.toggle();
-  });
-
-  // ── Window controls (decorations:false — custom title bar) ──
-  // ponytail: 绕过所有 import，直接调 __TAURI_INTERNALS__ IPC — 跟 bridge.ts 同一条路
-  const _winLabel: string = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label || 'main';
-  function _winCmd(cmd: string): void {
-    const t = (window as any).__TAURI_INTERNALS__;
-    if (!t) return;
-    const p = t.invoke(`plugin:window|${cmd}`, { label: _winLabel });
-    if (p && typeof p.catch === 'function') p.catch((e: any) => console.error(`[win] ${cmd}:`, e));
-  }
-
-  const btnMaximize = document.getElementById('btn-maximize')!;
-  const _maxIcon = { normal: '□', maximized: '❐' };
-  async function _syncMaximizeIcon(): Promise<void> {
-    try {
-      const t = (window as any).__TAURI_INTERNALS__;
-      if (!t) return;
-      const ok = await t.invoke('plugin:window|is_maximized', { label: _winLabel });
-      btnMaximize.innerHTML = ok ? _maxIcon.maximized : _maxIcon.normal;
-      btnMaximize.title = ok ? '还原' : '最大化';
-    } catch {
-      /* best-effort */
-    }
-  }
-  btnMaximize.addEventListener('click', () => {
-    _winCmd('toggle_maximize');
-    setTimeout(() => _syncMaximizeIcon(), 200); // ponytail: 等窗口动画完成
-  });
-  // 双击标题栏 / Win+↑↓ 等外部触发
-  let _maxSyncTimer = 0;
-  window.addEventListener('resize', () => {
-    clearTimeout(_maxSyncTimer);
-    _maxSyncTimer = window.setTimeout(() => _syncMaximizeIcon(), 200);
-  });
-
-  document.getElementById('btn-minimize')?.addEventListener('click', () => _winCmd('minimize'));
-  document.getElementById('btn-close')?.addEventListener('click', () => _winCmd('close'));
 
   // Save sessions on close — scheduleAutoSave is sync (sets timeout).
   // LocalStorage write inside saveActiveSession is sync, so it completes
@@ -824,158 +768,15 @@ async function init(): Promise<void> {
     }
   });
 
-  const isEditing = () => {
-    const el = document.activeElement;
-    if (!el) return false;
-    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
-  };
-
-  // Keyboard shortcuts
-  window.addEventListener('keydown', (e) => {
-    if (isEditing()) return;
-    if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      if (checkPanel.isOpen()) checkPanel.close();
-      if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-      chatPanel.toggle();
-      updateTabs();
-    }
-    if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      btnDiff.click();
-    }
-    if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      settingsPanel.toggle();
-    }
-  });
-
-  // Open folder buttons
+  // Open folder buttons（工具栏动作已入 actions 注册表，此处仅欢迎屏按钮）
   const open = () => switchWorkspace();
-  btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
 
-  // Re-analyze — runs analysis in-place without workspace switch
-  btnReanalyze.addEventListener('click', async () => {
-    if (_switching) {
-      statusText.textContent = '正在切换工作区，请稍候…';
-      return;
-    }
-    const ws = workspace;
-    if (!ws?.path) {
-      statusText.textContent = '请先打开项目';
-      return;
-    }
-    btnReanalyze.disabled = true;
-    const lbl = btnReanalyze.querySelector('.btn-label');
-    if (lbl) lbl.textContent = '分析中…';
-    else btnReanalyze.textContent = '分析中…';
-    statusText.textContent = '重新分析中…';
-    try {
-      console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
-      const raw = await rpc<string>('analyze_and_load', { path: ws.path, force: true });
-      console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
-      // Guard against workspace switch during the long await.
-      if (workspace !== ws) {
-        console.log('[reanalyze] workspace switched during analysis — discarding result');
-        statusText.textContent = '工作区已切换，重分析已取消';
-        return;
-      }
-      ws.graphData = JSON.parse(raw);
-      console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(ws.graphData.nodes || {}).length);
-      starGraph.render(ws.graphData);
-      console.log('[reanalyze] step 4: render done');
-      const nc = Array.isArray(ws.graphData.nodes)
-        ? ws.graphData.nodes.length
-        : Object.keys(ws.graphData.nodes || {}).length;
-      statusText.textContent = `✨ ${nc} 节点已就绪`;
-      console.log('[reanalyze] step 5: done');
-    } catch (e: any) {
-      console.error('[reanalyze] FAILED:', e);
-      statusText.textContent = `重分析失败: ${e}`;
-    } finally {
-      btnReanalyze.disabled = false;
-      const lbl = btnReanalyze.querySelector('.btn-label');
-      if (lbl) lbl.textContent = '重分析';
-      else btnReanalyze.textContent = '重分析';
-    }
-  });
-
-  searchBtn.addEventListener('click', doSearch);
-  searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') doSearch();
-  });
-
-  // ponytail: 点 graph 画布时释放搜索框焦点，Three.js canvas 不会自动抢焦点
+  // ponytail: 点 graph 画布时释放输入框焦点，Three.js canvas 不会自动抢焦点
   graphEl.addEventListener('pointerdown', () => {
-    if (document.activeElement === searchInput) searchInput.blur();
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ae.blur();
   });
-
-  // Fold / Reset camera
-  btnFold.addEventListener('click', () => {
-    starGraph.toggleFold();
-    updateFoldBtn();
-  });
-  btnResetCam.addEventListener('click', () => {
-    starGraph.resetCamera();
-  });
-  window.addEventListener('keydown', (e) => {
-    if (isEditing()) return;
-    if (e.key === 'f' || e.key === 'F') {
-      starGraph.toggleFold();
-      updateFoldBtn();
-    }
-    if (e.key === 'r' || e.key === 'R') {
-      starGraph.resetCamera();
-    }
-    if (e.key === '?') {
-      toggleShortcuts();
-    }
-    if (e.key === 'Escape') {
-      if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
-      else if (timelinePanel.isOpen()) {
-        timelinePanel.close();
-        updateTabs();
-      } else if (hotspotsPanel.isOpen()) {
-        hotspotsPanel.close();
-        updateTabs();
-      } else if (checkPanel.isOpen()) {
-        checkPanel.close();
-        updateTabs();
-      } else if (chatPanel.isOpen()) {
-        chatPanel.close();
-        updateTabs();
-      } else if (FV() && FV().get().isOpen) FV().get().close();
-      else starGraph.clearAgentHighlight();
-    }
-  });
-  function updateFoldBtn(): void {
-    btnFold.innerHTML = starGraph.isFolded ? `${iconSvg('fold')} 展开` : `${iconSvg('fold')} 折叠`;
-  }
-
-  // Shortcuts overlay
-  const shortcutsOverlay = document.getElementById('shortcuts-overlay')!;
-  function toggleShortcuts(): void {
-    const visible = shortcutsOverlay.style.display !== 'none';
-    shortcutsOverlay.style.display = visible ? 'none' : '';
-    if (!visible) {
-      clearTimeout((shortcutsOverlay as any)._hideTimer);
-      (shortcutsOverlay as any)._hideTimer = setTimeout(() => {
-        if (shortcutsOverlay.style.display !== 'none') shortcutsOverlay.style.display = 'none';
-      }, 12000);
-    }
-  }
-  shortcutsOverlay.addEventListener('mouseenter', () => clearTimeout((shortcutsOverlay as any)._hideTimer));
-  shortcutsOverlay.addEventListener('mouseleave', () => {
-    (shortcutsOverlay as any)._hideTimer = setTimeout(() => {
-      if (shortcutsOverlay.style.display !== 'none') shortcutsOverlay.style.display = 'none';
-    }, 12000);
-  });
-  shortcutsOverlay.querySelector('.so-close')?.addEventListener('click', () => {
-    shortcutsOverlay.style.display = 'none';
-  });
-  const btnShortcuts = document.getElementById('btn-shortcuts') as HTMLButtonElement;
-  btnShortcuts.addEventListener('click', () => toggleShortcuts());
 
   // ═══════════════════════════════════════════════════════════════
   // Cold start — resume cached project or show welcome
@@ -1004,7 +805,7 @@ async function init(): Promise<void> {
       if (!root) {
         // Graph exists but no path — render without workspace
         starGraph.render(graph);
-        statusText.textContent = '⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目';
+        pushStatus('⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目');
         timelinePanel.setProjectPath(null);
         hotspotsPanel.setProjectPath(null);
         setLoading(false);
@@ -1016,7 +817,7 @@ async function init(): Promise<void> {
       console.log('[init] cold start: switching to cached workspace', root);
       await switchWorkspace(root, { skipAnalysis: true, cachedGraph: graph });
       console.log('[init] cold start: switchWorkspace done');
-      statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
+      pushStatus(isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱');
       // Engine warm-up happens via runCheck → engine_init (SQLite cache). Do NOT fire
       // analyze_project here — it races with runCheck's analyze fallback and blocks workspace switches.
       return;
@@ -1031,5 +832,8 @@ async function init(): Promise<void> {
   setLoading(false);
   await setupPlaceholderAgent();
 }
+
+// ── React 壳引导（P1：CommandBar/DockRail/StatusBar/命令面板/快捷键浮层）──
+createRoot(document.getElementById('app-root')!).render(createElement(App));
 
 init();
