@@ -541,6 +541,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 import {
   buildPreReadBlock,
   cacheBuildResult,
+  type DiagnosticsSource,
   formatDiagnostics,
   refreshGitBlame,
   refreshGitStatus,
@@ -548,8 +549,9 @@ import {
 
 const MAX_STATE_BYTES = 600;
 
-/** Pre-read hook — injects diagnostics + blame when agent reads a file. */
-export function createStateReadHook(projectPath: string): Hook {
+/** Pre-read hook — injects diagnostics + blame when agent reads a file.
+ *  diagSource is workspace-injected (UI owns the LSP client). */
+export function createStateReadHook(projectPath: string, diagSource: DiagnosticsSource): Hook {
   return {
     name: 'state-read',
     shouldEnrich(toolName) {
@@ -562,7 +564,7 @@ export function createStateReadHook(projectPath: string): Hook {
       // Fire-and-forget: refresh blame for next time
       refreshGitBlame(projectPath, filePath).catch(() => {});
 
-      const block = buildPreReadBlock(filePath);
+      const block = buildPreReadBlock(filePath, diagSource);
       if (!block) return result;
 
       const full = `📋 [状态] ${block}\n${'─'.repeat(40)}\n\n`;
@@ -575,7 +577,7 @@ export function createStateReadHook(projectPath: string): Hook {
 }
 
 /** Preflight hook — adds diagnostics context before editing a file. */
-export function createStatePreflightHook(): PreflightHook {
+export function createStatePreflightHook(diagSource: DiagnosticsSource): PreflightHook {
   return {
     name: 'state-preflight',
     shouldCheck(toolName) {
@@ -586,7 +588,7 @@ export function createStatePreflightHook(): PreflightHook {
     check(_toolName, args) {
       const filePath = String(args['filePath'] || args['file_path'] || '');
       if (!filePath) return null;
-      return formatDiagnostics(filePath);
+      return formatDiagnostics(filePath, diagSource);
     },
   };
 }

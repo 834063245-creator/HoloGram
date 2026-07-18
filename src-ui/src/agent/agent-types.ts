@@ -58,3 +58,21 @@ export function computeCost(p: Pricing | undefined, u: Usage | undefined): numbe
 
 /** Sink receives the agent's typed event stream. */
 export type EventSink = (event: AgentEvent) => void;
+
+/** UI notification port — injected by the workspace so the agent core never
+ *  imports UI modules (one-way boundary: ui → agent, never agent → ui).
+ *  All members optional; a headless agent simply gets none. */
+export interface AgentUINotifier {
+  /** Loop progress (drives the status bar). */
+  progress?(step: number, toolName: string): void;
+  /** A tool call finished (panels auto-refresh). */
+  toolDone?(toolName: string, args: Record<string, unknown>, output: string): void;
+  /** A sub-agent is starting. The UI builds its render state here and returns
+   *  the EventSink the child agent should stream into (undefined → no-op sink). */
+  subAgentSpawn?(
+    info: { agentId: string; description: string },
+    onProgress?: (chunk: string) => void,
+  ): EventSink | undefined;
+  /** Sub-agent finished — UI finalizes its render state. */
+  subAgentFinished?(agentId: string, ok: boolean): void;
+}

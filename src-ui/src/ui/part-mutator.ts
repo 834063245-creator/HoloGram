@@ -5,10 +5,10 @@
 // Used by both main agent (chat-stream.ts) and sub-agent (subagent-sink.ts).
 // One function, one implementation — no more drifting duplicates.
 
-import type { AssistantPart } from '../ui/message-model';
-import { findToolPart, lastTextPart } from '../ui/message-model';
-import type { AgentEvent } from './agent-types';
-import { EventKind } from './agent-types';
+import type { AssistantPart } from './message-model';
+import { findToolPart, lastTextPart } from './message-model';
+import type { AgentEvent } from '../agent/agent-types';
+import { EventKind } from '../agent/agent-types';
 
 /**
  * Apply one AgentEvent to a parts array. Mutates in-place.

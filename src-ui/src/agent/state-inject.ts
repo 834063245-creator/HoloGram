@@ -12,8 +12,6 @@
 // All calls degrade gracefully — if data is unavailable, nothing is injected.
 
 import { rpc } from '../bridge';
-import type { LspDiagnostic } from '../ui/lsp-client';
-import { getDiagnosticsForFile } from '../ui/lsp-client';
 import {
   cacheStore,
   getBlameCache,
@@ -32,8 +30,22 @@ import {
 } from './cache-store';
 
 export type { BuildResult, CheckStatusSummary, GitStatusSummary, TimelineEvent } from './cache-store';
-// Re-export for consumers
-export type { LspDiagnostic };
+
+/** LSP 诊断的结构类型 — 与 ui/lsp-client 的 LspDiagnostic 结构一致，
+ *  在 agent 层本地定义以保持单向边界（诊断数据由调用方注入）。 */
+export interface LspDiagnostic {
+  severity: 'error' | 'warning' | 'info' | 'hint';
+  message: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  source?: string;
+  code?: string | number;
+}
+
+/** Diagnostics source — injected by the workspace (UI owns the LSP client). */
+export type DiagnosticsSource = (filePath: string) => LspDiagnostic[];
 
 // ── Git status cache ──
 
@@ -222,8 +234,8 @@ export function formatCheckStatus(): string | null {
 }
 
 /** Format diagnostics for pre-read injection. */
-export function formatDiagnostics(filePath: string): string | null {
-  const diags = getDiagnosticsForFile(filePath);
+export function formatDiagnostics(filePath: string, getDiags: DiagnosticsSource): string | null {
+  const diags = getDiags(filePath);
   if (diags.length === 0) return null;
   const errors = diags.filter((d) => d.severity === 'error');
   const warnings = diags.filter((d) => d.severity === 'warning');
@@ -264,9 +276,9 @@ export function buildTurnStartBlock(): string {
 }
 
 /** Build pre-read injection block for a specific file. */
-export function buildPreReadBlock(filePath: string): string {
+export function buildPreReadBlock(filePath: string, getDiags: DiagnosticsSource): string {
   const lines: string[] = [];
-  const diag = formatDiagnostics(filePath);
+  const diag = formatDiagnostics(filePath, getDiags);
   if (diag) lines.push(diag);
   const blame = formatBlame(filePath);
   if (blame) lines.push(blame);

@@ -71,8 +71,9 @@ describe('GoalManager CRUD', () => {
     mockLiveFs();
   });
 
-  it('create + get round-trip, emits goal:state active', async () => {
-    const gm = new GoalManager('/proj');
+  it('create + get round-trip, fires onState with active record', async () => {
+    const states: GoalRecord[] = [];
+    const gm = new GoalManager('/proj', (r) => states.push(r));
     const rec = await gm.create('fix auth bug');
 
     expect(rec.id).toMatch(/^goal-/);
@@ -83,9 +84,8 @@ describe('GoalManager CRUD', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.text).toBe('fix auth bug');
 
-    const emitted = emitMock.mock.calls.filter((c) => c[0] === 'goal:state');
-    expect(emitted.length).toBe(1);
-    expect((emitted[0][1] as GoalRecord).status).toBe('active');
+    expect(states.length).toBe(1);
+    expect(states[0].status).toBe('active');
   });
 
   it('create cancels an existing live goal (single-goal slot)', async () => {

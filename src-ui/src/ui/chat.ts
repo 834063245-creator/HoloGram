@@ -1171,7 +1171,7 @@ export class ChatPanel {
   private async showGoalStatus(): Promise<void> {
     const path = getChatStore(this.panelId).panel.getState().projectPath;
     if (!path) return;
-    const mgr = new GoalManager(path);
+    const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
     const active = await mgr.getActive();
     const history = (await mgr.list()).filter((r) => r.status !== 'active' && r.status !== 'paused');
     if (!active && history.length === 0) {
@@ -1197,7 +1197,7 @@ export class ChatPanel {
       this.addNotice('目标运行中 — 请先点击停止(或状态条上的暂停),再 /goal cancel', 'warn');
       return;
     }
-    const mgr = new GoalManager(path);
+    const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
     const active = await mgr.getActive();
     if (!active) {
       this.addNotice('没有可取消的目标', 'info');
@@ -1306,7 +1306,7 @@ export class ChatPanel {
   private async _refreshGoalStrip(): Promise<void> {
     const path = getChatStore(this.panelId).panel.getState().projectPath;
     if (!path) return;
-    this._goalStripRecord = await new GoalManager(path).getActive();
+    this._goalStripRecord = await new GoalManager(path, (r) => bus.emit('goal:state', r)).getActive();
     this._renderGoalStrip();
   }
 

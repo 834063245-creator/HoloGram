@@ -7,7 +7,7 @@
 
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
-import type { SubAgentPart } from '../ui/message-model';
+import type { SubAgentPart } from './message-model';
 import { applyEventToParts } from './part-mutator';
 
 export interface SubAgentSinkOpts {

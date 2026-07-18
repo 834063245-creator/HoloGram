@@ -14,7 +14,6 @@
 //   Agent 自己主动存的记忆最高只能给 reference。fact 级别只有用户通过 /remember 明确要求时才能使用。
 
 import { rpc } from '../bridge';
-import { bus } from '../ui/events';
 import type { AuraRecord } from './aura-memory';
 import { auraCount, auraInit, auraRecall, auraShutdown, auraStore } from './aura-memory';
 import type { Tool } from './tool';
@@ -65,6 +64,10 @@ export class MemoryManager {
   private _auraReady = false;
   private _auraInitPromise: Promise<void> | null = null;
   private globalDirPath: string | null = null;
+
+  /** Fired after a memory is saved (wired by the workspace — fans out to the
+   *  UI bus and to the live agent's notifyMemorySaved). */
+  onSaved?: (info: { name: string; description?: string; confidence?: string; scope?: string }) => void;
 
   /** @param projectPath 项目根目录
    *  @param globalPath  全局记忆目录（可选），不传则不启用全局记忆 */
@@ -800,8 +803,8 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           confidence,
           scope,
         );
-        // H1: emit event so agent can inject updated memory into running session
-        bus.emit('memory:saved', {
+        // H1: notify so the workspace can fan out (UI bus + live agent injection)
+        mm.onSaved?.({
           name: args.name as string,
           description: args.description as string,
           confidence,

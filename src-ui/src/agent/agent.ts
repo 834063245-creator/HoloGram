@@ -6,11 +6,17 @@
 import { rpc } from '../bridge';
 import type { Message, Provider, ToolCall, Usage } from '../provider/types';
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
-import { bus } from '../ui/events';
-import type { SubAgentPart } from '../ui/message-model';
 import type { AgentRecord, AgentStore } from './agent-store';
 // Shared types — also used internally by this file
-import { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent } from './agent-types';
+import {
+  type AgentEvent,
+  type AgentUINotifier,
+  computeCost,
+  EventKind,
+  type EventSink,
+  type Pricing,
+  type ToolEvent,
+} from './agent-types';
 import {
   type CompactionConfig,
   type CompactionEvent,
@@ -25,7 +31,6 @@ import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
-import { createSubAgentSink } from './subagent-sink';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 
@@ -54,11 +59,14 @@ export interface AgentOptions {
   agentId?: string;
   /** ID of the agent that spawned this one. null for main agent. */
   parentId?: string | null;
-  /** Custom event sink. When set, Agent emits here instead of the global bus.
+  /** Custom event sink. When set, Agent emits here instead of a no-op default.
    *  Used by sub-agents to capture output into SubAgentPart. */
   eventSink?: (ev: AgentEvent) => void;
   /** Execution state instance. Falls back to global execState if not provided. */
   execState?: ExecStateInstance;
+  /** UI notification port — progress / tool-done / sub-agent lifecycle.
+   *  Injected by the workspace; headless agents get none. */
+  ui?: AgentUINotifier;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -121,6 +129,8 @@ export class Agent {
   // Event sink — parent agents use the global bus; sub-agents get a custom one
   private _sink: (ev: AgentEvent) => void;
   private _agentOpts: AgentOptions;
+  // UI notification port (workspace-injected; no-op when headless)
+  private _ui: AgentUINotifier;
 
   // Last usage for status display
   private lastUsage: Usage | undefined;
@@ -149,7 +159,8 @@ export class Agent {
   constructor(prov: Provider, tools: ToolRegistry, systemPrompt: string, opts: AgentOptions = {}) {
     this.prov = prov;
     this.tools = tools;
-    this._sink = opts.eventSink ?? ((ev: AgentEvent) => bus.emit('agent:event', ev));
+    this._sink = opts.eventSink ?? (() => {});
+    this._ui = opts.ui ?? {};
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
@@ -172,13 +183,12 @@ export class Agent {
     if (systemPrompt) {
       this.session.push({ role: 'system', content: systemPrompt });
     }
+  }
 
-    // H1: listen for memory saves during session — inject as system-reminder
-    // ponytail: event listener lives as long as this Agent instance; GC cleans it up.
-    bus.on('memory:saved', ({ name, description, confidence }) => {
-      if (!this._pendingMemoryUpdates) this._pendingMemoryUpdates = [];
-      this._pendingMemoryUpdates.push(`记忆已更新: **${description || name}** (${confidence || 'reference'})`);
-    });
+  /** Called by the workspace when a memory is saved mid-session — queued and
+   *  injected as a system-reminder at the next safe boundary. */
+  notifyMemorySaved(text: string): void {
+    this._pendingMemoryUpdates.push(text);
   }
 
   setHooks(hooks: HookRegistry): void {
@@ -574,7 +584,7 @@ export class Agent {
     }
 
     for (let iter = record.iteration; !signal.aborted && iter < Agent.MAX_GOAL_ITERATIONS; iter++) {
-      bus.emit('agent:progress', { step: iter + 1, toolName: 'goal-loop' });
+      this._ui.progress?.(iter + 1, 'goal-loop');
 
       // ── 检查点:记录 + 对话现场快照进 goal 专属槽 ──
       // ponytail: sessionBefore lets us strip partial turn messages on abort.
@@ -759,10 +769,7 @@ ${resumeNote}
       this._applyPendingInserts();
       this._applyPendingMemoryUpdates();
 
-      bus.emit('agent:progress', {
-        step: step + 1,
-        toolName: 'thinking',
-      });
+      this._ui.progress?.(step + 1, 'thinking');
 
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
@@ -863,18 +870,18 @@ ${resumeNote}
           tool_call_id: call.id,
           name: call.name,
         });
-        // Emit tool-done event so panels can auto-refresh
-        bus.emit('agent:tool-done', {
-          toolName: call.name,
-          args: (() => {
+        // Notify panels for auto-refresh (workspace-injected port)
+        this._ui.toolDone?.(
+          call.name,
+          (() => {
             try {
               return JSON.parse(call.arguments || '{}');
             } catch {
               return {};
             }
           })(),
-          output: r?.output || '',
-        });
+          r?.output || '',
+        );
       }
 
       // Compact if needed before next turn
@@ -1582,20 +1589,10 @@ ${subTools
   .join('\n')}`;
     }
 
-    // ── Build SubAgentPart for inline chat rendering ──
+    // ── Hand the child's event stream to the UI (workspace-injected port builds
+    // the SubAgentPart and returns the sink; headless → no-op sink) ──
     const subAgentId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const subPart: SubAgentPart = {
-      type: 'subagent',
-      agentId: subAgentId,
-      description,
-      status: 'running',
-      parts: [],
-      version: 0,
-    };
-    // Wire into chat via event bus (avoids agent → workspace coupling)
-    bus.emit('subagent:spawn', { part: subPart });
-
-    const subSink = createSubAgentSink({ subPart, bump: () => bus.emit('subagent:bump', {}), onProgress });
+    const subSink = this._ui.subAgentSpawn?.({ agentId: subAgentId, description }, onProgress) ?? (() => {});
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(this.prov, subTools, subSystem, {
@@ -1650,8 +1647,7 @@ ${subTools
       subAgent.saveState('failed').catch(() => {});
       result = { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
-      subPart.status = subAgentSucceeded ? 'done' : 'error';
-      bus.emit('subagent:bump', {});
+      this._ui.subAgentFinished?.(subAgentId, subAgentSucceeded);
     }
 
     // ── Finalize isolation worktree (serialized — parallel sub-agents must not

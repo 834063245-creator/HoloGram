@@ -11,7 +11,6 @@
 // Pattern follows AgentStore: rpc file I/O, lazy ensureDir, stripLineNumbers.
 
 import { rpc } from '../bridge';
-import { bus } from '../ui/events';
 import type { Message } from '../provider/types';
 
 // ── Types ──
@@ -56,7 +55,12 @@ export class GoalManager {
   /** 进程(管理器)启动时间 — adoptOrphans 据此判定崩溃遗留的 active 记录 */
   private readonly startedAt = Date.now();
 
-  constructor(private projectPath: string) {}
+  /** @param projectPath 项目根目录
+   *  @param onState 状态变更回调（由 workspace 注入，转发到 UI 总线） */
+  constructor(
+    private projectPath: string,
+    private onState?: (record: GoalRecord) => void,
+  ) {}
 
   private get baseDir(): string {
     return this.projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/goals';
@@ -266,7 +270,7 @@ export class GoalManager {
       content: JSON.stringify(record, null, 2),
     });
     await this._upsertIndex(record);
-    bus.emit('goal:state', record);
+    this.onState?.(record);
   }
 
   private async _upsertIndex(record: GoalRecord): Promise<void> {

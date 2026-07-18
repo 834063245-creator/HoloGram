@@ -9,9 +9,23 @@
 
 import { type Tool, type ToolExecutor } from '../tool';
 import type { Provider } from '../../provider/types';
-import { bus } from '../../ui/events';
 
-export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool[] {
+/** ask_user 工具的 UI 请求 — 由 workspace 注入的回调转发到 UI 总线。
+ *  保持 agent 层不 import ui/ 模块。 */
+export interface AskUserRequest {
+  id: string;
+  question: string;
+  header: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
+  callback: (answer: string[] | null) => void;
+}
+
+export interface CodingToolsUI {
+  askUser?: (req: AskUserRequest) => void;
+}
+
+export function createCodingTools(exec: ToolExecutor, provider?: Provider, ui?: CodingToolsUI): Tool[] {
   return [
     // ── User Interaction ──
     {
@@ -57,8 +71,11 @@ export function createCodingTools(exec: ToolExecutor, provider?: Provider): Tool
         const options = (args.options || []) as { label: string; description: string }[];
         const multiSelect = args.multiSelect === true;
         const id = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        if (!ui?.askUser) {
+          return JSON.stringify({ answer: null, error: 'ask_user 不可用：UI 未接线' });
+        }
         return new Promise((resolve) => {
-          bus.emit('prompt:ask', {
+          ui.askUser!({
             id,
             question,
             header,

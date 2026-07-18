@@ -13,6 +13,7 @@
 
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { AgentStore } from './agent/agent-store';
+import type { AgentUINotifier } from './agent/agent-types';
 import { auraShutdown } from './agent/aura-memory';
 import { type CompactionConfig, createCompactionTools } from './agent/compaction-model';
 import { SubAgentPool } from './agent/coordinator';
@@ -55,6 +56,8 @@ import type { CheckPanel, CheckResult } from './ui/check';
 import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import type { SubAgentPart } from './ui/message-model';
+import { getDiagnosticsForFile } from './ui/lsp-client';
+import { createSubAgentSink } from './ui/subagent-sink';
 import { getPanelStore } from './ui/panel-store';
 
 // ═══════════════════════════════════════════════════════
@@ -506,30 +509,6 @@ export class Workspace {
   private async _setupAgentInner(chatPanel: ChatPanel, _checkPanel: CheckPanel): Promise<void> {
     this._storeId = chatPanel.panelId;
 
-    // Sub-agent event subscriptions — Agent emits events, Workspace handles UI updates
-    {
-      const onSpawn = ({ part }: { part: SubAgentPart }) => {
-        const store = msgStoreForActive(this._storeId);
-        if (!store) return;
-        const msgs = store.getState().messages;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.role === 'assistant' && (m as any).status === 'streaming') {
-            (m as any).parts.push(part);
-            break;
-          }
-        }
-        store.getState().bump();
-      };
-      const onBump = () => msgStoreForActive(this._storeId)?.getState().bump();
-      bus.on('subagent:spawn', onSpawn);
-      bus.on('subagent:bump', onBump);
-      this._unlisteners.push(() => {
-        bus.off('subagent:spawn', onSpawn);
-        bus.off('subagent:bump', onBump);
-      });
-    }
-
     let settings = loadSettings();
     settings = await restoreSecrets(settings);
 
@@ -567,6 +546,14 @@ export class Workspace {
       /* ignore */
     }
     this.memoryManager = new MemoryManager(this.path, globalDir);
+    // Fan out memory saves: UI bus (panels) + live agent mid-session injection.
+    // (The agent core no longer listens to the bus itself — one-way boundary.)
+    this.memoryManager.onSaved = (info) => {
+      bus.emit('memory:saved', info);
+      this.agent?.notifyMemorySaved(
+        `记忆已更新: **${info.description || info.name}** (${info.confidence || 'reference'})`,
+      );
+    };
     // Start Aura init early — runs in parallel with file I/O below
     const auraReady = this.memoryManager.initAura();
     const graphNodes = extractGraphNodeNames(this.graphData);
@@ -588,7 +575,7 @@ export class Workspace {
     // Init agent state persistence
     this.agentStore = new AgentStore(this.path);
     // Init goal lifecycle store — 旧格式迁移 + 崩溃孤儿接管,必须先于任何 /goal 新建
-    this.goalManager = new GoalManager(this.path);
+    this.goalManager = new GoalManager(this.path, (r) => bus.emit('goal:state', r));
     this.goalManager
       .migrateLegacy()
       .then(() => this.goalManager!.adoptOrphans())
@@ -790,7 +777,7 @@ export class Workspace {
       const result = await agentInvoke<string>(name, args);
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
-    for (const tool of createCodingTools(codingExec, prov)) {
+    for (const tool of createCodingTools(codingExec, prov, { askUser: (req) => bus.emit('prompt:ask', req) })) {
       registry.register(tool);
     }
 
@@ -874,6 +861,46 @@ export class Workspace {
           ),
         );
 
+        // UI notification port — the agent core emits domain signals, the UI
+        // side owns ALL rendering concerns (bus events, SubAgentPart, bumps).
+        const subParts = new Map<string, SubAgentPart>();
+        const bumpStore = () => msgStoreForActive(this._storeId)?.getState().bump();
+        const uiNotifier: AgentUINotifier = {
+          progress: (step, toolName) => bus.emit('agent:progress', { step, toolName }),
+          toolDone: (toolName, args, output) => bus.emit('agent:tool-done', { toolName, args, output }),
+          subAgentSpawn: (info, onProgress) => {
+            const store = msgStoreForActive(this._storeId);
+            if (!store) return undefined;
+            const subPart: SubAgentPart = {
+              type: 'subagent',
+              agentId: info.agentId,
+              description: info.description,
+              status: 'running',
+              parts: [],
+              version: 0,
+            };
+            subParts.set(info.agentId, subPart);
+            const msgs = store.getState().messages;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (m.role === 'assistant' && (m as any).status === 'streaming') {
+                (m as any).parts.push(subPart);
+                break;
+              }
+            }
+            bumpStore();
+            return createSubAgentSink({ subPart, bump: bumpStore, onProgress });
+          },
+          subAgentFinished: (id, ok) => {
+            const part = subParts.get(id);
+            if (part) {
+              part.status = ok ? 'done' : 'error';
+              subParts.delete(id);
+            }
+            bumpStore();
+          },
+        };
+
         // Build system prompt (per-session, with memory section)
         let memSection = '';
         if (mm) {
@@ -922,6 +949,7 @@ export class Workspace {
           temperature: agentOpts.temperature ?? 0.7,
           contextWindow: agentOpts.contextWindow ?? 0,
           maxTokens: act.maxTokens ?? 0,
+          ui: uiNotifier,
         });
 
         newAgent.setCompactionConfigPath(this.path);
@@ -939,11 +967,11 @@ export class Workspace {
           loadEngineSnapshot(hookCtx, this.path).catch(() => {});
           const hooks = new HookRegistry();
           hooks.register(createGraphContextHook(hookCtx));
-          hooks.register(createStateReadHook(this.path));
+          hooks.register(createStateReadHook(this.path, getDiagnosticsForFile));
           newAgent.setHooks(hooks);
           const preflightHooks = new PreflightHookRegistry();
           preflightHooks.register(createGraphPreflightHook(hookCtx));
-          preflightHooks.register(createStatePreflightHook());
+          preflightHooks.register(createStatePreflightHook(getDiagnosticsForFile));
           newAgent.setPreflightHooks(preflightHooks);
           this._preflightCtx = hookCtx;
 
