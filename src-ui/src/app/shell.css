@@ -42,6 +42,11 @@
   backdrop-filter: blur(16px) saturate(1.15);
   -webkit-backdrop-filter: blur(16px) saturate(1.15);
   border-bottom: 1px solid var(--obs-line);
+  -webkit-app-region: drag; /* 替代原生标题栏 — 整栏可拖动窗口 */
+}
+.cb-bar button,
+.cb-bar input {
+  -webkit-app-region: no-drag;
 }
 .cb-brand {
   display: flex;
