@@ -262,7 +262,6 @@ export class StarGraph {
     // if (mode === 'full') this.buildNebulaDust();
 
     if (true) this.buildHoloGrid();
-    this.graticule = Scene.buildGraticule(this.scene);
 
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
@@ -405,9 +404,6 @@ export class StarGraph {
   private holoGrid!: THREE.Mesh;
   private holoGridY = -60;
 
-  // ── P5 观测台刻度盘（单位半径几何，按图半径 scale）──────────
-  private graticule!: THREE.Group;
-
   private buildHoloGrid(): void {
     const result = buildHoloGridFX(this.scene);
     this.holoGrid = result.mesh;
@@ -416,15 +412,6 @@ export class StarGraph {
 
   private positionGrid(pos: Float32Array): void {
     this.holoGridY = positionGridFX(this.holoGrid, pos);
-    // 刻度盘随图半径缩放，贴在网格面上方（参考系仪器，不进 galaxyGroup）
-    let maxR = 0;
-    for (let i = 0; i < pos.length; i += 3) {
-      const r = Math.hypot(pos[i], pos[i + 2]);
-      if (r > maxR) maxR = r;
-    }
-    const R = Math.min(1600, Math.max(150, maxR * 1.35));
-    this.graticule.scale.set(R, R, R);
-    this.graticule.position.y = this.holoGridY + 2;
   }
 
   // ── Path finding — delegated to GraphAnalysis ──────────────

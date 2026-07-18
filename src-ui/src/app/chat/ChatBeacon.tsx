@@ -442,10 +442,6 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
             }}
           />
         ) : null}
-        <div className="corner-brackets">
-          <span className="cb-bottom left" />
-          <span className="cb-bottom right" />
-        </div>
         <div ref={resizeRef} className="chat-resize" />
 
         <div className="chat-header">

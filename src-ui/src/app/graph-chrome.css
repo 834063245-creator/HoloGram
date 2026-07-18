@@ -6,54 +6,6 @@
    操控方：ui/graph-ui.ts · graph-tooltip.ts · graph-fold.ts · file-viewer.ts
    ═══════════════════════════════════════════════════════════════ */
 
-.corner-brackets {
-  pointer-events: none;
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-}
-
-.corner-brackets::before,
-.corner-brackets::after {
-  content: "";
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  border-color: var(--obs-line);
-  border-style: solid;
-}
-
-.corner-brackets::before {
-  top: 0;
-  left: 0;
-  border-width: 1px 0 0 1px;
-}
-
-.corner-brackets::after {
-  top: 0;
-  right: 0;
-  border-width: 1px 1px 0 0;
-}
-
-.corner-brackets .cb-bottom {
-  position: absolute;
-  bottom: 0;
-  width: 12px;
-  height: 12px;
-  border-color: var(--obs-line);
-  border-style: solid;
-}
-
-.cb-bottom.left {
-  left: 0;
-  border-width: 0 0 1px 1px;
-}
-
-.cb-bottom.right {
-  right: 0;
-  border-width: 0 1px 1px 0;
-}
-
 /* ── 图例（P5 原型：水平玻璃胶囊 · 点击行过滤）────────────── */
 #graph-legend {
   position: absolute;
@@ -199,7 +151,7 @@
   font-weight: 700;
   color: var(--obs-text);
   text-shadow:
-    0 0 24px rgba(120, 180, 255, 0.4),
+    0 0 24px var(--obs-text-2),
     0 0 4px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
   transform: translate(-50%, -50%);
@@ -213,7 +165,7 @@
   background: rgba(4, 10, 24, 0.94);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(60, 100, 170, 0.25);
+  border: 1px solid rgba(148, 166, 205, 0.16);
   border-radius: 6px;
   padding: calc(7px * var(--font-scale)) calc(10px * var(--font-scale));
   font-size: calc(10px * var(--font-scale));
@@ -276,7 +228,7 @@
 #graph-tooltip .tt-loc {
   font-family: var(--obs-font-mono);
   font-size: calc(8px * var(--font-scale));
-  color: rgba(120, 160, 215, 0.62);
+  color: var(--obs-text-2);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -290,7 +242,7 @@
   background: var(--obs-glass-hi);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(60, 100, 180, 0.3);
+  border: 1px solid rgba(148, 166, 205, 0.19);
   border-radius: 6px;
   padding: calc(14px * var(--font-scale)) calc(16px * var(--font-scale));
   width: calc(260px * var(--font-scale));
@@ -301,7 +253,7 @@
     opacity 0.16s,
     transform 0.16s;
   box-shadow:
-    0 0 0 1px rgba(60, 100, 180, 0.05),
+    0 0 0 1px rgba(148, 166, 205, 0.03),
     0 12px 36px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
@@ -375,7 +327,7 @@
 
 #detail-card .dc-divider {
   height: 1px;
-  background: rgba(40, 60, 100, 0.15);
+  background: rgba(148, 166, 205, 0.09);
   margin: calc(2px * var(--font-scale)) 0;
   flex-shrink: 0;
 }
@@ -422,7 +374,7 @@
 #detail-card .dc-bar-track {
   flex: 1;
   height: calc(3px * var(--font-scale));
-  background: rgba(40, 60, 100, 0.2);
+  background: rgba(148, 166, 205, 0.12);
   border-radius: 2px;
   min-width: 20px;
   overflow: hidden;
@@ -436,11 +388,11 @@
 }
 
 .dc-bar-fill.l1 {
-  background: rgba(40, 75, 120, 0.5);
+  background: rgba(148, 166, 205, 0.31);
 }
 
 .dc-bar-fill.l2 {
-  background: rgba(60, 100, 170, 0.55);
+  background: rgba(148, 166, 205, 0.34);
 }
 
 .dc-bar-fill.l3 {
@@ -452,7 +404,7 @@
 }
 
 .dc-bar-row.dc-zero .dc-bar-track {
-  background: rgba(40, 60, 100, 0.08);
+  background: rgba(148, 166, 205, 0.05);
 }
 
 .dc-bar-warn {
@@ -476,9 +428,9 @@
   border-radius: 2px;
   cursor: pointer;
   transition: all var(--obs-snap);
-  border: 1px solid rgba(40, 60, 100, 0.25);
+  border: 1px solid rgba(148, 166, 205, 0.16);
   background: rgba(12, 22, 36, 0.6);
-  color: rgba(145, 180, 225, 0.6);
+  color: var(--obs-text-2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -510,7 +462,7 @@
 #detail-card .dc-blast-filters {
   display: none;
   padding-top: calc(8px * var(--font-scale));
-  border-top: 1px solid rgba(40, 60, 100, 0.15);
+  border-top: 1px solid rgba(148, 166, 205, 0.09);
 }
 
 #detail-card .dc-blast-filters .dc-filter-label {
@@ -545,4 +497,22 @@
   background: #555;
   border-color: #888;
   color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P6 · 观测台铬件表面（原型 #tip / 玻璃卡片语言）
+   ═══════════════════════════════════════════════════════════════ */
+
+#graph-tooltip {
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-color: var(--obs-line);
+  border-radius: 9px;
+}
+
+#detail-card {
+  border-color: var(--obs-line);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }

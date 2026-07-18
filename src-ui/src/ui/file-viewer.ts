@@ -172,11 +172,6 @@ export class FileViewer {
       minHeight: '320px',
     });
 
-    const brackets = document.createElement('div');
-    brackets.className = 'corner-brackets';
-    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
-    this.el.appendChild(brackets);
-
     // ═══════════════════════════════════════════════
     // LAYER 1: Titlebar — breadcrumb + window actions
     // ═══════════════════════════════════════════════

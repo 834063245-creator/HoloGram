@@ -3,7 +3,7 @@
        ═══════════════════════════════════════════════════════════════ */
 .prompt-shelf {
   flex-shrink: 0;
-  border-top: 1px solid rgba(40, 60, 100, 0.18);
+  border-top: 1px solid rgba(148, 166, 205, 0.11);
   background: rgba(6, 14, 30, 0.72);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -25,8 +25,8 @@
   letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--obs-blue);
-  background: rgba(80, 140, 240, 0.08);
-  border: 1px solid rgba(80, 140, 240, 0.15);
+  background: rgba(148, 166, 205, 0.05);
+  border: 1px solid rgba(148, 166, 205, 0.09);
 }
 .prompt-shelf__question {
   flex: 1;
@@ -78,7 +78,7 @@
   border-color: rgba(255, 255, 255, 0.1);
 }
 .prompt-shelf__option--on {
-  background: rgba(80, 140, 240, 0.08);
+  background: rgba(148, 166, 205, 0.05);
   border-color: rgba(125, 179, 232, 0.3);
   color: var(--obs-blue);
 }
@@ -116,7 +116,7 @@
   font-size: calc(10px * var(--font-scale));
   color: var(--obs-text-2);
   background: rgba(10, 20, 40, 0.4);
-  border-left: 2px solid rgba(80, 140, 240, 0.2);
+  border-left: 2px solid rgba(148, 166, 205, 0.12);
   line-height: 1.5;
 }
 .prompt-shelf__detail-label {
@@ -137,14 +137,14 @@
   font-size: calc(12px * var(--font-scale));
   font-weight: 600;
   font-family: var(--obs-font-body);
-  background: rgba(80, 140, 240, 0.12);
+  background: rgba(148, 166, 205, 0.07);
   border: 1px solid rgba(125, 179, 232, 0.3);
   color: var(--obs-blue);
   cursor: pointer;
   transition: all var(--obs-snap);
 }
 .prompt-shelf__confirm:hover {
-  background: rgba(80, 140, 240, 0.22);
+  background: rgba(148, 166, 205, 0.14);
   border-color: var(--obs-blue);
 }
 
@@ -189,13 +189,13 @@
   border-color: rgba(61, 165, 93, 0.4);
 }
 .prompt-shelf__perm-btn--once {
-  background: rgba(80, 140, 240, 0.12);
-  border-color: rgba(80, 140, 240, 0.2);
+  background: rgba(148, 166, 205, 0.07);
+  border-color: rgba(148, 166, 205, 0.12);
   color: var(--obs-blue);
 }
 .prompt-shelf__perm-btn--once:hover {
-  background: rgba(80, 140, 240, 0.2);
-  border-color: rgba(80, 140, 240, 0.35);
+  background: rgba(148, 166, 205, 0.12);
+  border-color: rgba(148, 166, 205, 0.22);
 }
 .prompt-shelf__perm-btn--deny {
   background: rgba(217, 68, 68, 0.08);

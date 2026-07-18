@@ -10,8 +10,8 @@ import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
 import { useDockStore } from '../dock-store';
-import { basename } from './helpers';
 import { iconHtml } from '../icons';
+import { basename } from './helpers';
 
 interface Violation {
   signal?: {
@@ -106,7 +106,9 @@ const ViolationItem: React.FC<{ v: Violation; label: string }> = ({ v, label }) 
       fp ? `文件: ${fp}${line ? ':' + line : ''}` : '',
       nodeList ? `影响: ${nodeList}` : '',
       sig.old_value ? `变更: ${sig.old_value} → ${sig.new_value}` : '',
-    ].filter(Boolean).join(' | ');
+    ]
+      .filter(Boolean)
+      .join(' | ');
     askAgent(`分析这条违规: ${ctx}`);
   };
 
@@ -145,7 +147,9 @@ const ViolationItem: React.FC<{ v: Violation; label: string }> = ({ v, label }) 
         </div>
       )}
       {sig.old_value && sig.new_value && (
-        <div className="check-vchange">{sig.old_value} → {sig.new_value}</div>
+        <div className="check-vchange">
+          {sig.old_value} → {sig.new_value}
+        </div>
       )}
     </div>
   );
@@ -175,7 +179,9 @@ export function CheckPanel() {
   const loadHistory = useCallback(async () => {
     try {
       const json = await rpc<string>('hologram_call', { tool: 'project_timeline', args: { limit: 80 } });
-      const data = JSON.parse(json) as { events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }> };
+      const data = JSON.parse(json) as {
+        events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }>;
+      };
       const events = (data.events || [])
         .filter((e) => e.event_type === 'commit_clean' || e.event_type === 'commit_violation')
         .map((e) => ({ timestamp: e.timestamp, summary: e.summary, props: e.properties }));
@@ -215,12 +221,6 @@ export function CheckPanel() {
 
   return (
     <div id="check-panel" className={open ? 'check-open' : ''}>
-      {/* Corner brackets */}
-      <div className="corner-brackets">
-        <span className="cb-bottom left" />
-        <span className="cb-bottom right" />
-      </div>
-
       {/* Resize 视觉条（旧拖拽逻辑从未接入宽度 — 死代码已清） */}
       <div className="check-resize" />
 
@@ -232,12 +232,18 @@ export function CheckPanel() {
           className="check-history-btn"
           title="查看历史"
           dangerouslySetInnerHTML={{ __html: iconHtml('timeline', 14) }}
-          onClick={(e) => { e.stopPropagation(); showHistoryList(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            showHistoryList();
+          }}
         />
         <button
           className="check-close-btn"
           dangerouslySetInnerHTML={{ __html: iconHtml('close', 16) }}
-          onClick={(e) => { e.stopPropagation(); closePanel('check'); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            closePanel('check');
+          }}
         />
       </div>
 
@@ -248,7 +254,9 @@ export function CheckPanel() {
           <>
             <div className="check-history-banner">
               <span className="check-history-label">历史简报 ({historyEvents.length} 条)</span>
-              <button className="check-history-back" onClick={showCurrent}>返回当前</button>
+              <button className="check-history-back" onClick={showCurrent}>
+                返回当前
+              </button>
             </div>
             {historyEvents.length === 0 ? (
               <div className="check-history-empty">暂无历史简报</div>
@@ -258,7 +266,9 @@ export function CheckPanel() {
                   const evPassed = ev.props?.passed !== false;
                   return (
                     <div key={ev.timestamp} className="check-history-item" onClick={() => showHistoryDetail(ev)}>
-                      <span className={`check-history-status ${evPassed ? 'check-history-pass' : 'check-history-fail'}`}>
+                      <span
+                        className={`check-history-status ${evPassed ? 'check-history-pass' : 'check-history-fail'}`}
+                      >
                         {evPassed ? '✓' : '✗'}
                       </span>
                       <div className="check-history-info">
@@ -280,21 +290,36 @@ export function CheckPanel() {
             {view === 'detail' && (
               <div className="check-history-banner">
                 <span className="check-history-label">历史简报 — {fmtTime(historyTimestamp)}</span>
-                <button className="check-history-back" onClick={showCurrent}>返回当前</button>
+                <button className="check-history-back" onClick={showCurrent}>
+                  返回当前
+                </button>
               </div>
             )}
 
             {/* Status bar */}
             <div className={`check-status-bar ${passed ? 'check-status-pass' : 'check-status-fail'}`}>
-              <span className="check-status-icon" dangerouslySetInnerHTML={{
-                __html: passed ? iconHtml('check-circle', 18) : iconHtml('alert', 18),
-              }} />
+              <span
+                className="check-status-icon"
+                dangerouslySetInnerHTML={{
+                  __html: passed ? iconHtml('check-circle', 18) : iconHtml('alert', 18),
+                }}
+              />
               <span className="check-status-label">{passed ? '检查通过' : '检查未通过'}</span>
             </div>
 
             {/* Summary row */}
             <div className="check-summary">
-              {[`${r.total_changed_files} 文件`, totalV > 0 && `${totalV} 违规`, r.blast_radius > 0 && `波及 ${r.blast_radius}`, r.new_cycles > 0 && `环 ${r.new_cycles}`, r.new_thread_conflicts > 0 && `冲突 ${r.new_thread_conflicts}`, r.api_signature_changes > 0 && `API ${r.api_signature_changes}`, fmtTime(r.timestamp)].filter(Boolean).join(' · ')}
+              {[
+                `${r.total_changed_files} 文件`,
+                totalV > 0 && `${totalV} 违规`,
+                r.blast_radius > 0 && `波及 ${r.blast_radius}`,
+                r.new_cycles > 0 && `环 ${r.new_cycles}`,
+                r.new_thread_conflicts > 0 && `冲突 ${r.new_thread_conflicts}`,
+                r.api_signature_changes > 0 && `API ${r.api_signature_changes}`,
+                fmtTime(r.timestamp),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </div>
 
             {/* Diff row */}
@@ -323,13 +348,20 @@ export function CheckPanel() {
               { label: 'L4 静默', cls: 'l4', count: l4, violations: r.l4_violations || [] },
               { label: 'L3 延迟', cls: 'l3', count: l3, violations: r.l3_violations || [] },
               { label: 'L2 波及', cls: 'l2', count: l2, violations: r.l2_violations || [] },
-            ].filter((vl) => vl.count > 0).map((vl) => (
-              <Collapsible key={vl.cls} title={vl.label} count={String(vl.count)} startOpen={vl.cls === 'l5' || vl.cls === 'l4'}>
-                {vl.violations.map((v, i) => (
-                  <ViolationItem key={i} v={v} label={vl.label} />
-                ))}
-              </Collapsible>
-            ))}
+            ]
+              .filter((vl) => vl.count > 0)
+              .map((vl) => (
+                <Collapsible
+                  key={vl.cls}
+                  title={vl.label}
+                  count={String(vl.count)}
+                  startOpen={vl.cls === 'l5' || vl.cls === 'l4'}
+                >
+                  {vl.violations.map((v, i) => (
+                    <ViolationItem key={i} v={v} label={vl.label} />
+                  ))}
+                </Collapsible>
+              ))}
 
             {/* Stats */}
             <Collapsible title="统计" count="" startOpen={false}>
@@ -353,18 +385,17 @@ export function CheckPanel() {
             {(r.passed_checks?.length || 0) > 0 && (
               <Collapsible title="自动放行" count={String(r.passed_checks.length)} startOpen={false}>
                 {(r.passed_checks || []).map((c, i) => (
-                  <div key={i} className="check-passed-item">{c}</div>
+                  <div key={i} className="check-passed-item">
+                    {c}
+                  </div>
                 ))}
               </Collapsible>
             )}
-
           </>
         )}
 
         {/* Empty state */}
-        {(view === 'current' || view === 'detail') && !r && (
-          <div className="check-history-empty">暂无简报数据</div>
-        )}
+        {(view === 'current' || view === 'detail') && !r && <div className="check-history-empty">暂无简报数据</div>}
       </div>
     </div>
   );
