@@ -4,13 +4,15 @@
 // HotspotsPanel — React rewrite of hotspots.ts.
 // Shows recurring L4 violation hotspots on the star graph.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
-import type { StarGraph } from '../graph';
-import { basename } from './helpers';
+import { getDockStarGraph } from '../dock-config';
+import { useDockStore } from '../dock-store';
 import { iconHtml } from '../icons';
+import { basename } from './helpers';
 
 interface HotspotItem {
   file: string;
@@ -49,20 +51,25 @@ function fmtTime(iso: string): string {
   }
 }
 
-// ── Component ──
+// ── Component（P3：直接挂 DockPanel 树，Controller 包装已删）──
+// 开合状态走 dock-store；starGraph 经 dock-config 注入槽读取（非 props）。
+// 旧版 open 重挂载重新拉取 / close 卸载清高亮 — 用 effect 复现同等语义。
 
-const HotspotsPanelApp: React.FC<{
-  path: string | null;
-  starGraph: StarGraph | null;
-  onClose: () => void;
-  onHotspotsLoaded?: (hs: HotspotItem[]) => void;
-}> = ({ path, starGraph, onClose, onHotspotsLoaded }) => {
+export function HotspotsPanel() {
+  const open = useDockStore((s) => s.open.hotspots);
+  const path = useDockStore((s) => s.projectPath);
+  const closePanel = useDockStore((s) => s.closePanel);
   const [hotspots, setHotspots] = useState<HotspotItem[]>([]);
   const [loading, setLoading] = useState(false);
   const loadedPath = useRef<string | null>(null);
 
-  // Auto-refresh when path changes
+  // 打开时拉取（每次打开都重新拉）；关闭时复位（对齐旧卸载行为）
   useEffect(() => {
+    if (!open) {
+      loadedPath.current = null;
+      setHotspots([]);
+      return;
+    }
     if (!path || path === loadedPath.current) return;
     loadedPath.current = path;
     setLoading(true);
@@ -70,30 +77,28 @@ const HotspotsPanelApp: React.FC<{
       .then((json) => {
         const data = JSON.parse(json) as HotspotsData;
         setHotspots(data.hotspots || []);
-        onHotspotsLoaded?.(data.hotspots || []);
       })
       .catch((err) => {
         console.error('Hotspots refresh failed:', err);
       })
       .finally(() => setLoading(false));
-  }, [path]);
+  }, [open, path]);
 
-  // Highlight on graph when hotspots change
+  // 图高亮联动（仅开启期间；关闭/列表变化时清理）
   useEffect(() => {
-    if (hotspots.length > 0) {
-      starGraph?.highlightHotspots(hotspots);
-    }
+    const sg = getDockStarGraph();
+    if (open && hotspots.length > 0) sg?.highlightHotspots(hotspots);
     return () => {
-      starGraph?.clearHotspots();
+      sg?.clearHotspots();
     };
-  }, [hotspots, starGraph]);
+  }, [open, hotspots]);
 
   const handleItemClick = useCallback(
     (file: string) => {
       shell.navigateToFile(file);
-      starGraph?.highlightHotspots(hotspots);
+      getDockStarGraph()?.highlightHotspots(hotspots);
     },
-    [hotspots, starGraph],
+    [hotspots],
   );
 
   const handleAskAgent = useCallback(
@@ -114,14 +119,14 @@ const HotspotsPanelApp: React.FC<{
   );
 
   return (
-    <>
+    <div id="hotspots-panel" className={open ? 'hs-open' : ''}>
       <div className="corner-brackets">
         <span className="cb-bottom left" />
         <span className="cb-bottom right" />
       </div>
       <div className="hs-header-row">
         <span className="hs-title">复发热点</span>
-        <button className="tl-close" title="收起" onClick={onClose}>
+        <button className="tl-close" title="收起" onClick={() => closePanel('hotspots')}>
           &#x2715;
         </button>
       </div>
@@ -129,16 +134,14 @@ const HotspotsPanelApp: React.FC<{
         {loading ? (
           <div className="hs-empty">加载中…</div>
         ) : hotspots.length === 0 ? (
-          <div className="hs-empty">
-            暂无复发热点。项目运行一段时间后，同一文件多次触发 L4 警报时会出现在这里。
-          </div>
+          <div className="hs-empty">暂无复发热点。项目运行一段时间后，同一文件多次触发 L4 警报时会出现在这里。</div>
         ) : (
           hotspots.map((hs) => {
             const fn = basename(hs.file);
             const sevClass = SEVERITY_CLASS[hs.last_details.level] || 'hs-sev-mid';
             const desc = hs.last_details.description
               ? hs.last_details.description.length > 60
-                ? hs.last_details.description.slice(0, 60) + '\u2026'
+                ? hs.last_details.description.slice(0, 60) + '…'
                 : hs.last_details.description
               : '';
             const line = hs.last_details.line ? `:${hs.last_details.line}` : '';
@@ -146,11 +149,7 @@ const HotspotsPanelApp: React.FC<{
             const countClass = hs.count >= 5 ? 'hs-count-critical' : hs.count >= 3 ? 'hs-count-warn' : '';
 
             return (
-              <div
-                key={hs.file}
-                className="hs-item"
-                onClick={() => handleItemClick(hs.file)}
-              >
+              <div key={hs.file} className="hs-item" onClick={() => handleItemClick(hs.file)}>
                 <div className="hs-file-row">
                   <span className={`hs-count ${countClass}`}>{hs.count}×</span>
                   <span className="hs-file">{fn}</span>
@@ -169,97 +168,6 @@ const HotspotsPanelApp: React.FC<{
           })
         )}
       </div>
-    </>
+    </div>
   );
-};
-
-// ── Controller ──
-
-export class HotspotsPanelController {
-  private _open = false;
-  private _starGraph: StarGraph | null = null;
-  private _path: string | null = null;
-  private _container: HTMLDivElement;
-  private _panel: HTMLDivElement;
-  private _root: import('react-dom/client').Root | null = null;
-  private _hotspots: HotspotItem[] = [];
-
-  constructor(container: HTMLElement) {
-    this._container = document.createElement('div');
-    this._container.style.display = 'none';
-    container.appendChild(this._container);
-
-    this._panel = document.createElement('div');
-    this._panel.id = 'hotspots-panel';
-    this._container.appendChild(this._panel);
-  }
-
-  setGraph(sg: StarGraph): void {
-    this._starGraph = sg;
-  }
-
-  setProjectPath(path: string | null): void {
-    this._path = path;
-    if (this._open) this._render();
-  }
-
-  // ── Public API ──
-
-  toggle(): void {
-    this._open ? this.close() : this.open();
-  }
-
-  open(): void {
-    if (this._open) return;
-    this._open = true;
-    this._container.style.display = '';
-    this._panel.classList.add('hs-open');
-    this._render();
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  close(): void {
-    if (!this._open) return;
-    this._open = false;
-    this._panel.classList.remove('hs-open');
-    shell.notifyPanelChanged();
-    // Delay hiding container so CSS transition can finish
-    setTimeout(() => {
-      if (!this._open) this._container.style.display = 'none';
-    }, 200);
-    this._starGraph?.clearHotspots();
-    if (this._root) {
-      this._root.unmount();
-      this._root = null;
-    }
-  }
-
-  isOpen(): boolean {
-    return this._open;
-  }
-
-  getHotspots(): HotspotItem[] {
-    return this._hotspots;
-  }
-
-  destroy(): void {
-    if (this._root) this._root.unmount();
-    this._container.remove();
-  }
-
-  // ── Internal ──
-
-  private async _render(): Promise<void> {
-    const { createRoot } = await import('react-dom/client');
-    if (!this._root) this._root = createRoot(this._panel);
-    this._root.render(
-      React.createElement(HotspotsPanelApp, {
-        key: Date.now(),
-        path: this._path,
-        starGraph: this._starGraph,
-        onClose: () => this.close(),
-        onHotspotsLoaded: (hs) => { this._hotspots = hs; },
-      }),
-    );
-  }
 }

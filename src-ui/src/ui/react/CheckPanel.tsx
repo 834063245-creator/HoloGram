@@ -5,12 +5,12 @@
 // Change summary panel with violations, statistics, gate check.
 // Right sidebar, auto-opens on failure.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { rpc } from '../../bridge';
-import { cacheCheckResult } from '../../agent/state-inject';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
-import { basename, escapeHtml } from './helpers';
+import { useDockStore } from '../dock-store';
+import { basename } from './helpers';
 import { iconHtml } from '../icons';
 
 interface Violation {
@@ -54,29 +54,6 @@ interface HistoryEvent {
   timestamp: string;
   summary: string;
   props: any;
-}
-
-interface GateModule {
-  file: string;
-  name: string;
-  node_count: number;
-  fan_in: number;
-  fan_out: number;
-  coupling_l1: number;
-  coupling_l2: number;
-  coupling_l3: number;
-  coupling_l4: number;
-  risk: 'high' | 'medium' | 'low';
-  recommendations: string[];
-}
-
-interface GateData {
-  modules: GateModule[];
-  total_evaluated: number;
-  high_risk: number;
-  medium_risk: number;
-  low_risk: number;
-  error?: string;
 }
 
 function fmtTime(iso: string): string {
@@ -174,44 +151,24 @@ const ViolationItem: React.FC<{ v: Violation; label: string }> = ({ v, label }) 
   );
 };
 
-// ── Main Component ──
+// ── Main Component（P3：直接挂 DockPanel 树，Controller 包装已删）──
+// 开合状态与结果数据都在 dock-store；旧 key 重挂载的视图复位语义用 effect 复现。
 
-const CheckPanelApp: React.FC<{
-  onClose: () => void;
-  onOpenAuto: (open: boolean) => void;
-  getResult: () => CheckResult | null;
-}> = ({ onClose, onOpenAuto, getResult }) => {
+export function CheckPanel() {
+  const open = useDockStore((s) => s.open.check);
+  const result = useDockStore((s) => s.checkResult);
+  const closePanel = useDockStore((s) => s.closePanel);
+
   const [view, setView] = useState<'current' | 'history' | 'detail'>('current');
   const [historyTimestamp, setHistoryTimestamp] = useState('');
   const [historyEvents, setHistoryEvents] = useState<HistoryEvent[]>([]);
   const [historyDetail, setHistoryDetail] = useState<CheckResult | null>(null);
-  const [gateData, setGateData] = useState<GateData | null>(null);
-  const [panelWidth, setPanelWidth] = useState(340);
 
-  const resultRef = useRef(getResult());
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  // ── Resize ──
-
-  const onResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = panelWidth;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    const onMove = (ev: MouseEvent) => {
-      setPanelWidth(Math.max(280, Math.min(600, startW + (startX - ev.clientX))));
-    };
-    const onUp = () => {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, [panelWidth]);
+  // 旧 Controller 每次 render 都以新 key 重挂载 → 视图复位为 current；
+  // 这里在「重新打开」与「新结果推入」时复现同样的复位。
+  useEffect(() => {
+    if (open) setView('current');
+  }, [open, result]);
 
   // ── History loading ──
 
@@ -243,20 +200,9 @@ const CheckPanelApp: React.FC<{
     setView('current');
   }, []);
 
-  // ── Gate check ──
-
-  const loadGate = useCallback(async (path: string) => {
-    try {
-      const json = await rpc<string>('hologram_gate_check', { path, moduleFile: null });
-      setGateData(JSON.parse(json) as GateData);
-    } catch (err) {
-      console.error('Gate check failed:', err);
-    }
-  }, []);
-
   // ── Compute current result ──
 
-  const r = view === 'detail' && historyDetail ? historyDetail : resultRef.current;
+  const r = view === 'detail' && historyDetail ? historyDetail : result;
   const passed = r?.passed ?? true;
   const l5 = r?.l5_violations?.length || 0;
   const l4 = r?.l4_violations?.length || 0;
@@ -268,15 +214,15 @@ const CheckPanelApp: React.FC<{
   const pv = r?.persistent_violations ?? 0;
 
   return (
-    <>
+    <div id="check-panel" className={open ? 'check-open' : ''}>
       {/* Corner brackets */}
       <div className="corner-brackets">
         <span className="cb-bottom left" />
         <span className="cb-bottom right" />
       </div>
 
-      {/* Resize handle */}
-      <div className="check-resize" onMouseDown={onResizeStart} />
+      {/* Resize 视觉条（旧拖拽逻辑从未接入宽度 — 死代码已清） */}
+      <div className="check-resize" />
 
       {/* Header */}
       <div className="check-tab">
@@ -291,7 +237,7 @@ const CheckPanelApp: React.FC<{
         <button
           className="check-close-btn"
           dangerouslySetInnerHTML={{ __html: iconHtml('close', 16) }}
-          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          onClick={(e) => { e.stopPropagation(); closePanel('check'); }}
         />
       </div>
 
@@ -363,7 +309,7 @@ const CheckPanelApp: React.FC<{
             {/* Files */}
             <Collapsible title="变更文件" count={String(r.total_changed_files)} startOpen={r.total_changed_files <= 5}>
               <div className="check-file-list">
-                {r.changed_files.map((f) => (
+                {(r.changed_files || []).map((f) => (
                   <div key={f} className="check-file-item" title={f} onClick={() => shell.navigateToFile(f)}>
                     {basename(f)}
                   </div>
@@ -404,41 +350,14 @@ const CheckPanelApp: React.FC<{
             </Collapsible>
 
             {/* Passed checks */}
-            {r.passed_checks.length > 0 && (
+            {(r.passed_checks?.length || 0) > 0 && (
               <Collapsible title="自动放行" count={String(r.passed_checks.length)} startOpen={false}>
-                {r.passed_checks.map((c, i) => (
+                {(r.passed_checks || []).map((c, i) => (
                   <div key={i} className="check-passed-item">{c}</div>
                 ))}
               </Collapsible>
             )}
 
-            {/* Gate check */}
-            {gateData && gateData.modules && gateData.modules.length > 0 && (
-              <Collapsible
-                title={`门禁评估 (${gateData.total_evaluated} 模块)`}
-                count={String(gateData.high_risk + gateData.medium_risk)}
-                startOpen={gateData.high_risk > 0}
-                className="check-fold-gate"
-              >
-                <div className="check-gate-summary">
-                  {gateData.high_risk > 0 && <span className="check-gate-badge check-gate-high">⚠ {gateData.high_risk} 高风险</span>}
-                  {gateData.medium_risk > 0 && <span className="check-gate-badge check-gate-mid">⚡ {gateData.medium_risk} 中风险</span>}
-                  <span className="check-gate-badge check-gate-low">✓ {gateData.low_risk} 低风险</span>
-                </div>
-                {gateData.modules.filter((m) => m.risk !== 'low').map((m) => (
-                  <div key={m.name} className={`check-gate-item check-gate-${m.risk}`}>
-                    <div className="check-gate-item-head">
-                      <span className={`check-gate-risk check-gate-risk-${m.risk}`}>{m.risk === 'high' ? '高' : '中'}</span>
-                      <span className="check-gate-name">{m.name}</span>
-                      <span className="check-gate-stats">扇入{m.fan_in} 扇出{m.fan_out} L4×{m.coupling_l4}</span>
-                    </div>
-                    {m.recommendations?.map((rec, i) => (
-                      <div key={i} className="check-gate-rec">{rec}</div>
-                    ))}
-                  </div>
-                ))}
-              </Collapsible>
-            )}
           </>
         )}
 
@@ -447,101 +366,6 @@ const CheckPanelApp: React.FC<{
           <div className="check-history-empty">暂无简报数据</div>
         )}
       </div>
-    </>
+    </div>
   );
-};
-
-// ── Controller ──
-
-export class CheckPanelController {
-  private _open = false;
-  private _lastResult: CheckResult | null = null;
-  private _panel: HTMLDivElement;
-  private _root: import('react-dom/client').Root | null = null;
-
-  constructor(container: HTMLElement) {
-    this._panel = document.createElement('div');
-    this._panel.id = 'check-panel';
-    container.appendChild(this._panel);
-  }
-
-  // ── Public API ──
-
-  update(result: CheckResult, projectPath?: string): void {
-    this._lastResult = result;
-
-    // Feed check result to state injection cache so the agent sees it
-    cacheCheckResult({
-      passed: result.passed,
-      violationCount:
-        (result.l5_violations?.length || 0) +
-        (result.l4_violations?.length || 0) +
-        (result.l3_violations?.length || 0) +
-        (result.l2_violations?.length || 0),
-      newCount: result.new_violations || 0,
-      resolvedCount: result.resolved_violations || 0,
-      persistentCount: result.persistent_violations || 0,
-    });
-
-    if (this._open) this._render(projectPath);
-
-    // Auto-open on failure
-    if (!result.passed && !this._open) this.open(projectPath);
-  }
-
-  showHistory(data: CheckResult, timestamp: string): void {
-    this._lastResult = data;
-    if (!this._open) this.open();
-    this._render(undefined, { historyDetail: data, historyTimestamp: timestamp, view: 'detail' });
-  }
-
-  getLastResult(): CheckResult | null {
-    return this._lastResult;
-  }
-
-  toggle(projectPath?: string): void {
-    this._open ? this.close() : this.open(projectPath);
-  }
-
-  open(projectPath?: string): void {
-    this._open = true;
-    this._panel.classList.add('check-open');
-    this._render(projectPath);
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  close(): void {
-    this._open = false;
-    this._panel.classList.remove('check-open');
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  isOpen(): boolean {
-    return this._open;
-  }
-
-  destroy(): void {
-    if (this._root) this._root.unmount();
-    this._panel.remove();
-  }
-
-  // ── Internal ──
-
-  private _lastGatePath: string | null = null;
-
-  private async _render(projectPath?: string, histOverride?: { historyDetail: CheckResult; historyTimestamp: string; view: string }): Promise<void> {
-    const { createRoot } = await import('react-dom/client');
-    if (!this._root) this._root = createRoot(this._panel);
-
-    const result = this._lastResult;
-
-    this._root.render(
-      React.createElement(CheckPanelApp, {
-        key: Date.now(),
-        onClose: () => this.close(),
-        onOpenAuto: () => {},
-        getResult: () => result,
-      }),
-    );
-  }
 }

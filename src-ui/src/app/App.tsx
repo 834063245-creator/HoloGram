@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: MIT
 
 // P1：应用壳 — 单 React 根。组合全部新 chrome，挂全局快捷键与 bus 适配器。
-// 旧面板（chat/check/timeline/…）本阶段仍由 main.ts 直接挂载 document.body，
-// 与本壳并存；P3 收编进 DockPanel。
+// P3：六个 dock 面板收编进 DockPanel；ContextMenu / FileTranslator 经 portal 宿主渲染。
 
 import { useEffect } from 'react';
+import { ContextMenuHost } from '../ui/react/ContextMenu';
 import { initBridgeAdapters } from './bridge-adapters';
 import { CommandBar } from './CommandBar';
 import { CommandPalette } from './CommandPalette';
 import { ChatBeacon } from './chat/ChatBeacon';
 import { useCoreStore } from './chat/core-instance';
 import { DockRail } from './DockRail';
+import { DockPanel } from './panels/DockPanel';
+import { FileTranslatorPortal } from './panels/FileTranslatorPortal';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { StatusBar } from './StatusBar';
 import { useGlobalKeys } from './useGlobalKeys';
@@ -31,6 +33,9 @@ export function App() {
       <CommandPalette />
       <ShortcutsOverlay />
       {core ? <ChatBeacon core={core} /> : null}
+      <DockPanel />
+      <ContextMenuHost />
+      <FileTranslatorPortal />
     </>
   );
 }

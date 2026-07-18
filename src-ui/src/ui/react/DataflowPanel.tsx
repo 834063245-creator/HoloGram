@@ -7,7 +7,8 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
-import { shell } from '../app-shell';
+import { getDataflowQueryParser } from '../dock-config';
+import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { escapeHtml } from './helpers';
 import { iconHtml } from '../icons';
@@ -195,12 +196,11 @@ function renderEngineDataflow(dfResult: any): string {
   return html;
 }
 
-// ── Component ──
+// ── Component（P3：DockPanel 条件挂载 — 关闭即卸载重置，对齐旧 Controller 语义）──
 
-const DataflowPanelApp: React.FC<{
-  onClose: () => void;
-  onParseQuery?: (nl: string) => Promise<string[]>;
-}> = ({ onClose, onParseQuery }) => {
+export function DataflowPanel() {
+  const closePanel = useDockStore((s) => s.closePanel);
+  const onClose = useCallback(() => closePanel('dataflow'), [closePanel]);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [tracesLoaded, setTracesLoaded] = useState(false);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
@@ -319,6 +319,7 @@ const DataflowPanelApp: React.FC<{
       let raw = await rpc<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols: [], includeSource: true } });
       let explore = JSON.parse(raw);
 
+      const onParseQuery = getDataflowQueryParser();
       if ((explore.meta?.totalSymbolsFound || 0) === 0 && onParseQuery) {
         try {
           const symbols = await onParseQuery(query);
@@ -347,7 +348,7 @@ const DataflowPanelApp: React.FC<{
     } catch (e: any) {
       setRightHtml(`<div class="df-empty">探索失败: ${e?.message || e}</div>`);
     }
-  }, [onParseQuery]);
+  }, []);
 
   // ── Drag ──
 
@@ -515,65 +516,4 @@ const DataflowPanelApp: React.FC<{
       <div ref={gripRef} className="df-grip" onPointerDown={onResizeStart} />
     </div>
   );
-};
-
-// ── Controller ──
-
-export class DataflowPanelController {
-  private _open = false;
-  private _el: HTMLDivElement;
-  private _root: import('react-dom/client').Root | null = null;
-
-  /** Called when NL query fails heuristic symbol resolution. */
-  onParseQuery?: (nl: string) => Promise<string[]>;
-
-  constructor(container: HTMLElement) {
-    this._el = document.createElement('div');
-    container.appendChild(this._el);
-  }
-
-  // ── Public API ──
-
-  toggle(): void {
-    this._open ? this.close() : this.open();
-  }
-
-  open(): void {
-    if (this._open) return;
-    this._open = true;
-    this._render();
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  close(): void {
-    if (!this._open) return;
-    this._open = false;
-    if (this._root) {
-      this._root.unmount();
-      this._root = null;
-    }
-    this._el.innerHTML = '';
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  isOpen(): boolean {
-    return this._open;
-  }
-
-  destroy(): void {
-    if (this._root) this._root.unmount();
-    this._el.remove();
-  }
-
-  private async _render(): Promise<void> {
-    const { createRoot } = await import('react-dom/client');
-    if (!this._root) this._root = createRoot(this._el);
-    this._root.render(
-      React.createElement(DataflowPanelApp, {
-        key: Date.now(),
-        onClose: () => this.close(),
-        onParseQuery: this.onParseQuery,
-      }),
-    );
-  }
 }

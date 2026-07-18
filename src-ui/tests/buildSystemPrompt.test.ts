@@ -3,8 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 // Hoisted mocks — must be before workspace.ts import
 vi.mock('../src/bridge', () => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
-vi.mock('../src/ui/chat', () => ({ ChatPanel: class {} }));
-vi.mock('../src/ui/check', () => ({ CheckPanel: class {} }));
 vi.mock('../src/agent/agent', () => ({ Agent: class {} }));
 vi.mock('../src/agent/tool', () => ({
   ToolRegistry: class {

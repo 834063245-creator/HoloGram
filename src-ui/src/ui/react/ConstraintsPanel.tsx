@@ -4,9 +4,11 @@
 // ConstraintsPanel — React rewrite of constraints.ts.
 // Edit hologram.constraints.yaml with a GUI form.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
+import { useDockStore } from '../dock-store';
 import { iconHtml } from '../icons';
 
 interface ConstraintsData {
@@ -32,10 +34,22 @@ function parseYamlSimple(yaml: string): ConstraintsData {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
 
-    if (trimmed === 'routing:') { section = 'routing'; continue; }
-    if (trimmed === 'thresholds:') { section = 'thresholds'; continue; }
-    if (trimmed === 'allowlist:') { section = 'allowlist'; continue; }
-    if (trimmed === 'denylist:') { section = 'denylist'; continue; }
+    if (trimmed === 'routing:') {
+      section = 'routing';
+      continue;
+    }
+    if (trimmed === 'thresholds:') {
+      section = 'thresholds';
+      continue;
+    }
+    if (trimmed === 'allowlist:') {
+      section = 'allowlist';
+      continue;
+    }
+    if (trimmed === 'denylist:') {
+      section = 'denylist';
+      continue;
+    }
 
     if (section === 'routing') {
       const m = trimmed.match(/^(\w+):\s*(true|false)/);
@@ -44,13 +58,22 @@ function parseYamlSimple(yaml: string): ConstraintsData {
       const m = trimmed.match(/^(\w+):\s*(\d+)/);
       if (m) result.thresholds[m[1]] = parseInt(m[2]);
     } else if (section === 'allowlist') {
-      if (trimmed === 'modules:') { subSection = 'modules'; continue; }
-      if (trimmed === 'files:') { subSection = 'files'; continue; }
+      if (trimmed === 'modules:') {
+        subSection = 'modules';
+        continue;
+      }
+      if (trimmed === 'files:') {
+        subSection = 'files';
+        continue;
+      }
       const m = trimmed.match(/^-\s*"([^"]+)"/);
       if (m && subSection === 'modules') result.allowlist.modules.push(m[1]);
       if (m && subSection === 'files') result.allowlist.files.push(m[1]);
     } else if (section === 'denylist') {
-      if (trimmed === 'keywords:') { subSection = 'keywords'; continue; }
+      if (trimmed === 'keywords:') {
+        subSection = 'keywords';
+        continue;
+      }
       const m = trimmed.match(/^-\s*"([^"]+)"/);
       if (m) result.denylist.keywords.push(m[1]);
     }
@@ -104,8 +127,9 @@ const THRESHOLD_LABELS: Record<string, string> = {
 
 const ConstraintsPanelApp: React.FC<{
   projectPath: string | null;
+  visible: boolean;
   onClose: () => void;
-}> = ({ projectPath, onClose }) => {
+}> = ({ projectPath, visible, onClose }) => {
   const [data, setData] = useState<ConstraintsData | null>(null);
   const [rawYaml, setRawYaml] = useState('');
   const [dirty, setDirty] = useState(false);
@@ -116,8 +140,12 @@ const ConstraintsPanelApp: React.FC<{
   const loadedPath = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load constraints when path changes
+  // Load constraints when path changes（旧版每次 open 都重挂载重载 — 关闭即令缓存失效复现之）
   useEffect(() => {
+    if (!visible) {
+      loadedPath.current = null;
+      return;
+    }
     if (!projectPath || projectPath === loadedPath.current) return;
     loadedPath.current = projectPath;
     setError('');
@@ -131,7 +159,7 @@ const ConstraintsPanelApp: React.FC<{
         console.error('Failed to load constraints:', err);
         setError('加载约束配置失败');
       });
-  }, [projectPath]);
+  }, [visible, projectPath]);
 
   const markDirty = useCallback(() => setDirty(true), []);
 
@@ -228,9 +256,7 @@ const ConstraintsPanelApp: React.FC<{
           .map(([k]) => k)
           .join(', ')
       : '未知';
-    askAgent(
-      `解释当前项目的约束配置。启用的路由: ${routingSummary}。这些约束规则的作用是什么？有没有可以优化的地方？`,
-    );
+    askAgent(`解释当前项目的约束配置。启用的路由: ${routingSummary}。这些约束规则的作用是什么？有没有可以优化的地方？`);
   }, [data]);
 
   const handleClose = useCallback(() => {
@@ -246,7 +272,11 @@ const ConstraintsPanelApp: React.FC<{
         {items.map((item) => (
           <span key={item} className="cs-tag">
             {item}
-            <button className="cs-tag-rm" onClick={() => handleRemoveItem(listKey, item)} dangerouslySetInnerHTML={{ __html: iconHtml('close', 8) }} />
+            <button
+              className="cs-tag-rm"
+              onClick={() => handleRemoveItem(listKey, item)}
+              dangerouslySetInnerHTML={{ __html: iconHtml('close', 8) }}
+            />
           </span>
         ))}
       </div>
@@ -258,7 +288,11 @@ const ConstraintsPanelApp: React.FC<{
           onChange={(e) => setAddValues((prev) => ({ ...prev, [listKey]: e.target.value }))}
           onKeyDown={(e) => e.key === 'Enter' && handleAddItem(listKey)}
         />
-        <button className="cs-add-btn" onClick={() => handleAddItem(listKey)} dangerouslySetInnerHTML={{ __html: iconHtml('plus', 10) }} />
+        <button
+          className="cs-add-btn"
+          onClick={() => handleAddItem(listKey)}
+          dangerouslySetInnerHTML={{ __html: iconHtml('plus', 10) }}
+        />
       </div>
     </div>
   );
@@ -266,18 +300,12 @@ const ConstraintsPanelApp: React.FC<{
   // ── Error / Loading ──
 
   if (error) {
-    return (
-      <div style={{ color: '#e05555', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>
-        {error}
-      </div>
-    );
+    return <div style={{ color: '#e05555', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>{error}</div>;
   }
 
   if (!data) {
     return (
-      <div style={{ color: 'var(--text-muted)', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>
-        加载中…
-      </div>
+      <div style={{ color: 'var(--text-muted)', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>加载中…</div>
     );
   }
 
@@ -391,17 +419,25 @@ const ConstraintsPanelApp: React.FC<{
         <div className="cs-actions">
           <button
             className="cs-btn cs-btn-save"
-            style={saveFeedback === 'ok' ? { color: 'var(--pass, #55aa55)' } : saveFeedback === 'err' ? { color: 'var(--error, #e05555)' } : {}}
+            style={
+              saveFeedback === 'ok'
+                ? { color: 'var(--pass, #55aa55)' }
+                : saveFeedback === 'err'
+                  ? { color: 'var(--error, #e05555)' }
+                  : {}
+            }
             onClick={handleSave}
             disabled={saving}
             dangerouslySetInnerHTML={{
-              __html:
-                saveFeedback === 'ok'
-                  ? `${iconHtml('check-circle', 11)} 已保存`
-                  : `${iconHtml('save', 10)} 保存`,
+              __html: saveFeedback === 'ok' ? `${iconHtml('check-circle', 11)} 已保存` : `${iconHtml('save', 10)} 保存`,
             }}
           />
-          <button className="cs-btn cs-btn-reset" onClick={handleReset} disabled={!dirty} dangerouslySetInnerHTML={{ __html: `${iconHtml('reset', 10)} 重置` }} />
+          <button
+            className="cs-btn cs-btn-reset"
+            onClick={handleReset}
+            disabled={!dirty}
+            dangerouslySetInnerHTML={{ __html: `${iconHtml('reset', 10)} 重置` }}
+          />
         </div>
       </div>
     </>
@@ -425,86 +461,46 @@ const headerBtnStyle: React.CSSProperties = {
 
 function getListEntry(data: ConstraintsData, key: string): string[] | null {
   switch (key) {
-    case 'allow-modules': return data.allowlist.modules;
-    case 'allow-files': return data.allowlist.files;
-    case 'deny-keywords': return data.denylist.keywords;
-    default: return null;
+    case 'allow-modules':
+      return data.allowlist.modules;
+    case 'allow-files':
+      return data.allowlist.files;
+    case 'deny-keywords':
+      return data.denylist.keywords;
+    default:
+      return null;
   }
 }
 
-// ── Controller ──
+// ── Panel root（P3：直接挂 DockPanel 树，Controller 包装已删）──
+// 内联样式与旧 Controller 完全一致（position:absolute 覆盖样式表的 fixed，保持原样）。
 
-export class ConstraintsPanelController {
-  private _open = false;
-  private _path: string | null = null;
-  private _panel: HTMLDivElement;
-  private _root: import('react-dom/client').Root | null = null;
+export function ConstraintsPanel() {
+  const open = useDockStore((s) => s.open.constraints);
+  const projectPath = useDockStore((s) => s.projectPath);
+  const closePanel = useDockStore((s) => s.closePanel);
 
-  constructor() {
-    this._panel = document.createElement('div');
-    this._panel.id = 'constraints-panel';
-    Object.assign(this._panel.style, {
-      position: 'absolute',
-      top: '36px',
-      right: '0',
-      bottom: '28px',
-      width: '340px',
-      maxWidth: '90vw',
-      background: 'var(--panel-bg, rgba(6,12,24,0.97))',
-      backdropFilter: 'var(--blur, blur(14px))',
-      WebkitBackdropFilter: 'var(--blur, blur(14px))',
-      borderLeft: '1px solid var(--panel-edge, rgba(48,60,80,0.5))',
-      zIndex: '16',
-      display: 'flex',
-      flexDirection: 'column',
-    });
-    document.body.appendChild(this._panel);
-  }
-
-  // ── Public API ──
-
-  load(projectPath: string): void {
-    this._path = projectPath;
-    if (this._open) this._render();
-  }
-
-  toggle(): void {
-    this._open ? this.close() : this.open();
-  }
-
-  open(): void {
-    this._open = true;
-    this._panel.classList.add('cs-open');
-    this._render();
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  close(): void {
-    this._open = false;
-    this._panel.classList.remove('cs-open');
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  isOpen(): boolean {
-    return this._open;
-  }
-
-  destroy(): void {
-    if (this._root) this._root.unmount();
-    this._panel.remove();
-  }
-
-  // ── Internal ──
-
-  private async _render(): Promise<void> {
-    const { createRoot } = await import('react-dom/client');
-    if (!this._root) this._root = createRoot(this._panel);
-    this._root.render(
-      React.createElement(ConstraintsPanelApp, {
-        key: Date.now(),
-        projectPath: this._path,
-        onClose: () => this.close(),
-      }),
-    );
-  }
+  return (
+    <div
+      id="constraints-panel"
+      className={open ? 'cs-open' : ''}
+      style={{
+        position: 'absolute',
+        top: '36px',
+        right: '0',
+        bottom: '28px',
+        width: '340px',
+        maxWidth: '90vw',
+        background: 'var(--panel-bg, rgba(6,12,24,0.97))',
+        backdropFilter: 'var(--blur, blur(14px))',
+        WebkitBackdropFilter: 'var(--blur, blur(14px))',
+        borderLeft: '1px solid var(--panel-edge, rgba(48,60,80,0.5))',
+        zIndex: 16,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <ConstraintsPanelApp projectPath={projectPath} visible={open} onClose={() => closePanel('constraints')} />
+    </div>
+  );
 }

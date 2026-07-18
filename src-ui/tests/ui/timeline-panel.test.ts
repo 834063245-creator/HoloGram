@@ -5,23 +5,15 @@
 // Bug: TimelinePanel._open desynced from React's `open` state → isOpen()
 // returned stale `true` → updateTabs hid left dock buttons permanently.
 //
-// Fix: isOpen() reads DOM classList directly. This test asserts that
-// invariant and guards against accidental reintroduction of internal state.
+// P3: 开合状态单一事实源迁入 dock-store（DOM classList 反查与双状态一并消除）。
+// 本测试守护「store 状态 ⇄ DOM class ⇄ × 按钮」三者同步。
 
+import { act, createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import React from 'react';
-import { act } from 'react';
-import { createRoot } from 'react-dom/client';
 
-// ── Mock shell — capture notifyPanelChanged calls ──
-const { shellNotifyMock } = vi.hoisted(() => ({ shellNotifyMock: vi.fn() }));
 vi.mock('../../src/ui/app-shell', () => ({
-  shell: {
-    register: vi.fn(),
-    notifyPanelChanged: shellNotifyMock,
-    wire: vi.fn(),
-    navigateToFile: vi.fn(),
-  },
+  shell: { navigateToFile: vi.fn() },
 }));
 
 vi.mock('../../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
@@ -39,106 +31,108 @@ vi.mock('../../src/ui/events', () => ({
   bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
 }));
 
+import { useDockStore } from '../../src/ui/dock-store';
 import { TimelinePanel } from '../../src/ui/react/TimelinePanel';
+
+function resetDock(): void {
+  useDockStore.setState({
+    open: { timeline: false, hotspots: false, check: false, constraints: false, dataflow: false, settings: false },
+    projectPath: null,
+    checkResult: null,
+  });
+}
 
 describe('TimelinePanel', () => {
   let container: HTMLElement;
-  let panel: TimelinePanel;
+  let root: Root;
 
   beforeEach(() => {
     container = document.createElement('div');
     document.body.appendChild(container);
     vi.clearAllMocks();
+    resetDock();
+    root = createRoot(container);
   });
 
   afterEach(() => {
-    panel.destroy();
+    act(() => {
+      root.unmount();
+    });
     document.body.removeChild(container);
   });
 
-  // Helper: wrap React 18 createRoot construction in act so mount is flushed
-  async function createPanel(): Promise<TimelinePanel> {
-    let p!: TimelinePanel;
+  async function renderPanel(): Promise<void> {
     await act(async () => {
-      p = new TimelinePanel(container);
+      root.render(createElement(TimelinePanel));
     });
-    return p;
   }
 
-  // Helper: toggle and wait for React to flush
-  async function toggleAndFlush(p: TimelinePanel): Promise<void> {
+  const isOpen = () => useDockStore.getState().open.timeline;
+  const hasOpenClass = () => document.getElementById('timeline-panel')?.classList.contains('tl-open') ?? false;
+
+  async function toggle(): Promise<void> {
     await act(async () => {
-      p.toggle();
+      useDockStore.getState().togglePanel('timeline');
     });
   }
 
   it('isOpen returns false initially', async () => {
-    panel = await createPanel();
-    expect(panel.isOpen()).toBe(false);
+    await renderPanel();
+    expect(isOpen()).toBe(false);
+    expect(hasOpenClass()).toBe(false);
   });
 
-  it('isOpen returns true after toggle — reads DOM classList', async () => {
-    panel = await createPanel();
+  it('store state reflects into DOM class after toggle', async () => {
+    await renderPanel();
+    await toggle();
 
-    await toggleAndFlush(panel);
-
-    const panelEl = document.getElementById('timeline-panel');
-    expect(panelEl).not.toBeNull();
-    expect(panelEl!.classList.contains('tl-open')).toBe(true);
-    expect(panel.isOpen()).toBe(true);
+    expect(isOpen()).toBe(true);
+    expect(hasOpenClass()).toBe(true);
   });
 
   it('isOpen returns false after close', async () => {
-    panel = await createPanel();
-    await toggleAndFlush(panel);
-    expect(panel.isOpen()).toBe(true);
+    await renderPanel();
+    await toggle();
+    expect(isOpen()).toBe(true);
 
-    await act(async () => {
-      panel.close();
-    });
-    expect(panel.isOpen()).toBe(false);
+    await toggle();
+    expect(isOpen()).toBe(false);
+    expect(hasOpenClass()).toBe(false);
   });
 
   it('isOpen stays correct after repeated toggle', async () => {
-    panel = await createPanel();
+    await renderPanel();
 
-    await toggleAndFlush(panel);
-    expect(panel.isOpen()).toBe(true);
+    await toggle();
+    expect(isOpen()).toBe(true);
 
-    await toggleAndFlush(panel);
-    expect(panel.isOpen()).toBe(false);
+    await toggle();
+    expect(isOpen()).toBe(false);
 
-    await toggleAndFlush(panel);
-    expect(panel.isOpen()).toBe(true);
+    await toggle();
+    expect(isOpen()).toBe(true);
   });
 
-  it('shell.notifyPanelChanged fires AFTER DOM is updated', async () => {
-    panel = await createPanel();
+  it('DOM class always mirrors store state', async () => {
+    await renderPanel();
+    expect(hasOpenClass()).toBe(false);
 
-    // Before toggle, DOM closed
-    const before = document.getElementById('timeline-panel')?.classList.contains('tl-open');
-    expect(before).toBe(false);
+    await toggle();
+    expect(hasOpenClass()).toBe(true);
 
-    await toggleAndFlush(panel);
-
-    // After toggle + flush, DOM updated
-    const after = document.getElementById('timeline-panel')?.classList.contains('tl-open');
-    expect(after).toBe(true);
-
-    // shell.notifyPanelChanged called (by useEffect after DOM update)
-    expect(shellNotifyMock).toHaveBeenCalled();
+    await act(async () => {
+      useDockStore.getState().closePanel('timeline');
+    });
+    expect(hasOpenClass()).toBe(false);
   });
 
-  it('× button close keeps isOpen() in sync (regression guard)', async () => {
-    // Exact scenario: user clicks React panel's × button.
-    // The button directly calls toggleRef.current → setOpen, skipping
-    // TimelinePanel's own _open field.
-    // After fix, isOpen() reads DOM classList, so it still works.
-    panel = await createPanel();
-    await toggleAndFlush(panel);
-    expect(panel.isOpen()).toBe(true);
+  it('× button close keeps store in sync (regression guard)', async () => {
+    // Exact scenario: user clicks panel's × button — it must drive the same
+    // store state (旧 bug：按钮走组件内 state，isOpen() 反查 DOM 得到陈旧值)。
+    await renderPanel();
+    await toggle();
+    expect(isOpen()).toBe(true);
 
-    // Simulate clicking × button inside React panel
     const closeBtn = document.querySelector('#timeline-panel .tl-close') as HTMLButtonElement;
     expect(closeBtn).not.toBeNull();
 
@@ -146,10 +140,7 @@ describe('TimelinePanel', () => {
       closeBtn.click();
     });
 
-    // DOM classList should be updated by React's useEffect
-    const panelEl = document.getElementById('timeline-panel');
-    expect(panelEl!.classList.contains('tl-open')).toBe(false);
-    // And isOpen() — which reads classList — should reflect that
-    expect(panel.isOpen()).toBe(false);
+    expect(isOpen()).toBe(false);
+    expect(hasOpenClass()).toBe(false);
   });
 });

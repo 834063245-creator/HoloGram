@@ -5,11 +5,11 @@
 // 替代 timeline.ts 中的纯 DOM 操作。
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
-import type { CheckResult } from '../check';
+import type { CheckResult } from './CheckPanel';
+import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
 
@@ -84,28 +84,15 @@ function extractFilename(path: string): string {
   return path.replace(/\\/g, '/').split('/').pop() || path;
 }
 
-// ── React Component ──
+// ── React Component（P3：直接挂 DockPanel 树，类包装已删）──
+// 开合状态走 dock-store（替代旧的组件内 state + DOM class 反查 isOpen）。
 
-function TimelineApp({
-  projectPath,
-  toggleRef,
-}: {
-  projectPath: string | null;
-  toggleRef: { current: (() => void) | null };
-}) {
-  const [open, setOpen] = useState(false);
+export function TimelinePanel() {
+  const open = useDockStore((s) => s.open.timeline);
+  const projectPath = useDockStore((s) => s.projectPath);
+  const closePanel = useDockStore((s) => s.closePanel);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  toggleRef.current = () => {
-    setOpen((prev) => !prev);
-  };
-
-  useEffect(() => {
-    panelRef.current?.classList.toggle('tl-open', open);
-    shell.notifyPanelChanged();
-  }, [open]);
 
   const refresh = useCallback(async () => {
     if (!projectPath || loading) return;
@@ -294,61 +281,18 @@ function TimelineApp({
   }
 
   return (
-    <div id="timeline-panel" ref={panelRef}>
+    <div id="timeline-panel" className={open ? 'tl-open' : ''}>
       <div className="corner-brackets">
         <span className="cb-bottom left"></span>
         <span className="cb-bottom right"></span>
       </div>
       <div className="tl-header">
         <span className="tl-title">时间轴</span>
-        <button className="tl-close" onClick={toggleRef.current}>
+        <button className="tl-close" onClick={() => closePanel('timeline')}>
           &#x2715;
         </button>
       </div>
       <div className="tl-content">{body}</div>
     </div>
   );
-}
-
-// ── Thin class wrapper — same public API as old TimelinePanel ──
-
-export class TimelinePanel {
-  private _root: Root;
-  private _mount: HTMLElement;
-  private _path: string | null = null;
-  private _toggleRef: { current: (() => void) | null } = { current: null };
-
-  constructor(container: HTMLElement) {
-    this._mount = document.createElement('div');
-    container.appendChild(this._mount);
-    this._root = createRoot(this._mount);
-    this._render();
-  }
-
-  private _render(): void {
-    this._root.render(React.createElement(TimelineApp, { projectPath: this._path, toggleRef: this._toggleRef }));
-  }
-
-  setProjectPath(path: string | null): void {
-    this._path = path;
-    this._render();
-  }
-
-  toggle(): void {
-    this._toggleRef.current?.();
-  }
-  isOpen(): boolean {
-    return this._mount.querySelector('#timeline-panel')?.classList.contains('tl-open') ?? false;
-  }
-
-  close(): void {
-    if (this.isOpen()) {
-      this._toggleRef.current?.();
-    }
-  }
-
-  destroy(): void {
-    this._root.unmount();
-    this._mount.remove();
-  }
 }

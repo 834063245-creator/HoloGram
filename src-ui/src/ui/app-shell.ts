@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 // AppShell — 应用级 UI 外壳
-// 管理面板生命周期、dock tab 更新、以及跨面板的命令式操作（导航、高亮、Agent 查询）。
+// 跨面板的命令式操作（导航、高亮、Agent 查询）。
 // 不负责项目级状态（那归 Workspace），不负责纯通知（那归 bus）。
+// P3：面板开合状态已迁 dock-store，本类只保留导航/高亮/查询命令。
 //
 // 使用方式：
 //   import { shell } from './app-shell';
-//   shell.notifyPanelChanged();       // 替代 bus.emit('panel:toggle')
 //   shell.navigateToNode(name);   // 替代 bus.emit('navigate:node', name)
 //   shell.highlightFile(path);    // 替代 bus.emit('highlight:file', path)
 //
@@ -15,21 +15,12 @@
 
 import { bus } from './events';
 
-interface AppPanel {
-  readonly id: string;
-  isOpen(): boolean;
-}
-
 /**
  * shell 本身是模块级单例——跟 bus 一样的 import 模式。
  * 所有面板 import { shell } 即可，不需要构造传参。
  */
 class AppShell {
-  // ── Panel registry ──
-  private _panels = new Map<string, AppPanel>();
-
   // ── Wiring slots (set by main.ts) ──
-  private _onPanelChanged: (() => void) | null = null;
   private _navigateToNode: ((name: string) => void) | null = null;
   private _navigateToFile: ((path: string, line?: number) => void) | null = null;
   private _highlightFile: ((path: string) => void) | null = null;
@@ -38,43 +29,8 @@ class AppShell {
   private _queryAgent: ((question: string) => void) | null = null;
 
   // ═══════════════════════════════════════════════════════════════
-  // Panel registry (main.ts registers each panel)
-  // ═══════════════════════════════════════════════════════════════
-
-  register(panel: AppPanel): void {
-    this._panels.set(panel.id, panel);
-  }
-
-  isOpen(id: string): boolean {
-    return this._panels.get(id)?.isOpen() ?? false;
-  }
-
-  /** 获取已注册的面板 ID 列表 */
-  get panelIds(): string[] {
-    return [...this._panels.keys()];
-  }
-
-  /** 全部面板的开合快照 — P1 用于同步进 shell-store（DockRail 数据源） */
-  states(): Record<string, boolean> {
-    const out: Record<string, boolean> = {};
-    for (const [id, p] of this._panels) {
-      try {
-        out[id] = !!p.isOpen();
-      } catch {
-        out[id] = false;
-      }
-    }
-    return out;
-  }
-
-  // ═══════════════════════════════════════════════════════════════
   // Wiring (called once by main.ts during init)
   // ═══════════════════════════════════════════════════════════════
-
-  /** 面板开关后调用 → 驱动 dock tab 更新 */
-  set onPanelChanged(fn: () => void) {
-    this._onPanelChanged = fn;
-  }
 
   /** 注入导航/高亮/查询处理函数 — 由 main.ts 在 starGraph/chatPanel 创建后调用 */
   wire(opts: {
@@ -91,15 +47,6 @@ class AppShell {
     this._highlightFolder = opts.highlightFolder;
     this._clearHighlight = opts.clearHighlight;
     this._queryAgent = opts.queryAgent;
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // Panel change notification (replaces bus.emit('panel:toggle'))
-  // ═══════════════════════════════════════════════════════════════
-
-  /** 面板在 open()/close() 后调用，触发 dock tab 刷新 */
-  notifyPanelChanged(): void {
-    this._onPanelChanged?.();
   }
 
   // ═══════════════════════════════════════════════════════════════

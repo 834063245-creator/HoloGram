@@ -10,8 +10,8 @@
 | P1 | `App.tsx` 组件树、`shell-store.ts`、`bridge-adapters.ts`、`actions.ts`、`useGlobalKeys.ts`、`shell.css` | ✅ `726f2f6` |
 | P2′-2a | `chat/chat-core.ts`（无头核心）、`chat/ChatBeacon.tsx` 等信标视图、`panel-store` 扩展 | ✅ `1e6a08f` |
 | P2′-2b | 六个 React 控制器内联为组件，删 Controller 包装 | ✅ `c0a169a` |
-| P3 | `panels/panel-def.ts` + 六面板收编 | ⬜ 下一棒 |
-| P4 | `ui/graph.ts` 拆解（facade 保 API，golden 测试先行） | ⬜ |
+| P3 | `panels/`（panel-def + DockPanel + FileTranslatorPortal）、`ui/dock-store`/`dock-config`/`overlay-store`、六面板收编 | ✅ `⬜本期` |
+| P4 | `ui/graph.ts` 拆解（facade 保 API，golden 测试先行） | ⬜ 下一棒 |
 | P5 | 视觉识别收尾（删旧 CSS 三大件、Orbitron 退役、星图氛围） | ⬜ |
 
 ## 约定

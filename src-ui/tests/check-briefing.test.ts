@@ -1,5 +1,6 @@
 // 守护简报系统 — CheckPanel 渲染 + Workspace.runCheck() invoke 契约。
 // 任何改工具名/CheckResult 形状的提交直接挂 — 必须同步修。
+// P3：CheckPanel 已是纯组件（Controller 包装已删），开合/数据走 ui/dock-store。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock layer ──
@@ -11,17 +12,22 @@ vi.mock('../src/bridge', () => ({
 }));
 
 vi.mock('../src/ui/app-shell', () => ({
-  shell: { notifyPanelChanged: vi.fn(), navigateToNode: vi.fn(), navigateToFile: vi.fn() },
+  shell: { navigateToNode: vi.fn(), navigateToFile: vi.fn() },
 }));
 
 vi.mock('../src/ui/agent-visualizer', () => ({ askAgent: vi.fn() }));
 
-import { CheckPanel, type CheckResult } from '../src/ui/check';
+import { createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { useDockStore } from '../src/ui/dock-store';
+import { CheckPanel, type CheckResult } from '../src/ui/react/CheckPanel';
 
-function makeContainer(): HTMLElement {
-  const div = document.createElement('div');
-  document.body.appendChild(div);
-  return div;
+function resetDock(): void {
+  useDockStore.setState({
+    open: { timeline: false, hotspots: false, check: false, constraints: false, dataflow: false, settings: false },
+    projectPath: null,
+    checkResult: null,
+  });
 }
 
 function makePassResult(overrides?: Partial<CheckResult>): CheckResult {
@@ -74,18 +80,29 @@ function makeFailResult(overrides?: Partial<CheckResult>): CheckResult {
   };
 }
 
-describe('CheckPanel — rendering', () => {
-  let panel: CheckPanel;
-  let container: HTMLElement;
+// ── dock-store 快捷操作（对齐旧 CheckPanel 公开 API 语义）──
 
-  /** Flush async React render (CheckPanelController._render uses dynamic import). */
+const dock = () => useDockStore.getState();
+const openPanel = () => dock().openPanel('check');
+const update = (r: CheckResult) => dock().setCheckResult(r);
+const showHistory = (r: CheckResult) => dock().showCheckHistory(r);
+const isOpen = () => dock().open.check;
+
+describe('CheckPanel — rendering', () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  /** Flush async React render (store 订阅 + effect 链). */
   const tick = () => new Promise((r) => setTimeout(r, 50));
 
   beforeEach(() => {
     mockInvoke.mockReset();
     document.body.innerHTML = '';
-    container = makeContainer();
-    panel = new CheckPanel(container);
+    resetDock();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    root.render(createElement(CheckPanel));
   });
 
   // ═══════════════════════════════════════════════════════
@@ -93,9 +110,9 @@ describe('CheckPanel — rendering', () => {
   // ═══════════════════════════════════════════════════════
 
   it('renders pass state', async () => {
-    panel.open();
+    openPanel();
     await tick();
-    panel.update(makePassResult());
+    update(makePassResult());
     await tick();
 
     const html = container.innerHTML;
@@ -108,9 +125,9 @@ describe('CheckPanel — rendering', () => {
   });
 
   it('renders auto-passed checks section', async () => {
-    panel.open();
+    openPanel();
     await tick();
-    panel.update(makePassResult({ passed_checks: ['no-cycles', 'no-l4-violations'] }));
+    update(makePassResult({ passed_checks: ['no-cycles', 'no-l4-violations'] }));
     await tick();
 
     const html = container.innerHTML;
@@ -120,9 +137,9 @@ describe('CheckPanel — rendering', () => {
   });
 
   it('renders stats section with values', async () => {
-    panel.open();
+    openPanel();
     await tick();
-    panel.update(makePassResult({ blast_radius: 5, new_cycles: 2 }));
+    update(makePassResult({ blast_radius: 5, new_cycles: 2 }));
     await tick();
 
     const html = container.innerHTML;
@@ -137,9 +154,9 @@ describe('CheckPanel — rendering', () => {
   // ═══════════════════════════════════════════════════════
 
   it('renders fail state and auto-opens', async () => {
-    panel.update(makeFailResult());
+    update(makeFailResult());
     await tick();
-    expect(panel.isOpen()).toBe(true);
+    expect(isOpen()).toBe(true);
 
     const html = container.innerHTML;
     expect(html).toContain('check-fail');
@@ -148,9 +165,9 @@ describe('CheckPanel — rendering', () => {
   });
 
   it('renders violations with file locations', async () => {
-    panel.update(makeFailResult());
+    update(makeFailResult());
     await tick();
-    panel.open();
+    openPanel();
     await tick();
 
     const html = container.innerHTML;
@@ -160,9 +177,9 @@ describe('CheckPanel — rendering', () => {
   });
 
   it('renders affected node links in violations', async () => {
-    panel.update(makeFailResult());
+    update(makeFailResult());
     await tick();
-    panel.open();
+    openPanel();
     await tick();
 
     const html = container.innerHTML;
@@ -171,7 +188,7 @@ describe('CheckPanel — rendering', () => {
   });
 
   it('renders L5 as highest severity', async () => {
-    panel.update(
+    update(
       makeFailResult({
         l5_violations: [
           {
@@ -186,7 +203,7 @@ describe('CheckPanel — rendering', () => {
       }),
     );
     await tick();
-    panel.open();
+    openPanel();
     await tick();
 
     const html = container.innerHTML;
@@ -198,31 +215,25 @@ describe('CheckPanel — rendering', () => {
   // 历史模式
   // ═══════════════════════════════════════════════════════
 
-  it('showHistory renders history banner', async () => {
-    // Note: showHistory delegates to _render() which ignores histOverride
-    // (source bug) — the view always renders as "current", not "detail".
-    // Test verifies data IS passed through correctly.
-    panel.showHistory(makePassResult(), '2026-07-06T08:00:00Z');
+  it('showHistory renders the historical result', async () => {
+    // 与旧版一致：showHistory 把历史结果作为当前视图数据展示（timestamp 不展示）。
+    showHistory(makePassResult());
     await tick();
 
     const html = container.innerHTML;
-    // Data IS rendered — passed state + files from makePassResult
     expect(html).toContain('check-pass');
     expect(html).toContain('检查通过');
   });
 
-  it('showCurrent clears history banner', async () => {
-    // Note: _render() ignores histOverride (source bug) — view stays "current".
-    // showCurrent() is NOT exposed on the public CheckPanel API.
-    // Test verifies showHistory + standard operations still work.
-    panel.open();
+  it('showHistory after update still renders current view', async () => {
+    openPanel();
     await tick();
-    panel.update(makePassResult());
+    update(makePassResult());
     await tick();
-    panel.showHistory(makePassResult(), '2026-07-06T08:00:00Z');
+    showHistory(makePassResult());
     await tick();
 
-    // After showHistory, panel still renders the current (pass) view
+    // showHistory 后仍渲染当前（通过）视图
     expect(container.innerHTML).toContain('check-pass');
     expect(container.innerHTML).toContain('检查通过');
   });
@@ -232,11 +243,9 @@ describe('CheckPanel — rendering', () => {
   // ═══════════════════════════════════════════════════════
 
   it('collapsible sections start collapsed for stats', async () => {
-    panel.open();
+    openPanel();
     await tick();
-    panel.update(makePassResult());
-    await tick();
-    panel.open();
+    update(makePassResult());
     await tick();
 
     // Stats fold body should exist and start collapsed

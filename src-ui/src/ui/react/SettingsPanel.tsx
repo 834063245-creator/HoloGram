@@ -6,12 +6,13 @@
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化。
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
 import type { AppSettings } from '../../settings';
 import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, saveSettings } from '../../settings';
+import { getOnSettingsSave } from '../dock-config';
+import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
 
@@ -668,68 +669,10 @@ const SettingsPanelApp: React.FC<{
   );
 };
 
-// ── Controller (replaces SettingsPanel class, same public API) ──
+// ── Panel root（P3：DockPanel 条件挂载 — 关闭即卸载，重开从 localStorage 重读）──
+// 旧 Controller 外层 overlay/panel 与组件内层同 id 重复嵌套，收编后只保留组件内这一层。
 
-export class SettingsPanelController {
-  private _overlay: HTMLElement;
-  private _panel: HTMLElement;
-  private _root: Root | null = null;
-  private _open = false;
-  private _onSave: (() => void) | null = null;
-
-  constructor() {
-    this._overlay = document.createElement('div');
-    this._overlay.id = 'settings-panel-overlay';
-
-    this._panel = document.createElement('div');
-    this._panel.id = 'settings-panel';
-
-    document.body.appendChild(this._overlay);
-    document.body.appendChild(this._panel);
-  }
-
-  setOnSave(fn: () => void): void {
-    this._onSave = fn;
-  }
-
-  isOpen(): boolean {
-    return this._open;
-  }
-
-  open(): void {
-    this._open = true;
-    // Fresh mount — re-reads localStorage etc.
-    if (!this._root) this._root = createRoot(this._panel);
-    this._root.render(
-      React.createElement(SettingsPanelApp, {
-        key: Date.now(),
-        onClose: () => this.close(),
-        onSave: this._onSave,
-      }),
-    );
-    this._overlay.classList.add('sp-open');
-    this._panel.classList.add('sp-open');
-    import('../app-shell').then(({ shell }) => shell.notifyPanelChanged());
-  }
-
-  close(): void {
-    this._open = false;
-    this._overlay.classList.remove('sp-open');
-    this._panel.classList.remove('sp-open');
-    // Unmount so next open loads fresh data from localStorage
-    if (this._root) {
-      this._root.unmount();
-      this._root = null;
-    }
-  }
-
-  toggle(): void {
-    this._open ? this.close() : this.open();
-  }
-
-  destroy(): void {
-    if (this._root) this._root.unmount();
-    this._overlay.remove();
-    this._panel.remove();
-  }
+export function SettingsPanel() {
+  const closePanel = useDockStore((s) => s.closePanel);
+  return <SettingsPanelApp onClose={() => closePanel('settings')} onSave={getOnSettingsSave()} />;
 }

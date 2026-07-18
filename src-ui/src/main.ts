@@ -25,16 +25,13 @@ import { setLang } from './i18n';
 import { loadSettings } from './settings';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
-import { CheckPanel, type CheckResult } from './ui/check';
-import { ConstraintsPanel } from './ui/constraints';
-import { DataflowPanel } from './ui/dataflow-panel';
+import { setDataflowQueryParser, setDockStarGraph, setOnSettingsSave } from './ui/dock-config';
+import { useDockStore } from './ui/dock-store';
 import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { GraphInteraction } from './ui/graph-interaction';
-import { HotspotsPanel } from './ui/hotspots';
 import { getPanelStore } from './ui/panel-store';
-import { TimelinePanel } from './ui/react/TimelinePanel';
-import { SettingsPanel } from './ui/settings-panel';
+import type { CheckResult } from './ui/react/CheckPanel';
 import { isSamePath, Workspace } from './workspace';
 
 // Lazy FileViewer — avoids pulling Monaco (~5MB) into initial bundle
@@ -121,12 +118,8 @@ let agentViz: AgentVisualizer | null = null;
 // when deactivate() stalls on watcher teardown.
 let _switching = false;
 
-// Panel singletons
+// Panel singletons（dock 面板已收编进 App 树 — 开合/数据走 ui/dock-store）
 let chatPanel: ChatCore;
-let checkPanel: CheckPanel;
-let timelinePanel: TimelinePanel;
-let hotspotsPanel: HotspotsPanel;
-let dataflowPanel: DataflowPanel;
 
 // ── Folder picker ──
 
@@ -183,7 +176,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     let ws: Workspace;
     try {
       console.log('[switchWorkspace] calling Workspace.open...');
-      ws = await Workspace.open(folder, starGraph, chatPanel, checkPanel, opts, { onStatusChange, onLoadingChange });
+      ws = await Workspace.open(folder, starGraph, chatPanel, opts, { onStatusChange, onLoadingChange });
       console.log('[switchWorkspace] Workspace.open returned');
     } catch (err: any) {
       console.error('[switchWorkspace] Workspace.open threw:', err);
@@ -213,14 +206,14 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     setLoading(false);
 
     try {
-      await ws.setupAgent(chatPanel, checkPanel);
+      await ws.setupAgent(chatPanel);
     } catch (e) {
       console.error('[switchWorkspace] setupAgent failed:', e);
     }
 
     chatPanel.setProjectPath(folder);
     chatPanel.autoRestoreLastSession(folder).catch(() => {});
-    ws.runCheck(checkPanel);
+    ws.runCheck();
     await rpc('workspace_start_watcher').catch(() => {});
   } finally {
     _switching = false;
@@ -233,7 +226,7 @@ function setLoading(active: boolean, folder?: string): void {
 }
 
 function resetCheckPanelState(): void {
-  checkPanel.update({
+  useDockStore.getState().setCheckResult({
     passed: true,
     timestamp: '',
     changed_files: [],
@@ -257,18 +250,16 @@ async function notifyAllPanels(ws: Workspace): Promise<void> {
   welcome.classList.add('hidden');
   graphEl.classList.remove('hidden');
   chatPanel.setProjectPath(ws.path);
-  timelinePanel.setProjectPath(ws.path);
-  hotspotsPanel.setProjectPath(ws.path);
+  useDockStore.getState().setProjectPath(ws.path);
   await loadFileViewer();
   FV().get().setProjectPath(ws.path);
-  if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().load(ws.path);
   bus.emit('workspace:switched');
 }
 
-// ── Check (thin wrapper) ──
+// ── Check ──
 
 async function runCheck(): Promise<void> {
-  if (workspace) await workspace.runCheck(checkPanel);
+  if (workspace) await workspace.runCheck();
 }
 
 // ── Search ──
@@ -365,19 +356,16 @@ async function reanalyze(): Promise<void> {
 // ── Esc 逐层关闭（快捷键经 useGlobalKeys → actions 分发到此）──
 
 function escLayer(): void {
+  const dock = useDockStore.getState();
   if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
-  else if (timelinePanel.isOpen()) timelinePanel.close();
-  else if (hotspotsPanel.isOpen()) hotspotsPanel.close();
-  else if (checkPanel.isOpen()) checkPanel.close();
+  else if (dock.isOpen('timeline')) dock.closePanel('timeline');
+  else if (dock.isOpen('hotspots')) dock.closePanel('hotspots');
+  else if (dock.isOpen('check')) dock.closePanel('check');
   else if (chatPanel.isOpen()) chatPanel.close();
   else if (FV() && FV().get().isOpen) FV().get().close();
   else starGraph.clearAgentHighlight();
 }
 
-/** 面板开合快照 → shell-store（DockRail 数据源；shell.onPanelChanged 与动作末尾双驱动） */
-function syncPanels(): void {
-  useShellStore.getState().setPanels(shell.states());
-}
 // ── Helper: set up agent with placeholder workspace (no project loaded) ──
 async function setupPlaceholderAgent(): Promise<void> {
   if (workspace) return;
@@ -389,7 +377,7 @@ async function setupPlaceholderAgent(): Promise<void> {
     pushStatus(msg);
   };
   try {
-    await ws.setupAgent(chatPanel, checkPanel);
+    await ws.setupAgent(chatPanel);
   } catch (e) {
     console.error('[init] setupAgent failed:', e);
   }
@@ -539,9 +527,6 @@ async function init(): Promise<void> {
   useCoreStore.getState().setChatCore(chatPanel);
   chatPanel.setStarGraph(starGraph);
 
-  // Check panel
-  checkPanel = new CheckPanel(document.body);
-
   // Agent visualizer
   agentViz = new AgentVisualizer(starGraph);
   chatPanel.setOnTrailToggle(() => agentViz?.toggleTrail());
@@ -549,18 +534,11 @@ async function init(): Promise<void> {
   // Graph interaction
   const _graphInteraction = new GraphInteraction(); // ponytail: side-effect constructor, event bus listeners
 
-  // Timeline
-  timelinePanel = new TimelinePanel(document.body);
-
-  // Hotspots
-  hotspotsPanel = new HotspotsPanel(document.body);
-  hotspotsPanel.setGraph(starGraph);
-
-  // Dataflow panel (floating window)
-  dataflowPanel = new DataflowPanel(document.body);
+  // Dock 面板外部依赖注入（组件已收编进 App 树，这里只写配置槽）
+  setDockStarGraph(starGraph);
 
   // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
-  dataflowPanel.onParseQuery = async (nl: string): Promise<string[]> => {
+  setDataflowQueryParser(async (nl: string): Promise<string[]> => {
     try {
       if (!workspace?.prov) return [];
       const gen = workspace.prov.stream(new AbortController().signal, {
@@ -587,17 +565,9 @@ async function init(): Promise<void> {
     } catch {
       return [];
     }
-  };
+  });
 
   // ── AppShell wiring — replaces bus commands with explicit dispatch ──
-  // Register all panels so shell knows who's open
-  shell.register({ id: 'check', isOpen: () => checkPanel.isOpen() });
-  shell.register({ id: 'chat', isOpen: () => chatPanel.isOpen() });
-  shell.register({ id: 'timeline', isOpen: () => timelinePanel.isOpen() });
-  shell.register({ id: 'hotspots', isOpen: () => hotspotsPanel.isOpen() });
-  shell.register({ id: 'constraints', isOpen: () => ConstraintsPanel.get().isOpen() });
-  shell.register({ id: 'dataflow', isOpen: () => dataflowPanel.isOpen() });
-  // Wire navigation / highlight / agent-query commands
   shell.wire({
     navigateToNode: (name) => starGraph.focusNode(name),
     navigateToFile: async (path, line) => {
@@ -608,24 +578,21 @@ async function init(): Promise<void> {
     highlightFolder: (path) => starGraph.highlightFolder(path),
     clearHighlight: () => starGraph.clearFileHighlight(),
     queryAgent: (question) => {
-      if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+      const dock = useDockStore.getState();
+      if (dock.isOpen('constraints')) dock.closePanel('constraints');
       chatPanel.ask(question);
     },
   });
 
   // ── Bus notifications (pure notification — sender doesn't care who listens) ──
-  bus.on('check:history', ({ checkData, timestamp }: { checkData: CheckResult; timestamp: string }) => {
-    checkPanel.showHistory(checkData, timestamp);
-    syncPanels();
+  bus.on('check:history', ({ checkData }: { checkData: CheckResult; timestamp: string }) => {
+    // 旧 showHistory 从未消费 timestamp — 行为保持：展示该历史结果并展开简报面板
+    useDockStore.getState().showCheckHistory(checkData);
   });
 
   bus.on('chat:turn-done', () => {
     if (workspace?.path) chatPanel.scheduleAutoSave(workspace.path);
   });
-
-  // ── 面板开合快照 → shell-store（DockRail 唯一数据源）──
-  shell.onPanelChanged = syncPanels;
-  syncPanels();
 
   // ── 动作注册（CommandBar / 命令面板 / 全局快捷键统一入口）──
   registerActions([
@@ -658,10 +625,10 @@ async function init(): Promise<void> {
       label: '面板：时间轴',
       icon: 'timeline',
       run: () => {
-        if (hotspotsPanel.isOpen()) hotspotsPanel.close();
-        if (workspace?.path) timelinePanel.setProjectPath(workspace.path);
-        timelinePanel.toggle();
-        syncPanels();
+        const dock = useDockStore.getState();
+        if (dock.isOpen('hotspots')) dock.closePanel('hotspots');
+        if (workspace?.path) dock.setProjectPath(workspace.path);
+        dock.togglePanel('timeline');
       },
     },
     {
@@ -670,10 +637,10 @@ async function init(): Promise<void> {
       label: '面板：热点',
       icon: 'fire',
       run: () => {
-        if (timelinePanel.isOpen()) timelinePanel.close();
-        if (workspace?.path) hotspotsPanel.setProjectPath(workspace.path);
-        hotspotsPanel.toggle();
-        syncPanels();
+        const dock = useDockStore.getState();
+        if (dock.isOpen('timeline')) dock.closePanel('timeline');
+        if (workspace?.path) dock.setProjectPath(workspace.path);
+        dock.togglePanel('hotspots');
       },
     },
     {
@@ -682,11 +649,11 @@ async function init(): Promise<void> {
       label: '面板：简报',
       icon: 'check',
       run: () => {
-        if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
-        checkPanel.toggle();
-        if (checkPanel.isOpen() && workspace?.path) runCheck();
+        const dock = useDockStore.getState();
+        if (dock.isOpen('constraints')) dock.closePanel('constraints');
+        dock.togglePanel('check');
+        if (dock.isOpen('check') && workspace?.path) runCheck();
         useShellStore.getState().setViolations(0); // 打开即视为已知晓
-        syncPanels();
       },
     },
     {
@@ -695,10 +662,10 @@ async function init(): Promise<void> {
       label: '面板：约束',
       icon: 'constraints',
       run: () => {
-        if (workspace?.path) ConstraintsPanel.get().load(workspace.path);
-        if (checkPanel.isOpen()) checkPanel.close();
-        ConstraintsPanel.get().toggle();
-        syncPanels();
+        const dock = useDockStore.getState();
+        if (workspace?.path) dock.setProjectPath(workspace.path);
+        if (dock.isOpen('check')) dock.closePanel('check');
+        dock.togglePanel('constraints');
       },
     },
     {
@@ -707,8 +674,7 @@ async function init(): Promise<void> {
       label: '面板：数据流',
       icon: 'dataflow',
       run: () => {
-        dataflowPanel.toggle();
-        syncPanels();
+        useDockStore.getState().togglePanel('dataflow');
       },
     },
     {
@@ -718,10 +684,10 @@ async function init(): Promise<void> {
       icon: 'chat',
       kbd: 'ctrl L',
       run: () => {
-        if (checkPanel.isOpen()) checkPanel.close();
-        if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+        const dock = useDockStore.getState();
+        if (dock.isOpen('check')) dock.closePanel('check');
+        if (dock.isOpen('constraints')) dock.closePanel('constraints');
         chatPanel.toggle();
-        syncPanels();
       },
     },
     {
@@ -730,7 +696,7 @@ async function init(): Promise<void> {
       label: '设置…',
       icon: 'settings',
       kbd: 'ctrl ,',
-      run: () => SettingsPanel.get().toggle(),
+      run: () => useDockStore.getState().togglePanel('settings'),
     },
     {
       id: 'toggle-shortcuts',
@@ -746,15 +712,14 @@ async function init(): Promise<void> {
     { id: 'esc-layer', group: '操作', label: '逐层关闭', icon: 'close', run: escLayer },
   ]);
 
-  // Settings
-  const settingsPanel = SettingsPanel.get();
-  settingsPanel.setOnSave(async () => {
+  // Settings（保存后的 agent 重建链必须保住）
+  setOnSettingsSave(async () => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph.resize();
     if (workspace) {
       // Save current conversation BEFORE re-initializing agent — avoids data loss
       await chatPanel.saveActiveSession(workspace.path).catch(() => {});
-      await workspace.setupAgent(chatPanel, checkPanel);
+      await workspace.setupAgent(chatPanel);
       if (workspace?.agent) {
         await chatPanel
           .autoRestoreLastSession(workspace.path)
@@ -762,7 +727,7 @@ async function init(): Promise<void> {
       }
     }
   });
-  chatPanel.setOnOpenSettings(() => settingsPanel.open());
+  chatPanel.setOnOpenSettings(() => useDockStore.getState().openPanel('settings'));
 
   // Save sessions on close — scheduleAutoSave is sync (sets timeout).
   // LocalStorage write inside saveActiveSession is sync, so it completes
@@ -815,8 +780,7 @@ async function init(): Promise<void> {
         // Graph exists but no path — render without workspace
         starGraph.render(graph);
         pushStatus('⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目');
-        timelinePanel.setProjectPath(null);
-        hotspotsPanel.setProjectPath(null);
+        useDockStore.getState().setProjectPath(null);
         setLoading(false);
         await setupPlaceholderAgent();
         return;

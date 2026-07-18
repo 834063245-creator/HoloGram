@@ -129,43 +129,18 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
   );
 };
 
-// ── Module-level API (kept as thin wrapper) ──
+// ── Module-level API（P3：懒 root 已删 — 请求写入 overlay-store，由单树 ContextMenuHost 渲染）──
 
-let _activeRoot: import('react-dom/client').Root | null = null;
-let _activeContainer: HTMLDivElement | null = null;
-
-function dismiss(): void {
-  if (_activeRoot) {
-    _activeRoot.unmount();
-    _activeRoot = null;
-  }
-  if (_activeContainer) {
-    _activeContainer.remove();
-    _activeContainer = null;
-  }
-}
+import { useOverlayStore } from '../overlay-store';
 
 export function showContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
-  dismiss();
+  useOverlayStore.getState().showContextMenu({ x: e.clientX, y: e.clientY, items });
+}
 
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  _activeContainer = container;
-
-  // Dynamic import to avoid circular deps: this module is imported synchronously,
-  // but createRoot needs react-dom/client which we lazy-load here.
-  import('react-dom/client').then(({ createRoot }) => {
-    // Guard: another menu may have been opened while we were importing
-    if (_activeContainer !== container) return;
-    const root = createRoot(container);
-    _activeRoot = root;
-    root.render(
-      React.createElement(ContextMenuApp, {
-        items,
-        x: e.clientX,
-        y: e.clientY,
-        onDismiss: dismiss,
-      }),
-    );
-  });
+/** 单 React 树内的宿主（App 挂载）。 */
+export function ContextMenuHost() {
+  const req = useOverlayStore((s) => s.contextMenu);
+  const dismiss = useOverlayStore((s) => s.dismissContextMenu);
+  if (!req) return null;
+  return <ContextMenuApp items={req.items} x={req.x} y={req.y} onDismiss={dismiss} />;
 }

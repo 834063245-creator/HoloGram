@@ -44,8 +44,6 @@ interface ShellState {
   folded: boolean;
   paletteOpen: boolean;
   shortcutsOpen: boolean;
-  /** 面板开合快照（shell.states() 同步而来） */
-  panels: Record<string, boolean>;
 
   /** 写状态文本并压入日志环 */
   pushStatus: (msg: string) => void;
@@ -59,7 +57,6 @@ interface ShellState {
   setFolded: (b: boolean) => void;
   setPaletteOpen: (b: boolean) => void;
   setShortcutsOpen: (b: boolean) => void;
-  setPanels: (p: Record<string, boolean>) => void;
 }
 
 const STATUS_LOG_MAX = 15;
@@ -76,7 +73,6 @@ export const useShellStore = create<ShellState>((set) => ({
   folded: false,
   paletteOpen: false,
   shortcutsOpen: false,
-  panels: {},
 
   pushStatus: (msg) =>
     set((st) => ({
@@ -92,5 +88,4 @@ export const useShellStore = create<ShellState>((set) => ({
   setFolded: (b) => set({ folded: b }),
   setPaletteOpen: (b) => set({ paletteOpen: b }),
   setShortcutsOpen: (b) => set({ shortcutsOpen: b }),
-  setPanels: (p) => set({ panels: p }),
 }));

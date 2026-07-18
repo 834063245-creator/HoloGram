@@ -1,10 +1,10 @@
 # HoloGram 前端「观测台」重构 — Handoff
 
-> 交接时间：2026-07-18 · 上一棒：P0 → P2′-2b 已完成并全部入库
+> 交接时间：2026-07-18 · 上一棒：P0 → P3 已完成并全部入库
 > **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`，然后按「下一步精确清单」执行。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
-## 一、已完成（4 个 commit，全部在 main）
+## 一、已完成（6 个 commit，全部在 main）
 
 | Commit | 阶段 | 内容 |
 |---|---|---|
@@ -13,19 +13,24 @@
 | `f2acd6e` | 修复 | 窗口拖拽：`.cb-bar` 补 `-webkit-app-region: drag`（按钮/输入 no-drag） |
 | `1e6a08f` | P2′-2a 聊天 | 无头 `ChatCore`（chat-core.ts）+ 观测信标视图 `ChatBeacon`；删 ui/chat.ts、chat-dom.ts、chat-anim.ts；`chat-session/chat-stream/part-mutator/execution-state` 逻辑**零改动** |
 | `c0a169a` | P2′-2b 内联 | 六个 React Controller 包装类删除，组件直接挂 ChatBeacon 树；core `register*` 改收组件 ref 句柄（Messages 收 `MessagesApi{bump}`）；AtAutocomplete 的 navigate/select/open 从 DOM-scraping 重写为状态驱动（顺带修掉选中后弹层滞留、紧接 Enter 误选二次）；PromptShelf 卸载时取消挂起 Promise；`chat-session/chat-stream` 零改动 |
+| `⬜本期` | P3 六面板收编 | `app/panels/`（panel-def 注册表 + DockPanel + FileTranslatorPortal）；`ui/dock-store`（开合+projectPath+checkResult 事实源）/ `dock-config`（依赖注入槽）/ `overlay-store`（portal 目标）三件套；六面板 + ContextMenu + FileTranslator 全部去 Controller 进单树（FileTranslator 经 createPortal 保 FileViewer 挂载点）；删五个 wrapper；`Workspace.open/setupAgent/runCheck/doGraphUpdate` 摘掉 checkPanel 形参；app-shell 剥掉面板注册表，shell-store 删 panels 快照；CheckPanel 清 gate/resize 死代码 + 畸形结果渲染加固（冒烟抓到的单树崩溃）；Settings 同 id 嵌套消除；`chat-session/chat-stream` 零改动 |
 
 ## 二、当前架构快照
 
 ```
 src-ui/src/
 ├── app/                        ← 新架构（单 React 根 + zustand）
-│   ├── App.tsx                 壳：CommandBar/DockRail×2/StatusBar/CommandPalette/ShortcutsOverlay/ChatBeacon
-│   ├── shell-store.ts          chrome 唯一数据源（statusText/statusLog/graphStats/violations/analyzing/panels/…）
+│   ├── App.tsx                 壳：CommandBar/DockRail×2/StatusBar/CommandPalette/ShortcutsOverlay/ChatBeacon/DockPanel/overlay 宿主
+│   ├── shell-store.ts          chrome 唯一数据源（statusText/statusLog/graphStats/violations/analyzing/…；panels 快照已删）
 │   ├── actions.ts              动作注册表；main.ts 注入实现，React 只认 id
 │   ├── bridge-adapters.ts      bus→store 适配（目前只有 check:result）
 │   ├── useGlobalKeys.ts        全局快捷键（Ctrl+K/L/D/, F R ? Esc）
 │   ├── tokens.css / shell.css  --obs-* token + chrome 样式
 │   ├── fonts.ts                fontsource 自托管
+│   ├── panels/
+│   │   ├── panel-def.ts        六面板注册表（id/side/title/icon/askAgent/unmountOnClose/component）
+│   │   ├── DockPanel.tsx       面板容器（注册表驱动；dataflow/settings 关闭即卸载）
+│   │   └── FileTranslatorPortal.tsx  FileTranslator 单树 portal 宿主
 │   └── chat/
 │       ├── chat-core.ts        无头 ChatCore：会话/流式/权限/goal 全部编排，公开 API 与旧 ChatPanel 一致
 │       ├── core-instance.ts    useCoreStore（main.ts 注入 core，App 就绪后渲染 ChatBeacon）
@@ -33,19 +38,28 @@ src-ui/src/
 │       ├── Composer.tsx        输入框（input-store.inputText 受控）
 │       ├── HistoryPanel.tsx    历史会话（portal 到 body）
 │       └── beacon.css          chat.css 之上的增量覆盖（宽 640px、CSS 过渡、a11y 复位）
-├── ui/                         ← 旧层（P3/P4 逐步清）
+├── ui/                         ← 旧层（P4/P5 逐步清）
 │   ├── chat-session.ts / chat-stream.ts / part-mutator.ts / message-model.ts / chat-store.ts  ★ 逻辑，勿动
 │   ├── panel-store.ts          per-panel UI 状态（P2′ 加了 goalRecord/lastAgentDetail）
-│   ├── react/                  React 岛（纯组件 + ref 句柄导出；2b 已删全部 Controller 包装类）
+│   ├── dock-store.ts           六面板开合 + projectPath + checkResult 单一事实源（P3；替代 shell 探针+syncPanels）
+│   ├── dock-config.ts          面板外部依赖注入槽（onParseQuery/starGraph/onSettingsSave；免注册竞态）
+│   ├── overlay-store.ts        ContextMenu / FileTranslator 的 portal 渲染目标（P3）
+│   ├── react/                  React 岛（纯组件；Controller 包装类已全部删除）
 │   │   ├── ChatMessages.tsx / ChatFooter.tsx / ChatHint.tsx / PromptShelf.tsx / AtAutocomplete.tsx / SlashPanel.tsx
-│   │   └── base.css / chat.css / panels.css   旧样式（聊天类契约仍生效；P5 删除）
+│   │   ├── CheckPanel.tsx / ConstraintsPanel.tsx / DataflowPanel.tsx / HotspotsPanel.tsx / TimelinePanel.tsx / SettingsPanel.tsx
+│   │   ├── ContextMenu.tsx（含 ContextMenuHost）/ FileTranslatorPanel.tsx（导出 FileTranslatorApp）
+│   │   └── base.css / chat.css / panels.css   旧样式（类契约仍生效；P5 删除）
+│   ├── app-shell.ts            导航/高亮/queryAgent 命令（面板注册表已删）
+│   ├── file-translator.ts      FileViewer 兼容 wrapper：DOM 挂载点 + 写 overlay-store（无独立 root）
 │   ├── graph.ts (3657 行)      StarGraph 上帝类（P4 拆；updateStatus 已写 shell-store）
 │   ├── graph-{scene,fx,layout,colors,fold,analysis,tooltip,ui,textures,shaders}.ts  卫星
 │   └── events.ts               bus（冻结：~26 emit/22 on，仅 11 文件 import）
-└── main.ts                     引导器：StarGraph + Workspace + 面板单例 + 动作注册 + createRoot(<App/>)
+└── main.ts                     引导器：StarGraph + Workspace + dock 配置槽注入 + 动作注册 + createRoot(<App/>)
 ```
 
 聊天数据流：Agent → `eventSink` → prefixed bus(`p:{panelId}:agent:event`) → `Stream.renderEvent` → **per-session zustand msg stores** → React 订阅渲染。视图与逻辑之间只隔 store。
+
+面板数据流：main/workspace → `useDockStore.getState()`（setCheckResult/openPanel/setProjectPath）→ 面板组件订阅渲染；`Workspace.open/setupAgent/runCheck/doGraphUpdate` 均已摘掉 checkPanel 形参。五个旧 wrapper（check/constraints/dataflow-panel/hotspots/settings-panel.ts）已删。
 
 ## 三、铁律（违反即返工）
 
@@ -63,18 +77,7 @@ src-ui/src/
 
 权限卡链路（`permission-ask` → `showPermissionCard` → enqueuePerm → PromptShelf）与 GoalStrip（panel-store.goalRecord）均已组件化。**剩手测**：权限卡 Enter=允许/Esc=拒绝（注意：Ctrl+Y 只是 tooltip 文本，旧版就没实现 handler，别当 bug 修——要补也是独立需求）；goal 暂停/恢复/取消。
 
-### P3 — 六面板收编（估 2–3 天）
-
-定义 `app/panels/panel-def.ts`：`{ id, side, title, icon, component, askAgent? }`，DockRail/DockPanel 读注册表。逐面板注意：
-
-- **Check**（ui/check.ts + react/CheckPanel.tsx）：数据 push（main/Workspace.runCheck → `checkPanel.update(result)`）+ 自取 rpc；wrapper 删除后由 shell-store 或注册回调接 update。
-- **Constraints**（ui/constraints.ts）：`.get()` 单例，main.ts 多处直调（load/toggle/isOpen/close）——调用点全改 action。
-- **Dataflow**（ui/dataflow-panel.ts）：main.ts 注入了 `onParseQuery`（NL→symbol 的 Agent 兜底），迁移时把该闭包挪进 panel-def。
-- **Hotspots**（ui/hotspots.ts）：持有 starGraph（`setGraph`），点行 → `shell.navigateToFile` + 高亮。
-- **Timeline**（react/TimelinePanel.tsx）：唯一无 wrapper 的（main.ts 直接用其 Controller）；听 `timeline:refresh`，发 `check:history`。
-- **Settings**（ui/settings-panel.ts）：`.get()` 单例 + `setOnSave`（main.ts:756 的 agent 重建链）。
-- **FileTranslator**：由 FileViewer 构造（file-viewer.ts:142），保持其挂载点，只去独立 root。
-- **ContextMenu**：portal 懒 root，收进单树 portal。
+### P3 — 已完成 ✅（六面板收编进 DockPanel，见上方架构快照与契约速查）
 
 ### P4 — StarGraph 拆解（估 2–3 天，零视觉变化）
 
@@ -114,11 +117,15 @@ npx vite --port 1420 --strictPort   # 起 dev server
 4. chat-session ctx 的 `panel/sessionTabs/tabBar` 是**分离桩元素**（吸收 DOM 写入，不可见）——这是故意的兼容桥，别当垃圾删。
 5. 浏览器 mock 下 `mock-data.ts` 有未实现命令的 warn（sandbox_status/workspace_activate），无害。
 6. index.html 里有个上古未闭合 `<style>` 空标签——P5 重写 index.html 时顺手清。
+7. mock 未实现 `hologram_run_check`（走兜底返回 `{mock:true,…}` 畸形结果）——dev mock 下简报面板会展开且内容显示 "undefined 文件"，是 mock 缺口非回归（真机引擎返回完整 CheckResult）。P3 已给 CheckPanel 渲染加 `|| []` 兜底防单树崩溃。
+8. Windows 上 Edit 工具会把文件写成 CRLF，而仓库工作树惯例是 LF（`.gitattributes` 只钉二进制）——改完跑 `sed -i 's/\r$//' <改动文件>`，否则 biome format 会报差异。
 
 ## 七、契约速查（省得重读代码）
 
 **ChatCore 公开 API**（main.ts/workspace.ts 契约面）：`panelId`、`eventSink`、`setAgent/getAgent`、`setAgentFactory`、`setToolSchemas`、`setOnOpenSettings/setOnTrailToggle`（视图侧用 fireOpenSettings/fireTrailToggle）、`setStarGraph`、`setProjectPath`、`toggle/open/close/isOpen/summonPanel/collapseToInput/collapseToPill/expandToInput/fadeToHud/restoreFromHud`、`ask(q)`、`showPermissionCard(tool,reason,subject,danger?)`、`switchSession/closeSession/createNewSession`、`saveActiveSession/scheduleAutoSave/autoRestoreLastSession`、`listSavedSessions/loadSessionFromDisk/deleteSessionFile`、`toggleHistory/closeHistory`、`runGoalResume/cancelGoal`、`sendMessage/abort`、`onExecChange(cb)/execBusy`、`register{Composer,PromptShelf,Slash,At,Footer,Messages}`（收组件 ref 句柄；Messages 收 `MessagesApi{bump}`）、消息回调 `copyText/navigateToNode/editUserMessage/resendUserMessage/retryAssistant`、`handleAtInput/applyAtSelect/atOpen/atNavigate/atSelect`、`handleSlashInput/slashVisible/slashNavigate/slashSelect/hideSlash/executeCommand`、`openFilePicker/handleFileDrop/removeAttachedFile`、`_exec`（workspace 以 `chatPanel['_exec']` 取用——字段名必须保留）。
 
-**Store 地图**：`shell-store`（chrome）· `panel-store`（面板内 UI：mode/tabs/tools/tokens/focus/goalRecord…）· `messages-store`（per-panel 与 per-session `${storeId}:${sid}` 消息）· `session-store`（会话元数据/activeIdx/tokens）· `input-store`（文本/附件/历史/草稿）· `chat-store`（四者注册表 + msgStoreFor）。
+**Store 地图**：`shell-store`（chrome）· `panel-store`（面板内 UI：mode/tabs/tools/tokens/focus/goalRecord…）· `messages-store`（per-panel 与 per-session `${storeId}:${sid}` 消息）· `session-store`（会话元数据/activeIdx/tokens）· `input-store`（文本/附件/历史/草稿）· `chat-store`（四者注册表 + msgStoreFor）· `dock-store`（六面板开合 + projectPath + checkResult）· `overlay-store`（ContextMenu/FileTranslator portal 目标）。
+
+**Dock 面板操作面**（main.ts/actions/workspace 都用 `useDockStore.getState()`）：`openPanel/closePanel/togglePanel/isOpen(id)`、`setProjectPath(p)`、`setCheckResult(r)`（cacheCheckResult + 失败自动展开）、`showCheckHistory(r)`。外部依赖经 `ui/dock-config`：`setDataflowQueryParser`（NL→symbol Agent 兜底）、`setDockStarGraph`、`setOnSettingsSave`（main.ts 的 agent 重建链）。
 
 **bus 高频事件**：`workspace:switched`、`graph:rendered`、`graph:node-clicked`、`check:result/history`、`chat:turn-done`、`agent:diag/event/progress`、`goal:state`、`highlight:file|folder|clear`、`navigate:file`、`prompt:ask`、`timeline:refresh`。最大生产者 workspace.ts，最大消费者（旧 chat.ts 位置）现在是 chat-core。

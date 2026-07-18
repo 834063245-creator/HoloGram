@@ -168,6 +168,6 @@ export const bus = new EventBus();
 // single source of truth, enforced by emit/on overloads.
 //
 // AppShell commands (not bus):
-//   shell.notifyPanelChanged() / navigateToNode() / navigateToFile()
+//   shell.navigateToNode() / navigateToFile()
 //   shell.highlightFile() / highlightFolder() / clearHighlight()
 //   shell.queryAgent()
