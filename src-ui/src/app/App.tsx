@@ -9,6 +9,8 @@ import { useEffect } from 'react';
 import { initBridgeAdapters } from './bridge-adapters';
 import { CommandBar } from './CommandBar';
 import { CommandPalette } from './CommandPalette';
+import { ChatBeacon } from './chat/ChatBeacon';
+import { useCoreStore } from './chat/core-instance';
 import { DockRail } from './DockRail';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { StatusBar } from './StatusBar';
@@ -16,6 +18,7 @@ import { useGlobalKeys } from './useGlobalKeys';
 
 export function App() {
   useGlobalKeys();
+  const core = useCoreStore((s) => s.core);
   useEffect(() => {
     initBridgeAdapters();
   }, []);
@@ -27,6 +30,7 @@ export function App() {
       <StatusBar />
       <CommandPalette />
       <ShortcutsOverlay />
+      {core ? <ChatBeacon core={core} /> : null}
     </>
   );
 }

@@ -11,18 +11,20 @@ import './ui/react/panels.css';
 import './app/fonts';
 import './app/tokens.css';
 import './app/shell.css';
+import './app/chat/beacon.css';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { log } from './agent/logger';
 import { App } from './app/App';
 import { registerActions } from './app/actions';
+import { ChatCore } from './app/chat/chat-core';
+import { useCoreStore } from './app/chat/core-instance';
 import { useShellStore } from './app/shell-store';
 import { isMockMode, rpc } from './bridge';
 import { setLang } from './i18n';
 import { loadSettings } from './settings';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
-import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { ConstraintsPanel } from './ui/constraints';
 import { DataflowPanel } from './ui/dataflow-panel';
@@ -120,7 +122,7 @@ let agentViz: AgentVisualizer | null = null;
 let _switching = false;
 
 // Panel singletons
-let chatPanel: ChatPanel;
+let chatPanel: ChatCore;
 let checkPanel: CheckPanel;
 let timelinePanel: TimelinePanel;
 let hotspotsPanel: HotspotsPanel;
@@ -403,59 +405,65 @@ async function init(): Promise<void> {
   document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
   starGraph.resize(); // CSS custom props changed → container shrunk → canvas must follow
 
-  const { listen } = await import('@tauri-apps/api/event');
+  // Tauri 事件监听 — 纯浏览器 dev(mock) 环境无 __TAURI_INTERNALS__，
+  // listen 会抛错并中断 init；降级为静默跳过（权限卡在 mock 下不会出现）
+  try {
+    const { listen } = await import('@tauri-apps/api/event');
 
-  await listen('unity-event', (event: any) => {
-    const { event: evt, payload } = event.payload;
-    console.log('[Unity]', evt, payload);
-    if (evt === 'node_double_clicked') {
-      const parts = (payload as string).split('|');
-      if (parts.length > 1 && parts[1]) shell.navigateToFile(parts[1]);
-    }
-    if (evt === 'path_selected') {
-      const parts = (payload as string).split('|');
-      if (parts.length === 2) {
-        chatPanel.open();
-        chatPanel.ask(
-          `分析从 ${parts[0]} 到 ${parts[1]} 的依赖路径。请分析这条依赖链的架构合理性、风险点、以及如果修改起点的潜在影响范围。`,
-        );
+    await listen('unity-event', (event: any) => {
+      const { event: evt, payload } = event.payload;
+      console.log('[Unity]', evt, payload);
+      if (evt === 'node_double_clicked') {
+        const parts = (payload as string).split('|');
+        if (parts.length > 1 && parts[1]) shell.navigateToFile(parts[1]);
       }
-    }
-  });
+      if (evt === 'path_selected') {
+        const parts = (payload as string).split('|');
+        if (parts.length === 2) {
+          chatPanel.open();
+          chatPanel.ask(
+            `分析从 ${parts[0]} 到 ${parts[1]} 的依赖路径。请分析这条依赖链的架构合理性、风险点、以及如果修改起点的潜在影响范围。`,
+          );
+        }
+      }
+    });
 
-  // ── Backend permission-ask → frontend inline chat card bridge ──
-  const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage']);
-  await listen('permission-ask', (event: any) => {
-    const p = event.payload as {
-      requestId: string;
-      tool: string;
-      path: string;
-      reason: string;
-      danger?: string;
-      suggestions: Array<{ rule: string; behavior: string }>;
-    };
+    // ── Backend permission-ask → frontend inline chat card bridge ──
+    const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage']);
+    await listen('permission-ask', (event: any) => {
+      const p = event.payload as {
+        requestId: string;
+        tool: string;
+        path: string;
+        reason: string;
+        danger?: string;
+        suggestions: Array<{ rule: string; behavior: string }>;
+      };
 
-    // Permission mode bypass: yolo → all auto, auto → safe edits only
-    const permMode = getPanelStore(chatPanel.panelId).getState().permissionMode;
-    if (permMode === 'yolo' || (permMode === 'auto' && AUTO_WHITELIST.has(p.tool))) {
-      rpc('permission_ask_response', {
-        requestId: p.requestId,
-        allow: true,
-        remember: false,
-      });
-      return;
-    }
+      // Permission mode bypass: yolo → all auto, auto → safe edits only
+      const permMode = getPanelStore(chatPanel.panelId).getState().permissionMode;
+      if (permMode === 'yolo' || (permMode === 'auto' && AUTO_WHITELIST.has(p.tool))) {
+        rpc('permission_ask_response', {
+          requestId: p.requestId,
+          allow: true,
+          remember: false,
+        });
+        return;
+      }
 
-    chatPanel.showPermissionCard(p.tool, p.reason, p.path, p.danger).then((result) => {
-      rpc('permission_ask_response', {
-        requestId: p.requestId,
-        allow: result.allow,
-        remember: result.remember || undefined,
-        ruleToAdd: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
-        ruleBehavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0].behavior : undefined,
+      chatPanel.showPermissionCard(p.tool, p.reason, p.path, p.danger).then((result) => {
+        rpc('permission_ask_response', {
+          requestId: p.requestId,
+          allow: result.allow,
+          remember: result.remember || undefined,
+          ruleToAdd: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
+          ruleBehavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0].behavior : undefined,
+        });
       });
     });
-  });
+  } catch {
+    /* browser mock: no tauri event bus */
+  }
 
   // Browser shortcut suppression
   (() => {
@@ -526,8 +534,9 @@ async function init(): Promise<void> {
     })
     .catch(() => {});
 
-  // Chat panel
-  chatPanel = new ChatPanel(document.body);
+  // Chat core（无头）+ React 信标视图（经 core-instance 注入 App 树）
+  chatPanel = new ChatCore();
+  useCoreStore.getState().setChatCore(chatPanel);
   chatPanel.setStarGraph(starGraph);
 
   // Check panel

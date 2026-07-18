@@ -24,7 +24,9 @@ vi.mock('../src/bridge', () => ({
 // ── Mock DOM-heavy libs that don't matter for session logic ──
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) } }));
+vi.mock('../src/ui/events', () => ({
+  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
+}));
 vi.mock('../src/ui/app-shell', () => ({
   shell: { register: vi.fn(), notifyPanelChanged: vi.fn(), wire: vi.fn(), navigateToFile: vi.fn() },
 }));
@@ -80,24 +82,15 @@ vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
 vi.mock('marked', () => ({ marked: { parse: (s: string) => s, lexer: (s: string) => [] } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
-import { ChatPanel } from '../src/ui/chat';
+import { ChatCore } from '../src/app/chat/chat-core';
 import * as Session from '../src/ui/chat-session';
 import { hashProjectPath, scanMaxSessionId, stripLineNumbers } from '../src/ui/chat-session';
 
 // ── Helpers ──
 
-/** Create a minimal ChatPanel in a detached DOM container. */
-function createChatPanel(): ChatPanel {
-  const container = document.createElement('div');
-  container.id = 'test-container';
-  document.body.appendChild(container);
-
-  // Add required global elements that buildDOM references
-  const graph = document.createElement('div');
-  graph.id = 'graph';
-  document.body.appendChild(graph);
-
-  return new ChatPanel(container);
+/** Create a minimal headless ChatCore (no DOM needed). */
+function createChatPanel(): ChatCore {
+  return new ChatCore();
 }
 
 /** Mock invoke to return session data on disk for read_file_content calls. */
@@ -113,7 +106,7 @@ function mockSessionFile(id: number, messages: any[], label = `会话 ${id}`, sa
 // ── Tests ──
 
 describe('ChatPanel session persistence', () => {
-  let panel: ChatPanel;
+  let panel: ChatCore;
 
   beforeEach(() => {
     // Clean localStorage between tests

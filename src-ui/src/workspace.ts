@@ -39,6 +39,7 @@ import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/
 import { createTaskTools, TaskManager } from './agent/task';
 import type { Tool } from './agent/tool';
 import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, ToolRegistry } from './agent/tool';
+import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createAnthropicProvider } from './provider/anthropic';
 import {
@@ -49,16 +50,15 @@ import {
   restoreSecrets,
   saveSettings,
 } from './settings';
-import type { ChatPanel } from './ui/chat';
 import { stripLineNumbers } from './ui/chat-session';
 import { msgStoreForActive } from './ui/chat-store';
 import type { CheckPanel, CheckResult } from './ui/check';
 import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
-import type { SubAgentPart } from './ui/message-model';
 import { getDiagnosticsForFile } from './ui/lsp-client';
-import { createSubAgentSink } from './ui/subagent-sink';
+import type { SubAgentPart } from './ui/message-model';
 import { getPanelStore } from './ui/panel-store';
+import { createSubAgentSink } from './ui/subagent-sink';
 
 // ═══════════════════════════════════════════════════════
 // Dynamic tool loading from engine registry
@@ -193,7 +193,7 @@ export class Workspace {
   static async open(
     path: string,
     starGraph: StarGraph,
-    chatPanel: ChatPanel,
+    chatPanel: ChatCore,
     checkPanel: CheckPanel,
     opts?: { skipAnalysis?: boolean; cachedGraph?: any },
     callbacks?: { onStatusChange?: (msg: string) => void; onLoadingChange?: (loading: boolean) => void },
@@ -418,7 +418,7 @@ export class Workspace {
   // Deactivate — save state, stop watcher, remove listeners
   // ═══════════════════════════════════════════════════════════════
 
-  async deactivate(chatPanel: ChatPanel): Promise<void> {
+  async deactivate(chatPanel: ChatCore): Promise<void> {
     this._active = false;
 
     // Save chat sessions
@@ -471,7 +471,7 @@ export class Workspace {
   // setupAgent — build the LLM agent with hologram/coding/memory tools
   // ═══════════════════════════════════════════════════════════════
 
-  async setupAgent(chatPanel: ChatPanel, checkPanel: CheckPanel): Promise<void> {
+  async setupAgent(chatPanel: ChatCore, checkPanel: CheckPanel): Promise<void> {
     if (this.agentSetupRunning) {
       this.agentSetupPending = true;
       return;
@@ -506,7 +506,7 @@ export class Workspace {
     }
   }
 
-  private async _setupAgentInner(chatPanel: ChatPanel, _checkPanel: CheckPanel): Promise<void> {
+  private async _setupAgentInner(chatPanel: ChatCore, _checkPanel: CheckPanel): Promise<void> {
     this._storeId = chatPanel.panelId;
 
     let settings = loadSettings();

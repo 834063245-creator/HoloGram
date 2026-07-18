@@ -5,6 +5,7 @@
 // Split from chat-store.ts (god store → domain stores).
 
 import { create } from 'zustand';
+import type { GoalRecord } from '../agent/goal-manager';
 import type { ToolSchema } from '../provider/types';
 
 export type PanelMode = 'pill' | 'input' | 'panel' | 'hud';
@@ -38,6 +39,10 @@ interface PanelStore {
   contextFilter: string;
   collaborationMode: CollaborationMode;
   permissionMode: PermissionMode;
+  /** P2′：goal 状态条记录（GoalStrip 组件数据源；active/paused 时有值） */
+  goalRecord: GoalRecord | null;
+  /** P2′：Agent 状态详情文本（如 '分析中…'；null 用默认标签） */
+  lastAgentDetail: string | null;
 
   setPanelMode: (mode: PanelMode) => void;
   setCollaborationMode: (mode: CollaborationMode) => void;
@@ -59,6 +64,8 @@ interface PanelStore {
   setHistoryOpen: (open: boolean) => void;
   setToolFilter: (filter: string) => void;
   setContextFilter: (filter: string) => void;
+  setGoalRecord: (r: GoalRecord | null) => void;
+  setLastAgentDetail: (s: string | null) => void;
 }
 
 export type PanelStoreApi = ReturnType<typeof createPanelStoreImpl>;
@@ -83,6 +90,8 @@ function createPanelStoreImpl() {
     contextFilter: '',
     collaborationMode: 'normal' as CollaborationMode,
     permissionMode: 'ask' as PermissionMode,
+    goalRecord: null,
+    lastAgentDetail: null,
 
     setPanelMode: (panelMode) => set({ panelMode }),
     setCollaborationMode: (collaborationMode) => set({ collaborationMode }),
@@ -110,6 +119,8 @@ function createPanelStoreImpl() {
     setHistoryOpen: (historyOpen) => set({ historyOpen }),
     setToolFilter: (toolFilter) => set({ toolFilter }),
     setContextFilter: (contextFilter) => set({ contextFilter }),
+    setGoalRecord: (goalRecord) => set({ goalRecord }),
+    setLastAgentDetail: (lastAgentDetail) => set({ lastAgentDetail }),
   }));
 }
 
