@@ -120,6 +120,6 @@ export async function agentInvoke<T = string>(name: string, args: Record<string,
 // Tool implementations moved to agent/tools/
 // ═══════════════════════════════════════════════════════
 
-export { createHologramTestTools } from './tools/hologram';
 export { createCodingTools } from './tools/coding';
-export { type SubAgentSpawner, createSubAgentTool, createAgentMessageTool, createAgentStatusTool, createAgentStopTool, createAgentStopAllTool } from './tools/subagent';
+export { createHologramTestTools } from './tools/hologram';
+export { createSubAgentTool, type SubAgentSpawner } from './tools/subagent';

@@ -1,11 +1,18 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Coordinator — asynchronous multi-agent orchestration.
-// CC ref: coordinator/coordinatorMode.ts, tools/AgentTool/
-
-import type { Message } from '../provider/types';
-import type { Agent } from './agent';
+// Coordinator — sub-agent lifecycle registry.
+//
+// 模型：子Agent = 一个会跑很久的工具调用。agent_spawn 阻塞至子Agent完成，
+// 子Agent的最终报告就是该工具调用的结果。同一轮发多个 agent_spawn 时
+// StreamingToolExecutor 并发执行，天然并行。
+//
+// Pool 的职责因此收窄为四件事：
+//   1. 并发上限（maxConcurrent）
+//   2. 超时兜底（timeout → abort runFn）
+//   3. 中断传播（stop/stopAll → AbortController，spawn 时同步把 signal 交给 runFn，
+//      不存在"先跑起来再补 signal"的时序窗）
+//   4. 状态查询（getHandle / summary，供 UI 与日志使用）
 
 export enum SubAgentStatus {
   Running = 'running',
@@ -23,32 +30,36 @@ export interface SubAgentHandle {
   error?: string;
 }
 
-type Resolver = (result: string) => void;
-type MessageCallback = (message: string) => void;
+/** The work a sub-agent runs. Receives the pool's AbortSignal synchronously —
+ *  wire it into the child agent's LLM stream so stop/timeout actually kills it. */
+export type SubAgentRunFn = (signal: AbortSignal) => Promise<{ text: string; err?: string }>;
+
+/** Returned synchronously by spawn(). `done` resolves exactly once with the
+ *  final handle (completed / failed / stopped / timeout-as-failed). */
+export interface SpawnedAgent {
+  id: string;
+  signal: AbortSignal;
+  done: Promise<SubAgentHandle>;
+}
 
 interface PendingAgent {
   handle: SubAgentHandle;
-  resolve: Resolver;
-  onMessage?: MessageCallback;
-  callId?: string; // tool call ID for event correlation
+  done: Promise<SubAgentHandle>;
+  resolve: (h: SubAgentHandle) => void;
+  callId?: string;
   finished?: boolean; // guard against double-finish (timeout + promise race)
-  abortController: AbortController; // ⚡ R4 fix: allows stopAll() to abort the actual runFn
-  onDone?: SubAgentDoneCallback; // per-spawn done callback (priority over pool-global)
+  abortController: AbortController;
 }
 
-export type SubAgentDoneCallback = (handle: SubAgentHandle, callId?: string) => void;
-
 const DEFAULT_MAX_CONCURRENT = 5;
-const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+// 10 minutes — coding sub-agents run builds/tests; 2 min timed out healthy agents
+// and (worse) left them running detached while the parent was told they failed.
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** Pool of asynchronously running sub-agents.
- *  Spawn is fire-and-forget — parent agent doesn't block.
- *  Results are collected via pollCompleted() or injected as task-notifications. */
 export class SubAgentPool {
   private agents = new Map<string, PendingAgent>();
   private completed: SubAgentHandle[] = [];
   private static readonly MAX_COMPLETED = 20; // cap to prevent memory leak
-  private onDone: SubAgentDoneCallback | null = null;
   private maxConcurrent: number;
   private defaultTimeoutMs: number;
   private timeouts = new Map<string, ReturnType<typeof setTimeout>>();
@@ -58,7 +69,6 @@ export class SubAgentPool {
     this.defaultTimeoutMs = defaultTimeoutMs;
   }
 
-  /** Add to completed list, capped to prevent unbounded memory growth. */
   private _addCompleted(handle: SubAgentHandle): void {
     this.completed.push(handle);
     if (this.completed.length > SubAgentPool.MAX_COMPLETED) {
@@ -66,34 +76,19 @@ export class SubAgentPool {
     }
   }
 
-  /** Register a callback invoked when ANY sub-agent completes. Used for UI events. */
-  setOnDone(cb: SubAgentDoneCallback): void {
-    this.onDone = cb;
-  }
-
-  /** Fire-and-forget spawn. Returns the handle ID immediately.
-   *  Rejects if at maxConcurrent. Times out after defaultTimeoutMs.
-   *  Idempotent: if callId already has a running agent, returns that agent's ID. */
-  spawn(
-    description: string,
-    runFn: (onMessage?: (msg: string) => void) => Promise<{ text: string; err?: string }>,
-    onMessage?: (msg: string) => void,
-    callId?: string,
-    timeoutMs?: number,
-    onDone?: SubAgentDoneCallback,
-  ): string | null {
-    // Idempotency: duplicate callId → return existing
+  /** Spawn a sub-agent. Returns null when at maxConcurrent.
+   *  Idempotent on callId: re-dispatch of the same tool call (stream retry)
+   *  returns the already-running agent instead of starting a duplicate. */
+  spawn(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent | null {
     if (callId) {
       for (const [id, pending] of this.agents) {
-        if (pending.callId === callId) return id;
-      }
-      for (const h of this.completed) {
-        if (h.id === callId || (h as any)._callId === callId) return h.id;
+        if (pending.callId === callId) {
+          return { id, signal: pending.abortController.signal, done: pending.done };
+        }
       }
     }
-    // Concurrency cap
     if (this.agents.size >= this.maxConcurrent) {
-      return null; // caller should handle: return "busy" message to parent
+      return null; // caller reports "busy" to the model
     }
 
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -103,126 +98,106 @@ export class SubAgentPool {
       status: SubAgentStatus.Running,
       startedAt: Date.now(),
     };
+    const abortController = new AbortController();
 
-    const abortController = new AbortController(); // ⚡ R4 fix
-    const promise = new Promise<string>((resolve) => {
-      this.agents.set(id, { handle, resolve, onMessage, callId, abortController, onDone });
+    let resolveDone!: (h: SubAgentHandle) => void;
+    const done = new Promise<SubAgentHandle>((r) => {
+      resolveDone = r;
     });
+    const pending: PendingAgent = { handle, done, resolve: resolveDone, callId, abortController };
+    this.agents.set(id, pending);
 
-    const cleanup = () => {
+    const finish = (text: string, err?: string, stopped = false) => {
+      if (pending.finished) return;
+      pending.finished = true;
       const t = this.timeouts.get(id);
       if (t) {
         clearTimeout(t);
         this.timeouts.delete(id);
       }
-    };
-
-    const finish = (text: string, err?: string) => {
-      cleanup();
-      const pending = this.agents.get(id);
-      if (!pending || pending.finished) return;
-      pending.finished = true;
-      if (pending) {
-        if (err) {
-          pending.handle.status = SubAgentStatus.Failed;
-          pending.handle.error = err;
-          pending.handle.result = text || err;
-        } else {
-          pending.handle.status = SubAgentStatus.Completed;
-          pending.handle.result = text;
-        }
-        this._addCompleted(pending.handle);
-        pending.resolve(text);
-        this.agents.delete(id);
-        // Per-spawn onDone takes priority; fall back to pool-global onDone
-        const doneCb = pending.onDone ?? this.onDone;
-        if (doneCb) doneCb(pending.handle, pending.callId);
+      if (stopped) {
+        handle.status = SubAgentStatus.Stopped;
+        handle.error = err || 'stopped by user';
+      } else if (err) {
+        handle.status = SubAgentStatus.Failed;
+        handle.error = err;
+        handle.result = text || err;
+      } else {
+        handle.status = SubAgentStatus.Completed;
+        handle.result = text;
       }
+      this._addCompleted(handle);
+      this.agents.delete(id);
+      pending.resolve(handle);
     };
 
-    // Timeout
     const ms = timeoutMs ?? this.defaultTimeoutMs;
     this.timeouts.set(
       id,
       setTimeout(() => {
-        abortController.abort(); // ⚡ R4: abort runFn on timeout too
-        finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`);
+        abortController.abort(); // kill the actual runFn first…
+        finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`); // …then settle the books
       }, ms),
     );
 
-    // Fire and forget — don't await
-    runFn(onMessage).then(
+    // Fire and forget — the signal is handed over synchronously, so stop/timeout
+    // always reach the running child. Late completions hit the `finished` guard.
+    runFn(abortController.signal).then(
       ({ text, err }) => finish(text, err),
       (err) => finish('', String(err?.message || err)),
     );
 
-    return id;
+    return { id, signal: abortController.signal, done };
   }
 
-  /** Poll for completed results. Non-blocking. */
-  pollCompleted(): SubAgentHandle[] {
-    const results = [...this.completed];
-    this.completed = [];
-    return results;
+  /** Look up a sub-agent by ID — running first, then completed history. */
+  getHandle(id: string): SubAgentHandle | undefined {
+    return this.agents.get(id)?.handle ?? this.completed.find((h) => h.id === id);
   }
 
-  /** Send a message to a running sub-agent (for SendMessage/agent_message tool). */
-  sendMessage(id: string, message: string): boolean {
-    const pending = this.agents.get(id);
-    if (!pending || !pending.onMessage) return false;
-    pending.onMessage(message);
-    return true;
-  }
-
-  /** Stop a running sub-agent. */
+  /** Stop a running sub-agent: aborts its runFn, then marks it stopped. */
   stop(id: string): boolean {
     const pending = this.agents.get(id);
     if (!pending) return false;
+    pending.abortController.abort();
+    this._finishStopped(pending);
+    return true;
+  }
+
+  /** Stop all running sub-agents. Returns the stopped agent IDs. */
+  stopAll(): string[] {
+    const stopped: string[] = [];
+    for (const [id, pending] of this.agents) {
+      pending.abortController.abort();
+      this._finishStopped(pending);
+      stopped.push(id);
+    }
+    return stopped;
+  }
+
+  private _finishStopped(pending: PendingAgent): void {
+    if (pending.finished) return;
+    pending.finished = true;
+    const id = pending.handle.id;
     const t = this.timeouts.get(id);
     if (t) {
       clearTimeout(t);
       this.timeouts.delete(id);
     }
-    // ⚡ R4 fix: abort the actual runFn before resolving
-    pending.abortController.abort();
     pending.handle.status = SubAgentStatus.Stopped;
     pending.handle.error = 'stopped by user';
     this._addCompleted(pending.handle);
-    pending.resolve('');
     this.agents.delete(id);
-    return true;
+    pending.resolve(pending.handle);
   }
 
-  /** Stop all running sub-agents. Returns the list of stopped agent IDs. */
-  stopAll(): string[] {
-    const stopped: string[] = [];
-    for (const [id, pending] of this.agents) {
-      const t = this.timeouts.get(id);
-      if (t) {
-        clearTimeout(t);
-        this.timeouts.delete(id);
-      }
-      // ⚡ R4 fix: abort the actual runFn before resolving
-      pending.abortController.abort();
-      pending.handle.status = SubAgentStatus.Stopped;
-      pending.handle.error = 'stopped by user';
-      this._addCompleted(pending.handle);
-      pending.resolve('');
-      stopped.push(id);
-    }
-    this.agents.clear();
-    return stopped;
-  }
-
-  /** Get a summary of all agents (running + completed). */
+  /** Summary of running + recently completed agents (for status display). */
   summary(): string {
     const lines: string[] = [];
-    // Running
     for (const [, pending] of this.agents) {
       const elapsed = Math.round((Date.now() - pending.handle.startedAt) / 1000);
       lines.push(`- 🔄 ${pending.handle.description} (运行中, ${elapsed}s)`);
     }
-    // Completed
     const recent = this.completed.slice(-5);
     for (const h of recent) {
       const icon = h.status === SubAgentStatus.Completed ? '✅' : h.status === SubAgentStatus.Failed ? '❌' : '⏹️';
@@ -234,45 +209,4 @@ export class SubAgentPool {
   get runningCount(): number {
     return this.agents.size;
   }
-
-  /** ⚡ R4 fix: get the AbortSignal for a running sub-agent.
-   *  Caller merges this with their own signal via AbortSignal.any(). */
-  getSubSignal(id: string): AbortSignal | undefined {
-    return this.agents.get(id)?.abortController.signal;
-  }
-
-  /** Wait for all running agents to complete.
-   *  ponytail: spins on pollCompleted with 100ms sleep — good enough
-   *  for a dozen sub-agents. Add per-handle Promise if latency matters. */
-  async awaitAll(): Promise<SubAgentHandle[]> {
-    while (this.agents.size > 0) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return [...this.completed];
-  }
-}
-
-/** Synthesize results from completed sub-agents into a final answer.
- *  Uses the parent agent to run a final LLM turn for synthesis. */
-export async function synthesizeResults(
-  handles: SubAgentHandle[],
-  synthesisPrompt: string,
-  parentAgent: Agent,
-  signal: AbortSignal,
-): Promise<string> {
-  if (handles.length === 0) return '子Agent 未返回任何结果。';
-
-  const report = handles
-    .map((h) => {
-      const statusIcon = h.status === SubAgentStatus.Completed ? '✅' : h.status === SubAgentStatus.Failed ? '❌' : '⏹️';
-      return `### ${statusIcon} ${h.description}\n${h.result || h.error || '(无输出)'}`;
-    })
-    .join('\n\n');
-
-  const prompt = `${synthesisPrompt}\n\n## 子Agent 结果\n\n${report}`;
-  await parentAgent.run(signal, prompt);
-  // Return the last assistant message as the synthesis output
-  const session = parentAgent.getSession();
-  const lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
-  return lastAssistant?.content || '(合成未生成输出)';
 }

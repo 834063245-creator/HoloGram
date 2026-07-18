@@ -61,7 +61,6 @@ const HOLOGRAM_TOOL_NAMES = new Set([
   'dataflow_query',
   // agent tools
   'agent_spawn',
-  'agent_message',
 ]);
 
 /** 工具别名 — 模型可能吐出这些名字，ToolRegistry alias 会解析到实际工具 */

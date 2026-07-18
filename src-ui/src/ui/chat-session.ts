@@ -135,6 +135,9 @@ export function removeSessionExecState(storeId: string, sessionId: number): void
   const k = agentKey(storeId, sessionId);
   const es = sessionExecStates.get(k);
   if (es) {
+    // Cascade-stop sub-agents first — their abort chain is independent of the
+    // session's execState and would otherwise keep running detached.
+    agentHandles.get(k)?.cascadeAbort();
     es.stop();
     sessionExecStates.delete(k);
   }

@@ -13,10 +13,10 @@
 
 import { Agent, type AgentEvent, EventKind } from './agent/agent';
 import { AgentStore } from './agent/agent-store';
-import { GoalManager } from './agent/goal-manager';
 import { auraShutdown } from './agent/aura-memory';
 import { type CompactionConfig, createCompactionTools } from './agent/compaction-model';
-import { type SubAgentHandle, SubAgentPool } from './agent/coordinator';
+import { SubAgentPool } from './agent/coordinator';
+import { GoalManager } from './agent/goal-manager';
 import type { GraphContext } from './agent/hooks';
 import {
   buildFileNodeIndex,
@@ -37,17 +37,7 @@ import { createSkillTool, SkillRegistry } from './agent/skills';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/state-inject';
 import { createTaskTools, TaskManager } from './agent/task';
 import type { Tool } from './agent/tool';
-import {
-  agentInvoke,
-  createAgentMessageTool,
-  createAgentStatusTool,
-  createAgentStopAllTool,
-  createAgentStopTool,
-  createCodingTools,
-  createSubAgentTool,
-  type ToolExecutor,
-  ToolRegistry,
-} from './agent/tool';
+import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, ToolRegistry } from './agent/tool';
 import { listen, rpc } from './bridge';
 import { createAnthropicProvider } from './provider/anthropic';
 import {
@@ -63,9 +53,9 @@ import { stripLineNumbers } from './ui/chat-session';
 import { msgStoreForActive } from './ui/chat-store';
 import type { CheckPanel, CheckResult } from './ui/check';
 import { bus } from './ui/events';
-import { getPanelStore } from './ui/panel-store';
 import type { StarGraph } from './ui/graph';
 import type { SubAgentPart } from './ui/message-model';
+import { getPanelStore } from './ui/panel-store';
 
 // ═══════════════════════════════════════════════════════
 // Dynamic tool loading from engine registry
@@ -149,7 +139,6 @@ export class Workspace {
 
   // ── Sub-agent pool ──
   subAgentPool = new SubAgentPool();
-  private _agentAbort: AbortController | null = null;
 
   // ── Store routing (per-panel isolation) ──
   _storeId: string = '__default__';
@@ -496,7 +485,6 @@ export class Workspace {
     }
   }
 
-
   /** Plan-mode tool registry: shallow-copies only read-only tools from the given registry. */
   private _planRegistry(base: ToolRegistry): ToolRegistry {
     const out = new ToolRegistry();
@@ -733,71 +721,71 @@ export class Workspace {
 
         return new Promise<string>((resolve) => {
           void (async () => {
-          let fullOutput = '';
-          let doneTimer: ReturnType<typeof setTimeout> | null = null;
-          let settled = false;
+            let fullOutput = '';
+            let doneTimer: ReturnType<typeof setTimeout> | null = null;
+            let settled = false;
 
-          const cleanup = () => {
-            if (doneTimer !== null) {
-              clearTimeout(doneTimer);
-              doneTimer = null;
-            }
-            const fns = _shellCleanups.get(streamId);
-            if (fns) {
-              for (const fn of fns) fn();
-              _shellCleanups.delete(streamId);
-            }
-          };
-
-          const resolveOnce = (value: string) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            resolve(value);
-          };
-
-          // await both listen() so unsub fns are set before any event can fire
-          const unsubOutput = await listen<{ streamId: string; kind: string; chunk: string }>(
-            'shell:output',
-            (event) => {
-              if (event.payload.streamId !== streamId) return;
-              fullOutput += event.payload.chunk;
-              onProgress(event.payload.chunk);
-            },
-          );
-
-          const unsubDone = await listen<{ streamId: string; exitCode: number; error?: string }>(
-            'shell:done',
-            (event) => {
-              if (event.payload.streamId !== streamId) return;
-              if (event.payload.error) {
-                resolveOnce(`[exit code: ${event.payload.exitCode}]\n${event.payload.error}`);
-              } else if (event.payload.exitCode !== 0) {
-                resolveOnce(`[exit code: ${event.payload.exitCode}]\n${fullOutput}`);
-              } else {
-                resolveOnce(fullOutput || '(无输出)');
+            const cleanup = () => {
+              if (doneTimer !== null) {
+                clearTimeout(doneTimer);
+                doneTimer = null;
               }
-            },
-          );
+              const fns = _shellCleanups.get(streamId);
+              if (fns) {
+                for (const fn of fns) fn();
+                _shellCleanups.delete(streamId);
+              }
+            };
 
-          _shellCleanups.set(streamId, [unsubOutput, unsubDone]);
+            const resolveOnce = (value: string) => {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              resolve(value);
+            };
 
-          // Timeout guard: if shell:done never fires (Rust thread crashed etc.)
-          doneTimer = setTimeout(() => {
-            resolveOnce(
-              `[exit code: -1]\n错误: shell 超时 (${SHELL_DONE_TIMEOUT_MS / 1000}s)，未收到 shell:done 事件`,
+            // await both listen() so unsub fns are set before any event can fire
+            const unsubOutput = await listen<{ streamId: string; kind: string; chunk: string }>(
+              'shell:output',
+              (event) => {
+                if (event.payload.streamId !== streamId) return;
+                fullOutput += event.payload.chunk;
+                onProgress(event.payload.chunk);
+              },
             );
-          }, SHELL_DONE_TIMEOUT_MS);
 
-          try {
-            await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId });
-            // Streaming path: Rust returns {"status":"started"} immediately.
-            // We wait for shell:done (or timeout) to resolve.
-          } catch (e: any) {
-            resolveOnce(`错误: ${e}`);
-          }
-        })();
-      });
+            const unsubDone = await listen<{ streamId: string; exitCode: number; error?: string }>(
+              'shell:done',
+              (event) => {
+                if (event.payload.streamId !== streamId) return;
+                if (event.payload.error) {
+                  resolveOnce(`[exit code: ${event.payload.exitCode}]\n${event.payload.error}`);
+                } else if (event.payload.exitCode !== 0) {
+                  resolveOnce(`[exit code: ${event.payload.exitCode}]\n${fullOutput}`);
+                } else {
+                  resolveOnce(fullOutput || '(无输出)');
+                }
+              },
+            );
+
+            _shellCleanups.set(streamId, [unsubOutput, unsubDone]);
+
+            // Timeout guard: if shell:done never fires (Rust thread crashed etc.)
+            doneTimer = setTimeout(() => {
+              resolveOnce(
+                `[exit code: -1]\n错误: shell 超时 (${SHELL_DONE_TIMEOUT_MS / 1000}s)，未收到 shell:done 事件`,
+              );
+            }, SHELL_DONE_TIMEOUT_MS);
+
+            try {
+              await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId });
+              // Streaming path: Rust returns {"status":"started"} immediately.
+              // We wait for shell:done (or timeout) to resolve.
+            } catch (e: any) {
+              resolveOnce(`错误: ${e}`);
+            }
+          })();
+        });
       }
       const result = await agentInvoke<string>(name, args);
       return typeof result === 'string' ? result : JSON.stringify(result);
@@ -844,7 +832,7 @@ export class Workspace {
 
     // ── Store shared state (Agent creation moved to factory below) ──
     this.prov = prov;
-    this.registry = registry;  // plan-mode filtering handled per-session in factory
+    this.registry = registry; // plan-mode filtering handled per-session in factory
 
     // Wire tool schemas to UI panel — dynamic, not hardcoded
     chatPanel.setToolSchemas(registry.schemas());
@@ -874,29 +862,17 @@ export class Workspace {
         const r = new ToolRegistry();
         for (const t of this.registry!.all()) r.register(t);
 
-        // Sub-agent tools — per-Agent lifecycle, wired via agentRef indirection
+        // Sub-agent tools — per-Agent lifecycle, wired via agentRef indirection.
+        // The spawner delegates to Agent.spawnSubAgent, which merges the pool's
+        // abort signal with the agent's current run signal (real stop/timeout).
         const agentRef = { current: null as Agent | null };
         r.register(
           createSubAgentTool(
-            async (description, prompt, onProgress, mode, _allowlist, coordSignal) => {
-              const parentSig = this._agentAbort?.signal ?? new AbortController().signal;
-              const merged = coordSignal ? AbortSignal.any([parentSig, coordSignal]) : parentSig;
-              return agentRef.current!.spawnSubAgent(merged, description, prompt, onProgress, mode);
-            },
+            async (description, prompt, onProgress, mode, allowlist, coordSignal) =>
+              agentRef.current!.spawnSubAgent(description, prompt, onProgress, mode, allowlist, coordSignal),
             this.subAgentPool,
-            (handle) => {
-              const resultText =
-                handle.status === 'failed'
-                  ? `[子 Agent 错误: ${handle.description}] ${handle.error || handle.result || ''}`
-                  : `[子 Agent 完成: ${handle.description}] ${(handle.result || '').slice(0, 500)}`;
-              agentRef.current?.injectTaskNotification(resultText);
-            },
           ),
         );
-        r.register(createAgentStopAllTool(() => this.subAgentPool));
-        r.register(createAgentStopTool(this.subAgentPool));
-        r.register(createAgentStatusTool(this.subAgentPool));
-        r.register(createAgentMessageTool(this.subAgentPool));
 
         // Build system prompt (per-session, with memory section)
         let memSection = '';
@@ -904,12 +880,16 @@ export class Workspace {
           try {
             const graphNodes = this.graphData ? extractGraphNodeNames(this.graphData) : undefined;
             memSection = await mm.loadPromptSection(graphNodes);
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
         let claudeMd = '';
         try {
           claudeMd = await rpc<string>('read_file_content', { filePath: `${this.path}/CLAUDE.md` });
-        } catch { /* file missing is fine */ }
+        } catch {
+          /* file missing is fine */
+        }
 
         const snap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
         const mode = this._modeState();
@@ -1355,7 +1335,9 @@ export function buildSystemPrompt(
 - 代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断
 - 你能直接调用 ${ws.path || '项目'} 的依赖图数据（${nodes} 节点、${edges} 条边）
 - 你看到的图已被分析引擎预处理，节点代表函数/类/模块/文件，边代表调用/继承/导入/时序关系
-${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` : ''}${collaborationMode === 'plan' ? `
+${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` : ''}${
+  collaborationMode === 'plan'
+    ? `
 ## ⚠️ 规划模式（当前激活）
 
 你处于**只读规划模式**。你的工具集中只有分析、搜索、读取类工具，没有任何写操作工具。
@@ -1363,7 +1345,9 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 - **不能做**：写文件、改代码、跑构建、Git commit、改记忆
 - **行为准则**：用户让你"修"时，给出详细方案（改哪个文件、怎么改、为什么），然后用 \`ask_user\` 请用户确认方案、切换到正常模式
 - **强制**：绝不要尝试调用写工具——它们不存在于你的工具集中，调用只会返回错误
-` : ''}
+`
+    : ''
+}
 ## 核心规则
 1. **诚实**：工具返回空结果就说"未找到"。数据正常就说"无异常"。不要编造节点名或关系，也不要为了显得"有发现"而夸大正常数据。
 2. **精确**：引用节点名时用图表中的准确名称。不确定就用工具查。
@@ -1375,7 +1359,7 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 8. **不确定就问**：需求模糊、两个方案选不定、或即将执行危险操作时，用 \`ask_user\` 工具反问用户。不要猜。
 9. **别用 run_shell 找文件/搜代码/操作 Git**：\`run_shell\` 只用于构建、测试、包管理等必须 shell 的操作。找文件用 \`glob\`（文件名模式），搜文本用 \`search_content\`（内容搜索），看目录用 \`list_directory\`。Git 操作用专用工具：\`git_status\`（状态）、\`git_diff\`（差异）、\`git_stage\`（暂存）、\`git_commit\`（提交）、\`git_push\`（推送）、\`git_pull\`（拉取）、\`git_log\`（日志）、\`git_checkout\`（切换分支）等。禁止用 \`run_shell\` 跑 ls/find/grep/cat/head/tail/sed/awk/git。
 10. **别复读工具输出**：工具已经返回的结果不要原文照搬到回复里。用户能看到工具卡片里的内容。你只需要提炼关键结论和行动。
-11. **${collaborationMode === 'plan' ? '方案必须具体' : '修改必须展示代码'}**：${collaborationMode === 'plan' ? '推荐的修改方案要精确到文件路径和代码片段，给出修改前后的 diff 对比，让用户在正常模式下可以直接交给 Agent 执行' : '用 \`edit_file\` 或 \`write_file\` 做完修改后，贴出修改前后的关键代码片段（不要贴整个文件），并标注文件路径和行号'}。
+11. **${collaborationMode === 'plan' ? '方案必须具体' : '修改必须展示代码'}**：${collaborationMode === 'plan' ? '推荐的修改方案要精确到文件路径和代码片段，给出修改前后的 diff 对比，让用户在正常模式下可以直接交给 Agent 执行' : '用 `edit_file` 或 `write_file` 做完修改后，贴出修改前后的关键代码片段（不要贴整个文件），并标注文件路径和行号'}。
 
 ## 工具地图 — 什么问题用什么工具
 
@@ -1428,7 +1412,9 @@ ${graphSnapshot ? `\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\`\n` 
 | "约束规则是啥？" | \`read_constraints\` — 查看项目的 hologram.constraints.yaml |
 
 ### ${collaborationMode === 'plan' ? '方案规划' : '编码操作'}
-${collaborationMode === 'plan' ? `| 用户问 | 用这个工具 |
+${
+  collaborationMode === 'plan'
+    ? `| 用户问 | 用这个工具 |
 |--------|----------|
 | "帮我设计重构方案" | 先用 \`explore_deps\` / \`search_content\` 理解现状 → \`trace_impact\` 预估影响 → 输出方案 |
 | "这个改动安全吗？" | \`preflight_check\` 模拟影响 → \`trace_impact\` 追踪波及 → 给出风险评级 |
@@ -1436,7 +1422,8 @@ ${collaborationMode === 'plan' ? `| 用户问 | 用这个工具 |
 | "方案确认了" | 用 \`ask_user\` 请用户切换到正常模式后你再执行 |
 | "看看 XXX 的实现" | \`read_file\` / \`search_content\` / \`inspect_symbol\` |
 | "查一下 XXX 怎么用" | \`web_fetch\` — 抓取文档 |
-| 需要用户确认/选择 | \`ask_user\` — 弹出对话框反问用户 |` : `| 用户问 | 用这个工具 |
+| 需要用户确认/选择 | \`ask_user\` — 弹出对话框反问用户 |`
+    : `| 用户问 | 用这个工具 |
 |--------|----------|
 | "帮我写个新文件" | \`write_file\` — 创建或覆盖整个文件 |
 | "帮我改 XX 文件的某处" | \`edit_file\` — 精确字符串替换（推荐：安全、省 token） |
@@ -1446,13 +1433,27 @@ ${collaborationMode === 'plan' ? `| 用户问 | 用这个工具 |
 | "Git 状态/提交/推送/拉取" | \`git_status\` / \`git_commit\` / \`git_push\` / \`git_pull\` |
 | "看看改了什么/提交记录" | \`git_diff\` / \`git_log\` |
 | "查一下 XXX 怎么用" | \`web_fetch\` — 抓取 URL 全文（HTML→纯文本） |
-| 需要用户确认/选择 | \`ask_user\` — 弹出对话框反问用户 |`}
+| 需要用户确认/选择 | \`ask_user\` — 弹出对话框反问用户 |`
+}
 
 ### 社区分析
 | 用户问 | 用这个工具 |
 |--------|----------|
 | "有哪些社区/子系统？" | \`cluster_report\` — 社区检测结果 |
 | "时间线？" | \`project_timeline\` — 变更时间线 |
+${
+  collaborationMode === 'plan'
+    ? ''
+    : `
+### 委派子Agent
+\`agent_spawn\` 会**阻塞直到子Agent完成**，子Agent的最终报告就是工具结果。用法：
+- **大任务拆分**：独立、多文件的子任务委派出去，子Agent有干净上下文，只做这一件事
+- **并行**：在**同一轮**发多个 \`agent_spawn\` 调用即可并行（例如 3 个模块各派一个调研Agent）
+- **指令要自足**：子Agent看不到你的对话，prompt 里写清要做什么、涉及哪些文件、如何验证（跑什么命令确认没炸）
+- **文件隔离**：fork 模式（默认）的文件修改在独立 worktree 中，成功后自动合并回主仓；合并冲突时 diff 会随结果返回，由你手动应用
+- **别委派小事**：几次工具调用能做完的事自己做，委派的开销大于收益
+`
+}
 
 ### LSP 符号解析
 | 用户问 | 用这个工具 |

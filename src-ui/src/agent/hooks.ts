@@ -67,18 +67,21 @@ export class PreflightHookRegistry {
     this.hooks.push(hook);
   }
 
+  /** Run all matching hooks and aggregate their warnings (was first-match-wins,
+   *  which silently shadowed every hook after the graph preflight). */
   check(toolName: string, args: Record<string, unknown>): string | null {
+    const warnings: string[] = [];
     for (const hook of this.hooks) {
       try {
         if (hook.shouldCheck(toolName, args)) {
           const warning = hook.check(toolName, args);
-          if (warning) return warning;
+          if (warning) warnings.push(warning);
         }
       } catch (e) {
         console.error(`[PreflightHookRegistry] hook "${hook.name}" failed:`, e);
       }
     }
-    return null;
+    return warnings.length > 0 ? warnings.join('\n\n') : null;
   }
 }
 
@@ -514,6 +517,11 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
       }
 
       if (snippet && snippet.length > 0) {
+        // Enforce the promised injection budget — engine-layer additions
+        // (fragility/cycles/LSP hotspots) used to grow the block unbounded.
+        if (snippet.length > MAX_ENRICH_BYTES) {
+          snippet = snippet.slice(0, MAX_ENRICH_BYTES) + '…';
+        }
         // 注入到结果顶部（而非底部），Agent 第一眼就能看到
         const block = `📊 [图上下文] ${snippet}\n${'─'.repeat(40)}\n\n`;
         if (result.length + block.length <= MAX_RESULT_BYTES) {
@@ -548,7 +556,7 @@ export function createStateReadHook(projectPath: string): Hook {
       return toolName === 'read_file_content';
     },
     async enrich(_toolName, args, result) {
-      const filePath = (args.file_path as string) || '';
+      const filePath = String(args['filePath'] || args['file_path'] || '');
       if (!filePath) return result;
 
       // Fire-and-forget: refresh blame for next time
@@ -571,10 +579,12 @@ export function createStatePreflightHook(): PreflightHook {
   return {
     name: 'state-preflight',
     shouldCheck(toolName) {
-      return ['edit_file', 'write_file_content'].includes(toolName);
+      // Tool names must match the registry (coding.ts): edit_file / write_file.
+      // ('write_file_content' never existed — this hook was dead until fixed.)
+      return ['edit_file', 'write_file'].includes(toolName);
     },
     check(_toolName, args) {
-      const filePath = (args.file_path as string) || '';
+      const filePath = String(args['filePath'] || args['file_path'] || '');
       if (!filePath) return null;
       return formatDiagnostics(filePath);
     },

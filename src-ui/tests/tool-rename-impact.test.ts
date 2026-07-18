@@ -108,7 +108,7 @@ function buildFullRegistry(): { registry: ToolRegistry; allNames: Set<string> } 
   }
 
   // agent tools
-  for (const name of ['agent_spawn', 'agent_message']) {
+  for (const name of ['agent_spawn']) {
     registry.register({
       name: () => name,
       description: () => `mock ${name}`,
@@ -291,7 +291,7 @@ describe('P4: invoke pathway — 每个工具名都有对应 Tauri command', () 
     // Check that every coding tool name either:
     // a) exists as a Tauri command, or
     // b) is routed through agent_invoke (sub-agent tools)
-    const agentInvokeTools = new Set(['agent_spawn', 'agent_message']);
+    const agentInvokeTools = new Set(['agent_spawn']);
 
     for (const name of codingNames) {
       if (agentInvokeTools.has(name)) continue;

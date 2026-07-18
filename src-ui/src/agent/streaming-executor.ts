@@ -146,7 +146,10 @@ export class StreamingToolExecutor {
     return results;
   }
 
-  /** Wait for all remaining tool executions to complete. */
+  /** Wait for all remaining tool executions to complete.
+   *  Also drains sync-completed results (unknown tool etc.) — runLoop never
+   *  calls pollCompleted, so without this the model would get a generic
+   *  "did not produce a result" instead of the real error. */
   async awaitRemaining(): Promise<PendingResult[]> {
     const remaining: PendingResult[] = [];
     for (const [id, promise] of this.pending) {
@@ -158,7 +161,8 @@ export class StreamingToolExecutor {
       }
     }
     this.pending.clear();
-    return remaining;
+    const syncCompleted = this.pollCompleted();
+    return [...syncCompleted, ...remaining];
   }
 
   /** Discard all pending executions (e.g., on abort). */

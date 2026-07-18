@@ -4,10 +4,11 @@
 // Agent 循环 — Run() → stream() → StreamingToolExecutor → 循环直到模型给出最终答案
 
 import { rpc } from '../bridge';
-import type { Chunk, Message, Provider, ToolCall, Usage } from '../provider/types';
+import type { Message, Provider, ToolCall, Usage } from '../provider/types';
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import { bus } from '../ui/events';
 import type { SubAgentPart } from '../ui/message-model';
+import type { AgentRecord, AgentStore } from './agent-store';
 // Shared types — also used internally by this file
 import { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent } from './agent-types';
 import {
@@ -19,12 +20,11 @@ import {
   maybeTune,
 } from './compaction-model';
 import { type ExecStateInstance, execState } from './execution-state';
+import type { GoalManager, GoalRecord } from './goal-manager';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
-import { type AgentRecord, type AgentStore } from './agent-store';
-import { GoalManager, type GoalRecord } from './goal-manager';
 import { createSubAgentSink } from './subagent-sink';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
@@ -62,40 +62,7 @@ export interface AgentOptions {
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
-const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
 const STORM_BREAK_THRESHOLD = 3;
-
-// ── Fork subagent ──
-const FORK_BOILERPLATE_TAG = 'fork-boilerplate';
-const FORK_PLACEHOLDER_RESULT = 'Fork started — processing in background';
-
-function buildForkDirective(prompt: string): string {
-  return `<${FORK_BOILERPLATE_TAG}>
-STOP. READ THIS FIRST.
-
-You are a forked worker process. You are NOT the main agent.
-
-RULES (non-negotiable):
-1. Your system prompt says "default to forking." IGNORE IT — that's for the parent.
-   You ARE the fork. Do NOT spawn sub-agents; execute directly.
-2. Do NOT converse, ask questions, or suggest next steps
-3. Do NOT editorialize or add meta-commentary
-4. USE your tools directly: read, write, edit, search, shell, etc.
-5. Stay strictly within your directive's scope. If you discover related systems outside
-   your scope, mention them in one sentence at most — other workers cover those areas.
-6. Keep your report concise and factual
-7. Your response MUST begin with "Scope:". No preamble, no thinking-out-loud.
-
-Output format (plain text labels, not markdown headers):
-  Scope: <echo back your assigned scope in one sentence>
-  Result: <the answer or key findings, limited to the scope above>
-  Key files: <relevant file paths — include for research tasks>
-  Files changed: <list — include only if you modified files>
-  Issues: <list — include only if there are issues to flag>
-</${FORK_BOILERPLATE_TAG}>
-
-Your directive: ${prompt}`;
-}
 
 // ---- Agent ----
 
@@ -167,6 +134,10 @@ export class Agent {
   // Pending memory updates (queued from memory:saved event, applied at safe boundary)
   private _pendingMemoryUpdates: string[] = [];
 
+  // Signal of the currently active runLoop — sub-agents spawned from tool calls
+  // merge it into their own abort signal so user-stop cascades to children.
+  private _currentRunSignal: AbortSignal | null = null;
+
   // Session persistence
   sessionId: string;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
@@ -175,12 +146,7 @@ export class Agent {
   private compactionTracker = new CompactionTracker();
   private _compactionConfigPath: string | null = null;
 
-  constructor(
-    prov: Provider,
-    tools: ToolRegistry,
-    systemPrompt: string,
-    opts: AgentOptions = {},
-  ) {
+  constructor(prov: Provider, tools: ToolRegistry, systemPrompt: string, opts: AgentOptions = {}) {
     this.prov = prov;
     this.tools = tools;
     this._sink = opts.eventSink ?? ((ev: AgentEvent) => bus.emit('agent:event', ev));
@@ -370,14 +336,6 @@ export class Agent {
     this._subAgentPool = pool;
   }
 
-  /** Inject a sub-agent result as a pending task notification.
-   *  Safe: queued and applied at the next safe boundary, never mid-stream.
-   *  Truncates output at 4000 chars to prevent context pollution. */
-  injectTaskNotification(text: string): void {
-    const truncated = text.length > 4000 ? text.slice(0, 4000) + `\n…[截断 ${text.length - 4000} 字符]` : text;
-    this._pendingInserts.push(`<task-notification>\n子Agent 任务完成:\n${truncated}\n</task-notification>`);
-  }
-
   /** Cascade abort: stop all sub-agents when the parent is interrupted. */
   cascadeAbort(): void {
     const pool = this._subAgentPool;
@@ -415,12 +373,16 @@ export class Agent {
   async saveState(status: AgentRecord['status'] = 'running'): Promise<void> {
     if (!this.agentStore) return;
     try {
-      await this.agentStore.save(this.id, {
-        parentId: this.parentId,
-        description: this.id === 'main' ? '主Agent' : `子Agent (depth ${this._subagentDepth})`,
-        status,
-        subagentDepth: this._subagentDepth,
-      }, this.session);
+      await this.agentStore.save(
+        this.id,
+        {
+          parentId: this.parentId,
+          description: this.id === 'main' ? '主Agent' : `子Agent (depth ${this._subagentDepth})`,
+          status,
+          subagentDepth: this._subagentDepth,
+        },
+        this.session,
+      );
     } catch {
       /* persistence is best-effort — never block the agent loop */
     }
@@ -464,13 +426,6 @@ export class Agent {
     this._sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
   }
 
-  /** Check whether this agent is already a fork child (for recursion guard). */
-  isInForkChild(): boolean {
-    return this.session.some(
-      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes(`<${FORK_BOILERPLATE_TAG}>`),
-    );
-  }
-
   /** Extract recent tool results from the parent session as context for a fork.
    *  Strips system prompt, assistant tool_calls, and truncates to the last N messages. */
   extractRecentContext(maxMessages: number): string {
@@ -498,13 +453,19 @@ export class Agent {
         if (recallCtx) {
           this.session.push({ role: 'user', content: `<system-reminder>\n${recallCtx}\n</system-reminder>` });
         }
-      } catch { /* pre-run hook failure is non-fatal */ }
+      } catch {
+        /* pre-run hook failure is non-fatal */
+      }
     }
     this.session.push({ role: 'user', content: input });
     await this.runLoop(signal);
     // Fire onSessionPersisted callback (memory bundle ingest, git refresh, turn-start block)
     if (this._onSessionPersisted) {
-      try { this._onSessionPersisted(this.sessionId, this.session); } catch { /* best-effort */ }
+      try {
+        this._onSessionPersisted(this.sessionId, this.session);
+      } catch {
+        /* best-effort */
+      }
     }
     // Persist agent state after each completed turn
     this.saveState('running').catch(() => {});
@@ -634,15 +595,16 @@ export class Agent {
           await mgr.saveSession(record.id, this.session);
           // Clear goal context from in-memory session so normal chat doesn't auto-continue.
           // Full context lives in the goal slot; /goal resume restores it from there.
-          this.session = this.session.length > 0 && this.session[0].role === 'system'
-            ? [this.session[0]]
-            : [];
+          this.session = this.session.length > 0 && this.session[0].role === 'system' ? [this.session[0]] : [];
           this._sink({
             kind: EventKind.Notice,
             level: 'info',
             text: `[目标] 已暂停于第 ${iter + 1} 轮。使用 /goal resume 继续。`,
           });
-          return { status: 'paused', summary: `已暂停于第 ${iter + 1}/${Agent.MAX_GOAL_ITERATIONS} 轮。使用 /goal resume 继续。` };
+          return {
+            status: 'paused',
+            summary: `已暂停于第 ${iter + 1}/${Agent.MAX_GOAL_ITERATIONS} 轮。使用 /goal resume 继续。`,
+          };
         }
         await mgr.update(record.id, { status: 'failed', summary: `执行异常: ${e?.message || e}` });
         return { status: 'failed', summary: `执行异常: ${e?.message || e}` };
@@ -680,8 +642,7 @@ export class Agent {
 
       // ── Stall detection: consecutive rounds with no tool calls → stuck ──
       const hasToolCalls = this._lastAssistantHasToolCalls();
-      const subAgentsRunning = (this._subAgentPool?.runningCount ?? 0) > 0;
-      if (!hasToolCalls && !subAgentsRunning) {
+      if (!hasToolCalls) {
         stallRounds++;
         if (stallRounds >= Agent.MAX_STALL_ROUNDS) {
           const summary = `连续 ${stallRounds} 轮未执行任何工具调用或委派子Agent。目标可能过于模糊或超出能力范围。请拆分目标为更具体的步骤。`;
@@ -698,9 +659,6 @@ export class Agent {
       }
 
       // Goal in progress — auto-continue
-      const pendingHint = subAgentsRunning
-        ? `\n⚠️ 仍有 ${this._subAgentPool!.runningCount} 个子Agent运行中，等待结果到达后再规划下一步。`
-        : '';
       const stallHint =
         stallRounds > 0
           ? `\n⚠️ 已连续 ${stallRounds}/${Agent.MAX_STALL_ROUNDS} 轮无实际行动。必须调用工具或委派子Agent，禁止只输出文字分析。`
@@ -708,7 +666,7 @@ export class Agent {
       this.session.push({
         role: 'user',
         content: `<system-reminder>
-目标未完成。已完成 ${iter + 1} 轮。${pendingHint}${stallHint}
+目标未完成。已完成 ${iter + 1} 轮。${stallHint}
 
 如果目标尚未达成: 规划下一步（不重复已完成步骤）→ 执行或 agent_spawn 委派 → 验证结果。
 如果目标已全部达成: 调用 goal_report(status="completed", summary=…) 上报。
@@ -790,6 +748,7 @@ ${resumeNote}
   private async runLoop(signal: AbortSignal): Promise<void> {
     const turnStart = performance.now();
     log.info('agent', 'turn started', { model: this.prov.name() });
+    this._currentRunSignal = signal; // sub-agent spawns merge this for cascade-abort
     this._sink({ kind: EventKind.TurnStarted });
 
     for (let step = 0; ; step++) {
@@ -867,20 +826,7 @@ ${resumeNote}
         tool_calls: calls,
       });
 
-      const runningSubs = this.runningSubAgentCount();
       if (calls.length === 0 && this._pendingInserts.length === 0) {
-        if (runningSubs > 0) {
-          // Sub-agents still running — don't exit yet. Results arrive via
-          // pool.onDone → injectTaskNotification → _pendingInserts, and are
-          // consumed by _applyPendingInserts() at the top of the loop.
-          this._sink({
-            kind: EventKind.Notice,
-            level: 'info',
-            text: `等待 ${runningSubs} 个子Agent 完成…`,
-          });
-          await this._subAgentPool?.awaitAll();
-          continue;
-        }
         return;
       }
 
@@ -892,11 +838,28 @@ ${resumeNote}
       const pendingResults = await executor.awaitRemaining();
       // Build results in call order
       const resultsByCallId = new Map(pendingResults.map((r) => [r.call.id, r]));
+
+      // ── Storm breaker + compaction instrumentation ──
+      // Both call sites were lost in 6e75046 (pre-StreamingToolExecutor cleanup);
+      // rewired here. Storm breaker nudges the model out of identical-failure
+      // loops; the tracker feeds compaction auto-tune with real loss data.
+      const stormNudge = this._stormNudge(calls, resultsByCallId);
       for (const call of calls) {
+        this.compactionTracker.recordToolCall(call.name, call.arguments || '{}');
+        if (call.name === 'read_file_content' || call.name === 'read_file') {
+          const fp = parseFilePathArg(call.arguments);
+          if (fp) this.compactionTracker.recordFileRead(fp);
+        }
+      }
+
+      for (let i = 0; i < calls.length; i++) {
+        const call = calls[i];
         const r = resultsByCallId.get(call.id);
+        let content = r?.output || `error: tool "${call.name}" did not produce a result`;
+        if (stormNudge && i === 0) content += stormNudge;
         this.session.push({
           role: 'tool',
-          content: r?.output || `error: tool "${call.name}" did not produce a result`,
+          content,
           tool_call_id: call.id,
           name: call.name,
         });
@@ -1100,33 +1063,47 @@ ${resumeNote}
 
   // ---- Storm breaker — break repetitive tool-call loops ----
 
-  private applyStormBreaker(calls: ToolCall[], outcomes: ToolOutcome[], results: string[]): void {
+  /** Detect repetitive identical tool-call failures. Returns a nudge string to
+   *  append to the first tool result, or null. The storm state (stormSig/stormCount)
+   *  is reset by compaction/newSession; any successful call in a batch also resets. */
+  private _stormNudge(
+    calls: ToolCall[],
+    resultsByCallId: Map<string, { output: string; err?: string }>,
+  ): string | null {
+    const outcomes: ToolOutcome[] = calls.map((c) => {
+      const r = resultsByCallId.get(c.id);
+      const output = r?.output ?? '';
+      return {
+        output,
+        errMsg: r?.err,
+        blocked: output.includes('架构门禁已阻止'),
+        truncated: false,
+      };
+    });
     const { sig, ok } = batchStormSignature(calls, outcomes);
     if (!ok) {
       this.stormSig = '';
       this.stormCount = 0;
-      return;
+      return null;
     }
     if (sig !== this.stormSig) {
       this.stormSig = sig;
       this.stormCount = 1;
-      return;
+      return null;
     }
     this.stormCount++;
-    if (this.stormCount < STORM_BREAK_THRESHOLD) return;
+    if (this.stormCount < STORM_BREAK_THRESHOLD) return null;
 
     const subject = calls.length === 1 ? `"${calls[0].name}"` : `this batch of ${calls.length} tool calls`;
     const short = calls.length === 1 ? calls[0].name : `a batch of ${calls.length} calls`;
-
-    results[0] =
-      outcomes[0].output +
-      `\n\n[loop guard] ${subject} has now failed ${this.stormCount} times in a row with the same error. Re-sending it will not help. Change approach: if an argument is being truncated, write less in one call and split the work; otherwise fix the arguments, use a different tool, or explain the blocker in your final answer.`;
 
     this._sink({
       kind: EventKind.Notice,
       level: 'warn',
       text: `loop guard: ${short} failed ${this.stormCount}× the same way — nudging the model to change approach`,
     });
+
+    return `\n\n[loop guard] ${subject} has now failed ${this.stormCount} times in a row with the same error. Re-sending it will not help. Change approach: if an argument is being truncated, write less in one call and split the work; otherwise fix the arguments, use a different tool, or explain the blocker in your final answer.`;
   }
 
   // ---- Context window management ----
@@ -1509,21 +1486,32 @@ ${resumeNote}
   // Sub-agent spawn — for parallel / delegated work
   // ══════════════════════════════════════════════════════
 
-  /** Spawn a sub-agent with full tool access to handle a focused task.
-   *  `mode: 'fork'` inherits parent context + fork directive (default for agent_spawn).
-   *  `mode: 'fresh'` creates a clean-slate agent (legacy). */
+  /** Spawn a sub-agent to handle a focused task. Blocks until the child finishes;
+   *  the child's final report (plus merge note) becomes the tool result.
+   *  `mode: 'fork'` (default) injects the parent's recent context and isolates
+   *  file edits in a git worktree; `mode: 'fresh'` is a clean-slate agent.
+   *  Abort sources are merged: user-stop (current run signal) + pool stop/timeout. */
   async spawnSubAgent(
-    signal: AbortSignal,
     description: string,
     prompt: string,
     onProgress?: (chunk: string) => void,
-    mode: 'fork' | 'fresh' = 'fresh',
+    mode: 'fork' | 'fresh' = 'fork',
     toolAllowlist?: string[] | null,
+    poolSignal?: AbortSignal,
   ): Promise<{ text: string; err?: string }> {
     // Depth-based recursion guard
     if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
       return { text: '', err: `Exceeded max subagent depth (${Agent.MAX_SUBAGENT_DEPTH})` };
     }
+
+    // Merge abort sources — the child dies when the user's run is stopped OR
+    // the pool stops/times-out this spawn. (The old wiring handed the pool
+    // signal over too late, so "stopped" agents kept running detached.)
+    const abortSources: AbortSignal[] = [];
+    if (this._currentRunSignal) abortSources.push(this._currentRunSignal);
+    if (poolSignal) abortSources.push(poolSignal);
+    const signal =
+      abortSources.length > 1 ? AbortSignal.any(abortSources) : (abortSources[0] ?? new AbortController().signal);
 
     // Auto-isolation: create a git worktree for fork sub-agents so file mutations
     // are sandboxed and can be reviewed (diff) before merge. Falls back to direct
@@ -1547,49 +1535,34 @@ ${resumeNote}
         subTools.register(t);
       }
     }
-    if (allowed) {
-      // Auto-remove recursive-spawn tools when allowlist is present (safer default)
-      subTools.unregister('agent_spawn');
-      subTools.unregister('agent_message');
-      subTools.unregister('agent_stop_all');
-    }
+    // Sub-agents never get recursive-spawn tools (fork children execute directly).
+    subTools.unregister('agent_spawn');
 
     let subSystem: string;
 
     if (mode === 'fork') {
-      // Fork mode: build a clean sub-agent with its OWN system prompt.
-      // We do NOT inherit the parent session — that causes the fork to inherit
-      // the parent's system prompt (e.g. "delegate via agent_spawn") and the
-      // fork then tries to spawn sub-agents of its own, hitting the recursion
-      // guard. Instead: fresh session with fork-specific system prompt.
-      //
-      // We still inject the parent's recent tool outputs as context so the fork
-      // knows what files were already read/modified — but we strip the parent's
-      // tool_calls (the fork shouldn't see "calls it didn't make").
+      // Fork mode: clean sub-agent with its OWN system prompt (never inherit the
+      // parent's session/system prompt — that made forks try to spawn their own
+      // sub-agents). The parent's recent tool outputs are injected as context so
+      // the fork knows what was already read/modified.
       const recentContext = this.extractRecentContext(12);
-      subTools.unregister('agent_spawn'); // fork children cannot spawn further forks
-      subTools.unregister('agent_message'); // no messaging between forks
 
-      subSystem = `你是主Agent派出的工作进程（fork）。你不是主Agent，不要尝试委派子任务。
+      subSystem = `你是主Agent派出的工作进程（fork）。你不是主Agent。
 
 ## 你的任务
 ${prompt}
 
 ## 硬性规则
-1. **直接执行** — 你有全部工具权限，直接读、写、搜索、跑命令。不要 spawn 子Agent
+1. **直接执行** — 直接读、写、搜索、跑命令。你不能 spawn 子Agent（该工具已移除）
 2. **专注** — 只完成分配给你的任务，不要偏离
 3. **先查后动** — 涉及代码库的，先查再动手
 4. **直接给结论** — 不要反问、不要建议下一步、不要写论文
 5. **验证** — 改完代码后跑编译/测试确认没炸
+6. **隔离** — 你的文件修改在独立 git worktree 中进行，正常保存即可；任务成功后变更会自动合并回主仓
 
 ## 父Agent近期上下文（⚠️ 快照 — 可能已过期。操作前自行验证文件当前状态）
 ${recentContext}`;
     } else {
-      // Fresh mode: also remove recursive spawn tools + job tools
-      subTools.unregister('agent_spawn');
-      subTools.unregister('agent_message');
-      subTools.unregister('agent_stop_all');
-
       subSystem = `你是主 Agent 派出的子任务 Agent。执行一个聚焦的专项任务。
 
 ## 任务
@@ -1642,17 +1615,15 @@ ${subTools
     }
 
     let subAgentSucceeded = false;
+    let result: { text: string; err?: string };
     try {
       // Fork and fresh both use run() — fork has its own system prompt + stripped tools
       await subAgent.run(signal, mode === 'fork' ? prompt : '开始执行。');
       subAgentSucceeded = true;
 
       // ── Summary distillation — ensure sub-agent handoff is useful ──
-      // ponytail: single continuation turn for sub-200-char summaries.
-      // Most sub-agents already produce >200 chars; this is a safety net for the
-      // "好的，完成了" cases. Kimi-Code uses a configurable summary policy;
-      // we hardcode 200 chars because this is a desktop app, not a server.
-      const CONTEXT_LINE_LIMIT = 300; // semi-arbitrary: above 300, summary is meaningful
+      // Single continuation turn for sub-300-char summaries (the "好的，完成了" cases).
+      const CONTEXT_LINE_LIMIT = 300;
       const session = subAgent.getSession();
       let lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
       let summary = lastAssistant?.content || '';
@@ -1673,48 +1644,77 @@ ${subTools
         }
       }
 
-      // Persist sub-agent state
       subAgent.saveState('done').catch(() => {});
-      return { text: summary || '(子 Agent 没有生成回复)' };
+      result = { text: summary || '(子 Agent 没有生成回复)' };
     } catch (e: any) {
       subAgent.saveState('failed').catch(() => {});
-      return { text: '', err: e.message || '子 Agent 执行失败' };
+      result = { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
       subPart.status = subAgentSucceeded ? 'done' : 'error';
       bus.emit('subagent:bump', {});
-      // Auto-diff + merge/discard based on success
-      if (isolationId) {
-        const diffT = this.tools.get('agent_isolation_diff');
-        const mergeT = this.tools.get('agent_isolation_merge');
-        const discardT = this.tools.get('agent_isolation_discard');
-        try {
-          if (diffT) {
-            const diffResult = await diffT.execute({ agent_id: isolationId });
-            let mergeSucceeded = false;
-            if (subAgentSucceeded && mergeT) {
-              try {
-                await mergeT.execute({ agent_id: isolationId });
-                mergeSucceeded = true;
-              } catch (mergeErr: any) {
-                // Merge conflict — inject error notification to parent
-                const errMsg = mergeErr?.message || String(mergeErr);
-                log.warn('agent', `merge conflict for ${isolationId}: ${errMsg}`);
-                this.injectTaskNotification(
-                  `❌ 子Agent "${description}" 的合并失败 (冲突): ${errMsg}。变更已保存到 diff，需手动处理。`,
-                );
-              }
-            }
-          }
-          // Always discard the isolation worktree after diff
-          if (discardT) {
-            await discardT.execute({ agent_id: isolationId });
-          }
-        } catch {
-          /* best effort — cleanup */
-        }
+    }
+
+    // ── Finalize isolation worktree (serialized — parallel sub-agents must not
+    // merge into the same repo concurrently). Success → merge; conflict → the
+    // diff travels back in the result so the parent can apply it manually
+    // (previously the worktree was discarded anyway = silent data loss). ──
+    if (isolationId) {
+      const mergeNote = await enqueueIsolationOp(() => this._finalizeIsolation(isolationId, subAgentSucceeded));
+      if (mergeNote) {
+        result = { text: (result.text ? result.text + '\n\n' : '') + mergeNote, err: result.err };
       }
     }
+    return result;
   }
+
+  /** Merge (on success) or discard (on failure) an isolation worktree.
+   *  Returns a human/model-readable note to append to the sub-agent result. */
+  private async _finalizeIsolation(agentId: string, success: boolean): Promise<string> {
+    const diffT = this.tools.get('agent_isolation_diff');
+    const mergeT = this.tools.get('agent_isolation_merge');
+    const discardT = this.tools.get('agent_isolation_discard');
+    try {
+      if (success && mergeT) {
+        try {
+          await mergeT.execute({ agent_id: agentId });
+          await discardT?.execute({ agent_id: agentId }).catch(() => {});
+          return '[隔离合并] ✅ 变更已自动合并回主仓。可用 git_status / git_diff 审阅。';
+        } catch (mergeErr: any) {
+          const errMsg = mergeErr?.message || String(mergeErr);
+          log.warn('agent', `merge conflict for ${agentId}: ${errMsg}`);
+          // Capture the diff BEFORE discarding the worktree — otherwise the
+          // sub-agent's work is silently lost.
+          let diffText = '';
+          try {
+            if (diffT) diffText = await diffT.execute({ agent_id: agentId });
+          } catch {
+            /* diff unavailable */
+          }
+          await discardT?.execute({ agent_id: agentId }).catch(() => {});
+          const clipped = diffText.length > 8000 ? diffText.slice(0, 8000) + '\n…[diff 过长已截断]' : diffText;
+          return (
+            `[隔离合并] ⚠️ 自动合并失败: ${errMsg}\n` +
+            'worktree 已清理，但变更 diff 已保全在下方。请审阅后用 edit_file 把需要的部分手动应用到主仓:\n\n' +
+            (clipped || '(diff 获取失败)')
+          );
+        }
+      }
+      // Sub-agent failed/aborted — discard the worktree, nothing to merge.
+      await discardT?.execute({ agent_id: agentId }).catch(() => {});
+      return '';
+    } catch {
+      return ''; // best effort — cleanup failures must not break the result flow
+    }
+  }
+}
+
+// Serialize isolation merge/discard — concurrent sub-agents share one repo,
+// and parallel git merges race on the index lock.
+let _isoQueue: Promise<unknown> = Promise.resolve();
+function enqueueIsolationOp<T>(fn: () => Promise<T>): Promise<T> {
+  const p = _isoQueue.then(fn, fn);
+  _isoQueue = p.catch(() => {});
+  return p;
 }
 
 // ---- Helpers ----
@@ -1727,34 +1727,6 @@ interface ToolOutcome {
   truncMsg?: string;
 }
 
-interface CallBatch {
-  start: number;
-  end: number;
-  parallel: boolean;
-}
-
-function partitionCalls(registry: ToolRegistry, calls: ToolCall[]): CallBatch[] {
-  const batches: CallBatch[] = [];
-  let i = 0;
-  while (i < calls.length) {
-    if (isParallelizable(registry, calls[i].name)) {
-      const start = i;
-      i++;
-      while (i < calls.length && isParallelizable(registry, calls[i].name)) i++;
-      batches.push({ start, end: i, parallel: true });
-    } else {
-      batches.push({ start: i, end: i + 1, parallel: false });
-      i++;
-    }
-  }
-  return batches;
-}
-
-function isParallelizable(registry: ToolRegistry, name: string): boolean {
-  const t = registry.get(name);
-  return !!t && t.readOnly();
-}
-
 function batchStormSignature(calls: ToolCall[], outcomes: ToolOutcome[]): { sig: string; ok: boolean } {
   if (calls.length === 0) return { sig: '', ok: false };
   const parts: string[] = [];
@@ -1765,46 +1737,16 @@ function batchStormSignature(calls: ToolCall[], outcomes: ToolOutcome[]): { sig:
   return { sig: parts.join('\x00'), ok: true };
 }
 
-function truncateToolOutput(s: string, toolName?: string): { body: string; truncMsg?: string } {
-  if (s.length <= MAX_TOOL_OUTPUT_BYTES) return { body: s };
-  const keep = Math.floor(MAX_TOOL_OUTPUT_BYTES / 2);
-  const head = snapToRune(s, 0, keep);
-  const tail = snapToRune(s, s.length - keep, s.length);
-  const omitted = s.length - head.length - tail.length;
-  const hint = truncationHint(toolName || '');
-  return {
-    body: `${head}\n\n…[截断 ${omitted} / ${s.length} 字节]…\n💡 ${hint}\n\n${tail}`,
-    truncMsg: `tool output truncated: ${omitted} of ${s.length} bytes elided (${toolName || 'unknown'})`,
-  };
-}
-
-function truncationHint(toolName: string): string {
-  switch (toolName) {
-    case 'read_file_content':
-      return '此工具支持 offset/limit 分页。用 offset 翻到下一段，或缩小 limit 范围。';
-    case 'search_content':
-      return '用 maxResults 参数减少返回条数，或用更精确的 pattern + fileTypes 过滤。';
-    case 'run_shell':
-      return '用更精确的命令（管道过滤如 | head -n 100），或 runInBackground + bash_output 分批读取。';
-    case 'list_directory':
-      return '缩小 path 到具体子目录。';
-    case 'git_diff':
-      return '用 file 参数指定单个文件，或 staged 只看暂存区变更。';
-    case 'analyze_project':
-      return 'analyze 输出大是正常的。用 graph_summary 看概览，再按需查具体节点。';
-    case 'git_log':
-      return '用 count 参数减少返回的提交数量。';
-    case 'project_timeline':
-      return '用 limit 参数缩小结果数，或用 module 参数过滤特定模块。';
-    default:
-      return '用更窄的参数重新调用，或换用更精确的工具获取子集。';
+/** Extract a file path from tool-call arguments (read_file_content / read_file).
+ *  Tolerates both filePath and file_path keys; returns null on any failure. */
+function parseFilePathArg(argsJson: string | undefined): string | null {
+  try {
+    const a = JSON.parse(argsJson || '{}');
+    const fp = a.filePath ?? a.file_path;
+    return typeof fp === 'string' && fp.length > 0 ? fp : null;
+  } catch {
+    return null;
   }
-}
-
-function snapToRune(s: string, lo: number, hi: number): string {
-  while (lo > 0 && (s.charCodeAt(lo) & 0xc0) === 0x80) lo--;
-  while (hi < s.length && (s.charCodeAt(hi) & 0xc0) === 0x80) hi++;
-  return s.slice(lo, hi);
 }
 
 function finishReasonMessage(u?: Usage): string | undefined {
@@ -1848,9 +1790,4 @@ function renderTranscript(msgs: Message[]): string {
     }
   }
   return lines.join('\n');
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }

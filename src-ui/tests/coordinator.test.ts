@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { SubAgentPool, SubAgentStatus } from '../src/agent/coordinator';
 
 function fakeRun(result: string, delayMs = 10, shouldFail = false) {
-  return () =>
+  return (_signal: AbortSignal) =>
     new Promise<{ text: string; err?: string }>((resolve, reject) => {
       setTimeout(() => {
         if (shouldFail) reject(new Error('simulated failure'));
@@ -15,11 +15,29 @@ function fakeRun(result: string, delayMs = 10, shouldFail = false) {
 }
 
 describe('SubAgentPool', () => {
-  it('spawn returns a task ID immediately', () => {
+  it('spawn returns id + signal + done synchronously', async () => {
     const pool = new SubAgentPool();
-    const id = pool.spawn('test task', fakeRun('done'));
-    expect(id).toBeTruthy();
-    expect(id.startsWith('subagent-')).toBe(true);
+    const spawned = pool.spawn('test task', fakeRun('done'));
+    expect(spawned).toBeTruthy();
+    expect(spawned!.id.startsWith('subagent-')).toBe(true);
+    expect(spawned!.signal).toBeInstanceOf(AbortSignal);
+    const handle = await spawned!.done;
+    expect(handle.status).toBe(SubAgentStatus.Completed);
+    expect(handle.result).toBe('done');
+  });
+
+  it('hands the abort signal to runFn SYNCHRONOUSLY (late-assignment race regression)', () => {
+    // Regression: the old agent_spawn tool assigned subSignal AFTER pool.spawn
+    // returned, but runFn is invoked synchronously inside spawn — the spawner
+    // always received undefined and "stopped" agents kept running detached.
+    const pool = new SubAgentPool();
+    let received: AbortSignal | undefined;
+    pool.spawn('check', (signal) => {
+      received = signal;
+      return Promise.resolve({ text: 'ok' });
+    });
+    expect(received).toBeInstanceOf(AbortSignal);
+    expect(received!.aborted).toBe(false);
   });
 
   it('tracks running agents', () => {
@@ -29,45 +47,41 @@ describe('SubAgentPool', () => {
     expect(pool.runningCount).toBe(2);
     expect(pool.summary()).toContain('task A');
     expect(pool.summary()).toContain('task B');
+    pool.stopAll();
   });
 
-  it('pollCompleted returns finished agents', async () => {
+  it('done resolves with failed status when runFn rejects', async () => {
     const pool = new SubAgentPool();
-    pool.spawn('quick', fakeRun('result', 10));
-
-    // Wait for completion
-    await new Promise((r) => setTimeout(r, 50));
-
-    const completed = pool.pollCompleted();
-    expect(completed.length).toBe(1);
-    expect(completed[0].status).toBe(SubAgentStatus.Completed);
-    expect(completed[0].result).toBe('result');
-    expect(pool.runningCount).toBe(0);
+    const spawned = pool.spawn('will fail', fakeRun('', 10, true));
+    const handle = await spawned!.done;
+    expect(handle.status).toBe(SubAgentStatus.Failed);
+    expect(handle.error).toContain('simulated failure');
   });
 
-  it('marks failed agents', async () => {
+  it('done resolves with failed status when runFn resolves with err', async () => {
     const pool = new SubAgentPool();
-    pool.spawn('will fail', fakeRun('', 10, true));
-
-    await new Promise((r) => setTimeout(r, 50));
-
-    const completed = pool.pollCompleted();
-    expect(completed.length).toBe(1);
-    expect(completed[0].status).toBe(SubAgentStatus.Failed);
+    const spawned = pool.spawn('soft fail', () => Promise.resolve({ text: '', err: 'boom' }));
+    const handle = await spawned!.done;
+    expect(handle.status).toBe(SubAgentStatus.Failed);
+    expect(handle.error).toBe('boom');
   });
 
-  it('stop terminates a running agent', () => {
+  it('stop aborts the runFn signal AND settles done as stopped (kill-chain regression)', async () => {
     const pool = new SubAgentPool();
-    const id = pool.spawn('long task', fakeRun('done', 5000));
+    let received: AbortSignal | undefined;
+    const spawned = pool.spawn('long task', (signal) => {
+      received = signal;
+      return new Promise<{ text: string }>(() => {}); // never settles on its own
+    })!;
     expect(pool.runningCount).toBe(1);
 
-    const stopped = pool.stop(id);
-    expect(stopped).toBe(true);
+    expect(pool.stop(spawned.id)).toBe(true);
+    // The actual work must receive the abort — this is the whole point of the fix.
+    expect(received!.aborted).toBe(true);
     expect(pool.runningCount).toBe(0);
 
-    const completed = pool.pollCompleted();
-    expect(completed.length).toBe(1);
-    expect(completed[0].status).toBe(SubAgentStatus.Stopped);
+    const handle = await spawned.done;
+    expect(handle.status).toBe(SubAgentStatus.Stopped);
   });
 
   it('stop returns false for unknown ID', () => {
@@ -75,133 +89,100 @@ describe('SubAgentPool', () => {
     expect(pool.stop('nonexistent')).toBe(false);
   });
 
-  it('sendMessage succeeds for running agent with callback', () => {
+  it('stopAll aborts every running agent', async () => {
     const pool = new SubAgentPool();
-    const messages: string[] = [];
+    const signals: AbortSignal[] = [];
+    const s1 = pool.spawn('a', (sig) => {
+      signals.push(sig);
+      return new Promise<{ text: string }>(() => {});
+    })!;
+    const s2 = pool.spawn('b', (sig) => {
+      signals.push(sig);
+      return new Promise<{ text: string }>(() => {});
+    })!;
 
-    const id = pool.spawn(
-      'interactive',
-      (onMsg) => {
-        onMsg?.('initialized');
-        return fakeRun('done')();
-      },
-      (msg) => {
-        messages.push(msg);
-      },
-    );
+    const stopped = pool.stopAll();
+    expect(stopped.sort()).toEqual([s1.id, s2.id].sort());
+    expect(signals.every((s) => s.aborted)).toBe(true);
+    expect(pool.runningCount).toBe(0);
 
-    // sendMessage before the promise resolves
-    const ok = pool.sendMessage(id, 'follow-up question');
-    expect(ok).toBe(true);
+    const [h1, h2] = await Promise.all([s1.done, s2.done]);
+    expect(h1.status).toBe(SubAgentStatus.Stopped);
+    expect(h2.status).toBe(SubAgentStatus.Stopped);
   });
 
-  it('sendMessage fails for completed agent', async () => {
-    const pool = new SubAgentPool();
-    const id = pool.spawn('quick', fakeRun('done', 10));
-
-    await new Promise((r) => setTimeout(r, 50));
-    pool.pollCompleted(); // consume
-
-    const ok = pool.sendMessage(id, 'too late');
-    expect(ok).toBe(false);
+  it('timeout aborts the runFn and resolves done with a timeout failure', async () => {
+    const pool = new SubAgentPool(5, 30); // 30ms pool default
+    let received: AbortSignal | undefined;
+    const spawned = pool.spawn('slow', (signal) => {
+      received = signal;
+      return new Promise<{ text: string }>(() => {});
+    })!;
+    const handle = await spawned.done;
+    expect(handle.status).toBe(SubAgentStatus.Failed);
+    expect(handle.error).toContain('timeout');
+    expect(received!.aborted).toBe(true);
   });
 
-  it('multiple agents complete independently', async () => {
-    const pool = new SubAgentPool();
-    pool.spawn('fast', fakeRun('fast', 10));
-    pool.spawn('slow', fakeRun('slow', 100));
-    pool.spawn('medium', fakeRun('medium', 50));
-
-    await new Promise((r) => setTimeout(r, 60));
-
-    // Fast and medium should be done
-    const batch1 = pool.pollCompleted();
-    expect(batch1.length).toBeGreaterThanOrEqual(1);
-
-    await new Promise((r) => setTimeout(r, 60));
-    const batch2 = pool.pollCompleted();
-    const all = [...batch1, ...batch2];
-    expect(all.length).toBe(3);
+  it('per-spawn timeout override wins over pool default', async () => {
+    const pool = new SubAgentPool(5, 60_000);
+    const spawned = pool.spawn('slow', () => new Promise<{ text: string }>(() => {}), undefined, 30)!;
+    const handle = await spawned.done;
+    expect(handle.error).toContain('timeout');
   });
 
-  it('pollCompleted clears after read', async () => {
-    const pool = new SubAgentPool();
-    pool.spawn('task', fakeRun('result', 10));
-    await new Promise((r) => setTimeout(r, 50));
-
-    const first = pool.pollCompleted();
-    expect(first.length).toBe(1);
-
-    const second = pool.pollCompleted();
-    expect(second.length).toBe(0);
+  it('returns null at maxConcurrent', () => {
+    const pool = new SubAgentPool(1);
+    pool.spawn('a', () => new Promise<{ text: string }>(() => {}));
+    const second = pool.spawn('b', fakeRun('b'));
+    expect(second).toBeNull();
+    pool.stopAll();
   });
 
-  // ═══════════════════════════════════════════════════════
-  // awaitAll — used by agent.runLoop to wait for sub-agents
-  // ═══════════════════════════════════════════════════════
-
-  it('awaitAll blocks until all agents complete', async () => {
+  it('spawn with same callId returns the already-running agent', () => {
     const pool = new SubAgentPool();
-    const start = Date.now();
-    pool.spawn('a', fakeRun('result-a', 50));
-    pool.spawn('b', fakeRun('result-b', 80));
-    pool.spawn('c', fakeRun('result-c', 30));
-
-    const results = await pool.awaitAll();
-
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(70); // slowest was 80ms
-    expect(results.length).toBe(3);
-    expect(results.map((r) => r.status)).toEqual([
-      SubAgentStatus.Completed,
-      SubAgentStatus.Completed,
-      SubAgentStatus.Completed,
-    ]);
-  });
-
-  it('awaitAll returns immediately when no agents running', async () => {
-    const pool = new SubAgentPool();
-    const results = await pool.awaitAll();
-    expect(results.length).toBe(0);
-  });
-
-  it('awaitAll includes previously completed agents', async () => {
-    const pool = new SubAgentPool();
-    pool.spawn('quick', fakeRun('done', 10));
-    await new Promise((r) => setTimeout(r, 30));
-
-    // Don't poll — awaitAll should still return them
-    const results = await pool.awaitAll();
-    expect(results.length).toBe(1);
-    expect(results[0].result).toBe('done');
-  });
-
-  // ═══════════════════════════════════════════════════════
-  // Idempotency — duplicate callId returns existing agent
-  // ═══════════════════════════════════════════════════════
-
-  it('spawn with same callId returns existing agent ID', () => {
-    const pool = new SubAgentPool();
-    const id1 = pool.spawn('task', fakeRun('done', 5000), undefined, 'call-001');
-    const id2 = pool.spawn('duplicate', fakeRun('ignored', 10), undefined, 'call-001');
-
-    expect(id2).toBe(id1);
+    const s1 = pool.spawn('task', () => new Promise<{ text: string }>(() => {}), 'call-001')!;
+    const s2 = pool.spawn('duplicate', fakeRun('ignored'), 'call-001')!;
+    expect(s2.id).toBe(s1.id);
     expect(pool.runningCount).toBe(1);
+    pool.stopAll();
   });
 
-  it('spawn with same callId returns completed agent ID only for running agents', async () => {
-    // NOTE: Idempotency by callId currently only works for running agents.
-    // Completed handles don't store callId — tracking completed callIds is a
-    // separate feature that can be added to SubAgentPool if needed.
+  it('getHandle finds running and completed agents', async () => {
     const pool = new SubAgentPool();
-    const id1 = pool.spawn('task', fakeRun('done', 10), undefined, 'call-002');
-    await new Promise((r) => setTimeout(r, 30));
-    pool.pollCompleted();
+    const running = pool.spawn('running', () => new Promise<{ text: string }>(() => {}))!;
+    expect(pool.getHandle(running.id)?.status).toBe(SubAgentStatus.Running);
 
-    // After pollCompleted, the agent is gone from both agents and completed maps.
-    // A new spawn with the same callId will create a NEW agent.
-    const id2 = pool.spawn('duplicate', fakeRun('result', 10), undefined, 'call-002');
-    expect(id2).not.toBe(id1); // new ID — completed handles don't track callId
-    expect(pool.runningCount).toBe(1); // new agent spawned
+    const doneSpawn = pool.spawn('quick', fakeRun('result', 5))!;
+    await doneSpawn.done;
+    const h = pool.getHandle(doneSpawn.id);
+    expect(h?.status).toBe(SubAgentStatus.Completed);
+    expect(h?.result).toBe('result');
+
+    expect(pool.getHandle('nope')).toBeUndefined();
+    pool.stopAll();
+  });
+
+  it('late completion after stop hits the finished guard (no double-settle)', async () => {
+    const pool = new SubAgentPool();
+    let resolveRun: ((v: { text: string }) => void) | undefined;
+    const spawned = pool.spawn('race', () => new Promise<{ text: string }>((r) => (resolveRun = r)))!;
+    pool.stop(spawned.id);
+    resolveRun!({ text: 'late' });
+    const handle = await spawned.done;
+    expect(handle.status).toBe(SubAgentStatus.Stopped);
+    expect(handle.result).toBeUndefined();
+    expect(pool.runningCount).toBe(0);
+  });
+
+  it('summary lists running and recent completed agents', async () => {
+    const pool = new SubAgentPool();
+    const doneSpawn = pool.spawn('done task', fakeRun('r', 5))!;
+    await doneSpawn.done;
+    pool.spawn('running task', () => new Promise<{ text: string }>(() => {}));
+    const s = pool.summary();
+    expect(s).toContain('done task');
+    expect(s).toContain('running task');
+    pool.stopAll();
   });
 });

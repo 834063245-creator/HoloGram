@@ -10,9 +10,8 @@ import hljs from 'highlight.js';
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle, GoalRunResult } from '../agent/chat-agent-handle';
-import { GoalManager, type GoalRecord } from '../agent/goal-manager';
-
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
+import { GoalManager, type GoalRecord } from '../agent/goal-manager';
 import { rpc } from '../bridge';
 import type { ToolSchema } from '../provider/types';
 import { loadSettings, saveSettings } from '../settings';
@@ -52,11 +51,11 @@ import {
   resetMsgIdCounter,
   type UserMessage,
 } from './message-model';
+import { AtAutocompleteController } from './react/AtAutocomplete';
+import { FooterController } from './react/ChatFooter';
+import { ChatHintController } from './react/ChatHint';
 import { ChatMessagesPanel } from './react/ChatMessages';
 import { type AskPrompt, type PermissionPrompt, PromptShelfController } from './react/PromptShelf';
-import { FooterController } from './react/ChatFooter';
-import { AtAutocompleteController } from './react/AtAutocomplete';
-import { ChatHintController } from './react/ChatHint';
 import { SlashPanelController } from './react/SlashPanel';
 
 // ── Constants ──
@@ -337,7 +336,10 @@ export class ChatPanel {
       }
     };
     const _bindExecState = () => {
-      if (_execUnsub) { _execUnsub(); _execUnsub = null; }
+      if (_execUnsub) {
+        _execUnsub();
+        _execUnsub = null;
+      }
       const exec = this._activeExec();
       _execUnsub = exec.onChange(() => _onExecChange(exec));
       _onExecChange(exec); // initial sync
@@ -464,7 +466,7 @@ export class ChatPanel {
     if (!this._promptShelf) {
       return Promise.resolve({ allow: false, remember: false });
     }
-    return this._exec.enqueuePerm(() =>
+    return this._activeExec().enqueuePerm(() =>
       this._promptShelf!.showPermission({
         type: 'permission',
         id: `perm-${toolName}-${Date.now()}`,
@@ -1532,7 +1534,7 @@ export class ChatPanel {
     // 安全超时：3 秒内若 Agent 没响应，强制复位
     const safety = setTimeout(() => {
       if (this._activeExec().isRunning) {
-        this._exec.forceReset();
+        this._activeExec().forceReset();
         this.finishTurn();
         this.addNotice('已强制中止（超时）', 'warn');
       }
@@ -1731,11 +1733,18 @@ export class ChatPanel {
       this.inputArea.value = '';
       this.inputArea.style.height = 'auto';
       if (!this.agent) return;
+      // Guard: compaction rewrites the session — racing a running turn corrupts it.
+      if (this._activeExec().isRunning) {
+        this.addNotice('Agent 正在运行，请先停止或等待完成后再压缩。', 'warn');
+        return;
+      }
       this.appendUserBubble('/compact');
       this.addNotice('正在压缩上下文…', 'info');
-      const ctrl = new AbortController();
+      // Track via execState so the stop button can abort the summarization call.
+      const exec = this._activeExec();
+      const signal = exec.start();
       this.agent
-        .compactNow(ctrl.signal)
+        .compactNow(signal)
         .then(() => {
           this.messages = [];
           resetMsgIdCounter(this.panelId);
@@ -1746,6 +1755,9 @@ export class ChatPanel {
         })
         .catch((err) => {
           this.addNotice(`压缩失败: ${err.message}`, 'error');
+        })
+        .finally(() => {
+          exec.done();
         });
     });
     override('export', () => this.exportSession());

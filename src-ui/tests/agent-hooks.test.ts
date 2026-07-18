@@ -395,7 +395,7 @@ describe('HookRegistry', () => {
 });
 
 describe('PreflightHookRegistry', () => {
-  it('check 返回第一个非 null 警告', () => {
+  it('check 聚合所有非 null 警告', () => {
     const reg = new PreflightHookRegistry();
     reg.register({
       name: 'a',
@@ -407,7 +407,9 @@ describe('PreflightHookRegistry', () => {
       shouldCheck: () => true,
       check: () => 'WARN_B',
     });
-    expect(reg.check('edit_file', {})).toBe('WARN_A'); // 第一个命中即返回
+    const out = reg.check('edit_file', {});
+    expect(out).toContain('WARN_A');
+    expect(out).toContain('WARN_B');
   });
 
   it('check 全部 null 返回 null', () => {
