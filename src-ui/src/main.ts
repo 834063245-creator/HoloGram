@@ -400,6 +400,9 @@ async function setupPlaceholderAgent(): Promise<void> {
 // ── Init ──
 
 async function init(): Promise<void> {
+  // 禁用浏览器原生右键菜单（自定义 ContextMenu 不受影响）
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+
   setLang(loadSettings().display.language);
   document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
   starGraph.resize(); // CSS custom props changed → container shrunk → canvas must follow

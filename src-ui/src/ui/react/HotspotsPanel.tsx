@@ -222,6 +222,7 @@ export class HotspotsPanelController {
     if (!this._open) return;
     this._open = false;
     this._panel.classList.remove('hs-open');
+    shell.notifyPanelChanged();
     // Delay hiding container so CSS transition can finish
     setTimeout(() => {
       if (!this._open) this._container.style.display = 'none';
