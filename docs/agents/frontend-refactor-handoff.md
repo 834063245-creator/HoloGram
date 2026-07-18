@@ -1,6 +1,6 @@
 # HoloGram 前端「观测台」重构 — Handoff
 
-> 交接时间：2026-07-18 · 上一棒：P0 → P2′-2a 已完成并全部入库
+> 交接时间：2026-07-18 · 上一棒：P0 → P2′-2b 已完成并全部入库
 > **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`，然后按「下一步精确清单」执行。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
@@ -12,6 +12,7 @@
 | `726f2f6` | P1 壳 | 单 React 根 `<App/>`：CommandBar/StatusBar/DockRail/CommandPalette(Ctrl+K)/ShortcutsOverlay；`shell-store`（zustand）+ `actions` 注册表 + `bridge-adapters`（bus→store）；main.ts 1035→~840 行；index.html 瘦身为 #app-root+#graph+#welcome；graph.ts updateStatus 改写 store |
 | `f2acd6e` | 修复 | 窗口拖拽：`.cb-bar` 补 `-webkit-app-region: drag`（按钮/输入 no-drag） |
 | `1e6a08f` | P2′-2a 聊天 | 无头 `ChatCore`（chat-core.ts）+ 观测信标视图 `ChatBeacon`；删 ui/chat.ts、chat-dom.ts、chat-anim.ts；`chat-session/chat-stream/part-mutator/execution-state` 逻辑**零改动** |
+| `4216c4e` | P2′-2b 内联 | 六个 React Controller 包装类删除，组件直接挂 ChatBeacon 树；core `register*` 改收组件 ref 句柄（Messages 收 `MessagesApi{bump}`）；AtAutocomplete 的 navigate/select/open 从 DOM-scraping 重写为状态驱动（顺带修掉选中后弹层滞留、紧接 Enter 误选二次）；PromptShelf 卸载时取消挂起 Promise；`chat-session/chat-stream` 零改动 |
 
 ## 二、当前架构快照
 
@@ -28,14 +29,14 @@ src-ui/src/
 │   └── chat/
 │       ├── chat-core.ts        无头 ChatCore：会话/流式/权限/goal 全部编排，公开 API 与旧 ChatPanel 一致
 │       ├── core-instance.ts    useCoreStore（main.ts 注入 core，App 就绪后渲染 ChatBeacon）
-│       ├── ChatBeacon.tsx      视图根：pill/input/panel/hud 模式机 + 六个控制器挂载 + 全部子组件
+│       ├── ChatBeacon.tsx      视图根：pill/input/panel/hud 模式机 + 内联聊天组件树（Messages/Hint/Shelf/At/Slash/Footer，ref 句柄注册进 core）
 │       ├── Composer.tsx        输入框（input-store.inputText 受控）
 │       ├── HistoryPanel.tsx    历史会话（portal 到 body）
 │       └── beacon.css          chat.css 之上的增量覆盖（宽 640px、CSS 过渡、a11y 复位）
 ├── ui/                         ← 旧层（P3/P4 逐步清）
 │   ├── chat-session.ts / chat-stream.ts / part-mutator.ts / message-model.ts / chat-store.ts  ★ 逻辑，勿动
 │   ├── panel-store.ts          per-panel UI 状态（P2′ 加了 goalRecord/lastAgentDetail）
-│   ├── react/                  React 岛（Controller 包装类，P2′-2b 内联后删包装）
+│   ├── react/                  React 岛（纯组件 + ref 句柄导出；2b 已删全部 Controller 包装类）
 │   │   ├── ChatMessages.tsx / ChatFooter.tsx / ChatHint.tsx / PromptShelf.tsx / AtAutocomplete.tsx / SlashPanel.tsx
 │   │   └── base.css / chat.css / panels.css   旧样式（聊天类契约仍生效；P5 删除）
 │   ├── graph.ts (3657 行)      StarGraph 上帝类（P4 拆；updateStatus 已写 shell-store）
@@ -57,21 +58,6 @@ src-ui/src/
 7. 每阶段一个干净 commit，消息风格参照 `git log`（中文 conventional commits）。
 
 ## 四、下一步精确清单
-
-### P2′-2b — 控制器内联（估 1 天，建议先做）
-
-目标：删掉 6 个 Controller 包装类，组件直接活在 ChatBeacon 树里。core 的 `register*` 接口可以保留（改成接受组件 ref 句柄）。
-
-| 控制器 | 现状 | 内联做法 |
-|---|---|---|
-| ChatMessagesPanel | `react/ChatMessages.tsx` 内层是 `ChatMessagesApp` | 导出内层组件（或整体迁 `app/chat/MessageList.tsx`），直接 `<ChatMessagesApp panelId callbacks scrollContainer/>`，删 Controller |
-| FooterController | `react/ChatFooter.tsx` | 组件直接渲染；三回调（onOpenSettings/onTriggerSlash/onAttachFile）照传；`refresh()` 经 ref |
-| PromptShelfController | `react/PromptShelf.tsx` | 组件 + `useImperativeHandle` 暴露 `showAsk/showPermission/dismiss/active`；core 注册接口签名不变 |
-| AtAutocompleteController | `react/AtAutocomplete.tsx` | ⚠ 其 `navigate/select/open` 是 DOM-scraping hack——借内联重写为 ref 句柄（组件自己管 activeIdx） |
-| SlashPanelController | `react/SlashPanel.tsx` | 已有 `SlashPanelHandle` forwardRef，直接渲染 + ref |
-| ChatHintController | `react/ChatHint.tsx` | `<ChatHint panelId/>` 直接渲染 |
-
-删：`ChatBeacon.tsx` 挂载 effect 简化；Controller 类删除（ui/react/* 文件去包装，组件本体留下）。
 
 ### P2′-2c — 已并入 2a 完成 ✅
 
@@ -131,7 +117,7 @@ npx vite --port 1420 --strictPort   # 起 dev server
 
 ## 七、契约速查（省得重读代码）
 
-**ChatCore 公开 API**（main.ts/workspace.ts 契约面）：`panelId`、`eventSink`、`setAgent/getAgent`、`setAgentFactory`、`setToolSchemas`、`setOnOpenSettings/setOnTrailToggle`（视图侧用 fireOpenSettings/fireTrailToggle）、`setStarGraph`、`setProjectPath`、`toggle/open/close/isOpen/summonPanel/collapseToInput/collapseToPill/expandToInput/fadeToHud/restoreFromHud`、`ask(q)`、`showPermissionCard(tool,reason,subject,danger?)`、`switchSession/closeSession/createNewSession`、`saveActiveSession/scheduleAutoSave/autoRestoreLastSession`、`listSavedSessions/loadSessionFromDisk/deleteSessionFile`、`toggleHistory/closeHistory`、`runGoalResume/cancelGoal`、`sendMessage/abort`、`onExecChange(cb)/execBusy`、`register{Composer,PromptShelf,Slash,At,Footer,Messages}`、消息回调 `copyText/navigateToNode/editUserMessage/resendUserMessage/retryAssistant`、`handleAtInput/applyAtSelect/atOpen/atNavigate/atSelect`、`handleSlashInput/slashVisible/slashNavigate/slashSelect/hideSlash/executeCommand`、`openFilePicker/handleFileDrop/removeAttachedFile`、`_exec`（workspace 以 `chatPanel['_exec']` 取用——字段名必须保留）。
+**ChatCore 公开 API**（main.ts/workspace.ts 契约面）：`panelId`、`eventSink`、`setAgent/getAgent`、`setAgentFactory`、`setToolSchemas`、`setOnOpenSettings/setOnTrailToggle`（视图侧用 fireOpenSettings/fireTrailToggle）、`setStarGraph`、`setProjectPath`、`toggle/open/close/isOpen/summonPanel/collapseToInput/collapseToPill/expandToInput/fadeToHud/restoreFromHud`、`ask(q)`、`showPermissionCard(tool,reason,subject,danger?)`、`switchSession/closeSession/createNewSession`、`saveActiveSession/scheduleAutoSave/autoRestoreLastSession`、`listSavedSessions/loadSessionFromDisk/deleteSessionFile`、`toggleHistory/closeHistory`、`runGoalResume/cancelGoal`、`sendMessage/abort`、`onExecChange(cb)/execBusy`、`register{Composer,PromptShelf,Slash,At,Footer,Messages}`（收组件 ref 句柄；Messages 收 `MessagesApi{bump}`）、消息回调 `copyText/navigateToNode/editUserMessage/resendUserMessage/retryAssistant`、`handleAtInput/applyAtSelect/atOpen/atNavigate/atSelect`、`handleSlashInput/slashVisible/slashNavigate/slashSelect/hideSlash/executeCommand`、`openFilePicker/handleFileDrop/removeAttachedFile`、`_exec`（workspace 以 `chatPanel['_exec']` 取用——字段名必须保留）。
 
 **Store 地图**：`shell-store`（chrome）· `panel-store`（面板内 UI：mode/tabs/tools/tokens/focus/goalRecord…）· `messages-store`（per-panel 与 per-session `${storeId}:${sid}` 消息）· `session-store`（会话元数据/activeIdx/tokens）· `input-store`（文本/附件/历史/草稿）· `chat-store`（四者注册表 + msgStoreFor）。
 

@@ -31,16 +31,20 @@ import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from '../../ui/com
 import { bus } from '../../ui/events';
 import type { StarGraph } from '../../ui/graph';
 import { type AssistantMessage, type ChatMessage, resetMsgIdCounter, type UserMessage } from '../../ui/message-model';
-import type { AtAutocompleteController } from '../../ui/react/AtAutocomplete';
-import type { FooterController } from '../../ui/react/ChatFooter';
-import type { ChatMessagesPanel } from '../../ui/react/ChatMessages';
-import type { PromptShelfController } from '../../ui/react/PromptShelf';
-import type { SlashPanelController } from '../../ui/react/SlashPanel';
+import type { AtAutocompleteHandle } from '../../ui/react/AtAutocomplete';
+import type { ChatFooterHandle } from '../../ui/react/ChatFooter';
+import type { PromptShelfHandle } from '../../ui/react/PromptShelf';
+import type { SlashPanelHandle } from '../../ui/react/SlashPanel';
 
 /** 视图注册的输入框命令式接口（聚焦/全选），其余输入状态一律走 input-store */
 export interface ComposerApi {
   focus: () => void;
   selectEnd: () => void;
+}
+
+/** 消息列表命令式句柄 —— /compact 重建会话后强制重拉（bump = bumpChat(panelId)） */
+export interface MessagesApi {
+  bump(): void;
 }
 
 export class ChatCore {
@@ -61,13 +65,13 @@ export class ChatCore {
   private onOpenSettings: (() => void) | null = null;
   private _onTrailToggle: (() => void) | null = null;
 
-  // ── 视图注册槽（ChatBeacon 挂载后注入）──
+  // ── 视图注册槽（ChatBeacon 挂载后注入组件 ref 句柄）──
   private _composer: ComposerApi | null = null;
-  private _promptShelf: PromptShelfController | null = null;
-  private _slashController: SlashPanelController | null = null;
-  private _atAutocomplete: AtAutocompleteController | null = null;
-  private _footerController: FooterController | null = null;
-  private _chatMessages: ChatMessagesPanel | null = null;
+  private _promptShelf: PromptShelfHandle | null = null;
+  private _slashController: SlashPanelHandle | null = null;
+  private _atAutocomplete: AtAutocompleteHandle | null = null;
+  private _footerController: ChatFooterHandle | null = null;
+  private _chatMessages: MessagesApi | null = null;
 
   // ── chat-session ctx 的 DOM 桩：分离元素，吸收写入，永不挂载 ──
   private _stubPanel: HTMLElement = document.createElement('div');
@@ -189,20 +193,20 @@ export class ChatCore {
   registerComposer(api: ComposerApi): void {
     this._composer = api;
   }
-  registerPromptShelf(c: PromptShelfController): void {
+  registerPromptShelf(c: PromptShelfHandle): void {
     this._promptShelf = c;
   }
-  registerSlash(c: SlashPanelController): void {
+  registerSlash(c: SlashPanelHandle): void {
     this._slashController = c;
   }
-  registerAt(c: AtAutocompleteController): void {
+  registerAt(c: AtAutocompleteHandle): void {
     this._atAutocomplete = c;
     if (this.starGraph) c.setNodeNames(this.starGraph.getNodeNames());
   }
-  registerFooter(c: FooterController): void {
+  registerFooter(c: ChatFooterHandle): void {
     this._footerController = c;
   }
-  registerMessages(c: ChatMessagesPanel): void {
+  registerMessages(c: MessagesApi): void {
     this._chatMessages = c;
   }
 

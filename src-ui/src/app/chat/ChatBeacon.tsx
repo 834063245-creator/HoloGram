@@ -6,19 +6,19 @@
 // DOM 结构与 chat.css 的类契约一致（.chat-panel/.chat-pill/.chat-open/…），旧样式无缝套用。
 // 数据全部来自 store；命令全部经 ChatCore；本文件只做渲染与事件转发。
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import { loadSettings } from '../../settings';
 import * as Session from '../../ui/chat-session';
-import { getChatStore } from '../../ui/chat-store';
-import { CommandRegistry } from '../../ui/command-registry';
-import { AtAutocompleteController } from '../../ui/react/AtAutocomplete';
-import { FooterController } from '../../ui/react/ChatFooter';
-import { ChatHintController } from '../../ui/react/ChatHint';
-import { ChatMessagesPanel } from '../../ui/react/ChatMessages';
-import { PromptShelfController } from '../../ui/react/PromptShelf';
-import { SlashPanelController } from '../../ui/react/SlashPanel';
+import { bumpChat, getChatStore } from '../../ui/chat-store';
+import { type CommandDef, CommandRegistry } from '../../ui/command-registry';
+import { AtAutocomplete, type AtAutocompleteHandle } from '../../ui/react/AtAutocomplete';
+import { ChatFooter, type ChatFooterHandle } from '../../ui/react/ChatFooter';
+import { ChatHint } from '../../ui/react/ChatHint';
+import { ChatMessagesApp, type ChatMessagesCallbacks } from '../../ui/react/ChatMessages';
+import { PromptShelf, type PromptShelfHandle } from '../../ui/react/PromptShelf';
+import { SlashPanel, type SlashPanelHandle } from '../../ui/react/SlashPanel';
 import { Icon } from '../Icon';
 import { Composer } from './Composer';
 import { ChatCore } from './chat-core';
@@ -298,51 +298,36 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
   const toolUsage = useStore(panelStore, (s) => s.toolUsage);
   const [busy, setBusy] = useState(core.execBusy);
   const panelRef = useRef<HTMLDivElement>(null);
-  const chatTabRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
+  const shelfRef = useRef<PromptShelfHandle>(null);
+  const atRef = useRef<AtAutocompleteHandle>(null);
+  const slashRef = useRef<SlashPanelHandle>(null);
+  const footerRef = useRef<ChatFooterHandle>(null);
 
   useEffect(() => core.onExecChange(() => setBusy(core.execBusy)), [core]);
 
-  // ── 六个 React 控制器挂载（2b 再内联为组件，本阶段复用）──
+  // ── 控制器内联：组件常驻本树，ref 句柄在首次提交后即有效（注册一次）──
   useEffect(() => {
-    const panelEl = panelRef.current;
-    const chatTabEl = chatTabRef.current;
-    if (!panelEl || !chatTabEl) return;
+    if (shelfRef.current) core.registerPromptShelf(shelfRef.current);
+    if (atRef.current) core.registerAt(atRef.current);
+    if (slashRef.current) core.registerSlash(slashRef.current);
+    if (footerRef.current) core.registerFooter(footerRef.current);
+    core.registerMessages({ bump: () => bumpChat(core.panelId) });
+  }, [core]);
 
-    // 消息列表
-    const msgRoot = document.createElement('div');
-    msgRoot.className = 'chat-messages';
-    chatTabEl.appendChild(msgRoot);
-    const messages = new ChatMessagesPanel(msgRoot, core.panelId);
-    messages.setCallbacks({
+  const msgCallbacks = useMemo<ChatMessagesCallbacks>(
+    () => ({
       onCopyText: (t) => core.copyText(t),
       onNavigateToNode: (n) => core.navigateToNode(n),
       onEditUserMessage: (m) => core.editUserMessage(m),
       onResendUserMessage: (m) => core.resendUserMessage(m),
       onRetryAssistant: (m) => core.retryAssistant(m),
-    });
-    core.registerMessages(messages);
+    }),
+    [core],
+  );
 
-    // 空态提示
-    const hint = new ChatHintController(chatTabEl, core.panelId);
-
-    // 权限 / ask_user 卡（插入 .chat-input-area 之前）
-    const shelf = new PromptShelfController(panelEl);
-    core.registerPromptShelf(shelf);
-
-    // @ 补全
-    const at = new AtAutocompleteController(panelEl, core.panelId);
-    at.setOnSelect((atIdx, token) => core.applyAtSelect(atIdx, token));
-    core.registerAt(at);
-
-    // 斜杠面板
-    const slash = new SlashPanelController(panelEl, CommandRegistry.instance.getAll(), (cmd) =>
-      core.executeCommand(cmd),
-    );
-    core.registerSlash(slash);
-
-    // Footer（token/模型/模式选择）
-    const footer = new FooterController(panelEl, core.panelId, {
+  const footerCallbacks = useMemo(
+    () => ({
       onOpenSettings: () => core.fireOpenSettings(),
       onTriggerSlash: () => {
         const input = getChatStore(core.panelId).input.getState();
@@ -351,19 +336,13 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
         core.handleSlashInput(`${v}/`);
       },
       onAttachFile: () => core.openFilePicker(),
-    });
-    core.registerFooter(footer);
+    }),
+    [core],
+  );
 
-    return () => {
-      messages.destroy();
-      hint.destroy();
-      shelf.destroy();
-      at.destroy();
-      slash.destroy();
-      footer.destroy();
-      msgRoot.remove();
-    };
-  }, [core]);
+  const handleAtSelect = useCallback((atIdx: number, token: string) => core.applyAtSelect(atIdx, token), [core]);
+  const handleSlashCommit = useCallback((cmd: CommandDef) => core.executeCommand(cmd), [core]);
+  const slashCommands = useMemo(() => CommandRegistry.instance.getAll(), []);
 
   // ── 图点击自动退避：panel→hud，hud/input→pill ──
   useEffect(() => {
@@ -513,9 +492,10 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
         <StatusStrip core={core} />
 
         <div className="chat-tab-content">
-          <div ref={chatTabRef} className={`chat-tab-panel${activeTab === 'chat' ? ' active' : ''}`} data-panel="chat">
+          <div className={`chat-tab-panel${activeTab === 'chat' ? ' active' : ''}`} data-panel="chat">
             <GoalStrip core={core} />
-            {/* 消息列表由 ChatMessagesPanel 控制器挂载于此 */}
+            <ChatMessagesApp panelId={core.panelId} callbacks={msgCallbacks} />
+            <ChatHint panelId={core.panelId} />
           </div>
           <div className={`chat-tab-panel${activeTab === 'tools' ? ' active' : ''}`} data-panel="tools">
             {activeTab === 'tools' ? <ToolsView core={core} /> : null}
@@ -540,8 +520,12 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
 
         <AttachPills core={core} />
 
+        {/* 权限 / ask_user 卡（原 Controller 插入 .chat-input-area 之前，内联保持同位） */}
+        <PromptShelf ref={shelfRef} />
+
         <div className="chat-input-area">
           <Composer core={core} />
+          <AtAutocomplete ref={atRef} panelId={core.panelId} onSelect={handleAtSelect} />
         </div>
 
         {/* Pill 球体装饰（chat.css 绘制） */}
@@ -564,6 +548,10 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
         <div className={`chat-pill-badge${pillCount > 0 ? ' show' : ''}`}>
           {pillCount > 99 ? '99+' : pillCount || ''}
         </div>
+
+        {/* 斜杠面板 + Footer（原 Controller 追加于面板末尾，内联保持同位） */}
+        <SlashPanel ref={slashRef} commands={slashCommands} onCommit={handleSlashCommit} />
+        <ChatFooter ref={footerRef} panelId={core.panelId} callbacks={footerCallbacks} />
       </div>
 
       <HistoryPortal core={core} />

@@ -5,11 +5,10 @@
 // 替代 chat.ts 中 updateFooter() 的 innerHTML + querySelector 命令式操作。
 // 纯声明式：订阅 Zustand stores → 自动渲染，零 DOM 操作。
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import React, { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
-import { iconHtml } from '../icons';
 import { loadSettings, saveSettings } from '../../settings';
+import { iconHtml } from '../icons';
 import { getChatStore } from '../chat-store';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
 
@@ -23,7 +22,7 @@ export interface FooterCallbacks {
 
 // ── React Component ──
 
-function ChatFooter({ panelId, callbacks }: { panelId: string; callbacks: FooterCallbacks }) {
+function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: FooterCallbacks }) {
   const panelStore = getChatStore(panelId).panel;
 
   const totalTokensUsed = useStore(panelStore, (s) => s.totalTokensUsed);
@@ -150,69 +149,27 @@ function ChatModebar({ panelId }: { panelId: string }) {
   );
 }
 
-// ── Full footer component ──
+// ── Full footer component（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
 
-function ChatFooterInner({ panelId, callbacks, _forceVersion }: {
-  panelId: string;
-  callbacks: FooterCallbacks;
-  _forceVersion?: number;
-}) {
-  // _forceVersion bumps when settings change — triggers re-render to pick up new model name
-  void _forceVersion;
-  return (
-    <>
-      <ChatModebar panelId={panelId} />
-      <div className="chat-footer-row">
-        <ChatFooter panelId={panelId} callbacks={callbacks} />
-        <ChatFooterRight callbacks={callbacks} />
+export interface ChatFooterHandle {
+  /** settings 变更后调用 —— 设置非响应式，需手动催更重读模型名 */
+  refresh(): void;
+}
+
+export const ChatFooter = forwardRef<ChatFooterHandle, { panelId: string; callbacks: FooterCallbacks }>(
+  function ChatFooter({ panelId, callbacks }, ref) {
+    // version 仅用于 refresh() 催更，不参与渲染
+    const [version, setVersion] = useState(0);
+    void version;
+    useImperativeHandle(ref, () => ({ refresh: () => setVersion((v) => v + 1) }), []);
+    return (
+      <div className="chat-footer">
+        <ChatModebar panelId={panelId} />
+        <div className="chat-footer-row">
+          <ChatFooterLeft panelId={panelId} callbacks={callbacks} />
+          <ChatFooterRight callbacks={callbacks} />
+        </div>
       </div>
-    </>
-  );
-}
-
-// ── Controller — thin wrapper for ChatPanel ──
-
-export class FooterController {
-  private _root: Root;
-  private _mount: HTMLElement;
-  private _panelId: string;
-  private _callbacks: FooterCallbacks;
-  private _version = 0;
-
-  constructor(container: HTMLElement, panelId: string, callbacks: FooterCallbacks) {
-    this._panelId = panelId;
-    this._callbacks = callbacks;
-    this._mount = document.createElement('div');
-    this._mount.className = 'chat-footer';
-    container.appendChild(this._mount);
-    this._root = createRoot(this._mount);
-    this._render();
-  }
-
-  private _render(): void {
-    this._root.render(
-      React.createElement(ChatFooterInner, {
-        panelId: this._panelId,
-        callbacks: this._callbacks,
-        _forceVersion: this._version,
-      }),
     );
-  }
-
-  /** Call after settings change to re-read model badge. */
-  refresh(): void {
-    this._version++;
-    this._render();
-  }
-
-  /** Update callbacks (e.g. onOpenSettings may change after construction). */
-  setCallbacks(callbacks: FooterCallbacks): void {
-    this._callbacks = callbacks;
-    this._render();
-  }
-
-  destroy(): void {
-    this._root.unmount();
-    this._mount.remove();
-  }
-}
+  },
+);

@@ -5,8 +5,7 @@
 // Handles both ask_user cards and permission approvals.
 // Does NOT live inside the messages array — independent React root.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import './prompt-shelf.css';
 
 // ── Types ──
@@ -254,111 +253,89 @@ const PermCard: React.FC<{
   );
 };
 
-// ── Shelf shell ──
+// ── Exposed imperative API（core 注册接口签名不变）──
 
-const PromptShelfApp: React.FC<{
-  prompt: PromptData | null;
-  onResolveAsk: (answer: string[] | null) => void;
-  onResolvePerm: (result: { allow: boolean; remember: boolean }) => void;
-}> = ({ prompt, onResolveAsk, onResolvePerm }) => {
-  if (!prompt) return null;
-  return (
-    <div className="prompt-shelf">
-      {prompt.type === 'ask' ? (
-        <AskCard prompt={prompt} onResolve={onResolveAsk} />
-      ) : (
-        <PermCard prompt={prompt} onResolve={onResolvePerm} />
-      )}
-    </div>
-  );
-};
-
-// ── Controller class (pattern copied from SlashPanelController) ──
-
-export class PromptShelfController {
-  private _root: Root;
-  private _mount: HTMLElement;
-  private _active: PromptData | null = null;
-  private _pendingResolver: ((v: any) => void) | null = null;
-
-  constructor(parent: HTMLElement) {
-    this._mount = document.createElement('div');
-    this._mount.className = 'prompt-shelf';
-    // Insert between chat-messages and chat-input-area
-    const inputArea = parent.querySelector('.chat-input-area');
-    if (inputArea) {
-      parent.insertBefore(this._mount, inputArea);
-    } else {
-      parent.appendChild(this._mount);
-    }
-    this._root = createRoot(this._mount);
-    this._render();
-  }
-
-  get active(): PromptData | null {
-    return this._active;
-  }
-
+export interface PromptShelfHandle {
+  readonly active: PromptData | null;
   /** Show an ask prompt. Returns a Promise that resolves with selected labels or null if cancelled. */
-  showAsk(prompt: AskPrompt): Promise<string[] | null> {
-    return new Promise((resolve) => {
-      this._dismissCurrent();
-      this._active = prompt;
-      this._pendingResolver = (v) => resolve(v as string[] | null);
-      this._render();
-    });
-  }
-
+  showAsk(prompt: AskPrompt): Promise<string[] | null>;
   /** Show a permission prompt. Returns a Promise that resolves with allow/remember. */
-  showPermission(prompt: PermissionPrompt): Promise<{ allow: boolean; remember: boolean }> {
-    return new Promise((resolve) => {
-      this._dismissCurrent();
-      this._active = prompt;
-      this._pendingResolver = (v) => resolve(v as { allow: boolean; remember: boolean });
-      this._render();
-    });
-  }
-
+  showPermission(prompt: PermissionPrompt): Promise<{ allow: boolean; remember: boolean }>;
   /** Dismiss current prompt (cancels pending Promise). */
-  dismiss(): void {
-    this._dismissCurrent();
-    this._render();
-  }
+  dismiss(): void;
+}
+
+// ── Shelf component（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
+// 句柄只创建一次（core 挂载时注册）；命令式读取一律走 ref 镜像，避免陈旧闭包。
+
+export const PromptShelf = forwardRef<PromptShelfHandle>(function PromptShelf(_props, ref) {
+  const [active, setActive] = useState<PromptData | null>(null);
+  const activeRef = useRef<PromptData | null>(null);
+  const resolverRef = useRef<((v: unknown) => void) | null>(null);
 
   /** Clear current prompt and resolve the pending Promise with null (cancelled).
    *  This prevents silent Promise leaks when a second prompt supersedes the first. */
-  private _dismissCurrent(): void {
-    const prev = this._pendingResolver;
-    this._active = null;
-    this._pendingResolver = null;
+  const dismissCurrent = useCallback(() => {
+    const prev = resolverRef.current;
+    activeRef.current = null;
+    resolverRef.current = null;
+    setActive(null);
     prev?.(null);
-  }
+  }, []);
 
-  private _render(): void {
-    this._root.render(
-      React.createElement(PromptShelfApp, {
-        prompt: this._active,
-        onResolveAsk: (answer) => {
-          const r = this._pendingResolver;
-          this._active = null;
-          this._pendingResolver = null;
-          this._render();
-          r?.(answer);
-        },
-        onResolvePerm: (result) => {
-          const r = this._pendingResolver;
-          this._active = null;
-          this._pendingResolver = null;
-          this._render();
-          r?.(result);
-        },
+  const showAsk = useCallback(
+    (prompt: AskPrompt) =>
+      new Promise<string[] | null>((resolve) => {
+        dismissCurrent();
+        activeRef.current = prompt;
+        resolverRef.current = (v) => resolve(v as string[] | null);
+        setActive(prompt);
       }),
-    );
-  }
+    [dismissCurrent],
+  );
 
-  destroy(): void {
-    this._dismissCurrent();
-    this._root.unmount();
-    this._mount.remove();
-  }
-}
+  const showPermission = useCallback(
+    (prompt: PermissionPrompt) =>
+      new Promise<{ allow: boolean; remember: boolean }>((resolve) => {
+        dismissCurrent();
+        activeRef.current = prompt;
+        resolverRef.current = (v) => resolve(v as { allow: boolean; remember: boolean });
+        setActive(prompt);
+      }),
+    [dismissCurrent],
+  );
+
+  const resolve = useCallback((v: unknown) => {
+    const r = resolverRef.current;
+    activeRef.current = null;
+    resolverRef.current = null;
+    setActive(null);
+    r?.(v);
+  }, []);
+
+  // 卸载时取消挂起的 Promise，防泄漏（旧 Controller.destroy 语义）
+  useEffect(() => dismissCurrent, [dismissCurrent]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      get active() {
+        return activeRef.current;
+      },
+      showAsk,
+      showPermission,
+      dismiss: dismissCurrent,
+    }),
+    [showAsk, showPermission, dismissCurrent],
+  );
+
+  return (
+    <div className="prompt-shelf">
+      {active?.type === 'ask' ? (
+        <AskCard prompt={active} onResolve={resolve} />
+      ) : active?.type === 'permission' ? (
+        <PermCard prompt={active} onResolve={resolve} />
+      ) : null}
+    </div>
+  );
+});

@@ -10,11 +10,9 @@
 
 import hljs from 'highlight.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
-import { bumpChat } from '../chat-store';
 import type {
   AssistantMessage,
   AssistantPart,
@@ -738,15 +736,18 @@ const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
 // ── Permission card ──
 
 // ── Main component ──
+// P2′-2b：直接挂在 ChatBeacon 树里（Controller 包装已删）。
+// React.memo 隔离 ChatBeacon 重渲染（模式/角标变化不触碰消息树）；
+// 消息更新走 store 订阅，与旧独立 root 语义一致。
 
-const ChatMessagesApp: React.FC<{
+export const ChatMessagesApp: React.FC<{
   callbacks: ChatMessagesCallbacks;
   scrollContainer?: HTMLElement;
-  storeId: string;
-}> = ({ callbacks, scrollContainer, storeId }) => {
+  panelId: string;
+}> = React.memo(({ callbacks, scrollContainer, panelId }) => {
   // ponytail: messages live in per-session stores — subscribe to the active session's store.
   // React re-renders automatically on session switch because activeSessionId changes.
-  const sessStore = useMemo(() => getSessionStore(storeId), [storeId]);
+  const sessStore = useMemo(() => getSessionStore(panelId), [panelId]);
   const activeSessionId = useStore(sessStore, (s) => {
     const active = s.sessions[s.activeIdx];
     return active?.id ?? null;
@@ -754,14 +755,16 @@ const ChatMessagesApp: React.FC<{
   const msgStore = useMemo(
     () =>
       activeSessionId != null
-        ? getMessagesStore(`${storeId}:${activeSessionId}`)
-        : getMessagesStore(`${storeId}:__empty__`),
-    [storeId, activeSessionId],
+        ? getMessagesStore(`${panelId}:${activeSessionId}`)
+        : getMessagesStore(`${panelId}:__empty__`),
+    [panelId, activeSessionId],
   );
   const messages = useStore(msgStore, (s) => s.messages);
   const version = useStore(msgStore, (s) => s.version);
 
-  const listRef = useRef<HTMLDivElement>(null);
+  // ponytail: callback-ref state 而非 useRef —— 元素挂载后触发一次重渲染，
+  // 让依赖 scrollEl 的 effect 拿到真实节点（内联后本组件自带滚动容器）。
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const autoScrollRaf = useRef<number | null>(null);
   const lastMsgCount = useRef(0);
@@ -771,10 +774,10 @@ const ChatMessagesApp: React.FC<{
   // scroll position (and stickRef=false) from the previous session.
   useEffect(() => {
     stickRef.current = true;
-  }, [activeSessionId, storeId]);
+  }, [activeSessionId, panelId]);
 
-  // Resolve the actual scrollable element (outer reactRoot, not the inner React div)
-  const scrollEl = scrollContainer ?? listRef.current;
+  // Resolve the actual scrollable element (外部指定或自身)
+  const scrollEl = scrollContainer ?? listEl;
 
   // Auto-scroll: coalesce into single pending rAF
   useEffect(() => {
@@ -880,7 +883,7 @@ const ChatMessagesApp: React.FC<{
   }, []);
 
   return (
-    <div className="chat-messages" ref={listRef}>
+    <div className="chat-messages" ref={setListEl}>
       {messages.map((msg) => {
         switch (msg.role) {
           case 'user':
@@ -922,48 +925,4 @@ const ChatMessagesApp: React.FC<{
       })}
     </div>
   );
-};
-
-// ── Thin class wrapper ──
-
-export class ChatMessagesPanel {
-  private _root: Root;
-  private _mount: HTMLElement;
-  private _scrollContainer: HTMLElement;
-  private _storeId: string;
-  private _callbacks: ChatMessagesCallbacks = {};
-
-  setCallbacks(cbs: ChatMessagesCallbacks): void {
-    this._callbacks = cbs;
-    this._render();
-  }
-
-  constructor(container: HTMLElement, storeId: string) {
-    this._storeId = storeId;
-    this._scrollContainer = container;
-    this._mount = document.createElement('div');
-    container.appendChild(this._mount);
-    this._root = createRoot(this._mount);
-    this._render();
-  }
-
-  /** Trigger re-render — called by store-aware code instead of manual bump(). */
-  bump(): void {
-    bumpChat(this._storeId);
-  }
-
-  private _render(): void {
-    this._root.render(
-      React.createElement(ChatMessagesApp, {
-        callbacks: this._callbacks,
-        scrollContainer: this._scrollContainer,
-        storeId: this._storeId,
-      }),
-    );
-  }
-
-  destroy(): void {
-    this._root.unmount();
-    this._mount.remove();
-  }
-}
+});

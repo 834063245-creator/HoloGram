@@ -5,11 +5,9 @@
 // 替代 chat.ts 中 handleAtInput / buildAtPopup / updateAtSelection / confirmAtSelection。
 // 零 innerHTML、零 querySelector、零手动 class 切换。
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { getChatStore } from '../chat-store';
-import { escapeHtml } from '../chat-utils';
 
 // ── Types ──
 
@@ -37,23 +35,33 @@ function buildToken(kind: string, name: string): string {
   return `[@${base}](${name})`;
 }
 
+// ── Exposed imperative API（core 注册接口签名不变）──
+// P2′-2b：navigate/select/open 重写为状态驱动（旧版是 DOM-scraping hack）。
+// 句柄只创建一次（core 挂载时注册）；命令式读取一律走 ref 镜像，避免陈旧闭包。
+
+export interface AtAutocompleteHandle {
+  /** 每次输入事件调用。textBefore = value.slice(0, cursorPos) */
+  update(textBefore: string, cursorPos: number): void;
+  /** 更新可用节点名（来自 starGraph） */
+  setNodeNames(names: string[]): void;
+  /** 键盘上下导航 — 输入框 keydown 转发 */
+  navigate(delta: number): void;
+  /** 选中当前高亮项 */
+  select(): void;
+  /** 弹层是否有可选项（非加载/空态） */
+  readonly open: boolean;
+}
+
 // ── React Component ──
 
 const CACHE_TTL = 30000;
 
-function AtAutocomplete({
-  panelId,
-  textBefore,
-  cursorPos,
-  nodeNames,
-  onSelect,
-}: {
-  panelId: string;
-  textBefore: string;
-  cursorPos: number;
-  nodeNames: string[];
-  onSelect: (atIdx: number, token: string) => void;
-}) {
+export const AtAutocomplete = forwardRef<
+  AtAutocompleteHandle,
+  { panelId: string; onSelect: (atIdx: number, token: string) => void }
+>(function AtAutocomplete({ panelId, onSelect }, ref) {
+  const [textBefore, setTextBefore] = useState('');
+  const [nodeNames, setNodeNames] = useState<string[]>([]);
   const [items, setItems] = useState<AtItem[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -62,7 +70,21 @@ function AtAutocomplete({
 
   const atPos = findAtTrigger(textBefore);
   const query = atPos >= 0 ? textBefore.slice(atPos + 1).toLowerCase() : '';
-  const visible = atPos >= 0 && query.length >= 0;
+  const visible = atPos >= 0;
+
+  // 命令式句柄的实时数据镜像（每次渲染后同步）
+  const itemsRef = useRef<AtItem[]>([]);
+  const activeIdxRef = useRef(0);
+  const atPosRef = useRef(-1);
+  const visibleRef = useRef(false);
+  const onSelectRef = useRef(onSelect);
+  useEffect(() => {
+    itemsRef.current = items;
+    activeIdxRef.current = activeIdx;
+    atPosRef.current = atPos;
+    visibleRef.current = visible;
+    onSelectRef.current = onSelect;
+  });
 
   // Fetch files when visible
   useEffect(() => {
@@ -122,29 +144,53 @@ function AtAutocomplete({
     el?.scrollIntoView({ block: 'nearest' });
   }, [activeIdx]);
 
-  const handleSelect = useCallback(
-    (item: AtItem) => {
-      const token = buildToken(item.kind, item.name);
-      onSelect(atPos, token);
-    },
-    [atPos, onSelect],
+  const applySelect = useCallback((item: AtItem) => {
+    onSelectRef.current(atPosRef.current, buildToken(item.kind, item.name));
+    // 选中即关弹层（清空 textBefore → atPos=-1；旧版选择后弹层滞留，紧接 Enter 会误选第二次）
+    setTextBefore('');
+  }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      update: (tb) => setTextBefore(tb),
+      setNodeNames: (names) => setNodeNames(names),
+      navigate: (delta) => {
+        const len = itemsRef.current.length;
+        if (len === 0) return;
+        setActiveIdx((idx) => Math.max(0, Math.min(idx + delta, len - 1)));
+      },
+      select: () => {
+        if (!visibleRef.current) return;
+        const item = itemsRef.current[activeIdxRef.current];
+        if (item) applySelect(item);
+      },
+      get open() {
+        return visibleRef.current && itemsRef.current.length > 0;
+      },
+    }),
+    [applySelect],
   );
 
   if (!visible || (items.length === 0 && !loading)) return null;
 
-      return (
+  return (
     <div ref={popupRef} className={`chat-at-popup${visible && (items.length > 0 || loading) ? ' open' : ''}`}>
-              {loading && items.length === 0 ? (
-          <div className="at-loading" style={{ opacity: 0.4 }}>加载中…</div>
-        ) : items.length === 0 ? (
-          <div className="at-empty" style={{ opacity: 0.4 }}>无匹配结果</div>
+      {loading && items.length === 0 ? (
+        <div className="at-loading" style={{ opacity: 0.4 }}>
+          加载中…
+        </div>
+      ) : items.length === 0 ? (
+        <div className="at-empty" style={{ opacity: 0.4 }}>
+          无匹配结果
+        </div>
       ) : (
         items.map((item, i) => (
           <div
             key={`${item.kind}:${item.name}`}
             className={`at-item${i === activeIdx ? ' active' : ''}`}
             onMouseEnter={() => setActiveIdx(i)}
-            onClick={() => handleSelect(item)}
+            onClick={() => applySelect(item)}
           >
             <span className="at-kind">{item.kind}</span>
             <span>{item.name}</span>
@@ -153,114 +199,4 @@ function AtAutocomplete({
       )}
     </div>
   );
-}
-
-// ── Exposed imperative API ──
-
-export interface AtAutocompleteHandle {
-  readonly items: ReadonlyArray<AtItem>;
-  readonly activeIdx: number;
-  readonly open: boolean;
-  navigate(delta: number): void;
-  select(): AtItem | null;
-}
-
-// ── Controller — thin wrapper for ChatPanel ──
-
-export class AtAutocompleteController {
-  private _root: Root;
-  private _mount: HTMLElement;
-  private _panelId: string;
-  private _textBefore = '';
-  private _cursorPos = 0;
-  private _nodeNames: string[] = [];
-  private _onSelect: ((atIdx: number, token: string) => void) | null = null;
-  private _version = 0;
-
-  constructor(container: HTMLElement, panelId: string) {
-    this._panelId = panelId;
-    this._mount = document.createElement('div');
-    this._mount.className = 'chat-at-autocomplete-mount';
-    // Mount into the input area so it positions relative to the input
-    const inputArea = container.querySelector('.chat-input-area');
-    (inputArea || container).appendChild(this._mount);
-    this._root = createRoot(this._mount);
-    this._render();
-  }
-
-  private _render(): void {
-    this._root.render(
-      React.createElement(AtAutocomplete, {
-        panelId: this._panelId,
-        textBefore: this._textBefore,
-        cursorPos: this._cursorPos,
-        nodeNames: this._nodeNames,
-        onSelect: (atIdx, token) => this._onSelect?.(atIdx, token),
-        key: this._version,
-      }),
-    );
-  }
-
-  /** Call on every input event. textBefore = value.slice(0, cursorPos). */
-  update(textBefore: string, cursorPos: number): void {
-    this._textBefore = textBefore;
-    this._cursorPos = cursorPos;
-    this._render();
-  }
-
-  /** Update available node names (from starGraph). */
-  setNodeNames(names: string[]): void {
-    this._nodeNames = names;
-    this._render();
-  }
-
-  /** Set the select callback. */
-  setOnSelect(fn: ((atIdx: number, token: string) => void) | null): void {
-    this._onSelect = fn;
-    this._render();
-  }
-
-  /** Force re-render (e.g. after project path change clears cache). */
-  refresh(): void {
-    this._version++;
-    this._render();
-  }
-
-  /** Keyboard navigation — arrow up/down. Call from input keydown handler. */
-  navigate(delta: number): void {
-    // Only navigate when there are actual items (not loading/empty state)
-    const items = this._mount.querySelectorAll('.chat-at-popup.open .at-item');
-    if (items.length === 0) return;
-    // Find current active
-    let idx = 0;
-    items.forEach((item, i) => {
-      if (item.classList.contains('active')) idx = i;
-    });
-    const next = Math.max(0, Math.min(idx + delta, items.length - 1));
-    items.forEach((item, i) => {
-      item.classList.toggle('active', i === next);
-    });
-  }
-
-  /** Select the currently highlighted item. Returns selected item or null. */
-  select(): { kind: string; name: string } | null {
-    const active = this._mount.querySelector('.chat-at-popup.open .at-item.active');
-    if (!active) return null;
-    const kindEl = active.querySelector('.at-kind');
-    const nameEl = active.querySelector('span:last-child');
-    const item = { kind: kindEl?.textContent || '', name: nameEl?.textContent || '' };
-    // Trigger the React-level onSelect callback via click
-    (active as HTMLElement).click();
-    return item;
-  }
-
-  /** Whether the popup has selectable items (not loading/empty). */
-  get open(): boolean {
-    return !!this._mount.querySelector('.chat-at-popup.open .at-item');
-  }
-
-  destroy(): void {
-    this._root.unmount();
-    this._mount.remove();
-  }
-}
+});

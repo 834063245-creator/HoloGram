@@ -5,8 +5,7 @@
 // Auto-subscribes to panel store and active session messages store.
 // Disappears automatically when messages arrive or agent is configured.
 
-import React, { useMemo } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { useMemo } from 'react';
 import { useStore } from 'zustand';
 import { getChatStore, msgStoreFor } from '../chat-store';
 
@@ -14,7 +13,7 @@ import { getChatStore, msgStoreFor } from '../chat-store';
 // which would trigger an infinite loop via useSyncExternalStore.
 const EMPTY_MSGS: never[] = [];
 
-function ChatHint({ panelId }: { panelId: string }) {
+export function ChatHint({ panelId }: { panelId: string }) {
   const panelStore = getChatStore(panelId).panel;
   const sessStore = getChatStore(panelId).sess;
   const lastAgentDiag = useStore(panelStore, (s) => s.lastAgentDiag);
@@ -40,21 +39,4 @@ function ChatHint({ panelId }: { panelId: string }) {
     : `请先配置 API Key（点击工具栏 设置 或在对话中设置）${lastAgentDiag ? `\n\n诊断: ${lastAgentDiag}` : ''}`;
 
   return <div className="chat-hint">{text}</div>;
-}
-
-export class ChatHintController {
-  private _root: Root;
-  private _mount: HTMLElement;
-
-  constructor(container: HTMLElement, panelId: string) {
-    this._mount = document.createElement('div');
-    container.appendChild(this._mount);
-    this._root = createRoot(this._mount);
-    this._root.render(React.createElement(ChatHint, { panelId }));
-  }
-
-  destroy(): void {
-    this._root.unmount();
-    this._mount.remove();
-  }
 }
