@@ -331,10 +331,13 @@ export class Agent {
     return this.session.length + this._pendingInserts.length;
   }
 
-  /** Insert a user message mid-run. Queued safely; agent sees it next loop iteration. */
-  insertMessage(text: string): void {
+  /** Insert a message into the session queue. Queued safely; agent sees it next loop iteration.
+   *  Notice is opt-in — system callers (onSessionPersisted) should pass silent=true. */
+  insertMessage(text: string, opts?: { silent?: boolean }): void {
     this._pendingInserts.push(text);
-    this._sink({ kind: EventKind.Notice, level: 'info', text: '消息已插入，Agent 将在下一轮看到' });
+    if (!opts?.silent) {
+      this._sink({ kind: EventKind.Notice, level: 'info', text: '消息已插入，Agent 将在下一轮看到' });
+    }
   }
 
   // ── Sub-agent lifecycle ──

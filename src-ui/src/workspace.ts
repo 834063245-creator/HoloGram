@@ -942,7 +942,7 @@ export class Workspace {
               await refreshGitStatus(this.path);
               await refreshTimeline(this.path);
               const block = buildTurnStartBlock();
-              if (block) newAgent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`);
+              if (block) newAgent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true });
             })().catch(() => {});
           },
           pricing: defaultPricing(act.kind, act.model),

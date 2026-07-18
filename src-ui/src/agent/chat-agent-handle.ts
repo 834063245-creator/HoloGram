@@ -38,8 +38,8 @@ export interface ChatAgentHandle {
   /** 预测下一条 insert 的 session 索引 */
   readonly nextInsertIndex: number;
 
-  /** 在 Agent 运行中插入用户消息 */
-  insertMessage(text: string): void;
+  /** 在 Agent 运行中插入消息。silent=true 抑制用户反馈 notice。 */
+  insertMessage(text: string, opts?: { silent?: boolean }): void;
 
   /** 级联取消：父Agent中断时停止所有运行中的子Agent */
   cascadeAbort(): void;
