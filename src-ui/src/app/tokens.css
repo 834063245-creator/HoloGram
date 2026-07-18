@@ -1,0 +1,54 @@
+/* ═══════════════════════════════════════════════════════════════
+   HOLOGRAM · 观测台设计 token（P0）
+   方向：数字星图 / 天文仪器 —— 星图为王，界面是仪器的刻度盘。
+   与 base.css 的旧 token 并存；新代码（src/app/**）只用本文件。
+   过渡覆盖置底，P5 随旧样式一并移除。
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* 深空底色 */
+  --obs-void: #05070d;
+  --obs-void-deep: #030509;
+
+  /* 蚀刻玻璃 */
+  --obs-glass: rgba(11, 15, 26, 0.62);
+  --obs-glass-hi: rgba(14, 19, 32, 0.82);
+  --obs-line: rgba(148, 166, 205, 0.13);
+  --obs-line-soft: rgba(148, 166, 205, 0.07);
+
+  /* 文字层级 */
+  --obs-text: #e6eaf3;
+  --obs-text-2: rgba(186, 197, 220, 0.68);
+  --obs-text-3: rgba(158, 172, 205, 0.4);
+
+  /* 黄铜 — 仪器 accent（聚焦、激活、Agent） */
+  --obs-brass: #c9a25c;
+  --obs-brass-hi: #e8c887;
+  --obs-brass-dim: rgba(201, 162, 92, 0.14);
+
+  /* 冷蓝 — 链接/信息 */
+  --obs-blue: #7db3e8;
+
+  /* 语义 */
+  --obs-pass: #63b27d;
+  --obs-warn: #d8a24a;
+  --obs-fail: #d9635f;
+
+  /* 字体栈（fontsource 自托管） */
+  --obs-font-serif: "Fraunces Variable", "Noto Serif SC", serif;
+  --obs-font-mono: "JetBrains Mono", "Cascadia Code", monospace;
+  --obs-font-body: "Noto Sans SC", system-ui, sans-serif;
+
+  /* 动效 */
+  --obs-snap: 0.12s cubic-bezier(0.23, 1, 0.32, 1);
+  --obs-glide: 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* 结构 */
+  --obs-bar-h: 46px;
+  --obs-status-h: 28px;
+  --obs-rail-w: 46px;
+
+  /* ── 过渡覆盖：旧样式桥接，P5 删除 ────────────────────────── */
+  /* base.css 的 --font-hud 引用 CDN 的 "Orbitron"，改指自托管变量体 */
+  --font-hud: "Orbitron Variable", system-ui, sans-serif;
+}

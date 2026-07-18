@@ -8,11 +8,12 @@
 import './ui/react/base.css';
 import './ui/react/chat.css';
 import './ui/react/panels.css';
+import './app/fonts';
+import './app/tokens.css';
 import { initLogger, log } from './agent/logger';
 import { isMockMode, listen, rpc } from './bridge';
 import { setLang, t } from './i18n';
 import { loadSettings, saveSettings } from './settings';
-import { getPanelStore } from './ui/panel-store';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
 import { ChatPanel } from './ui/chat';
@@ -25,6 +26,7 @@ import { StarGraph } from './ui/graph';
 import { GraphInteraction } from './ui/graph-interaction';
 import { HotspotsPanel } from './ui/hotspots';
 import { iconSvg } from './ui/icons';
+import { getPanelStore } from './ui/panel-store';
 import { TimelinePanel } from './ui/react/TimelinePanel';
 import { SettingsPanel } from './ui/settings-panel';
 import { isSamePath, Workspace } from './workspace';
@@ -814,7 +816,11 @@ async function init(): Promise<void> {
   // before the window closes even if the RPC disk write doesn't.
   window.addEventListener('beforeunload', () => {
     if (workspace?.path) {
-      try { chatPanel.scheduleAutoSave(workspace.path); } catch { /* silent */ }
+      try {
+        chatPanel.scheduleAutoSave(workspace.path);
+      } catch {
+        /* silent */
+      }
     }
   });
 
