@@ -1,10 +1,10 @@
 # HoloGram 前端「观测台」重构 — Handoff
 
-> 交接时间：2026-07-19 · 上一棒：P0 → P4 已完成并全部入库
-> **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`，然后按「下一步精确清单」执行。
+> 交接时间：2026-07-19 · 上一棒：P0 → P5 已完成并全部入库，**重构竣工**
+> **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
-## 一、已完成（7 个 commit，全部在 main）
+## 一、已完成（8 个 commit，全部在 main）
 
 | Commit | 阶段 | 内容 |
 |---|---|---|
@@ -15,6 +15,7 @@
 | `c0a169a` | P2′-2b 内联 | 六个 React Controller 包装类删除，组件直接挂 ChatBeacon 树；core `register*` 改收组件 ref 句柄（Messages 收 `MessagesApi{bump}`）；AtAutocomplete 的 navigate/select/open 从 DOM-scraping 重写为状态驱动（顺带修掉选中后弹层滞留、紧接 Enter 误选二次）；PromptShelf 卸载时取消挂起 Promise；`chat-session/chat-stream` 零改动 |
 | `350845d` | P3 六面板收编 | `app/panels/`（panel-def 注册表 + DockPanel + FileTranslatorPortal）；`ui/dock-store`（开合+projectPath+checkResult 事实源）/ `dock-config`（依赖注入槽）/ `overlay-store`（portal 目标）三件套；六面板 + ContextMenu + FileTranslator 全部去 Controller 进单树（FileTranslator 经 createPortal 保 FileViewer 挂载点）；删五个 wrapper；`Workspace.open/setupAgent/runCheck/doGraphUpdate` 摘掉 checkPanel 形参；app-shell 剥掉面板注册表，shell-store 删 panels 快照；CheckPanel 清 gate/resize 死代码 + 畸形结果渲染加固（冒烟抓到的单树崩溃）；Settings 同 id 嵌套消除；`chat-session/chat-stream` 零改动 |
 | `6e3a6e1` | P4 星图拆解 | `graph.ts` 3651→~770 行 facade（持全量共享字段 + 公开 API 委托）；八个新模块沿 GraphFold host 反查接缝抽出：`graph-types`/`graph-node-renderer`/`graph-edge-renderer`/`graph-labels`/`graph-highlight`（清单外第 8 个：高亮+滤镜+lens+trail）/`graph-interaction-controller`/`graph-focus-controller`/`graph-scene-lifecycle`/`graph-diff-overlay`；材质工厂去重用 graph-shaders 既有导出（逐字节一致），删死 import；`tests/ui/layout-golden.test.ts` 固定种子图钉死 layout3D 坐标；公开调用面零改动，graph.test.ts 无需改（vi.mock 按注册表拦截与 importer 无关） |
+| `2455111` | P5 视觉识别 | 旧 CSS 三大件（7321 行）按活 selector 集（487 个）抽取为 `app/foundation.css`/`graph-chrome.css`/`chat/chat.css`（并入 beacon.css）/`panels/dock-panels.css`，旧变量全量映射 --obs-*（含 9 个 TS/TSX 内联样式与 prompt-shelf/file-translator.css）；Orbitron 退役（fonts.ts+package.json，--font-hud→--obs-font-mono）；`graph-scene.ts buildGraticule`（同心环/径向线/144 刻度环/黄道椭圆 23.4° 黄铜签名，单位半径几何 facade 按图半径 scale）；index.html 删 #space/#scanlines/#vignette；Welcome/图例/聚焦横幅按原型重写为玻璃胶囊；图例单源化（facade 委托 graph-ui.buildLegend，消除 P4 双拷贝分叉）；顺带修 #welcome 永不显示（旧 CSS 默认 none 无 .on 写入者）与 #graph 定位 38→46px 对齐；biome.json overrides 对四个迁移 CSS 关 noDescendingSpecificity/noImportantStyles；`chat-session/chat-stream` 零改动 |
 
 ## 二、当前架构快照
 
@@ -27,18 +28,22 @@ src-ui/src/
 │   ├── bridge-adapters.ts      bus→store 适配（目前只有 check:result）
 │   ├── useGlobalKeys.ts        全局快捷键（Ctrl+K/L/D/, F R ? Esc）
 │   ├── tokens.css / shell.css  --obs-* token + chrome 样式
-│   ├── fonts.ts                fontsource 自托管
+│   ├── foundation.css          P5：reset/body/滚动条/#graph 容器/.hidden/Welcome（原型重写）
+│   ├── graph-chrome.css        P5：图例/聚焦横幅/tooltip/detail-card/星系标签/corner-brackets/file-viewer/hg-icon
+│   ├── fonts.ts                fontsource 自托管（Orbitron 已退役：Fraunces/JetBrains Mono/Noto Sans+Serif SC）
 │   ├── panels/
 │   │   ├── panel-def.ts        六面板注册表（id/side/title/icon/askAgent/unmountOnClose/component）
 │   │   ├── DockPanel.tsx       面板容器（注册表驱动；dataflow/settings 关闭即卸载）
+│   │   ├── dock-panels.css     P5：六面板样式（panels.css + chat.css 的 check-* 抽取合并）
 │   │   └── FileTranslatorPortal.tsx  FileTranslator 单树 portal 宿主
 │   └── chat/
 │       ├── chat-core.ts        无头 ChatCore：会话/流式/权限/goal 全部编排，公开 API 与旧 ChatPanel 一致
 │       ├── core-instance.ts    useCoreStore（main.ts 注入 core，App 就绪后渲染 ChatBeacon）
 │       ├── ChatBeacon.tsx      视图根：pill/input/panel/hud 模式机 + 内联聊天组件树（Messages/Hint/Shelf/At/Slash/Footer，ref 句柄注册进 core）
+│       ├── chat.css            P5：聊天全树样式（ui/react/chat.css + beacon.css 合并，变量映射 --obs-*）
 │       ├── Composer.tsx        输入框（input-store.inputText 受控）
 │       ├── HistoryPanel.tsx    历史会话（portal 到 body）
-│       └── beacon.css          chat.css 之上的增量覆盖（宽 640px、CSS 过渡、a11y 复位）
+│       └── （beacon.css 已并入 chat.css）
 ├── ui/                         ← 旧层（P4/P5 逐步清）
 │   ├── chat-session.ts / chat-stream.ts / part-mutator.ts / message-model.ts / chat-store.ts  ★ 逻辑，勿动
 │   ├── panel-store.ts          per-panel UI 状态（P2′ 加了 goalRecord/lastAgentDetail）
@@ -49,7 +54,7 @@ src-ui/src/
 │   │   ├── ChatMessages.tsx / ChatFooter.tsx / ChatHint.tsx / PromptShelf.tsx / AtAutocomplete.tsx / SlashPanel.tsx
 │   │   ├── CheckPanel.tsx / ConstraintsPanel.tsx / DataflowPanel.tsx / HotspotsPanel.tsx / TimelinePanel.tsx / SettingsPanel.tsx
 │   │   ├── ContextMenu.tsx（含 ContextMenuHost）/ FileTranslatorPanel.tsx（导出 FileTranslatorApp）
-│   │   └── base.css / chat.css / panels.css   旧样式（类契约仍生效；P5 删除）
+│   │   └── prompt-shelf.css（组件内；base.css/chat.css/panels.css 已于 P5 删除）
 │   ├── app-shell.ts            导航/高亮/queryAgent 命令（面板注册表已删）
 │   ├── file-translator.ts      FileViewer 兼容 wrapper：DOM 挂载点 + 写 overlay-store（无独立 root）
 │   ├── graph.ts (~770 行)      StarGraph facade（P4）：持全量共享字段 + 公开 API 委托 + fold/analysis/tooltip 契约兜底
@@ -62,7 +67,9 @@ src-ui/src/
 │   ├── graph-focus-controller.ts        P4：相机飞行/聚焦/聚焦子图（飞行状态字段留 facade 供 GraphFold 直读写）
 │   ├── graph-scene-lifecycle.ts         P4：renderImpl/applyGraphDiff/渐进揭示/clearGraph/animate/resize/destroy
 │   ├── graph-diff-overlay.ts   P4：变更回看着色（diffActive/diffAddedIds 等状态自持有）
-│   ├── graph-{scene,fx,layout,colors,fold,analysis,tooltip,ui,textures,shaders}.ts  卫星
+│   ├── graph-ui.ts             图例/聚焦横幅 DOM 工厂（P5 起为 facade 唯一来源）
+│   ├── graph-{fx,layout,colors,fold,analysis,tooltip,textures,shaders}.ts  卫星
+│   ├── graph-scene.ts          卫星 + P5 buildGraticule（刻度环+黄道椭圆，WebGL 仪器刻度盘）
 │   └── events.ts               bus（冻结：~26 emit/22 on，仅 11 文件 import）
 └── main.ts                     引导器：StarGraph + Workspace + dock 配置槽注入 + 动作注册 + createRoot(<App/>)
 ```
@@ -76,10 +83,11 @@ src-ui/src/
 1. **不碰 `ui/graph-layout.ts` / `gpu-layout.ts` 的任何参数**（AGENTS.md 锁定）。
 2. **bus 冻结**：`app/` 新代码不 import `ui/events.ts`（chrome 走 store；chat-core 是编排层可豁免，因为它替代的旧 chat.ts 本就是 bus 参与者）。新事件一律进 store。
 3. `chat-session.ts`/`chat-stream.ts`/`part-mutator.ts`/`execution-state.ts` 不改——改了就说明越界了。
-4. **门禁每期必过**：`cd src-ui && npm run build`、`npx vitest run`（324 个）、`npx biome ci src/app`（必须零问题；存量代码有 288 个历史 error 是**既有基线**，不要顺手修）。
+4. **门禁每期必过**：`cd src-ui && npm run build`、`npx vitest run`（330 个）、`npx biome ci src/app`（必须零问题；存量代码有 288 个历史 error 是**既有基线**，不要顺手修）。
 5. biome 会重排 import 顺序——编辑后跑 `npx biome check --write <改动文件>`。
 6. `src-tauri/*` 的工作区改动是用户自己的，**不要 commit**。
 7. 每阶段一个干净 commit，消息风格参照 `git log`（中文 conventional commits）。
+8. **样式只写 `--obs-*`**（tokens.css）；`--font-scale` 是唯一保留的非 obs 变量（fontScale 运行时注入）。四个迁移 CSS（foundation/graph-chrome/chat/dock-panels）在 biome.json overrides 里关了 `noDescendingSpecificity`/`noImportantStyles`——存量类契约原样保留，新增样式不要依赖这两个豁免。
 
 ## 四、下一步精确清单
 
@@ -95,13 +103,13 @@ src-ui/src/
 - 外部调用面逐项保住（render/focusNode/resize/toggleFold/resetCamera/isFolded/isInsideGalaxy/exitGalaxy/clearAgentHighlight/highlightFile/highlightFolder/clearFileHighlight/showDiff/clearDiff/hasGraph/getNodeNames/showAgentTrail/hideAgentTrail/highlightHotspots/clearHotspots），main.ts/workspace.ts/agent-visualizer.ts/HotspotsPanel 零改动。
 - graph.test.ts 无需同步：vi.mock 按模块注册表拦截、与 importer 无关——330/330 通过即为证明。
 - 比清单多一个模块 `graph-highlight`（文件/Agent/热点高亮 + 滤镜 + lens + trail 天然一簇，留 facade 会重新鼓包）。
-- **剩手测**：真机视觉核对（focus 飞行、fold 钻取、diff 着色、watcher 增量更新）——单测 mock 掉 three.js 覆盖不到视觉，P5 走查一并看。
 
-### P5 — 视觉识别落地（估 2 天）
+### P5 — 已完成 ✅（`2455111`，见上方架构快照与契约速查）
 
-- 新组件样式全走 `--obs-*`；`base.css/chat.css/panels.css`（7300 行）随旧代码退役删除（注意 beacon.css 目前依赖 chat.css 类契约——先搬后删）。
-- Orbitron 退役；刻度盘+黄道椭圆进 WebGL（graph-scene.ts 扩展）；删 index.html 的 #space/#scanlines/#vignette。
-- Welcome/图例/聚焦横幅按原型重写；更新 `.cursor/rules/hologram-frontend.mdc` 与根 `AGENTS.md`。
+- 迁移方法：`scripts/css-usage-survey.cjs`（活 selector 交叉比对：487 活 / 215 死）+ `scripts/css-extract.cjs`（抽取 + 变量映射 + keyframes 引用扫描），一次性脚本已入库溯源。
+- 变量映射表：starlight→obs-text、text-muted/dim→obs-text-2、text-faint→obs-text-3、signal→obs-blue、sol→obs-brass、nebula→字面量 #a088e0、anomaly-*→obs-fail/warn/pass、font-hud→obs-font-mono、toolbar-h→obs-bar-h（38→46px，顺带对齐新 chrome）、status-h→obs-status-h；`--font-scale` 保留进 tokens.css。
+- 无头 CDP 走查（`scripts/cdp-shot.cjs`，无头 Chrome + Runtime.evaluate 点击 + 截图）：shell/信标三态（pill→input→panel）/简报/时间轴/数据流/约束/图例胶囊/刻度盘全部视觉核对过。
+- **剩手测（真机）**：Welcome 首屏（mock 有缓存工作区无法触发，样式是原型直译）、聚焦横幅（fb-name/fb-meta 胶囊，需真机 F 聚焦看）、focus 飞行、fold 钻取、diff 着色、watcher 增量、权限卡/goal、chat-history-entry-wrap.active（P2′ 遗留）、tooltip/detail-card 悬停。
 
 ## 五、验证方法
 
@@ -118,19 +126,25 @@ npx vite --port 1420 --strictPort   # 起 dev server
   --screenshot=/tmp/shot.png "http://localhost:1420/"
 # 控制台错误排查：加 --enable-logging=stderr --v=0 然后 grep CONSOLE
 # headless WebGL 渲染偏暗属正常；信标/面板/chrome 可见即可
+
+# CDP 交互截图（P5 走查工具，可点击/求值后截图 —— 能看信标三态、面板开合）：
+node scripts/cdp-shot.cjs /tmp/out '[{"js":"...document.querySelector(...).click()..."},{"wait":1200},{"shot":"name"}]'
 ```
 
 ## 六、已知坑（都是确认过的，别再查）
 
 1. `biome ci` 全仓库基线 = 288 errors/686 warnings（2026-07-18 快照，stash 验证为存量）——只保证 `src/app` 零新增。
-2. `chat-history-entry-wrap.active` 的样式是我 P2′ 新写的，未经真机视觉核对——P5 走查时看一眼。
-3. 聊天 `progressSink`/`sink` 两个 getter 无消费者，为兼容旧契约保留；删不删随 P3 清理。
+2. `chat-history-entry-wrap.active` 的样式是我 P2′ 新写的，未经真机视觉核对——真机走查时看一眼。
+3. 聊天 `progressSink`/`sink` 两个 getter 无消费者，为兼容旧契约保留。
 4. chat-session ctx 的 `panel/sessionTabs/tabBar` 是**分离桩元素**（吸收 DOM 写入，不可见）——这是故意的兼容桥，别当垃圾删。
 5. 浏览器 mock 下 `mock-data.ts` 有未实现命令的 warn（sandbox_status/workspace_activate），无害。
-6. index.html 里有个上古未闭合 `<style>` 空标签——P5 重写 index.html 时顺手清。
+6. ~~index.html 上古未闭合 `<style>`~~ —— P5 已清。
 7. mock 未实现 `hologram_run_check`（走兜底返回 `{mock:true,…}` 畸形结果）——dev mock 下简报面板会展开且内容显示 "undefined 文件"，是 mock 缺口非回归（真机引擎返回完整 CheckResult）。P3 已给 CheckPanel 渲染加 `|| []` 兜底防单树崩溃。
 8. Windows 上 Edit 工具会把文件写成 CRLF，而仓库工作树惯例是 LF（`.gitattributes` 只钉二进制）——改完跑 `sed -i 's/\r$//' <改动文件>`，否则 biome format 会报差异。
 9. P4 后 facade 上的 `_gaussRand` 是死代码（原样保留，零行为变化原则）；facade 的 15 个契约委托方法（`_setCore*`/`_setGlow*`/`getNodeBaseScale`/`enterFocusSubgraph`/`exitFocusSubgraph`/`_findNodeIndexByName`/`clearAgentHighlight`/`highlightNodeNames`）是 fold/analysis/tooltip 的运行时依赖，**不可删**。
+10. P5 迁移副作用零残留已验证：全库 grep 无旧变量（--starlight/--panel-bg/--signal/--sol/--nebula/--font-hud 等）——**不要再引入旧变量名**；ContextMenu 内联样式引的是 --obs-*（原 --starlight fallback 已换）。
+11. 刻度盘（buildGraticule）加法混合颜色是「原型 alpha × 约 4 倍」的提亮版——原型是 Canvas 源-over 合成，WebGL 加法混合在同亮度下观感弱很多，别按原型 alpha 直译。
+12. `#welcome` 现在默认 `display:flex` + `.hidden` 切换（P5 修复：旧 CSS 默认 none 且无 .on 写入者导致永不显示）；index.html 初始带 `class="hidden"` 防 FOUC，main.ts 决策后 remove/add。
 
 ## 七、契约速查（省得重读代码）
 
@@ -143,3 +157,7 @@ npx vite --port 1420 --strictPort   # 起 dev server
 **Dock 面板操作面**（main.ts/actions/workspace 都用 `useDockStore.getState()`）：`openPanel/closePanel/togglePanel/isOpen(id)`、`setProjectPath(p)`、`setCheckResult(r)`（cacheCheckResult + 失败自动展开）、`showCheckHistory(r)`。外部依赖经 `ui/dock-config`：`setDataflowQueryParser`（NL→symbol Agent 兜底）、`setDockStarGraph`、`setOnSettingsSave`（main.ts 的 agent 重建链）。
 
 **bus 高频事件**：`workspace:switched`、`graph:rendered`、`graph:node-clicked`、`check:result/history`、`chat:turn-done`、`agent:diag/event/progress`、`goal:state`、`highlight:file|folder|clear`、`navigate:file`、`prompt:ask`、`timeline:refresh`。最大生产者 workspace.ts，最大消费者（旧 chat.ts 位置）现在是 chat-core。
+
+**样式文件地图（P5）**：`tokens.css`（--obs-* + --font-scale）→ `foundation.css`（reset/body/滚动条/#graph/#graph-labels/.hidden/Welcome）→ `graph-chrome.css`（#graph-legend/#graph-focus-banner/.fb-name/.fb-meta/#graph-tooltip .tt-*/#detail-card .dc-*/.galaxy-label/.galaxy-flash-label/.corner-brackets/.cb-bottom/#file-viewer/.fv-*/.hg-icon）→ `shell.css`（chrome）→ `chat/chat.css`（聊天全树 + goal-strip + 历史面板 + chat-utils 的 diff-\*/glob-\*）→ `panels/dock-panels.css`（check-\*/cs-\*/df-\*/hs-\*/sp-\*/tl-\* + 面板根 id 定位）。组件内：`ui/react/prompt-shelf.css`、`ui/file-translator.css`。main.ts 按此序 import。
+
+**星图氛围契约（P5）**：`buildGraticule(scene)` 在 graph-scene.ts，facade 构造时挂 scene（不进 galaxyGroup，刻度盘是参考系不旋转）；`positionGrid()` 按节点最大水平半径 ×1.35（clamp [150,1600]）scale，贴 holoGridY+2。图例 DOM 唯一来源是 `graph-ui.buildLegend`（facade `buildLegend()` 委托，传 setEdgeTypeFilter/setNodeKindFilter + 两个 getter；**别再造第二份图例 markup**——P4 遗留的 facade 私有拷贝就是这么分叉的）。聚焦横幅 markup 在 graph-focus-controller.enterFocusSubgraph 与 facade _langHandler 两处（`.fb-name` 黄铜衬线斜体 + `.fb-meta` mono，改动需同步）。
