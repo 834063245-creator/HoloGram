@@ -2788,6 +2788,13 @@ button.chat-history-entry {
   transition: none;
 }
 
+/* 形态补间期间禁 transform 的 CSS 过渡：pill 规则的 transition 含 transform，
+   进 pill 时与 WAAPI 双轨同跑、WAAPI 先结束被 CSS 接管 → pill 位置跳一下。
+   补间中由 ChatBeacon 挂此类（只摘 transform，border/shadow/background 过渡保留），结束即摘。 */
+.chat-panel.chat-morphing {
+  transition-property: border-color, box-shadow, background;
+}
+
 /* 内容区进入淡入（旧 GSAP fadeContentIn 的 CSS 版；类切换重新匹配即重触发） */
 @keyframes p7g-content-in {
   from {

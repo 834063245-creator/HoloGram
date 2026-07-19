@@ -437,10 +437,16 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
         };
         if (JSON.stringify(from) === JSON.stringify(to)) return;
         anim?.cancel(); // 同帧多次连切：只保留最新一条动画
-        anim = el.animate([from, to], { duration: 280, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
-        anim.onfinish = () => {
+        el.classList.add('chat-morphing'); // 摘掉 pill 规则的 transform 过渡，防双轨跳变
+        const a = el.animate([from, to], { duration: 280, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
+        anim = a;
+        const done = () => {
+          if (anim !== a) return; // 已被后续补间接管（cancel 事件异步触发，防误摘新补间的类）
+          el.classList.remove('chat-morphing');
           anim = undefined;
         };
+        a.onfinish = done;
+        a.oncancel = done;
       });
     });
     return () => {

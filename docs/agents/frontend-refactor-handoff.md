@@ -97,6 +97,7 @@ src-ui/src/
 
 - 信标模式动效 = **WAAPI 单轨驱动**（用户授权重构，FLIP+定时清场补丁方案已废）：ChatBeacon 订阅 panel-store，同步段量起点（宽/高/圆角/transform/opacity 五通道，含在飞动画接管值），rAF 里 React 已提交新模式类、CSS 无几何过渡故类切换即终态，直接量终点，`el.animate(from→to, 280ms)`；不写内联样式、无清场定时器——fill:none 结束天然落回 CSS 终态。连切：subscribe 与 rAF 双点 cancel，同帧多次切换只留最新一条动画。CSS 端 `.chat-panel{transition:none}`（覆写 P2′ 版，防双轨；pill 类自身 transition 特异性更高不受影响）。
 - 内容区进入淡入 `@keyframes p7g-content-in`（旧 GSAP fadeContentIn 的 CSS 版，open/input 模式内容元素 0.22s/0.06s 延迟）。
+- **进 pill 位置跳变**（真机反馈）：pill 规则 transition 含 transform，进 pill 时与 WAAPI 双轨同跑、WAAPI 先结束被 CSS 接管瞬间跳一下——补间期间挂 `.chat-morphing` 类把 transform 从 CSS 过渡摘除（border/shadow/background 过渡保留），结束摘掉还原 hover 过渡；done 回调带身份校验（cancel 事件异步，防误摘后续补间的类）。
 - `.chat-panel.chat-open` 补 `min-height: 320px`。
 - **escLayer 补 constraints**（用户真机反馈 Esc 无响应）——链序：galaxy→timeline→hotspots→check→**constraints**→chat→FV→highlight。
 - 核对无误不改码三项：#grain 维持 z150（原型 z40 本就盖 chrome，截图顶栏文字无摩尔纹）；`.msg-bubble.assistant` padding 0 即原型 `.msg.agent .bubble` 无内边距语言（工具卡与文字同左缘）；浮动面板无弹层被子 overflow 裁切（df-grip 内缩 right/bottom:0，Settings 用原生 select）。
