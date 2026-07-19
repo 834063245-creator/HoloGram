@@ -120,6 +120,7 @@ export function CommandBar() {
       <span className="cb-brand">
         <span className="cb-brand-mark">◈</span>
         <span className="cb-brand-name">HOLOGRAM</span>
+        <span className="cb-brand-sub">OBSERVATORY</span>
       </span>
       <span className="cb-sep" />
       <BarBtn

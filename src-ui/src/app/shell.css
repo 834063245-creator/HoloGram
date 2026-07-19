@@ -548,3 +548,43 @@
   border-radius: 4px;
   padding: 0.5px 5px;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   P7e · chrome 细节（原型对照补齐：brand sub / .on 黄铜 / rail 左条）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* brand：mono 8px 0.32em 黄铜 sub（原型 #brand .sub；TSX 纯装饰节点） */
+.cb-brand-sub {
+  font-family: var(--obs-font-mono);
+  font-size: 8px;
+  letter-spacing: 0.32em;
+  color: var(--obs-brass);
+  opacity: 0.85;
+}
+
+/* 原型 .btn.on（toggle 激活态黄铜；当前 TSX 未 emit .on，先立规则） */
+.cb-btn.on {
+  color: var(--obs-brass-hi);
+}
+
+/* 搜索框 = 原型 palette-trigger hover（brass 边 + brass 淡底） */
+.cb-search input:hover {
+  border-color: rgba(201, 162, 92, 0.4);
+  background: rgba(201, 162, 92, 0.05);
+}
+
+/* DockRail：rail-btn.on 的 2px 黄铜侧条（右轨镜像到右侧） */
+.dr-btn.on::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--obs-brass);
+}
+.dr-right .dr-btn.on::before {
+  left: auto;
+  right: -3px;
+}

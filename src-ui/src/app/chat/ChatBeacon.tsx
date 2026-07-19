@@ -605,9 +605,6 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
             />
           </svg>
         </div>
-        <div className="chat-pill-inner-ring">
-          <div className="chat-pill-orbit-dot" />
-        </div>
         <div className={`chat-pill-badge${pillCount > 0 ? ' show' : ''}`}>
           {pillCount > 99 ? '99+' : pillCount || ''}
         </div>

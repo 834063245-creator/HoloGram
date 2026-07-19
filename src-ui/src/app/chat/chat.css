@@ -45,8 +45,7 @@
 }
 
 .chat-panel.chat-pill .chat-pill-badge,
-.chat-panel.chat-pill .chat-pill-star,
-.chat-panel.chat-pill .chat-pill-inner-ring {
+.chat-panel.chat-pill .chat-pill-star {
   /* Keep decorative elements clipped to pill circle */
   overflow: hidden;
   border-radius: 50%;
@@ -114,50 +113,6 @@
 
 .chat-panel.chat-pill:hover::after {
   border-color: rgba(148, 166, 205, 0.22);
-}
-
-.chat-pill-inner-ring {
-  position: absolute;
-  inset: 6px;
-  border-radius: 50%;
-  border: 1px solid rgba(148, 166, 205, 0.06);
-  animation: pill-inner-spin 18s linear infinite;
-  pointer-events: none;
-  opacity: 0;
-  transition:
-    opacity var(--obs-glide),
-    border-color var(--obs-glide);
-}
-
-.chat-panel.chat-pill .chat-pill-inner-ring {
-  opacity: 1;
-}
-
-.chat-panel.chat-pill:hover .chat-pill-inner-ring {
-  border-color: rgba(148, 166, 205, 0.28);
-}
-
-.chat-pill-orbit-dot {
-  position: absolute;
-  top: -3px;
-  left: calc(50% - 3px);
-  width: 6px;
-  height: 6px;
-  background: var(--obs-blue);
-  border-radius: 50%;
-  box-shadow:
-    0 0 10px var(--obs-text-2),
-    0 0 2px rgba(200, 230, 255, 0.9);
-  transition:
-    background var(--obs-glide),
-    box-shadow var(--obs-glide);
-}
-
-.chat-panel.chat-pill:hover .chat-pill-orbit-dot {
-  background: #e0f0ff;
-  box-shadow:
-    0 0 16px var(--obs-text),
-    0 0 4px rgba(220, 240, 255, 1);
 }
 
 .chat-panel .chat-pill-star {
@@ -235,18 +190,6 @@
 
 .chat-panel.chat-pill-running::after {
   border-color: rgba(240, 170, 50, 0.14);
-}
-
-.chat-panel.chat-pill-running .chat-pill-inner-ring {
-  border-color: rgba(240, 170, 50, 0.12);
-  animation-duration: 4.5s;
-}
-
-.chat-panel.chat-pill-running .chat-pill-orbit-dot {
-  background: var(--obs-brass-hi);
-  box-shadow:
-    0 0 12px rgba(240, 180, 60, 0.8),
-    0 0 3px rgba(255, 210, 100, 0.9);
 }
 
 .chat-panel.chat-input-mode {
@@ -2508,15 +2451,6 @@
   }
 }
 
-@keyframes pill-inner-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes pill-core-pulse {
   0%,
   100% {
@@ -3111,4 +3045,58 @@ button.chat-history-entry {
   border-color: rgba(217, 99, 95, 0.4);
   color: var(--obs-fail);
   background: rgba(217, 99, 95, 0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7e · 信标 pill 视觉精简（退役轨道点/内环旋转——JSX 与死规则已除；
+   hover 统一 0.08；running = 黄铜呼吸；badge = chip 配方）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* hover：退役大辉光与蓝色径向渐变，统一 hover 0.08（保留 scale 动效） */
+.chat-panel.chat-pill:hover {
+  border-color: var(--obs-line);
+  background: rgba(160, 180, 220, 0.08);
+  box-shadow: 0 2px 24px rgba(0, 0, 0, 0.5);
+}
+.chat-panel.chat-pill:hover .chat-pill-star {
+  color: var(--obs-text);
+  filter: none;
+}
+
+/* running：旧 sol 金色族 → --obs-brass 族（呼吸环复用 pill-breathe） */
+.chat-panel.chat-pill-running {
+  box-shadow:
+    0 2px 20px rgba(0, 0, 0, 0.4),
+    0 0 36px rgba(201, 162, 92, 0.18),
+    inset 0 0 20px rgba(201, 162, 92, 0.04);
+  border-color: rgba(201, 162, 92, 0.2);
+  background: radial-gradient(circle at 35% 30%, rgba(201, 162, 92, 0.1), rgba(4, 12, 28, 0.96) 70%);
+}
+.chat-panel.chat-pill-running::before {
+  background: radial-gradient(circle, rgba(201, 162, 92, 0.1) 0%, transparent 65%);
+}
+.chat-panel.chat-pill-running::after {
+  border-color: rgba(201, 162, 92, 0.14);
+}
+@keyframes pill-core-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(201, 162, 92, 0.4));
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 22px rgba(232, 200, 135, 0.55));
+    transform: scale(1.06);
+  }
+}
+
+/* badge：chip 配方（mono 9.5px + 1px 语义边 + radius 4 + 淡底，去红辉光） */
+.chat-pill-badge {
+  font-size: calc(9.5px * var(--font-scale));
+  font-weight: 500;
+  border: 1px solid rgba(217, 99, 95, 0.4);
+  background: rgba(217, 99, 95, 0.1);
+  color: #f0a8a4;
+  border-radius: 4px;
+  box-shadow: none;
 }
