@@ -100,6 +100,7 @@ src-ui/src/
 - 字距规范：28 条 mono 大写小标签统一 0.24em（三文件 P7f 段；df-tag 去字距；P6/P7a/P7b 已覆盖规则刻意排除，防后写反杀）。
 - **新坑/教训**：① 扫描命中先查后置覆盖——.chat-send-btn P6 已是原型裸黄铜态，误改已回退；② vite dev 长跑会死，cdp-shot 前 curl 探活；③ CDP 匹配 textContent 注意 CSS uppercase 假象（小写比较）。
 - **P7 系列至此全竣工**。遗留真机项：消息流内容态/权限卡 Enter-Esc/goal 条/星图手测矩阵/翻译面板内容态/热点行/df 内容态/hover 家族。
+- **P7f 后补修（`669f4c2`）**：① .chat-session-x 补按钮复位（旧红色裸奔 → text-3 + hover fail 淡底，对齐 del 语言）；② .chat-panel.chat-open/.chat-hud overflow:hidden——手动缩 180px 时内容溢出圆角边界；pill 保持 overflow:visible、input-mode 不动（弹层向上溢出依赖）。
 
 ### P7c — 已完成 ✅（`bc84362`，已入 main）
 
