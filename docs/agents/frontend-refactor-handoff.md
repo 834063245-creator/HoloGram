@@ -93,6 +93,14 @@ src-ui/src/
 
 ## 四、下一步精确清单
 
+### P7f — 已完成 ✅（`e7567f4`，已入 main）
+
+- 蓝色残留扫描 33→19（残留全合规：--obs-blue 家族/原型 scrollbar/星图本体/debug console）：graph-tooltip prompt-bar 去旧 signal 蓝边/影、DataflowPanel 分栏线、ChatBeacon 会话统计、ConstraintsPanel 头、#68a8ff/#7eb8ff 回潮 fallback 清零。
+- 暗蓝底中性化：session-tab/modebar/panel-tab 三处 active → 黄铜选中族；5 处 hover → 0.045/0.08 统一；cs-add-btn mini-btn 化；check-history-banner 旧棕底 → 中性；chat-history-panel 阴影入浮层家族。
+- 字距规范：28 条 mono 大写小标签统一 0.24em（三文件 P7f 段；df-tag 去字距；P6/P7a/P7b 已覆盖规则刻意排除，防后写反杀）。
+- **新坑/教训**：① 扫描命中先查后置覆盖——.chat-send-btn P6 已是原型裸黄铜态，误改已回退；② vite dev 长跑会死，cdp-shot 前 curl 探活；③ CDP 匹配 textContent 注意 CSS uppercase 假象（小写比较）。
+- **P7 系列至此全竣工**。遗留真机项：消息流内容态/权限卡 Enter-Esc/goal 条/星图手测矩阵/翻译面板内容态/热点行/df 内容态/hover 家族。
+
 ### P7c — 已完成 ✅（`bc84362`，已入 main）
 
 - ContextMenu.tsx 内联值替换（旧 signal 蓝边/影 → --obs-line + 浮层阴影；容器 10/项 7 圆角；hover 0.08；disabled text-3）。
