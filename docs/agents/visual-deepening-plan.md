@@ -114,6 +114,36 @@ P0–P6 已在 main 完成：单 React 壳 + 无头聊天核心 + 六面板收�
 3. **kbd 全局统一**：mono 10px text-3 + line 边 + radius 4。
 4. **DockRail**：`.dr-btn.on` 已有黄铜？对照 rail-btn.on（brass-dim 底 + 左 2px 黄铜条）补齐。
 
+### P7g — 行为与动效修复（1 天 · 建议最先做）
+
+> 用户反馈：多期重构后 UI 行为逻辑与动效已出问题。以下为 2026-07-19 代码审计**确认**的问题（含修复方向）+ 必须真机走查的矩阵。
+
+**确认的问题清单**：
+
+1. **聊天面板高度动画丢失**（P2′-2a GSAP 退役的遗留）：`.chat-panel` 无显式 height（auto），`transition: height 0.28s` 对 auto 不生效——pill↔input↔panel 切换时高度**瞬间跳变**（旧版 GSAP 测高补间）。修法：模式切换时 FLIP（读 offsetHeight → 设显式 height → 下帧改目标值 → transitionend 后清回 auto），或各模式给 `max-height` 档位过渡。同时解决 open 模式消息少时面板过矮（旧版有 min-height 语义）。
+2. **resize 内联高度不清**（ChatBeacon.tsx:384-385）：拖拽写入的 `maxHeight/minHeight` 内联常驻，切模式不清理——pill/input 模式被残留高度撑住。修法：mode 变化的 effect 里清除 inline min/maxHeight；resize 手柄仅在 panel 模式生效。
+3. **浮动面板 `overflow:hidden` 裁切**：`.check-resize`（left:-4px）等跨边界元素被裁——死视觉条可接受，但需逐面板确认无下拉/弹层类子元素被裁。
+4. **`#grain`（z150, mix-blend overlay）合成开销与摩尔纹**：覆盖 shell 文字层，滚动/动画时可能闪烁；mix-blend 强制全帧合成。走查确认观感；若不可接受，降到 z-3 与 #vig 同层（只罩星图）或删。
+5. **聊天 pill 隐藏列表含死选择器 `.corner-brackets`**（chat.css，JSX 已删）——清理。
+6. **`.msg-bubble.assistant` padding 归零**（P6）：reasoning/tool 卡片左缘贴面板边，真机核对是否需要保留 4-8px 内边距。
+
+**动效走查矩阵（每期完工后真机过一遍；标 ⚠ 的是已知遗留手测项）**：
+
+| 面 | 检查点 |
+|---|---|
+| 信标模式机 | pill→input→panel→hud 四态切换的宽/高/圆角过渡是否连贯；running 态 pill 脉冲 |
+| 面板开合 | 六面板滑入滑出（glide 0.3s）；check 失败自动展开；浮动几何无 sliver 残留 |
+| resize | 拖高手柄（180px~70vh 夹取）；拖后切模式不残留高度 |
+| 键盘 | Ctrl+K/L/D/, · F · R · ? · Esc 逐层关闭链（focus→prompt→sub→galaxy→fold→blast） |
+| 权限卡 ⚠ | Enter=允许 / Esc=拒绝（Ctrl+Y 只是 tooltip 文本，旧版未实现，别当 bug 修） |
+| goal ⚠ | 暂停/恢复/取消条 |
+| 星图 ⚠ | focus 飞行、fold 钻取、diff 着色、watcher 增量更新（P4 遗留手测） |
+| 悬停 | tooltip 淡入、detail-card 弹出、图例行 active、rail/按钮 hover 0.08 |
+| 历史面板 ⚠ | entry-wrap.active 样式（P2′ 遗留未核对） |
+| 碰撞 | 窄窗（<1400px）图例 vs 聊天面板 vs 热点面板 |
+| 氛围 | #grain 闪烁/性能、#vig 暗角观感 |
+| Welcome | 首屏 rise 入场、按钮 hover |
+
 ### P7f — 一致性清扫（0.5 天）
 
 1. 全库 rgba 扫描（复用 P6 规则脚本）：`b>=90 && b>r*1.45 && b>g*1.15` 的蓝色残留、以及 `rgba(25,45,80,·)`/`rgba(10,18,36,·)` 类暗蓝底 → 中性。
@@ -144,9 +174,12 @@ P0–P6 已在 main 完成：单 React 壳 + 无头聊天核心 + 六面板收�
 
 | 阶段 | 内容 | 状态 | Commit |
 |---|---|---|---|
+| **P7g** | **行为与动效修复（回归审计已坐实 6 项，最先做）** | ⬜ | — |
 | P7a | 消息流内部 | ⬜ | — |
 | P7b | 六面板内部 | ⬜ | — |
 | P7c | 浮层与菜单 | ⬜ | — |
 | P7d | FileViewer/翻译器 | ⬜ | — |
 | P7e | chrome 细节 | ⬜ | — |
 | P7f | 一致性清扫 | ⬜ | — |
+
+> 注：P7g 字母靠后但**优先级最高**——它是 P0–P6 引入的行为/动效回归修复，应先于视觉深化推进；完工后把确认清单逐项勾掉并更新本表。
