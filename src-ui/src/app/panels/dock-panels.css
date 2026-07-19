@@ -2985,35 +2985,25 @@
    布局宽度不动，只改几何外边距与表面；同类选择器后写优先。
    ═══════════════════════════════════════════════════════════════ */
 
-/* 右侧 dock（简报/约束）：浮动化，发丝线整圈（开态 .check-open/.cs-open 优先级更高，仍 translateX(0)） */
+/* 右侧 dock（简报/约束）：贴边侧边栏（用户确认 P6 浮动化是回归——要侧边栏不要独立面板） */
 #check-panel,
 #constraints-panel {
-  top: calc(var(--obs-bar-h) + 10px);
-  bottom: calc(var(--obs-status-h) + 10px);
-  right: calc(var(--obs-rail-w) + 8px);
-  border: 1px solid var(--obs-line);
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
-  transform: translateX(calc(100% + var(--obs-rail-w) + 16px));
+  border-left: 1px solid var(--obs-line);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.35);
 }
 
-/* 左侧 dock（时间轴/热点）：浮动化 */
+/* 左侧 dock（时间轴/热点）：贴边侧边栏 */
 #timeline-panel {
-  top: calc(var(--obs-bar-h) + 10px);
-  bottom: calc(var(--obs-status-h) + 10px);
-  left: calc(var(--obs-rail-w) + 8px);
-  border-radius: 12px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
-  transform: translateX(calc(-100% - var(--obs-rail-w) - 16px));
+  border: none;
+  border-right: 1px solid var(--obs-line);
+  border-radius: 0;
+  box-shadow: 24px 0 60px rgba(0, 0, 0, 0.35);
 }
 #hotspots-panel {
-  left: calc(var(--obs-rail-w) + 8px);
-  border: 1px solid var(--obs-line);
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
-  transform: translateY(-50%) translateX(calc(-100% - var(--obs-rail-w) - 16px));
+  border: none;
+  border-right: 1px solid var(--obs-line);
+  border-radius: 0;
+  box-shadow: 24px 0 60px rgba(0, 0, 0, 0.35);
 }
 
 /* 数据流/设置：圆角统一 */
