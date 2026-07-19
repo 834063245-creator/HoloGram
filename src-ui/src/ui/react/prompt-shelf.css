@@ -229,3 +229,94 @@
 .prompt-shelf__custom-input::placeholder {
   color: var(--obs-text-3);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   P7a · 权限卡（原型 .perm-card 配方：warn 色调卡片 + mini-btn 组）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 卡片：warn 淡边淡底 + radius 11（权限卡 = 含 perm-btns 的 card） */
+.prompt-shelf__card:has(.prompt-shelf__perm-btns) {
+  border: 1px solid rgba(216, 162, 74, 0.35);
+  background: rgba(216, 162, 74, 0.06);
+  border-radius: 11px;
+  margin: 6px 8px 8px;
+  padding: 11px 12px;
+}
+.prompt-shelf__card--danger:has(.prompt-shelf__perm-btns) {
+  border-color: rgba(217, 99, 95, 0.4);
+  background: rgba(217, 99, 95, 0.06);
+}
+
+/* 标签/工具名：warn 色（danger 用 fail） */
+.prompt-shelf__card:has(.prompt-shelf__perm-btns) .prompt-shelf__tag {
+  color: #ecd2a0;
+  border-color: rgba(216, 162, 74, 0.4);
+  background: rgba(216, 162, 74, 0.1);
+}
+.prompt-shelf__card:has(.prompt-shelf__perm-btns) .prompt-shelf__question {
+  font-family: var(--obs-font-mono);
+  color: var(--obs-warn);
+}
+.prompt-shelf__card--danger:has(.prompt-shelf__perm-btns) .prompt-shelf__tag {
+  color: #f0a8a4;
+  border-color: rgba(217, 99, 95, 0.4);
+  background: rgba(217, 99, 95, 0.1);
+}
+.prompt-shelf__card--danger:has(.prompt-shelf__perm-btns) .prompt-shelf__question {
+  color: var(--obs-fail);
+}
+
+/* 命令块：mono + rgba(0,0,0,0.3) 底 + radius 6 */
+.prompt-shelf__perm-subject {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10.5px * var(--font-scale));
+  color: var(--obs-text);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
+/* 按钮组：mini-btn（mono 10.5 + 1px line + radius 7；允许本次 = primary 黄铜） */
+.prompt-shelf__perm-btns {
+  gap: 7px;
+}
+.prompt-shelf__perm-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10.5px * var(--font-scale));
+  font-weight: 400;
+  color: var(--obs-text-2);
+  border: 1px solid var(--obs-line);
+  border-radius: 7px;
+  padding: 5px 10px;
+  backdrop-filter: none;
+}
+.prompt-shelf__perm-btn:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+.prompt-shelf__perm-btn--session,
+.prompt-shelf__perm-btn--session:hover,
+.prompt-shelf__perm-btn--deny,
+.prompt-shelf__perm-btn--deny:hover {
+  border-color: var(--obs-line);
+  background: none;
+  color: var(--obs-text-2);
+}
+.prompt-shelf__perm-btn--session:hover,
+.prompt-shelf__perm-btn--deny:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+.prompt-shelf__perm-btn--once,
+.prompt-shelf__perm-btn--once:hover {
+  color: var(--obs-brass-hi);
+  border-color: rgba(201, 162, 92, 0.45);
+  background: var(--obs-brass-dim);
+}
+.prompt-shelf__perm-btn--once:hover {
+  background: rgba(201, 162, 92, 0.22);
+}

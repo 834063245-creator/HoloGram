@@ -2795,6 +2795,267 @@ button.chat-history-entry {
   transition-property: border-color, box-shadow, background;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   P7a · 消息流内部（原型语言覆盖：markdown/工具卡/reasoning/sub-agent/
+   diff/glob/node-link/caret/弹层/hint/meter；同选择器后写优先）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. markdown 排版 ── */
+.msg-markdown h2,
+.msg-markdown h3 {
+  font-family: var(--obs-font-serif);
+  font-weight: 500;
+}
+.msg-markdown h2 {
+  font-size: calc(14px * var(--font-scale));
+  margin: 14px 0 6px;
+}
+.msg-markdown h3 {
+  font-size: calc(12.5px * var(--font-scale));
+  margin: 12px 0 5px;
+}
+.msg-markdown h4 {
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+}
+.msg-markdown blockquote {
+  border-left: 2px solid var(--obs-brass);
+  padding: 2px 12px;
+  color: var(--obs-text-2);
+}
+.msg-markdown th {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  background: none;
+  color: var(--obs-text-2);
+  border: 1px solid var(--obs-line-soft);
+  border-bottom: 1px solid var(--obs-line);
+}
+.msg-markdown td {
+  border: 1px solid var(--obs-line-soft);
+}
+.msg-markdown tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.msg-markdown pre {
+  border: 1px solid var(--obs-line-soft);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+}
+
+/* ── 2. 工具卡内部 ── */
+.msg-tool-header {
+  background: none;
+}
+.msg-tool-header:hover {
+  background: rgba(160, 180, 220, 0.08);
+}
+.msg-tool-header .tool-name {
+  color: var(--obs-brass-hi);
+}
+.msg-tool-header .tool-args {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  padding: 2px 7px;
+  color: var(--obs-text-2);
+}
+.msg-tool-result {
+  background: none;
+  border-top: 1px solid var(--obs-line-soft);
+  color: var(--obs-text-2);
+}
+.msg-tool-card.tool-done {
+  opacity: 0.75;
+}
+.msg-tool-card.tool-done:hover {
+  opacity: 1;
+}
+/* 状态徽章（chip 配方：mono 9.5px + 1px line + radius 4 + 语义淡边淡底） */
+.msg-tool-badge {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8.5px * var(--font-scale));
+  border-radius: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--obs-line);
+  color: var(--obs-text-2);
+  flex-shrink: 0;
+}
+.msg-tool-badge.badge-ok {
+  color: #a9dcb9;
+  border-color: rgba(99, 178, 125, 0.4);
+  background: rgba(99, 178, 125, 0.1);
+}
+.msg-tool-badge.badge-fail {
+  color: #f0a8a4;
+  border-color: rgba(217, 99, 95, 0.4);
+  background: rgba(217, 99, 95, 0.1);
+}
+.msg-tool-badge.badge-running {
+  color: #ecd2a0;
+  border-color: rgba(216, 162, 74, 0.4);
+  background: rgba(216, 162, 74, 0.1);
+}
+.msg-tool-summary {
+  background: none;
+  border: 1px solid var(--obs-line-soft);
+  color: var(--obs-text-3);
+}
+.msg-tool-summary:hover {
+  background: rgba(160, 180, 220, 0.045);
+}
+.msg-tool-summary span {
+  color: var(--obs-text-2);
+}
+
+/* ── 4. reasoning 块（折叠头 mono text-3 + 内容 text-2 发丝线左边界）── */
+.msg-reasoning-toggle {
+  background: none;
+  border: 1px solid var(--obs-line-soft);
+  color: var(--obs-text-3);
+}
+.msg-reasoning-toggle:hover {
+  background: rgba(160, 180, 220, 0.045);
+  color: var(--obs-text-2);
+}
+.msg-reasoning-content {
+  background: none;
+  border-left: 1px solid var(--obs-line-soft);
+  border-radius: 0;
+  color: var(--obs-text-2);
+}
+
+/* ── 5. sub-agent 块（工具卡同族，左边条 --obs-blue 区分层级）── */
+.msg-sub-agent {
+  margin-left: 0;
+  border: 1px solid var(--obs-line);
+  border-left: 2px solid var(--obs-blue);
+  background: rgba(125, 179, 232, 0.05);
+  border-radius: 9px;
+  padding: 8px 11px;
+}
+
+/* ── 6. diff 卡 ── */
+.diff-header {
+  background: none;
+  padding-left: 0;
+  color: var(--obs-text-3);
+}
+.diff-added {
+  background: rgba(99, 178, 125, 0.09);
+  color: #a9dcb9;
+}
+.diff-removed {
+  background: rgba(217, 99, 95, 0.09);
+  color: #f0a8a4;
+}
+.diff-collapsed {
+  background: none;
+  color: var(--obs-text-3);
+}
+.diff-collapsed:hover {
+  background: rgba(160, 180, 220, 0.045);
+  color: var(--obs-text-2);
+}
+
+/* ── 7. glob 卡 ── */
+.glob-summary {
+  font-family: var(--obs-font-mono);
+  color: var(--obs-text-2);
+}
+.glob-truncated {
+  font-style: normal;
+  color: var(--obs-text-3);
+}
+
+/* ── 8. node-link 蓝签名小胶囊 ── */
+.node-link,
+.node-link:hover {
+  text-decoration: none;
+  color: var(--obs-blue);
+}
+.node-link {
+  background: rgba(125, 179, 232, 0.09);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.node-link:hover {
+  background: rgba(125, 179, 232, 0.16);
+}
+
+/* ── 9. 流式 caret（原型 caret：brass 块闪烁）── */
+.msg-text.streaming::after {
+  content: "";
+  display: inline-block;
+  width: calc(6px * var(--font-scale));
+  height: calc(12px * var(--font-scale));
+  margin-left: 1px;
+  background: var(--obs-brass);
+  vertical-align: -2px;
+  animation: cursor-blink 0.9s steps(2) infinite;
+  opacity: 1;
+}
+
+/* ── 10. SlashPanel / AtAutocomplete 弹层 ── */
+.chat-slash-panel,
+.chat-at-popup {
+  border: 1px solid var(--obs-line);
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+.sp-item:hover {
+  background: rgba(160, 180, 220, 0.08);
+  color: var(--obs-text);
+}
+.sp-item.sp-active {
+  background: var(--obs-brass-dim);
+  box-shadow: inset 2px 0 0 var(--obs-brass);
+  color: var(--obs-text);
+}
+.sp-key {
+  background: none;
+  border: 1px solid var(--obs-line-soft);
+}
+.at-item:hover {
+  background: rgba(160, 180, 220, 0.08);
+  color: var(--obs-text);
+}
+.at-item.active {
+  background: var(--obs-brass-dim);
+  box-shadow: inset 2px 0 0 var(--obs-brass);
+  color: var(--obs-text);
+}
+
+/* ── 11. ChatHint mono 小字 ── */
+.chat-hint {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 0.06em;
+  color: var(--obs-text-3);
+}
+
+/* ── 12. 上下文 meter（原型 3px 渐变条）── */
+.chat-context-meter-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.chat-context-meter-fill {
+  border-radius: 2px;
+}
+.chat-context-meter-fill.safe {
+  background: linear-gradient(90deg, var(--obs-pass), #8fd0a2);
+}
+.chat-context-meter-fill.warn {
+  background: linear-gradient(90deg, var(--obs-brass), var(--obs-brass-hi));
+}
+.chat-context-meter-fill.danger {
+  background: var(--obs-fail);
+}
+
 /* 内容区进入淡入（旧 GSAP fadeContentIn 的 CSS 版；类切换重新匹配即重触发） */
 @keyframes p7g-content-in {
   from {

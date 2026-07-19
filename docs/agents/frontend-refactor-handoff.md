@@ -2,7 +2,7 @@
 
 > 交接时间：2026-07-19 · 上一棒：P0 → P6 已完成并全部入库
 > **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`。
-> **下一棒**：视觉深化 P7 系列 —— P7g 已完成（`feature/observatory-visual`）；下一棒 P7a 消息流内部。按 `docs/agents/visual-deepening-plan.md` 施工（唯一事实来源）。
+> **下一棒**：视觉深化 P7 系列 —— P7g/P7a 已入 main；下一棒 P7b 六面板内部。按 `docs/agents/visual-deepening-plan.md` 施工（唯一事实来源）。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
 ## 一、已完成（9 个 commit，全部在 main）
@@ -93,7 +93,14 @@ src-ui/src/
 
 ## 四、下一步精确清单
 
-### P7g — 已完成 ✅（`feature/observatory-visual`，待用户确认后合 main）
+### P7a — 已完成 ✅（已入 main）
+
+- chat.css 追加 P7a 覆盖段（12 项全）：markdown（h2/h3 serif、h4 mono 大写小标、blockquote 黄铜左边条、表格发丝线 + 表头 mono、pre 黑底 radius 6）、工具卡内部（header mono brass-hi、tool-args 黑底 chip、msg-tool-badge 状态 chip——badge-ok/fail/running 此前**无样式裸奔**、tool-done 弱化 0.75）、reasoning（toggle text-3 去深底、内容发丝线左边界）、sub-agent（蓝左边条卡，与黄铜工具卡区分层级）、diff（pass/fail 淡色边底，色值出原型 chip）、glob（mono 化 + truncated text-3）、node-link（蓝胶囊去下划线）、流式 caret（"▍"字符 → 原型 brass 块 cursor-blink 0.9s steps(2)）、Slash/At 弹层（radius 10 + hover 0.08 + active brass-dim+左条）、ChatHint（mono text-3）、上下文 meter（3px + pass/brass 渐变）。
+- prompt-shelf.css 追加权限卡覆盖段：`:has(.prompt-shelf__perm-btns)` 作用域——warn 淡边淡底卡（danger 换 fail）、tag/工具名 warn 色、命令块 mono 黑底、按钮 mini-btn 化（允许本次 = primary 黄铜，会话允许/拒绝 = 默认，去掉旧绿/蓝/红三色大按钮）。
+- 视觉验证：CDP 注入合成富文本消息（mock 无真实消息流），markdown/工具卡/reasoning/sub-agent/diff/glob/node-link/权限卡逐项截图核对过；caret 用 computedStyle 证 brass 块 + blink。
+- **留真机**：真实 agent 消息流观感、权限卡 Enter/Esc（矩阵 ⚠ 项）。
+
+### P7g — 已完成 ✅（已入 main）
 
 - 信标模式动效 = **WAAPI 单轨驱动**（用户授权重构，FLIP+定时清场补丁方案已废）：ChatBeacon 订阅 panel-store，同步段量起点（宽/高/圆角/transform/opacity 五通道，含在飞动画接管值），rAF 里 React 已提交新模式类、CSS 无几何过渡故类切换即终态，直接量终点，`el.animate(from→to, 280ms)`；不写内联样式、无清场定时器——fill:none 结束天然落回 CSS 终态。连切：subscribe 与 rAF 双点 cancel，同帧多次切换只留最新一条动画。CSS 端 `.chat-panel{transition:none}`（覆写 P2′ 版，防双轨；pill 类自身 transition 特异性更高不受影响）。
 - 内容区进入淡入 `@keyframes p7g-content-in`（旧 GSAP fadeContentIn 的 CSS 版，open/input 模式内容元素 0.22s/0.06s 延迟）。
@@ -163,6 +170,7 @@ node scripts/cdp-shot.cjs /tmp/out '[{"js":"...document.querySelector(...).click
 12. `#welcome` 现在默认 `display:flex` + `.hidden` 切换（P5 修复：旧 CSS 默认 none 且无 .on 写入者导致永不显示）；index.html 初始带 `class="hidden"` 防 FOUC，main.ts 决策后 remove/add。
 13. 无头 Chrome（`--headless --disable-gpu`）CSS 补间帧被节流：rAF 回调延迟到泵帧时才跑、`transitionend` 同理——CDP 验证动画要看**最终落定态**（定时清场后无内联残留、终点尺寸正确），别测中间态；合成点击不移动焦点（activeElement 停留 textarea 会触发 isEditing 吞键假象），测键盘链前先显式 blur。
 14. `TimelinePanel.tsx` 的 `.corner-brackets`（含 `.cb-bottom` 两 span）是 P5 迁移遗留的**无样式死 JSX**——全库无对应 CSS 规则，不可见也无裁切问题；清理归 P7b 时间轴期，别在别的期顺手删（类契约原则按期走）。
+15. `core.autocrlf=true`：`git checkout/switch/merge` 会把改动文件以 CRLF 写回工作树，biome format 立刻报全文件 CR——**checkout/merge 后对受影响文件重跑 `sed -i 's/\r$//'`**（或至少跑 `npx biome ci src/app` 自查）。git diff 因 autocrlf 归一化不可见此差异，只能靠 biome 抓。
 
 ## 七、契约速查（省得重读代码）
 
