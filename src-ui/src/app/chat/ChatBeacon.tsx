@@ -423,8 +423,15 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
         opacity: cs0.opacity,
       };
       anim?.cancel(); // 连切接管：from 已含在飞动画的当前视觉态
-      requestAnimationFrame(() => {
+      // 等目标模式的类真正落到 DOM 再量终点：graph 点击/键盘等 React 外事件的提交
+      // 在 MessageChannel 任务里，帧边界可能先于提交——否则量出 from===to 早退、
+      // 动画未建，提交时新模式瞬跳（panel→pill 收回跳变的根因）。
+      const tryStart = (left: number): void => {
         if (!el.isConnected) return;
+        if (!el.classList.contains(MODE_CLASS[next])) {
+          if (left > 0) requestAnimationFrame(() => tryStart(left - 1));
+          return;
+        }
         el.style.maxHeight = ''; // resize 写入的内联高度不跨模式残留
         el.style.minHeight = '';
         const cs1 = getComputedStyle(el);
@@ -447,7 +454,8 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
         };
         a.onfinish = done;
         a.oncancel = done;
-      });
+      };
+      requestAnimationFrame(() => tryStart(3));
     });
     return () => {
       unsub();
