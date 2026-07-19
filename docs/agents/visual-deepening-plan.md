@@ -120,6 +120,7 @@ P0–P6 已在 main 完成：单 React 壳 + 无头聊天核心 + 六面板收�
 
 **确认的问题清单**：
 
+0. ~~**侧边栏面板浮动化**~~（P6 引入，用户 2026-07-19 反馈）——已修（`2a44bf6`）：简报/约束/时间轴/热点恢复贴边 dock（上下贴 bar/status、左右贴边、内缘发丝线 + 侧向软阴影）。**结论固化：dock 面板语义 = 贴边侧边栏，不做浮动卡片**（数据流/设置本来就是浮卡/模态，除外）。
 1. **聊天面板高度动画丢失**（P2′-2a GSAP 退役的遗留）：`.chat-panel` 无显式 height（auto），`transition: height 0.28s` 对 auto 不生效——pill↔input↔panel 切换时高度**瞬间跳变**（旧版 GSAP 测高补间）。修法：模式切换时 FLIP（读 offsetHeight → 设显式 height → 下帧改目标值 → transitionend 后清回 auto），或各模式给 `max-height` 档位过渡。同时解决 open 模式消息少时面板过矮（旧版有 min-height 语义）。
 2. **resize 内联高度不清**（ChatBeacon.tsx:384-385）：拖拽写入的 `maxHeight/minHeight` 内联常驻，切模式不清理——pill/input 模式被残留高度撑住。修法：mode 变化的 effect 里清除 inline min/maxHeight；resize 手柄仅在 panel 模式生效。
 3. **浮动面板 `overflow:hidden` 裁切**：`.check-resize`（left:-4px）等跨边界元素被裁——死视觉条可接受，但需逐面板确认无下拉/弹层类子元素被裁。
