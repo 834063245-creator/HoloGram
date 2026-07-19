@@ -99,7 +99,10 @@ src-ui/src/
 - `.chat-panel.chat-open` 补 `min-height: 320px`（open 空态不再贴 input 条）。
 - 核对无误不改码三项：#grain 维持 z150（原型 z40 本就盖 chrome，截图顶栏文字无摩尔纹）；`.msg-bubble.assistant` padding 0 即原型 `.msg.agent .bubble` 无内边距语言（工具卡与文字同左缘）；浮动面板无弹层被子 overflow 裁切（df-grip 内缩 right/bottom:0，Settings 用原生 select）。
 - 清死选择器 `.chat-panel.chat-pill .corner-brackets`（ChatBeacon JSX 本无此节点）。
-- **留真机**：消息流内容态（reasoning/工具卡左缘对齐观感）mock 无法触发；四态切换补间流畅度。
+- **CDP 补测（第二轮，合成事件全过）**：六面板开合 + 同侧 rail 让位/回位正常；Esc 链逐层实测（timeline/hotspots/check/chat 各分支均关闭正确）；Ctrl+K/?/Ctrl+L/Ctrl+, 全通；resize 真拖拽夹取精确（上极限 913px=70vh、下极限 180px、中间值线性），真拖拽后切模式内联残留全清；mock 简报自动展开复证（坑 #7）。
+- **两个观察（现状契约非回归，未动）**：① constraints/dataflow/settings 不在 escLayer 链（Esc 不关，P1/P3 起如此）；② 输入框聚焦时 Esc 走 Composer 自身（panel→input），blur 后 input 态 Esc 不进 pill（`isOpen()=panel||hud` 语义）——均与旧版一致。
+- **留真机**：消息流内容态（reasoning/工具卡左缘对齐观感）mock 无法触发；四态切换补间流畅度；走查矩阵 ⚠ 项（权限卡/goal/星图/历史 active/碰撞/Welcome/悬停）。
+- 合成事件注意：window 派发的事件不进 React 根容器，Composer 等组件级 handler 测不到——测组件级按键要把事件派发到具体元素上（K6 曾因此误判）。
 
 ### P2′-2c — 已并入 2a 完成 ✅
 
