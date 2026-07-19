@@ -27,12 +27,16 @@
     "windows": {
       "wix": {
         "language": "zh-CN",
-        "fragmentPaths": ["wix/cleanup.wxs"],
-        "webviewInstallMode": "downloadBootstrapper"
-      },
-      "nsis": {
-        "webviewInstallMode": "downloadBootstrapper"
+        "fragmentPaths": ["wix/cleanup.wxs"]
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5RjAzQzNEMzlENTczMTAKUldRUWM5VTVQVHp3V1ZjUTZ0NDlJdkdlZlJ5R2JiOCtqQ1ZGS1NIYklpYlE1THVjbnBzQUJRWloK",
+      "endpoints": [
+        "https://github.com/834063245-creator/HoloGram/releases/latest/download/latest.json"
+      ]
     }
   }
 }

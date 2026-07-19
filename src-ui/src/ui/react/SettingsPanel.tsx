@@ -51,6 +51,45 @@ const SettingsPanelApp: React.FC<{
   const [activeTab, setActiveTab] = useState<Tab>('provider');
   const [appVersion, setAppVersion] = useState('…');
   useEffect(() => { getVersion().then(setAppVersion).catch(() => setAppVersion('9.0.1')); }, []);
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'available' | 'downloading' | 'done' | 'error'>('idle');
+  const [updateMsg, setUpdateMsg] = useState('');
+  const [updateVersion, setUpdateVersion] = useState('');
+  const checkUpdate = useCallback(async () => {
+    setUpdateStatus('checking');
+    setUpdateMsg('');
+    try {
+      const { check: checkUpdate } = await import('@tauri-apps/plugin-updater');
+      const update = await checkUpdate();
+      if (update) {
+        setUpdateVersion(update.version);
+        setUpdateStatus('available');
+        setUpdateMsg(`新版本 ${update.version} 可用`);
+      } else {
+        setUpdateStatus('done');
+        setUpdateMsg('已是最新版本');
+      }
+    } catch (e: any) {
+      setUpdateStatus('error');
+      setUpdateMsg(e?.message || String(e));
+    }
+  }, []);
+  const doUpdate = useCallback(async () => {
+    setUpdateStatus('downloading');
+    try {
+      const { check: checkUpdate } = await import('@tauri-apps/plugin-updater');
+      const update = await checkUpdate();
+      if (!update) { setUpdateStatus('error'); setUpdateMsg('更新信息已过期'); return; }
+      setUpdateMsg('下载中…');
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === 'Finished') setUpdateMsg('下载完成，重启生效');
+      });
+      setUpdateStatus('done');
+      setUpdateMsg('下载完成，下次启动生效');
+    } catch (e: any) {
+      setUpdateStatus('error');
+      setUpdateMsg(e?.message || String(e));
+    }
+  }, []);
   const [dirty, setDirty] = useState(false);
 
   // Provider add form
@@ -673,8 +712,42 @@ const SettingsPanelApp: React.FC<{
               </div>
             </div>
             <div className="sp-section">
-              <div className="sp-section-title">系统</div>
-              <div className="sp-hint">版本信息、检查更新及引擎状态将在后续版本中完善。</div>
+              <div className="sp-section-title">更新</div>
+              <div style={{ marginTop: 8 }}>
+                {updateStatus === 'idle' && (
+                  <button className="sp-btn sp-btn-save" onClick={checkUpdate}>
+                    检查更新
+                  </button>
+                )}
+                {updateStatus === 'checking' && (
+                  <span className="sp-hint">检查中…</span>
+                )}
+                {updateStatus === 'available' && (
+                  <div>
+                    <div className="sp-hint" style={{ marginBottom: 8 }}>{updateMsg}</div>
+                    <button className="sp-btn sp-btn-save" onClick={doUpdate}>
+                      下载并安装
+                    </button>
+                  </div>
+                )}
+                {updateStatus === 'downloading' && (
+                  <span className="sp-hint">{updateMsg}</span>
+                )}
+                {updateStatus === 'done' && (
+                  <span className="sp-hint" style={{ color: 'var(--obs-pass)' }}>{updateMsg}</span>
+                )}
+                {updateStatus === 'error' && (
+                  <div>
+                    <span className="sp-hint" style={{ color: 'var(--obs-warn)' }}>
+                      检查失败: {updateMsg}
+                    </span>
+                    <br />
+                    <button className="sp-btn sp-btn-cancel" style={{ marginTop: 8 }} onClick={checkUpdate}>
+                      重试
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 base64 = "0.22"
 hologram-engine = { path = "../engine" }
+tauri-plugin-updater = "2.10.1"
 
 [features]
 default = ["custom-protocol"]

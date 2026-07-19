@@ -69,6 +69,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(workspace_state)
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
