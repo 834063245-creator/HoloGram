@@ -2,7 +2,7 @@
 
 > 交接时间：2026-07-19 · 上一棒：P0 → P6 已完成并全部入库
 > **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`。
-> **下一棒**：视觉深化 P7 系列 —— 按 `docs/agents/visual-deepening-plan.md` 施工（唯一事实来源），分支 `feature/observatory-visual`。
+> **下一棒**：视觉深化 P7 系列 —— P7g 已完成（`feature/observatory-visual`）；下一棒 P7a 消息流内部。按 `docs/agents/visual-deepening-plan.md` 施工（唯一事实来源）。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
 ## 一、已完成（9 个 commit，全部在 main）
@@ -93,6 +93,14 @@ src-ui/src/
 
 ## 四、下一步精确清单
 
+### P7g — 已完成 ✅（`feature/observatory-visual`，待用户确认后合 main）
+
+- 高度 FLIP：`ChatBeacon.tsx` 新增 panel-store 订阅 —— 旧模式 DOM 同步段测 `fromH`，rAF（React 已提交新模式类、未绘制）清 resize 内联高 + 测 `toH`，锁起点走既有 CSS `height 0.28s` 补间，`transitionend` 清回 auto。语义 = 旧 GSAP `morphToMode` 的 CSS 复刻。
+- `.chat-panel.chat-open` 补 `min-height: 320px`（open 空态不再贴 input 条）。
+- 核对无误不改码三项：#grain 维持 z150（原型 z40 本就盖 chrome，截图顶栏文字无摩尔纹）；`.msg-bubble.assistant` padding 0 即原型 `.msg.agent .bubble` 无内边距语言（工具卡与文字同左缘）；浮动面板无弹层被子 overflow 裁切（df-grip 内缩 right/bottom:0，Settings 用原生 select）。
+- 清死选择器 `.chat-panel.chat-pill .corner-brackets`（ChatBeacon JSX 本无此节点）。
+- **留真机**：消息流内容态（reasoning/工具卡左缘对齐观感）mock 无法触发；四态切换补间流畅度。
+
 ### P2′-2c — 已并入 2a 完成 ✅
 
 权限卡链路（`permission-ask` → `showPermissionCard` → enqueuePerm → PromptShelf）与 GoalStrip（panel-store.goalRecord）均已组件化。**剩手测**：权限卡 Enter=允许/Esc=拒绝（注意：Ctrl+Y 只是 tooltip 文本，旧版就没实现 handler，别当 bug 修——要补也是独立需求）；goal 暂停/恢复/取消。
@@ -147,6 +155,8 @@ node scripts/cdp-shot.cjs /tmp/out '[{"js":"...document.querySelector(...).click
 10. P5 迁移副作用零残留已验证：全库 grep 无旧变量（--starlight/--panel-bg/--signal/--sol/--nebula/--font-hud 等）——**不要再引入旧变量名**；ContextMenu 内联样式引的是 --obs-*（原 --starlight fallback 已换）。
 11. ~~刻度盘~~ —— P5 的 3D 版经用户确认不好看已删，屏幕空间 SVG 版讨论后也放弃。**别再复活表盘/黄道椭圆**，除非用户明确要求。
 12. `#welcome` 现在默认 `display:flex` + `.hidden` 切换（P5 修复：旧 CSS 默认 none 且无 .on 写入者导致永不显示）；index.html 初始带 `class="hidden"` 防 FOUC，main.ts 决策后 remove/add。
+13. 无头 Chrome（`--headless --disable-gpu`）CSS 补间帧被节流：`transitionend` 只在截图泵帧时才触发——CDP 验证 FLIP/动画要看**内联样式写入**（fromH→toH 已锁），别拿完成态说事；真机连续帧下 transitionend 正常清回 auto（P7g 实测）。
+14. `TimelinePanel.tsx` 的 `.corner-brackets`（含 `.cb-bottom` 两 span）是 P5 迁移遗留的**无样式死 JSX**——全库无对应 CSS 规则，不可见也无裁切问题；清理归 P7b 时间轴期，别在别的期顺手删（类契约原则按期走）。
 
 ## 七、契约速查（省得重读代码）
 

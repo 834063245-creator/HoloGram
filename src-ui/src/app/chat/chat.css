@@ -67,7 +67,6 @@
 .chat-panel.chat-pill .chat-expand-handle,
 .chat-panel.chat-pill .chat-input-area,
 .chat-panel.chat-pill .chat-footer,
-.chat-panel.chat-pill .corner-brackets,
 .chat-panel.chat-pill .chat-resize,
 .chat-panel.chat-pill .chat-status-bar,
 .chat-panel.chat-pill .chat-panel-tabs,
@@ -2772,4 +2771,13 @@ button.chat-history-entry {
 /* goal 条：发丝线（原 --obs-text 过重） */
 .goal-strip {
   border-color: var(--obs-line);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7g · 行为与动效修复（2026-07-19 审计确认项）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* open 模式消息少时面板过矮：min-height 语义回归（配合 ChatBeacon FLIP 测高补间） */
+.chat-panel.chat-open {
+  min-height: 320px;
 }

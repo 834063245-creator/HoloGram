@@ -400,6 +400,37 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
     };
   }, []);
 
+  // ── 模式切换：高度 FLIP + resize 内联高度清理（P7g，复刻旧 GSAP 测高补间语义）──
+  // height:auto 无法 transition —— 订阅 store：旧模式 DOM 仍在时测起点高，
+  // rAF（React 已提交新模式类、未绘制）测自然目标高，锁起点 → CSS 补间 → transitionend 清回 auto。
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    let prev = panelStore.getState().panelMode;
+    return panelStore.subscribe((s) => {
+      const next = s.panelMode;
+      if (next === prev) return;
+      prev = next;
+      const fromH = el.offsetHeight; // 旧模式 DOM 仍在（React 提交前同步段）
+      requestAnimationFrame(() => {
+        if (!el.isConnected) return;
+        el.style.maxHeight = ''; // resize 写入的内联高度不跨模式残留
+        el.style.minHeight = '';
+        const toH = el.offsetHeight;
+        if (fromH <= 0 || toH <= 0 || fromH === toH) return;
+        el.style.height = `${fromH}px`;
+        void el.offsetHeight; // 强制 reflow，锁定补间起点
+        el.style.height = `${toH}px`;
+        const onEnd = (e: TransitionEvent) => {
+          if (e.propertyName !== 'height') return;
+          el.style.height = '';
+          el.removeEventListener('transitionend', onEnd);
+        };
+        el.addEventListener('transitionend', onEnd);
+      });
+    });
+  }, [panelStore]);
+
   const toolTotal = Object.values(toolUsage || {}).reduce((a, b) => a + b, 0);
   const switchTab = (tab: 'chat' | 'tools' | 'context') => panelStore.getState().setActiveTab(tab);
 
