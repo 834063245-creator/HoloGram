@@ -10,7 +10,8 @@
 #graph-legend {
   position: absolute;
   bottom: 12px;
-  left: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 15;
   pointer-events: auto;
   display: flex;

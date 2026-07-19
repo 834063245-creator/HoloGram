@@ -5,7 +5,7 @@
 
 .chat-panel {
   position: fixed;
-  bottom: 100px;
+  bottom: 124px; /* 用户确认：给居中图例让位（原 100px） */
   left: 50%;
   transform: translateX(-50%);
   width: 48px;
