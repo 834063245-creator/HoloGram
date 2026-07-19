@@ -113,6 +113,11 @@ P0–P6 已在 main 完成：单 React 壳 + 无头聊天核心 + 六面板收�
 2. **StatusBar**：遥测值 text-2、agent 名黄铜、pulse 点 pass 发光（原型 #status）。
 3. **kbd 全局统一**：mono 10px text-3 + line 边 + radius 4。
 4. **DockRail**：`.dr-btn.on` 已有黄铜？对照 rail-btn.on（brass-dim 底 + 左 2px 黄铜条）补齐。
+5. **信标 pill 视觉精简**（2026-07-19 用户提议，评估结论：结构/行为不动，只精简装饰）：
+   - pill 模式机（pill→input→panel→hud）与点击热区**不重构**——行为正确，不是回归项。
+   - 退役旧 HUD 装饰：`.chat-pill-orbit-dot`（轨道点）、`.chat-pill-inner-ring`（内环旋转）——与仪器语言不符。
+   - running 态改黄铜呼吸环（复用既有 `pill-breathe` keyframes，去蓝色脉冲）；`.chat-pill-badge` 对齐 chip 配方（mono 9.5px + line 边 + radius 4）。
+   - hover 态统一 `rgba(160,180,220,0.08)`。
 
 ### P7g — 行为与动效修复（1 天 · 建议最先做）
 
