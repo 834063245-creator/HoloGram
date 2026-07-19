@@ -534,3 +534,17 @@
 .sx-desc {
   flex: 1;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   P7c · 浮层与菜单（快捷键浮层 kbd 并入共享配方——
+   原共享规则只覆盖 .cb-bar/.sb-bar/.pal-box，.sx-box 裸奔浏览器默认样式）
+   ═══════════════════════════════════════════════════════════════ */
+.sx-box kbd {
+  font-family: var(--obs-font-mono);
+  font-size: 10px;
+  color: var(--obs-text-3);
+  border: 1px solid var(--obs-line);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  padding: 0.5px 5px;
+}

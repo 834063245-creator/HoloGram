@@ -3076,3 +3076,39 @@ button.chat-history-entry {
 .chat-panel.chat-input-mode .chat-footer {
   animation: p7g-content-in 0.22s ease 0.06s both;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   P7c · 浮层与菜单（历史面板：原型选中/hover/语义色纪律；
+   同选择器后写优先，存量规则不动）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* entry：选中 = brass-dim 底 + 2px brass 左条（原型 p-row.active 配方），
+   hover 统一 0.08；左条占位在基础态常驻，避免选中态 2px 跳动 */
+.chat-history-entry {
+  border-left: 2px solid transparent;
+}
+.chat-history-entry:hover {
+  background: rgba(160, 180, 220, 0.08);
+}
+.chat-history-entry.active {
+  background: var(--obs-brass-dim);
+  border-left-color: var(--obs-brass);
+}
+.chat-history-entry-wrap.active .chat-history-entry {
+  border-color: transparent;
+  border-left-color: var(--obs-brass);
+}
+
+/* del / close：text-3 弱化，hover fail 淡底（退役 #e53e3e 字面量） */
+.chat-history-del {
+  color: var(--obs-text-3);
+}
+.chat-history-del:hover {
+  color: var(--obs-fail);
+  background: rgba(217, 99, 95, 0.1);
+}
+.chat-history-panel-close:hover {
+  border-color: rgba(217, 99, 95, 0.4);
+  color: var(--obs-fail);
+  background: rgba(217, 99, 95, 0.08);
+}
