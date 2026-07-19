@@ -93,6 +93,14 @@ src-ui/src/
 
 ## 四、下一步精确清单
 
+### P7b — 已完成 ✅（`c56a4b7`，已入 main）
+
+- dock-panels.css 追加 P7b 覆盖段（8 项全，+348 -0，唯一改动文件）：统一行语言（.check-vitem/.tl-event/.hs-item/.cs-toggle 向原型 .row 看齐：8px 垂直节奏 + line-soft 底边 + hover 0.045；横向内边距沿用各容器已有 padding，不双排）；简报摘要卡 .check-summary → sum-card 卡壳（radius 10 + pass 淡底），fail 态用相邻选择器 `.check-status-bar.check-status-fail + .check-summary` 换 fail 淡底（DOM 正好相邻，纯 CSS 双态成立）；.check-vloc mono text-3；热点 hs-count-warn/critical 与 hs-sev-high/critical 上色（**此前无样式裸奔**，hs-count 基础色黄铜→text-2 守色彩纪律）；时间轴 dot 去边去透明度、divider text-3、tl-file-chip chip 化（neutral）；约束开关（轨道 line-soft、on 态 brass-dim 底 + 黄铜圆点）、cs-tag chip 化、cs-btn-save/reset mini-btn 化；数据流 df-tag-* 淡底淡边（语义色保持）、df-md-* 逐项对齐 P7a 值、df-df-table 发丝线变量化；设置 sp-input/select（radius 8 + focus 黄铜 + caret brass）、sp-tab active 黄铜下划线、sp-radio/sp-checkbox 黄铜自绘（appearance:none，勾选标记 ::after 旋转边框）、sp-range 黄铜填充去蓝辉光、sp-btn mini-btn 化。
+- **偏差（DOM 无支撑，纯 CSS 不造假数据，已向用户报备）**：① sum-card 的 serif 大数字与 3px meter——.check-summary 是单行文本无 .big/.meter 元素；② 违规条目 L4/环 fail chip——vitem 无标记元素、Collapsible 无 severity 类；③ 热点 .heat 条——hs-item 无条元素。三处只落卡壳/行语言/语义色。
+- **CDP 核对**：简报 pass/fail 双态卡片底色 computedStyle 实证（rgba(99,178,125,0.05) / rgba(217,99,95,0.05)）；时间轴行语言与 dot；约束开关/tag；设置三 tab（radio 黄铜圈、checkbox 黄铜勾、sp-range 黄铜渐变 computedStyle 证、input radius 8、保存 mini-btn）；数据流空态框架。
+- **留真机**：热点行语言与严重度色（mock 无热点数据）；df-tag/df-md 内容态（需真实查询）；hs 行 hover。
+- **新坑（P7f 候选）**：设置-显示 tab 的字体缩放滑杆是 TSX 内联 `accentColor: var(--obs-blue)`（非 .sp-range），连同 sp-fs-value 内联蓝色——P7b 不动 TSX 未收，P7f 或后续允许改内联的期处理。CDP 教训：设置 tab 按钮文字经 CSS uppercase，合成点击匹配 textContent 需小写比较。
+
 ### P7a — 已完成 ✅（已入 main）
 
 - chat.css 追加 P7a 覆盖段（12 项全）：markdown（h2/h3 serif、h4 mono 大写小标、blockquote 黄铜左边条、表格发丝线 + 表头 mono、pre 黑底 radius 6）、工具卡内部（header mono brass-hi、tool-args 黑底 chip、msg-tool-badge 状态 chip——badge-ok/fail/running 此前**无样式裸奔**、tool-done 弱化 0.75）、reasoning（toggle text-3 去深底、内容发丝线左边界）、sub-agent（蓝左边条卡，与黄铜工具卡区分层级）、diff（pass/fail 淡色边底，色值出原型 chip）、glob（mono 化 + truncated text-3）、node-link（蓝胶囊去下划线）、流式 caret（"▍"字符 → 原型 brass 块 cursor-blink 0.9s steps(2)）、Slash/At 弹层（radius 10 + hover 0.08 + active brass-dim+左条）、ChatHint（mono text-3）、上下文 meter（3px + pass/brass 渐变）。
