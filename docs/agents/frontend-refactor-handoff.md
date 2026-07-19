@@ -95,8 +95,9 @@ src-ui/src/
 
 ### P7g — 已完成 ✅（`feature/observatory-visual`，待用户确认后合 main）
 
-- 高度 FLIP：`ChatBeacon.tsx` 新增 panel-store 订阅 —— 旧模式 DOM 同步段量起点（宽/高/圆角/transform 四通道），rAF 里禁过渡一帧跳到目标态量正确终点（**宽过渡中的窄宽虚高是真机动效 bug 的根因**，旧 GSAP 是先锁目标宽再量高的），锁起点走 CSS 补间，300ms 定时清场（比 transitionend 皮实：无过渡通道不触发事件、连切时旧事件被取消；连切靠 clearTimeout 接管）。resize 内联 max/minHeight 同点清除。
-- `.chat-panel` transition 补 `transform`（hud 的 scale/translateY 进出不再瞬跳）；`.chat-panel.chat-open` 补 `min-height: 320px`。
+- 信标模式动效 = **WAAPI 单轨驱动**（用户授权重构，FLIP+定时清场补丁方案已废）：ChatBeacon 订阅 panel-store，同步段量起点（宽/高/圆角/transform/opacity 五通道，含在飞动画接管值），rAF 里 React 已提交新模式类、CSS 无几何过渡故类切换即终态，直接量终点，`el.animate(from→to, 280ms)`；不写内联样式、无清场定时器——fill:none 结束天然落回 CSS 终态。连切：subscribe 与 rAF 双点 cancel，同帧多次切换只留最新一条动画。CSS 端 `.chat-panel{transition:none}`（覆写 P2′ 版，防双轨；pill 类自身 transition 特异性更高不受影响）。
+- 内容区进入淡入 `@keyframes p7g-content-in`（旧 GSAP fadeContentIn 的 CSS 版，open/input 模式内容元素 0.22s/0.06s 延迟）。
+- `.chat-panel.chat-open` 补 `min-height: 320px`。
 - **escLayer 补 constraints**（用户真机反馈 Esc 无响应）——链序：galaxy→timeline→hotspots→check→**constraints**→chat→FV→highlight。
 - 核对无误不改码三项：#grain 维持 z150（原型 z40 本就盖 chrome，截图顶栏文字无摩尔纹）；`.msg-bubble.assistant` padding 0 即原型 `.msg.agent .bubble` 无内边距语言（工具卡与文字同左缘）；浮动面板无弹层被子 overflow 裁切（df-grip 内缩 right/bottom:0，Settings 用原生 select）。
 - 清死选择器 `.chat-panel.chat-pill .corner-brackets`（ChatBeacon JSX 本无此节点）。

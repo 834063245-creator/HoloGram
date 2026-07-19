@@ -400,64 +400,52 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
     };
   }, []);
 
-  // ── 模式切换：尺寸 FLIP + resize 内联高度清理（P7g，复刻旧 GSAP morphToMode 语义）──
-  // height:auto 无法 transition —— 订阅 store：旧模式 DOM 仍在时量起点；
-  // rAF（React 已提交新模式类、未绘制）禁过渡一帧量目标态（宽度/圆角也在变，
-  // 必须跳到目标宽下量高，否则量出窄宽虚高），锁起点 → CSS 补间 → 定时清场。
+  // ── 模式切换动效：WAAPI 单轨驱动（P7g 重构，替代 CSS transition + FLIP 补丁）──
+  // 订阅 store：旧模式 DOM 仍在（React 提交前同步段）量起点；rAF 里新模式类已应用，
+  // 直接量目标态（CSS 已无几何过渡，类切换即终态）；el.animate(from→to) 合成器补间，
+  // 不写内联样式、无需清场——动画结束（fill:none）元素天然落回 CSS 终态。
+  // 连切时 cancel 旧动画，起点取当前视觉值（offset* 含在飞动画），无缝接管。
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
     let prev = panelStore.getState().panelMode;
-    let cleanup: number | undefined;
+    let anim: Animation | undefined;
     const unsub = panelStore.subscribe((s) => {
       const next = s.panelMode;
       if (next === prev) return;
       prev = next;
-      // 旧模式 DOM 仍在（React 提交前同步段）：量起点
-      const fromH = el.offsetHeight;
-      const fromW = el.offsetWidth;
-      const fromR = getComputedStyle(el).borderRadius;
-      const fromT = getComputedStyle(el).transform;
-      if (cleanup) clearTimeout(cleanup); // 连切接管：作废上一轮清场
+      const cs0 = getComputedStyle(el);
+      const from = {
+        width: `${el.offsetWidth}px`,
+        height: `${el.offsetHeight}px`,
+        borderRadius: cs0.borderRadius,
+        transform: cs0.transform,
+        opacity: cs0.opacity,
+      };
+      anim?.cancel(); // 连切接管：from 已含在飞动画的当前视觉态
       requestAnimationFrame(() => {
         if (!el.isConnected) return;
         el.style.maxHeight = ''; // resize 写入的内联高度不跨模式残留
         el.style.minHeight = '';
-        // 禁过渡让新模式目标态瞬时生效，量正确终点
-        el.style.transition = 'none';
-        void el.offsetHeight;
-        const toH = el.offsetHeight;
-        const toW = el.offsetWidth;
-        const toR = getComputedStyle(el).borderRadius;
-        const toT = getComputedStyle(el).transform;
-        if (fromH === toH && fromW === toW && fromR === toR && fromT === toT) {
-          el.style.transition = '';
-          return;
-        }
-        // 锁起点 → 恢复过渡 → 补间到终点
-        el.style.width = `${fromW}px`;
-        el.style.height = `${fromH}px`;
-        el.style.borderRadius = fromR;
-        el.style.transform = fromT;
-        void el.offsetHeight; // 强制 reflow，锁定补间起点
-        el.style.transition = '';
-        el.style.width = `${toW}px`;
-        el.style.height = `${toH}px`;
-        el.style.borderRadius = toR;
-        el.style.transform = toT;
-        // 清场用定时而非 transitionend：尺寸无变化的通道不触发事件，且连切时旧事件被取消
-        cleanup = window.setTimeout(() => {
-          el.style.width = '';
-          el.style.height = '';
-          el.style.borderRadius = '';
-          el.style.transform = '';
-          cleanup = undefined;
-        }, 300);
+        const cs1 = getComputedStyle(el);
+        const to = {
+          width: `${el.offsetWidth}px`,
+          height: `${el.offsetHeight}px`,
+          borderRadius: cs1.borderRadius,
+          transform: cs1.transform,
+          opacity: cs1.opacity,
+        };
+        if (JSON.stringify(from) === JSON.stringify(to)) return;
+        anim?.cancel(); // 同帧多次连切：只保留最新一条动画
+        anim = el.animate([from, to], { duration: 280, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
+        anim.onfinish = () => {
+          anim = undefined;
+        };
       });
     });
     return () => {
       unsub();
-      if (cleanup) clearTimeout(cleanup);
+      anim?.cancel();
     };
   }, [panelStore]);
 

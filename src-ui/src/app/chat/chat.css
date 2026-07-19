@@ -2777,17 +2777,34 @@ button.chat-history-entry {
    P7g · 行为与动效修复（2026-07-19 审计确认项）
    ═══════════════════════════════════════════════════════════════ */
 
-/* open 模式消息少时面板过矮：min-height 语义回归（配合 ChatBeacon FLIP 测高补间） */
+/* open 模式消息少时面板过矮：min-height 语义回归 */
 .chat-panel.chat-open {
   min-height: 320px;
 }
 
-/* 模式切换过渡补 transform：hud 的 scale/translateY 进出不再瞬跳（覆盖 P2′ 版列表） */
+/* 模式几何过渡由 ChatBeacon WAAPI 单轨接管（覆写 P2′ 版 transition，防 CSS/WAAPI 双轨打架）。
+   pill 类自身 transition（特异性更高）不受影响，hover/running 照旧。 */
 .chat-panel {
-  transition:
-    width 0.28s cubic-bezier(0.23, 1, 0.32, 1),
-    height 0.28s cubic-bezier(0.23, 1, 0.32, 1),
-    border-radius 0.28s cubic-bezier(0.23, 1, 0.32, 1),
-    transform 0.28s cubic-bezier(0.23, 1, 0.32, 1),
-    opacity 0.2s ease;
+  transition: none;
+}
+
+/* 内容区进入淡入（旧 GSAP fadeContentIn 的 CSS 版；类切换重新匹配即重触发） */
+@keyframes p7g-content-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.chat-panel.chat-open .chat-header,
+.chat-panel.chat-open .chat-status-bar,
+.chat-panel.chat-open .chat-tab-content,
+.chat-panel.chat-open .chat-expand-handle,
+.chat-panel.chat-open .chat-input-area,
+.chat-panel.chat-open .chat-footer,
+.chat-panel.chat-input-mode .chat-expand-handle,
+.chat-panel.chat-input-mode .chat-input-area,
+.chat-panel.chat-input-mode .chat-footer {
+  animation: p7g-content-in 0.22s ease 0.06s both;
 }
