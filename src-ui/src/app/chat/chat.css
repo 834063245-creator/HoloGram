@@ -411,7 +411,15 @@
   transition: all var(--obs-snap);
   line-height: 1;
   margin-left: 2px;
-  color: rgba(200, 60, 60, 0.6);
+  padding: 0 2px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--obs-text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .chat-session-tab:hover .chat-session-x {
@@ -419,8 +427,9 @@
 }
 
 .chat-session-x:hover {
-  opacity: 0.8 !important;
+  opacity: 1 !important;
   color: var(--obs-fail);
+  background: rgba(217, 99, 95, 0.1);
 }
 
 .chat-session-add {
@@ -3116,4 +3125,15 @@ button.chat-history-entry {
 /* P7f · 浮层家族阴影一致：历史面板并入 0 24px 80px 家族（去 inset 描边影） */
 .chat-history-panel {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   修复 · panel 模式手动缩到最小（180px）时固定子块总高超限，
+   内容溢出圆角边界（用户反馈「文字挤出面板」）：
+   open/hud 裁剪进边框；pill 维持 overflow:visible（状态标签外飘），
+   input-mode 不动（Slash/At 弹层向上溢出面板顶，依赖可见溢出）
+   ═══════════════════════════════════════════════════════════════ */
+.chat-panel.chat-open,
+.chat-panel.chat-hud {
+  overflow: hidden;
 }
