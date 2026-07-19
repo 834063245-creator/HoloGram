@@ -93,6 +93,27 @@ src-ui/src/
 
 ## 四、下一步精确清单
 
+### P7c — 已完成 ✅（`bc84362`，已入 main）
+
+- ContextMenu.tsx 内联值替换（旧 signal 蓝边/影 → --obs-line + 浮层阴影；容器 10/项 7 圆角；hover 0.08；disabled text-3）。
+- chat.css 追加历史面板段：entry hover 0.08、active = brass-dim + 2px brass 左条（基础态常驻透明左条防跳动）、del/panel-close hover fail 化（退役 #e53e3e）。
+- shell.css 追加 .sx-box kbd（共享 kbd 配方原只覆盖 cb/sb/pal-box，快捷键浮层裸奔浏览器默认样式）。
+- **核对无改动**：.pal-* 已符合原型 #palette（P1 即按原型写）；FileTranslatorPortal 宿主无样式。
+- **偏差**：原型 #shortx 的 h3 serif + sx-sub 无 DOM 对应（现行 4 组布局，sx-group-title 即 sub 语言）；**ContextMenu 无活动触发路径**（showContextMenu 无生产调用方，纯值替换未截图）。
+
+### P7d — 已完成 ✅（`3f253cf`，已入 main）
+
+- file-viewer.ts 内联值替换 14 处：容器 12px + 浮层阴影；titlebar/toolbar/tabbar/statusbar 去深色底纯发丝线；win-ctrl hover 0.08、close = 原型 win-ctrl.close（#ffd9d6 + fail 淡底）；tab active 旧蓝 → 黄铜顶条 + brass-dim 底；dirty dot → --obs-warn；面包屑 hover 0.08；LSP 色字面量 → obs 变量。
+- file-translator.css 追加段：ft-header 去底 + 标题 text-2；发丝线变量化；audit tag chip 化（fail/warn/pass 淡边淡底，risk 橙既有语义保持）。
+- CDP：时间轴点 .tl-event-file 开 FileViewer 逐项截图核对。**留真机**：翻译面板内容态（需真实 Agent 翻译）。
+
+### P7e — 已完成 ✅（`1c3bbc8`，已入 main）
+
+- CommandBar：brand 增 OBSERVATORY sub（纯装饰 JSX）；.cb-btn.on 黄铜规则（TSX 未 emit，先立）；搜索框 hover 黄铜边。
+- DockRail：.dr-btn.on 补 2px 黄铜侧条（注意：面板开时整轨隐藏，.on 实际不可达，规则备着）。
+- pill 精简：orbit-dot/inner-ring JSX+CSS+keyframes 全退役（零残留）；hover → 0.08 去大辉光；running → --obs-brass 族（pill-core-pulse 末尾重声明黄铜化）；badge → chip 配方。
+- **偏差**：StatusBar agent 名黄铜无 DOM 对应（原型 .agent 未立，不加结构）；kbd 全局统一 P7c 已闭环。
+
 ### P7b — 已完成 ✅（`c56a4b7`，已入 main）
 
 - dock-panels.css 追加 P7b 覆盖段（8 项全，+348 -0，唯一改动文件）：统一行语言（.check-vitem/.tl-event/.hs-item/.cs-toggle 向原型 .row 看齐：8px 垂直节奏 + line-soft 底边 + hover 0.045；横向内边距沿用各容器已有 padding，不双排）；简报摘要卡 .check-summary → sum-card 卡壳（radius 10 + pass 淡底），fail 态用相邻选择器 `.check-status-bar.check-status-fail + .check-summary` 换 fail 淡底（DOM 正好相邻，纯 CSS 双态成立）；.check-vloc mono text-3；热点 hs-count-warn/critical 与 hs-sev-high/critical 上色（**此前无样式裸奔**，hs-count 基础色黄铜→text-2 守色彩纪律）；时间轴 dot 去边去透明度、divider text-3、tl-file-chip chip 化（neutral）；约束开关（轨道 line-soft、on 态 brass-dim 底 + 黄铜圆点）、cs-tag chip 化、cs-btn-save/reset mini-btn 化；数据流 df-tag-* 淡底淡边（语义色保持）、df-md-* 逐项对齐 P7a 值、df-df-table 发丝线变量化；设置 sp-input/select（radius 8 + focus 黄铜 + caret brass）、sp-tab active 黄铜下划线、sp-radio/sp-checkbox 黄铜自绘（appearance:none，勾选标记 ::after 旋转边框）、sp-range 黄铜填充去蓝辉光、sp-btn mini-btn 化。
