@@ -1,4 +1,4 @@
-# 打 v* tag 自动出 MSI。两步：编前端 → 打包。
+# 打 v* tag 自动发版。签名 + 更新清单 + MSI。
 name: Release
 
 on:
@@ -6,12 +6,14 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write  # action-gh-release 需要写权限创建 Release
+  contents: write
 
 jobs:
   release:
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,4 +30,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: src-tauri/target/release/bundle/msi/*.msi
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.zip
+            src-tauri/target/release/bundle/msi/*.msi.zip.sig

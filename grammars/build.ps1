@@ -52,7 +52,8 @@ function Build-Grammar($lang) {
     $gccArgs = @(
         "-shared", "-o", $dllPath,
         "-I", $srcDir,
-        "-fPIC", "-O2"
+        "-fPIC", "-O2",
+        "-static-libgcc", "-static-libstdc++"
     ) + $srcFiles
 
     Write-Host "  gcc $($gccArgs -join ' ')"
