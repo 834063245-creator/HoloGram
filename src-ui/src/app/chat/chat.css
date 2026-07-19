@@ -396,13 +396,13 @@
 
 .chat-session-tab:hover {
   color: var(--obs-text);
-  background: rgba(20, 35, 60, 0.4);
+  background: rgba(160, 180, 220, 0.08);
 }
 
 .chat-session-tab.active {
-  color: var(--obs-blue);
-  background: rgba(20, 40, 70, 0.5);
-  border-color: rgba(148, 166, 205, 0.16);
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+  border-color: rgba(201, 162, 92, 0.45);
 }
 
 .chat-session-x {
@@ -442,7 +442,7 @@
 
 .chat-session-add:hover {
   color: var(--obs-blue);
-  background: rgba(20, 35, 60, 0.4);
+  background: rgba(160, 180, 220, 0.08);
   border-color: rgba(148, 166, 205, 0.12);
 }
 
@@ -1049,7 +1049,7 @@
 }
 
 .fv-preview a {
-  color: var(--obs-blue, #7eb8ff);
+  color: var(--obs-blue);
   text-decoration: none;
 }
 
@@ -1348,9 +1348,9 @@
 }
 
 .chat-modebar__btn--active {
-  color: #7eb8ff;
-  background: rgba(148, 166, 205, 0.22);
-  border-color: rgba(148, 166, 205, 0.31);
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+  border-color: rgba(201, 162, 92, 0.45);
 }
 
 .chat-modebar__seg {
@@ -1958,9 +1958,8 @@
 }
 
 .chat-panel-tab.active {
-  color: var(--obs-blue);
-  border-bottom-color: var(--obs-blue);
-  box-shadow: 0 1px 0 rgba(125, 179, 232, 0.3);
+  color: var(--obs-brass-hi);
+  border-bottom-color: var(--obs-brass);
 }
 
 .chat-panel-tab .tab-badge {
@@ -2203,7 +2202,7 @@
 }
 
 .chat-tool-recent-item:hover {
-  background: rgba(20, 35, 60, 0.4);
+  background: rgba(160, 180, 220, 0.045);
   color: var(--obs-text);
 }
 
@@ -3099,4 +3098,22 @@ button.chat-history-entry {
   color: #f0a8a4;
   border-radius: 4px;
   box-shadow: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7f · 字距规范（§2.2：mono 大写小标签统一 0.2–0.3em，取原型
+   panel-title 值 0.24em；已被 P6/P7a/P7b 覆盖的规则不在此列）
+   ═══════════════════════════════════════════════════════════════ */
+.chat-history-panel-title,
+.chat-history-section,
+.sp-group-title,
+.chat-panel-tab,
+.chat-tools-section-title,
+.chat-context-section-label {
+  letter-spacing: 0.24em;
+}
+
+/* P7f · 浮层家族阴影一致：历史面板并入 0 24px 80px 家族（去 inset 描边影） */
+.chat-history-panel {
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
 }

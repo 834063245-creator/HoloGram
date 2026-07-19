@@ -38,7 +38,7 @@
   font-weight: 600;
   letter-spacing: 1px;
   text-transform: uppercase;
-  color: var(--obs-blue, #68a8ff);
+  color: var(--obs-blue);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -161,7 +161,7 @@
   flex-shrink: 0;
 }
 .ft-col-header.ft-code-hdr {
-  color: var(--obs-blue, #68a8ff);
+  color: var(--obs-blue);
 }
 .ft-col-header.ft-human-hdr {
   color: var(--obs-pass, #3da55d);
@@ -215,7 +215,7 @@
 }
 .ft-code-line.ft-highlight {
   background: rgba(148, 166, 205, 0.05);
-  border-left: 2px solid var(--obs-blue, #68a8ff);
+  border-left: 2px solid var(--obs-blue);
   padding-left: 10px;
 }
 .ft-code-line .ft-ln {

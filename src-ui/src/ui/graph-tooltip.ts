@@ -333,9 +333,9 @@ export class GraphTooltip {
       'display:none;align-items:center;gap:10px;padding:8px 14px;' +
       'background:var(--obs-glass-hi,rgba(4,12,28,0.94));' +
       'backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);' +
-      'border:1px solid rgba(60,100,180,0.3);' +
-      'border-radius:6px;' +
-      'box-shadow:0 0 0 1px rgba(60,100,180,0.05),0 12px 36px rgba(0,0,0,0.5);' +
+      'border:1px solid var(--obs-line);' +
+      'border-radius:9px;' +
+      'box-shadow:0 24px 80px rgba(0,0,0,0.45);' +
       'font-family:var(--obs-font-mono);font-size: calc(10px * var(--font-scale));color:var(--obs-text,#c3daf8);white-space:nowrap;' +
       'opacity:0;transition:opacity 0.16s;';
     this._promptTitleEl = document.createElement('span');
@@ -351,7 +351,7 @@ export class GraphTooltip {
       'border:1px solid rgba(140,100,200,0.25);' +
       'background:rgba(12,22,36,0.6);color:#a088e0;';
     this._promptBtnEl.addEventListener('mouseenter', () => {
-      this._promptBtnEl.style.background = 'rgba(22,36,54,0.7)';
+      this._promptBtnEl.style.background = 'rgba(160,180,220,0.08)';
       this._promptBtnEl.style.color = 'var(--obs-text,#c3daf8)';
     });
     this._promptBtnEl.addEventListener('mouseleave', () => {
@@ -369,13 +369,13 @@ export class GraphTooltip {
     const dismissBtn = document.createElement('button');
     dismissBtn.innerHTML = iconHtml('close', 11);
     dismissBtn.style.cssText =
-      'padding:2px 4px;border:none;background:none;color:rgba(120,160,215,0.5);' +
+      'padding:2px 4px;border:none;background:none;color:var(--obs-text-3);' +
       'cursor:pointer;font-size: calc(11px * var(--font-scale));line-height:0;transition:color var(--obs-snap);';
     dismissBtn.addEventListener('mouseenter', () => {
       dismissBtn.style.color = 'var(--obs-text,#c3daf8)';
     });
     dismissBtn.addEventListener('mouseleave', () => {
-      dismissBtn.style.color = 'rgba(120,160,215,0.5)';
+      dismissBtn.style.color = 'var(--obs-text-3)';
     });
     dismissBtn.addEventListener('click', (e) => {
       e.stopPropagation();

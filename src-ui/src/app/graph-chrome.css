@@ -440,7 +440,7 @@
 }
 
 #detail-card .dc-actions button:hover {
-  background: rgba(22, 36, 54, 0.7);
+  background: rgba(160, 180, 220, 0.08);
   color: var(--obs-text);
 }
 
@@ -516,4 +516,12 @@
   border-color: var(--obs-line);
   border-radius: 12px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7f · 字距规范（§2.2：mono 大写小标签统一 0.2–0.3em，取 0.24em）
+   ═══════════════════════════════════════════════════════════════ */
+#detail-card .dc-section-title,
+#detail-card .dc-actions button {
+  letter-spacing: 0.24em;
 }

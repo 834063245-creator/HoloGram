@@ -326,7 +326,7 @@ const ConstraintsPanelApp: React.FC<{
           style={{
             fontSize: 'calc(13px * var(--font-scale))',
             fontWeight: 600,
-            color: 'var(--obs-blue, #7eb8ff)',
+            color: 'var(--obs-text-2)',
             letterSpacing: '0.5px',
           }}
           dangerouslySetInnerHTML={{ __html: `${iconHtml('constraints', 12)} 约束配置` }}
@@ -336,7 +336,7 @@ const ConstraintsPanelApp: React.FC<{
             className="cs-ask-btn"
             title="问 Agent 关于当前约束配置"
             style={headerBtnStyle}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--obs-blue, #7eb8ff)')}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--obs-blue)')}
             onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--obs-text-2, #4a5568)')}
             onClick={handleAskAgent}
             dangerouslySetInnerHTML={{ __html: iconHtml('agent', 12) }}

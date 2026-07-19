@@ -237,7 +237,7 @@ function ContextView({ core }: { core: ChatCore }) {
           style={{
             fontFamily: 'var(--obs-font-mono)',
             fontSize: 'calc(11px * var(--font-scale))',
-            color: 'rgba(145,180,225,0.55)',
+            color: 'var(--obs-text-2)',
             display: 'flex',
             gap: 16,
           }}

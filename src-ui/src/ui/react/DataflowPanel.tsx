@@ -5,13 +5,14 @@
 // Floating trace browser: left panel = trace list + quick explore, right = trace content.
 // Supports drag (header) and resize (grip).
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { getDataflowQueryParser } from '../dock-config';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
-import { escapeHtml } from './helpers';
 import { iconHtml } from '../icons';
+import { escapeHtml } from './helpers';
 
 interface TraceSummary {
   traceId: string;
@@ -63,11 +64,17 @@ function renderMd(text: string): string {
       if (first.startsWith('### ')) return `<h4 class="df-md-h4">${inlineMd(first.slice(4))}</h4>`;
       if (first === '---' || first === '***' || first === '___') return '<hr class="df-md-hr">';
       if (first.match(/^[-*]\s/)) {
-        const items = lines.filter((l) => l.trim()).map((l) => `<li>${inlineMd(l.replace(/^[-*]\s*/, ''))}</li>`).join('');
+        const items = lines
+          .filter((l) => l.trim())
+          .map((l) => `<li>${inlineMd(l.replace(/^[-*]\s*/, ''))}</li>`)
+          .join('');
         return `<ul class="df-md-ul">${items}</ul>`;
       }
       if (first.match(/^\d+\.\s/)) {
-        const items = lines.filter((l) => l.trim()).map((l) => `<li>${inlineMd(l.replace(/^\d+\.\s*/, ''))}</li>`).join('');
+        const items = lines
+          .filter((l) => l.trim())
+          .map((l) => `<li>${inlineMd(l.replace(/^\d+\.\s*/, ''))}</li>`)
+          .join('');
         return `<ol class="df-md-ol">${items}</ol>`;
       }
       if (first.startsWith('|') && first.endsWith('|')) {
@@ -75,12 +82,15 @@ function renderMd(text: string): string {
         const hCells = lines[0].split('|').filter((c) => c.trim());
         const thead = `<thead><tr>${hCells.map((c) => `<th>${inlineMd(c.trim())}</th>`).join('')}</tr></thead>`;
         const bodyRows = lines.slice(1).filter((l) => !l.match(/^\|[\s\-:|]+\|$/));
-        const tbody = bodyRows.length > 0
-          ? `<tbody>${bodyRows.map((row) => {
-              const cells = row.split('|').filter((c) => c.trim());
-              return `<tr>${cells.map((c) => `<td>${inlineMd(c.trim())}</td>`).join('')}</tr>`;
-            }).join('')}</tbody>`
-          : '';
+        const tbody =
+          bodyRows.length > 0
+            ? `<tbody>${bodyRows
+                .map((row) => {
+                  const cells = row.split('|').filter((c) => c.trim());
+                  return `<tr>${cells.map((c) => `<td>${inlineMd(c.trim())}</td>`).join('')}</tr>`;
+                })
+                .join('')}</tbody>`
+            : '';
         return `<table class="df-md-table">${thead}${tbody}</table>`;
       }
       if (first.startsWith('> ')) {
@@ -110,47 +120,85 @@ function renderEngineExplore(explore: any): string {
 
   if (flow?.path) {
     const steps = flow.path || [];
-    const rows = steps.map((s: any) => {
-      if (s.edge) return `<div class="df-flow-edge"><span class="df-flow-arrow">↓</span><span class="df-flow-ekind">${escapeHtml(s.edge)}</span></div>`;
-      return `<div class="df-flow-node"><span class="df-flow-kind">${escapeHtml(s.kind || '')}</span><span class="df-flow-name">${escapeHtml(s.name || '')}</span><span class="df-flow-loc">${escapeHtml(s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—')}</span></div>`;
-    }).join('');
-    parts.push(`<div class="df-section"><div class="df-section-hdr">数据流路径 (${Math.floor(steps.length / 2) + 1} 节点, ${Math.floor(steps.length / 2)} 跳)</div><div class="df-flow">${rows}</div></div>`);
+    const rows = steps
+      .map((s: any) => {
+        if (s.edge)
+          return `<div class="df-flow-edge"><span class="df-flow-arrow">↓</span><span class="df-flow-ekind">${escapeHtml(s.edge)}</span></div>`;
+        return `<div class="df-flow-node"><span class="df-flow-kind">${escapeHtml(s.kind || '')}</span><span class="df-flow-name">${escapeHtml(s.name || '')}</span><span class="df-flow-loc">${escapeHtml(s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—')}</span></div>`;
+      })
+      .join('');
+    parts.push(
+      `<div class="df-section"><div class="df-section-hdr">数据流路径 (${Math.floor(steps.length / 2) + 1} 节点, ${Math.floor(steps.length / 2)} 跳)</div><div class="df-flow">${rows}</div></div>`,
+    );
   }
 
   const relKeys = Object.keys(relationships);
   if (relKeys.length) {
-    const rows = relKeys.map((kind) => {
-      const edges = relationships[kind] || [];
-      const items = edges.slice(0, 30).map((e: any) => `<div class="df-rel-item"><span class="df-rel-src">${escapeHtml(e.source)}</span> → <span class="df-rel-tgt">${escapeHtml(e.target)}</span></div>`).join('');
-      const more = edges.length > 30 ? `<div class="df-table-more">…及其他 ${edges.length - 30} 条</div>` : '';
-      return `<div class="df-rel-group"><div class="df-rel-kind">${escapeHtml(kind)} (${edges.length})</div>${items}${more}</div>`;
-    }).join('');
+    const rows = relKeys
+      .map((kind) => {
+        const edges = relationships[kind] || [];
+        const items = edges
+          .slice(0, 30)
+          .map(
+            (e: any) =>
+              `<div class="df-rel-item"><span class="df-rel-src">${escapeHtml(e.source)}</span> → <span class="df-rel-tgt">${escapeHtml(e.target)}</span></div>`,
+          )
+          .join('');
+        const more = edges.length > 30 ? `<div class="df-table-more">…及其他 ${edges.length - 30} 条</div>` : '';
+        return `<div class="df-rel-group"><div class="df-rel-kind">${escapeHtml(kind)} (${edges.length})</div>${items}${more}</div>`;
+      })
+      .join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">关系</div>${rows}</div>`);
   }
 
   if (sourceCode.length) {
-    const snippets = sourceCode.slice(0, 8).map((s: any) => `<div class="df-src-item"><div class="df-src-loc">${escapeHtml(s.file || '')}${s.line ? ':' + s.line : ''}</div><pre class="df-src-code">${escapeHtml(s.code || '')}</pre></div>`).join('');
-    const more = sourceCode.length > 8 ? `<div class="df-table-more">…及其他 ${sourceCode.length - 8} 个片段</div>` : '';
-    parts.push(`<div class="df-section"><div class="df-section-hdr">源码 (${sourceCode.length})</div>${snippets}${more}</div>`);
+    const snippets = sourceCode
+      .slice(0, 8)
+      .map(
+        (s: any) =>
+          `<div class="df-src-item"><div class="df-src-loc">${escapeHtml(s.file || '')}${s.line ? ':' + s.line : ''}</div><pre class="df-src-code">${escapeHtml(s.code || '')}</pre></div>`,
+      )
+      .join('');
+    const more =
+      sourceCode.length > 8 ? `<div class="df-table-more">…及其他 ${sourceCode.length - 8} 个片段</div>` : '';
+    parts.push(
+      `<div class="df-section"><div class="df-section-hdr">源码 (${sourceCode.length})</div>${snippets}${more}</div>`,
+    );
   }
 
   const deps = blastRadius.dependents || [];
   const tests = blastRadius.tests || [];
   if (deps.length || tests.length) {
-    const depItems = deps.slice(0, 20).map((d: any) => `<div class="df-br-item">${escapeHtml(d.name)} <span class="df-br-loc">${escapeHtml(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`).join('');
-    const testItems = tests.slice(0, 10).map((t: any) => `<div class="df-br-item df-br-test">🧪 ${escapeHtml(t.name)} <span class="df-br-loc">${escapeHtml(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`).join('');
+    const depItems = deps
+      .slice(0, 20)
+      .map(
+        (d: any) =>
+          `<div class="df-br-item">${escapeHtml(d.name)} <span class="df-br-loc">${escapeHtml(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`,
+      )
+      .join('');
+    const testItems = tests
+      .slice(0, 10)
+      .map(
+        (t: any) =>
+          `<div class="df-br-item df-br-test">🧪 ${escapeHtml(t.name)} <span class="df-br-loc">${escapeHtml(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`,
+      )
+      .join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">影响范围</div>
       ${deps.length ? `<div class="df-br-sub">依赖者 (${deps.length})</div>${depItems}${deps.length > 20 ? `<div class="df-table-more">…及其他 ${deps.length - 20} 个</div>` : ''}` : ''}
       ${tests.length ? `<div class="df-br-sub">相关测试 (${tests.length})</div>${testItems}${tests.length > 10 ? `<div class="df-table-more">…及其他 ${tests.length - 10} 个</div>` : ''}` : ''}</div>`);
   }
 
-  const alertKeys = Object.keys(alerts).filter((k) => alerts[k] && (Array.isArray(alerts[k]) ? alerts[k].length > 0 : true));
+  const alertKeys = Object.keys(alerts).filter(
+    (k) => alerts[k] && (Array.isArray(alerts[k]) ? alerts[k].length > 0 : true),
+  );
   if (alertKeys.length) {
-    const rows = alertKeys.map((k) => {
-      const v = alerts[k];
-      const display = Array.isArray(v) ? `${v.length} 项` : String(v);
-      return `<div class="df-alert-row"><span class="df-alert-key">${escapeHtml(k)}</span>: ${escapeHtml(display)}</div>`;
-    }).join('');
+    const rows = alertKeys
+      .map((k) => {
+        const v = alerts[k];
+        const display = Array.isArray(v) ? `${v.length} 项` : String(v);
+        return `<div class="df-alert-row"><span class="df-alert-key">${escapeHtml(k)}</span>: ${escapeHtml(display)}</div>`;
+      })
+      .join('');
     parts.push(`<div class="df-section"><div class="df-section-hdr">架构提醒</div>${rows}</div>`);
   }
 
@@ -265,10 +313,14 @@ export function DataflowPanel() {
       const trace = JSON.parse(raw);
       const content = trace.content;
       const exploreResult = trace.exploreResult
-        ? typeof trace.exploreResult === 'string' ? JSON.parse(trace.exploreResult) : trace.exploreResult
+        ? typeof trace.exploreResult === 'string'
+          ? JSON.parse(trace.exploreResult)
+          : trace.exploreResult
         : null;
       const dataflowResult = trace.dataflowResult
-        ? typeof trace.dataflowResult === 'string' ? JSON.parse(trace.dataflowResult) : trace.dataflowResult
+        ? typeof trace.dataflowResult === 'string'
+          ? JSON.parse(trace.dataflowResult)
+          : trace.dataflowResult
         : null;
 
       const parts: string[] = [];
@@ -280,7 +332,9 @@ export function DataflowPanel() {
       </div>`);
       if (content) parts.push(`<div class="df-trace-body">${renderMd(content)}</div>`);
       if (exploreResult || dataflowResult) {
-        parts.push(`<details class="df-engine-data"><summary class="df-engine-summary">引擎原始数据</summary><div class="df-engine-body">`);
+        parts.push(
+          `<details class="df-engine-data"><summary class="df-engine-summary">引擎原始数据</summary><div class="df-engine-body">`,
+        );
         if (exploreResult) parts.push(renderEngineExplore(exploreResult));
         if (dataflowResult) parts.push(renderEngineDataflow(dataflowResult));
         parts.push(`</div></details>`);
@@ -294,19 +348,22 @@ export function DataflowPanel() {
 
   // ── Delete trace ──
 
-  const deleteTrace = useCallback(async (e: React.MouseEvent, tid: string) => {
-    e.stopPropagation();
-    try {
-      await rpc<string>('dataflow_delete', { traceId: tid });
-      setTraces((prev) => prev.filter((t) => t.traceId !== tid));
-      if (selectedTraceId === tid) {
-        setSelectedTraceId(null);
-        setRightHtml('');
+  const deleteTrace = useCallback(
+    async (e: React.MouseEvent, tid: string) => {
+      e.stopPropagation();
+      try {
+        await rpc<string>('dataflow_delete', { traceId: tid });
+        setTraces((prev) => prev.filter((t) => t.traceId !== tid));
+        if (selectedTraceId === tid) {
+          setSelectedTraceId(null);
+          setRightHtml('');
+        }
+      } catch (err) {
+        console.error('[dataflow] delete failed:', err);
       }
-    } catch (err) {
-      console.error('[dataflow] delete failed:', err);
-    }
-  }, [selectedTraceId]);
+    },
+    [selectedTraceId],
+  );
 
   // ── Quick explore ──
 
@@ -316,7 +373,10 @@ export function DataflowPanel() {
     setRightHtml('<div class="df-loading">探索中…</div>');
 
     try {
-      let raw = await rpc<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols: [], includeSource: true } });
+      let raw = await rpc<string>('hologram_call', {
+        tool: 'explore_deps',
+        args: { query, symbols: [], includeSource: true },
+      });
       let explore = JSON.parse(raw);
 
       const onParseQuery = getDataflowQueryParser();
@@ -324,16 +384,27 @@ export function DataflowPanel() {
         try {
           const symbols = await onParseQuery(query);
           if (symbols.length > 0) {
-            raw = await rpc<string>('hologram_call', { tool: 'explore_deps', args: { query, symbols, includeSource: true } });
+            raw = await rpc<string>('hologram_call', {
+              tool: 'explore_deps',
+              args: { query, symbols, includeSource: true },
+            });
             explore = JSON.parse(raw);
           }
-        } catch { /* Agent unavailable */ }
+        } catch {
+          /* Agent unavailable */
+        }
       }
 
       const fileSet = new Set<string>();
-      (explore.flow?.path || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
-      (explore.sourceCode || []).forEach((s: any) => { if (s.file) fileSet.add(s.file); });
-      (explore.blastRadius?.dependents || []).forEach((d: any) => { if (d.file) fileSet.add(d.file); });
+      (explore.flow?.path || []).forEach((s: any) => {
+        if (s.file) fileSet.add(s.file);
+      });
+      (explore.sourceCode || []).forEach((s: any) => {
+        if (s.file) fileSet.add(s.file);
+      });
+      (explore.blastRadius?.dependents || []).forEach((d: any) => {
+        if (d.file) fileSet.add(d.file);
+      });
 
       let dfPart = '';
       const files = Array.from(fileSet);
@@ -341,7 +412,9 @@ export function DataflowPanel() {
         try {
           const dfRaw = await rpc<string>('hologram_call', { tool: 'trace_dataflow', args: { files } });
           dfPart = renderEngineDataflow(JSON.parse(dfRaw));
-        } catch { /* optional */ }
+        } catch {
+          /* optional */
+        }
       }
 
       setRightHtml(renderEngineExplore(explore) + dfPart);
@@ -352,52 +425,58 @@ export function DataflowPanel() {
 
   // ── Drag ──
 
-  const onDragStart = useCallback((e: React.PointerEvent) => {
-    draggingRef.current = true;
-    dragStartRef.current = { x: e.clientX, y: e.clientY, elX: pos.x, elY: pos.y, w: 0, h: 0 };
-    headerRef.current?.setPointerCapture(e.pointerId);
+  const onDragStart = useCallback(
+    (e: React.PointerEvent) => {
+      draggingRef.current = true;
+      dragStartRef.current = { x: e.clientX, y: e.clientY, elX: pos.x, elY: pos.y, w: 0, h: 0 };
+      headerRef.current?.setPointerCapture(e.pointerId);
 
-    const onMove = (ev: PointerEvent) => {
-      if (!draggingRef.current) return;
-      setPos({
-        x: Math.max(0, dragStartRef.current.elX + ev.clientX - dragStartRef.current.x),
-        y: Math.max(0, dragStartRef.current.elY + ev.clientY - dragStartRef.current.y),
-      });
-    };
-    const onEnd = (ev: PointerEvent) => {
-      draggingRef.current = false;
-      headerRef.current?.releasePointerCapture(ev.pointerId);
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onEnd);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onEnd);
-  }, [pos]);
+      const onMove = (ev: PointerEvent) => {
+        if (!draggingRef.current) return;
+        setPos({
+          x: Math.max(0, dragStartRef.current.elX + ev.clientX - dragStartRef.current.x),
+          y: Math.max(0, dragStartRef.current.elY + ev.clientY - dragStartRef.current.y),
+        });
+      };
+      const onEnd = (ev: PointerEvent) => {
+        draggingRef.current = false;
+        headerRef.current?.releasePointerCapture(ev.pointerId);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onEnd);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onEnd);
+    },
+    [pos],
+  );
 
   // ── Resize ──
 
-  const onResizeStart = useCallback((e: React.PointerEvent) => {
-    e.stopPropagation();
-    resizingRef.current = true;
-    dragStartRef.current = { x: e.clientX, y: e.clientY, elX: 0, elY: 0, w: size.w, h: size.h };
-    gripRef.current?.setPointerCapture(e.pointerId);
+  const onResizeStart = useCallback(
+    (e: React.PointerEvent) => {
+      e.stopPropagation();
+      resizingRef.current = true;
+      dragStartRef.current = { x: e.clientX, y: e.clientY, elX: 0, elY: 0, w: size.w, h: size.h };
+      gripRef.current?.setPointerCapture(e.pointerId);
 
-    const onMove = (ev: PointerEvent) => {
-      if (!resizingRef.current) return;
-      setSize({
-        w: Math.max(480, dragStartRef.current.w + ev.clientX - dragStartRef.current.x),
-        h: Math.max(300, dragStartRef.current.h + ev.clientY - dragStartRef.current.y),
-      });
-    };
-    const onEnd = (ev: PointerEvent) => {
-      resizingRef.current = false;
-      gripRef.current?.releasePointerCapture(ev.pointerId);
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onEnd);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onEnd);
-  }, [size]);
+      const onMove = (ev: PointerEvent) => {
+        if (!resizingRef.current) return;
+        setSize({
+          w: Math.max(480, dragStartRef.current.w + ev.clientX - dragStartRef.current.x),
+          h: Math.max(300, dragStartRef.current.h + ev.clientY - dragStartRef.current.y),
+        });
+      };
+      const onEnd = (ev: PointerEvent) => {
+        resizingRef.current = false;
+        gripRef.current?.releasePointerCapture(ev.pointerId);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onEnd);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onEnd);
+    },
+    [size],
+  );
 
   return (
     <div
@@ -423,7 +502,12 @@ export function DataflowPanel() {
         onPointerDown={onDragStart}
       >
         <span className="df-panel-title">数据流</span>
-        <button className="df-panel-close" onPointerDown={(e) => e.stopPropagation()} onClick={onClose} dangerouslySetInnerHTML={{ __html: iconHtml('close', 15) }} />
+        <button
+          className="df-panel-close"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onClose}
+          dangerouslySetInnerHTML={{ __html: iconHtml('close', 15) }}
+        />
       </div>
 
       {/* Body */}
@@ -436,18 +520,25 @@ export function DataflowPanel() {
             minWidth: 180,
             display: 'flex',
             flexDirection: 'column',
-            borderRight: '1px solid rgba(40,70,130,0.15)',
+            borderRight: '1px solid var(--obs-line-soft)',
           }}
         >
           <div className="df-trace-list-hdr">
             <span>已存追踪 ({traces.length})</span>
-            <button className="df-hist-clear" onClick={loadTraceList} dangerouslySetInnerHTML={{ __html: `${iconHtml('search', 11)} 刷新` }} />
+            <button
+              className="df-hist-clear"
+              onClick={loadTraceList}
+              dangerouslySetInnerHTML={{ __html: `${iconHtml('search', 11)} 刷新` }}
+            />
           </div>
           <div className="df-hist-list" style={{ flex: 1, overflow: 'auto' }}>
             {traces.length === 0 ? (
               <div className="df-empty" style={{ padding: '16px 12px', lineHeight: 1.6 }}>
-                暂无已存追踪。<br /><br />
-                在对话中让 Agent 追踪数据流，<br />
+                暂无已存追踪。
+                <br />
+                <br />
+                在对话中让 Agent 追踪数据流，
+                <br />
                 结果会出现在这里。
               </div>
             ) : (
@@ -458,8 +549,7 @@ export function DataflowPanel() {
                   onClick={() => selectTrace(t.traceId)}
                 >
                   <div className="df-hist-query">
-                    {t.query.length > 50 ? t.query.slice(0, 50) + '\u2026' : t.query}
-                    {' '}
+                    {t.query.length > 50 ? t.query.slice(0, 50) + '\u2026' : t.query}{' '}
                     <span className={t.hasContent ? 'df-trace-agent-badge' : 'df-trace-engine-badge'}>
                       {t.hasContent ? 'Agent' : '引擎'}
                     </span>
@@ -478,7 +568,9 @@ export function DataflowPanel() {
 
           {/* Quick explore */}
           <div className="df-query-area">
-            <div className="df-hist-sub" style={{ marginBottom: 4 }}>引擎直查（不保存）</div>
+            <div className="df-hist-sub" style={{ marginBottom: 4 }}>
+              引擎直查（不保存）
+            </div>
             <textarea
               className="df-query-input"
               placeholder="符号名或查询…"
@@ -492,7 +584,11 @@ export function DataflowPanel() {
                 }
               }}
             />
-            <button className="df-query-btn" onClick={() => doExplore(exploreQuery.trim())} dangerouslySetInnerHTML={{ __html: `${iconHtml('search', 13)} 探索` }} />
+            <button
+              className="df-query-btn"
+              onClick={() => doExplore(exploreQuery.trim())}
+              dangerouslySetInnerHTML={{ __html: `${iconHtml('search', 13)} 探索` }}
+            />
           </div>
         </div>
 
