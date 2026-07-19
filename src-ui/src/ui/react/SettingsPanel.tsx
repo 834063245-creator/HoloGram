@@ -7,6 +7,7 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
@@ -17,7 +18,7 @@ import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
 
-type Tab = 'provider' | 'agent' | 'display' | 'languages';
+type Tab = 'provider' | 'agent' | 'display' | 'languages' | 'about';
 
 interface LspServer {
   command: string;
@@ -48,6 +49,8 @@ const SettingsPanelApp: React.FC<{
 }> = ({ onClose, onSave }) => {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [activeTab, setActiveTab] = useState<Tab>('provider');
+  const [appVersion, setAppVersion] = useState('…');
+  useEffect(() => { getVersion().then(setAppVersion).catch(() => setAppVersion('9.0.1')); }, []);
   const [dirty, setDirty] = useState(false);
 
   // Provider add form
@@ -216,6 +219,7 @@ const SettingsPanelApp: React.FC<{
               ['agent', 'code', 'Agent'],
               ['display', 'mode-standard', '显示'],
               ['languages', 'code', '语言依赖'],
+              ['about', 'info', '关于'],
             ] as const
           ).map(([id, icon, label]) => (
             <button
@@ -646,6 +650,32 @@ const SettingsPanelApp: React.FC<{
                 </div>
               </>
             )}
+          </div>
+
+          {/* ═══ About Tab ═══ */}
+          <div
+            className="sp-tab-content"
+            data-tab="about"
+            style={{ display: activeTab === 'about' ? '' : 'none' }}
+          >
+            <div className="sp-section">
+              <div className="sp-section-title">HoloGram 全息观测站</div>
+              <div className="sp-hint" style={{ marginBottom: 16 }}>
+                深空代码拓扑 · AI 辅助分析
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '6px 12px', fontSize: 12 }}>
+                <span style={{ color: 'var(--obs-text-2)' }}>版本</span>
+                <span style={{ fontFamily: 'var(--obs-font-mono)' }}>{appVersion}</span>
+                <span style={{ color: 'var(--obs-text-2)' }}>许可</span>
+                <span>MIT</span>
+                <span style={{ color: 'var(--obs-text-2)' }}>作者</span>
+                <span>Wenbing Jing</span>
+              </div>
+            </div>
+            <div className="sp-section">
+              <div className="sp-section-title">系统</div>
+              <div className="sp-hint">版本信息、检查更新及引擎状态将在后续版本中完善。</div>
+            </div>
           </div>
         </div>
 
