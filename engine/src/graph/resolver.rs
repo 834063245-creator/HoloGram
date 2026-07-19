@@ -102,18 +102,25 @@ impl CrossFileResolver {
             if !edge.cross_file {
                 continue;
             }
-            // Try to resolve source if not in graph
+            // Try to resolve source if not in graph.
+            // Use edge.source itself to infer the source language for filtering.
+            let src_lang = infer_language(&edge.source);
             let src_id = if graph.nodes.contains_key(&edge.source) {
                 Some(edge.source.clone())
             } else {
-                resolve_name(&edge.source, &name_index, &stem_index, graph)
+                resolve_name(&edge.source, &name_index, &stem_index, graph, src_lang)
             };
 
-            // Try to resolve target if not in graph
+            // Try to resolve target if not in graph.
+            // Use the source's language to prefer same-language targets.
+            let tgt_lang = src_id.as_ref()
+                .map(|id| infer_language(id))
+                .flatten()
+                .or(src_lang);
             let tgt_id = if graph.nodes.contains_key(&edge.target) {
                 Some(edge.target.clone())
             } else {
-                resolve_name(&edge.target, &name_index, &stem_index, graph)
+                resolve_name(&edge.target, &name_index, &stem_index, graph, tgt_lang)
             };
 
             let src_ok = src_id.is_some();
@@ -254,12 +261,73 @@ fn short_name(full: &str) -> String {
     full.rsplit('.').next().unwrap_or(full).to_string()
 }
 
+/// Infer the language family from a node ID or file path.
+///
+/// Scans dot-separated segments for known file extensions and returns
+/// the language family as a static string. Used to filter cross-file
+/// resolution candidates so that e.g. a TypeScript function's call to
+/// `clear` resolves to another TS `clear`, not a Rust `clear`.
+///
+/// Node IDs encode the file extension as a segment:
+///   "D:...events.ts.EventBus.clear" → Some("typescript")
+///   "D:...graph.rs.Graph.clear"     → Some("rust")
+///
+/// Paths work the same way:
+///   "src-ui/src/ui/events.ts"       → Some("typescript")
+///   "engine/src/graph/graph.rs"     → Some("rust")
+pub fn infer_language(id_or_path: &str) -> Option<&'static str> {
+    let lower = id_or_path.to_lowercase();
+    for segment in lower.split('.') {
+        match segment {
+            "rs" => return Some("rust"),
+            "ts" | "tsx" | "js" | "jsx" | "mjs" | "mts" | "cts" => return Some("typescript"),
+            "py" | "pyi" => return Some("python"),
+            "go" => return Some("go"),
+            "java" => return Some("java"),
+            "cs" => return Some("csharp"),
+            "rb" => return Some("ruby"),
+            "kt" | "kts" => return Some("kotlin"),
+            "php" => return Some("php"),
+            "swift" => return Some("swift"),
+            "dart" => return Some("dart"),
+            "lua" => return Some("lua"),
+            "zig" => return Some("zig"),
+            "r" => return Some("r"),
+            "scala" => return Some("scala"),
+            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" | "c" | "h" => return Some("c_cpp"),
+            "ex" | "exs" | "erl" | "hrl" => return Some("elixir_erlang"),
+            "hs" => return Some("haskell"),
+            "ml" | "mli" => return Some("ocaml"),
+            "svelte" => return Some("svelte"),
+            "vue" => return Some("vue"),
+            _ => continue,
+        }
+    }
+    None
+}
+
+/// Filter candidates to those matching the given language, if known.
+/// Returns a Vec of references to the matching candidates.
+/// If `lang` is None or no same-language candidates exist, returns all candidates.
+fn filter_by_language<'a>(
+    candidates: &'a [String],
+    lang: Option<&str>,
+) -> Vec<&'a String> {
+    let all: Vec<&String> = candidates.iter().collect();
+    let same_lang: Vec<&String> = candidates
+        .iter()
+        .filter(|c| lang == infer_language(c))
+        .collect();
+    if same_lang.is_empty() { all } else { same_lang }
+}
+
 /// Try to resolve a name reference to an actual node ID.
 fn resolve_name(
     name: &str,
     name_index: &HashMap<String, Vec<String>>,
     stem_index: &HashMap<String, Vec<String>>,
     graph: &Graph,
+    source_lang: Option<&str>,
 ) -> Option<String> {
     // ── Strategy 1: exact match ──
     if graph.nodes.contains_key(name) {
@@ -270,17 +338,18 @@ fn resolve_name(
     // Works for bare fn/class names: "fn_a" → "a.rs.fn_a"
     let short = short_name(name);
     if let Some(candidates) = name_index.get(&short) {
-        if candidates.len() == 1 && !name.contains('.') {
-            return Some(candidates[0].clone());
+        let filtered = filter_by_language(candidates, source_lang);
+        if filtered.len() == 1 && !name.contains('.') {
+            return Some(filtered[0].clone());
         }
         // Multiple candidates — pick the most qualified (longest) match
-        if let Some(c) = best_qualified_match(name, candidates) {
+        if let Some(c) = best_qualified_match(name, &filtered) {
             return Some(c);
         }
         // ponytail: bare names can't suffix-match (match_len < 2).
         // Fall back to heuristic: prefer Function/Class, then shortest path.
         if !name.contains('.') {
-            if let Some(c) = best_bare_match(candidates, graph) {
+            if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
                 return Some(c);
             }
         }
@@ -291,15 +360,16 @@ fn resolve_name(
     let stem = file_stem(name);
     if stem != short {
         if let Some(candidates) = stem_index.get(&stem) {
-            if candidates.len() == 1 {
-                return Some(candidates[0].clone());
+            let filtered = filter_by_language(candidates, source_lang);
+            if filtered.len() == 1 {
+                return Some(filtered[0].clone());
             }
-            if let Some(c) = best_qualified_match(name, candidates) {
+            if let Some(c) = best_qualified_match(name, &filtered) {
                 return Some(c);
             }
             // Same bare-name fallback for stem matches
             if !name.contains('.') {
-                if let Some(c) = best_bare_match(candidates, graph) {
+                if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
                     return Some(c);
                 }
             }
@@ -312,10 +382,11 @@ fn resolve_name(
     if normalized != *name {
         let short_norm = short_name(&normalized);
         if let Some(candidates) = name_index.get(&short_norm) {
-            if candidates.len() == 1 {
-                return Some(candidates[0].clone());
+            let filtered = filter_by_language(candidates, source_lang);
+            if filtered.len() == 1 {
+                return Some(filtered[0].clone());
             }
-            if let Some(c) = best_qualified_match(&normalized, candidates) {
+            if let Some(c) = best_qualified_match(&normalized, &filtered) {
                 return Some(c);
             }
         }
@@ -342,14 +413,15 @@ fn resolve_name(
             stripped = stripped[dot_pos + 1..].to_string();
             let short = short_name(&stripped);
             if let Some(candidates) = name_index.get(&short) {
-                if candidates.len() == 1 {
-                    return Some(candidates[0].clone());
+                let filtered = filter_by_language(candidates, source_lang);
+                if filtered.len() == 1 {
+                    return Some(filtered[0].clone());
                 }
-                if let Some(c) = best_qualified_match(&stripped, candidates) {
+                if let Some(c) = best_qualified_match(&stripped, &filtered) {
                     return Some(c);
                 }
                 if !stripped.contains('.') {
-                    if let Some(c) = best_bare_match(candidates, graph) {
+                    if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
                         return Some(c);
                     }
                 }
@@ -363,9 +435,9 @@ fn resolve_name(
 /// Pick the best candidate when multiple nodes share the same short name.
 /// "models.User" vs candidates ["auth.models.User", "shop.models.User"]
 /// → matches suffix-wise against "auth.models.User" (both end with "models.User").
-fn best_qualified_match(name: &str, candidates: &[String]) -> Option<String> {
+fn best_qualified_match(name: &str, candidates: &[&String]) -> Option<String> {
     let name_parts: Vec<&str> = name.rsplit('.').collect();
-    let mut best: Option<&String> = None;
+    let mut best: Option<&&String> = None;
     let mut best_score = 0usize;
 
     for candidate in candidates {
@@ -380,7 +452,7 @@ fn best_qualified_match(name: &str, candidates: &[String]) -> Option<String> {
         }
     }
 
-    best.cloned()
+    best.map(|c| (*c).clone())
 }
 
 /// Fallback for bare names with multiple candidates.
@@ -388,19 +460,21 @@ fn best_qualified_match(name: &str, candidates: &[String]) -> Option<String> {
 /// When the query is a single bare name (e.g., "render") and multiple
 /// nodes share that short name, suffix matching is impossible. This
 /// heuristic picks the best candidate by:
-///   1. Prefer Function over Class over other node kinds
-///   2. Prefer shorter paths (less nested = more likely to be the intended target)
+///   1. Prefer same-language candidates (+10000 bonus)
+///   2. Prefer Function over Class over other node kinds
+///   3. Prefer shorter paths (less nested = more likely to be the intended target)
 ///
 /// ponytail: this is a heuristic, not a guarantee. For precise call resolution,
 /// use hologram_resolve_call (LSP-based) on individual edges.
-fn best_bare_match(candidates: &[String], graph: &Graph) -> Option<String> {
+fn best_bare_match(candidates: &[&String], graph: &Graph, source_lang: Option<&str>) -> Option<String> {
     use super::node::NodeKind;
 
-    // Score: kind priority (lower = better) * 1000 + path depth
-    let scored: Vec<(&String, usize)> = candidates
+    // Score: lang_match * 100000 + kind_prio * 1000 + path depth
+    // Same-language candidates always outrank cross-language ones.
+    let scored: Vec<(&&String, usize)> = candidates
         .iter()
         .filter_map(|c| {
-            let kind_prio = match graph.nodes.get(c).map(|n| &n.kind) {
+            let kind_prio = match graph.nodes.get(*c).map(|n| &n.kind) {
                 Some(NodeKind::Function) => 0,
                 Some(NodeKind::Class) => 1,
                 Some(NodeKind::Symbol) => 2,
@@ -408,11 +482,16 @@ fn best_bare_match(candidates: &[String], graph: &Graph) -> Option<String> {
                 _ => 4,
             };
             let depth = c.split('.').count();
-            Some((c, kind_prio * 1000 + depth))
+            let lang_bonus = if source_lang.is_some() && infer_language(c) == source_lang {
+                100000
+            } else {
+                0
+            };
+            Some((c, lang_bonus + kind_prio * 1000 + depth))
         })
         .collect();
 
-    scored.iter().min_by_key(|(_, score)| *score).map(|(c, _)| (*c).clone())
+    scored.iter().min_by_key(|(_, score)| *score).map(|(c, _)| (**c).clone())
 }
 
 #[cfg(test)]
@@ -729,5 +808,78 @@ mod tests {
         // Both Function nodes have depth 3, so first in HashMap order wins
         let target_kind = g.nodes.get(&e.target).map(|n| &n.kind);
         assert_eq!(target_kind, Some(&NodeKind::Function), "should prefer Function over Variable");
+    }
+
+    #[test]
+    fn test_cross_language_isolation_ts_caller_to_rs_target_blocked() {
+        let mut g = Graph::new();
+        // Two "clear" functions: one in Rust, one in TypeScript
+        g.add_node(Node::new(
+            "D:.HoloGramHG.engine.src.graph.graph.rs.Graph.clear",
+            "clear", NodeKind::Function));
+        g.add_node(Node::new(
+            "D:.HoloGramHG.src-ui.src.ui.events.ts.EventBus.clear",
+            "clear", NodeKind::Function));
+        // A TS file calling clear()
+        g.add_node(Node::new(
+            "D:.HoloGramHG.src-ui.src.ui.chat-store.ts.ChatStore.save",
+            "save", NodeKind::Function));
+        g.add_edge(cross_edge("e1",
+            "D:.HoloGramHG.src-ui.src.ui.chat-store.ts.ChatStore.save",
+            "clear", EdgeKind::Calls));
+
+        let _resolved = CrossFileResolver::resolve(&mut g);
+        let edge = g.get_edge("e1_resolved").expect("edge should be resolved");
+        assert!(
+            edge.target.contains(".ts."),
+            "TS caller must resolve to same-language target, got {}",
+            edge.target
+        );
+    }
+
+    #[test]
+    fn test_cross_language_isolation_rust_caller_to_rust_target() {
+        let mut g = Graph::new();
+        g.add_node(Node::new(
+            "D:.HoloGramHG.engine.src.engine.pipeline.rs.Pipeline.start",
+            "start", NodeKind::Function));
+        g.add_node(Node::new(
+            "D:.HoloGramHG.src-ui.src.agent.execution-state.ts.createExecState.start",
+            "start", NodeKind::Function));
+        g.add_node(Node::new(
+            "D:.HoloGramHG.engine.src.main.rs.main",
+            "main", NodeKind::Function));
+        g.add_edge(cross_edge("e1",
+            "D:.HoloGramHG.engine.src.main.rs.main",
+            "start", EdgeKind::Calls));
+
+        let _resolved = CrossFileResolver::resolve(&mut g);
+        let edge = g.get_edge("e1_resolved").expect("edge should be resolved");
+        assert!(
+            edge.target.contains(".rs."),
+            "Rust caller must resolve to same-language target, got {}",
+            edge.target
+        );
+    }
+
+    #[test]
+    fn test_cross_language_filter_does_not_break_same_language() {
+        let mut g = Graph::new();
+        g.add_node(Node::new(
+            "django.shortcuts.py.render",
+            "render", NodeKind::Function));
+        g.add_node(Node::new(
+            "flask.views.py.render",
+            "render", NodeKind::Function));
+        g.add_node(Node::new(
+            "app.views.py.index",
+            "index", NodeKind::Function));
+        g.add_edge(cross_edge("e1",
+            "app.views.py.index",
+            "render", EdgeKind::Calls));
+
+        let _resolved = CrossFileResolver::resolve(&mut g);
+        assert!(g.get_edge("e1_resolved").is_some(),
+            "same-language resolution must still work");
     }
 }

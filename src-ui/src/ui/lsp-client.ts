@@ -113,7 +113,6 @@ function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): l
     filterText: item.filterText,
     insertText: insertText ?? item.insertText ?? item.label,
     range,
-
   } as languages.CompletionItem;
 }
 
@@ -176,7 +175,7 @@ export async function stopAllLsp(): Promise<void> {
   hoverProviders = [];
   definitionProviders = [];
   referenceProviders = [];
-  for (const [language, sid] of lspSessions) {
+  for (const [_language, sid] of lspSessions) {
     await rpc('lsp_stop', { sessionId: sid }).catch(() => {});
   }
   lspSessions.clear();
@@ -359,12 +358,12 @@ export function registerReferencesProvider(
 
 /** Listen for LSP diagnostics and apply markers to the editor. */
 export function listenForDiagnostics(
-  monacoEditor: editor.IStandaloneCodeEditor,
+  _monacoEditor: editor.IStandaloneCodeEditor,
   monaco: typeof import('monaco-editor'),
 ): void {
   listen<{ session_id: number; message: any }>('lsp-message', (event) => {
     const msg = (event as any).payload?.message;
-    if (!msg || msg.method !== 'textDocument/publishDiagnostics') return;
+    if (msg?.method !== 'textDocument/publishDiagnostics') return;
     const params = msg.params;
     if (!params?.uri || !params?.diagnostics) return;
 

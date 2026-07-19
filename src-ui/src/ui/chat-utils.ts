@@ -50,7 +50,7 @@ export function formatDiffResult(body: string, argsJson?: string): string {
   if (argsJson) {
     try {
       const args = JSON.parse(argsJson);
-      filePath = args['file_path'] || args['path'] || '';
+      filePath = args.file_path || args.path || '';
     } catch {}
   }
 
@@ -61,8 +61,8 @@ export function formatDiffResult(body: string, argsJson?: string): string {
     try {
       const args = JSON.parse(argsJson);
       // Agent sends camelCase (tool.ts), but also handle snake_case from any legacy paths
-      oldStr = args['oldString'] || args['old_string'] || args['old_text'] || args['oldText'] || '';
-      newStr = args['newString'] || args['new_string'] || args['new_text'] || args['newText'] || args['content'] || '';
+      oldStr = args.oldString || args.old_string || args.old_text || args.oldText || '';
+      newStr = args.newString || args.new_string || args.new_text || args.newText || args.content || '';
     } catch {}
   }
 
@@ -157,7 +157,7 @@ export function computeSimpleDiff(
 // ═══════════════════════════════════════════════════════════════════
 
 export function computeCostStr(pricing: AgentEvent['pricing'], usage: AgentEvent['usage']): string {
-  if (!pricing || !usage || !usage.total_tokens) return '';
+  if (!pricing || !usage?.total_tokens) return '';
   const cost =
     ((usage.cache_hit_tokens || 0) * pricing.cache_hit +
       (usage.cache_miss_tokens || 0) * pricing.input +

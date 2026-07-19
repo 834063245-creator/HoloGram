@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GRAPH_ENRICH_TOOLS, GRAPH_PREFLIGHT_TOOLS } from '../src/agent/hooks';
 import type { ToolExecutor } from '../src/agent/tool';
-import { createCodingTools, ToolRegistry } from '../src/agent/tool';
+import { createCodingTools } from '../src/agent/tool';
 
 // ── 单一事实来源：工具名交叉验证 ──
 // 任何人在 tool.ts 里改了名字，或在 hooks.ts 里加了名字但没注册工具，

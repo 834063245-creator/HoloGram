@@ -31,7 +31,11 @@ function buildToken(kind: string, name: string): string {
   if (kind === '节点') {
     return `\`${name}\``;
   }
-  const base = name.split('/').pop()?.replace(/\.\w+$/, '') || name;
+  const base =
+    name
+      .split('/')
+      .pop()
+      ?.replace(/\.\w+$/, '') || name;
   return `[@${base}](${name})`;
 }
 
@@ -136,13 +140,13 @@ export const AtAutocomplete = forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [visible, query, panelId, nodeNames.join(',')]);
+  }, [visible, query, panelId, nodeNames]);
 
   // Scroll active item into view
   useEffect(() => {
     const el = popupRef.current?.querySelector('.at-item.active') as HTMLElement;
     el?.scrollIntoView({ block: 'nearest' });
-  }, [activeIdx]);
+  }, []);
 
   const applySelect = useCallback((item: AtItem) => {
     onSelectRef.current(atPosRef.current, buildToken(item.kind, item.name));

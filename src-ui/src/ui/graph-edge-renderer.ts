@@ -101,8 +101,8 @@ export class GraphEdgeRenderer {
         });
         // ponytail: static edge opacity — no per-frame breathing, set once
         const baseLines = new LineSegments2(baseGeo, baseMat);
-        baseLines.userData['edgeDepth'] = g.depth;
-        baseLines.userData['edgeType'] = g.edgeType;
+        baseLines.userData.edgeDepth = g.depth;
+        baseLines.userData.edgeType = g.edgeType;
         baseLines.computeLineDistances();
         this.host.edgeGroup.add(baseLines);
         this.host.edgeLineGroups.push(baseLines);
@@ -174,17 +174,17 @@ export class GraphEdgeRenderer {
     for (let i = 0; i < this.host._nodeCount; i++) {
       this.host._nodeMagCache[i] = 0.15 + 0.85 * (Math.log1p(this.host.deg[i]) / logMax);
       if (gAttr) {
-        (gAttr['mag'].array as Float32Array)[i] = this.host._nodeMagCache[i];
-        (gAttr['risk'].array as Float32Array)[i] = this.host.l34Count[i] || 0;
+        (gAttr.mag.array as Float32Array)[i] = this.host._nodeMagCache[i];
+        (gAttr.risk.array as Float32Array)[i] = this.host.l34Count[i] || 0;
       }
     }
     if (gAttr) {
-      gAttr['mag'].needsUpdate = true;
-      gAttr['risk'].needsUpdate = true;
+      gAttr.mag.needsUpdate = true;
+      gAttr.risk.needsUpdate = true;
     }
     if (g2Attr) {
-      g2Attr['mag'].needsUpdate = true;
-      g2Attr['risk'].needsUpdate = true;
+      g2Attr.mag.needsUpdate = true;
+      g2Attr.risk.needsUpdate = true;
     }
 
     this._disposeEdges();

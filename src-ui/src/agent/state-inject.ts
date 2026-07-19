@@ -13,7 +13,6 @@
 
 import { rpc } from '../bridge';
 import {
-  cacheStore,
   getBlameCache,
   getBuildResultCache,
   getCheckCache,
@@ -28,6 +27,7 @@ import {
   setGitCache,
   setTimelineCache,
 } from './cache-store';
+import type { BuildResult, CheckStatusSummary } from './cache-store';
 
 export type { BuildResult, CheckStatusSummary, GitStatusSummary, TimelineEvent } from './cache-store';
 
@@ -102,7 +102,7 @@ export async function refreshGitBlame(projectPath: string, filePath: string): Pr
       if (line.startsWith('author-time ')) latestTime = line.slice(12).trim();
     }
     if (latestAuthor) {
-      const ago = latestTime ? timeAgo(parseInt(latestTime) * 1000) : '';
+      const ago = latestTime ? timeAgo(parseInt(latestTime, 10) * 1000) : '';
       setBlameEntry(
         filePath,
         `${latestAuthor}${ago ? ', ' + ago : ''}${authors.size > 1 ? ` (+${authors.size - 1} others)` : ''}`,
@@ -122,7 +122,7 @@ export function getGitBlameCached(filePath: string): string | null {
 
 /** Called by CheckPanel.update() when a new check result arrives. */
 export function cacheCheckResult(result: ReturnType<typeof getCheckCache> & {}): void {
-  setCheckCache(result as any);
+  setCheckCache(result as CheckStatusSummary);
 }
 
 /** Sync read for hooks. */
@@ -134,7 +134,7 @@ export function getCheckStatusCached() {
 
 /** Called by run_shell hook when a test/build command finishes. */
 export function cacheBuildResult(result: ReturnType<typeof getBuildResultCache> & {}): void {
-  setBuildResultCache(result as any);
+  setBuildResultCache(result as BuildResult);
 }
 
 /** Format cached build/test result for turn-start. Consumed on read. */

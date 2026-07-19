@@ -134,7 +134,9 @@ export class MemoryManager {
       try {
         const entries = await this.list(scope);
         for (const e of entries) active.add(e.name + '.md');
-      } catch { /* scope not ready yet */ }
+      } catch {
+        /* scope not ready yet */
+      }
     }
     if (active.size === 0) return records; // can't verify, keep all
     const markerRe = /^\[memory:([^\]]+)\]/;
@@ -343,9 +345,10 @@ export class MemoryManager {
     let itemsToLoad = allItems;
     if (allItems.length > MEMORY_LIMIT && graphNodes && graphNodes.length > 0) {
       // Score each non-fact memory by relevance to graph nodes
+      const gn = graphNodes ?? [];
       const scored = others.map((item) => ({
         item,
-        score: scoreMemoryRelevance(item.mf, graphNodes!),
+        score: scoreMemoryRelevance(item.mf, gn),
       }));
       scored.sort((a, b) => b.score - a.score);
 
@@ -699,7 +702,8 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         properties: {
           query: {
             type: 'string',
-            description: '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
+            description:
+              '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
           },
           topK: {
             type: 'number',

@@ -35,10 +35,10 @@ interface LspData {
 
 // ── Helpers ──
 
-const escapeAttr = (s: string) =>
+const _escapeAttr = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const _escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // ── Main Component ──
 
@@ -358,7 +358,7 @@ const SettingsPanelApp: React.FC<{
                   value={active?.maxTokens || 0}
                   min={0}
                   step={1000}
-                  onChange={(e) => updateProvider('maxTokens', parseInt(e.target.value) || 0)}
+                  onChange={(e) => updateProvider('maxTokens', parseInt(e.target.value, 10) || 0)}
                   placeholder="0"
                 />
               </div>
@@ -451,7 +451,10 @@ const SettingsPanelApp: React.FC<{
                   min={0}
                   step={1000}
                   onChange={(e) => {
-                    setSettings((s) => ({ ...s, agent: { ...s.agent, contextWindow: parseInt(e.target.value) || 0 } }));
+                    setSettings((s) => ({
+                      ...s,
+                      agent: { ...s.agent, contextWindow: parseInt(e.target.value, 10) || 0 },
+                    }));
                     markDirty();
                   }}
                   placeholder="0 = 不限制"

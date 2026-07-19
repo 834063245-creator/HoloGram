@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { type AgentEvent, EventKind } from '../src/agent/agent-types';
 import { StreamingToolExecutor } from '../src/agent/streaming-executor';
 import type { Tool } from '../src/agent/tool';
@@ -45,9 +45,9 @@ describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
 
     // The tool should receive _callId = call.id
     expect(receivedArgs).toHaveLength(1);
-    expect(receivedArgs[0]['_callId']).toBe('call-42');
-    expect(receivedArgs[0]['description']).toBe('test');
-    expect(receivedArgs[0]['prompt']).toBe('hello');
+    expect(receivedArgs[0]._callId).toBe('call-42');
+    expect(receivedArgs[0].description).toBe('test');
+    expect(receivedArgs[0].prompt).toBe('hello');
   });
 
   it('streaming path does NOT inject _callId for non-agent_spawn tools', async () => {
@@ -71,7 +71,7 @@ describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
     const results = await executor.awaitRemaining();
     expect(results).toHaveLength(1);
     expect(receivedArgs).toHaveLength(1);
-    expect(receivedArgs[0]['_callId']).toBeUndefined();
+    expect(receivedArgs[0]._callId).toBeUndefined();
   });
 
   it('agent_spawn ToolDispatch event has correct call id', async () => {
@@ -92,7 +92,7 @@ describe('StreamingToolExecutor — agent_spawn _callId injection', () => {
     // Should have ToolDispatch + ToolResult events
     const dispatch = events.find((e) => e.kind === EventKind.ToolDispatch);
     expect(dispatch).toBeDefined();
-    expect(dispatch!.tool!.id).toBe('call-7');
-    expect(dispatch!.tool!.name).toBe('agent_spawn');
+    expect(dispatch?.tool?.id).toBe('call-7');
+    expect(dispatch?.tool?.name).toBe('agent_spawn');
   });
 });

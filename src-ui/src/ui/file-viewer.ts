@@ -101,7 +101,6 @@ export class FileViewer {
   private previewContainer!: HTMLElement;
   private diffEditor!: monaco.editor.IStandaloneDiffEditor;
   private resizeHandle!: HTMLElement;
-  private windowCloseBtn!: HTMLElement;
   private translator!: FileTranslator;
   // ── New chrome ──
   private breadcrumb!: HTMLElement;
@@ -110,6 +109,7 @@ export class FileViewer {
   private statusLsp!: HTMLElement;
   private statusCursor!: HTMLElement;
   private toolbarBtns: Record<string, HTMLButtonElement> = {};
+  private windowCloseBtn: HTMLButtonElement | null = null;
 
   private tabs: TabData[] = [];
   private activeIdx = -1;
@@ -369,7 +369,7 @@ export class FileViewer {
       fmtBtn.style.background = 'none';
     });
     fmtBtn.addEventListener('click', () => this.editor.getAction('editor.action.formatDocument')?.run());
-    this.toolbarBtns['format'] = fmtBtn;
+    this.toolbarBtns.format = fmtBtn;
     this.toolbar.appendChild(fmtBtn);
 
     // Preview toggle
@@ -402,7 +402,7 @@ export class FileViewer {
       previewBtn.style.background = 'none';
     });
     previewBtn.addEventListener('click', () => this.togglePreview());
-    this.toolbarBtns['preview'] = previewBtn;
+    this.toolbarBtns.preview = previewBtn;
     this.toolbar.appendChild(previewBtn);
 
     // ═══════════════════════════════════════════════
@@ -732,7 +732,7 @@ export class FileViewer {
   private updateBreadcrumb(): void {
     const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
     this.breadcrumb.innerHTML = '';
-    if (!tab || !tab.filePath) {
+    if (!tab?.filePath) {
       this.breadcrumb.textContent = '未打开文件';
       return;
     }
@@ -1193,7 +1193,7 @@ export class FileViewer {
   }
 
   private updatePreviewButton(): void {
-    const btn = this.toolbarBtns['preview'];
+    const btn = this.toolbarBtns.preview;
     if (!btn) return;
     const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
     if (tab && this.canPreview(tab)) {
@@ -1300,8 +1300,8 @@ export class FileViewer {
   }
 
   centerOnScreen(): void {
-    const w = parseInt(this.el.style.width) || this.state.width;
-    const h = parseInt(this.el.style.height) || this.state.height;
+    const w = parseInt(this.el.style.width, 10) || this.state.width;
+    const h = parseInt(this.el.style.height, 10) || this.state.height;
     this.el.style.left = `${Math.max(0, (window.innerWidth - w) / 2)}px`;
     this.el.style.top = `${Math.max(36, (window.innerHeight - h) / 2)}px`;
   }
@@ -1316,8 +1316,8 @@ export class FileViewer {
     this.dragging = true;
     this.dragStart.x = e.clientX;
     this.dragStart.y = e.clientY;
-    this.dragStart.elX = parseInt(this.el.style.left) || this.state.x;
-    this.dragStart.elY = parseInt(this.el.style.top) || this.state.y;
+    this.dragStart.elX = parseInt(this.el.style.left, 10) || this.state.x;
+    this.dragStart.elY = parseInt(this.el.style.top, 10) || this.state.y;
     this.el.setPointerCapture(e.pointerId);
   }
 
@@ -1327,7 +1327,7 @@ export class FileViewer {
     const dy = e.clientY - this.dragStart.y;
     const newX = this.dragStart.elX + dx;
     const newY = this.dragStart.elY + dy;
-    const w = parseInt(this.el.style.width) || this.state.width;
+    const w = parseInt(this.el.style.width, 10) || this.state.width;
     const minVisible = 60;
     this.el.style.left = `${Math.max(-w + minVisible, Math.min(window.innerWidth - minVisible, newX))}px`;
     this.el.style.top = `${Math.max(0, Math.min(window.innerHeight - 36, newY))}px`;
@@ -1335,8 +1335,8 @@ export class FileViewer {
 
   private onDragEnd(): void {
     if (this.dragging) {
-      this.state.x = parseInt(this.el.style.left) || this.state.x;
-      this.state.y = parseInt(this.el.style.top) || this.state.y;
+      this.state.x = parseInt(this.el.style.left, 10) || this.state.x;
+      this.state.y = parseInt(this.el.style.top, 10) || this.state.y;
     }
     this.dragging = false;
   }
@@ -1349,8 +1349,8 @@ export class FileViewer {
     this.resizing = true;
     this.dragStart.x = e.clientX;
     this.dragStart.y = e.clientY;
-    this.dragStart.w = parseInt(this.el.style.width) || this.state.width;
-    this.dragStart.h = parseInt(this.el.style.height) || this.state.height;
+    this.dragStart.w = parseInt(this.el.style.width, 10) || this.state.width;
+    this.dragStart.h = parseInt(this.el.style.height, 10) || this.state.height;
     this.el.setPointerCapture(e.pointerId);
   }
 
@@ -1366,8 +1366,8 @@ export class FileViewer {
 
   private onResizeEnd(): void {
     if (this.resizing) {
-      this.state.width = parseInt(this.el.style.width) || this.state.width;
-      this.state.height = parseInt(this.el.style.height) || this.state.height;
+      this.state.width = parseInt(this.el.style.width, 10) || this.state.width;
+      this.state.height = parseInt(this.el.style.height, 10) || this.state.height;
     }
     this.resizing = false;
   }

@@ -100,7 +100,7 @@ describe('hologram dispatch integration', () => {
     mockInvoke.mockResolvedValue(SAMPLE_TOOLS_LIST);
 
     const schemas = await loadHologramSchemas();
-    const exec: ToolExecutor = async (name, args) => `result:${name}`;
+    const exec: ToolExecutor = async (name, _args) => `result:${name}`;
     const tools = schemas.map((s) => mcpSchemaToTool(s, exec));
 
     // neighbors

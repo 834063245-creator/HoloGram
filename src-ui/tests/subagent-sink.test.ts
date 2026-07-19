@@ -5,8 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventKind } from '../src/agent/agent-types';
-import { createSubAgentSink } from '../src/ui/subagent-sink';
 import type { SubAgentPart } from '../src/ui/message-model';
+import { createSubAgentSink } from '../src/ui/subagent-sink';
 
 function freshPart(overrides?: Partial<SubAgentPart>): SubAgentPart {
   return {

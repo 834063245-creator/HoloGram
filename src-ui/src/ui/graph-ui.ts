@@ -33,14 +33,14 @@ export function buildLegend(
   el.querySelectorAll<HTMLElement>('.legend-edge-row').forEach((row) => {
     row.style.cursor = 'pointer';
     row.addEventListener('click', () => {
-      const et = row.dataset['edgeType'] || '';
+      const et = row.dataset.edgeType || '';
       setEdgeTypeFilter(_edgeTypeFilter() === et ? null : et);
     });
   });
   el.querySelectorAll<HTMLElement>('.legend-node-row').forEach((row) => {
     row.style.cursor = 'pointer';
     row.addEventListener('click', () => {
-      const nk = row.dataset['nodeFilter'] || '';
+      const nk = row.dataset.nodeFilter || '';
       setNodeKindFilter(_nodeKindFilter() === nk ? null : nk);
     });
   });

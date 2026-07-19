@@ -16,7 +16,6 @@ import { useStore } from 'zustand';
 import type {
   AssistantMessage,
   AssistantPart,
-  ChatMessage,
   NoticeMessage,
   SubAgentPart,
   TextPart,
@@ -100,7 +99,7 @@ function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) =>
       span.textContent = m[1];
       span.addEventListener('click', (e) => {
         e.stopPropagation();
-        onNavigate(m![1]);
+        onNavigate(m![1] as string);
       });
       frag.appendChild(span);
       last = m.index + m[0].length;
@@ -131,7 +130,7 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
 
   const text = String(children ?? '').replace(/\n$/, '');
   const match = /language-([\w-]+)/.exec(className ?? '');
-  const lang = match?.[1];
+  const _lang = match?.[1];
   const isBlock = match !== null || text.includes('\n');
 
   if (isBlock) {
@@ -160,7 +159,7 @@ const MarkdownContent: React.FC<{
     if (streaming || !onNavigateToNode) return;
     const el = containerRef.current;
     if (el) linkifyNodeNames(el, onNavigateToNode);
-  }, [text, streaming, onNavigateToNode]);
+  }, [streaming, onNavigateToNode]);
 
   // 【性能】streaming 时用纯文本渲染，避免 react-markdown 全量重解析。
   // 累积文本每帧都在增长，react-markdown 的 AST 解析是 O(n)，
@@ -492,7 +491,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
       }
     }
     return items;
-  }, [part.version, part.status, expandedTools]);
+  }, [expandedTools, toggleTool, part.parts.length, streaming, part.parts]);
 
   return (
     <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
@@ -760,7 +759,7 @@ export const ChatMessagesApp: React.FC<{
     [panelId, activeSessionId],
   );
   const messages = useStore(msgStore, (s) => s.messages);
-  const version = useStore(msgStore, (s) => s.version);
+  const _version = useStore(msgStore, (s) => s.version);
 
   // ponytail: callback-ref state 而非 useRef —— 元素挂载后触发一次重渲染，
   // 让依赖 scrollEl 的 effect 拿到真实节点（内联后本组件自带滚动容器）。
@@ -774,7 +773,7 @@ export const ChatMessagesApp: React.FC<{
   // scroll position (and stickRef=false) from the previous session.
   useEffect(() => {
     stickRef.current = true;
-  }, [activeSessionId, panelId]);
+  }, []);
 
   // Resolve the actual scrollable element (外部指定或自身)
   const scrollEl = scrollContainer ?? listEl;
@@ -799,7 +798,7 @@ export const ChatMessagesApp: React.FC<{
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
     });
-  }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scrollEl!.style, messages.length, messages, scrollEl!.scrollHeight, scrollEl] as const); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll during streaming — MutationObserver catches incremental DOM
   // additions when message parts are mutated in-place (no version bump).
@@ -915,7 +914,7 @@ export const ChatMessagesApp: React.FC<{
                       }
                     : undefined
                 }
-                onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant!(msg) : undefined}
+                onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant?.(msg) : undefined}
                 onNavigateToNode={callbacks.onNavigateToNode}
               />
             );

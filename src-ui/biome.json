@@ -49,6 +49,16 @@
           }
         }
       }
+    },
+    {
+      "includes": ["tests/**/*.ts", "tests/**/*.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
     }
   ]
 }

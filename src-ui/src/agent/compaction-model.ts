@@ -238,7 +238,6 @@ export function optimalCompactRatio(
 // ── CompactionTracker — instruments agent.ts ──
 
 export class CompactionTracker {
-  private sessionStart = Date.now();
   private filesRead = new Set<string>();
   private toolSigs = new Set<string>();
   private totalTurns = 0;
@@ -336,7 +335,6 @@ export class CompactionTracker {
     this.reReads = 0;
     this.dupTools = 0;
     this.currentPostCompactCounter = -1;
-    this.sessionStart = Date.now();
   }
 }
 
@@ -367,7 +365,7 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
     }, 0) / stats.events.length;
 
   // Average turns after compaction
-  const avgTurnsAfter =
+  const _avgTurnsAfter =
     stats.turnsAfterCompaction.length > 0
       ? stats.turnsAfterCompaction.reduce((a, b) => a + b, 0) / stats.turnsAfterCompaction.length
       : 0;

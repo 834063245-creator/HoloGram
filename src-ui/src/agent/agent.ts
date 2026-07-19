@@ -81,6 +81,7 @@ export class Agent {
   private temperature: number;
   private pricing: Pricing | undefined;
   private maxTokens: number;
+  private _agentOpts: AgentOptions;
 
   // Context management
   private contextWindow: number;
@@ -128,7 +129,6 @@ export class Agent {
 
   // Event sink — parent agents use the global bus; sub-agents get a custom one
   private _sink: (ev: AgentEvent) => void;
-  private _agentOpts: AgentOptions;
   // UI notification port (workspace-injected; no-op when headless)
   private _ui: AgentUINotifier;
 
@@ -285,7 +285,7 @@ export class Agent {
    *  Called after each compaction. Never throws — best-effort background tuning. */
   private async tryAutoTune(): Promise<void> {
     const result = maybeTune(this.compactionTracker, this.compactRatio, this.recentKeep, this.pricing);
-    if (!result || !result.changed) return;
+    if (!result?.changed) return;
 
     const { config } = result;
     log.info('agent', 'auto-tune recommendation', {
@@ -576,7 +576,8 @@ export class Agent {
     isResume: boolean,
     report: { called: boolean; status: 'completed' | 'failed'; summary: string },
   ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
-    const mgr = this.goalManager!;
+    const mgr = this.goalManager;
+    if (!mgr) return { status: 'aborted', summary: 'goal manager not initialized' };
     let stallRounds = record.stallRounds;
 
     // 重注完整目标提示词 — 新建与恢复都走这里。恢复时不能指望快照里
@@ -1474,7 +1475,7 @@ ${resumeNote}
         if (chunk.type === ChunkType.Text && chunk.text) {
           text += chunk.text;
         }
-        if (chunk.type === ChunkType.Error) throw chunk.err!;
+        if (chunk.type === ChunkType.Error) throw chunk.err ?? new Error('stream error');
       }
       return text.trim();
     } catch (e: any) {

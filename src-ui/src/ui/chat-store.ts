@@ -19,7 +19,6 @@ import {
   getInputText,
   type InputStoreApi,
 } from './input-store';
-import type { ChatMessage } from './message-model';
 import {
   getExpandedReasoningSet as _msg_expandedReasoning,
   getUserScrolledUp as _msg_scrolledUp,

@@ -10,13 +10,12 @@
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
-import { applyEventToParts } from './part-mutator';
 import { autoTitleSessionIfDefault } from './chat-session';
-import { bumpChat, bumpSession, getChatStore, msgStoreFor } from './chat-store';
+import { bumpChat, getChatStore } from './chat-store';
 import type { StarGraph } from './graph';
-import { iconHtml } from './icons';
 import type { AssistantMessage, ChatMessage, FileAttachment, MessageId, UserMessage } from './message-model';
 import { createAssistantMessage, createNoticeMessage, createUserMessage } from './message-model';
+import { applyEventToParts } from './part-mutator';
 
 // ── Turn pair type (shared with chat-session) ──
 type TurnPair = {

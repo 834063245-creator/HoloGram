@@ -84,8 +84,8 @@ export interface FocusHost {
 
 export class GraphFocusController {
   private _resettingCamera = false;
-  private _savedFocusGlowScale = 0;
   private _savedFocusCoreScale = 0;
+  private _savedFocusGlowScale = 1.0;
   private focusSubgraphSavedGlowOpacities: number[] = [];
   private focusSubgraphSavedCoreVisible: boolean[] = [];
   private focusSubgraphSavedEdgeOpacities: number[] = [];

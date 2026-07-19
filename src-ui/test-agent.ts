@@ -7,8 +7,8 @@
  * 或修改下面的 API_KEY
  */
 
-import { execFileSync } from 'child_process';
-import * as readline from 'readline';
+import { execFileSync } from 'node:child_process';
+import * as readline from 'node:readline';
 import type { AgentEvent, EventSink } from './src/agent/agent';
 import { Agent, EventKind } from './src/agent/agent';
 import { createHologramTestTools, ToolRegistry } from './src/agent/tool';
@@ -29,7 +29,7 @@ const GRAPH_FILE = process.env.GRAPH_FILE || `${PROJECT_ROOT}/hologram_full.json
 // ══════════════════════════════════════
 
 async function pythonExec(toolName: string, args: Record<string, unknown>): Promise<string> {
-  const cliArgs: string[] = [];
+  const _cliArgs: string[] = [];
   const graph = (args.graph as string) || GRAPH_FILE;
 
   switch (toolName) {

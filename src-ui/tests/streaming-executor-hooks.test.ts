@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { type AgentEvent, EventKind, type Pricing } from '../src/agent/agent-types';
+import type { AgentEvent } from '../src/agent/agent-types';
 import type { Hook, PreflightHook } from '../src/agent/hooks';
 import { HookRegistry, PreflightHookRegistry } from '../src/agent/hooks';
 import { StreamingToolExecutor } from '../src/agent/streaming-executor';

@@ -367,11 +367,12 @@ export class GPULayout {
 
   /** Create and upload a GPU buffer from an ArrayBuffer. */
   private _upload(data: ArrayBuffer | SharedArrayBuffer, usage: number): GPUBuffer {
-    const buf = this.device!.createBuffer({
+    const buf = this.device?.createBuffer({
       size: data.byteLength,
       usage,
       mappedAtCreation: true,
     });
+    if (!buf) throw new Error('GPU buffer creation failed');
     new Uint8Array(buf.getMappedRange()).set(new Uint8Array(data));
     buf.unmap();
     return buf;

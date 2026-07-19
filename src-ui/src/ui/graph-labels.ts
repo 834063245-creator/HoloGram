@@ -69,7 +69,7 @@ export class GraphLabelSystem {
     // Galaxy labels — no distance fade, hover brightens
     for (let k = 0; k < this.host._fold.galaxyLabelDivs.length; k++) {
       const div = this.host._fold.galaxyLabelDivs[k];
-      const gIdx = Number(div.dataset['galaxyIndex']);
+      const gIdx = Number(div.dataset.galaxyIndex);
       if (gIdx === undefined || gIdx >= this.host._fold.galaxyMeta.length) continue;
       const gm = this.host._fold.galaxyMeta[gIdx];
       this.host.tmpVec3.copy(gm.centroid);

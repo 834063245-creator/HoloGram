@@ -5,11 +5,12 @@
 // 替代 chat.ts 中 updateFooter() 的 innerHTML + querySelector 命令式操作。
 // 纯声明式：订阅 Zustand stores → 自动渲染，零 DOM 操作。
 
-import React, { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
+import type React from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
 import { loadSettings, saveSettings } from '../../settings';
-import { iconHtml } from '../icons';
 import { getChatStore } from '../chat-store';
+import { iconHtml } from '../icons';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
 
 // ── Types ──
@@ -27,7 +28,7 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
 
   const totalTokensUsed = useStore(panelStore, (s) => s.totalTokensUsed);
   const lastUsageText = useStore(panelStore, (s) => s.lastUsageText);
-  const projectPath = useStore(panelStore, (s) => s.projectPath);
+  const _projectPath = useStore(panelStore, (s) => s.projectPath);
 
   // settings are non-reactive — read once and re-render when stores tick
   const settings = loadSettings();
@@ -64,8 +65,13 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
 
   return (
     <div className="chat-footer-left">
-      <button className="chat-model-badge chat-model-clickable" title={`点击切换模型 · ${active?.name} / ${active?.model}`} onClick={handleModelClick}>
-        <span dangerouslySetInnerHTML={{ __html: iconHtml('agent', 10) }} /> {modelLabel}{thinking}
+      <button
+        className="chat-model-badge chat-model-clickable"
+        title={`点击切换模型 · ${active?.name} / ${active?.model}`}
+        onClick={handleModelClick}
+      >
+        <span dangerouslySetInnerHTML={{ __html: iconHtml('agent', 10) }} /> {modelLabel}
+        {thinking}
       </button>
       {tokenBar}
       <span className="chat-usage-badge">{usageStr}</span>
@@ -76,7 +82,10 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
 function ChatFooterRight({ callbacks }: { callbacks: FooterCallbacks }) {
   return (
     <div className="chat-footer-right">
-      <button className="chat-shortcuts-btn" data-tooltip="Ctrl+L    打开/关闭面板&#10;Enter     发送 (输入框)&#10;Shift+Enter  换行&#10;Esc       关闭面板&#10;Ctrl+Y    始终允许 (权限)&#10;↑↓        历史导航 (输入框)">
+      <button
+        className="chat-shortcuts-btn"
+        data-tooltip="Ctrl+L    打开/关闭面板&#10;Enter     发送 (输入框)&#10;Shift+Enter  换行&#10;Esc       关闭面板&#10;Ctrl+Y    始终允许 (权限)&#10;↑↓        历史导航 (输入框)"
+      >
         <span dangerouslySetInnerHTML={{ __html: iconHtml('keyboard', 13) }} />
       </button>
       <button className="chat-slash-trigger" title="命令菜单" onClick={callbacks.onTriggerSlash}>
@@ -97,18 +106,24 @@ function ChatModebar({ panelId }: { panelId: string }) {
   const collaborationMode = useStore(panelStore, (s) => s.collaborationMode);
   const permissionMode = useStore(panelStore, (s) => s.permissionMode);
 
-  const setCollaboration = useCallback((mode: CollaborationMode) => {
-    panelStore.getState().setCollaborationMode(mode);
-    const s = loadSettings();
-    s.agent = { ...s.agent, collaborationMode: mode };
-    saveSettings(s);
-  }, [panelStore]);
-  const setPermission = useCallback((mode: PermissionMode) => {
-    panelStore.getState().setPermissionMode(mode);
-    const s = loadSettings();
-    s.agent = { ...s.agent, permissionMode: mode };
-    saveSettings(s);
-  }, [panelStore]);
+  const setCollaboration = useCallback(
+    (mode: CollaborationMode) => {
+      panelStore.getState().setCollaborationMode(mode);
+      const s = loadSettings();
+      s.agent = { ...s.agent, collaborationMode: mode };
+      saveSettings(s);
+    },
+    [panelStore],
+  );
+  const setPermission = useCallback(
+    (mode: PermissionMode) => {
+      panelStore.getState().setPermissionMode(mode);
+      const s = loadSettings();
+      s.agent = { ...s.agent, permissionMode: mode };
+      saveSettings(s);
+    },
+    [panelStore],
+  );
 
   return (
     <div className="chat-modebar">

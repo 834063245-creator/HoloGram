@@ -8,10 +8,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
-import type { CheckResult } from './CheckPanel';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
+import type { CheckResult } from './CheckPanel';
 
 // ── Types ──
 
@@ -135,7 +135,7 @@ export function TimelinePanel() {
   // Auto-refresh when opened with empty events
   useEffect(() => {
     if (open && events.length === 0 && !loading) refresh();
-  }, [open]);
+  }, [open, refresh, loading, events.length]);
 
   const handleFileClick = useCallback(
     async (f: string) => {
@@ -182,9 +182,9 @@ export function TimelinePanel() {
           lastMinute = ts;
           const isCheck =
             ev.event_type === 'commit_violation' || ev.event_type === 'commit_clean' || ev.event_type === 'check';
-          const checkPassed = ev.properties?.['passed'] !== false;
-          const hasVio = ev.properties && (ev.properties['l2_violations'] || ev.properties['passed'] !== undefined);
-          const filesProp = ev.properties?.['files'];
+          const checkPassed = ev.properties?.passed !== false;
+          const hasVio = ev.properties && (ev.properties.l2_violations || ev.properties.passed !== undefined);
+          const filesProp = ev.properties?.files;
 
           return (
             <React.Fragment key={ev.id}>

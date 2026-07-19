@@ -133,7 +133,7 @@ async function simulateForces(
     if (iter % 5 === 0) {
       let diverged = false;
       for (let i = 0; i < m * 3 && !diverged; i++) {
-        if (!isFinite(pos[i]) || !isFinite(vel[i])) diverged = true;
+        if (!Number.isFinite(pos[i]) || !Number.isFinite(vel[i])) diverged = true;
       }
       if (diverged) {
         const fresh = fibonacciSphere(m, shellRadius);
@@ -149,12 +149,12 @@ async function simulateForces(
         const i = (k * 2654435761 + iter * 0x9e3779b9) % m;
         const i3 = i * 3;
         if (
-          !isFinite(pos[i3]) ||
-          !isFinite(pos[i3 + 1]) ||
-          !isFinite(pos[i3 + 2]) ||
-          !isFinite(vel[i3]) ||
-          !isFinite(vel[i3 + 1]) ||
-          !isFinite(vel[i3 + 2])
+          !Number.isFinite(pos[i3]) ||
+          !Number.isFinite(pos[i3 + 1]) ||
+          !Number.isFinite(pos[i3 + 2]) ||
+          !Number.isFinite(vel[i3]) ||
+          !Number.isFinite(vel[i3 + 1]) ||
+          !Number.isFinite(vel[i3 + 2])
         ) {
           diverged = true;
         }
@@ -299,7 +299,7 @@ export async function relaxNewNodes(
     // NaN guard
     if (iter % 3 === 0) {
       for (let i = 0; i < m * 3; i++) {
-        if (!isFinite(pos[i])) {
+        if (!Number.isFinite(pos[i])) {
           pos[i] = allPos[affected[Math.floor(i / 3)] * 3 + (i % 3)];
           vel[i] = 0;
         }
@@ -413,7 +413,7 @@ export function repelCommunityCentroids(
   pos: Float32Array,
   n: number,
   nodeComm: number[],
-  shellRadius: number,
+  _shellRadius: number,
   edgePairs: [number, number][],
 ): void {
   const commMap = new Map<number, { cx: number; cy: number; cz: number; nodes: number[]; r: number; idx: number }>();
@@ -549,11 +549,11 @@ export async function layout3D(
   groupMap.set(UNASSIGNED, []);
 
   for (let i = 0; i < n; i++) {
-    const c = nodeComm![i];
-    if (c >= 0) groupMap.get(c)!.push(i);
-    else groupMap.get(UNASSIGNED)!.push(i);
+    const c = nodeComm?.[i];
+    if (c != null && c >= 0) groupMap.get(c)?.push(i);
+    else groupMap.get(UNASSIGNED)?.push(i);
   }
-  if (groupMap.get(UNASSIGNED)!.length === 0) groupMap.delete(UNASSIGNED);
+  if (groupMap.get(UNASSIGNED)?.length === 0) groupMap.delete(UNASSIGNED);
 
   const groupEntries = [...groupMap.entries()];
   const C = groupEntries.length;
@@ -711,7 +711,7 @@ export async function layout3D(
     if (iter % 10 === 0) {
       let diverged = false;
       for (let i = 0; i < C * 3 && !diverged; i++) {
-        if (!isFinite(centers[i])) diverged = true;
+        if (!Number.isFinite(centers[i])) diverged = true;
       }
       if (diverged) {
         const fresh = fibonacciSphere(C, R0);

@@ -288,7 +288,7 @@ export class GraphFold {
   clearFoldOverlay(): void {
     this.host.hoveredGalaxyIdx = -1;
     this.hideGalaxyTitle();
-    const isFull = true;
+    const _isFull = true;
     for (let i = 0; i < this.host._nodeCount; i++) {
       const kind = ((this.host.graphNodes[i].type || this.host.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
@@ -304,7 +304,7 @@ export class GraphFold {
     }
     for (const lines of this.host.edgeLineGroups) {
       lines.visible = true;
-      (lines.material as any).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as any).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
     this._disposeFoldChildren();
     this.clearCrossEdgeFlow();
@@ -332,7 +332,7 @@ export class GraphFold {
   _showConstellation(galaxyId: string): number {
     const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
     if (!gm) return 0;
-    const isFull = true;
+    const _isFull = true;
     const cc = new THREE.Color(GraphFold.CONSTELLATION_COLOR);
     for (const mi of gm.memberIndices) {
       if (mi < this.host._nodeCount) {
@@ -375,7 +375,7 @@ export class GraphFold {
     const subCommunities = this.host.communities.filter((c) => {
       if (!c.parent_id || c.parent_id !== galaxyId) return false;
       const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 1;
+      return !Number.isNaN(lvl) && lvl >= 1;
     });
     let subCount = 0;
     this._subCommByNodeIdx.clear();
@@ -424,7 +424,7 @@ export class GraphFold {
     const subCommunities = this.host.communities.filter((c) => {
       if (!c.parent_id || c.parent_id !== galaxyId) return false;
       const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 1;
+      return !Number.isNaN(lvl) && lvl >= 1;
     });
 
     if (subCommunities.length > 0) {
@@ -596,7 +596,7 @@ export class GraphFold {
     return this.host.communities.some((c) => {
       if (!c.parent_id || c.parent_id !== parentId) return false;
       const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 1 && c.node_ids.length >= 4;
+      return !Number.isNaN(lvl) && lvl >= 1 && c.node_ids.length >= 4;
     });
   }
 
@@ -646,7 +646,7 @@ export class GraphFold {
     const deeperSubs = this.host.communities.filter((c) => {
       if (!c.parent_id || c.parent_id !== subCommId) return false;
       const lvl = Number(c.level);
-      return !isNaN(lvl) && lvl >= 2;
+      return !Number.isNaN(lvl) && lvl >= 2;
     });
 
     if (deeperSubs.length > 0) {
@@ -910,8 +910,8 @@ export class GraphFold {
       div.style.cssText =
         'position:absolute;z-index:3;pointer-events:none;font-size: calc(10px * var(--font-scale));color:var(--obs-text,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
       this.host.container.appendChild(div);
-      div.dataset['galaxyIndex'] = String(gi);
-      div.dataset['galaxyId'] = gm.id;
+      div.dataset.galaxyIndex = String(gi);
+      div.dataset.galaxyId = gm.id;
       this.galaxyLabelDivs.push(div);
     }
   }
@@ -920,7 +920,7 @@ export class GraphFold {
     const seen = new Set<string>();
     const verts: number[] = [],
       colors: number[] = [];
-    const pos = this.host.nodePositions;
+    const _pos = this.host.nodePositions;
     for (const d of this.host.edgeDataList) {
       const sc = this.host.nodeCommMap.get(d.s),
         tc = this.host.nodeCommMap.get(d.t);
@@ -1032,7 +1032,7 @@ export class GraphFold {
 
   animateCrossEdgeFlow(): void {
     if (!this.crossFlowParticles || this.crossFlowSegments.length === 0) return;
-    const pArr = this.crossFlowParticles.geometry.attributes['position'].array as Float32Array;
+    const pArr = this.crossFlowParticles.geometry.attributes.position.array as Float32Array;
     for (let i = 0; i < this.crossFlowData.length; i++) {
       const fd = this.crossFlowData[i];
       fd.t += fd.speed;
@@ -1045,7 +1045,7 @@ export class GraphFold {
       pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
       pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
     }
-    this.crossFlowParticles.geometry.attributes['position'].needsUpdate = true;
+    this.crossFlowParticles.geometry.attributes.position.needsUpdate = true;
   }
 
   clearCrossEdgeFlow(): void {

@@ -29,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::graph::{Graph, Node, NodeKind};
+use crate::graph::resolver::infer_language;
 
 /// Parsed source held in the pipeline parse cache.
 
@@ -246,15 +247,28 @@ pub fn detect_eval(
 
 
 pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
-    // Try exact match first
+    let file_lang = infer_language(file);
+    // Try exact match first — prefer same-language nodes
+    for (id, node) in &graph.nodes {
+        if node.name == name && file_lang == infer_language(id) {
+            return id.clone();
+        }
+    }
+    // Fallback: exact match regardless of language (synthesized markers may be langless)
     for (id, node) in &graph.nodes {
         if node.name == name {
             return id.clone();
         }
     }
-    // Try last-component match (for qualified names)
+    // Try last-component match (for qualified names) — same-language first
     if let Some(last_part) = name.rsplit('.').next() {
         if last_part != name {
+            for (id, node) in &graph.nodes {
+                if node.name == last_part && file_lang == infer_language(id) {
+                    return id.clone();
+                }
+            }
+            // Fallback: last-component match regardless of language
             for (id, node) in &graph.nodes {
                 if node.name == last_part {
                     return id.clone();

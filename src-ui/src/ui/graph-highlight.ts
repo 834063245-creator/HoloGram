@@ -162,7 +162,7 @@ export class GraphHighlight {
     this.host._edgeTypeFilter = edgeType;
     if (edgeType === null) {
       for (const lines of this.host.edgeLineGroups) {
-        (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+        (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
       }
     } else {
       // ponytail: 按选中类边数分档 opacity, 防 AdditiveBlending 密集叠加过曝
@@ -171,7 +171,7 @@ export class GraphHighlight {
       const selOp = selCount > 2000 ? 0.08 : selCount > 200 ? 0.2 : 0.45;
       for (const lines of this.host.edgeLineGroups) {
         const mat = lines.material as LineMaterial;
-        const letype = (lines.userData['edgeType'] as string) || '';
+        const letype = (lines.userData.edgeType as string) || '';
         mat.opacity = letype === edgeType ? selOp : 0.005;
       }
     }
@@ -219,12 +219,12 @@ export class GraphHighlight {
 
   private _updateLegendActive(activeEdge: string | null, activeNode: string | null = null): void {
     this.host.legendEl.querySelectorAll<HTMLElement>('.legend-edge-row').forEach((row) => {
-      const et = row.dataset['edgeType'] || '';
+      const et = row.dataset.edgeType || '';
       row.classList.toggle('active', activeEdge !== null && et === activeEdge);
       row.style.opacity = activeEdge === null ? '1' : et === activeEdge ? '1' : '0.35';
     });
     this.host.legendEl.querySelectorAll<HTMLElement>('.legend-node-row').forEach((row) => {
-      const nk = row.dataset['nodeFilter'] || '';
+      const nk = row.dataset.nodeFilter || '';
       row.classList.toggle('active', activeNode !== null && nk === activeNode);
       row.style.opacity = activeNode === null ? '1' : nk === activeNode ? '1' : '0.35';
     });
@@ -303,7 +303,7 @@ export class GraphHighlight {
     this.host._flushOverrideAttrs();
     // Restore edge opacities
     for (const lines of this.host.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
     this._agentHighlightIndices.clear();
   }
@@ -415,7 +415,7 @@ export class GraphHighlight {
 
     // Restore edge opacities
     for (const lines of this.host.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
 
     this._clearTrailLine();
@@ -476,7 +476,7 @@ export class GraphHighlight {
     this.host._flushOverrideAttrs();
 
     for (const lines of this.host.edgeLineGroups) {
-      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
 
     this._clearTrailLine();

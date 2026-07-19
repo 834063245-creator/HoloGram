@@ -14,7 +14,6 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -28,11 +27,7 @@ import { type DiffOverlayHost, GraphDiffOverlay } from './graph-diff-overlay';
 import { type EdgeRendererHost, GraphEdgeRenderer } from './graph-edge-renderer';
 import { type FocusHost, GraphFocusController } from './graph-focus-controller';
 import { type FoldHost, GraphFold } from './graph-fold';
-import {
-  buildHoloGrid as buildHoloGridFX,
-  buildStarfield as buildStarfieldFX,
-  positionGrid as positionGridFX,
-} from './graph-fx';
+import { buildHoloGrid as buildHoloGridFX } from './graph-fx';
 import { GraphHighlight, type HighlightHost } from './graph-highlight';
 import { GraphInteractionController, type InteractionHost } from './graph-interaction-controller';
 import { GraphLabelSystem, type LabelHost } from './graph-labels';
@@ -41,7 +36,7 @@ import * as Scene from './graph-scene';
 import { GraphSceneLifecycle, type LifecycleHost } from './graph-scene-lifecycle';
 import { createSpikeTexture } from './graph-textures';
 import { GraphTooltip, type TooltipHost } from './graph-tooltip';
-import type { CommunityData, EdgeData, GraphDiffJson, GraphJSON, GraphNode } from './graph-types';
+import type { EdgeData, GraphDiffJson, GraphJSON, GraphNode } from './graph-types';
 import { buildLegend as buildLegendUI } from './graph-ui';
 import { iconHtml } from './icons';
 
@@ -55,124 +50,48 @@ export class StarGraph {
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private container: HTMLElement;
-  private animId = 0;
-  private starfield!: THREE.Points;
   private galaxyGroup = new THREE.Group(); // parent for full-mode rotation
   private nodeGroup = new THREE.Group();
   private edgeGroup = new THREE.Group();
   private highlightEdgeGroup = new THREE.Group();
   private legendEl!: HTMLDivElement;
-  private sphereGeo: THREE.SphereGeometry;
   private glowTex: THREE.Texture;
 
   // Graph data
   private graphNodes: GraphNode[] = [];
-  private nodePositions: Float32Array<ArrayBufferLike> = new Float32Array(0);
-  private deg: number[] = [];
   private edgeDataList: EdgeData[] = [];
-  private maxDeg = 1;
-  private neighborMap: number[][] = [];
-  private edgeIndexOf: number[][] = [];
-  private nodeLabelIdx: number[] = [];
-  private l34Count: number[] = [];
-
-  // Batched rendering (ponytail: 1 InstancedMesh + 2 Points = 3 draw calls vs 210K individual objects)
-  private nodeCoresInstanced!: THREE.InstancedMesh;
-  private nodeGlowsPoints!: THREE.Points;
-  private nodeGlows2Points!: THREE.Points;
-  // CPU-side buffers (uploaded to GPU each frame)
-  private _coreScales: Float32Array = new Float32Array(0);
-  private _glowRgba: Float32Array = new Float32Array(0);
-  private _glow2Rgba: Float32Array = new Float32Array(0);
-  private _glowSizes: Float32Array = new Float32Array(0); // per-point size (twinkle variation)
-  private _glow2Sizes: Float32Array = new Float32Array(0); // outer glow size
-  private _nodeMagCache: Float32Array = new Float32Array(0); // pre-computed log1p ratio
-  private _overrideFlags: Float32Array = new Float32Array(0); // 0=shader animated, 1=CPU overridden
-  private _prevOverrideSet: Set<number> = new Set(); // nodes overridden last frame (for reset)
   private _nodeCount = 0;
-  private _nodeCapacity = 0; // ponytail: InstancedMesh/Points capacity (>= _nodeCount)
   private _deadIndices: Set<number> = new Set(); // ponytail: dead node indices (removed but kept for index stability)
-  // Reference colors (unchanged API)
-  private nodeGlowColors: number[] = [];
-  private nodeCoreColors: number[] = [];
-  // Edge rendering (unchanged)
-  private edgeLineGroups: LineSegments2[] = [];
-  private scaleMode: 'degree' | 'coupling' = 'degree';
-
-  // Full-FX extras
-  private _nodeBaseHSL: Array<{ h: number; s: number; l: number }> = [];
-  // Edge flow handled inside edgeLineGroups — dashed overlays animated via dashOffset
-
-  // Hover
-  private raycaster: THREE.Raycaster;
-  private mouse = new THREE.Vector2(-999, -999);
   private hoveredIdx = -1;
-  private hoveredGalaxyIdx = -1;
-  private hoverScale = 0;
-  private targetHoverScale = 0;
 
   // Labels
   private labelsContainer!: HTMLDivElement;
-  private labelDivs: HTMLDivElement[] = [];
-
-  // Tooltip & Detail card → graph-tooltip.ts
-
-  // Graph spatial scale — p95 radius from center, set after layout.
-  // Used for camera zoom range only (no LOD).
-  private _graphRadius = 1000;
-
-  // Camera reset — store initial view
-  private _initCamPos = new THREE.Vector3();
-  private _initCamTarget = new THREE.Vector3(0, 0, 0);
-
-  // Focus
-  private focusTarget = new THREE.Vector3();
-  private focusActive = false;
-  private focusProgress = 0;
-  private focusNodeIdx = -1;
 
   // Focus subgraph (detail-card button triggered)
   private focusSubgraphActive = false;
   private focusSubgraphIdx = -1;
   private focusSubgraphVisibleIndices = new Set<number>();
   private focusSubgraphBanner!: HTMLDivElement;
-  private focusStartCam = new THREE.Vector3();
-  private focusStartLook = new THREE.Vector3();
-  private focusFlash = 0;
-  // ponytail: 统一飞行规划 — focusTarget 语义改为"相机终点"，_focusLookTarget 是看向的点
-  private _focusLookTarget = new THREE.Vector3();
-  private _focusStartTime = 0;
-  private _focusDurationMs = 600;
-  private _userInteracting = false;
+  focusActive = false;
   private _flyDebounce: ReturnType<typeof setTimeout> | null = null;
-
-  // Filter / lens / trail 开关状态（实现已迁 graph-highlight；字段留 facade 供多模块共享）
-  private _lensActive = false;
   private _trailActive = false;
   private _edgeTypeFilter: string | null = null;
   private _nodeKindFilter: string | null = null;
+  private _userInteracting = false;
+  private _renderInProgress = false;
 
   // Blast + Path — delegated to GraphAnalysis
   private _analysis: GraphAnalysis;
 
-  // Guard: true while _renderImpl is rebuilding the scene. Animation loop skips
-  // rendering to avoid accessing disposed GPU resources (causes ghost artifacts
-  // and cold-start blank screen on slow machines).
-  private _renderInProgress = false;
-
   // ── Community / Galaxy fold overlay ──────────────────────
   private _fold: GraphFold;
-  private communities: CommunityData[] = [];
-  private nodeCommMap = new Map<number, string>(); // nodeIdx → communityId
 
   // ── DOM 交互层（tooltip/detail card/select rect/prompt bar）─
   private _tooltip: GraphTooltip;
 
   // ── P4 拆分模块（共享状态经 host 反查本 facade）─────────
   private _diffOverlay: GraphDiffOverlay;
-  private _labels: GraphLabelSystem;
   private _nodes: GraphNodeRenderer;
-  private _edges: GraphEdgeRenderer;
   private _highlight: GraphHighlight;
   private _interaction: GraphInteractionController;
   private _focus: GraphFocusController;
@@ -182,11 +101,20 @@ export class StarGraph {
   private composer!: EffectComposer;
   private bloomPass!: UnrealBloomPass;
 
+  // Reusable geometry
+  sphereGeo!: THREE.SphereGeometry;
+  private _labels!: GraphLabelSystem;
+  private _edges!: GraphEdgeRenderer;
+  raycaster!: THREE.Raycaster;
+
+  // Nebula + HoloGrid
+  private nebulaDust!: THREE.Points;
+  nebulaPhases: number[] | null = null;
+  holoGrid: THREE.Mesh | null = null;
+  holoGridY = 0;
+
   // Animation
   private pulseTime = 0;
-  private tmpVec3 = new THREE.Vector3();
-
-  private readonly mode = 'full';
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -383,8 +311,6 @@ export class StarGraph {
   // ── Starfield ────────────────────────────────────────────
 
   // ── Nebula dust → graph-scene.ts ──
-  private nebulaDust!: THREE.Points;
-  private nebulaPhases: number[] = [];
 
   private buildNebulaDust(): void {
     const res = Scene.buildNebulaDust(this.scene, this.glowTex);
@@ -396,22 +322,10 @@ export class StarGraph {
     Scene.animateNebulaDust(this.nebulaDust, this.pulseTime);
   }
 
-  private buildStarfield(): void {
-    this.starfield = buildStarfieldFX(this.scene, this.glowTex);
-  }
-
-  // ── Infinite holographic grid (shader-based) ──────────────
-  private holoGrid!: THREE.Mesh;
-  private holoGridY = -60;
-
   private buildHoloGrid(): void {
     const result = buildHoloGridFX(this.scene);
     this.holoGrid = result.mesh;
     this.holoGridY = result.gridY;
-  }
-
-  private positionGrid(pos: Float32Array): void {
-    this.holoGridY = positionGridFX(this.holoGrid, pos);
   }
 
   // ── Path finding — delegated to GraphAnalysis ──────────────
@@ -631,15 +545,6 @@ export class StarGraph {
     return this._lifecycle.applyGraphDiff(diff, fullGraph);
   }
 
-  /** Render sub-community clouds — clickable "mini galaxies" inside a parent galaxy. */
-  private _gaussRand(): number {
-    let u = 0,
-      v = 0;
-    while (u === 0) u = Math.random();
-    while (v === 0) v = Math.random();
-    return Math.min(3, Math.max(-3, Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v))) / 3;
-  }
-
   // ── Render ───────────────────────────────────────────────
 
   async render(graph: GraphJSON): Promise<void> {
@@ -705,20 +610,6 @@ export class StarGraph {
       l4,
       galaxies: this._fold.foldMode && this._fold.galaxyMeta.length > 0 ? this._fold.galaxyMeta.length : 0,
     });
-  }
-
-  // ── Full-FX: edge particle flow ──────────────────────────
-
-  // ponytail: twinkle data now generated inline in buildNodes (GPU buffer attrs).
-  // Kept as no-op for backward compat — called from _renderImpl after init.
-  private initTwinkleData(_n: number): void {
-    /* no-op: phase/speed baked into GPU attrs in buildNodes */
-  }
-
-  // ── Edge flow: built into edgeLineGroups as dashed overlay in buildEdges() ──
-  // ponytail: no separate particle system — dashOffset animation on LineMaterial handles flow.
-  private initEdgeParticles(_pos: Float32Array, _data: EdgeData[]): void {
-    /* no-op: flow dashes built in buildEdges */
   }
 
   // ── Resize ───────────────────────────────────────────────

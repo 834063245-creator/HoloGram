@@ -56,6 +56,8 @@ export class ChatCore {
 
   /** Execution state — per-panel instance. */
   private _exec: ExecStateInstance;
+  /** Public accessor for workspace wiring. */
+  get execState(): ExecStateInstance { return this._exec; }
 
   private starGraph: StarGraph | null = null;
 

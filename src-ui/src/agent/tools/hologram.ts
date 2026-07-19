@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-import { type Tool, type ToolExecutor } from "../tool";
+import type { Tool, ToolExecutor } from '../tool';
 
 // ═══════════════════════════════════════════════════════
 

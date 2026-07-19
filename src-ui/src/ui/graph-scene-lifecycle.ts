@@ -143,11 +143,9 @@ export class GraphSceneLifecycle {
 
   // Diagnostics
   private _diagMsg = '';
-
-  // Progressive reveal state
-  private _revealRevealed = true; // false during animation
   private _revealCancelled = false;
   private _revealGeneration = 0; // ponytail: increment on each new reveal; old rAF callbacks discard themselves
+  private _revealRevealed = false;
 
   // Animation loop state
   private _lastFrameTime = 0;
@@ -266,7 +264,7 @@ export class GraphSceneLifecycle {
     // Pre-compute galaxy members (centroids filled after layout)
     // Only keep communities above minimum size — single-node communities are noise
     this.host._fold.galaxyMeta = [];
-    let skippedSingletons = 0;
+    let _skippedSingletons = 0;
     for (const comm of level0Communities) {
       const members: number[] = [];
       for (const nid of comm.node_ids) {
@@ -282,7 +280,7 @@ export class GraphSceneLifecycle {
           radius: 0,
         });
       } else if (members.length > 0 && members.length < GraphFold.MIN_GALAXY_SIZE) {
-        skippedSingletons += members.length;
+        _skippedSingletons += members.length;
       }
     }
     // Sort galaxies by size descending so largest render first (OCD-friendly)
@@ -322,13 +320,13 @@ export class GraphSceneLifecycle {
         // Extract top-level dir: "src/foo/bar.py" → "src", "engine/src/main.rs" → "engine"
         const topDir = loc.replace(/^[/\\]+/, '').split(/[/\\]/)[0] || '(root)';
         if (!dirGroups.has(topDir)) dirGroups.set(topDir, []);
-        dirGroups.get(topDir)!.push(i);
+        dirGroups.get(topDir)?.push(i);
       }
       console.warn(`[StarGraph] Directory-based groups: ${dirGroups.size} groups`, [...dirGroups.keys()]);
       // Only use if we get more groups than Louvain
       if (dirGroups.size > 1) {
         let nextId = 0;
-        for (const [dir, members] of dirGroups) {
+        for (const [_dir, members] of dirGroups) {
           for (const mi of members) nodeCommArr[mi] = nextId;
           nextId++;
         }
@@ -389,7 +387,7 @@ export class GraphSceneLifecycle {
     // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
-      if (!isFinite(rawPos[i])) {
+      if (!Number.isFinite(rawPos[i])) {
         rawPos[i] = 0;
         fixed++;
       }
@@ -406,7 +404,7 @@ export class GraphSceneLifecycle {
       const x = rawPos[i * 3],
         y = rawPos[i * 3 + 1],
         z = rawPos[i * 3 + 2];
-      if (isFinite(x) && isFinite(y) && isFinite(z)) {
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;
@@ -429,7 +427,7 @@ export class GraphSceneLifecycle {
     const dists: number[] = [];
     for (let i = 0; i < nodes.length; i++) {
       const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
-      if (isFinite(r2)) dists.push(Math.sqrt(r2));
+      if (Number.isFinite(r2)) dists.push(Math.sqrt(r2));
     }
     dists.sort((a, b) => a - b);
     const radius = dists[Math.floor(dists.length * 0.95)] || 50;
@@ -566,10 +564,10 @@ export class GraphSceneLifecycle {
     this.host._nodes._flushOverrideAttrs();
     // Zero all glow alpha — override=1 means shader uses these values directly
     this.host._glowRgba.fill(0);
-    this.host.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+    this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
     if (this.host._glow2Rgba.length > 0) {
       this.host._glow2Rgba.fill(0);
-      this.host.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+      this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
     }
     // Save & clear edge opacities
     const edgeTargetOpacities: number[] = [];
@@ -599,14 +597,14 @@ export class GraphSceneLifecycle {
       this.host.nodeCoresInstanced.count = nodeEnd;
       this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
       // Restore glow alpha for revealed batch
-      const gCol = this.host.nodeGlowsPoints.geometry.attributes['color'].array as Float32Array;
-      const g2Col = this.host.nodeGlows2Points?.geometry.attributes['color']?.array as Float32Array;
+      const gCol = this.host.nodeGlowsPoints.geometry.attributes.color.array as Float32Array;
+      const g2Col = this.host.nodeGlows2Points?.geometry.attributes.color?.array as Float32Array;
       for (let i = revealedNodes; i < nodeEnd; i++) {
         gCol[i * 4 + 3] = 0.75;
         if (g2Col) g2Col[i * 4 + 3] = 0.48;
       }
-      this.host.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
-      if (this.host.nodeGlows2Points) this.host.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+      this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
+      if (this.host.nodeGlows2Points) this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
       revealedNodes = nodeEnd;
 
       const edgeEnd = Math.min(revealedEdges + edgeRevealBatch, totalEdgeGroups);
@@ -922,14 +920,14 @@ export class GraphSceneLifecycle {
     // ghost artifacts on cold-start.
     if (this.host._renderInProgress) return;
 
-    const isMinimal = false;
+    const _isMinimal = false;
     const isFull = true;
     // Auto-rotation disabled
 
     // Infinite grid follows camera Y — always at viewer level, capped below nodes
     if (this.host.holoGrid) {
       const sMat = this.host.holoGrid.material as THREE.ShaderMaterial;
-      sMat.uniforms['uCameraWorldPos'].value.copy(this.host.camera.position);
+      sMat.uniforms.uCameraWorldPos.value.copy(this.host.camera.position);
       this.host.holoGrid.position.y = Math.min(this.host.camera.position.y, this.host.holoGridY);
     }
 
@@ -983,12 +981,12 @@ export class GraphSceneLifecycle {
     const galTime = performance.now() * 0.001;
     // Update shader time uniforms on both glow layers
     if (this.host.nodeGlowsPoints) {
-      (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms['uTime'].value = galTime;
-      (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms['uPulseTime'].value = this.host.pulseTime;
+      (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms.uTime.value = galTime;
+      (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms.uPulseTime.value = this.host.pulseTime;
     }
     if (this.host.nodeGlows2Points) {
-      (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms['uTime'].value = galTime;
-      (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms['uPulseTime'].value = this.host.pulseTime;
+      (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms.uTime.value = galTime;
+      (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms.uPulseTime.value = this.host.pulseTime;
     }
 
     // ── Hover overrides — reset previous, apply current ──
@@ -998,11 +996,11 @@ export class GraphSceneLifecycle {
       if (pi < this.host._nodeCount) this.host._overrideFlags[pi] = 0;
     }
     this.host._prevOverrideSet.clear();
-    if (this.host.nodeGlowsPoints?.geometry.attributes['override']) {
-      this.host.nodeGlowsPoints.geometry.attributes['override'].needsUpdate = true;
+    if (this.host.nodeGlowsPoints?.geometry.attributes.override) {
+      this.host.nodeGlowsPoints.geometry.attributes.override.needsUpdate = true;
     }
-    if (this.host.nodeGlows2Points?.geometry.attributes['override']) {
-      this.host.nodeGlows2Points.geometry.attributes['override'].needsUpdate = true;
+    if (this.host.nodeGlows2Points?.geometry.attributes.override) {
+      this.host.nodeGlows2Points.geometry.attributes.override.needsUpdate = true;
     }
 
     // Hover effects — brightness-only, no size inflation
@@ -1026,11 +1024,11 @@ export class GraphSceneLifecycle {
     }
     // Flush override flags to GPU (only when overrides changed)
     if (this.host._prevOverrideSet.size > 0) {
-      if (this.host.nodeGlowsPoints?.geometry.attributes['override']) {
-        this.host.nodeGlowsPoints.geometry.attributes['override'].needsUpdate = true;
+      if (this.host.nodeGlowsPoints?.geometry.attributes.override) {
+        this.host.nodeGlowsPoints.geometry.attributes.override.needsUpdate = true;
       }
-      if (this.host.nodeGlows2Points?.geometry.attributes['override']) {
-        this.host.nodeGlows2Points.geometry.attributes['override'].needsUpdate = true;
+      if (this.host.nodeGlows2Points?.geometry.attributes.override) {
+        this.host.nodeGlows2Points.geometry.attributes.override.needsUpdate = true;
       }
     }
 
@@ -1059,7 +1057,7 @@ export class GraphSceneLifecycle {
           // 中心球 shader — 轻微脉冲, hover 提亮放大
           const hoverMul = hovered ? 1.2 : 1.0;
           const beat = 0.9 + 0.1 * Math.abs(Math.sin(this.host.pulseTime * (1.2 + gi * 0.37)));
-          ((glow as THREE.Mesh).material as THREE.ShaderMaterial).uniforms['uOpacity'].value = beat * hoverMul;
+          ((glow as THREE.Mesh).material as THREE.ShaderMaterial).uniforms.uOpacity.value = beat * hoverMul;
           glow.scale.setScalar(hovered ? 1.15 : 1.0);
         }
       }

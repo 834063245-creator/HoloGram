@@ -155,7 +155,13 @@ export class GoalManager {
   async update(id: string, partial: Partial<Omit<GoalRecord, 'id' | 'createdAt'>>): Promise<GoalRecord | null> {
     const current = await this.get(id);
     if (!current) return null;
-    const next: GoalRecord = { ...current, ...partial, id: current.id, createdAt: current.createdAt, updatedAt: Date.now() };
+    const next: GoalRecord = {
+      ...current,
+      ...partial,
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: Date.now(),
+    };
     await this._write(next);
     return next;
   }
@@ -246,7 +252,8 @@ export class GoalManager {
 
     // 旧 session 现场复制到新槽(best-effort — 丢了也能靠重注目标提示词继续)
     try {
-      const legacySessionPath = this.projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/agents/main/session.json';
+      const legacySessionPath =
+        this.projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/agents/main/session.json';
       const rawSession = await rpc<string>('read_file_content', { filePath: legacySessionPath });
       await this.saveSession(record.id, JSON.parse(stripNums(rawSession)) as Message[]);
     } catch {

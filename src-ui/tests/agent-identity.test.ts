@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { Agent, type AgentOptions } from '../src/agent/agent';
 import { AgentStore } from '../src/agent/agent-store';
 import { ToolRegistry } from '../src/agent/tool';
-import type { Provider, Message, Chunk } from '../src/provider/types';
+import type { Chunk, Provider } from '../src/provider/types';
 
 // Minimal mock provider — never actually called in these tests
 function mockProvider(): Provider {

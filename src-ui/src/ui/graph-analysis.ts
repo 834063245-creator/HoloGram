@@ -195,7 +195,7 @@ export class GraphAnalysis {
     }
     this.host._flushOverrideAttrs();
     const st = document.getElementById('status-text');
-    if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
+    if (st?.innerHTML?.includes('blast')) st.innerHTML = '就绪';
   }
 
   updateBlastNodeColors(): void {

@@ -56,7 +56,7 @@ function parseYamlSimple(yaml: string): ConstraintsData {
       if (m) result.routing[m[1]] = m[2] === 'true';
     } else if (section === 'thresholds') {
       const m = trimmed.match(/^(\w+):\s*(\d+)/);
-      if (m) result.thresholds[m[1]] = parseInt(m[2]);
+      if (m) result.thresholds[m[1]] = parseInt(m[2], 10);
     } else if (section === 'allowlist') {
       if (trimmed === 'modules:') {
         subSection = 'modules';
@@ -385,7 +385,7 @@ const ConstraintsPanelApp: React.FC<{
                 max={1000}
                 onChange={(e) => {
                   let val = parseInt(e.target.value, 10);
-                  if (isNaN(val) || val < 0) val = 0;
+                  if (Number.isNaN(val) || val < 0) val = 0;
                   if (val > 10000) val = 10000;
                   handleThresholdChange(key, val);
                 }}

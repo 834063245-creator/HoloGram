@@ -2,7 +2,7 @@
  * Agent 单次测试 — 发送一条消息，打印结果，退出。
  * 用法：npx tsx test-once.ts "你的问题"
  */
-import { execFileSync } from 'child_process';
+import { execFileSync } from 'node:child_process';
 import type { AgentEvent } from './src/agent/agent';
 import { Agent, EventKind } from './src/agent/agent';
 import { createHologramTestTools, ToolRegistry } from './src/agent/tool';

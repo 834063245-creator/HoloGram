@@ -13,8 +13,6 @@
 //   - Hook 崩溃静默降级，绝不影响工具结果
 //   - preflight 基于内存 fileIndex，零延迟（< 0.1ms）
 
-import type { Agent } from './agent';
-
 // ── Hook 接口 ──
 
 export interface Hook {
@@ -305,7 +303,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
       switch (toolName) {
         case 'read_file_content':
         case 'read_file': {
-          const fp = String(args['filePath'] || args['file_path'] || '');
+          const fp = String(args.filePath || args.file_path || '');
           if (fp) {
             snippet = ctx.getImpactSummary(fp);
             const nodes = ctx.getNodesInFile(fp);
@@ -352,7 +350,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               if (ctx.engine) {
                 const hot = files.filter((f) => {
                   const nf = f.replace(/\\/g, '/').toLowerCase();
-                  return ctx.engine!.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
+                  return ctx.engine?.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
                 });
                 if (hot.length > 0) {
                   snippet = (snippet || '') + ` ⚠ 其中 ${hot.length} 个文件在高脆弱度排名中 → 谨慎修改`;
@@ -387,7 +385,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             // Engine-layer: highlight high-fragility files among search hits
             if (ctx.engine) {
               const rankHit = nodes.some((node) =>
-                ctx.engine!.fragilityRanks.some((r) => r.file.toLowerCase().includes(node.name.toLowerCase())),
+                ctx.engine?.fragilityRanks.some((r) => r.file.toLowerCase().includes(node.name.toLowerCase())),
               );
               if (rankHit) {
                 snippet += ` ⚠ 命中了高脆弱度模块 → 调 trace_impact`;
@@ -418,7 +416,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             if (ctx.engine) {
               const hot = files.filter((f) => {
                 const nf = f.replace(/\\/g, '/').toLowerCase();
-                return ctx.engine!.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
+                return ctx.engine?.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
               });
               if (hot.length > 0) {
                 snippet = (snippet || '') + ` ⚠ ${hot.length} 个变更文件在高脆弱度排名中`;
@@ -428,7 +426,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           break;
         }
         case 'run_shell': {
-          const cmd = String(args['command'] || '');
+          const cmd = String(args.command || '');
           const isTest = /pytest|jest|cargo.test|npm.test|go.test|python.-m.pytest/.test(cmd);
           const isBuild = /npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd);
 
@@ -462,7 +460,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               const names = top.map((r: any) => `\`${r.callee_qn}\``).join(', ');
               snippet = `解析到 ${parsed.resolved.length} 个调用目标: ${names}${parsed.resolved.length > 3 ? '…' : ''}。`;
               // Check graph for callee impact
-              const fp = String(args['file_path'] || '');
+              const fp = String(args.file_path || '');
               if (fp && parsed.resolved[0].callee_qn) {
                 snippet += ` → 调 trace_impact "${parsed.resolved[0].callee_qn}" 看下游`;
               }
@@ -544,10 +542,9 @@ import {
   type DiagnosticsSource,
   formatDiagnostics,
   refreshGitBlame,
-  refreshGitStatus,
 } from './state-inject';
 
-const MAX_STATE_BYTES = 600;
+const _MAX_STATE_BYTES = 600;
 
 /** Pre-read hook — injects diagnostics + blame when agent reads a file.
  *  diagSource is workspace-injected (UI owns the LSP client). */
@@ -558,7 +555,7 @@ export function createStateReadHook(projectPath: string, diagSource: Diagnostics
       return toolName === 'read_file_content';
     },
     async enrich(_toolName, args, result) {
-      const filePath = String(args['filePath'] || args['file_path'] || '');
+      const filePath = String(args.filePath || args.file_path || '');
       if (!filePath) return result;
 
       // Fire-and-forget: refresh blame for next time
@@ -586,7 +583,7 @@ export function createStatePreflightHook(diagSource: DiagnosticsSource): Preflig
       return ['edit_file', 'write_file'].includes(toolName);
     },
     check(_toolName, args) {
-      const filePath = String(args['filePath'] || args['file_path'] || '');
+      const filePath = String(args.filePath || args.file_path || '');
       if (!filePath) return null;
       return formatDiagnostics(filePath, diagSource);
     },
@@ -638,7 +635,7 @@ function parseBuildOutput(
   // pytest
   if (/pytest|python\s+-m\s+pytest/.test(cmd)) {
     const failed = output.match(/(\d+)\s+failed/);
-    if (failed && parseInt(failed[1]) > 0)
+    if (failed && parseInt(failed[1], 10) > 0)
       return { command: label, outcome: 'fail', summary: `${failed[1]} failed`, ts };
     const passed = output.match(/(\d+)\s+passed/);
     if (passed) return { command: label, outcome: 'pass', summary: `${passed[1]} passed`, ts };
@@ -804,8 +801,8 @@ function extractFilesFromDiffResult(result: string): string[] {
 
 export function createGraphContext(
   fileIndex: Map<string, NodeBrief[]>,
-  fanIn: Map<string, number>,
-  fanOut: Map<string, number>,
+  _fanIn: Map<string, number>,
+  _fanOut: Map<string, number>,
   engine: EngineSnapshot | null = null,
 ): GraphContext {
   function norm(fp: string): string {
@@ -899,7 +896,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
     check(toolName: string, args: Record<string, unknown>): string | null {
       // ── git_checkout: 无具体文件，通用警告 ──
       if (toolName === 'git_checkout') {
-        const branch = String(args['branch'] || '');
+        const branch = String(args.branch || '');
         return [
           `⚠️ [切换分支] 即将切换到 \`${branch}\`。`,
           `│  切换前请确认当前工作区已提交或暂存，避免丢失未保存的修改。`,
@@ -919,11 +916,11 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
       // ── git_discard: 拼接 repo 根 + 相对路径 ──
       let fp: string;
       if (toolName === 'git_discard') {
-        const repoPath = String(args['path'] || '');
-        const file = String(args['file'] || '');
+        const repoPath = String(args.path || '');
+        const file = String(args.file || '');
         fp = repoPath ? `${repoPath.replace(/\\/g, '/')}/${file}` : file;
       } else {
-        fp = String(args['filePath'] || args['file_path'] || '');
+        fp = String(args.filePath || args.file_path || '');
       }
 
       if (!fp) return null;

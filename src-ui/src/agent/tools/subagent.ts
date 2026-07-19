@@ -64,14 +64,14 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
     }),
     readOnly: () => false,
     execute: async (args, onProgress) => {
-      const description = (args['description'] as string) || '子任务';
-      const prompt = (args['prompt'] as string) || '';
-      const subagentType = args['subagent_type'] as string | undefined;
-      const toolAllowlist = args['tool_allowlist'] as string[] | undefined;
-      const timeoutMinutes = args['timeout_minutes'] as number | undefined;
+      const description = (args.description as string) || '子任务';
+      const prompt = (args.prompt as string) || '';
+      const subagentType = args.subagent_type as string | undefined;
+      const toolAllowlist = args.tool_allowlist as string[] | undefined;
+      const timeoutMinutes = args.timeout_minutes as number | undefined;
       if (!prompt) return '(agent_spawn: prompt is required)';
       const mode = subagentType === 'fresh' ? 'fresh' : 'fork';
-      const callId = (args['_callId'] as string) || undefined;
+      const callId = (args._callId as string) || undefined;
       const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? Math.min(timeoutMinutes, 60) * 60 * 1000 : undefined;
 
       // Pool registers the agent (concurrency cap + timeout + stop propagation),

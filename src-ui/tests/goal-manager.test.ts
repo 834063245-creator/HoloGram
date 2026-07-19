@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock bridge and events ──
 
@@ -82,7 +82,7 @@ describe('GoalManager CRUD', () => {
 
     const loaded = await gm.get(rec.id);
     expect(loaded).not.toBeNull();
-    expect(loaded!.text).toBe('fix auth bug');
+    expect(loaded?.text).toBe('fix auth bug');
 
     expect(states.length).toBe(1);
     expect(states[0].status).toBe('active');
@@ -93,10 +93,10 @@ describe('GoalManager CRUD', () => {
     const g1 = await gm.create('old goal');
     const g2 = await gm.create('new goal');
 
-    expect((await gm.get(g1.id))!.status).toBe('cancelled');
+    expect((await gm.get(g1.id))?.status).toBe('cancelled');
     const active = await gm.getActive();
     expect(active).not.toBeNull();
-    expect(active!.id).toBe(g2.id);
+    expect(active?.id).toBe(g2.id);
   });
 
   it('getActive returns null when no live goal; finds paused too', async () => {
@@ -107,7 +107,7 @@ describe('GoalManager CRUD', () => {
     await gm.update(rec.id, { status: 'paused' });
     const active = await gm.getActive();
     expect(active).not.toBeNull();
-    expect(active!.status).toBe('paused');
+    expect(active?.status).toBe('paused');
   });
 
   it('update refreshes fields + updatedAt, keeps id/createdAt, index stays consistent', async () => {
@@ -117,11 +117,11 @@ describe('GoalManager CRUD', () => {
 
     const updated = await gm.update(rec.id, { iteration: 5, stallRounds: 2 });
     expect(updated).not.toBeNull();
-    expect(updated!.iteration).toBe(5);
-    expect(updated!.stallRounds).toBe(2);
-    expect(updated!.id).toBe(rec.id);
-    expect(updated!.createdAt).toBe(rec.createdAt);
-    expect(updated!.updatedAt).toBeGreaterThanOrEqual(before);
+    expect(updated?.iteration).toBe(5);
+    expect(updated?.stallRounds).toBe(2);
+    expect(updated?.id).toBe(rec.id);
+    expect(updated?.createdAt).toBe(rec.createdAt);
+    expect(updated?.updatedAt).toBeGreaterThanOrEqual(before);
 
     const all = await gm.list();
     expect(all.length).toBe(1);
@@ -138,7 +138,7 @@ describe('GoalManager CRUD', () => {
     const rec = await gm.create('cancel me');
     await gm.cancel(rec.id);
 
-    expect((await gm.get(rec.id))!.status).toBe('cancelled');
+    expect((await gm.get(rec.id))?.status).toBe('cancelled');
     expect(await gm.getActive()).toBeNull();
     // 历史里仍可见
     expect((await gm.list()).some((r) => r.id === rec.id)).toBe(true);
@@ -175,8 +175,8 @@ describe('GoalManager session snapshots', () => {
 
     const loaded = await gm.loadSession(rec.id);
     expect(loaded).not.toBeNull();
-    expect(loaded!.length).toBe(2);
-    expect(loaded![1].content).toBe('<goal>fix</goal>');
+    expect(loaded?.length).toBe(2);
+    expect(loaded?.[1].content).toBe('<goal>fix</goal>');
   });
 
   it('loadSession returns null when no snapshot', async () => {
@@ -203,7 +203,7 @@ describe('GoalManager adoptOrphans', () => {
     expect(adopted.length).toBe(1);
     expect(adopted[0].id).toBe('goal-orphan');
     expect(adopted[0].status).toBe('paused');
-    expect((await gm.get('goal-orphan'))!.status).toBe('paused');
+    expect((await gm.get('goal-orphan'))?.status).toBe('paused');
   });
 
   it('fresh active record from this process is untouched', async () => {
@@ -213,7 +213,7 @@ describe('GoalManager adoptOrphans', () => {
 
     const adopted = await gm.adoptOrphans();
     expect(adopted.length).toBe(0);
-    expect((await gm.get(live.id))!.status).toBe('active');
+    expect((await gm.get(live.id))?.status).toBe('active');
   });
 });
 
@@ -223,8 +223,18 @@ describe('GoalManager migrateLegacy', () => {
   beforeEach(() => emitMock.mockReset());
 
   it('imports legacy goal.json as paused, copies session, deletes legacy file', async () => {
-    const legacy = { goal: 'legacy goal', iteration: 3, stallRounds: 1, status: 'active', createdAt: 100, updatedAt: 200 };
-    const legacySession = [{ role: 'system', content: 'sys' }, { role: 'user', content: '<goal>legacy goal</goal>' }];
+    const legacy = {
+      goal: 'legacy goal',
+      iteration: 3,
+      stallRounds: 1,
+      status: 'active',
+      createdAt: 100,
+      updatedAt: 200,
+    };
+    const legacySession = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '<goal>legacy goal</goal>' },
+    ];
     const files = mockLiveFs({
       '/proj/.hologram/agents/main/goal.json': JSON.stringify(legacy),
       '/proj/.hologram/agents/main/session.json': JSON.stringify(legacySession),
@@ -233,15 +243,15 @@ describe('GoalManager migrateLegacy', () => {
 
     const migrated = await gm.migrateLegacy();
     expect(migrated).not.toBeNull();
-    expect(migrated!.text).toBe('legacy goal');
-    expect(migrated!.status).toBe('paused'); // active 一律按 paused(启动时无活体循环)
-    expect(migrated!.iteration).toBe(3);
-    expect(migrated!.stallRounds).toBe(1);
+    expect(migrated?.text).toBe('legacy goal');
+    expect(migrated?.status).toBe('paused'); // active 一律按 paused(启动时无活体循环)
+    expect(migrated?.iteration).toBe(3);
+    expect(migrated?.stallRounds).toBe(1);
 
     // session 快照已复制到新槽
-    const session = await gm.loadSession(migrated!.id);
+    const session = await gm.loadSession(migrated?.id);
     expect(session).not.toBeNull();
-    expect(session!.length).toBe(2);
+    expect(session?.length).toBe(2);
 
     // 旧 goal.json 已删除(防止重复迁移)
     expect(files.has('/proj/.hologram/agents/main/goal.json')).toBe(false);

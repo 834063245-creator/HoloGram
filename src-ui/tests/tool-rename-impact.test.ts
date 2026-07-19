@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GRAPH_ENRICH_TOOLS, GRAPH_PREFLIGHT_TOOLS } from '../src/agent/hooks';
-import type { Tool, ToolExecutor } from '../src/agent/tool';
+import type { ToolExecutor } from '../src/agent/tool';
 import { createCodingTools, ToolRegistry } from '../src/agent/tool';
 
 // ═══════════════════════════════════════════════════════════════

@@ -11,11 +11,11 @@
 //
 // Switching workspaces is atomic: old.deactivate() → new = Workspace.open() → assign.
 
-import { Agent, type AgentEvent, EventKind } from './agent/agent';
+import { Agent } from './agent/agent';
 import { AgentStore } from './agent/agent-store';
 import type { AgentUINotifier } from './agent/agent-types';
 import { auraShutdown } from './agent/aura-memory';
-import { type CompactionConfig, createCompactionTools } from './agent/compaction-model';
+import { createCompactionTools } from './agent/compaction-model';
 import { SubAgentPool } from './agent/coordinator';
 import { GoalManager } from './agent/goal-manager';
 import type { GraphContext } from './agent/hooks';
@@ -30,7 +30,7 @@ import {
   HookRegistry,
   PreflightHookRegistry,
 } from './agent/hooks';
-import { initLogger, log } from './agent/logger';
+import { initLogger } from './agent/logger';
 // ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
 import { createMemoryTools, MemoryManager } from './agent/memory';
 import { memoryBundleIngest } from './agent/memory-bundle-client';
@@ -42,14 +42,7 @@ import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, 
 import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createAnthropicProvider } from './provider/anthropic';
-import {
-  defaultPricing,
-  getActiveProvider,
-  loadSettings,
-  persistSecrets,
-  restoreSecrets,
-  saveSettings,
-} from './settings';
+import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { msgStoreForActive } from './ui/chat-store';
 import { useDockStore } from './ui/dock-store';
@@ -193,7 +186,7 @@ export class Workspace {
   static async open(
     path: string,
     starGraph: StarGraph,
-    chatPanel: ChatCore,
+    _chatPanel: ChatCore,
     opts?: { skipAnalysis?: boolean; cachedGraph?: any },
     callbacks?: { onStatusChange?: (msg: string) => void; onLoadingChange?: (loading: boolean) => void },
   ): Promise<Workspace> {
@@ -562,10 +555,10 @@ export class Workspace {
     }
 
     // Load project conventions (CLAUDE.md) — same file Claude Code reads
-    let claudeMdSection = '';
+    let _claudeMdSection = '';
     try {
       const filesPath = `${this.path}/CLAUDE.md`;
-      claudeMdSection = await rpc<string>('read_file_content', { filePath: filesPath });
+      _claudeMdSection = await rpc<string>('read_file_content', { filePath: filesPath });
     } catch {
       /* file missing is fine */
     }
@@ -576,7 +569,7 @@ export class Workspace {
     this.goalManager = new GoalManager(this.path, (r) => bus.emit('goal:state', r));
     this.goalManager
       .migrateLegacy()
-      .then(() => this.goalManager!.adoptOrphans())
+      .then(() => this.goalManager?.adoptOrphans())
       .catch(() => {});
 
     // Init skill registry (hot-loads on first Skill tool call)
@@ -675,7 +668,7 @@ export class Workspace {
     const SHELL_DONE_TIMEOUT_MS = 600_000; // 10 min — matches Rust max timeout
 
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
-      if (name === 'run_shell' && args['runInBackground']) {
+      if (name === 'run_shell' && args.runInBackground) {
         const taskId = await agentInvoke<string>('run_shell', args);
         let done = false;
         while (!done) {
@@ -695,7 +688,7 @@ export class Workspace {
         return '';
       }
       // ── Streaming shell: real-time output via Tauri events ──
-      if (name === 'exec_command' && onProgress && !args['runInBackground']) {
+      if (name === 'exec_command' && onProgress && !args.runInBackground) {
         const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
         // Clean up stale listeners from abandoned Promises (e.g. agent abort)
@@ -845,7 +838,7 @@ export class Workspace {
 
         // Clone shared tool registry — all workspace-level tools
         const r = new ToolRegistry();
-        for (const t of this.registry!.all()) r.register(t);
+        for (const t of this.registry?.all() ?? []) r.register(t);
 
         // Sub-agent tools — per-Agent lifecycle, wired via agentRef indirection.
         // The spawner delegates to Agent.spawnSubAgent, which merges the pool's
@@ -854,7 +847,7 @@ export class Workspace {
         r.register(
           createSubAgentTool(
             async (description, prompt, onProgress, mode, allowlist, coordSignal) =>
-              agentRef.current!.spawnSubAgent(description, prompt, onProgress, mode, allowlist, coordSignal),
+              agentRef.current?.spawnSubAgent(description, prompt, onProgress, mode, allowlist, coordSignal) ?? Promise.resolve({ text: '', err: 'agent not available' }),
             this.subAgentPool,
           ),
         );
@@ -926,7 +919,7 @@ export class Workspace {
           agentId: 'main',
           parentId: null,
           eventSink: chatPanel.eventSink,
-          execState: chatPanel['_exec'],
+          execState: chatPanel.execState,
           onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
             memoryBundleIngest(
               messages.map((m) => ({

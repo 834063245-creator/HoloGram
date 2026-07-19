@@ -102,7 +102,7 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
     if (iter % 5 === 0) {
       let diverged = false;
       for (let i = 0; i < n * 3; i++) {
-        if (!isFinite(pos[i]) || !isFinite(vel[i])) {
+        if (!Number.isFinite(pos[i]) || !Number.isFinite(vel[i])) {
           diverged = true;
           break;
         }
@@ -121,12 +121,12 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
         const i = (k * 2654435761 + iter * 0x9e3779b9) % n;
         const i3 = i * 3;
         if (
-          !isFinite(pos[i3]) ||
-          !isFinite(pos[i3 + 1]) ||
-          !isFinite(pos[i3 + 2]) ||
-          !isFinite(vel[i3]) ||
-          !isFinite(vel[i3 + 1]) ||
-          !isFinite(vel[i3 + 2])
+          !Number.isFinite(pos[i3]) ||
+          !Number.isFinite(pos[i3 + 1]) ||
+          !Number.isFinite(pos[i3 + 2]) ||
+          !Number.isFinite(vel[i3]) ||
+          !Number.isFinite(vel[i3 + 1]) ||
+          !Number.isFinite(vel[i3 + 2])
         ) {
           diverged = true;
         }

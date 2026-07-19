@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock bridge and events ──
 
@@ -18,16 +18,20 @@ vi.mock('../src/ui/events', () => ({
 import { Agent } from '../src/agent/agent';
 import { AgentStore } from '../src/agent/agent-store';
 import { GoalManager } from '../src/agent/goal-manager';
-import { ToolRegistry } from '../src/agent/tool';
 import type { Tool } from '../src/agent/tool';
+import { ToolRegistry } from '../src/agent/tool';
 import type { Chunk, Provider, ToolCall } from '../src/provider/types';
 import { ChunkType } from '../src/provider/types';
 
 // ── Fixtures ──
 
 const USAGE = {
-  prompt_tokens: 100, completion_tokens: 50, total_tokens: 150,
-  cache_hit_tokens: 0, cache_miss_tokens: 100, reasoning_tokens: 0,
+  prompt_tokens: 100,
+  completion_tokens: 50,
+  total_tokens: 150,
+  cache_hit_tokens: 0,
+  cache_miss_tokens: 100,
+  reasoning_tokens: 0,
   finish_reason: 'stop',
 } as const;
 
@@ -39,11 +43,7 @@ function textChunks(text: string): Chunk[] {
 }
 
 function toolChunks(text: string, tc: ToolCall): Chunk[] {
-  return [
-    { type: ChunkType.Text, text },
-    { type: ChunkType.ToolCall, tool_call: tc },
-    USG, DONE,
-  ];
+  return [{ type: ChunkType.Text, text }, { type: ChunkType.ToolCall, tool_call: tc }, USG, DONE];
 }
 
 function steppedProvider(turns: Chunk[][]): Provider {
@@ -115,24 +115,28 @@ describe('Agent identity', () => {
   beforeEach(() => mockLiveFs());
 
   it('auto-generates agent ID matching agent-timestamp pattern', () => {
-    const reg = new ToolRegistry(); reg.register(dummyTool());
+    const reg = new ToolRegistry();
+    reg.register(dummyTool());
     const a = new Agent(steppedProvider([[DONE]]), reg, 'sys');
     expect(a.id).toMatch(/^agent-/);
   });
   it('uses explicit ID', () => {
-    const reg = new ToolRegistry(); reg.register(dummyTool());
+    const reg = new ToolRegistry();
+    reg.register(dummyTool());
     expect(new Agent(steppedProvider([[DONE]]), reg, 'sys', { agentId: 'main' }).id).toBe('main');
   });
   it('parentId defaults to null', () => {
     expect(makeAgent().parentId).toBeNull();
   });
   it('parentId from options', () => {
-    const reg = new ToolRegistry(); reg.register(dummyTool());
+    const reg = new ToolRegistry();
+    reg.register(dummyTool());
     expect(new Agent(steppedProvider([[DONE]]), reg, 'sys', { parentId: 'agent-123' }).parentId).toBe('agent-123');
   });
   it('child agent gets parentId from parent', () => {
     const p = makeAgent();
-    const reg = new ToolRegistry(); reg.register(dummyTool());
+    const reg = new ToolRegistry();
+    reg.register(dummyTool());
     const c = new Agent(steppedProvider([[DONE]]), reg, 'child', { agentId: 'c1', parentId: p.id });
     expect(c.parentId).toBe(p.id);
   });
@@ -180,9 +184,7 @@ describe('Goal loop', () => {
   });
 
   it('[GOAL_FAILED] → failed,记录保留可查', async () => {
-    const provider = steppedProvider([
-      textChunks('[GOAL_FAILED] 缺少必要的 API 密钥,无法继续。'),
-    ]);
+    const provider = steppedProvider([textChunks('[GOAL_FAILED] 缺少必要的 API 密钥,无法继续。')]);
     const agent = makeAgent(provider);
     const gm = wireGoals(agent);
 
@@ -276,20 +278,29 @@ describe('Pause session isolation', () => {
   function pauseProvider(afterPause: () => Chunk[]): Provider {
     let callCount = 0;
     let abortReady: () => void;
-    (pauseProvider as any)._ready = new Promise<void>((r) => { abortReady = r; });
+    (pauseProvider as any)._ready = new Promise<void>((r) => {
+      abortReady = r;
+    });
     return {
       name: () => 'mock',
       stream: async function* (signal: AbortSignal) {
         callCount++;
         if (callCount === 1) {
           yield { type: ChunkType.Text, text: 'step 1' };
-          yield { type: ChunkType.ToolCall, tool_call: { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/a.txt"}' } };
-          yield USG; yield DONE;
+          yield {
+            type: ChunkType.ToolCall,
+            tool_call: { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/a.txt"}' },
+          };
+          yield USG;
+          yield DONE;
         } else if (callCount === 2) {
           yield DONE; // 空轮 → runLoop 返回,第 0 轮迭代完成
         } else if (callCount === 3) {
           yield { type: ChunkType.Text, text: 'step 2' };
-          yield { type: ChunkType.ToolCall, tool_call: { id: 'c2', name: 'read_file_content', arguments: '{"filePath":"/b.txt"}' } };
+          yield {
+            type: ChunkType.ToolCall,
+            tool_call: { id: 'c2', name: 'read_file_content', arguments: '{"filePath":"/b.txt"}' },
+          };
           yield USG;
           abortReady();
           while (!signal.aborted) await new Promise((r) => setTimeout(r, 5));
@@ -343,15 +354,21 @@ describe('Pause session isolation', () => {
   it('流中途中断(BodyStreamBuffer 式错误)也算暂停(暂停误判失败 回归)', async () => {
     let callCount = 0;
     let abortReady: () => void;
-    const ready = new Promise<void>((r) => { abortReady = r; });
+    const ready = new Promise<void>((r) => {
+      abortReady = r;
+    });
     const provider: Provider = {
       name: () => 'mock',
       stream: async function* (signal: AbortSignal) {
         callCount++;
         if (callCount === 1) {
           yield { type: ChunkType.Text, text: 'step 1' };
-          yield { type: ChunkType.ToolCall, tool_call: { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/a.txt"}' } };
-          yield USG; yield DONE;
+          yield {
+            type: ChunkType.ToolCall,
+            tool_call: { id: 'c1', name: 'read_file_content', arguments: '{"filePath":"/a.txt"}' },
+          };
+          yield USG;
+          yield DONE;
         } else if (callCount === 2) {
           yield DONE; // 空轮 → 第 0 轮迭代完成
         } else {

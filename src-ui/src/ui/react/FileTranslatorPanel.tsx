@@ -5,14 +5,15 @@
 // LLM-powered code-to-human translation with three-column view.
 // Integrated into FileViewer. Caches results in .hologram/translations/
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { createAnthropicProvider } from '../../provider/anthropic';
 import { createOpenAIProvider } from '../../provider/openai';
 import { ChunkType } from '../../provider/types';
 import { getActiveProvider, loadSettings, type ProviderSettings } from '../../settings';
-import { escapeAttr } from './helpers';
 import { iconHtml } from '../icons';
+import { escapeAttr } from './helpers';
 import '../file-translator.css';
 
 // ── Types ──
@@ -60,7 +61,7 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString('zh-CN');
 }
 
-function calcMaxTokens(lineCount: number, isSelection: boolean): number {
+function calcMaxTokens(_lineCount: number, isSelection: boolean): number {
   return isSelection ? 8192 : 32768;
 }
 
@@ -146,7 +147,10 @@ export const FileTranslatorApp: React.FC<{
   const [lineCount, setLineCount] = useState(0);
   const [waitSeconds, setWaitSeconds] = useState(0);
   const [issueStats, setIssueStats] = useState<{ bug: number; risk: number; smell: number; ok: number }>({
-    bug: 0, risk: 0, smell: 0, ok: 0,
+    bug: 0,
+    risk: 0,
+    smell: 0,
+    ok: 0,
   });
 
   // Refs
@@ -221,170 +225,213 @@ export const FileTranslatorApp: React.FC<{
   // ── Render columns as HTML ──
 
   const renderColumnsHtml = useCallback((l: TranslationLine[]) => {
-    const codeHtml = l.map((ln, i) =>
-      `<div class="ft-code-line" data-line="${i}"><span class="ft-ln">${i + 1}</span><span class="ft-ct">${escapeAttr(ln.code)}</span></div>`
-    ).join('');
-    const humanHtml = l.map((ln, i) =>
-      `<div class="ft-human-line" data-line="${i}"><span class="ft-ct">${escapeAttr(ln.human) || '<span style="opacity:0.3">—</span>'}</span></div>`
-    ).join('');
-    const auditHtml = l.map((ln, i) => {
-      if (!ln.audit_type) return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-dash">—</span></div>`;
-      const tagMap: Record<string, string> = { bug: '致命', risk: '风险', smell: '坏味道', ok: '正确' };
-      const tagLabel = tagMap[ln.audit_type] || ln.audit_type;
-      return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-tag ft-${ln.audit_type}">${tagLabel}</span><span class="ft-audit-text">${escapeAttr(ln.audit)}</span></div>`;
-    }).join('');
+    const codeHtml = l
+      .map(
+        (ln, i) =>
+          `<div class="ft-code-line" data-line="${i}"><span class="ft-ln">${i + 1}</span><span class="ft-ct">${escapeAttr(ln.code)}</span></div>`,
+      )
+      .join('');
+    const humanHtml = l
+      .map(
+        (ln, i) =>
+          `<div class="ft-human-line" data-line="${i}"><span class="ft-ct">${escapeAttr(ln.human) || '<span style="opacity:0.3">—</span>'}</span></div>`,
+      )
+      .join('');
+    const auditHtml = l
+      .map((ln, i) => {
+        if (!ln.audit_type)
+          return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-dash">—</span></div>`;
+        const tagMap: Record<string, string> = { bug: '致命', risk: '风险', smell: '坏味道', ok: '正确' };
+        const tagLabel = tagMap[ln.audit_type] || ln.audit_type;
+        return `<div class="ft-audit-line" data-line="${i}"><span class="ft-audit-tag ft-${ln.audit_type}">${tagLabel}</span><span class="ft-audit-text">${escapeAttr(ln.audit)}</span></div>`;
+      })
+      .join('');
     return { codeHtml, humanHtml, auditHtml };
   }, []);
 
   // ── LLM API call ──
 
-  const callApi = useCallback(async (
-    provider: ProviderSettings,
-    content: string,
-    codeLines: string[],
-    lineCount_: number,
-    language: string,
-    maxTokens: number,
-    extraNote?: string,
-  ): Promise<{ lines: TranslationLine[] }> => {
-    if (abortRef.current) abortRef.current.abort();
-    abortRef.current = new AbortController();
-    const signal = abortRef.current.signal;
+  const callApi = useCallback(
+    async (
+      provider: ProviderSettings,
+      content: string,
+      _codeLines: string[],
+      lineCount_: number,
+      language: string,
+      maxTokens: number,
+      extraNote?: string,
+    ): Promise<{ lines: TranslationLine[] }> => {
+      if (abortRef.current) abortRef.current.abort();
+      abortRef.current = new AbortController();
+      const signal = abortRef.current.signal;
 
-    const systemPrompt = `${SYSTEM_PROMPT}\n\n代码行数：${lineCount_}\n目标语言：${language}${extraNote || ''}`;
-    const userMessage = `代码内容：\n\`\`\`\n${content}\n\`\`\`\n\n请翻译并返回 JSON。`;
-    const messages = [
-      { role: 'system' as const, content: systemPrompt },
-      { role: 'user' as const, content: userMessage },
-    ];
+      const systemPrompt = `${SYSTEM_PROMPT}\n\n代码行数：${lineCount_}\n目标语言：${language}${extraNote || ''}`;
+      const userMessage = `代码内容：\n\`\`\`\n${content}\n\`\`\`\n\n请翻译并返回 JSON。`;
+      const messages = [
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: userMessage },
+      ];
 
-    let rawText = '';
-    if (provider.kind === 'anthropic') {
-      const p = createAnthropicProvider({
-        apiKey: provider.apiKey, baseUrl: provider.baseUrl, model: provider.model, thinking: provider.thinking,
-      });
-      for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
-        if (chunk.type === ChunkType.Text) rawText += chunk.text;
-        else if (chunk.type === ChunkType.Error) throw chunk.err!;
-      }
-    } else {
-      const p = createOpenAIProvider({
-        apiKey: provider.apiKey, baseUrl: provider.baseUrl, model: provider.model, disableThinking: true,
-      });
-      for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
-        if (chunk.type === ChunkType.Text) rawText += chunk.text;
-        else if (chunk.type === ChunkType.Error) throw chunk.err!;
-      }
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/) || rawText.match(/(\{[\s\S]*\})/);
-      if (jsonMatch) {
-        try { parsed = JSON.parse(jsonMatch[1]); } catch {
-          throw new Error(`模型返回格式异常，请重试\n\n${rawText.slice(0, 500)}`);
+      let rawText = '';
+      if (provider.kind === 'anthropic') {
+        const p = createAnthropicProvider({
+          apiKey: provider.apiKey,
+          baseUrl: provider.baseUrl,
+          model: provider.model,
+          thinking: provider.thinking,
+        });
+        for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
+          if (chunk.type === ChunkType.Text) rawText += chunk.text;
+          else if (chunk.type === ChunkType.Error) throw chunk.err!;
         }
       } else {
-        throw new Error(`模型返回格式异常，请重试\n\n${rawText.slice(0, 500)}`);
+        const p = createOpenAIProvider({
+          apiKey: provider.apiKey,
+          baseUrl: provider.baseUrl,
+          model: provider.model,
+          disableThinking: true,
+        });
+        for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
+          if (chunk.type === ChunkType.Text) rawText += chunk.text;
+          else if (chunk.type === ChunkType.Error) throw chunk.err!;
+        }
       }
-    }
-    if (!parsed.lines || !Array.isArray(parsed.lines)) {
-      throw new Error(`模型返回缺少 lines 数组，请重试\n\n${rawText.slice(0, 500)}`);
-    }
-    return parsed;
-  }, []);
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/) || rawText.match(/(\{[\s\S]*\})/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[1]);
+          } catch {
+            throw new Error(`模型返回格式异常，请重试\n\n${rawText.slice(0, 500)}`);
+          }
+        } else {
+          throw new Error(`模型返回格式异常，请重试\n\n${rawText.slice(0, 500)}`);
+        }
+      }
+      if (!parsed.lines || !Array.isArray(parsed.lines)) {
+        throw new Error(`模型返回缺少 lines 数组，请重试\n\n${rawText.slice(0, 500)}`);
+      }
+      return parsed;
+    },
+    [],
+  );
 
   // ── Main translation flow ──
 
-  const startTranslation = useCallback(async (fp: string) => {
-    const settings = loadSettings();
-    const provider = getActiveProvider(settings);
+  const startTranslation = useCallback(
+    async (fp: string) => {
+      const settings = loadSettings();
+      const provider = getActiveProvider(settings);
 
-    if (!provider.apiKey) {
-      setMode('error');
-      setErrorMsg('请先在设置中配置 API Key');
-      return;
-    }
+      if (!provider.apiKey) {
+        setMode('error');
+        setErrorMsg('请先在设置中配置 API Key');
+        return;
+      }
 
-    const content = getEditorContent();
-    if (!content) {
-      setMode('error');
-      setErrorMsg('无法读取文件内容');
-      return;
-    }
-    if (!content.trim()) {
-      setMode('error');
-      setErrorMsg('文件为空，无需翻译');
-      return;
-    }
+      const content = getEditorContent();
+      if (!content) {
+        setMode('error');
+        setErrorMsg('无法读取文件内容');
+        return;
+      }
+      if (!content.trim()) {
+        setMode('error');
+        setErrorMsg('文件为空，无需翻译');
+        return;
+      }
 
-    const codeLines = content.split('\n');
-    const lc = codeLines.length;
-    const fn = fp.replace(/\\/g, '/').split('/').pop() || fp;
+      const codeLines = content.split('\n');
+      const lc = codeLines.length;
+      const fn = fp.replace(/\\/g, '/').split('/').pop() || fp;
 
-    setMode('loading');
-    setFileName(fn);
-    setLineCount(lc);
-    setErrorMsg('');
-    setLines([]);
-    setWaitSeconds(0);
+      setMode('loading');
+      setFileName(fn);
+      setLineCount(lc);
+      setErrorMsg('');
+      setLines([]);
+      setWaitSeconds(0);
 
-    // Start wait timer
-    if (waitTimerRef.current) clearInterval(waitTimerRef.current);
-    waitTimerRef.current = setInterval(() => {
-      setWaitSeconds((w) => w + 3);
-    }, 3000);
+      // Start wait timer
+      if (waitTimerRef.current) clearInterval(waitTimerRef.current);
+      waitTimerRef.current = setInterval(() => {
+        setWaitSeconds((w) => w + 3);
+      }, 3000);
 
-    try {
-      // Cache check
-      const hash = await hashContent(content);
-      const cachePath = `.hologram/translations/${hash}.json`;
       try {
-        const raw = await rpc<string>('read_file_content', { filePath: cachePath });
-        const cached: CacheData = JSON.parse(raw);
-        if (cached.lines && Array.isArray(cached.lines)) {
-          const aligned = alignLines(cached.lines, codeLines);
-          setLines(aligned);
-          setCacheHit(true);
-          setTranslatedAt(cached.translated_at);
-          setMode('content');
-          if (waitTimerRef.current) { clearInterval(waitTimerRef.current); waitTimerRef.current = null; }
-          computeStats(aligned);
-          return;
+        // Cache check
+        const hash = await hashContent(content);
+        const cachePath = `.hologram/translations/${hash}.json`;
+        try {
+          const raw = await rpc<string>('read_file_content', { filePath: cachePath });
+          const cached: CacheData = JSON.parse(raw);
+          if (cached.lines && Array.isArray(cached.lines)) {
+            const aligned = alignLines(cached.lines, codeLines);
+            setLines(aligned);
+            setCacheHit(true);
+            setTranslatedAt(cached.translated_at);
+            setMode('content');
+            if (waitTimerRef.current) {
+              clearInterval(waitTimerRef.current);
+              waitTimerRef.current = null;
+            }
+            computeStats(aligned);
+            return;
+          }
+        } catch {
+          /* cache miss */
         }
-      } catch { /* cache miss */ }
 
-      // API call
-      const maxTokens = calcMaxTokens(lc, false);
-      const language = settings.display.language === 'en' ? 'English' : '中文';
-      const response = await callApi(provider, content, codeLines, lc, language, maxTokens);
-      const aligned = alignLines(response.lines, codeLines);
+        // API call
+        const maxTokens = calcMaxTokens(lc, false);
+        const language = settings.display.language === 'en' ? 'English' : '中文';
+        const response = await callApi(provider, content, codeLines, lc, language, maxTokens);
+        const aligned = alignLines(response.lines, codeLines);
 
-      // Write cache
-      const cacheData: CacheData = {
-        file: fn, hash, translated_at: new Date().toISOString(),
-        model: provider.model, language: settings.display.language, line_count: lc, lines: aligned,
-      };
-      try { await rpc('write_file_content', { filePath: cachePath, content: JSON.stringify(cacheData) }); } catch { /* ok */ }
+        // Write cache
+        const cacheData: CacheData = {
+          file: fn,
+          hash,
+          translated_at: new Date().toISOString(),
+          model: provider.model,
+          language: settings.display.language,
+          line_count: lc,
+          lines: aligned,
+        };
+        try {
+          await rpc('write_file_content', { filePath: cachePath, content: JSON.stringify(cacheData) });
+        } catch {
+          /* ok */
+        }
 
-      setLines(aligned);
-      setCacheHit(false);
-      setTranslatedAt(null);
-      setMode('content');
-      computeStats(aligned);
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return;
-      setMode('error');
-      setErrorMsg(e?.message || '翻译失败');
-    } finally {
-      if (waitTimerRef.current) { clearInterval(waitTimerRef.current); waitTimerRef.current = null; }
-    }
-  }, [getEditorContent, callApi]);
+        setLines(aligned);
+        setCacheHit(false);
+        setTranslatedAt(null);
+        setMode('content');
+        computeStats(aligned);
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+        setMode('error');
+        setErrorMsg(e?.message || '翻译失败');
+      } finally {
+        if (waitTimerRef.current) {
+          clearInterval(waitTimerRef.current);
+          waitTimerRef.current = null;
+        }
+      }
+    },
+    [getEditorContent, callApi, computeStats],
+  );
 
   function computeStats(ls: TranslationLine[]) {
-    let bug = 0, risk = 0, smell = 0, ok = 0;
+    let bug = 0,
+      risk = 0,
+      smell = 0,
+      ok = 0;
     for (const l of ls) {
       if (l.audit_type === 'bug') bug++;
       else if (l.audit_type === 'risk') risk++;
@@ -409,33 +456,36 @@ export const FileTranslatorApp: React.FC<{
       // Use rAF to ensure DOM is painted
       requestAnimationFrame(() => wireColumnListeners());
     }
-  }, [mode, lines, wireColumnListeners]);
+  }, [mode, wireColumnListeners]);
 
   // ── Divider drag ──
 
-  const onDividerStart = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startH = panelHeight;
-    dividerRef.current?.classList.add('ft-dragging');
-    dividerRef.current?.setPointerCapture(e.pointerId);
+  const onDividerStart = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      const startY = e.clientY;
+      const startH = panelHeight;
+      dividerRef.current?.classList.add('ft-dragging');
+      dividerRef.current?.setPointerCapture(e.pointerId);
 
-    const onMove = (ev: PointerEvent) => {
-      const dy = startY - ev.clientY;
-      const parentH = panelRef.current?.parentElement?.clientHeight || 500;
-      const newH = Math.max(60, Math.min(parentH * 0.8, startH + dy));
-      setPanelHeight(newH);
-      panelHeightRatio.current = newH / Math.max(1, parentH);
-      onLayoutChange();
-    };
-    const onUp = () => {
-      dividerRef.current?.classList.remove('ft-dragging');
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  }, [panelHeight, onLayoutChange]);
+      const onMove = (ev: PointerEvent) => {
+        const dy = startY - ev.clientY;
+        const parentH = panelRef.current?.parentElement?.clientHeight || 500;
+        const newH = Math.max(60, Math.min(parentH * 0.8, startH + dy));
+        setPanelHeight(newH);
+        panelHeightRatio.current = newH / Math.max(1, parentH);
+        onLayoutChange();
+      };
+      const onUp = () => {
+        dividerRef.current?.classList.remove('ft-dragging');
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    },
+    [panelHeight, onLayoutChange],
+  );
 
   // ── Column resize ──
 
@@ -452,11 +502,18 @@ export const FileTranslatorApp: React.FC<{
       const totalW = columnsEl.clientWidth;
       if (totalW === 0) return;
       const dFrac = (ev.clientX - startX) / totalW;
-      const leftMin = 0.12, rightMin = 0.12;
+      const leftMin = 0.12,
+        rightMin = 0.12;
       let newLeft = startWidths[colIdx] + dFrac;
       let newRight = startWidths[colIdx + 1] - dFrac;
-      if (newLeft < leftMin) { newLeft = leftMin; newRight = 1 - leftMin - colWidths.current[2]; }
-      if (newRight < rightMin) { newRight = rightMin; newLeft = 1 - rightMin - colWidths.current[0]; }
+      if (newLeft < leftMin) {
+        newLeft = leftMin;
+        newRight = 1 - leftMin - colWidths.current[2];
+      }
+      if (newRight < rightMin) {
+        newRight = rightMin;
+        newLeft = 1 - rightMin - colWidths.current[0];
+      }
       const thirdIdx = 3 - colIdx - (colIdx + 1);
       colWidths.current[colIdx] = newLeft;
       colWidths.current[colIdx + 1] = newRight;
@@ -484,13 +541,15 @@ export const FileTranslatorApp: React.FC<{
   if (issueStats.smell > 0) issueParts.push(`${issueStats.smell} 坏味道`);
   const issueLabel = issueParts.length > 0 ? issueParts.join(' ') : '未发现问题 ✅';
 
-  const headerTitle = mode === 'error'
-    ? `🔮 翻译器 · ${fileName} · 翻译失败`
-    : mode === 'loading'
-      ? `🔮 翻译器 · ${fileName} · 正在翻译…`
-      : `🔮 翻译器 · ${fileName}`;
+  const headerTitle =
+    mode === 'error'
+      ? `🔮 翻译器 · ${fileName} · 翻译失败`
+      : mode === 'loading'
+        ? `🔮 翻译器 · ${fileName} · 正在翻译…`
+        : `🔮 翻译器 · ${fileName}`;
 
-  const { codeHtml, humanHtml, auditHtml } = mode === 'content' ? renderColumnsHtml(lines) : { codeHtml: '', humanHtml: '', auditHtml: '' };
+  const { codeHtml, humanHtml, auditHtml } =
+    mode === 'content' ? renderColumnsHtml(lines) : { codeHtml: '', humanHtml: '', auditHtml: '' };
 
   return (
     <>
@@ -502,11 +561,13 @@ export const FileTranslatorApp: React.FC<{
         {/* Header */}
         <div className="ft-header">
           <span className="ft-title">{headerTitle}</span>
-          <span className="ft-meta">
-            {mode === 'content' ? `${cacheLabel} · ${issueLabel}` : ''}
-          </span>
-          <button className="ft-close-btn" title="关闭翻译面板" onClick={onClose}
-            dangerouslySetInnerHTML={{ __html: iconHtml('close', 12) }} />
+          <span className="ft-meta">{mode === 'content' ? `${cacheLabel} · ${issueLabel}` : ''}</span>
+          <button
+            className="ft-close-btn"
+            title="关闭翻译面板"
+            onClick={onClose}
+            dangerouslySetInnerHTML={{ __html: iconHtml('close', 12) }}
+          />
         </div>
 
         {/* Loading */}
@@ -531,20 +592,38 @@ export const FileTranslatorApp: React.FC<{
           <div className="ft-columns">
             <div className="ft-col" style={{ flex: colWidths.current[0] }}>
               <div className="ft-col-header ft-code-hdr">📄 原始代码</div>
-              <div className="ft-col-body" data-col="0" ref={(el) => { colBodiesRef.current[0] = el; }}
-                dangerouslySetInnerHTML={{ __html: codeHtml }} />
+              <div
+                className="ft-col-body"
+                data-col="0"
+                ref={(el) => {
+                  colBodiesRef.current[0] = el;
+                }}
+                dangerouslySetInnerHTML={{ __html: codeHtml }}
+              />
             </div>
             <div className="ft-col-resizer" onPointerDown={(e) => onColResizerStart(e, 0)} />
             <div className="ft-col" style={{ flex: colWidths.current[1] }}>
               <div className="ft-col-header ft-human-hdr">💬 人话视图</div>
-              <div className="ft-col-body" data-col="1" ref={(el) => { colBodiesRef.current[1] = el; }}
-                dangerouslySetInnerHTML={{ __html: humanHtml }} />
+              <div
+                className="ft-col-body"
+                data-col="1"
+                ref={(el) => {
+                  colBodiesRef.current[1] = el;
+                }}
+                dangerouslySetInnerHTML={{ __html: humanHtml }}
+              />
             </div>
             <div className="ft-col-resizer" onPointerDown={(e) => onColResizerStart(e, 1)} />
             <div className="ft-col" style={{ flex: colWidths.current[2] }}>
               <div className="ft-col-header ft-audit-hdr">🔍 审计</div>
-              <div className="ft-col-body" data-col="2" ref={(el) => { colBodiesRef.current[2] = el; }}
-                dangerouslySetInnerHTML={{ __html: auditHtml }} />
+              <div
+                className="ft-col-body"
+                data-col="2"
+                ref={(el) => {
+                  colBodiesRef.current[2] = el;
+                }}
+                dangerouslySetInnerHTML={{ __html: auditHtml }}
+              />
             </div>
           </div>
         )}

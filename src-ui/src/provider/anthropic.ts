@@ -205,7 +205,7 @@ function buildRequest(
     } else {
       // 纯数字字符串 = budget tokens（如 "4000"、"16000"）
       const budget = parseInt(thinkingCfg, 10);
-      if (!isNaN(budget) && budget > 0) {
+      if (!Number.isNaN(budget) && budget > 0) {
         r.thinking = { type: 'enabled', budget_tokens: Math.min(budget, 32000) };
       } else {
         // "auto" 或任意非 off 字符串 → 自动模式
@@ -307,7 +307,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
   const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
   let inTok = 0;
   let outTok = 0;
-  let cacheCreate = 0;
+  let _cacheCreate = 0;
   let cacheRead = 0;
   let finishReason = '';
   let haveUsage = false;
@@ -343,7 +343,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
           case 'message_start':
             if (ev.message?.usage) {
               inTok = ev.message.usage.input_tokens;
-              cacheCreate = ev.message.usage.cache_creation_input_tokens;
+              _cacheCreate = ev.message.usage.cache_creation_input_tokens;
               cacheRead = ev.message.usage.cache_read_input_tokens;
               haveUsage = true;
             }

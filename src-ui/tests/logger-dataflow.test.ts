@@ -153,9 +153,9 @@ describe('Logger 数据流链路验证', () => {
     const targetEntry = allEntries.find((e: any) => e.module === 'AuthModule' && e.message === 'token expired');
 
     expect(targetEntry).toBeDefined();
-    expect(targetEntry!.level).toBe('error');
-    expect(targetEntry!.ctx).toEqual({ userId: 'u123', retry: 3 });
-    expect(targetEntry!.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(targetEntry?.level).toBe('error');
+    expect(targetEntry?.ctx).toEqual({ userId: 'u123', retry: 3 });
+    expect(targetEntry?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 });
 

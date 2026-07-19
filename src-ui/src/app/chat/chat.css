@@ -1194,6 +1194,7 @@
   border-radius: 0;
   outline: none;
   resize: none;
+  overflow-y: hidden;
   transition: all var(--obs-snap);
 }
 

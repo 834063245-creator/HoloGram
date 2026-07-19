@@ -79,7 +79,7 @@ vi.mock('gsap', () => {
 
 // marked returns sanitized HTML — DOMPurify needs a real window in jsdom
 vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s, lexer: (s: string) => [] } }));
+vi.mock('marked', () => ({ marked: { parse: (s: string) => s, lexer: (_s: string) => [] } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 import { ChatCore } from '../src/app/chat/chat-core';
@@ -345,9 +345,9 @@ describe('ChatPanel session persistence', () => {
     it('completes without calling list_directory (regression: no backend hang)', async () => {
       panel = createChatPanel();
       // Set up factory that returns a minimal agent-like object
-      let factoryCalled = false;
+      let _factoryCalled = false;
       panel.setAgentFactory(async () => {
-        factoryCalled = true;
+        _factoryCalled = true;
         return {
           getSession: () => [{ role: 'system', content: 'sys' }],
           setSession: vi.fn(),
@@ -589,7 +589,7 @@ describe('ChatPanel session persistence', () => {
 
       // Verify localStorage was written (saveActiveSession writes there first)
       const hash = hashProjectPath('D:/test').toString(36);
-      const sessionId = (Session as any).getSessions?.()?.[0]?.id;
+      const _sessionId = (Session as any).getSessions?.()?.[0]?.id;
       // Just verify SOMETHING was written to localStorage
       const lsKeys = Object.keys(localStorage).filter((k) => k.startsWith('hologram_session_'));
       expect(lsKeys.length).toBeGreaterThan(0);

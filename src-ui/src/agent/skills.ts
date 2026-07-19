@@ -131,8 +131,8 @@ export function createSkillTool(registry: SkillRegistry): Tool {
     execute: async (args) => {
       // Hot-load — ensures newly installed skills are visible immediately
       const skills = await registry.reload();
-      const name = (args['skill'] as string)?.trim();
-      const skillArgs = (args['args'] as string) || '';
+      const name = (args.skill as string)?.trim();
+      const skillArgs = (args.args as string) || '';
 
       if (!name) {
         return skills.length === 0

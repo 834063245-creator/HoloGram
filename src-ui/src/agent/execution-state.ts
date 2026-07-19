@@ -79,7 +79,8 @@ export function createExecState(): ExecStateInstance {
 
   function _cancelAllPermissions(): void {
     while (_permCards.length > 0) {
-      const p = _permCards.pop()!;
+      const p = _permCards.pop();
+      if (!p) continue;
       p.cleanup();
       p.resolve({ allow: false, remember: false });
     }

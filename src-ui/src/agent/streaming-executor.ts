@@ -128,9 +128,9 @@ export class StreamingToolExecutor {
 
   /** Poll for completed results. Non-blocking — returns whatever is ready. */
   pollCompleted(): PendingResult[] {
-    const ready: PendingResult[] = [];
+    const _ready: PendingResult[] = [];
     // Check each pending promise — if done, move to completed
-    for (const [id, promise] of this.pending) {
+    for (const [_id, _promise] of this.pending) {
       // ponytail: Promise.race with a resolved promise to check if done.
       // We can't truly poll a Promise, so we use a marker.
       // Instead, we rely on awaitRemaining() for the final collection.
@@ -152,7 +152,7 @@ export class StreamingToolExecutor {
    *  "did not produce a result" instead of the real error. */
   async awaitRemaining(): Promise<PendingResult[]> {
     const remaining: PendingResult[] = [];
-    for (const [id, promise] of this.pending) {
+    for (const [_id, promise] of this.pending) {
       try {
         const result = await promise;
         remaining.push(result);
@@ -177,7 +177,7 @@ export class StreamingToolExecutor {
   }
 
   /** Execute a single tool — with preflight + post-tool hooks applied. */
-  private async executeTool(call: ToolCall, tool: Tool, idx: number): Promise<PendingResult> {
+  private async executeTool(call: ToolCall, tool: Tool, _idx: number): Promise<PendingResult> {
     let args: Record<string, unknown>;
     try {
       args = JSON.parse(call.arguments || '{}');
@@ -197,14 +197,14 @@ export class StreamingToolExecutor {
     if (this.preflightHooks) {
       try {
         preflightWarning = this.preflightHooks.check(call.name, args);
-      } catch (e: any) {
+      } catch (_e: any) {
         // Silent degrade — don't block execution
       }
     }
 
     // ── Architecture gate: HIGH risk → return blocked result, don't execute ──
-    if (preflightWarning && preflightWarning.includes('风险等级: HIGH')) {
-      const forceGate = args['_forceGate'] === true || args['_forceGate'] === 'true';
+    if (preflightWarning?.includes('风险等级: HIGH')) {
+      const forceGate = args._forceGate === true || args._forceGate === 'true';
       if (!forceGate) {
         const blockedResult: PendingResult = {
           call,
@@ -223,16 +223,16 @@ export class StreamingToolExecutor {
 
     // ponytail: inject _callId for agent_spawn so sub-agent events can correlate
     if (call.name === 'agent_spawn') {
-      args['_callId'] = call.id;
+      args._callId = call.id;
     }
 
     // Inject _agent_id for isolation — tells Rust backend which worktree to use
     if (this.agentId) {
-      args['_agent_id'] = this.agentId;
+      args._agent_id = this.agentId;
     }
 
     try {
-      const toolStart = performance.now();
+      const _toolStart = performance.now();
       let output = '';
 
       output = await tool.execute(args, (chunk) => {
@@ -252,7 +252,7 @@ export class StreamingToolExecutor {
       if (this.hooks) {
         try {
           output = await this.hooks.apply(call.name, args, output);
-        } catch (e: any) {
+        } catch (_e: any) {
           // Silent degrade — don't break the result
         }
       }

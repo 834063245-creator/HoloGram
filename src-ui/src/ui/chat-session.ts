@@ -10,9 +10,7 @@ import { createExecState, type ExecStateInstance } from '../agent/execution-stat
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
 import { loadSettings } from '../settings';
-import type { ChatSessionMeta } from './chat-store';
-import { bumpChat, bumpSession, getChatStore, msgStoreFor, msgStoreForActive } from './chat-store';
-import { iconHtml } from './icons';
+import { bumpSession, getChatStore, msgStoreFor } from './chat-store';
 import type { AssistantMessage, ChatMessage, MessageId, UserMessage } from './message-model';
 import {
   createAssistantMessage,
@@ -421,7 +419,7 @@ export async function scanMaxSessionId(projectPath: string): Promise<number> {
     for (const e of entries) {
       if (e.is_dir || !e.name || e.name === '_active.json') continue;
       const sid = parseInt(String(e.name).replace(/\.json$/, ''), 10);
-      if (!isNaN(sid) && sid > maxId) maxId = sid;
+      if (!Number.isNaN(sid) && sid > maxId) maxId = sid;
     }
     return maxId;
   } catch {
@@ -561,7 +559,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
       try {
         const lsData = JSON.parse(lsRaw);
         // Use localStorage if file was missing OR localStorage has newer data
-        if (!data || !data.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt)) {
+        if (!data?.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt)) {
           data = lsData;
         }
       } catch {
@@ -569,7 +567,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
       }
     }
   }
-  if (!data || !data.messages || data.messages.length === 0) {
+  if (!data?.messages || data.messages.length === 0) {
     ctx.addNotice('历史会话数据为空，已创建新会话', 'info');
     return;
   }
@@ -613,7 +611,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     }
   }
 
-  const newAgent = await getAgentFactory(ctx.storeId)!();
+  const newAgent = await getAgentFactory(ctx.storeId)?.();
   if (!newAgent) {
     ctx.addNotice('Agent 未就绪（API Key 未配置？），历史会话暂未恢复', 'warn');
     return;
@@ -655,7 +653,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
 
 /** Scan sessions directory — no agent required. */
 export async function listSavedSessions(
-  ctx: SessionContext,
+  _ctx: SessionContext,
   projectPath: string,
 ): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
   const dirPath = sessionsDir(projectPath);
@@ -679,7 +677,7 @@ export async function listSavedSessions(
       !e.is_dir &&
       e.name.endsWith('.json') &&
       e.name !== '_active.json' &&
-      !isNaN(parseInt(e.name.replace('.json', ''), 10)),
+      !Number.isNaN(parseInt(e.name.replace('.json', ''), 10)),
   );
 
   // ── Read all session files in parallel with a 10s timeout ──
@@ -749,7 +747,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     return;
   }
 
-  const newAgent = await getAgentFactory(ctx.storeId)!();
+  const newAgent = await getAgentFactory(ctx.storeId)?.();
   if (!newAgent) {
     ctx.addNotice('无法创建 Agent', 'error');
     return;
@@ -765,7 +763,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     data.label && !data.label.startsWith('会话 ') && data.label !== '已恢复的会话'
       ? data.label
       : firstUser
-        ? firstUser.content!.slice(0, 28) + (firstUser.content!.length > 28 ? '…' : '')
+        ? firstUser.content?.slice(0, 28) + (firstUser.content?.length > 28 ? '…' : '')
         : `会话 ${st1.sessions.length + 1}`;
 
   // ponytail: messages in per-session stores — no saveCurrentMessages needed

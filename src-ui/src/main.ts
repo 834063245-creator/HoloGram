@@ -55,7 +55,7 @@ function FV(): any {
  * @param graph - 图对象，包含 nodes（节点集合）和 edges（边集合）
  * @returns 边索引对数组，每个元素为 [sourceIndex, targetIndex] 的元组
  */
-function buildEdgePairs(graph: any): Array<[number, number]> {
+function _buildEdgePairs(graph: any): Array<[number, number]> {
   // 统一处理节点数据：支持数组或对象两种结构
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes || {});
   // 建立节点ID到数组索引的映射表，用于快速查找
@@ -75,7 +75,7 @@ function buildEdgePairs(graph: any): Array<[number, number]> {
   return pairs;
 }
 
-function layoutViaWorker(nodeCount: number, pairs: Array<[number, number]>): Promise<Float32Array> {
+function _layoutViaWorker(nodeCount: number, pairs: Array<[number, number]>): Promise<Float32Array> {
   return new Promise((resolve) => {
     try {
       const worker = new Worker(new URL('./ui/layout.worker.ts', import.meta.url), { type: 'module' });
@@ -363,7 +363,7 @@ function escLayer(): void {
   else if (dock.isOpen('check')) dock.closePanel('check');
   else if (dock.isOpen('constraints')) dock.closePanel('constraints');
   else if (chatPanel.isOpen()) chatPanel.close();
-  else if (FV() && FV().get().isOpen) FV().get().close();
+  else if (FV()?.get().isOpen) FV().get().close();
   else starGraph.clearAgentHighlight();
 }
 

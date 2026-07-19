@@ -140,7 +140,7 @@ const ViolationItem: React.FC<{ v: Violation; label: string }> = ({ v, label }) 
               >
                 {name}
               </span>
-              {i < Math.min(sig.affected_nodes!.length, 8) - 1 && ' · '}
+              {i < Math.min(sig.affected_nodes?.length ?? 0, 8) - 1 && ' · '}
             </React.Fragment>
           ))}
           {sig.affected_nodes.length > 8 && ` … +${sig.affected_nodes.length - 8}`}
@@ -172,7 +172,7 @@ export function CheckPanel() {
   // 这里在「重新打开」与「新结果推入」时复现同样的复位。
   useEffect(() => {
     if (open) setView('current');
-  }, [open, result]);
+  }, [open]);
 
   // ── History loading ──
 

@@ -98,7 +98,7 @@ export class GraphNodeRenderer {
     this.host._glowRgba[i * 4 + 1] = g;
     this.host._glowRgba[i * 4 + 2] = b;
     this.host._glowRgba[i * 4 + 3] = a;
-    this.host.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+    this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
   }
 
   _setGlowColor(i: number, c: THREE.Color | number, a?: number): void {
@@ -109,7 +109,7 @@ export class GraphNodeRenderer {
   _setGlowAlpha(i: number, a: number): void {
     if (i < this.host._nodeCount) {
       this.host._glowRgba[i * 4 + 3] = a;
-      if (this.host.nodeGlowsPoints) this.host.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+      if (this.host.nodeGlowsPoints) this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
     }
   }
 
@@ -119,13 +119,13 @@ export class GraphNodeRenderer {
     this.host._glow2Rgba[i * 4 + 1] = g;
     this.host._glow2Rgba[i * 4 + 2] = b;
     this.host._glow2Rgba[i * 4 + 3] = a;
-    this.host.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+    this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
   }
 
   _setGlow2Alpha(i: number, a: number): void {
     if (i < this.host._nodeCount && this.host._glow2Rgba.length > 0) {
       this.host._glow2Rgba[i * 4 + 3] = a;
-      if (this.host.nodeGlows2Points) this.host.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+      if (this.host.nodeGlows2Points) this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
     }
   }
 
@@ -134,17 +134,17 @@ export class GraphNodeRenderer {
       this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
       if (this.host.nodeCoresInstanced.instanceColor) this.host.nodeCoresInstanced.instanceColor.needsUpdate = true;
     }
-    if (this.host.nodeGlowsPoints?.geometry.attributes['color']) {
-      this.host.nodeGlowsPoints.geometry.attributes['color'].needsUpdate = true;
+    if (this.host.nodeGlowsPoints?.geometry.attributes.color) {
+      this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
     }
-    if (this.host.nodeGlowsPoints?.geometry.attributes['size']) {
-      this.host.nodeGlowsPoints.geometry.attributes['size'].needsUpdate = true;
+    if (this.host.nodeGlowsPoints?.geometry.attributes.size) {
+      this.host.nodeGlowsPoints.geometry.attributes.size.needsUpdate = true;
     }
-    if (this.host.nodeGlows2Points?.geometry.attributes['color']) {
-      this.host.nodeGlows2Points.geometry.attributes['color'].needsUpdate = true;
+    if (this.host.nodeGlows2Points?.geometry.attributes.color) {
+      this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
     }
-    if (this.host.nodeGlows2Points?.geometry.attributes['size']) {
-      this.host.nodeGlows2Points.geometry.attributes['size'].needsUpdate = true;
+    if (this.host.nodeGlows2Points?.geometry.attributes.size) {
+      this.host.nodeGlows2Points.geometry.attributes.size.needsUpdate = true;
     }
   }
 
@@ -154,11 +154,11 @@ export class GraphNodeRenderer {
   }
 
   _flushOverrideAttrs(): void {
-    if (this.host.nodeGlowsPoints?.geometry.attributes['override']) {
-      this.host.nodeGlowsPoints.geometry.attributes['override'].needsUpdate = true;
+    if (this.host.nodeGlowsPoints?.geometry.attributes.override) {
+      this.host.nodeGlowsPoints.geometry.attributes.override.needsUpdate = true;
     }
-    if (this.host.nodeGlows2Points?.geometry.attributes['override']) {
-      this.host.nodeGlows2Points.geometry.attributes['override'].needsUpdate = true;
+    if (this.host.nodeGlows2Points?.geometry.attributes.override) {
+      this.host.nodeGlows2Points.geometry.attributes.override.needsUpdate = true;
     }
   }
 
@@ -356,16 +356,16 @@ export class GraphNodeRenderer {
     const magArr = new Float32Array(newCapacity);
     const riskArr = new Float32Array(newCapacity);
     const hslArr = new Float32Array(newCapacity * 3);
-    phaseArr.set(oldGlowGeo.attributes['phase'].array as Float32Array);
-    speedArr.set(oldGlowGeo.attributes['speed'].array as Float32Array);
-    magArr.set(oldGlowGeo.attributes['mag'].array as Float32Array);
-    riskArr.set(oldGlowGeo.attributes['risk'].array as Float32Array);
-    hslArr.set(oldGlowGeo.attributes['baseHSL'].array as Float32Array);
+    phaseArr.set(oldGlowGeo.attributes.phase.array as Float32Array);
+    speedArr.set(oldGlowGeo.attributes.speed.array as Float32Array);
+    magArr.set(oldGlowGeo.attributes.mag.array as Float32Array);
+    riskArr.set(oldGlowGeo.attributes.risk.array as Float32Array);
+    hslArr.set(oldGlowGeo.attributes.baseHSL.array as Float32Array);
     const glowPosArr = new Float32Array(newCapacity * 3);
-    glowPosArr.set(oldGlowGeo.attributes['position'].array as Float32Array);
+    glowPosArr.set(oldGlowGeo.attributes.position.array as Float32Array);
     const glow2PosArr = new Float32Array(newCapacity * 3);
     if (this.host.nodeGlows2Points)
-      glow2PosArr.set(this.host.nodeGlows2Points.geometry.attributes['position'].array as Float32Array);
+      glow2PosArr.set(this.host.nodeGlows2Points.geometry.attributes.position.array as Float32Array);
 
     const addAnimAttrs = (geo: THREE.BufferGeometry) => {
       geo.setAttribute('phase', new THREE.BufferAttribute(phaseArr, 1));
@@ -499,30 +499,30 @@ export class GraphNodeRenderer {
 
       // Glow points (position+color+size are per-geometry; phase/speed/mag/risk/baseHSL/override are shared)
       const gAttr = this.host.nodeGlowsPoints.geometry.attributes;
-      (gAttr['position'].array as Float32Array)[i * 3] = px;
-      (gAttr['position'].array as Float32Array)[i * 3 + 1] = py;
-      (gAttr['position'].array as Float32Array)[i * 3 + 2] = pz;
+      (gAttr.position.array as Float32Array)[i * 3] = px;
+      (gAttr.position.array as Float32Array)[i * 3 + 1] = py;
+      (gAttr.position.array as Float32Array)[i * 3 + 2] = pz;
       this.host._glowRgba[i * 4] = gc.r;
       this.host._glowRgba[i * 4 + 1] = gc.g;
       this.host._glowRgba[i * 4 + 2] = gc.b;
       this.host._glowRgba[i * 4 + 3] = 0.85;
       this.host._glowSizes[i] = 1.0 * 0.8; // ponytail: 新节点 deg=0, baseScale=0.8; _rebuildEdgeData 后不回填, 跟 core 对齐足够
       // Shared anim attrs (write once — both geometries share the same arrays)
-      (gAttr['phase'].array as Float32Array)[i] = Math.random() * Math.PI * 2;
-      (gAttr['speed'].array as Float32Array)[i] = 0.5 + Math.random() * 2.5;
-      (gAttr['mag'].array as Float32Array)[i] = 0.15;
-      (gAttr['risk'].array as Float32Array)[i] = 0;
-      (gAttr['baseHSL'].array as Float32Array)[i * 3] = hsl.h;
-      (gAttr['baseHSL'].array as Float32Array)[i * 3 + 1] = hsl.s;
-      (gAttr['baseHSL'].array as Float32Array)[i * 3 + 2] = hsl.l;
+      (gAttr.phase.array as Float32Array)[i] = Math.random() * Math.PI * 2;
+      (gAttr.speed.array as Float32Array)[i] = 0.5 + Math.random() * 2.5;
+      (gAttr.mag.array as Float32Array)[i] = 0.15;
+      (gAttr.risk.array as Float32Array)[i] = 0;
+      (gAttr.baseHSL.array as Float32Array)[i * 3] = hsl.h;
+      (gAttr.baseHSL.array as Float32Array)[i * 3 + 1] = hsl.s;
+      (gAttr.baseHSL.array as Float32Array)[i * 3 + 2] = hsl.l;
       this.host._overrideFlags[i] = 0;
 
       // Outer glow (separate position/color/size)
       if (this.host.nodeGlows2Points) {
         const g2Attr = this.host.nodeGlows2Points.geometry.attributes;
-        (g2Attr['position'].array as Float32Array)[i * 3] = px;
-        (g2Attr['position'].array as Float32Array)[i * 3 + 1] = py;
-        (g2Attr['position'].array as Float32Array)[i * 3 + 2] = pz;
+        (g2Attr.position.array as Float32Array)[i * 3] = px;
+        (g2Attr.position.array as Float32Array)[i * 3 + 1] = py;
+        (g2Attr.position.array as Float32Array)[i * 3 + 2] = pz;
         this.host._glow2Rgba[i * 4] = gc.r;
         this.host._glow2Rgba[i * 4 + 1] = gc.g;
         this.host._glow2Rgba[i * 4 + 2] = gc.b;
@@ -568,19 +568,19 @@ export class GraphNodeRenderer {
       this.host.nodeCoresInstanced.setMatrixAt(i, _m.compose(_v.set(px, py, pz), _q, new THREE.Vector3(s, s, s)));
       // Glow point positions
       if (gAttr) {
-        (gAttr['position'].array as Float32Array)[i * 3] = px;
-        (gAttr['position'].array as Float32Array)[i * 3 + 1] = py;
-        (gAttr['position'].array as Float32Array)[i * 3 + 2] = pz;
+        (gAttr.position.array as Float32Array)[i * 3] = px;
+        (gAttr.position.array as Float32Array)[i * 3 + 1] = py;
+        (gAttr.position.array as Float32Array)[i * 3 + 2] = pz;
       }
       if (g2Attr) {
-        (g2Attr['position'].array as Float32Array)[i * 3] = px;
-        (g2Attr['position'].array as Float32Array)[i * 3 + 1] = py;
-        (g2Attr['position'].array as Float32Array)[i * 3 + 2] = pz;
+        (g2Attr.position.array as Float32Array)[i * 3] = px;
+        (g2Attr.position.array as Float32Array)[i * 3 + 1] = py;
+        (g2Attr.position.array as Float32Array)[i * 3 + 2] = pz;
       }
     }
     this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
-    if (gAttr) gAttr['position'].needsUpdate = true;
-    if (g2Attr) g2Attr['position'].needsUpdate = true;
+    if (gAttr) gAttr.position.needsUpdate = true;
+    if (g2Attr) g2Attr.position.needsUpdate = true;
   }
 
   /** Sync all core matrices — call after incremental update to flush positions. */

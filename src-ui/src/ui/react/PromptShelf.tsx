@@ -5,7 +5,8 @@
 // Handles both ask_user cards and permission approvals.
 // Does NOT live inside the messages array — independent React root.
 
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import type React from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import './prompt-shelf.css';
 
 // ── Types ──
@@ -216,7 +217,11 @@ const PermCard: React.FC<{
   }, [onResolve]);
 
   return (
-    <div className={`prompt-shelf__card${prompt.danger ? ' prompt-shelf__card--danger' : ''}`} role="dialog" aria-modal="false">
+    <div
+      className={`prompt-shelf__card${prompt.danger ? ' prompt-shelf__card--danger' : ''}`}
+      role="dialog"
+      aria-modal="false"
+    >
       <div className="prompt-shelf__head">
         <span className={`prompt-shelf__tag${prompt.danger ? ' prompt-shelf__tag--danger' : ''}`}>
           <span dangerouslySetInnerHTML={{ __html: svgIcon('lock', 10) }} />

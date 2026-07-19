@@ -84,7 +84,7 @@ export class GraphInteractionController {
 
   updateHover(): void {
     if (this.host._nodeCount === 0) return;
-    if (!isFinite(this.host.mouse.x) || !isFinite(this.host.mouse.y)) return;
+    if (!Number.isFinite(this.host.mouse.x) || !Number.isFinite(this.host.mouse.y)) return;
 
     // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
     const cloudViewActive = this.host._fold.foldMode && this.host._fold.galaxyGlows.length > 0;
@@ -99,7 +99,7 @@ export class GraphInteractionController {
       const galaxyHits = this.host.raycaster.intersectObjects(coreSprites);
       if (galaxyHits.length > 0 && this.host.mouse.x > -999) {
         this.host.container.style.cursor = 'pointer';
-        const gIdx = galaxyHits[0].object.userData['galaxyIndex'] as number | undefined;
+        const gIdx = galaxyHits[0].object.userData.galaxyIndex as number | undefined;
         if (gIdx !== undefined && gIdx < this.host._fold.galaxyMeta.length) {
           this.host.hoveredGalaxyIdx = gIdx;
           const gm = this.host._fold.galaxyMeta[gIdx];
@@ -158,7 +158,7 @@ export class GraphInteractionController {
       const coreSprites = this.host._fold.galaxyGlows.filter((_, i) => i % 2 === 1);
       const hits = this.host.raycaster.intersectObjects(coreSprites);
       if (hits.length > 0) {
-        return (hits[0].object.userData['galaxyId'] as string) || null;
+        return (hits[0].object.userData.galaxyId as string) || null;
       }
       return null;
     };

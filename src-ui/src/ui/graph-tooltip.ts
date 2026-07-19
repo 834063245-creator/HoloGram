@@ -89,7 +89,7 @@ export class GraphTooltip {
     communities: any[],
     nodeCommMap: Map<number, string>,
     foldMode: boolean,
-    fold: { galaxyMeta: any[]; enteredGalaxyId: string | null; galaxyGlows: any[] },
+    _fold: { galaxyMeta: any[]; enteredGalaxyId: string | null; galaxyGlows: any[] },
     container: HTMLElement,
     camera: THREE.Camera,
     _nodeCount: number,
@@ -115,7 +115,7 @@ export class GraphTooltip {
       metaText += ` · 🌌 ${commLabel}`;
     }
     metaEl.textContent = metaText;
-    (metaEl as HTMLElement).dataset['kind'] = kind;
+    (metaEl as HTMLElement).dataset.kind = kind;
     this.tooltipEl.querySelector('.tt-loc')!.textContent = node.location || '';
     const i = hoveredIdx;
     this._tmpVec3.set(nodePositions[i * 3], nodePositions[i * 3 + 1], nodePositions[i * 3 + 2]);
@@ -171,12 +171,12 @@ export class GraphTooltip {
     this.host.container.appendChild(this.detailCard);
 
     // Close
-    this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => {
+    this.detailCard.querySelector('.dc-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this.hideDetail();
     });
     // Focus subgraph
-    this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
+    this.detailCard.querySelector('.dc-focus-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
       if (this.selectedIdx >= 0) {
@@ -186,19 +186,19 @@ export class GraphTooltip {
       }
     });
     // Blast radius
-    this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
+    this.detailCard.querySelector('.dc-blast-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
       if (this.selectedIdx >= 0) this.host._analysis.startBlastMode(this.selectedIdx);
     });
-    this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('contextmenu', (e) => {
+    this.detailCard.querySelector('.dc-blast-btn')?.addEventListener('contextmenu', (e) => {
       e.stopPropagation();
       e.preventDefault();
       const panel = this.detailCard.querySelector('.dc-blast-filters') as HTMLElement;
       if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
     });
     // Open file
-    this.detailCard.querySelector('.dc-open-btn')!.addEventListener('pointerdown', (e) => {
+    this.detailCard.querySelector('.dc-open-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
       if (this.selectedIdx >= 0) {
@@ -209,12 +209,12 @@ export class GraphTooltip {
           const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
           const lineStr = lastColon > 1 ? loc.substring(lastColon + 1) : '';
           const line = parseInt(lineStr, 10);
-          shell.navigateToFile(filePath, isNaN(line) ? undefined : line);
+          shell.navigateToFile(filePath, Number.isNaN(line) ? undefined : line);
         }
       }
     });
     // Ask Agent
-    this.detailCard.querySelector('.dc-agent-btn')!.addEventListener('pointerdown', (e) => {
+    this.detailCard.querySelector('.dc-agent-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
       if (this.selectedIdx >= 0) {
@@ -239,7 +239,7 @@ export class GraphTooltip {
     const node = graphNodes[idx];
     // Emit file path for file tree <-> graph linking
     if (node.location) {
-      const filePath =
+      const _filePath =
         node.location.indexOf(':') >= 0 ? node.location.substring(0, node.location.lastIndexOf(':')) : node.location;
     }
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();

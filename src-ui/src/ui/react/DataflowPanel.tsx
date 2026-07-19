@@ -250,7 +250,7 @@ export function DataflowPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
   const onClose = useCallback(() => closePanel('dataflow'), [closePanel]);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
-  const [tracesLoaded, setTracesLoaded] = useState(false);
+  const [_tracesLoaded, setTracesLoaded] = useState(false);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [rightHtml, setRightHtml] = useState('');
   const [exploreQuery, setExploreQuery] = useState('');

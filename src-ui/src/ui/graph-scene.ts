@@ -239,7 +239,7 @@ export function buildGalaxyClouds(
 export function buildGalaxyLabels(
   container: HTMLElement,
   galaxyMeta: Array<{ id: string; memberIndices: number[]; centroid: THREE.Vector3; label: string; radius: number }>,
-  camera: THREE.Camera,
+  _camera: THREE.Camera,
 ): HTMLDivElement[] {
   const maxLabels = Math.min(15, galaxyMeta.length);
   const divs: HTMLDivElement[] = [];

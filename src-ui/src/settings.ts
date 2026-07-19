@@ -131,7 +131,7 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
       if (!p.apiKey || p.apiKey.trim() === '') {
         try {
           const stored: string | null = await rpc('credential_get', { provider: p.name });
-          if (stored && stored.trim()) {
+          if (stored?.trim()) {
             p.apiKey = stored.trim();
             changed = true;
           }
@@ -154,7 +154,7 @@ export function getActiveProvider(s: AppSettings): ProviderSettings {
   return active || s.providers[0];
 }
 
-function setActiveProvider(s: AppSettings, name: string): AppSettings {
+function _setActiveProvider(s: AppSettings, name: string): AppSettings {
   if (!s.providers.find((p) => p.name === name)) {
     throw new Error(`Unknown provider: ${name}`);
   }

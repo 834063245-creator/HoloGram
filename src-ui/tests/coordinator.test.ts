@@ -19,9 +19,9 @@ describe('SubAgentPool', () => {
     const pool = new SubAgentPool();
     const spawned = pool.spawn('test task', fakeRun('done'));
     expect(spawned).toBeTruthy();
-    expect(spawned!.id.startsWith('subagent-')).toBe(true);
-    expect(spawned!.signal).toBeInstanceOf(AbortSignal);
-    const handle = await spawned!.done;
+    expect(spawned?.id.startsWith('subagent-')).toBe(true);
+    expect(spawned?.signal).toBeInstanceOf(AbortSignal);
+    const handle = await spawned?.done;
     expect(handle.status).toBe(SubAgentStatus.Completed);
     expect(handle.result).toBe('done');
   });
@@ -37,7 +37,7 @@ describe('SubAgentPool', () => {
       return Promise.resolve({ text: 'ok' });
     });
     expect(received).toBeInstanceOf(AbortSignal);
-    expect(received!.aborted).toBe(false);
+    expect(received?.aborted).toBe(false);
   });
 
   it('tracks running agents', () => {
@@ -53,7 +53,7 @@ describe('SubAgentPool', () => {
   it('done resolves with failed status when runFn rejects', async () => {
     const pool = new SubAgentPool();
     const spawned = pool.spawn('will fail', fakeRun('', 10, true));
-    const handle = await spawned!.done;
+    const handle = await spawned?.done;
     expect(handle.status).toBe(SubAgentStatus.Failed);
     expect(handle.error).toContain('simulated failure');
   });
@@ -61,7 +61,7 @@ describe('SubAgentPool', () => {
   it('done resolves with failed status when runFn resolves with err', async () => {
     const pool = new SubAgentPool();
     const spawned = pool.spawn('soft fail', () => Promise.resolve({ text: '', err: 'boom' }));
-    const handle = await spawned!.done;
+    const handle = await spawned?.done;
     expect(handle.status).toBe(SubAgentStatus.Failed);
     expect(handle.error).toBe('boom');
   });
@@ -77,7 +77,7 @@ describe('SubAgentPool', () => {
 
     expect(pool.stop(spawned.id)).toBe(true);
     // The actual work must receive the abort — this is the whole point of the fix.
-    expect(received!.aborted).toBe(true);
+    expect(received?.aborted).toBe(true);
     expect(pool.runningCount).toBe(0);
 
     const handle = await spawned.done;
@@ -121,7 +121,7 @@ describe('SubAgentPool', () => {
     const handle = await spawned.done;
     expect(handle.status).toBe(SubAgentStatus.Failed);
     expect(handle.error).toContain('timeout');
-    expect(received!.aborted).toBe(true);
+    expect(received?.aborted).toBe(true);
   });
 
   it('per-spawn timeout override wins over pool default', async () => {
@@ -168,7 +168,7 @@ describe('SubAgentPool', () => {
     let resolveRun: ((v: { text: string }) => void) | undefined;
     const spawned = pool.spawn('race', () => new Promise<{ text: string }>((r) => (resolveRun = r)))!;
     pool.stop(spawned.id);
-    resolveRun!({ text: 'late' });
+    resolveRun?.({ text: 'late' });
     const handle = await spawned.done;
     expect(handle.status).toBe(SubAgentStatus.Stopped);
     expect(handle.result).toBeUndefined();

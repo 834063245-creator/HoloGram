@@ -82,7 +82,6 @@ vi.mock('three', () => {
       r = 1;
       g = 1;
       b = 1;
-      constructor(_hex?: number) {}
       getHex() {
         return 0xffffff;
       }
@@ -206,7 +205,7 @@ vi.mock('three', () => {
     },
     ShaderMaterial: function (this: any, opts?: any) {
       this.dispose = vi.fn();
-      this.uniforms = opts && opts.uniforms ? opts.uniforms : { uTime: { value: 0 }, uPulseTime: { value: 0 } };
+      this.uniforms = opts?.uniforms ? opts.uniforms : { uTime: { value: 0 }, uPulseTime: { value: 0 } };
       this.vertexShader = opts?.vertexShader || '';
       this.fragmentShader = opts?.fragmentShader || '';
       this.transparent = opts?.transparent ?? false;
@@ -356,7 +355,6 @@ vi.mock('three', () => {
       dispose = vi.fn();
     },
     LineBasicMaterial: class {
-      constructor(_opts?: any) {}
       dispose() {}
     },
     ACESFilmicToneMapping: 0,
