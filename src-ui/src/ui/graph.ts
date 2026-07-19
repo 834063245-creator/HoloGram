@@ -107,6 +107,18 @@ export class StarGraph {
   private _edges!: GraphEdgeRenderer;
   raycaster!: THREE.Raycaster;
 
+  // ponytail: 生产构建时 constructor 内 handleResize/setupHover 先于
+  // render 执行，这些字段在渲染时才赋值。显式初始化为安全值防崩。
+  mouse = new THREE.Vector2();
+  edgeLineGroups: any[] = [];
+  nodeLabelIdx: number[] = [];
+  labelDivs: HTMLDivElement[] = [];
+  nodePositions = new Float32Array(0);
+  tmpVec3 = new THREE.Vector3();
+  nodeCommMap = new Map<number, string>();
+  _initCamPos = new THREE.Vector3();
+  _initCamTarget = new THREE.Vector3();
+
   // Nebula + HoloGrid
   private nebulaDust!: THREE.Points;
   nebulaPhases: number[] | null = null;
@@ -327,6 +339,14 @@ export class StarGraph {
     this.holoGrid = result.mesh;
     this.holoGridY = result.gridY;
   }
+
+  // ponytail: LifecycleHost 要求的方法，P4 拆分时漏实现
+  positionGrid(pos: Float32Array): void {
+    Scene.positionGrid(this.holoGrid!, pos, this.holoGridY);
+  }
+  // ponytail: edge particles / twinkle 计划中未实现，空桩防崩
+  initEdgeParticles(_pos: Float32Array, _data: import('./graph-types').EdgeData[]): void {}
+  initTwinkleData(_n: number): void {}
 
   // ── Path finding — delegated to GraphAnalysis ──────────────
 

@@ -40,6 +40,8 @@ export class GraphLabelSystem {
   }
 
   updateLabels(): void {
+    // ponytail: 生产构建时 animation loop 在 render 之前启动，这些字段尚未赋值
+    if (!this.host.nodeLabelIdx || this.host.nodeLabelIdx.length === 0) return;
     const halfW = this.host.container.clientWidth * 0.5,
       halfH = this.host.container.clientHeight * 0.5;
     const hoverI = this.host.hoveredIdx;

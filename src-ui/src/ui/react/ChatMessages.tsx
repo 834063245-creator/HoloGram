@@ -798,7 +798,7 @@ export const ChatMessagesApp: React.FC<{
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
     });
-  }, [scrollEl!.style, messages.length, messages, scrollEl!.scrollHeight, scrollEl] as const); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scrollEl?.style, messages.length, messages, scrollEl?.scrollHeight, scrollEl] as const); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll during streaming — MutationObserver catches incremental DOM
   // additions when message parts are mutated in-place (no version bump).

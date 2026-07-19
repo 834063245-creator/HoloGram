@@ -1066,6 +1066,8 @@ export class GraphSceneLifecycle {
     this.host.pulseTime += 0.03 * (isFull ? 1.5 : 1);
 
     if (!IDLE || this._idleCounter % 3 === 0) {
+      // ponytail: 无数据时跳过，animation loop 早于 render 执行
+      if (this.host._nodeCount > 0) {
       this.host._tooltip.updateTooltip(
         this.host.hoveredIdx,
         this.host.hoveredGalaxyIdx,
@@ -1082,6 +1084,7 @@ export class GraphSceneLifecycle {
       );
       this.host._labels.updateLabels();
       this.host._fold._updateCommunityRingHover();
+      } // _nodeCount > 0
     }
     this.host.controls.update();
     this.host.composer.render();

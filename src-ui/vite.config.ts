@@ -9,6 +9,7 @@ import { defineConfig } from 'vite';
 // misses. Use .native (GetFinalPathNameByHandleW) which returns canonical case.
 export default defineConfig({
   root: realpathSync.native(process.cwd()),
+  base: './',
   build: {
     target: 'es2021',
     outDir: 'dist',
