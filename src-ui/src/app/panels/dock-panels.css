@@ -3020,3 +3020,351 @@
   background: none;
   border-bottom-color: var(--obs-line-soft);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   P7b · 六面板内部（原型 .row / .chip / sum-card / mini-btn 语言；
+   同选择器后写优先，存量规则不动。
+   偏差说明：sum-card 的 serif 大数字与 meter、违规条目的 L4/环 fail chip、
+   热点 .heat 条均无对应 DOM 元素——纯 CSS 不造假数据，只落可落地部分）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. 统一行语言（原型 .row：8px 垂直节奏 + line-soft 底边 + hover 0.045）── */
+.check-vitem {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--obs-line-soft);
+  transition: background var(--obs-snap);
+}
+.check-vitem:hover {
+  background: rgba(160, 180, 220, 0.045);
+}
+
+.tl-event {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--obs-line-soft);
+  transition: background var(--obs-snap);
+}
+.tl-event:hover,
+.tl-event-clickable:hover {
+  background: rgba(160, 180, 220, 0.045);
+}
+
+.hs-item {
+  padding: 8px 6px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--obs-line-soft);
+  border-radius: 0;
+}
+.hs-item:last-child {
+  border-bottom: none;
+}
+.hs-item:hover {
+  background: rgba(160, 180, 220, 0.045);
+  border-left-color: transparent;
+}
+
+.cs-toggle {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--obs-line-soft);
+}
+.cs-toggle:last-child {
+  border-bottom: none;
+}
+
+/* ── 2. 简报摘要卡（sum-card 配方：1px line + radius 10 + 淡底；
+       fail 态由相邻 status-bar 换 fail 淡底）── */
+.check-summary {
+  margin: 10px 13px 4px;
+  padding: 12px 13px;
+  border: 1px solid var(--obs-line);
+  border-radius: 10px;
+  background: rgba(99, 178, 125, 0.05);
+  color: var(--obs-text-2);
+}
+.check-status-bar.check-status-fail + .check-summary {
+  background: rgba(217, 99, 95, 0.05);
+}
+
+/* ── 3. 违规条目：vloc mono text-3 ── */
+.check-vloc {
+  color: var(--obs-text-3);
+}
+
+/* ── 4. 热点：严重度语义色（hs-count-warn/critical、hs-sev-* 此前无样式裸奔）── */
+.hs-count {
+  font-family: var(--obs-font-mono);
+  color: var(--obs-text-2);
+}
+.hs-count-warn {
+  color: var(--obs-warn);
+}
+.hs-count-critical {
+  color: var(--obs-fail);
+}
+.hs-desc {
+  color: var(--obs-text-2);
+}
+.hs-sev-high {
+  color: var(--obs-warn);
+}
+.hs-sev-critical {
+  color: var(--obs-fail);
+}
+.hs-line {
+  font-family: var(--obs-font-mono);
+  color: var(--obs-text-3);
+}
+
+/* ── 5. 时间轴：dot 语义色 6px / divider mono text-3 / file-chip = chip 配方 ── */
+.tl-event-dot {
+  border: none;
+  opacity: 1;
+}
+.tl-dot-pass,
+.tl-dot-fail {
+  border-color: transparent;
+  opacity: 1;
+}
+.tl-time-divider span {
+  color: var(--obs-text-3);
+}
+.tl-file-chip {
+  font-size: calc(9.5px * var(--font-scale));
+  color: var(--obs-text-2);
+  background: none;
+  border: 1px solid var(--obs-line);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.tl-file-chip:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+  border-color: var(--obs-line);
+}
+.tl-file-chip-action {
+  color: var(--obs-text-3);
+}
+
+/* ── 6. 约束表单：开关（轨道 line-soft、on 态黄铜圆点）/ tag chip / mini-btn ── */
+.cs-toggle input[type="checkbox"] {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--obs-line-soft);
+}
+.cs-toggle input[type="checkbox"]::after {
+  background: var(--obs-text-3);
+}
+.cs-toggle input[type="checkbox"]:checked {
+  background: var(--obs-brass-dim);
+  border-color: rgba(201, 162, 92, 0.45);
+}
+.cs-toggle input[type="checkbox"]:checked::after {
+  background: var(--obs-brass);
+}
+.cs-tag {
+  font-size: calc(9.5px * var(--font-scale));
+  color: var(--obs-text-2);
+  background: none;
+  border: 1px solid var(--obs-line);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.cs-btn {
+  border-radius: 7px;
+}
+.cs-btn-save {
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+  border: 1px solid rgba(201, 162, 92, 0.45);
+}
+.cs-btn-save:hover {
+  background: rgba(201, 162, 92, 0.22);
+}
+.cs-btn-reset {
+  color: var(--obs-text-2);
+  background: none;
+  border: 1px solid var(--obs-line);
+}
+.cs-btn-reset:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+
+/* ── 7. 数据流：df-tag 淡底淡边（语义色保持）/ df-md 对齐 P7a / df-df-table 发丝线 ── */
+.df-tag {
+  border-radius: 4px;
+}
+.df-tag-read {
+  color: var(--obs-blue);
+  background: rgba(125, 179, 232, 0.07);
+  border: 1px solid rgba(125, 179, 232, 0.22);
+}
+.df-tag-write {
+  color: var(--obs-brass-hi);
+  background: rgba(201, 162, 92, 0.07);
+  border: 1px solid rgba(201, 162, 92, 0.25);
+}
+.df-tag-trigger {
+  color: #c0a8ff;
+  background: rgba(160, 136, 224, 0.07);
+  border: 1px solid rgba(160, 136, 224, 0.25);
+}
+.df-tag-await {
+  color: rgba(140, 230, 210, 0.8);
+  background: rgba(100, 200, 180, 0.06);
+  border: 1px solid rgba(100, 200, 180, 0.22);
+}
+.df-md-h3 {
+  font-family: var(--obs-font-serif);
+  font-weight: 500;
+  font-size: calc(12.5px * var(--font-scale));
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--obs-text);
+  border-bottom: none;
+}
+.df-md-h4 {
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+}
+.df-md-code {
+  border: 1px solid var(--obs-line-soft);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+}
+.df-md-inline-code {
+  color: var(--obs-brass-hi);
+  background: rgba(201, 162, 92, 0.1);
+  border-radius: 4px;
+  padding: 0.5px 5px;
+}
+.df-md-bq {
+  border-left: 2px solid var(--obs-brass);
+  padding: 2px 12px;
+  color: var(--obs-text-2);
+  font-style: normal;
+  background: none;
+}
+.df-md-hr {
+  border-top: 1px solid var(--obs-line-soft);
+}
+.df-md-table th {
+  background: none;
+  border: 1px solid var(--obs-line-soft);
+  border-bottom: 1px solid var(--obs-line);
+}
+.df-md-table td {
+  border: 1px solid var(--obs-line-soft);
+}
+.df-md-table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.df-df-table th {
+  border-bottom: 1px solid var(--obs-line);
+}
+.df-df-table td {
+  border-bottom: 1px solid var(--obs-line-soft);
+}
+
+/* ── 8. 设置表单：input/select radius 8 + focus 黄铜；radio/checkbox 黄铜勾选；
+       tabs active 黄铜下划线；range 黄铜滑杆；按钮 mini-btn ── */
+.sp-input,
+.sp-select {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--obs-line);
+  border-radius: 8px;
+  caret-color: var(--obs-brass);
+}
+.sp-input:focus,
+.sp-select:focus {
+  border-color: rgba(201, 162, 92, 0.45);
+}
+.sp-tab:hover {
+  color: var(--obs-text);
+}
+.sp-tab.active {
+  color: var(--obs-brass-hi);
+  border-bottom-color: var(--obs-brass);
+}
+.sp-radio:hover {
+  background: rgba(160, 180, 220, 0.045);
+}
+.sp-radio input[type="radio"] {
+  border-color: var(--obs-line);
+  background: rgba(0, 0, 0, 0.25);
+}
+.sp-radio input[type="radio"]:checked {
+  border-color: var(--obs-brass);
+  background: var(--obs-brass-dim);
+  box-shadow: inset 0 0 0 3px var(--obs-brass);
+}
+.sp-checkbox-label {
+  color: var(--obs-text-2);
+}
+.sp-checkbox-label input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin: 0;
+  border: 1px solid var(--obs-line);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  position: relative;
+  transition: all var(--obs-snap);
+}
+.sp-checkbox-label input[type="checkbox"]:checked {
+  border-color: rgba(201, 162, 92, 0.45);
+  background: var(--obs-brass-dim);
+}
+.sp-checkbox-label input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 5px;
+  height: 8px;
+  border: solid var(--obs-brass);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(42deg);
+}
+.sp-range {
+  background: linear-gradient(
+    to right,
+    var(--obs-brass) 0%,
+    var(--obs-brass) var(--pct, 35%),
+    rgba(255, 255, 255, 0.06) var(--pct, 35%),
+    rgba(255, 255, 255, 0.06) 100%
+  );
+}
+.sp-range::-webkit-slider-thumb {
+  background: var(--obs-brass);
+  border-color: rgba(5, 7, 13, 0.9);
+  box-shadow: none;
+}
+.sp-range::-webkit-slider-thumb:hover {
+  box-shadow: none;
+}
+.sp-btn {
+  border-radius: 7px;
+}
+.sp-btn-save {
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+  border: 1px solid rgba(201, 162, 92, 0.45);
+}
+.sp-btn-save:hover {
+  background: rgba(201, 162, 92, 0.22);
+  box-shadow: none;
+}
+.sp-btn-cancel {
+  color: var(--obs-text-2);
+  background: none;
+  border: 1px solid var(--obs-line);
+}
+.sp-btn-cancel:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
