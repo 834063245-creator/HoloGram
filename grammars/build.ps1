@@ -17,7 +17,7 @@ $BuildDir  = Join-Path $ScriptDir "build"
 $OutDir    = $ScriptDir  # grammars/ directory
 
 function Build-Grammar($lang) {
-    $repoUrl = "https://github.com/tree-sitter/tree-sitter-$lang.git"
+    $repoUrl = "https://github.com/tree-sitter-grammars/tree-sitter-$lang.git"
     $repoDir = Join-Path $BuildDir "tree-sitter-$lang"
     $dllName = "tree-sitter-$lang.dll"
     $dllPath = Join-Path $OutDir $dllName
@@ -27,23 +27,22 @@ function Build-Grammar($lang) {
     # Clone if not already present
     if (-not (Test-Path $repoDir)) {
         Write-Host "  cloning $repoUrl ..."
-        git clone --depth 1 $repoUrl $repoDir 2>&1 | Out-Null
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        cmd /c "git clone --depth 1 $repoUrl $repoDir 2>&1 >NUL"
+        $ErrorActionPreference = $prev
     }
 
-    $srcDir = Join-Path $repoDir "src"
-    if (-not (Test-Path $srcDir)) {
-        Write-Host "  ERROR: no src/ in $repoDir" -ForegroundColor Red
+    # Find parser.c — handles monorepos (markdown) and flat repos (kotlin, toml)
+    $parserC = Get-ChildItem -Path $repoDir -Filter "parser.c" -Recurse -File | Select-Object -First 1
+    if (-not $parserC) {
+        Write-Host "  ERROR: no parser.c found in $repoDir" -ForegroundColor Red
         return
     }
-
-    $parserC = Join-Path $srcDir "parser.c"
+    $srcDir = $parserC.Directory.FullName
+    $parserC = $parserC.FullName
     $scannerC = Join-Path $srcDir "scanner.c"
     $scannerCC = Join-Path $srcDir "scanner.cc"
-
-    if (-not (Test-Path $parserC)) {
-        Write-Host "  ERROR: no parser.c in $srcDir" -ForegroundColor Red
-        return
-    }
 
     $srcFiles = @($parserC)
     if (Test-Path $scannerC)  { $srcFiles += $scannerC }
