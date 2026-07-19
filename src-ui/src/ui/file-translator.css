@@ -347,3 +347,48 @@
 .ft-divider:hover::after {
   background: rgba(148, 166, 205, 0.22);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   P7d · 文件翻译器表面（面板头去底色 + 发丝线 + chip 语义色纪律；
+   ft-* 类契约不动，同选择器后写优先）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 面板头：去深蓝底，纯发丝线（对齐 P6 面板头语言）；标题 text-2（蓝仅链接/info） */
+.ft-header {
+  background: none;
+  border-bottom-color: var(--obs-line-soft);
+}
+.ft-header .ft-title {
+  color: var(--obs-text-2);
+}
+.ft-close-btn:hover {
+  background: rgba(160, 180, 220, 0.08);
+}
+
+/* 分栏/列头发丝线变量化 */
+.ft-col {
+  border-right-color: var(--obs-line-soft);
+}
+.ft-col-header {
+  border-bottom-color: var(--obs-line-soft);
+}
+
+/* 审查 tag：chip 配方（radius 4 + 语义淡边淡底，值出原型 chip；risk 橙为既有语义色保持） */
+.ft-audit-tag {
+  border-radius: 4px;
+}
+.ft-audit-tag.ft-bug {
+  color: #f0a8a4;
+  background: rgba(217, 99, 95, 0.1);
+  border-color: rgba(217, 99, 95, 0.4);
+}
+.ft-audit-tag.ft-smell {
+  color: #ecd2a0;
+  background: rgba(216, 162, 74, 0.1);
+  border-color: rgba(216, 162, 74, 0.4);
+}
+.ft-audit-tag.ft-ok {
+  color: #a9dcb9;
+  background: rgba(99, 178, 125, 0.1);
+  border-color: rgba(99, 178, 125, 0.4);
+}

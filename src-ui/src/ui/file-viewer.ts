@@ -164,8 +164,8 @@ export class FileViewer {
       backdropFilter: 'blur(8px)',
       WebkitBackdropFilter: 'blur(8px)',
       border: '1px solid var(--obs-line, rgba(48, 60, 80, 0.5))',
-      borderRadius: '8px',
-      boxShadow: '0 12px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(88,120,180,0.08) inset',
+      borderRadius: '12px',
+      boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
       flexDirection: 'column',
       overflow: 'hidden',
       minWidth: '420px',
@@ -186,8 +186,8 @@ export class FileViewer {
       flexShrink: '0',
       cursor: 'move',
       userSelect: 'none',
-      background: 'rgba(14, 22, 38, 0.7)',
-      borderBottom: '1px solid var(--obs-line, rgba(48, 60, 80, 0.25))',
+      background: 'none',
+      borderBottom: '1px solid var(--obs-line-soft)',
     });
 
     // Breadcrumb
@@ -215,10 +215,22 @@ export class FileViewer {
       gap: '2px',
       flexShrink: '0',
     });
-    for (const { id, icon, tip, colorVar } of [
-      { id: 'agent', icon: 'agent', tip: '问 Agent 分析当前文件', colorVar: 'var(--obs-blue, #7eb8ff)' },
-      { id: 'translate', icon: 'translate', tip: '翻译当前文件', colorVar: '#a088e0' },
-      { id: 'close', icon: 'close', tip: '关闭', colorVar: 'var(--obs-text-2)' },
+    for (const { id, icon, tip, colorVar, hoverBg } of [
+      {
+        id: 'agent',
+        icon: 'agent',
+        tip: '问 Agent 分析当前文件',
+        colorVar: 'var(--obs-blue)',
+        hoverBg: 'rgba(160,180,220,0.08)',
+      },
+      {
+        id: 'translate',
+        icon: 'translate',
+        tip: '翻译当前文件',
+        colorVar: '#a088e0',
+        hoverBg: 'rgba(160,180,220,0.08)',
+      },
+      { id: 'close', icon: 'close', tip: '关闭', colorVar: '#ffd9d6', hoverBg: 'rgba(217,99,95,0.25)' },
     ]) {
       const btn = document.createElement('button');
       btn.className = `fv-title-btn`;
@@ -240,7 +252,7 @@ export class FileViewer {
       });
       btn.addEventListener('mouseenter', () => {
         btn.style.color = colorVar;
-        btn.style.background = 'rgba(255,255,255,0.05)';
+        btn.style.background = hoverBg;
       });
       btn.addEventListener('mouseleave', () => {
         btn.style.color = 'var(--obs-text-2)';
@@ -285,8 +297,8 @@ export class FileViewer {
       height: '26px',
       padding: '0 4px',
       flexShrink: '0',
-      background: 'rgba(10, 18, 32, 0.5)',
-      borderBottom: '1px solid rgba(48, 60, 80, 0.2)',
+      background: 'none',
+      borderBottom: '1px solid var(--obs-line-soft)',
     });
 
     const btnDefs: [string, string, string, () => void][] = [
@@ -315,7 +327,7 @@ export class FileViewer {
       });
       btn.addEventListener('mouseenter', () => {
         btn.style.color = 'var(--obs-text)';
-        btn.style.background = 'rgba(255,255,255,0.04)';
+        btn.style.background = 'rgba(160,180,220,0.08)';
       });
       btn.addEventListener('mouseleave', () => {
         btn.style.color = 'var(--obs-text-2)';
@@ -328,7 +340,7 @@ export class FileViewer {
 
     // Separator
     const sep = document.createElement('div');
-    sep.style.cssText = 'width:1px;height:14px;background:rgba(48,60,80,0.35);margin:0 4px;';
+    sep.style.cssText = 'width:1px;height:14px;background:var(--obs-line);margin:0 4px;';
     this.toolbar.appendChild(sep);
 
     // Format button
@@ -349,8 +361,8 @@ export class FileViewer {
       justifyContent: 'center',
     });
     fmtBtn.addEventListener('mouseenter', () => {
-      fmtBtn.style.color = 'var(--obs-blue, #7eb8ff)';
-      fmtBtn.style.background = 'rgba(255,255,255,0.04)';
+      fmtBtn.style.color = 'var(--obs-blue)';
+      fmtBtn.style.background = 'rgba(160,180,220,0.08)';
     });
     fmtBtn.addEventListener('mouseleave', () => {
       fmtBtn.style.color = 'var(--obs-text-2)';
@@ -362,7 +374,7 @@ export class FileViewer {
 
     // Preview toggle
     const prevSep = document.createElement('div');
-    prevSep.style.cssText = 'width:1px;height:14px;background:rgba(48,60,80,0.35);margin:0 4px;';
+    prevSep.style.cssText = 'width:1px;height:14px;background:var(--obs-line);margin:0 4px;';
     this.toolbar.appendChild(prevSep);
 
     const previewBtn = document.createElement('button');
@@ -383,7 +395,7 @@ export class FileViewer {
     });
     previewBtn.addEventListener('mouseenter', () => {
       previewBtn.style.color = '#a088e0';
-      previewBtn.style.background = 'rgba(255,255,255,0.04)';
+      previewBtn.style.background = 'rgba(160,180,220,0.08)';
     });
     previewBtn.addEventListener('mouseleave', () => {
       previewBtn.style.color = 'var(--obs-text-2)';
@@ -407,8 +419,8 @@ export class FileViewer {
       flexShrink: '0',
       overflowX: 'auto',
       overflowY: 'hidden',
-      background: 'rgba(8, 14, 26, 0.6)',
-      borderBottom: '1px solid var(--obs-line, rgba(48, 60, 80, 0.3))',
+      background: 'none',
+      borderBottom: '1px solid var(--obs-line-soft)',
       minHeight: '30px',
     });
 
@@ -446,8 +458,8 @@ export class FileViewer {
       height: '22px',
       padding: '0 8px',
       flexShrink: '0',
-      background: 'rgba(8, 14, 26, 0.8)',
-      borderTop: '1px solid rgba(48, 60, 80, 0.3)',
+      background: 'none',
+      borderTop: '1px solid var(--obs-line-soft)',
       fontSize: 'calc(10px * var(--font-scale))',
       fontFamily: 'var(--obs-font-mono, monospace)',
       color: 'var(--obs-text-2)',
@@ -622,8 +634,8 @@ export class FileViewer {
         whiteSpace: 'nowrap',
         flexShrink: '0',
         maxWidth: '170px',
-        borderTop: isActive ? '2px solid rgba(80, 140, 220, 0.7)' : '2px solid transparent',
-        background: isActive ? 'rgba(22, 40, 70, 0.55)' : 'transparent',
+        borderTop: isActive ? '2px solid var(--obs-brass)' : '2px solid transparent',
+        background: isActive ? 'var(--obs-brass-dim)' : 'transparent',
         color: isActive ? 'var(--obs-text, #e6edf3)' : 'var(--obs-text-2)',
         borderRadius: '3px 3px 0 0',
       });
@@ -638,7 +650,7 @@ export class FileViewer {
       if (tab.dirty) {
         const dot = document.createElement('span');
         dot.className = 'fv-tab-dirty';
-        dot.style.cssText = 'width:7px;height:7px;border-radius:50%;background:rgba(235,180,80,0.9);flex-shrink:0;';
+        dot.style.cssText = 'width:7px;height:7px;border-radius:50%;background:var(--obs-warn);flex-shrink:0;';
         tabEl.appendChild(dot);
       }
 
@@ -740,8 +752,8 @@ export class FileViewer {
       span.style.cssText = 'cursor:pointer;padding:0 2px;border-radius:2px;';
       span.title = parts.slice(0, i + 1).join('/');
       span.addEventListener('mouseenter', () => {
-        span.style.color = 'var(--obs-blue, #7eb8ff)';
-        span.style.background = 'rgba(80,140,220,0.12)';
+        span.style.color = 'var(--obs-blue)';
+        span.style.background = 'rgba(160,180,220,0.08)';
       });
       span.addEventListener('mouseleave', () => {
         span.style.color = '';
@@ -777,13 +789,13 @@ export class FileViewer {
     const lspActive = lspSessions.has(lang);
     if (lspActive) {
       this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
-      this.statusLsp.style.color = '#6ebf70';
+      this.statusLsp.style.color = 'var(--obs-pass)';
       this.statusLsp.style.opacity = '1';
       this.statusLsp.title = `${lang} LSP 已连接`;
     } else if (lang === 'typescript' || lang === 'javascript' || lang === 'json' || lang === 'css' || lang === 'html') {
       // Monaco native support
       this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
-      this.statusLsp.style.color = '#80a4c0';
+      this.statusLsp.style.color = 'var(--obs-text-2)';
       this.statusLsp.style.opacity = '1';
       this.statusLsp.title = `${lang} 使用 Monaco 内置支持`;
     } else {
