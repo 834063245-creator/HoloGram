@@ -361,6 +361,7 @@ function escLayer(): void {
   else if (dock.isOpen('timeline')) dock.closePanel('timeline');
   else if (dock.isOpen('hotspots')) dock.closePanel('hotspots');
   else if (dock.isOpen('check')) dock.closePanel('check');
+  else if (dock.isOpen('constraints')) dock.closePanel('constraints');
   else if (chatPanel.isOpen()) chatPanel.close();
   else if (FV() && FV().get().isOpen) FV().get().close();
   else starGraph.clearAgentHighlight();

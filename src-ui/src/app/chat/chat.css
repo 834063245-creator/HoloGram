@@ -2781,3 +2781,13 @@ button.chat-history-entry {
 .chat-panel.chat-open {
   min-height: 320px;
 }
+
+/* 模式切换过渡补 transform：hud 的 scale/translateY 进出不再瞬跳（覆盖 P2′ 版列表） */
+.chat-panel {
+  transition:
+    width 0.28s cubic-bezier(0.23, 1, 0.32, 1),
+    height 0.28s cubic-bezier(0.23, 1, 0.32, 1),
+    border-radius 0.28s cubic-bezier(0.23, 1, 0.32, 1),
+    transform 0.28s cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 0.2s ease;
+}

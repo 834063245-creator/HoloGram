@@ -400,35 +400,65 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
     };
   }, []);
 
-  // ── 模式切换：高度 FLIP + resize 内联高度清理（P7g，复刻旧 GSAP 测高补间语义）──
-  // height:auto 无法 transition —— 订阅 store：旧模式 DOM 仍在时测起点高，
-  // rAF（React 已提交新模式类、未绘制）测自然目标高，锁起点 → CSS 补间 → transitionend 清回 auto。
+  // ── 模式切换：尺寸 FLIP + resize 内联高度清理（P7g，复刻旧 GSAP morphToMode 语义）──
+  // height:auto 无法 transition —— 订阅 store：旧模式 DOM 仍在时量起点；
+  // rAF（React 已提交新模式类、未绘制）禁过渡一帧量目标态（宽度/圆角也在变，
+  // 必须跳到目标宽下量高，否则量出窄宽虚高），锁起点 → CSS 补间 → 定时清场。
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
     let prev = panelStore.getState().panelMode;
-    return panelStore.subscribe((s) => {
+    let cleanup: number | undefined;
+    const unsub = panelStore.subscribe((s) => {
       const next = s.panelMode;
       if (next === prev) return;
       prev = next;
-      const fromH = el.offsetHeight; // 旧模式 DOM 仍在（React 提交前同步段）
+      // 旧模式 DOM 仍在（React 提交前同步段）：量起点
+      const fromH = el.offsetHeight;
+      const fromW = el.offsetWidth;
+      const fromR = getComputedStyle(el).borderRadius;
+      const fromT = getComputedStyle(el).transform;
+      if (cleanup) clearTimeout(cleanup); // 连切接管：作废上一轮清场
       requestAnimationFrame(() => {
         if (!el.isConnected) return;
         el.style.maxHeight = ''; // resize 写入的内联高度不跨模式残留
         el.style.minHeight = '';
+        // 禁过渡让新模式目标态瞬时生效，量正确终点
+        el.style.transition = 'none';
+        void el.offsetHeight;
         const toH = el.offsetHeight;
-        if (fromH <= 0 || toH <= 0 || fromH === toH) return;
+        const toW = el.offsetWidth;
+        const toR = getComputedStyle(el).borderRadius;
+        const toT = getComputedStyle(el).transform;
+        if (fromH === toH && fromW === toW && fromR === toR && fromT === toT) {
+          el.style.transition = '';
+          return;
+        }
+        // 锁起点 → 恢复过渡 → 补间到终点
+        el.style.width = `${fromW}px`;
         el.style.height = `${fromH}px`;
+        el.style.borderRadius = fromR;
+        el.style.transform = fromT;
         void el.offsetHeight; // 强制 reflow，锁定补间起点
+        el.style.transition = '';
+        el.style.width = `${toW}px`;
         el.style.height = `${toH}px`;
-        const onEnd = (e: TransitionEvent) => {
-          if (e.propertyName !== 'height') return;
+        el.style.borderRadius = toR;
+        el.style.transform = toT;
+        // 清场用定时而非 transitionend：尺寸无变化的通道不触发事件，且连切时旧事件被取消
+        cleanup = window.setTimeout(() => {
+          el.style.width = '';
           el.style.height = '';
-          el.removeEventListener('transitionend', onEnd);
-        };
-        el.addEventListener('transitionend', onEnd);
+          el.style.borderRadius = '';
+          el.style.transform = '';
+          cleanup = undefined;
+        }, 300);
       });
     });
+    return () => {
+      unsub();
+      if (cleanup) clearTimeout(cleanup);
+    };
   }, [panelStore]);
 
   const toolTotal = Object.values(toolUsage || {}).reduce((a, b) => a + b, 0);

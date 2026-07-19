@@ -95,12 +95,13 @@ src-ui/src/
 
 ### P7g — 已完成 ✅（`feature/observatory-visual`，待用户确认后合 main）
 
-- 高度 FLIP：`ChatBeacon.tsx` 新增 panel-store 订阅 —— 旧模式 DOM 同步段测 `fromH`，rAF（React 已提交新模式类、未绘制）清 resize 内联高 + 测 `toH`，锁起点走既有 CSS `height 0.28s` 补间，`transitionend` 清回 auto。语义 = 旧 GSAP `morphToMode` 的 CSS 复刻。
-- `.chat-panel.chat-open` 补 `min-height: 320px`（open 空态不再贴 input 条）。
+- 高度 FLIP：`ChatBeacon.tsx` 新增 panel-store 订阅 —— 旧模式 DOM 同步段量起点（宽/高/圆角/transform 四通道），rAF 里禁过渡一帧跳到目标态量正确终点（**宽过渡中的窄宽虚高是真机动效 bug 的根因**，旧 GSAP 是先锁目标宽再量高的），锁起点走 CSS 补间，300ms 定时清场（比 transitionend 皮实：无过渡通道不触发事件、连切时旧事件被取消；连切靠 clearTimeout 接管）。resize 内联 max/minHeight 同点清除。
+- `.chat-panel` transition 补 `transform`（hud 的 scale/translateY 进出不再瞬跳）；`.chat-panel.chat-open` 补 `min-height: 320px`。
+- **escLayer 补 constraints**（用户真机反馈 Esc 无响应）——链序：galaxy→timeline→hotspots→check→**constraints**→chat→FV→highlight。
 - 核对无误不改码三项：#grain 维持 z150（原型 z40 本就盖 chrome，截图顶栏文字无摩尔纹）；`.msg-bubble.assistant` padding 0 即原型 `.msg.agent .bubble` 无内边距语言（工具卡与文字同左缘）；浮动面板无弹层被子 overflow 裁切（df-grip 内缩 right/bottom:0，Settings 用原生 select）。
 - 清死选择器 `.chat-panel.chat-pill .corner-brackets`（ChatBeacon JSX 本无此节点）。
 - **CDP 补测（第二轮，合成事件全过）**：六面板开合 + 同侧 rail 让位/回位正常；Esc 链逐层实测（timeline/hotspots/check/chat 各分支均关闭正确）；Ctrl+K/?/Ctrl+L/Ctrl+, 全通；resize 真拖拽夹取精确（上极限 913px=70vh、下极限 180px、中间值线性），真拖拽后切模式内联残留全清；mock 简报自动展开复证（坑 #7）。
-- **两个观察（现状契约非回归，未动）**：① constraints/dataflow/settings 不在 escLayer 链（Esc 不关，P1/P3 起如此）；② 输入框聚焦时 Esc 走 Composer 自身（panel→input），blur 后 input 态 Esc 不进 pill（`isOpen()=panel||hud` 语义）——均与旧版一致。
+- **两个观察（现状契约非回归，未动）**：① ~~constraints~~/dataflow/settings 不在 escLayer 链（constraints 已按用户反馈补入；dataflow/settings 维持现状）；② 输入框聚焦时 Esc 走 Composer 自身（panel→input），blur 后 input 态 Esc 不进 pill（`isOpen()=panel||hud` 语义）——均与旧版一致。
 - **留真机**：消息流内容态（reasoning/工具卡左缘对齐观感）mock 无法触发；四态切换补间流畅度；走查矩阵 ⚠ 项（权限卡/goal/星图/历史 active/碰撞/Welcome/悬停）。
 - 合成事件注意：window 派发的事件不进 React 根容器，Composer 等组件级 handler 测不到——测组件级按键要把事件派发到具体元素上（K6 曾因此误判）。
 
@@ -158,7 +159,7 @@ node scripts/cdp-shot.cjs /tmp/out '[{"js":"...document.querySelector(...).click
 10. P5 迁移副作用零残留已验证：全库 grep 无旧变量（--starlight/--panel-bg/--signal/--sol/--nebula/--font-hud 等）——**不要再引入旧变量名**；ContextMenu 内联样式引的是 --obs-*（原 --starlight fallback 已换）。
 11. ~~刻度盘~~ —— P5 的 3D 版经用户确认不好看已删，屏幕空间 SVG 版讨论后也放弃。**别再复活表盘/黄道椭圆**，除非用户明确要求。
 12. `#welcome` 现在默认 `display:flex` + `.hidden` 切换（P5 修复：旧 CSS 默认 none 且无 .on 写入者导致永不显示）；index.html 初始带 `class="hidden"` 防 FOUC，main.ts 决策后 remove/add。
-13. 无头 Chrome（`--headless --disable-gpu`）CSS 补间帧被节流：`transitionend` 只在截图泵帧时才触发——CDP 验证 FLIP/动画要看**内联样式写入**（fromH→toH 已锁），别拿完成态说事；真机连续帧下 transitionend 正常清回 auto（P7g 实测）。
+13. 无头 Chrome（`--headless --disable-gpu`）CSS 补间帧被节流：rAF 回调延迟到泵帧时才跑、`transitionend` 同理——CDP 验证动画要看**最终落定态**（定时清场后无内联残留、终点尺寸正确），别测中间态；合成点击不移动焦点（activeElement 停留 textarea 会触发 isEditing 吞键假象），测键盘链前先显式 blur。
 14. `TimelinePanel.tsx` 的 `.corner-brackets`（含 `.cb-bottom` 两 span）是 P5 迁移遗留的**无样式死 JSX**——全库无对应 CSS 规则，不可见也无裁切问题；清理归 P7b 时间轴期，别在别的期顺手删（类契约原则按期走）。
 
 ## 七、契约速查（省得重读代码）
