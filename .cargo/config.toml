@@ -1,1 +1,5 @@
-# MinGW linker issue resolved — target dir now defaults to src-tauri/target/
+# MinGW toolchain: use gcc as linker so -static-libstdc++ actually works
+# (rust-lld doesn't understand gcc driver flags)
+[target.x86_64-pc-windows-gnu]
+linker = "D:\\mingw64\\bin\\gcc.exe"
+rustflags = ["-C", "link-args=-static-libgcc -static-libstdc++"]
