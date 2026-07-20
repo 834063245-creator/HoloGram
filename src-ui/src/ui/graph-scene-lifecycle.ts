@@ -12,6 +12,7 @@ import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { bus } from './events';
 import { gpuLayout } from './gpu-layout';
+import { useShellStore } from '../app/shell-store';
 import type { GraphAnalysis } from './graph-analysis';
 import { GLOW_COLORS, NODE_COLORS } from './graph-colors';
 import type { GraphDiffOverlay } from './graph-diff-overlay';
@@ -344,6 +345,10 @@ export class GraphSceneLifecycle {
 
     let rawPos: Float32Array;
     const effGroups = new Set(nodeCommArr.filter((c) => c >= 0));
+    // Ensure GPU init has settled before choosing layout path — eliminates
+    // the race where first render uses CPU (init not yet complete) and
+    // subsequent renders use GPU, producing visually inconsistent layouts.
+    await gpuLayout.init();
     // GPU path: N-body for macro structure, spiral for micro
     if (gpuLayout.ready) {
       // ── GPU N-body: macro structure from edge forces, spiral for micro ──
@@ -534,8 +539,8 @@ export class GraphSceneLifecycle {
     if (this.host.legendEl) this.host.legendEl.style.display = '';
     // Append layout diagnostics so user can report them (release build has no DevTools)
     if (this._diagMsg) {
-      const st = document.getElementById('status-text');
-      if (st) st.textContent = (st.textContent || '') + ' | ' + this._diagMsg;
+      const cur = useShellStore.getState().statusText;
+      useShellStore.getState().setStatusText(`${cur} | ${this._diagMsg}`);
     }
     // Fix: container may have been display:none during constructor onResize().
     // Defer resize one frame to ensure CSS layout has settled.

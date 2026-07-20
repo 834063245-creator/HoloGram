@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import { communityColor, edgeColorByType, edgeOpacityByDepth, GLOW_COLORS } from './graph-colors';
-import { iconHtml } from './icons';
+import { useShellStore } from '../app/shell-store';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -173,8 +173,7 @@ export class GraphFold {
       }
       this.applyFoldOverlay();
       this.initCrossEdgeFlow();
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
+      useShellStore.getState().setStatusText(`${this.galaxyMeta.length} 星团 · 点击进入或搜索`);
     } else {
       this.clearFoldOverlay();
       if (true) {
@@ -431,9 +430,7 @@ export class GraphFold {
       this._showSubCommunityClouds(subCommunities);
       const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
       this.showGalaxyTitle(gm);
-      const st = document.getElementById('status-text');
-      if (st)
-        st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
+      useShellStore.getState().setStatusText(`${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`);
     } else {
       this._showConstellation(galaxyId);
       const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
@@ -462,9 +459,7 @@ export class GraphFold {
         this.host.controls.maxDistance = clusterRadius * 8;
       }
       this.showGalaxyTitle(gm);
-      const st = document.getElementById('status-text');
-      if (st)
-        st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+      useShellStore.getState().setStatusText(`星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`);
     }
   }
 
@@ -622,8 +617,7 @@ export class GraphFold {
       this._savedGalaxyMeta = null;
     }
     this.applyFoldOverlay();
-    const st = document.getElementById('status-text');
-    if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
+    useShellStore.getState().setStatusText(`${this.galaxyMeta.length} 星团 · 点击进入或搜索`);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -653,9 +647,7 @@ export class GraphFold {
       this._showSubCommunityClouds(deeperSubs);
       const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
       this.showGalaxyTitle({ id: subCommId, label: subComm.label });
-      const st = document.getElementById('status-text');
-      if (st)
-        st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
+      useShellStore.getState().setStatusText(`子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`);
     } else {
       for (let i = 0; i < this.host._nodeCount; i++) {
         this.host._setCoreVisible(i, false);
@@ -711,8 +703,7 @@ export class GraphFold {
       this.host.controls.maxDistance = clusterRadius * 8;
       const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
       this.showGalaxyTitle({ id: subCommId, label: subComm.label });
-      const st = document.getElementById('status-text');
-      if (st) st.innerHTML = `${iconHtml('focus', 12)} 子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`;
+      useShellStore.getState().setStatusText(`子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`);
     }
   }
 
@@ -733,9 +724,7 @@ export class GraphFold {
         this._showSubCommunityClouds(deeperSubs);
         const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
         this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
-        const st = document.getElementById('status-text');
-        if (st)
-          st.innerHTML = `${iconHtml('galaxy', 12)} 子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`;
+        useShellStore.getState().setStatusText(`子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`);
       } else {
         for (let i = 0; i < this.host._nodeCount; i++) {
           this.host._setCoreVisible(i, false);
@@ -760,8 +749,7 @@ export class GraphFold {
         this._buildSubCommunityEdges(parentSub.node_ids);
         const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
         this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
-        const st = document.getElementById('status-text');
-        if (st) st.innerHTML = `${iconHtml('focus', 12)} 子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`;
+        useShellStore.getState().setStatusText(`子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`);
       }
     } else {
       this.enteredSubCommunityId = null;
@@ -772,16 +760,12 @@ export class GraphFold {
         this._showSubCommunityClouds(subCommunities);
         const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
         this.showGalaxyTitle(gm);
-        const st = document.getElementById('status-text');
-        if (st)
-          st.innerHTML = `${iconHtml('galaxy', 12)} ${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`;
+        useShellStore.getState().setStatusText(`${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`);
       } else {
         this._showConstellation(galaxyId);
         const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
         this.showGalaxyTitle(gm);
-        const st = document.getElementById('status-text');
-        if (st)
-          st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+        useShellStore.getState().setStatusText(`星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`);
       }
     }
   }

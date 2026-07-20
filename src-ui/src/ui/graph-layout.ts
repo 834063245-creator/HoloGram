@@ -331,7 +331,7 @@ export function spiralGalaxies(
   nodeDeg: number[],
   shellRadius: number,
 ): void {
-  type Comm = { cx: number; cy: number; cz: number; cnt: number; nodes: number[] };
+  type Comm = { id: number; cx: number; cy: number; cz: number; cnt: number; nodes: number[] };
   const comms = new Map<number, Comm>();
   const unassigned: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -342,7 +342,7 @@ export function spiralGalaxies(
     }
     let cc = comms.get(c);
     if (!cc) {
-      cc = { cx: 0, cy: 0, cz: 0, cnt: 0, nodes: [] };
+      cc = { id: c, cx: 0, cy: 0, cz: 0, cnt: 0, nodes: [] };
       comms.set(c, cc);
     }
     cc.cx += pos[i * 3];
@@ -373,6 +373,22 @@ export function spiralGalaxies(
     const ctB = Math.cos(tiltB),
       stB = Math.sin(tiltB);
 
+    // Seeded PRNG — deterministic per community (mulberry32)
+    let _s = ((cc.id + 1) * 2654435761) >>> 0;
+    const rng = () => {
+      _s = (_s + 0x6d2b79f5) | 0;
+      let t = Math.imul(_s ^ (_s >>> 15), 1 | _s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const gauss = () => {
+      let u = 0,
+        v = 0;
+      while (u === 0) u = rng();
+      while (v === 0) v = rng();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    };
+
     for (let j = 0; j < m; j++) {
       const t = j / Math.max(1, m - 1);
       const r = commR * t ** 0.55;
@@ -380,13 +396,6 @@ export function spiralGalaxies(
       const armAngle = (armIdx / arms) * Math.PI * 2;
       const spiralAngle = r * twist + armAngle;
       const scatter = commR * 0.06 * (0.3 + t * 1.2);
-      const gauss = () => {
-        let u = 0,
-          v = 0;
-        while (u === 0) u = Math.random();
-        while (v === 0) v = Math.random();
-        return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-      };
       const px = Math.cos(spiralAngle) * r + gauss() * scatter;
       const py = gauss() * r * flat * 0.5;
       const pz = Math.sin(spiralAngle) * r + gauss() * scatter;

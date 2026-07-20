@@ -7,7 +7,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
-import { iconHtml } from './icons';
+import { useShellStore } from '../app/shell-store';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -97,10 +97,8 @@ export class GraphAnalysis {
     this.blastSource = idx;
     this.computeBlastDistances();
     this.buildBlastEdges();
-    const st = document.getElementById('status-text');
     const inRadius = this.blastDistances.filter((d) => d >= 0).length;
-    if (st)
-      st.innerHTML = `${iconHtml('blast', 12)} 波及: ${this.host.graphNodes[idx]?.name || '?'}  ·  ${inRadius} 节点  ·  B/ESC 退出`;
+    useShellStore.getState().setStatusText(`波及: ${this.host.graphNodes[idx]?.name || '?'}  ·  ${inRadius} 节点  ·  B/ESC 退出`);
   }
 
   computeBlastDistances(): void {
@@ -194,8 +192,7 @@ export class GraphAnalysis {
       if (this.host._glow2Rgba.length > 0) this.host._setGlow2Rgba(i, gc.r, gc.g, gc.b, 0.55);
     }
     this.host._flushOverrideAttrs();
-    const st = document.getElementById('status-text');
-    if (st?.innerHTML?.includes('blast')) st.innerHTML = '就绪';
+    if (useShellStore.getState().statusText.includes('波及')) useShellStore.getState().setStatusText('就绪');
   }
 
   updateBlastNodeColors(): void {

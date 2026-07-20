@@ -247,8 +247,7 @@ function resetCheckPanelState(): void {
 
 async function notifyAllPanels(ws: Workspace): Promise<void> {
   useShellStore.getState().setProjectPath(ws.path);
-  welcome.classList.add('hidden');
-  graphEl.classList.remove('hidden');
+  useShellStore.getState().setView('graph');
   chatPanel.setProjectPath(ws.path);
   useDockStore.getState().setProjectPath(ws.path);
   await loadFileViewer();
@@ -777,8 +776,7 @@ async function init(): Promise<void> {
       // No cached graph
     }
     if (!graph) {
-      welcome.classList.remove('hidden');
-      graphEl.classList.add('hidden');
+      useShellStore.getState().setView('welcome');
       setLoading(false);
       // Set up agent without workspace context (general chat only)
       await setupPlaceholderAgent();
@@ -812,8 +810,7 @@ async function init(): Promise<void> {
   }
 
   // No cached graph — show welcome
-  welcome.classList.remove('hidden');
-  graphEl.classList.add('hidden');
+  useShellStore.getState().setView('welcome');
   setLoading(false);
   await setupPlaceholderAgent();
 }

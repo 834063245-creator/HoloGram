@@ -28,6 +28,8 @@ export type AnalyzingKind = 'open' | 'reanalyze' | null;
 interface ShellState {
   /** 当前工作区路径（空 = 未打开） */
   projectPath: string;
+  /** 当前视图：welcome=欢迎屏, graph=星图 */
+  view: 'welcome' | 'graph';
   /** 状态栏左侧文本 */
   statusText: string;
   /** 状态日志（环形，上限 15；id 单调递增供 React key 使用） */
@@ -50,6 +52,7 @@ interface ShellState {
   /** 仅写状态文本（不进日志） */
   setStatusText: (msg: string) => void;
   setProjectPath: (p: string) => void;
+  setView: (v: 'welcome' | 'graph') => void;
   setGraphStats: (g: GraphStats) => void;
   setViolations: (n: number) => void;
   setAnalyzing: (k: AnalyzingKind) => void;
@@ -64,6 +67,7 @@ let _logSeq = 0;
 
 export const useShellStore = create<ShellState>((set) => ({
   projectPath: '',
+  view: 'welcome',
   statusText: '就绪',
   statusLog: [],
   graphStats: null,
@@ -81,6 +85,7 @@ export const useShellStore = create<ShellState>((set) => ({
     })),
   setStatusText: (msg) => set({ statusText: msg }),
   setProjectPath: (p) => set({ projectPath: p }),
+  setView: (v) => set({ view: v }),
   setGraphStats: (g) => set({ graphStats: g }),
   setViolations: (n) => set({ violations: n }),
   setAnalyzing: (k) => set({ analyzing: k }),

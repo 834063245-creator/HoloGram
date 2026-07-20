@@ -250,49 +250,6 @@ export function stripLineNumbers(text: string): string {
 
 // ── Session CRUD ──
 
-export function renderSessionTabs(ctx: SessionContext): void {
-  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  ctx.sessionTabs.innerHTML = '';
-  const multi = sessions.length > 1;
-  const bar = ctx.sessionTabs.parentElement;
-  if (bar) bar.style.display = multi ? '' : 'none';
-
-  for (let i = 0; i < sessions.length; i++) {
-    const s = sessions[i];
-    const tab = document.createElement('button');
-    tab.className = 'chat-session-tab';
-    if (i === activeIdx) tab.classList.add('active');
-    const shortLabel = s.label.length > 8 ? s.label.slice(0, 7) + '…' : s.label;
-    tab.textContent = shortLabel;
-    tab.title = `${s.label} (点击切换)`;
-    tab.addEventListener('click', () => switchSession(ctx, i));
-
-    if (multi) {
-      const xBtn = document.createElement('span');
-      xBtn.className = 'chat-session-x';
-      xBtn.innerHTML = '×';
-      xBtn.title = '关闭会话';
-      xBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        closeSession(ctx, i);
-      });
-      tab.appendChild(xBtn);
-    }
-    ctx.sessionTabs.appendChild(tab);
-  }
-
-  const chatTab = ctx.tabBar.querySelector<HTMLElement>('.chat-panel-tab[data-tab="chat"]');
-  if (chatTab) {
-    const activeSess = sessions[activeIdx];
-    chatTab.textContent =
-      multi && activeSess
-        ? activeSess.label.length > 6
-          ? activeSess.label.slice(0, 5) + '…'
-          : activeSess.label
-        : '对话';
-  }
-}
-
 export function switchSession(ctx: SessionContext, idx: number): void {
   const st = getChatStore(ctx.storeId).sess.getState();
   const { sessions, activeIdx } = st;
@@ -307,7 +264,6 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   ctx.flushText();
   ctx.clearPendingToolCards();
   getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
-  renderSessionTabs(ctx);
 
   // Restore token count for target session
   ctx.setTotalTokensUsed(st.sessionTokens[sessions[idx].id] || 0);
@@ -331,7 +287,6 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
   if (newIdx < 0) newIdx = 0;
   getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
-  renderSessionTabs(ctx);
   // ponytail: no restoreMessages — React reads from per-session store automatically
   ctx.updateFooter();
 
@@ -374,7 +329,6 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   });
   // ponytail: create per-session messages store — the ONLY source of truth
   msgStoreFor(ctx.storeId, id).getState().setMessages([]);
-  renderSessionTabs(ctx);
   resetMsgIdCounter();
   ctx.clearInputHistory();
   setTurnPairs(ctx.storeId, []);
@@ -639,7 +593,6 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   });
   // ponytail: create per-session messages store + populate from restored data
   msgStoreFor(ctx.storeId, data.id).getState().setMessages([]);
-  renderSessionTabs(ctx);
 
   try {
     renderRestoredSession(ctx);
@@ -786,7 +739,6 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     ctx.setTotalTokensUsed(0);
     getChatStore(ctx.storeId).sess.getState().setSessionTokens(sid, 0);
   }
-  renderSessionTabs(ctx);
 
   try {
     renderRestoredSession(ctx);

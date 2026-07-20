@@ -17,13 +17,23 @@ import { FileTranslatorPortal } from './panels/FileTranslatorPortal';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { StatusBar } from './StatusBar';
 import { useGlobalKeys } from './useGlobalKeys';
+import { useShellStore } from './shell-store';
 
 export function App() {
   useGlobalKeys();
   const core = useCoreStore((s) => s.core);
+  const view = useShellStore((s) => s.view);
+
   useEffect(() => {
     initBridgeAdapters();
   }, []);
+
+  useEffect(() => {
+    const welcome = document.getElementById('welcome');
+    const graph = document.getElementById('graph');
+    if (welcome) welcome.classList.toggle('hidden', view === 'graph');
+    if (graph) graph.classList.toggle('hidden', view === 'welcome');
+  }, [view]);
   return (
     <>
       <CommandBar />

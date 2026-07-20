@@ -178,9 +178,15 @@ export class GPULayout {
   private updatePipeline: GPUComputePipeline | null = null;
   private bindGroupLayout: GPUBindGroupLayout | null = null;
   ready = false;
+  private _initPromise: Promise<boolean> | null = null;
 
-  /** Initialize WebGPU. Returns true on success, false → fall back to CPU. */
-  async init(): Promise<boolean> {
+  /** Initialize WebGPU. Idempotent — concurrent callers share the same promise. */
+  init(): Promise<boolean> {
+    if (!this._initPromise) this._initPromise = this._doInit();
+    return this._initPromise;
+  }
+
+  private async _doInit(): Promise<boolean> {
     if (this.ready) return true; // already initialized
     try {
       if (typeof navigator === 'undefined' || !navigator.gpu) {
