@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 // ═══════════════════════════════════════════════════════════════
-// GraphInteractionController — 指针交互（hover raycast / 点击派发）
+// GraphInteractionController — 指针交互（hover / 点击派发）
 // 从 graph.ts 拆分（P4）。状态字段仍由 facade 持有。
+//
+// 拾取方式：屏幕空间距离拾取（与原型一致）。
+// 将所有节点投影到屏幕，取鼠标 18px 内最近的节点。
+// 比 raycast 更精准——小节点也能命中。
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
@@ -14,7 +18,7 @@ import type { GraphFold } from './graph-fold';
 import type { GraphTooltip } from './graph-tooltip';
 import type { EdgeData, GraphNode } from './graph-types';
 
-// ── InteractionHost — GraphInteractionController 需要从 StarGraph 访问的成员 ──
+// ── InteractionHost ──
 
 export interface InteractionHost {
   container: HTMLElement;
@@ -24,6 +28,7 @@ export interface InteractionHost {
   tmpVec3: THREE.Vector3;
 
   _nodeCount: number;
+  _deadIndices: Set<number>;
   nodeCoresInstanced: THREE.InstancedMesh;
   graphNodes: GraphNode[];
   nodePositions: Float32Array;
@@ -45,21 +50,50 @@ export interface InteractionHost {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GraphInteractionController
-// ═══════════════════════════════════════════════════════════════
 
 export class GraphInteractionController {
+  private reticleEl: HTMLDivElement | null = null;
+
   constructor(private host: InteractionHost) {}
 
-  // ── Hover ────────────────────────────────────────────────
-  // Hover raycaster uses ALL nodeCores regardless of .visible state.
-  // This is intentional: .visible is a visual/rendering concern, and many
-  // features (agent highlight, path mode, blast) temporarily toggle it.
-  // If a node exists in the graph, it should be hoverable and clickable.
-  // The only exception is fold-mode cloud view, which intentionally restricts
-  // interaction to galaxy clouds only.
+  // ── Hover ──
 
   setupHover(): void {
+    this.reticleEl = document.createElement('div');
+    this.reticleEl.id = 'graph-reticle';
+    this.reticleEl.style.cssText = `
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 56px;
+      height: 56px;
+      margin-left: -28px;
+      margin-top: -28px;
+      pointer-events: none;
+      z-index: 50;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+    `;
+    this.reticleEl.innerHTML = `
+      <svg width="56" height="56" viewBox="0 0 56 56" style="display:block;overflow:visible">
+        <!-- Outer arc segments (bracket marks) -->
+        <path d="M 28 4 A 24 24 0 0 1 48 14" fill="none" stroke="rgba(232,200,135,0.9)" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M 48 42 A 24 24 0 0 1 28 52" fill="none" stroke="rgba(232,200,135,0.9)" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M 8 42 A 24 24 0 0 1 8 14" fill="none" stroke="rgba(232,200,135,0.9)" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M 8 14 A 24 24 0 0 1 28 4" fill="none" stroke="rgba(232,200,135,0.9)" stroke-width="1.4" stroke-linecap="round"/>
+        <!-- Inner ring -->
+        <circle cx="28" cy="28" r="14" fill="none" stroke="rgba(232,200,135,0.35)" stroke-width="0.8"/>
+        <!-- Crosshair lines (gapped at center) -->
+        <line x1="28" y1="10" x2="28" y2="17" stroke="rgba(232,200,135,0.9)" stroke-width="1.2" stroke-linecap="round"/>
+        <line x1="28" y1="39" x2="28" y2="46" stroke="rgba(232,200,135,0.9)" stroke-width="1.2" stroke-linecap="round"/>
+        <line x1="10" y1="28" x2="17" y2="28" stroke="rgba(232,200,135,0.9)" stroke-width="1.2" stroke-linecap="round"/>
+        <line x1="39" y1="28" x2="46" y2="28" stroke="rgba(232,200,135,0.9)" stroke-width="1.2" stroke-linecap="round"/>
+        <!-- Center dot -->
+        <circle cx="28" cy="28" r="1.2" fill="rgba(232,200,135,0.8)"/>
+      </svg>
+    `;
+    this.host.container.appendChild(this.reticleEl);
+
     this.host.container.addEventListener('pointermove', (e: PointerEvent) => {
       const rect = this.host.container.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
@@ -72,21 +106,71 @@ export class GraphInteractionController {
     });
   }
 
-  /** Raycast against node cores; returns index or -1. Uses ALL cores regardless of .visible. */
-  _raycastNode(): number {
+  /** Screen-space picking: project all nodes, find nearest within radius. */
+  _pickNode(): number {
     if (this.host._nodeCount === 0) return -1;
-    if (!this.host.nodeCoresInstanced) return -1;
-    this.host.raycaster.setFromCamera(this.host.mouse, this.host.camera);
-    const hits = this.host.raycaster.intersectObject(this.host.nodeCoresInstanced);
-    if (hits.length === 0) return -1;
-    return hits[0].instanceId ?? -1;
+    if (!Number.isFinite(this.host.mouse.x) || this.host.mouse.x <= -100) return -1;
+
+    const rect = this.host.container.getBoundingClientRect();
+    // Mouse position in pixels
+    const mxPx = (this.host.mouse.x * 0.5 + 0.5) * rect.width;
+    const myPx = (-this.host.mouse.y * 0.5 + 0.5) * rect.height;
+
+    const cam = this.host.camera;
+    const pos = this.host.nodePositions;
+    const n = this.host._nodeCount;
+    const dead = this.host._deadIndices;
+
+    let bestIdx = -1;
+    let bestDist = 18 * 18; // 18px pick radius
+
+    const v = this.host.tmpVec3;
+    for (let i = 0; i < n; i++) {
+      if (dead.has(i)) continue;
+      v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+      v.project(cam);
+      if (v.z > 1 || v.z < -1) continue; // behind camera or clipped
+      const sx = (v.x * 0.5 + 0.5) * rect.width;
+      const sy = (-v.y * 0.5 + 0.5) * rect.height;
+      const dx = sx - mxPx;
+      const dy = sy - myPx;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestDist) {
+        bestDist = d2;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+
+  /** Update reticle position to follow hovered node's screen position. */
+  private _updateReticle(): void {
+    if (!this.reticleEl) return;
+    if (this.host.hoveredIdx < 0 || this.host.hoveredIdx >= this.host._nodeCount) {
+      this.reticleEl.style.opacity = '0';
+      return;
+    }
+    const pos = this.host.nodePositions;
+    const idx = this.host.hoveredIdx;
+    this.host.tmpVec3.set(pos[idx * 3], pos[idx * 3 + 1], pos[idx * 3 + 2]);
+    this.host.tmpVec3.project(this.host.camera);
+    if (this.host.tmpVec3.z > 1) {
+      this.reticleEl.style.opacity = '0';
+      return;
+    }
+    const rect = this.host.container.getBoundingClientRect();
+    const sx = (this.host.tmpVec3.x * 0.5 + 0.5) * rect.width;
+    const sy = (-this.host.tmpVec3.y * 0.5 + 0.5) * rect.height;
+    this.reticleEl.style.left = `${sx}px`;
+    this.reticleEl.style.top = `${sy}px`;
+    this.reticleEl.style.opacity = '1';
   }
 
   updateHover(): void {
     if (this.host._nodeCount === 0) return;
     if (!Number.isFinite(this.host.mouse.x) || !Number.isFinite(this.host.mouse.y)) return;
 
-    // Cloud hover: fold mode with visible galaxy clouds (nodes hidden intentionally)
+    // Cloud hover: fold mode with visible galaxy clouds
     const cloudViewActive = this.host._fold.foldMode && this.host._fold.galaxyGlows.length > 0;
     if (cloudViewActive) {
       if (this.host.hoveredIdx >= 0) {
@@ -94,6 +178,7 @@ export class GraphInteractionController {
         this.host.targetHoverScale = 0;
         this.host._edges.rebuildHighlightEdges(-1);
       }
+      this._updateReticle();
       this.host.raycaster.setFromCamera(this.host.mouse, this.host.camera);
       const coreSprites = this.host._fold.galaxyGlows.filter((_, i) => i % 2 === 1);
       const galaxyHits = this.host.raycaster.intersectObjects(coreSprites);
@@ -129,21 +214,19 @@ export class GraphInteractionController {
       return;
     }
 
-    // Standard / constellation view: raycast all cores (ignore .visible)
-    const newIdx = this._raycastNode();
+    // Standard view: screen-space picking
+    const newIdx = this._pickNode();
     if (newIdx !== this.host.hoveredIdx) {
-      // Restore previous hovered node — brightness only, no scale change
+      // Restore previous hovered node
       if (this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount) {
-        // Restore original core color
         this.host._setCoreColor(this.host.hoveredIdx, this.host.nodeCoreColors[this.host.hoveredIdx]);
-        if (this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount) {
-          this.host._setGlowAlpha(this.host.hoveredIdx, 0.55);
-        }
+        this.host._setGlowAlpha(this.host.hoveredIdx, 0.55);
       }
       this.host.hoveredIdx = newIdx;
       this.host.targetHoverScale = newIdx >= 0 ? 1 : 0;
       this.host._edges.rebuildHighlightEdges(newIdx);
     }
+    this._updateReticle();
   }
 
   onClick(e: MouseEvent): void {
@@ -172,17 +255,14 @@ export class GraphInteractionController {
       return;
     }
 
-    // Inside a galaxy or sub-community: dispatch based on whether we're in cloud or constellation view
+    // Inside a galaxy or sub-community
     if (this.host._fold.foldMode && this.host._fold.enteredGalaxyId) {
-      // Current parent is the deepest sub-community, or the galaxy itself
       const activeParentId =
         this.host._fold._drillStack.length > 0
           ? this.host._fold._drillStack[this.host._fold._drillStack.length - 1]
           : this.host._fold.enteredGalaxyId;
 
-      // Check if current parent has sub-communities (→ cloud view) or not (→ constellation view)
       if (this.host._fold._hasVisibleSubCommunities(activeParentId)) {
-        // Cloud view: click sub-cloud → enterSubCommunity
         const cid = hitCloudId();
         if (cid) {
           this.host._fold.enterSubCommunity(cid);
@@ -191,9 +271,14 @@ export class GraphInteractionController {
       }
     }
 
-    // Intersect ALL node cores (ignore .visible — hover/click should always work)
-    const hits = this.host.raycaster.intersectObject(this.host.nodeCoresInstanced);
-    const idx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
+    // Use screen-space picking for click too (consistent with hover)
+    const savedMx = this.host.mouse.x;
+    const savedMy = this.host.mouse.y;
+    this.host.mouse.x = mx;
+    this.host.mouse.y = my;
+    const idx = this._pickNode();
+    this.host.mouse.x = savedMx;
+    this.host.mouse.y = savedMy;
 
     if (idx >= 0 && idx !== this.host._tooltip.selectedIdx)
       this.host._tooltip.showDetail(
@@ -207,7 +292,6 @@ export class GraphInteractionController {
       );
     else if (idx < 0) this.host._tooltip.hideDetail();
 
-    // Step 3: Emit graph:node-clicked (for external interaction handlers)
     if (idx >= 0 && idx < this.host._nodeCount) {
       const node = this.host.graphNodes[idx];
       bus.emit('graph:node-clicked', {

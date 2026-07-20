@@ -37,7 +37,7 @@ export function makeGlowPointMaterial(glowTex: THREE.Texture, alphaMul: number, 
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         float pointScale = 28.0 * (300.0 / -mv.z);
         if (override > 0.5) {
-          vColor = color;
+          vColor = vec4(color.rgb, color.a * mag);
           gl_PointSize = size * pointScale;
         } else {
           float twinkle = 1.0 + sin(uTime * speed + phase) * 0.10;

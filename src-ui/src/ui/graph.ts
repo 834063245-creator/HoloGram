@@ -118,6 +118,15 @@ export class StarGraph {
   nodeCommMap = new Map<number, string>();
   _initCamPos = new THREE.Vector3();
   _initCamTarget = new THREE.Vector3();
+  _focusDurationMs = 800;
+  focusTarget = new THREE.Vector3();
+  focusStartCam = new THREE.Vector3();
+  focusStartLook = new THREE.Vector3();
+  _focusLookTarget = new THREE.Vector3();
+  focusProgress = 0;
+  focusNodeIdx = -1;
+  focusFlash = 0;
+  _focusStartTime = 0;
 
   // Nebula + HoloGrid
   private nebulaDust!: THREE.Points;
@@ -201,7 +210,7 @@ export class StarGraph {
     // nebulaDust disabled
     // if (mode === 'full') this.buildNebulaDust();
 
-    if (true) this.buildHoloGrid();
+    // Holographic grid removed — natural 3D star field doesn't need a floor
 
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
@@ -301,6 +310,9 @@ export class StarGraph {
         } else if (this._tooltip.selectedIdx >= 0) {
           this._analysis.startBlastMode(this._tooltip.selectedIdx);
         }
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        this.resetCamera();
       }
     };
     window.addEventListener('keydown', this._onKeyDown);

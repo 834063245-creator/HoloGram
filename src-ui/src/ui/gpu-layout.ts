@@ -141,17 +141,18 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
   pos[i * 3u + 1u] += vel[i * 3u + 1u];
   pos[i * 3u + 2u] += vel[i * 3u + 2u];
 
-  // Shell constraint (adaptive strength: params.sp)
+  // Shell constraint — soft, only pull in far outliers (matching graph-layout.ts fix)
   let dx = pos[i * 3u];
   let dy = pos[i * 3u + 1u];
   let dz = pos[i * 3u + 2u];
   let dist = sqrt(dx * dx + dy * dy + dz * dz);
-  if (dist > 1.0f) {
-    let drift = (dist - params.shellRadius) * params.sp;
+  let hardLimit = params.shellRadius * 2.5;
+  if (dist > hardLimit) {
+    let pull = (dist - hardLimit) * params.sp * 3.0;
     let inv = 1.0f / dist;
-    pos[i * 3u] -= dx * inv * drift;
-    pos[i * 3u + 1u] -= dy * inv * drift;
-    pos[i * 3u + 2u] -= dz * inv * drift;
+    pos[i * 3u] -= dx * inv * pull;
+    pos[i * 3u + 1u] -= dy * inv * pull;
+    pos[i * 3u + 2u] -= dz * inv * pull;
   }
 }
 `;

@@ -139,17 +139,18 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
         }
       }
     }
-    // Shell constraint (adaptive)
+    // Shell constraint — soft, only pull in far outliers (matching graph-layout.ts fix)
+    const hardLimit = shellRadius * 2.5;
     for (let i = 0; i < n; i++) {
       const dx = pos[i * 3],
         dy = pos[i * 3 + 1],
         dz = pos[i * 3 + 2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > 1) {
-        const drift = (dist - shellRadius) * sp;
-        pos[i * 3] -= (dx / dist) * drift;
-        pos[i * 3 + 1] -= (dy / dist) * drift;
-        pos[i * 3 + 2] -= (dz / dist) * drift;
+      if (dist > hardLimit) {
+        const pull = (dist - hardLimit) * sp * 3;
+        pos[i * 3] -= (dx / dist) * pull;
+        pos[i * 3 + 1] -= (dy / dist) * pull;
+        pos[i * 3 + 2] -= (dz / dist) * pull;
       }
     }
   }
