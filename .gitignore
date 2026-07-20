@@ -96,13 +96,13 @@ preflight/
 # ── Project docs (markdown specs, plans, guides) ──
 docs_archive/
 specs/
-docs/*
-!docs/agents/
-docs/agents/*
-!docs/agents/*
+docs/
 
 # Internal design notes — not for public
 CODE_OF_CONDUCT.md
+REACT_MIGRATION.md
+INVARIANTS.md
+CONVENTIONS.md
 INCREMENTAL-GRAPH-UPDATE.md
 AGENTS.md
 CLAUDE.md
