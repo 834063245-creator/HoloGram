@@ -632,78 +632,80 @@ const AssistantBubble: React.FC<{
   }
 
   return (
-    <div className="msg-bubble assistant" data-message-id={msg._id}>
-      {groups.map((g, gi) => {
-        if (g.kind === 'tool') {
-          const tools = g.tools;
-          const doneCount = tools.filter((t) => t.status === 'done' || t.status === 'error').length;
-          const allDone = doneCount === tools.length && tools.length >= 3;
-          const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
-          const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
-          // ponytail: when collapsed, show summary ONLY; when expanded, show cards + summary as toggle
-          const collapsed = allDone && !groupExpanded;
-          return (
-            <div key={gi} className="msg-tool-wrapper">
-              {collapsed ? (
-                <ToolSummary
-                  tools={doneTools}
-                  expandedTools={expandedTools}
-                  onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
-                  onCollapseAll={() => {}}
-                />
-              ) : (
-                <>
-                  {allDone && (
-                    <ToolSummary
-                      tools={doneTools}
-                      expandedTools={expandedTools}
-                      onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
-                      onCollapseAll={() => onCollapseAllTools(tools.map((t) => t.toolId))}
-                    />
-                  )}
-                  {tools.map((t) => (
-                    <ToolCard
-                      key={t.toolId}
-                      part={t}
-                      expanded={expandedTools.has(t.toolId)}
-                      onToggle={() => onToggleTool(t.toolId)}
-                    />
-                  ))}
-                </>
-              )}
-            </div>
-          );
-        }
+    <div className="msg-assistant-row" data-message-id={msg._id}>
+      <div className="msg-bubble assistant">
+        {groups.map((g, gi) => {
+          if (g.kind === 'tool') {
+            const tools = g.tools;
+            const doneCount = tools.filter((t) => t.status === 'done' || t.status === 'error').length;
+            const allDone = doneCount === tools.length && tools.length >= 3;
+            const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
+            const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
+            // ponytail: when collapsed, show summary ONLY; when expanded, show cards + summary as toggle
+            const collapsed = allDone && !groupExpanded;
+            return (
+              <div key={gi} className="msg-tool-wrapper">
+                {collapsed ? (
+                  <ToolSummary
+                    tools={doneTools}
+                    expandedTools={expandedTools}
+                    onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                    onCollapseAll={() => {}}
+                  />
+                ) : (
+                  <>
+                    {allDone && (
+                      <ToolSummary
+                        tools={doneTools}
+                        expandedTools={expandedTools}
+                        onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                        onCollapseAll={() => onCollapseAllTools(tools.map((t) => t.toolId))}
+                      />
+                    )}
+                    {tools.map((t) => (
+                      <ToolCard
+                        key={t.toolId}
+                        part={t}
+                        expanded={expandedTools.has(t.toolId)}
+                        onToggle={() => onToggleTool(t.toolId)}
+                      />
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          }
 
-        if (g.kind === 'reasoning') {
-          const isLast = g.idx === reasoningTotal;
-          return (
-            <ReasoningBlock
-              key={gi}
-              text={g.text}
-              streaming={streaming && isLast}
-              reasoningComplete={!streaming || !isLast}
-            />
-          );
-        }
+          if (g.kind === 'reasoning') {
+            const isLast = g.idx === reasoningTotal;
+            return (
+              <ReasoningBlock
+                key={gi}
+                text={g.text}
+                streaming={streaming && isLast}
+                reasoningComplete={!streaming || !isLast}
+              />
+            );
+          }
 
-        if (g.kind === 'text') {
-          return (
-            <MarkdownContent
-              key={gi}
-              text={g.text}
-              streaming={streaming && !g.finalised}
-              onNavigateToNode={onNavigateToNode}
-            />
-          );
-        }
+          if (g.kind === 'text') {
+            return (
+              <MarkdownContent
+                key={gi}
+                text={g.text}
+                streaming={streaming && !g.finalised}
+                onNavigateToNode={onNavigateToNode}
+              />
+            );
+          }
 
-        if (g.kind === 'subagent') {
-          return <SubAgentBlock key={gi} part={g.part} />;
-        }
+          if (g.kind === 'subagent') {
+            return <SubAgentBlock key={gi} part={g.part} />;
+          }
 
-        return null;
-      })}
+          return null;
+        })}
+      </div>
       <span className="msg-actions">
         {onCopy && (
           <span

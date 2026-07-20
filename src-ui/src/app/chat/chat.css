@@ -74,6 +74,11 @@
   display: none;
 }
 
+/* Welcome 页面：隐藏 pill 入口，Agent 不可用 */
+body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
+  display: none;
+}
+
 .chat-panel::before {
   content: "";
   position: absolute;
@@ -1127,7 +1132,7 @@
   transition: opacity var(--obs-snap);
 }
 
-.msg-bubble.assistant:hover .msg-actions {
+.msg-assistant-row:hover .msg-actions {
   opacity: 1;
 }
 
@@ -1916,6 +1921,25 @@
 }
 
 .msg-user-row:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-assistant-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.msg-assistant-row .msg-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+  margin-left: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.msg-assistant-row:hover .msg-actions {
   opacity: 1;
 }
 
