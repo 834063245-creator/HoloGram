@@ -15,10 +15,12 @@ export const _GLSL_HSL2RGB = /* glsl */ `
 export function makeGlowPointMaterial(glowTex: THREE.Texture, alphaMul: number, sizeMul: number): THREE.ShaderMaterial {
   const hsl2rgb = _GLSL_HSL2RGB;
   return new THREE.ShaderMaterial({
-    uniforms: {
+        uniforms: {
       uTex: { value: glowTex },
       uTime: { value: 0 },
       uPulseTime: { value: 0 },
+      uHoveredIdx: { value: -1 },
+      uHoverScale: { value: 0 },
     },
     vertexShader: /* glsl */ `
       attribute vec4 color;
@@ -32,6 +34,8 @@ export function makeGlowPointMaterial(glowTex: THREE.Texture, alphaMul: number, 
       varying vec4 vColor;
       uniform float uTime;
       uniform float uPulseTime;
+      uniform float uHoveredIdx;
+      uniform float uHoverScale;
       ${hsl2rgb}
       void main() {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -46,6 +50,10 @@ export function makeGlowPointMaterial(glowTex: THREE.Texture, alphaMul: number, 
           float wave = 1.0 + sin(uPulseTime * riskFreq) * waveAmp;
           float combined = twinkle * wave;
           float alpha = min(1.0, ${alphaMul.toFixed(2)} * combined * mag);
+          // GPU-native hover: boost alpha + size for the hovered point
+          if (int(uHoveredIdx) == gl_VertexID) {
+            alpha = min(1.0, alpha * (1.0 + uHoverScale * 0.5));
+          }
           float hueShift = sin(uTime * 0.3 + phase) * 0.05;
           float newH = mod(baseHSL.x + hueShift + 1.0, 1.0);
           float newS = min(1.0, baseHSL.y * 1.2);
@@ -53,6 +61,9 @@ export function makeGlowPointMaterial(glowTex: THREE.Texture, alphaMul: number, 
           vec3 rgb = hsl2rgb(newH, newS, newL);
           vColor = vec4(rgb, alpha);
           gl_PointSize = size * combined * ${sizeMul.toFixed(2)} * pointScale;
+          if (int(uHoveredIdx) == gl_VertexID) {
+            gl_PointSize *= (1.0 + uHoverScale * 0.3);
+          }
         }
         gl_Position = projectionMatrix * mv;
       }`,

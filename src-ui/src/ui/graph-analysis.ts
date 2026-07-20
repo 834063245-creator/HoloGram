@@ -180,16 +180,22 @@ export class GraphAnalysis {
     this.blastDistances = [];
     while (this.host.highlightEdgeGroup.children.length)
       this.host.highlightEdgeGroup.remove(this.host.highlightEdgeGroup.children[0]);
+    const ncLen = this.host.nodeCoreColors.length;
+    const ngLen = this.host.nodeGlowColors.length;
     for (let i = 0; i < this.host._nodeCount; i++) {
       this.host._overrideFlags[i] = 0;
-      this.host._setCoreColor(i, this.host.nodeCoreColors[i]);
+      if (i < ncLen) {
+        this.host._setCoreColor(i, this.host.nodeCoreColors[i]);
+      }
       const base = this.host.getNodeBaseScale(i);
       this.host._setCoreScale(i, base * 0.35);
     }
     for (let i = 0; i < this.host._nodeCount; i++) {
-      const gc = new THREE.Color(this.host.nodeGlowColors[i]);
-      this.host._setGlowRgba(i, gc.r, gc.g, gc.b, 0.85);
-      if (this.host._glow2Rgba.length > 0) this.host._setGlow2Rgba(i, gc.r, gc.g, gc.b, 0.55);
+      if (i < ngLen && this.host.nodeGlowColors[i] != null) {
+        const gc = new THREE.Color(this.host.nodeGlowColors[i]);
+        this.host._setGlowRgba(i, gc.r, gc.g, gc.b, 0.85);
+        if (this.host._glow2Rgba.length > 0) this.host._setGlow2Rgba(i, gc.r, gc.g, gc.b, 0.55);
+      }
     }
     this.host._flushOverrideAttrs();
     if (useShellStore.getState().statusText.includes('波及')) useShellStore.getState().setStatusText('就绪');

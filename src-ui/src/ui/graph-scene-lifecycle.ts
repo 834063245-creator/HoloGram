@@ -567,11 +567,17 @@ export class GraphSceneLifecycle {
     // ponytail: set override flags so shader passes through CPU alpha during reveal
     this.host._overrideFlags.fill(1);
     this.host._nodes._flushOverrideAttrs();
-    // Zero all glow alpha — override=1 means shader uses these values directly
-    this.host._glowRgba.fill(0);
+    // Zero all glow alpha — override=1 means shader uses these values directly.
+    // ponytail: only zero alpha channel, preserve RGB — fill(0) was wiping RGB,
+    // causing hover to read (0,0,0) glow color via override path → black dot
+    for (let i = 0; i < totalNodes; i++) {
+      this.host._glowRgba[i * 4 + 3] = 0;
+    }
     this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
     if (this.host._glow2Rgba.length > 0) {
-      this.host._glow2Rgba.fill(0);
+      for (let i = 0; i < totalNodes; i++) {
+        this.host._glow2Rgba[i * 4 + 3] = 0;
+      }
       this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
     }
     // Save & clear edge opacities
@@ -983,59 +989,25 @@ export class GraphSceneLifecycle {
       }
     }
 
-    // ponytail: GPU-driven glow — set time uniforms, shader handles all animation.
-    // CPU only touches hovered node + neighbors (~10 nodes).
+    // ── GPU-driven glow: time + hover uniforms ──
+    // Shader handles all animation (twinkle, wave, hsl) and hover boost.
+    // CPU no longer touches _overrideFlags or _glowRgba for hover.
     const galTime = performance.now() * 0.001;
-    // Update shader time uniforms on both glow layers
+    this.host.hoverScale += (this.host.targetHoverScale - this.host.hoverScale) * 0.18;
+    const hIdx = this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount ? this.host.hoveredIdx : -1;
     if (this.host.nodeGlowsPoints) {
-      (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms.uTime.value = galTime;
-      (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms.uPulseTime.value = this.host.pulseTime;
+      const um = (this.host.nodeGlowsPoints.material as THREE.ShaderMaterial).uniforms;
+      um.uTime.value = galTime;
+      um.uPulseTime.value = this.host.pulseTime;
+      um.uHoveredIdx.value = hIdx;
+      um.uHoverScale.value = this.host.hoverScale;
     }
     if (this.host.nodeGlows2Points) {
-      (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms.uTime.value = galTime;
-      (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms.uPulseTime.value = this.host.pulseTime;
-    }
-
-    // ── Hover overrides — reset previous, apply current ──
-    // Track previously overridden nodes so we can release them back to shader
-    if (!this.host._prevOverrideSet) this.host._prevOverrideSet = new Set<number>();
-    for (const pi of this.host._prevOverrideSet) {
-      if (pi < this.host._nodeCount) this.host._overrideFlags[pi] = 0;
-    }
-    this.host._prevOverrideSet.clear();
-    if (this.host.nodeGlowsPoints?.geometry.attributes.override) {
-      this.host.nodeGlowsPoints.geometry.attributes.override.needsUpdate = true;
-    }
-    if (this.host.nodeGlows2Points?.geometry.attributes.override) {
-      this.host.nodeGlows2Points.geometry.attributes.override.needsUpdate = true;
-    }
-
-    // Hover effects — glow brightness only, no core color change
-    this.host.hoverScale += (this.host.targetHoverScale - this.host.hoverScale) * 0.18;
-    const neighborSet = new Set(this.host.hoveredIdx >= 0 ? this.host.neighborMap[this.host.hoveredIdx] || [] : []);
-    if (this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount) {
-      this.host._overrideFlags[this.host.hoveredIdx] = 1;
-      this.host._prevOverrideSet.add(this.host.hoveredIdx);
-      // Boost glow alpha on hover — but keep it proportional to mag
-      const mag = this.host._nodeMagCache[this.host.hoveredIdx] ?? 0.15;
-      this.host._nodes._setGlowAlpha(this.host.hoveredIdx, mag * (0.7 + this.host.hoverScale * 0.3));
-      for (const ni of neighborSet) {
-        if (ni !== this.host.hoveredIdx && ni < this.host._nodeCount) {
-          this.host._overrideFlags[ni] = 1;
-          this.host._prevOverrideSet.add(ni);
-          const niMag = this.host._nodeMagCache[ni] ?? 0.15;
-          this.host._nodes._setGlowAlpha(ni, niMag * (0.5 + this.host.hoverScale * 0.1));
-        }
-      }
-    }
-    // Flush override flags to GPU (only when overrides changed)
-    if (this.host._prevOverrideSet.size > 0) {
-      if (this.host.nodeGlowsPoints?.geometry.attributes.override) {
-        this.host.nodeGlowsPoints.geometry.attributes.override.needsUpdate = true;
-      }
-      if (this.host.nodeGlows2Points?.geometry.attributes.override) {
-        this.host.nodeGlows2Points.geometry.attributes.override.needsUpdate = true;
-      }
+      const um = (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms;
+      um.uTime.value = galTime;
+      um.uPulseTime.value = this.host.pulseTime;
+      um.uHoveredIdx.value = hIdx;
+      um.uHoverScale.value = this.host.hoverScale;
     }
 
     // ── Mode-driven override: blast/path/filter set once on mode change, not per-frame ──

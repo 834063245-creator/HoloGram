@@ -217,18 +217,8 @@ export class GraphInteractionController {
     // Standard view: screen-space picking
     const newIdx = this._pickNode();
     if (newIdx !== this.host.hoveredIdx) {
-            // Restore previous hovered node
-      // ponytail: check nodeCoreColors length — array may not be synced with _nodeCount
-      // during dynamic graph updates, causing undefined → new THREE.Color(undefined) → black
-      if (
-        this.host.hoveredIdx >= 0 &&
-        this.host.hoveredIdx < this.host._nodeCount &&
-        this.host.hoveredIdx < this.host.nodeCoreColors.length &&
-        typeof this.host.nodeCoreColors[this.host.hoveredIdx] === 'number'
-      ) {
-        this.host._setCoreColor(this.host.hoveredIdx, this.host.nodeCoreColors[this.host.hoveredIdx]);
-        this.host._setGlowAlpha(this.host.hoveredIdx, 0.55);
-      }
+      // ponytail: hover is now GPU-native (uHoveredIdx uniform in shader).
+      // No more CPU-side _overrideFlags / _glowRgba manipulation needed.
       this.host.hoveredIdx = newIdx;
       this.host.targetHoverScale = newIdx >= 0 ? 1 : 0;
       this.host._edges.rebuildHighlightEdges(newIdx);
