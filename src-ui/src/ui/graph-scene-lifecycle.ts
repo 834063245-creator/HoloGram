@@ -129,8 +129,7 @@ export interface LifecycleHost {
   positionGrid(pos: Float32Array): void;
   initEdgeParticles(pos: Float32Array, data: EdgeData[]): void;
   initTwinkleData(n: number): void;
-  onResize: () => void;
-  _onKeyDown?: (e: KeyboardEvent) => void;
+    onResize: () => void;
   _langHandler: ((data: { lang: string }) => void) | null;
 }
 
@@ -1121,8 +1120,6 @@ export class GraphSceneLifecycle {
       this.host._tooltip._promptTimer = null;
     }
     window.removeEventListener('resize', this.host.onResize);
-    // Remove window keydown listener (audit HIGH fix — prevent stale reference)
-    if (this.host._onKeyDown) window.removeEventListener('keydown', this.host._onKeyDown);
     // Unsubscribe EventBus handlers (audit: prevent stale bus listeners)
     if (this.host._langHandler) {
       bus.off('lang:changed', this.host._langHandler);

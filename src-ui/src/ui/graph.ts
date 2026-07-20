@@ -274,48 +274,6 @@ export class StarGraph {
     });
     // Prevent browser context menu on canvas
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
-    this._onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (this.focusSubgraphActive) {
-          this.exitFocusSubgraph();
-          return;
-        }
-        if (this._tooltip._promptBarEl?.style.display === 'flex') {
-          this._tooltip._hidePrompt();
-          return;
-        }
-        if (this._fold.enteredSubCommunityId) {
-          this._fold.exitSubCommunity();
-          return;
-        }
-        if (this._fold.enteredGalaxyId) {
-          this._fold.exitGalaxy();
-          return;
-        }
-        // In universe fold view: ESC exits fold mode
-        if (this._fold.foldMode) {
-          this._fold.setFoldMode(false);
-          return;
-        }
-        if (this._analysis.blastMode) {
-          this._analysis.exitBlastMode();
-          return;
-        }
-      }
-      if (e.key === 'b' || e.key === 'B') {
-        if (this._analysis.blastMode) {
-          this._analysis.exitBlastMode();
-        } else if (this.hoveredIdx >= 0) {
-          this._analysis.startBlastMode(this.hoveredIdx);
-        } else if (this._tooltip.selectedIdx >= 0) {
-          this._analysis.startBlastMode(this._tooltip.selectedIdx);
-        }
-      }
-      if (e.key === 'r' || e.key === 'R') {
-        this.resetCamera();
-      }
-    };
-    window.addEventListener('keydown', this._onKeyDown);
 
     this.onResize();
     window.addEventListener('resize', this.onResize);
@@ -361,9 +319,6 @@ export class StarGraph {
   initTwinkleData(_n: number): void {}
 
   // ── Path finding — delegated to GraphAnalysis ──────────────
-
-  // ── Step 3: Shift+click quick path mode — delegated to GraphAnalysis ──
-  private _onKeyDown?: (e: KeyboardEvent) => void;
 
   // ── i18n ──
   private _langHandler: ((data: { lang: string }) => void) | null = null;
@@ -615,6 +570,28 @@ export class StarGraph {
 
   exitFocusSubgraph(): void {
     this._focus.exitFocusSubgraph();
+  }
+
+  /** 处理 Escape 键（由 escLayer 统一调度）。返回 true 表示已消费，不再继续冒泡。 */
+  handleEscape(): boolean {
+    if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return true; }
+    if (this._tooltip._promptBarEl?.style.display === 'flex') { this._tooltip._hidePrompt(); return true; }
+    if (this._fold.enteredSubCommunityId) { this._fold.exitSubCommunity(); return true; }
+    if (this._fold.enteredGalaxyId) { this._fold.exitGalaxy(); return true; }
+    if (this._fold.foldMode) { this._fold.setFoldMode(false); return true; }
+    if (this._analysis.blastMode) { this._analysis.exitBlastMode(); return true; }
+    return false;
+  }
+
+  /** 切换 Blast 模式（B 键）。依赖于当前 hover/选中节点。 */
+  handleBlastToggle(): void {
+    if (this._analysis.blastMode) {
+      this._analysis.exitBlastMode();
+    } else if (this.hoveredIdx >= 0) {
+      this._analysis.startBlastMode(this.hoveredIdx);
+    } else if (this._tooltip.selectedIdx >= 0) {
+      this._analysis.startBlastMode(this._tooltip.selectedIdx);
+    }
   }
 
   // ── Status ───────────────────────────────────────────────

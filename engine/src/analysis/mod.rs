@@ -21,6 +21,7 @@ pub mod dataflow_synthesis;
 pub mod dataflow_engine;
 
 pub use coupling::compute_coupling;
+pub use coupling::compute_coupling_incremental;
 pub use fragility::fragile_nodes;
 pub use fragility::fragile_nodes_from_index;
 pub use cycles::detect_cycles;
@@ -28,6 +29,7 @@ pub use cycles::detect_cycles_from_index;
 pub use coupling_report::coupling_report;
 pub use coupling_report::coupling_report_from_index;
 pub use coupling_report::count_l4_from_index;
+pub use coupling_report::count_l4_by_file;
 pub use graph_stats::graph_summary;
 pub use graph_stats::graph_summary_from_index;
 pub use dataflow::classify_cycles;

@@ -356,6 +356,9 @@ async function reanalyze(): Promise<void> {
 // ── Esc 逐层关闭（快捷键经 useGlobalKeys → actions 分发到此）──
 
 function escLayer(): void {
+  // Graph-internal Escape states (was in graph.ts keydown, now unified)
+  if (starGraph.handleEscape()) return;
+  // Global UI layers
   const dock = useDockStore.getState();
   if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
   else if (dock.isOpen('timeline')) dock.closePanel('timeline');
@@ -617,6 +620,14 @@ async function init(): Promise<void> {
       icon: 'reset-cam',
       kbd: 'R',
       run: () => starGraph.resetCamera(),
+    },
+    {
+      id: 'blast-toggle',
+      group: '操作',
+      label: '切换 Blast 模式',
+      icon: 'blast',
+      kbd: 'B',
+      run: () => starGraph.handleBlastToggle(),
     },
     { id: 'toggle-diff', group: '操作', label: '变更回看着色', icon: 'diff', kbd: 'ctrl D', run: () => toggleDiff() },
     { id: 'search', group: '操作', label: '搜索符号', icon: 'search', run: (q) => doSearch(q || '') },

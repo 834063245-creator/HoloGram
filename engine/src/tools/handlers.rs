@@ -445,11 +445,24 @@ pub(crate) fn handler_timeline(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_blindspots(args: &Value) -> ToolResponse {
-    let _filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
+    let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
+    let detail = args.get("detail").and_then(|v| v.as_bool()).unwrap_or(false);
     ToolResponse::Success(with_store(|idx| {
-        let l4 = count_l4_from_index(idx);
+        let l4_total = count_l4_from_index(idx);
         let cycles = detect_cycles_from_index(idx);
-        let blind = find_blindspots(l4, cycles.len(), 0);
+        let mut blind = find_blindspots(l4_total, cycles.len(), 0);
+
+        // When filter is "L4" or detail is requested, include per-file L4 breakdown
+        if detail || filter == "L4" {
+            let l4_files: Vec<serde_json::Value> = count_l4_by_file(idx)
+                .into_iter()
+                .take(20)
+                .map(|(file, count)| json!({"file": file, "l4_edges": count}))
+                .collect();
+            blind["l4_breakdown"] = json!(l4_files);
+            blind["l4_total"] = json!(l4_total);
+        }
+
         json!(blind)
     }))
 }
@@ -1129,6 +1142,62 @@ pub(crate) fn handler_node(args: &Value) -> ToolResponse {
     }))
 }
 
+/// Check whether a node is a known entry point that static analysis can't see
+/// (framework-registered commands, constructors, test functions, etc.).
+fn is_entry_point(node: &Node) -> bool {
+    let name = &node.name;
+    let raw_loc = node.location.as_deref().unwrap_or("");
+    // Strip trailing ":line_number" suffix (e.g. ".../App.tsx:21")
+    let loc = if let Some(pos) = raw_loc.rfind(':') {
+        let maybe_line = &raw_loc[pos + 1..];
+        if maybe_line.chars().all(|c| c.is_ascii_digit()) {
+            &raw_loc[..pos]
+        } else {
+            raw_loc
+        }
+    } else {
+        raw_loc
+    };
+
+    // Binary entry points (main in any language)
+    if name == "main" {
+        return true;
+    }
+    // Class constructors (called via `new` keyword in JS/TS)
+    if name == "constructor" || name.ends_with(".constructor") {
+        return true;
+    }
+    // Test functions (dynamically discovered by test frameworks)
+    if name.starts_with("test_") {
+        return true;
+    }
+    // Tauri command dispatcher (registered via #[command] macro)
+    if name == "rpc" && loc.contains("rpc.rs") {
+        return true;
+    }
+    // Engine pipeline entry
+    if name == "run_pipeline" {
+        return true;
+    }
+    // Tauri command handler modules (in commands/ directory, registered by macro)
+    if loc.contains("/commands/") || loc.contains("\\commands\\") {
+        return true;
+    }
+    // React/Vue component entry points
+    if name == "App" && (loc.ends_with("App.tsx") || loc.ends_with("App.ts")) {
+        return true;
+    }
+    // Framework init/bootstrap functions
+    if name == "init" && node.out_degree > 3 {
+        return true;
+    }
+    // CLI/shell entry scripts
+    if loc.contains("test-once.ts") || loc.contains("test-agent.ts") {
+        return true;
+    }
+    false
+}
+
 pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     let limit = get_usize(args, "limit", 20).min(200);
     let kind_str = args
@@ -1145,12 +1214,17 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
         // False positives possible for event handlers / callback registrations.
         let mut candidates: Vec<&Node> = idx
             .nodes_iter()
-            .filter(|n| n.in_degree <= 1 && kinds.iter().any(|k| n.kind.as_str() == *k))
+            .filter(|n| {
+                n.in_degree <= 1
+                    && kinds.iter().any(|k| n.kind.as_str() == *k)
+                    && !is_entry_point(n)
+            })
             .collect();
         candidates.sort_by_key(|n| std::cmp::Reverse(n.out_degree));
+        let total = candidates.len();
         candidates.truncate(limit);
         json!({
-            "total_unused": candidates.len(),
+            "total_unused": total,
             "limit": limit,
             "kind_filter": kind_label,
             "unused": candidates.iter().map(|n| json!({

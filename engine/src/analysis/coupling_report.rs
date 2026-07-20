@@ -46,7 +46,7 @@ pub fn coupling_report(graph: &Graph, module: &str) -> serde_json::Value {
 pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json::Value {
     let mut l1=0u32; let mut l2=0u32; let mut l3=0u32; let mut l4=0u32;
 
-    // Normalize module path for matching
+        // Normalize module path for matching
     let normalized = module.replace('\\', "/");
 
     // Find nodes belonging to this module
@@ -55,8 +55,22 @@ pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json
     if idx.get_node(module).is_some() {
         module_node_ids.push(module.to_string());
     }
-    // File path match via file_index
+    // File path match via file_index (exact match first)
     module_node_ids.extend(idx.get_nodes_by_file(&normalized));
+
+    // Fuzzy fallback: if no nodes found, try suffix/substring match
+    // Supports partial paths like "pipeline.rs" or "src/engine/pipeline.rs"
+    if module_node_ids.is_empty() {
+        let lower_module = normalized.to_lowercase();
+        for n in idx.nodes_iter() {
+            if let Some(ref loc) = n.location {
+                let loc_norm = loc.replace('\\', "/").to_lowercase();
+                if loc_norm.ends_with(&lower_module) || loc_norm.contains(&lower_module) {
+                    module_node_ids.push(n.id.clone());
+                }
+            }
+        }
+    }
 
     // ponytail: only traverse edges incident to module nodes — O(degree), not O(E)
     let mut seen = std::collections::HashSet::new();
@@ -91,6 +105,40 @@ pub fn count_l4_from_index(idx: &MemoryIndex) -> usize {
         .flat_map(|(_, targets)| targets)
         .filter(|(_, _, depth, _)| *depth >= 4)
         .count()
+}
+
+/// Group L4 edges by source file, returning (file_path, count) pairs sorted by count desc.
+/// Used by arch_blindspots to show WHERE the deep coupling lives.
+pub fn count_l4_by_file(idx: &MemoryIndex) -> Vec<(String, usize)> {
+    use std::collections::HashMap;
+    let node_files: HashMap<String, String> = idx
+        .nodes_iter()
+        .filter_map(|n| {
+            n.location.as_ref().map(|loc| {
+                let file = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
+                (n.id.clone(), file.replace('\\', "/"))
+            })
+        })
+        .collect();
+
+    let mut file_counts: HashMap<String, usize> = HashMap::new();
+    for (src_id, targets) in idx.edges_iter() {
+        for (tgt_id, _kind, depth, _delay) in targets {
+            if depth >= 4 {
+                // Try source file first, fall back to target file
+                let file = node_files
+                    .get(&src_id)
+                    .or_else(|| node_files.get(&tgt_id))
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                *file_counts.entry(file).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut sorted: Vec<(String, usize)> = file_counts.into_iter().collect();
+    sorted.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    sorted
 }
 
 #[cfg(test)]

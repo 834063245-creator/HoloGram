@@ -8,6 +8,16 @@ use crate::graph::{EdgeKind, Graph};
 /// Assign L1-L4 coupling depth to all edges. O(E) single pass.
 /// L1 = direct import (same package), L2 = cross-package, L3 = data, L4 = temporal.
 pub fn compute_coupling(graph: &mut Graph) {
+    compute_coupling_impl(graph, false)
+}
+
+/// Compute coupling depth only for edges with coupling_depth == 0 (newly added,
+/// not yet classified). Preserves explicitly-set L3/L4 depths from DI reflection.
+pub fn compute_coupling_incremental(graph: &mut Graph) {
+    compute_coupling_impl(graph, true)
+}
+
+fn compute_coupling_impl(graph: &mut Graph, incremental: bool) {
     // Extract package prefix from node location for L1 vs L2
     let node_pkg: HashMap<String, String> = graph
         .nodes
@@ -21,6 +31,10 @@ pub fn compute_coupling(graph: &mut Graph) {
         .collect();
 
     for edge in graph.edges.values_mut() {
+        // Incremental mode: skip edges already classified by DI reflection (L3/L4)
+        if incremental && edge.coupling_depth > 0 {
+            continue;
+        }
         edge.coupling_depth = match edge.kind {
             EdgeKind::Imports | EdgeKind::Calls | EdgeKind::Inherits | EdgeKind::Defines => {
                 let src_pkg = node_pkg.get(&edge.source);

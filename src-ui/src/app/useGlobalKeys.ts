@@ -45,6 +45,8 @@ export function useGlobalKeys(): void {
         runAction('toggle-settings');
       } else if (key === 'f') {
         runAction('toggle-fold');
+      } else if (key === 'b') {
+        runAction('blast-toggle');
       } else if (key === 'r') {
         runAction('reset-cam');
       } else if (e.key === '?') {

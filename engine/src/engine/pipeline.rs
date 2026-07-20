@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
 
 use crate::analysis::coupling::compute_coupling;
+use crate::analysis::coupling::compute_coupling_incremental;
 use crate::analysis::di_reflection::{
     detect_cross_lang_calls, detect_di_reflection, detect_dynamic_imports, detect_eval,
 };
@@ -204,9 +205,22 @@ impl Engine {
             detail: format!("{} markers", xlang_edges),
         });
 
-        // 6. Dataflow — now on-demand via query_file_dataflow().
+                // 6. Dataflow — now on-demand via query_file_dataflow().
         // Pipeline no longer precomputes dataflow edges at graph build time.
         // Agent tools call the query engine directly when tracing variables.
+
+        // 6.1. Re-run coupling for edges added during synthesis (steps 4-5.8).
+        // Uses incremental mode — preserves L3/L4 depths set by DI reflection.
+        set_progress("耦合增量更新", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        compute_coupling_incremental(&mut result.graph);
+        eprintln!("[engine] stage: coupling-incr done in {:.1}s",
+            stage_start.elapsed().as_secs_f64());
+        stage_timings.push(StageTiming {
+            name: "Coupling (incr)".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: String::new(),
+        });
 
         // ── 5.9 Extract source snippets for vector index ──
         // ponytail: build module→source index first (O(F)), then single-pass nodes
