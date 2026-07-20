@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "hologram": {
-      "command": "d:/HoloGramHG/engine/target/release/hologram-engine.exe",
-      "args": ["serve", "--project-root", "d:/HoloGramHG"]
-    }
-  }
-}

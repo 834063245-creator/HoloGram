@@ -131,6 +131,9 @@ nul
 # SonarQube scanner working directory
 .scannerwork/
 
+# Tauri auto-generated schemas
+src-tauri/gen/schemas/
+
 # Build log / debug output
 *_warnings.txt
 *_check.txt
@@ -148,3 +151,4 @@ test_mcp_protocol.sh
 src-tauri/python/*
 !src-tauri/python/.gitkeep
 scripts/python-3.14.4-embed-amd64.zip
+.mcp.json
