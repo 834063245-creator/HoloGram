@@ -115,8 +115,34 @@ export function CommandBar() {
     inputRef.current?.blur(); // 搜完释放焦点，恢复键盘快捷键
   };
 
+  // 标题栏双击最大化（仅当点击区域不是按钮/输入框时触发）
+  const handleBarDoubleClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, kbd, .cb-win-btn, .cb-palette-trigger')) return;
+    winCmd('toggle_maximize');
+  }, []);
+
+  // 标题栏拖拽 — 优先用 CSS -webkit-app-region: drag；Linux 部分 WM 不认时，用 Tauri API 兜底
+  const barRef = useRef<HTMLElement>(null);
+  const handleBarPointerDown = useCallback((e: React.PointerEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, kbd, .cb-win-btn, .cb-palette-trigger')) return;
+    // 只在 CSS drag 无效时启用（Linux 检测）
+    if (document.documentElement.getAttribute('data-platform') !== 'linux') return;
+    // 用 Tauri 原生拖拽
+    const ta = tauri();
+    if (ta?.invoke) {
+      ta.invoke('plugin:window|start_dragging', { label: winLabel() }).catch(() => {});
+    }
+  }, []);
+
   return (
-    <header className="cb-bar">
+    <header
+      className="cb-bar"
+      ref={barRef}
+      onDoubleClick={handleBarDoubleClick}
+      onPointerDown={handleBarPointerDown}
+    >
       <span className="cb-brand">
         <span className="cb-brand-mark">◈</span>
         <span className="cb-brand-name">HOLOGRAM</span>

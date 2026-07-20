@@ -807,6 +807,13 @@ async function init(): Promise<void> {
   await setupPlaceholderAgent();
 }
 
+// ── 平台标记：方便 CSS 针对不同操作系统做差异化处理 ──
+{
+  const ua = navigator.userAgent;
+  const plat = ua.includes('Linux') ? 'linux' : ua.includes('Windows') ? 'windows' : ua.includes('Mac') ? 'macos' : 'unknown';
+  document.documentElement.setAttribute('data-platform', plat);
+}
+
 // ── React 壳引导（P1：CommandBar/DockRail/StatusBar/命令面板/快捷键浮层）──
 createRoot(document.getElementById('app-root')!).render(createElement(App));
 
