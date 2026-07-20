@@ -1,0 +1,527 @@
+/* ═══════════════════════════════════════════════════════════════
+   HOLOGRAM · 星图铬件（P5 — 自 base.css 抽取，变量已映射 --obs-*；
+   图例/聚焦横幅按 observatory-concept 原型重写为玻璃胶囊）
+   内容：图例 / 聚焦横幅 / 节点 tooltip / detail-card / 星系标签 /
+   corner-brackets / file-viewer / hg-icon
+   操控方：ui/graph-ui.ts · graph-tooltip.ts · graph-fold.ts · file-viewer.ts
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 图例（P5 原型：水平玻璃胶囊 · 点击行过滤）────────────── */
+#graph-legend {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--obs-glass);
+  border: 1px solid var(--obs-line);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  font-family: var(--obs-font-body);
+  font-size: calc(11px * var(--font-scale));
+  color: var(--obs-text-2);
+  opacity: 0.75;
+  transition:
+    opacity var(--obs-glide),
+    border-color var(--obs-glide);
+}
+
+#graph-legend:hover {
+  opacity: 1;
+  border-color: rgba(148, 166, 205, 0.28);
+}
+
+#graph-legend .legend-title {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 0.26em;
+  color: var(--obs-text-3);
+}
+
+#graph-legend .legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#graph-legend .legend-swatch {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+  flex: none;
+}
+
+#graph-legend .legend-edge-swatch {
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+
+#graph-legend .legend-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--obs-line-soft);
+  flex: none;
+}
+
+#graph-legend .legend-row.active {
+  background: rgba(125, 179, 232, 0.14);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(125, 179, 232, 0.42);
+  padding: 1px 6px;
+  margin: -1px -6px;
+}
+
+#graph-legend .legend-row.active .legend-swatch,
+#graph-legend .legend-row.active .legend-edge-swatch {
+  filter: brightness(1.3);
+}
+
+/* ── 聚焦横幅（P5 原型：顶部玻璃胶囊 · 黄铜星标 + 衬线斜体名）── */
+#graph-focus-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: none;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 15px;
+  border-radius: 999px;
+  background: var(--obs-glass);
+  border: 1px solid var(--obs-line);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    opacity var(--obs-glide),
+    border-color var(--obs-glide);
+}
+
+#graph-focus-banner:hover {
+  border-color: rgba(201, 162, 92, 0.5);
+}
+
+#graph-focus-banner svg {
+  color: var(--obs-brass);
+  display: block;
+}
+
+#graph-focus-banner .fb-name {
+  font-family: var(--obs-font-serif);
+  font-style: italic;
+  font-size: calc(14.5px * var(--font-scale));
+  color: var(--obs-brass-hi);
+}
+
+#graph-focus-banner .fb-meta {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10.5px * var(--font-scale));
+  color: var(--obs-text-2);
+}
+
+.galaxy-label {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text, rgba(200, 200, 220, 0.55));
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+
+.galaxy-flash-label {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  font-family: var(--obs-font-mono);
+  font-size: calc(18px * var(--font-scale));
+  font-weight: 700;
+  color: var(--obs-text);
+  text-shadow:
+    0 0 24px var(--obs-text-2),
+    0 0 4px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.5s;
+}
+
+#graph-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 55;
+  background: rgba(4, 10, 24, 0.94);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(148, 166, 205, 0.16);
+  border-radius: 6px;
+  padding: calc(7px * var(--font-scale)) calc(10px * var(--font-scale));
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(5px);
+  transition:
+    opacity 0.12s,
+    transform 0.12s;
+  max-width: 280px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+#graph-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#graph-tooltip .tt-name {
+  font-weight: 600;
+  color: var(--obs-text);
+  font-size: calc(11px * var(--font-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#graph-tooltip .tt-meta {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  margin-top: 1px;
+}
+
+#graph-tooltip .tt-meta[data-kind="symbol"],
+#graph-tooltip .tt-meta[data-kind="function"],
+#graph-tooltip .tt-meta[data-kind="method"],
+#graph-tooltip .tt-meta[data-kind="class"],
+#graph-tooltip .tt-meta[data-kind="module"],
+#graph-tooltip .tt-meta[data-kind="variable"],
+#graph-tooltip .tt-meta[data-kind="interface"],
+#graph-tooltip .tt-meta[data-kind="constant"] {
+  color: var(--obs-blue);
+}
+
+#graph-tooltip .tt-meta[data-kind="medium"],
+#graph-tooltip .tt-meta[data-kind="file"],
+#graph-tooltip .tt-meta[data-kind="database"],
+#graph-tooltip .tt-meta[data-kind="cache"],
+#graph-tooltip .tt-meta[data-kind="queue"] {
+  color: var(--obs-brass);
+}
+
+#graph-tooltip .tt-meta[data-kind="temporal"],
+#graph-tooltip .tt-meta[data-kind="thread"],
+#graph-tooltip .tt-meta[data-kind="timer"],
+#graph-tooltip .tt-meta[data-kind="trigger"] {
+  color: #a088e0;
+}
+
+#graph-tooltip .tt-loc {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  color: var(--obs-text-2);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#detail-card {
+  position: absolute;
+  z-index: 56;
+  pointer-events: auto;
+  background: var(--obs-glass-hi);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(148, 166, 205, 0.19);
+  border-radius: 6px;
+  padding: calc(14px * var(--font-scale)) calc(16px * var(--font-scale));
+  width: calc(260px * var(--font-scale));
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(4px) scale(0.97);
+  transition:
+    opacity 0.16s,
+    transform 0.16s;
+  box-shadow:
+    0 0 0 1px rgba(148, 166, 205, 0.03),
+    0 12px 36px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--font-scale));
+  user-select: none;
+}
+
+#detail-card.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+#detail-card .dc-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+#detail-card .dc-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--obs-text);
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.3;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#detail-card .dc-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--obs-text);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: calc(11px * var(--font-scale));
+  transition: color var(--obs-snap);
+  line-height: 1;
+}
+
+#detail-card .dc-close:hover {
+  color: var(--obs-text);
+}
+
+#detail-card .dc-meta {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#detail-card .dc-meta .dc-kind {
+  font-weight: 600;
+}
+
+#detail-card .dc-meta .dc-degree {
+  opacity: 0.65;
+}
+
+#detail-card .dc-location {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  color: var(--obs-text-2);
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+#detail-card .dc-divider {
+  height: 1px;
+  background: rgba(148, 166, 205, 0.09);
+  margin: calc(2px * var(--font-scale)) 0;
+  flex-shrink: 0;
+}
+
+#detail-card .dc-section-title {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+}
+
+#detail-card .dc-coupling {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--font-scale));
+}
+
+#detail-card .dc-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(8px * var(--font-scale));
+}
+
+#detail-card .dc-bar-label {
+  width: calc(72px * var(--font-scale));
+  color: var(--obs-text-2);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#detail-card .dc-bar-count {
+  width: calc(28px * var(--font-scale));
+  color: var(--obs-text-2);
+  text-align: right;
+  flex-shrink: 0;
+  font-family: var(--obs-font-mono);
+}
+
+#detail-card .dc-bar-track {
+  flex: 1;
+  height: calc(3px * var(--font-scale));
+  background: rgba(148, 166, 205, 0.12);
+  border-radius: 2px;
+  min-width: 20px;
+  overflow: hidden;
+}
+
+#detail-card .dc-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  min-width: 2px;
+  transition: width 0.3s;
+}
+
+.dc-bar-fill.l1 {
+  background: rgba(148, 166, 205, 0.31);
+}
+
+.dc-bar-fill.l2 {
+  background: rgba(148, 166, 205, 0.34);
+}
+
+.dc-bar-fill.l3 {
+  background: var(--obs-warn);
+}
+
+.dc-bar-fill.l4 {
+  background: var(--obs-fail);
+}
+
+.dc-bar-row.dc-zero .dc-bar-track {
+  background: rgba(148, 166, 205, 0.05);
+}
+
+.dc-bar-warn {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+#detail-card .dc-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(5px * var(--font-scale));
+}
+
+#detail-card .dc-actions button {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: calc(5px * var(--font-scale)) calc(6px * var(--font-scale));
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all var(--obs-snap);
+  border: 1px solid rgba(148, 166, 205, 0.16);
+  background: rgba(12, 22, 36, 0.6);
+  color: var(--obs-text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+#detail-card .dc-actions button:hover {
+  background: rgba(160, 180, 220, 0.08);
+  color: var(--obs-text);
+}
+
+.dc-open-btn {
+  color: rgba(80, 210, 170, 0.8) !important;
+}
+
+.dc-agent-btn {
+  color: #a088e0 !important;
+}
+
+.dc-blast-btn {
+  color: var(--obs-brass) !important;
+}
+
+.dc-focus-btn {
+  color: var(--obs-blue) !important;
+}
+
+#detail-card .dc-blast-filters {
+  display: none;
+  padding-top: calc(8px * var(--font-scale));
+  border-top: 1px solid rgba(148, 166, 205, 0.09);
+}
+
+#detail-card .dc-blast-filters .dc-filter-label {
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-text);
+  margin-bottom: 4px;
+}
+
+#detail-card .dc-blast-filters .dc-filter-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+#detail-card .dc-blast-filters .dc-filter-btn {
+  padding: calc(2px * var(--font-scale)) calc(6px * var(--font-scale));
+  font-size: calc(9px * var(--font-scale));
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+  color: rgba(200, 215, 240, 0.6);
+  transition: all var(--obs-snap);
+}
+
+#detail-card .dc-blast-filters .dc-filter-btn:hover {
+  background: #444;
+}
+
+#detail-card .dc-blast-filters .dc-filter-btn.active {
+  background: #555;
+  border-color: #888;
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P6 · 观测台铬件表面（原型 #tip / 玻璃卡片语言）
+   ═══════════════════════════════════════════════════════════════ */
+
+#graph-tooltip {
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-color: var(--obs-line);
+  border-radius: 9px;
+}
+
+#detail-card {
+  border-color: var(--obs-line);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7f · 字距规范（§2.2：mono 大写小标签统一 0.2–0.3em，取 0.24em）
+   ═══════════════════════════════════════════════════════════════ */
+#detail-card .dc-section-title,
+#detail-card .dc-actions button {
+  letter-spacing: 0.24em;
+}

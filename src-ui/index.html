@@ -1,0 +1,37 @@
+<!-- Copyright (c) 2026 Wenbing Jing. MIT License. SPDX-License-Identifier: MIT -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔮 全息观测站 — HoloGram Observatory</title>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       APP ROOT — React 壳（CommandBar/DockRail/StatusBar/命令面板）
+       ═══════════════════════════════════════════════════════════════ -->
+  <div id="app-root"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       WELCOME — 空状态（main.ts 以 .hidden 切换；默认隐藏待 JS 决策）
+       ═══════════════════════════════════════════════════════════════ -->
+  <div id="welcome" class="hidden">
+    <div class="w-mark">◈</div>
+    <h1>HoloGram</h1>
+    <p>DEEP SPACE CODE TOPOLOGY · AI-ASSISTED ANALYSIS</p>
+    <button type="button" class="big-btn" id="btn-welcome-open">INITIALIZE WORKSPACE</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       GRAPH — Three.js canvas lives here
+       ═══════════════════════════════════════════════════════════════ -->
+  <div id="graph"></div>
+
+  <!-- 氛围层（原型同款：边缘暗角 + 胶片颗粒；pointer-events none） -->
+  <div id="vig"></div>
+  <div id="grain"></div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

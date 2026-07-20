@@ -1,0 +1,37 @@
+---
+description: Tauri 桥接层命令与安全沙箱
+globs: src-tauri/**/*
+alwaysApply: false
+---
+
+# Tauri 壳 (`src-tauri/`)
+
+**入口：** `main.rs`（~55 个 `#[tauri::command]`）· `engine_client.rs`（TCP :9777 RPC）
+
+## 进程模型
+
+Tauri 启动 → `.setup()` spawn `engine.exe`（TCP :9777）→ 前端 `invoke` → Rust 桥接 → EngineClient
+
+MCP 模式：`engine.exe serve --project-root`（stdio JSON-RPC），由 McpManager 管理。
+
+Unity 3D 原型**未合入主线**（保留 Three.js）。`unity_manager.rs` / `ipc_client.rs` 存在但未启用。
+
+## 命令分组
+
+- **图：** analyze_and_load、hologram_* 查询（全走 EngineClient）
+- **工作区：** set_active_project、start_watching、estimate_project_size
+- **文件/Git/Shell：** 全部经 `sandbox.rs` 目录监禁校验
+- **MCP：** start_mcp_server、mcp_call、mcp_list_tools
+
+## 安全（8 层）
+
+`sandbox.rs` 目录监禁 · `audit.rs` JSONL · CSP · SSRF(DNS→拒内网) · DPAPI(`credential.rs`) · permission fail-closed · 污染源标记 · 默认安全模式 OFF 危险工具
+
+写/删/Shell/Git push 需用户审批。读可在 project_root + 白名单。
+
+## 改 Tauri 注意
+
+- Tauri 命令参数必须拼入 EngineClient 命令字符串（history/community/hotspots/conflict 等曾漏参）
+- preflight/health 用正确 TCP 前缀路由
+- 文件监听 1s polling → 增量分析 → emit `graph-updated`
+- 打包：`cargo tauri build`；WiX cleanup.wxs 卸载时询问删用户数据

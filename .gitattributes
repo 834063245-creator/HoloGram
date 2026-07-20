@@ -1,0 +1,7 @@
+# Binary files — never convert line endings
+*.png binary
+*.ico binary
+*.hologram binary
+*.db binary
+*.dll binary
+*.exe binary

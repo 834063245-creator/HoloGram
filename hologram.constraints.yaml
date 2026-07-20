@@ -1,0 +1,49 @@
+# Copyright (c) 2026 Wenbing Jing. MIT License.
+# SPDX-License-Identifier: MIT
+
+# 全息仓约束配置 — hologram.constraints.yaml
+#
+# 约束 = 不可逾越的边界。触碰边界 = 路由到人。完全在边界内 = 自动放行。
+#
+# 修改此文件来定制你的项目的破坏性变更阈值。
+# 删除此文件即可恢复默认值。
+
+constraints:
+  # ── 路由开关 ──
+  # 控制哪些级别的信号路由到人。
+  # L5 不可逆破坏永远路由（不可关闭）。
+  routing:
+    l5_irreversible: true        # L5 永远路由，不可关闭
+    l4_silent: true              # L4 静默破坏默认路由
+    l3_delayed: true             # L3 延迟破坏默认路由
+    l2_blast: true               # L2 波及破坏默认路由
+    l1_visible: false            # L1 可见破坏从不路由
+
+  # ── 阈值 ──
+  # 调整"什么程度才算触碰约束"。
+  thresholds:
+    blast_radius_max: 20         # 波及节点上限
+    cross_community_tolerance: 0 # 跨社区边新增容忍（0 = 任何都路由）
+    api_signature_tolerance: 0   # 公开 API 签名变更容忍
+    l4_penetration_tolerance: 0  # L4 封装穿透新增容忍
+    l4_threshold_change_tolerance: 0  # 数值阈值变更容忍
+
+  # ── 白名单 ──
+  # 这些模块/文件的变更不触发特定级别的路由。
+  allowlist:
+    modules:                     # 这些模块允许 L4 穿透（不触发路由）
+      # - "legacy_adapter.py"
+    files:                       # 这些文件的变更不触发 L3 延迟路由
+      - "docs/*.md"
+      - "tests/*.py"
+      - "*.txt"
+
+  # ── 黑名单 ──
+  # 包含这些关键词的变量变更永远路由。
+  denylist:
+    keywords:
+      - "password"
+      - "secret"
+      - "token"
+      - "api_key"
+      - "private_key"

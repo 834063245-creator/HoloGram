@@ -1,0 +1,394 @@
+/* Copyright (c) 2026 Wenbing Jing. MIT License. SPDX-License-Identifier: MIT */
+/* ═══════════════════════════════════════════════════════════════
+   FILE TRANSLATOR — Code → Human translation panel
+   Adapted from vibe-viewer-hologram.html, injected with HoloGram CSS vars
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --audit-risk: #f07838; /* Ported from vibe-viewer-hologram.html --anomaly-orange */
+}
+
+/* ── Panel container ──────────────────────────── */
+.ft-panel {
+  display: none;
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid var(--obs-line, rgba(48, 60, 80, 0.4));
+  background: var(--obs-glass-hi, rgba(6, 12, 24, 0.97));
+}
+.ft-panel.ft-open {
+  display: flex;
+}
+
+/* ── Panel header ─────────────────────────────── */
+.ft-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  background: rgba(3, 8, 20, 0.92);
+  border-bottom: 1px solid rgba(148, 166, 205, 0.12);
+  min-height: 30px;
+}
+.ft-header .ft-title {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--obs-blue);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ft-header .ft-meta {
+  font-family: var(--obs-font-mono, monospace);
+  font-size: calc(8px * var(--font-scale));
+  color: var(--obs-text-2);
+  white-space: nowrap;
+}
+.ft-close-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--obs-text-2, #4a5568);
+  font-size: calc(14px * var(--font-scale));
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+.ft-close-btn:hover {
+  color: var(--obs-text, #c9d1d9);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── Loading area ─────────────────────────────── */
+.ft-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  padding: 40px 20px;
+}
+.ft-loading .ft-loading-icon {
+  font-size: calc(32px * var(--font-scale));
+  animation: ft-pulse 1.8s ease-in-out infinite;
+}
+@keyframes ft-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+.ft-loading .ft-loading-text {
+  font-family: var(--obs-font-body, sans-serif);
+  font-size: calc(12px * var(--font-scale));
+  color: var(--obs-text, #c9d1d9);
+  text-align: center;
+}
+.ft-loading .ft-loading-wait {
+  font-family: var(--obs-font-mono, monospace);
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2, rgba(145, 165, 190, 0.65));
+}
+
+/* ── Error area ───────────────────────────────── */
+.ft-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  padding: 40px 20px;
+}
+.ft-error .ft-error-icon {
+  font-size: calc(28px * var(--font-scale));
+  opacity: 0.7;
+}
+.ft-error .ft-error-text {
+  font-family: var(--obs-font-body, sans-serif);
+  font-size: calc(12px * var(--font-scale));
+  color: var(--obs-fail, #d94444);
+  text-align: center;
+  max-width: 420px;
+}
+
+/* ── Three-column content ─────────────────────── */
+.ft-columns {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.ft-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid rgba(148, 166, 205, 0.07);
+}
+.ft-col:last-child {
+  border-right: none;
+}
+.ft-col-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 6px 14px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  background: rgba(3, 8, 20, 0.9);
+  border-bottom: 1px solid rgba(148, 166, 205, 0.09);
+  flex-shrink: 0;
+}
+.ft-col-header.ft-code-hdr {
+  color: var(--obs-blue);
+}
+.ft-col-header.ft-human-hdr {
+  color: var(--obs-pass, #3da55d);
+}
+.ft-col-header.ft-audit-hdr {
+  color: var(--obs-brass, #f0b848);
+}
+.ft-col-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.ft-col-body::-webkit-scrollbar {
+  width: 3px;
+}
+.ft-col-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ft-col-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 166, 205, 0.16);
+  border-radius: 2px;
+}
+
+/* ── Column resizers ──────────────────────────── */
+.ft-col-resizer {
+  width: 4px;
+  cursor: col-resize;
+  flex-shrink: 0;
+  background: transparent;
+  transition: background 0.12s;
+}
+.ft-col-resizer:hover,
+.ft-col-resizer.ft-resizing {
+  background: rgba(148, 166, 205, 0.16);
+}
+
+/* ── Code column lines ────────────────────────── */
+.ft-code-line {
+  display: flex;
+  padding: 0 12px;
+  min-height: 20px;
+  align-items: flex-start;
+  font-family: var(--obs-font-mono, "JetBrains Mono", monospace);
+  font-size: calc(11px * var(--font-scale));
+  line-height: 20px;
+  cursor: default;
+  user-select: none;
+}
+.ft-code-line:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.ft-code-line.ft-highlight {
+  background: rgba(148, 166, 205, 0.05);
+  border-left: 2px solid var(--obs-blue);
+  padding-left: 10px;
+}
+.ft-code-line .ft-ln {
+  color: var(--obs-text-2);
+  min-width: 32px;
+  text-align: right;
+  margin-right: 10px;
+  user-select: none;
+  font-size: calc(9px * var(--font-scale));
+  flex-shrink: 0;
+}
+.ft-code-line .ft-ct {
+  white-space: pre;
+  color: var(--obs-text, #c9d1d9);
+}
+
+/* ── Human column lines ───────────────────────── */
+.ft-human-line {
+  display: flex;
+  padding: 0 12px;
+  min-height: 20px;
+  align-items: flex-start;
+  font-family: var(--obs-font-body, "Noto Sans SC", sans-serif);
+  font-size: calc(11px * var(--font-scale));
+  line-height: 20px;
+  cursor: default;
+  user-select: none;
+}
+.ft-human-line:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.ft-human-line.ft-highlight {
+  background: rgba(61, 165, 93, 0.06);
+  border-left: 2px solid var(--obs-pass, #3da55d);
+  padding-left: 10px;
+}
+.ft-human-line .ft-ct {
+  color: var(--obs-text, #c9d1d9);
+  white-space: pre-wrap;
+}
+
+/* ── Audit column lines ───────────────────────── */
+.ft-audit-line {
+  display: flex;
+  padding: 0 12px;
+  min-height: 20px;
+  align-items: flex-start;
+  font-family: var(--obs-font-body, "Noto Sans SC", sans-serif);
+  font-size: calc(10px * var(--font-scale));
+  line-height: 20px;
+  cursor: default;
+  user-select: none;
+}
+.ft-audit-line:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.ft-audit-line.ft-highlight {
+  background: rgba(240, 184, 72, 0.06);
+  border-left: 2px solid var(--obs-brass, #f0b848);
+  padding-left: 10px;
+}
+.ft-audit-dash {
+  color: rgba(90, 100, 115, 0.48);
+}
+.ft-audit-text {
+  color: var(--obs-text, #c9d1d9);
+  white-space: pre-wrap;
+}
+
+/* ── Audit tags ───────────────────────────────── */
+.ft-audit-tag {
+  display: inline-block;
+  font-family: var(--obs-font-mono);
+  font-size: calc(7px * var(--font-scale));
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.ft-audit-tag.ft-bug {
+  color: var(--obs-fail, #d94444);
+  background: rgba(217, 68, 68, 0.12);
+  border: 1px solid rgba(217, 68, 68, 0.2);
+}
+.ft-audit-tag.ft-risk {
+  color: var(--audit-risk, #f07838);
+  background: rgba(240, 120, 56, 0.1);
+  border: 1px solid rgba(240, 120, 56, 0.18);
+}
+.ft-audit-tag.ft-smell {
+  color: var(--obs-warn, #d29922);
+  background: rgba(210, 153, 34, 0.1);
+  border: 1px solid rgba(210, 153, 34, 0.18);
+}
+.ft-audit-tag.ft-ok {
+  color: var(--obs-pass, #3da55d);
+  background: rgba(61, 165, 93, 0.1);
+  border: 1px solid rgba(61, 165, 93, 0.18);
+}
+
+/* ── Panel ↔ editor draggable divider ─────────── */
+.ft-divider {
+  height: 5px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  background: transparent;
+  transition: background 0.12s;
+  position: relative;
+  z-index: 2;
+}
+.ft-divider:hover,
+.ft-divider.ft-dragging {
+  background: rgba(148, 166, 205, 0.12);
+}
+.ft-divider::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 1px;
+  background: rgba(148, 166, 205, 0);
+  transition: background 0.12s;
+}
+.ft-divider:hover::after {
+  background: rgba(148, 166, 205, 0.22);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7d · 文件翻译器表面（面板头去底色 + 发丝线 + chip 语义色纪律；
+   ft-* 类契约不动，同选择器后写优先）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 面板头：去深蓝底，纯发丝线（对齐 P6 面板头语言）；标题 text-2（蓝仅链接/info） */
+.ft-header {
+  background: none;
+  border-bottom-color: var(--obs-line-soft);
+}
+.ft-header .ft-title {
+  color: var(--obs-text-2);
+}
+.ft-close-btn:hover {
+  background: rgba(160, 180, 220, 0.08);
+}
+
+/* 分栏/列头发丝线变量化 */
+.ft-col {
+  border-right-color: var(--obs-line-soft);
+}
+.ft-col-header {
+  border-bottom-color: var(--obs-line-soft);
+}
+
+/* 审查 tag：chip 配方（radius 4 + 语义淡边淡底，值出原型 chip；risk 橙为既有语义色保持） */
+.ft-audit-tag {
+  border-radius: 4px;
+}
+.ft-audit-tag.ft-bug {
+  color: #f0a8a4;
+  background: rgba(217, 99, 95, 0.1);
+  border-color: rgba(217, 99, 95, 0.4);
+}
+.ft-audit-tag.ft-smell {
+  color: #ecd2a0;
+  background: rgba(216, 162, 74, 0.1);
+  border-color: rgba(216, 162, 74, 0.4);
+}
+.ft-audit-tag.ft-ok {
+  color: #a9dcb9;
+  background: rgba(99, 178, 125, 0.1);
+  border-color: rgba(99, 178, 125, 0.4);
+}

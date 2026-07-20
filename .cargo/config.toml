@@ -1,0 +1,6 @@
+# MinGW toolchain: use gcc-wrap to inject static -lstdc++ BEFORE rustc's
+# dynamic -lstdc++ (the -static-libstdc++ driver flag alone can't override
+# -Wl,-Bdynamic -lstdc++ that rustc hardcodes in its target spec).
+[target.x86_64-pc-windows-gnu]
+linker = "D:\\HoloGramHG\\grammars\\gcc-wrap.exe"
+rustflags = ["-C", "link-args=-static-libgcc"]

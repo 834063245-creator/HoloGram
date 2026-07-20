@@ -1,0 +1,851 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+// Agent 持久化记忆系统 — 对标 Claude Code MEMORY.md
+// 项目记忆: .hologram/memory/*.md + MEMORY.md 索引
+// 全局记忆: ~/.hologram/global_memory/*.md + MEMORY.md 索引
+// 跨会话、跨 session tab 共享。全局记忆跨所有项目共享。
+//
+// 记忆置信度体系 (inspired by 初痕 MemoryDirective):
+//   fact       — 用户明确要求，过去的确定结论。仅作提醒，不替代代码和约束决策
+//   reference  — Agent 发现或用户提过的参考信息（默认级别）
+//   background — 用于调整回复风格和语气，不需要在回复中提及
+//   suppressed — 不给 LLM 看到
+//   Agent 自己主动存的记忆最高只能给 reference。fact 级别只有用户通过 /remember 明确要求时才能使用。
+
+import { rpc } from '../bridge';
+import type { AuraRecord } from './aura-memory';
+import { auraCount, auraInit, auraRecall, auraShutdown, auraStore } from './aura-memory';
+import type { Tool } from './tool';
+
+// ── Fact-save authorization (self-consuming sentinel) ──
+// /remember command sets this; the next hologram_memory_save consumes it.
+// Agent has no way to call authorizeFactSave() — only chat.ts's /remember handler can.
+let _factAuthorized = false;
+/** Called by /remember handler BEFORE sending the save prompt to the Agent. */
+export function authorizeFactSave(): void {
+  _factAuthorized = true;
+}
+/** Consume the authorization. Returns true exactly once per /remember. */
+function consumeFactAuthorization(): boolean {
+  const was = _factAuthorized;
+  _factAuthorized = false;
+  return was;
+}
+
+// ── Types ──
+
+type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
+
+/** Parsed entry from MEMORY.md index */
+export interface MemoryEntry {
+  name: string; // kebab-case slug, e.g. "user-prefers-concise"
+  title: string; // display title, e.g. "用户偏好简洁回复"
+  file: string; // file name with .md extension
+  description: string; // one-line hook from index
+}
+
+/** Full memory with parsed frontmatter + body */
+export interface MemoryFile {
+  name: string;
+  description: string;
+  type: 'user' | 'feedback' | 'project' | 'reference';
+  confidence: Confidence;
+  hit_count: number;
+  content: string; // body only (without frontmatter)
+  raw: string; // full file text (for rewriting with updated metadata)
+}
+
+// ── MemoryManager ──
+
+export class MemoryManager {
+  private _projectDirReady = false;
+  private _globalDirReady = false;
+  private _auraReady = false;
+  private _auraInitPromise: Promise<void> | null = null;
+  private globalDirPath: string | null = null;
+
+  /** Fired after a memory is saved (wired by the workspace — fans out to the
+   *  UI bus and to the live agent's notifyMemorySaved). */
+  onSaved?: (info: { name: string; description?: string; confidence?: string; scope?: string }) => void;
+
+  /** @param projectPath 项目根目录
+   *  @param globalPath  全局记忆目录（可选），不传则不启用全局记忆 */
+  constructor(
+    private projectPath: string,
+    globalPath?: string,
+  ) {
+    this.globalDirPath = globalPath || null;
+  }
+
+  /** Whether AuraSDK semantic recall has been initialized. */
+  get auraReady(): boolean {
+    return this._auraReady;
+  }
+
+  /** Initialize AuraSDK semantic retrieval engine.
+   *  Creates or opens the brain at .hologram/aura-brain/ in the project root.
+   *  Safe to call multiple times — subsequent calls are no-ops. */
+  async initAura(): Promise<void> {
+    if (this._auraReady) return;
+    if (this._auraInitPromise) return this._auraInitPromise;
+    this._auraInitPromise = (async () => {
+      try {
+        // ponytail: native Aura is a global singleton — shut down old brain before init'ing new one (workspace switch)
+        try {
+          await auraShutdown();
+        } catch {
+          /* not initialized yet, ok */
+        }
+        const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
+        const result = await auraInit(brainPath);
+        this._auraReady = true;
+        console.log(`[aura] initialized — ${result.record_count} records at ${result.path}`);
+      } catch (e) {
+        console.warn('[aura] init failed (semantic recall disabled):', e);
+      } finally {
+        this._auraInitPromise = null;
+      }
+    })();
+    return this._auraInitPromise;
+  }
+
+  /** Run AuraSDK semantic recall against a natural-language query.
+   *  Returns scored records, filtered to remove records whose source memory
+   *  has been deleted. Gracefully falls back to empty array if Aura is down. */
+  async auraSemanticRecall(query: string, topK: number = 20): Promise<AuraRecord[]> {
+    if (!this._auraReady) return [];
+    try {
+      const records = await auraRecall(query, topK);
+      return await this._filterOrphaned(records);
+    } catch (e) {
+      console.warn('[aura] recall failed:', e);
+      return [];
+    }
+  }
+
+  /** Filter out Aura records whose source memory file no longer exists.
+   *  Records without a [memory:NAME] marker (pre-migration) are kept. */
+  private async _filterOrphaned(records: AuraRecord[]): Promise<AuraRecord[]> {
+    if (records.length === 0) return records;
+    // Collect all active memory names across all scopes (with .md extension for direct lookup)
+    const active = new Set<string>();
+    for (const scope of this.scopes()) {
+      try {
+        const entries = await this.list(scope);
+        for (const e of entries) active.add(e.name + '.md');
+      } catch {
+        /* scope not ready yet */
+      }
+    }
+    if (active.size === 0) return records; // can't verify, keep all
+    const markerRe = /^\[memory:([^\]]+)\]/;
+    return records.filter((r) => {
+      const m = r.content.match(markerRe);
+      if (!m) return true; // no marker → pre-migration record, keep
+      return active.has(m[1] + '.md');
+    });
+  }
+
+  /** Get Aura record count. */
+  async auraRecordCount(): Promise<number> {
+    if (!this._auraReady) return 0;
+    try {
+      return await auraCount();
+    } catch {
+      return 0;
+    }
+  }
+
+  private get projectDir(): string {
+    return this.projectPath.replace(/\\/g, '/') + '/.hologram/memory';
+  }
+
+  /** Resolve the working directory for a given scope. */
+  private dirFor(scope: 'project' | 'global'): string {
+    if (scope === 'global') {
+      if (!this.globalDirPath) throw new Error('全局记忆未启用');
+      return this.globalDirPath;
+    }
+    return this.projectDir;
+  }
+
+  /** Returns both scopes (global first if enabled). */
+  public scopes(): Array<'project' | 'global'> {
+    const s: Array<'project' | 'global'> = [];
+    if (this.globalDirPath) s.push('global');
+    s.push('project');
+    return s;
+  }
+
+  private indexPath(scope: 'project' | 'global' = 'project'): string {
+    return this.dirFor(scope) + '/MEMORY.md';
+  }
+
+  private filePath(name: string, scope: 'project' | 'global' = 'project'): string {
+    return this.dirFor(scope) + '/' + name + '.md';
+  }
+
+  /** Ensure .hologram/memory/ exists before any read. Fixes cold-start where
+   *  sandbox denies reads from non-existent parent directories. */
+  private async ensureDir(scope: 'project' | 'global' = 'project'): Promise<void> {
+    if (scope === 'project' && this._projectDirReady) return;
+    if (scope === 'global' && this._globalDirReady) return;
+    try {
+      await rpc('create_directory', { path: this.dirFor(scope) });
+    } catch {
+      // Directory may already exist or create is not available — safe to continue
+    }
+    if (scope === 'project') this._projectDirReady = true;
+    else this._globalDirReady = true;
+  }
+
+  // ── Prompt section cache ──
+
+  private _promptSectionCache: string | null = null;
+  private _promptSectionCacheTime = 0;
+
+  // ── Index ──
+
+  /** Load the raw MEMORY.md text for a scope. */
+  async loadIndexText(scope: 'project' | 'global' = 'project'): Promise<string> {
+    await this.ensureDir(scope);
+    try {
+      const numbered = await rpc<string>('read_file_content', { filePath: this.indexPath(scope) });
+      // read_file_content returns cat -n format (line numbers); strip them.
+      return numbered.replace(/^\s*\d+\t/gm, '');
+    } catch {
+      return '';
+    }
+  }
+
+  /** Parse MEMORY.md into structured entries for a scope. */
+  async list(scope: 'project' | 'global' = 'project'): Promise<MemoryEntry[]> {
+    const text = await this.loadIndexText(scope);
+    if (!text.trim()) return [];
+
+    const entries: MemoryEntry[] = [];
+    const re = /^-\s+\[([^\]]+)\]\(([^)]+)\)\s+[—–-]\s+(.+)$/gm;
+    for (const m of text.matchAll(re)) {
+      entries.push({
+        title: m[1],
+        file: m[2],
+        name: m[2].replace(/\.md$/, ''),
+        description: m[3],
+      });
+    }
+    return entries;
+  }
+
+  /** Build a compact index line (for adding to MEMORY.md). */
+  static formatIndexEntry(entry: MemoryEntry): string {
+    return `- [${entry.title}](${entry.file}) — ${entry.description}`;
+  }
+
+  // ── Read ──
+
+  /** Read a full memory file by name (without .md). Returns null if not found.
+   *  Set incrementHit to track recall frequency. */
+  async read(name: string, scope: 'project' | 'global' = 'project', incrementHit = false): Promise<MemoryFile | null> {
+    await this.ensureDir(scope);
+    try {
+      const raw = await rpc<string>('read_file_content', { filePath: this.filePath(name, scope) });
+      const mf = parseFrontmatter(raw);
+
+      if (incrementHit) {
+        mf.hit_count = (mf.hit_count || 0) + 1;
+        mf.raw = rebuildRaw(mf);
+        rpc('write_file_content', {
+          filePath: this.filePath(name, scope),
+          content: mf.raw,
+        }).catch((e: unknown) => {
+          console.warn(`[memory] hit_count write failed for "${name}":`, e);
+        });
+      }
+
+      return mf;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── Prompt section — loaded into system prompt ──
+
+  /** Load all non-suppressed memories from both scopes and format as system prompt section.
+   *  Global memories load first, project memories overlay (same name = project wins).
+   *  When memory count exceeds threshold, graph-aware relevance filtering is applied
+   *  to keep only the most relevant memories (facts are always included).
+   *  Cached for 5 seconds for rapid session creation. */
+  async loadPromptSection(graphNodes?: string[]): Promise<string> {
+    const now = Date.now();
+    if (this._promptSectionCache && now - this._promptSectionCacheTime < 5000) {
+      return this._promptSectionCache;
+    }
+
+    // Collect from all scopes (global first, project overlay).
+    // Use batch read when there are multiple entries to avoid N IPC round-trips.
+    const allByName = new Map<string, { mf: MemoryFile; scope: string }>();
+    for (const scope of this.scopes()) {
+      const entries = await this.list(scope);
+      if (entries.length === 0) continue;
+
+      // Collect file paths for batch read
+      const filePaths = entries.map((e) => this.filePath(e.name, scope));
+      let batchResults: Record<string, string | null> = {};
+
+      if (filePaths.length > 1) {
+        try {
+          const raw = await rpc<string>('read_memory_batch', { paths: filePaths });
+          batchResults = JSON.parse(raw);
+        } catch {
+          // Fall back to individual reads below
+        }
+      }
+
+      for (const entry of entries) {
+        let mf: MemoryFile | null = null;
+        const fp = this.filePath(entry.name, scope);
+
+        if (batchResults[fp] !== undefined) {
+          // Used batch result
+          const content = batchResults[fp];
+          mf = content !== null ? parseFrontmatter(content) : null;
+        } else {
+          // Fall back to individual read
+          mf = await this.read(entry.name, scope);
+        }
+
+        if (mf && mf.confidence !== 'suppressed') {
+          if (!allByName.has(entry.name)) {
+            allByName.set(entry.name, { mf, scope });
+          }
+          // Project scope overlays global (same name)
+          if (scope === 'project') {
+            allByName.set(entry.name, { mf, scope: 'project' });
+          }
+        }
+      }
+    }
+
+    if (allByName.size === 0) {
+      const section = '暂无已保存的记忆。用户说"记住..."时保存，说"忘了..."时删除。';
+      this._promptSectionCache = section;
+      this._promptSectionCacheTime = now;
+      return section;
+    }
+
+    // ── Graph-aware relevance filtering ──
+    // When memories > 10, rank by relevance to current graph nodes.
+    // Facts are always included; reference/background compete for remaining slots.
+    const MEMORY_LIMIT = 10;
+    const allItems = [...allByName.values()];
+    const facts = allItems.filter((i) => i.mf.confidence === 'fact');
+    const others = allItems.filter((i) => i.mf.confidence !== 'fact');
+
+    let itemsToLoad = allItems;
+    if (allItems.length > MEMORY_LIMIT && graphNodes && graphNodes.length > 0) {
+      // Score each non-fact memory by relevance to graph nodes
+      const gn = graphNodes ?? [];
+      const scored = others.map((item) => ({
+        item,
+        score: scoreMemoryRelevance(item.mf, gn),
+      }));
+      scored.sort((a, b) => b.score - a.score);
+
+      // Take top (MEMORY_LIMIT - facts.length) reference/background + all facts
+      const refLimit = Math.max(0, MEMORY_LIMIT - facts.length);
+      const topRefs = scored.slice(0, refLimit).map((s) => s.item);
+      itemsToLoad = [...facts, ...topRefs];
+
+      // If some memories were filtered out, note it
+      const dropped = allItems.length - itemsToLoad.length;
+      if (dropped > 0) {
+        // ponytail: silent filter — the section note below explains it
+        void dropped;
+      }
+    }
+
+    // Group by confidence
+    const byConfidence: Record<Confidence, Array<{ mf: MemoryFile; scope: string }>> = {
+      fact: [],
+      reference: [],
+      background: [],
+      suppressed: [],
+    };
+
+    for (const item of itemsToLoad) {
+      const c = item.mf.confidence || 'reference';
+      if (c === 'suppressed') continue;
+      byConfidence[c].push(item);
+    }
+
+    const parts: string[] = [];
+
+    if (itemsToLoad.length < allItems.length && allItems.length > MEMORY_LIMIT) {
+      parts.push(`> 📌 记忆库共 ${allItems.length} 条，已按当前图上下文过滤显示 ${itemsToLoad.length} 条最相关的。`);
+    }
+
+    if (byConfidence.fact.length > 0) {
+      parts.push('### 🔒 铁律 (fact)\n用户明确要求的规则。仅作提醒——Agent 仍需基于代码和约束做决策:\n');
+      for (const { mf, scope } of byConfidence.fact) {
+        parts.push(formatMemoryLine(mf, scope));
+      }
+    }
+
+    if (byConfidence.reference.length > 0) {
+      parts.push('### 📋 参考 (reference)\nAgent 发现或用户提过的信息。可以参考，引用时带核实语气:\n');
+      for (const { mf, scope } of byConfidence.reference) {
+        parts.push(formatMemoryLine(mf, scope));
+      }
+    }
+
+    if (byConfidence.background.length > 0) {
+      parts.push('### 🎨 背景 (background)\n用于调整回复风格和语气，不需要在回复中提及:\n');
+      for (const { mf, scope } of byConfidence.background) {
+        parts.push(formatMemoryLine(mf, scope));
+      }
+    }
+
+    const section = parts.length > 0 ? parts.join('\n') : '暂无已保存的记忆。';
+    this._promptSectionCache = section;
+    this._promptSectionCacheTime = now;
+    return section;
+  }
+
+  // ── Write ──
+
+  /** Save a memory (creates or updates). Also updates MEMORY.md index.
+   *  Preserves existing hit_count on update. Confidence defaults to 'reference'. */
+  async save(
+    name: string,
+    description: string,
+    type: 'user' | 'feedback' | 'project' | 'reference',
+    content: string,
+    confidence: Confidence = 'reference',
+    scope: 'project' | 'global' = 'project',
+  ): Promise<void> {
+    let hitCount = 0;
+    const existing = await this.read(name, scope);
+    if (existing) {
+      hitCount = existing.hit_count || 0;
+    }
+
+    const mf: MemoryFile = {
+      name,
+      description,
+      type,
+      confidence,
+      hit_count: hitCount,
+      content,
+      raw: '',
+    };
+    const frontmatter = rebuildRaw(mf);
+
+    await rpc('write_file_content', {
+      filePath: this.filePath(name, scope),
+      content: frontmatter,
+    });
+
+    const title = description.length > 40 ? description.slice(0, 39) + '…' : description;
+    await this.upsertIndex(title, name + '.md', description, scope);
+
+    // Dual-write to AuraSDK for semantic retrieval
+    if (this._auraReady) {
+      const tagList = [type, confidence, scope];
+      // ponytail: prefix with [memory:NAME] marker so recall can detect orphaned records
+      auraStore(`[memory:${name}] ${description}\n\n${content}`, 0, tagList, scope).catch((e: unknown) => {
+        console.warn('[aura] dual-write failed:', e);
+      });
+    }
+
+    this._promptSectionCache = null;
+  }
+
+  /** Delete a memory by name. Returns true if deleted, false if not found. */
+  async delete(name: string, scope: 'project' | 'global' = 'project'): Promise<boolean> {
+    let index = await this.loadIndexText(scope);
+    if (!index.trim()) return false;
+
+    const pattern = new RegExp(`^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(name)}\\.md\\)\\s+[—–-]\\s+.+$\\n?`, 'm');
+    if (!pattern.test(index)) return false;
+
+    index = index
+      .replace(pattern, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (index) index += '\n';
+
+    await rpc('write_file_content', {
+      filePath: this.indexPath(scope),
+      content: index,
+    });
+
+    try {
+      await rpc('write_file_content', {
+        filePath: this.filePath(name, scope),
+        content: JSON.stringify({ deleted: true }),
+      });
+    } catch (e) {
+      console.warn(`[memory] failed to delete file for "${name}":`, e);
+    }
+
+    this._promptSectionCache = null;
+    return true;
+  }
+
+  private async upsertIndex(
+    title: string,
+    file: string,
+    description: string,
+    scope: 'project' | 'global' = 'project',
+  ): Promise<void> {
+    let index = await this.loadIndexText(scope);
+    const newLine = `- [${title}](${file}) — ${description}`;
+
+    const pattern = new RegExp(
+      `^\\s*-\\s*\\[[^\\]]*\\]\\(${escapeRegExp(file.replace(/\.md$/, ''))}\\.md\\)\\s+[—–-]\\s+.+$`,
+      'm',
+    );
+    if (pattern.test(index)) {
+      index = index.replace(pattern, newLine);
+    } else {
+      index = index.trimEnd();
+      if (index) index += '\n';
+      index += newLine + '\n';
+    }
+
+    await rpc('write_file_content', {
+      filePath: this.indexPath(scope),
+      content: index,
+    });
+  }
+}
+
+// ── Frontmatter ──
+
+function parseFrontmatter(raw: string): MemoryFile {
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!fmMatch) {
+    return {
+      name: 'unknown',
+      description: '',
+      type: 'reference',
+      confidence: 'reference',
+      hit_count: 0,
+      content: raw,
+      raw,
+    };
+  }
+
+  const fm = fmMatch[1];
+  const body = fmMatch[2].trim();
+
+  const name = (fm.match(/^name:\s*(.+)$/m) || [])[1]?.trim() || 'unknown';
+  const desc = (fm.match(/^description:\s*(.+)$/m) || [])[1]?.trim() || '';
+  // ponytail: accept both indented (under metadata:) and top-level formats
+  const typeRaw = (fm.match(/^\s*type:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
+  const type = (['user', 'feedback', 'project', 'reference'] as const).includes(typeRaw as any)
+    ? (typeRaw as MemoryFile['type'])
+    : 'reference';
+  const confRaw = (fm.match(/^\s*confidence:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
+  const confidence = (['fact', 'reference', 'background', 'suppressed'] as const).includes(confRaw as any)
+    ? (confRaw as Confidence)
+    : 'reference';
+  const hitCountRaw = (fm.match(/^\s*hit_count:\s*(\d+)$/m) || [])[1];
+  const hit_count = hitCountRaw ? parseInt(hitCountRaw, 10) : 0;
+
+  return { name, description: desc, type, confidence, hit_count, content: body, raw };
+}
+
+function rebuildRaw(mf: MemoryFile): string {
+  return [
+    '---',
+    `name: ${mf.name}`,
+    `description: ${mf.description}`,
+    'metadata:',
+    `  type: ${mf.type}`,
+    `  confidence: ${mf.confidence}`,
+    `  hit_count: ${mf.hit_count}`,
+    '---',
+    '',
+    mf.content,
+  ].join('\n');
+}
+
+// ── Helpers ──
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+}
+
+function formatMemoryLine(m: MemoryFile, scope?: string): string {
+  const body = m.content.length > 120 ? m.content.slice(0, 119) + '…' : m.content;
+  const tag = scope === 'global' ? ' [全局]' : '';
+  return `- **${m.description}**${tag} — ${body}`;
+}
+
+/** Score a memory's relevance to the current graph context.
+ *  Higher score = more likely to be relevant to what the user is working on.
+ *  ponytail: simple substring matching against graph node names — no LLM call needed. */
+function scoreMemoryRelevance(mf: MemoryFile, graphNodes: string[]): number {
+  let score = 0;
+  const haystack = (mf.description + ' ' + mf.content + ' ' + mf.name).toLowerCase();
+
+  for (const node of graphNodes) {
+    const lower = node.toLowerCase();
+    // Exact node name match in memory content
+    if (haystack.includes(lower)) {
+      score += 3;
+      // File-name portion match (last segment after / or \) → stronger signal
+      const filePart = lower.split(/[/\\]/).pop() || '';
+      if (filePart && filePart !== lower && haystack.includes(filePart)) {
+        score += 2;
+      }
+    } else {
+      // Partial word matches
+      const parts = lower.split(/[/\\:.#_-]/);
+      for (const part of parts) {
+        if (part.length > 2 && haystack.includes(part)) {
+          score += 1;
+        }
+      }
+    }
+  }
+
+  // Boost: more recently hit memories are likely more relevant
+  score += Math.min(mf.hit_count, 5);
+
+  return score;
+}
+
+// ── Agent Tools ──
+
+/** Create Agent tools for memory operations. All operate on the given MemoryManager. */
+export function createMemoryTools(mm: MemoryManager): Tool[] {
+  return [
+    {
+      name: () => 'hologram_memory_list',
+      description: () =>
+        '列出所有已保存的记忆及其置信度和所属范围（项目/全局）。保存新记忆前，先调用此工具检查是否已有类似记忆——已有则用 hologram_memory_save 更新而非新建。',
+      parameters: () => ({ type: 'object', properties: {} }),
+      readOnly: () => true,
+      execute: async () => {
+        const sections: string[] = [];
+        // Show global first, then project
+        const allScopes = mm.scopes?.() || ['project'];
+        for (const scope of allScopes) {
+          const entries = await mm.list(scope);
+          if (entries.length === 0) continue;
+          const label = scope === 'global' ? '🌐 全局记忆' : '📁 项目记忆';
+          sections.push(`### ${label}`);
+          for (const e of entries) {
+            const mf = await mm.read(e.name, scope);
+            const conf = mf?.confidence || 'reference';
+            const confTag = { fact: '[fact]', reference: '[ref]', background: '[bg]', suppressed: '[sup]' }[conf];
+            const hit = mf?.hit_count ? ` · 回想${mf.hit_count}次` : '';
+            sections.push(`- ${confTag} **${e.title}** (\`${e.name}\`)${hit} — ${e.description}`);
+          }
+        }
+        return sections.length > 0 ? sections.join('\n') : '暂无已保存的记忆。';
+      },
+    },
+    {
+      name: () => 'hologram_memory_read',
+      description: () =>
+        '读取一条已保存记忆的完整内容。需要回忆具体事实、用户偏好或过往决策时使用。每次读取会记录回想次数。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: '记忆名称（不含 .md 扩展名），从 hologram_memory_list 获取',
+          },
+          scope: {
+            type: 'string',
+            enum: ['project', 'global'],
+            description: '记忆范围。project=当前项目，global=跨所有项目共享。默认从 list 中看到的范围推断。',
+          },
+        },
+        required: ['name'],
+      }),
+      readOnly: () => true,
+      execute: async (args) => {
+        const name = args.name as string;
+        const scope = (args.scope as 'project' | 'global') || 'project';
+        const mf = await mm.read(name, scope, true);
+        if (!mf) return `未找到记忆 "${name}"。用 hologram_memory_list 查看所有记忆。`;
+        const confLabels: Record<Confidence, string> = {
+          fact: '🔒 铁律 — 用户明确要求。仅作提醒，不替代代码决策',
+          reference: '📋 参考 — 可以参考，引用时带核实语气',
+          background: '🎨 背景 — 用于调整风格，无需在回复中提及',
+          suppressed: '🚫 已抑制',
+        };
+        const scopeLabel = scope === 'global' ? ' [全局]' : ' [项目]';
+        return [
+          `## ${mf.description || mf.name}${scopeLabel}`,
+          `类型: ${mf.type}`,
+          `置信度: ${confLabels[mf.confidence] || mf.confidence}`,
+          `回想次数: ${mf.hit_count}`,
+          '',
+          mf.content,
+        ].join('\n');
+      },
+    },
+    {
+      name: () => 'hologram_memory_search',
+      description: () =>
+        '语义搜索记忆库（AuraSDK SDR 引擎）。用自然语言描述你想要的上下文，返回最相关的记忆文本。\n' +
+        '适合：不确定是否有相关记忆时先搜一下、需要跨记忆关联信息、当前问题需要历史决策上下文。\n' +
+        '注意：搜索结果基于语义相似度，不一定精确匹配关键词。空结果 = 确实没有相关记忆。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
+          },
+          topK: {
+            type: 'number',
+            description: '返回条数上限（默认 10）。',
+          },
+        },
+        required: ['query'],
+      }),
+      readOnly: () => true,
+      execute: async (args) => {
+        const query = args.query as string;
+        const topK = (args.topK as number) || 10;
+        const records = await mm.auraSemanticRecall(query, topK);
+        if (records.length === 0) {
+          const count = await mm.auraRecordCount();
+          return count > 0
+            ? `未找到与 "${query}" 语义相关的记忆（记忆库共 ${count} 条）。尝试换一种表述。`
+            : '记忆库为空。用 hologram_memory_save 存一条记忆后即可语义搜索。';
+        }
+        const lines = records.map((r) => {
+          const tagStr = r.tags?.length ? ` [${r.tags.join(', ')}]` : '';
+          const scoreStr = ` (相关度: ${(r.score * 100).toFixed(0)}%)`;
+          return `-${tagStr}${scoreStr}\n  ${r.content.slice(0, 300)}`;
+        });
+        return `### 语义搜索: "${query}"\n找到 ${records.length} 条相关记忆:\n\n${lines.join('\n\n')}`;
+      },
+    },
+    {
+      name: () => 'hologram_memory_save',
+      description: () =>
+        '保存或更新一条记忆。保守使用——只记代码库查不到且未来会话忘了会出错的东西。\n\n' +
+        '置信度级别:\n' +
+        '- reference (默认) — Agent 自己发现的信息最高只能给此级别\n' +
+        '- fact — 仅用户通过 /remember 命令明确要求时才能使用\n' +
+        '- background — 仅影响风格/语气\n' +
+        '- suppressed — 已废弃，不再给 LLM 看到\n\n' +
+        '记忆范围 (scope):\n' +
+        '- project (默认) — 仅当前项目可见，适合架构决策、项目约定\n' +
+        '- global — 跨所有项目可见，适合用户偏好、编码风格、个性\n\n' +
+        '先 hologram_memory_list 检查是否已有类似记忆——已有则更新而非新建。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: '简短的 kebab-case 名称（只含小写字母数字和连字符），如 "user-prefers-concise"',
+          },
+          description: {
+            type: 'string',
+            description: '一句话摘要，用于快速判断是否相关',
+          },
+          type: {
+            type: 'string',
+            enum: ['user', 'feedback', 'project', 'reference'],
+            description: '记忆类型: user=用户画像, feedback=用户反馈/要求, project=项目决策/进展, reference=外部参考',
+          },
+          confidence: {
+            type: 'string',
+            enum: ['fact', 'reference', 'background', 'suppressed'],
+            description: '置信度。Agent 自己最高只能给 reference。fact 只有用户明确要求时才能用。默认: reference',
+          },
+          content: {
+            type: 'string',
+            description: '记忆正文。对于 feedback/project 类型，应包含 **Why:** 和 **How to apply:** 段落。',
+          },
+          scope: {
+            type: 'string',
+            enum: ['project', 'global'],
+            description:
+              '记忆范围。project=仅当前项目，global=跨所有项目共享。用户偏好/编码风格 → global；架构决策/项目约定 → project。默认: project',
+          },
+        },
+        required: ['name', 'description', 'type', 'content'],
+      }),
+      readOnly: () => false,
+      execute: async (args) => {
+        const type = args.type as string;
+        if (!['user', 'feedback', 'project', 'reference'].includes(type)) {
+          return `错误: type 必须是 user/feedback/project/reference，收到了 "${type}"`;
+        }
+        let confidence = (args.confidence as Confidence) || 'reference';
+        if (!['fact', 'reference', 'background', 'suppressed'].includes(confidence)) {
+          confidence = 'reference';
+        }
+        let factDowngraded = false;
+        const authorized = consumeFactAuthorization();
+        if (confidence === 'fact') {
+          if (authorized) {
+            // /remember authorized — fact passes through
+          } else {
+            confidence = 'reference';
+            factDowngraded = true;
+          }
+        }
+        const scope = (args.scope as 'project' | 'global') || 'project';
+        await mm.save(
+          args.name as string,
+          args.description as string,
+          type as MemoryFile['type'],
+          args.content as string,
+          confidence,
+          scope,
+        );
+        // H1: notify so the workspace can fan out (UI bus + live agent injection)
+        mm.onSaved?.({
+          name: args.name as string,
+          description: args.description as string,
+          confidence,
+          scope,
+        });
+        const downgradeNote = factDowngraded ? ' (注意: fact 级别需用户授权，已自动降为 reference)' : '';
+        const scopeNote = scope === 'global' ? ' [全局]' : '';
+        return `已保存记忆 "${args.name}" (${confidence})${scopeNote}。${downgradeNote}`;
+      },
+    },
+    {
+      name: () => 'hologram_memory_delete',
+      description: () => '删除一条已保存的记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: '要删除的记忆名称（不含 .md 扩展名）',
+          },
+          scope: {
+            type: 'string',
+            enum: ['project', 'global'],
+            description: '记忆范围。默认: project',
+          },
+        },
+        required: ['name'],
+      }),
+      readOnly: () => false,
+      execute: async (args) => {
+        const name = args.name as string;
+        const scope = (args.scope as 'project' | 'global') || 'project';
+        const ok = await mm.delete(name, scope);
+        return ok
+          ? `已删除记忆 "${name}"。`
+          : `未找到记忆 "${name}"，可能已被删除。用 hologram_memory_list 查看当前记忆列表。`;
+      },
+    },
+  ];
+}

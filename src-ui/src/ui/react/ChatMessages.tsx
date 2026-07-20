@@ -1,0 +1,929 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+// ChatMessages — React 消息列表渲染
+//
+// 渲染引擎：react-markdown（替代 marked + dangerouslySetInnerHTML）
+// 滚动管理：wheel capture phase rAF 合并（参考 Reasonix useScrollManager）
+// 推理块：流式时展开，流结束自动折叠（用户手动 toggle 后尊重用户选择）
+// 流式截断：推理文本只保留末尾 12,000 字符 / 240 行
+
+import hljs from 'highlight.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { useStore } from 'zustand';
+import type {
+  AssistantMessage,
+  AssistantPart,
+  NoticeMessage,
+  SubAgentPart,
+  TextPart,
+  ToolCallPart,
+  UserMessage,
+} from '../message-model';
+import { getMessagesStore } from '../messages-store';
+import { getSessionStore } from '../session-store';
+
+// ── Constants ──
+
+const BOTTOM_THRESHOLD = 80;
+const REASONING_TAIL_CHARS = 12_000;
+const REASONING_TAIL_LINES = 240;
+
+function isNearBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD;
+}
+
+function truncateReasoning(text: string): string {
+  let out = text;
+  let truncated = false;
+  if (REASONING_TAIL_CHARS > 0 && out.length > REASONING_TAIL_CHARS) {
+    out = out.slice(-REASONING_TAIL_CHARS);
+    truncated = true;
+  }
+  if (REASONING_TAIL_LINES > 0) {
+    const lines = out.split('\n');
+    if (lines.length > REASONING_TAIL_LINES) {
+      out = lines.slice(-REASONING_TAIL_LINES).join('\n');
+      truncated = true;
+    }
+  }
+  return truncated ? '…\n' + out : out;
+}
+
+// ── Callbacks ──
+
+export interface ChatMessagesCallbacks {
+  onEditUserMessage?: (msg: UserMessage) => void;
+  onResendUserMessage?: (msg: UserMessage) => void;
+  onRetryAssistant?: (msg: AssistantMessage) => void;
+  onCopyText?: (text: string) => void;
+  onNavigateToNode?: (nodeName: string) => void;
+}
+
+// ── Icons ──
+
+function svgIcon(name: string, size: number = 12): string {
+  const icons: Record<string, string> = {
+    edit: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+    refresh: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>`,
+    copy: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
+    'check-circle': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+    close: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+    dot: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>`,
+    'chevron-right': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`,
+    'chevron-down': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`,
+  };
+  return icons[name] || '';
+}
+
+// ── Node name linkification ──
+
+function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) => void): void {
+  if (!onNavigate) return;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const replacements: Array<{ node: Text; frag: DocumentFragment }> = [];
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) {
+    const text = node.textContent || '';
+    if (!text.includes('`')) continue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    const re = /`([^`]+)`/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const span = document.createElement('span');
+      span.className = 'node-link';
+      span.textContent = m[1];
+      span.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onNavigate(m![1] as string);
+      });
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (last > 0) {
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      replacements.push({ node, frag });
+    }
+  }
+  for (const { node: n, frag } of replacements) {
+    n.parentNode?.replaceChild(frag, n);
+  }
+}
+
+// ── react-markdown code component (hljs highlighting) ──
+
+function MarkdownCode({ className, children }: { className?: string; children?: React.ReactNode }) {
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    el.querySelectorAll('pre code').forEach((block) => {
+      try {
+        hljs.highlightElement(block as HTMLElement);
+      } catch {
+        /* noop */
+      }
+    });
+  }, []);
+
+  const text = String(children ?? '').replace(/\n$/, '');
+  const match = /language-([\w-]+)/.exec(className ?? '');
+  const _lang = match?.[1];
+  const isBlock = match !== null || text.includes('\n');
+
+  if (isBlock) {
+    return (
+      <div ref={ref}>
+        <pre>
+          <code className={className}>{text}</code>
+        </pre>
+      </div>
+    );
+  }
+  return <code className="md-code">{children}</code>;
+}
+
+// ── Markdown content (streaming-aware) ──
+
+const MarkdownContent: React.FC<{
+  text: string;
+  streaming: boolean;
+  onNavigateToNode?: (name: string) => void;
+}> = React.memo(({ text, streaming, onNavigateToNode }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Linkify node names after render (on finalised content)
+  useEffect(() => {
+    if (streaming || !onNavigateToNode) return;
+    const el = containerRef.current;
+    if (el) linkifyNodeNames(el, onNavigateToNode);
+  }, [streaming, onNavigateToNode]);
+
+  // 【性能】streaming 时用纯文本渲染，避免 react-markdown 全量重解析。
+  // 累积文本每帧都在增长，react-markdown 的 AST 解析是 O(n)，
+  // 5000 字输出时累计解析量 ≈ 12.5 万字（O(n²)），是长文卡顿的主犯。
+  // finalised 后才跑一次完整的 markdown 渲染。
+  if (streaming) {
+    return (
+      <div ref={containerRef} className="msg-text msg-markdown streaming">
+        <div className="msg-streaming-text">{text}</div>
+        <span className="streaming-typing">▊</span>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="msg-text msg-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: MarkdownCode,
+          pre: ({ children }) => <>{children}</>,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
+// ── Reasoning block ──
+// Auto-expand while streaming; auto-collapse when done (respects user manual toggle).
+
+const ReasoningBlock: React.FC<{
+  text: string;
+  streaming: boolean;
+  reasoningComplete: boolean;
+}> = React.memo(({ text, streaming, reasoningComplete }) => {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const userOverridden = useRef(false);
+  const [open, setOpen] = useState(streaming);
+
+  // Auto open/close on streaming state transitions
+  useEffect(() => {
+    if (streaming) {
+      if (!userOverridden.current) setOpen(true);
+    } else if (reasoningComplete && !userOverridden.current) {
+      setOpen(false);
+    }
+  }, [streaming, reasoningComplete]);
+
+  const toggle = () => {
+    userOverridden.current = true;
+    setOpen((v) => !v);
+  };
+
+  const displayText = streaming ? truncateReasoning(text) : text;
+
+  return (
+    <div className={`msg-reasoning${open ? ' msg-reasoning-open' : ''}`}>
+      <div className="msg-reasoning-toggle" onClick={toggle}>
+        <span
+          dangerouslySetInnerHTML={{
+            __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          }}
+        />
+        {open ? '收起思考' : '查看思考'}
+      </div>
+      <div ref={bodyRef} className={`msg-reasoning-content${open ? ' msg-reasoning-open' : ''}`}>
+        <pre>{displayText}</pre>
+      </div>
+    </div>
+  );
+});
+
+// ── Tool card ──
+
+// ponytail: NOT wrapped in React.memo — part-mutator mutates ToolCallPart in-place
+// (tr.status = 'error'), so the object reference never changes. React.memo
+// would block re-renders when tool status transitions (e.g. pending→running→done/error).
+const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = ({
+  part,
+  expanded,
+  onToggle,
+}) => {
+  const icon =
+    part.status === 'running'
+      ? svgIcon('dot')
+      : part.status === 'done'
+        ? svgIcon('check-circle')
+        : part.status === 'error'
+          ? svgIcon('close')
+          : svgIcon('dot');
+  const toolDone = part.status === 'done' || part.status === 'error';
+  const badgeLabel =
+    part.status === 'running'
+      ? '执行中'
+      : part.status === 'done'
+        ? '完成'
+        : part.status === 'error'
+          ? '失败'
+          : '等待中';
+  const badgeCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
+
+  return (
+    <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${expanded ? ' tool-expanded' : ''}`}>
+      <div className="msg-tool-header" onClick={onToggle}>
+        <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
+        <span className="tool-name">{part.name}</span>
+        <span className="tool-args">
+          {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : part.args || ''}
+        </span>
+        <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
+      </div>
+      {expanded && part.output && (
+        <div className="msg-tool-result">
+          <pre>
+            <code>
+              {part.output.slice(0, 2000)}
+              {part.output.length > 2000 ? '\n…(截断)' : ''}
+            </code>
+          </pre>
+        </div>
+      )}
+      {expanded && part.err && (
+        <div className="msg-tool-result msg-tool-err">
+          <pre>
+            <code>{part.err}</code>
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Tool summary ──
+
+const ToolSummary: React.FC<{
+  tools: ToolCallPart[];
+  expandedTools: Set<string>;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+}> = ({ tools, expandedTools, onExpandAll, onCollapseAll }) => {
+  const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
+  const names = doneTools.map((t) => t.label || t.name);
+  const unique = [...new Set(names)];
+  const allExpanded = doneTools.every((t) => expandedTools.has(t.toolId));
+  return (
+    <div
+      className="msg-tool-summary"
+      onClick={allExpanded ? onCollapseAll : onExpandAll}
+      title={allExpanded ? '点击折叠所有工具' : '点击展开所有工具'}
+    >
+      <span dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 12) }} /> 已执行 {doneTools.length} 个工具：
+      <span>
+        {unique.slice(0, 3).join(', ')}
+        {unique.length > 3 ? ` 等 ${unique.length} 个` : ''}
+      </span>
+    </div>
+  );
+};
+
+// ── Sub-agent reasoning (collapsed except last) ──
+
+const SubReasoningBlock: React.FC<{
+  part: { type: 'reasoning'; text: string };
+  parts: AssistantPart[];
+  index: number;
+}> = ({ part, parts, index }) => {
+  // Find index of the LAST reasoning part — only that one renders expanded
+  let lastIdx = -1;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].type === 'reasoning') {
+      lastIdx = i;
+      break;
+    }
+  }
+  const isLast = index === lastIdx;
+  const [open, setOpen] = useState(isLast);
+
+  // Sync open state when a NEW part becomes the last (streaming progress)
+  useEffect(() => {
+    if (isLast) setOpen(true);
+  }, [isLast]);
+
+  const displayText = open ? (isLast ? truncateReasoning(part.text) : part.text) : '';
+
+  return (
+    <div className="msg-reasoning">
+      <div className="msg-reasoning-toggle" onClick={() => setOpen((v) => !v)}>
+        <span
+          dangerouslySetInnerHTML={{
+            __html: open ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          }}
+        />
+        {open ? '收起思考' : `思考 (${(part.text.length / 1000).toFixed(0)}k)`}
+      </div>
+      {open && (
+        <div className="msg-reasoning-content msg-reasoning-open">
+          <pre>{displayText}</pre>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Sub-agent block ──
+// Renders a nested collapsible group for sub-agent output inside an assistant message.
+// Auto-expands while running; auto-collapses on done (respects user manual toggle).
+
+// ponytail: NOT wrapped in React.memo — subagent-sink mutates SubAgentPart in-place
+// (push to parts[], version++), so the object reference never changes. React.memo
+// would block re-renders. Performance is handled by useMemo on renderedParts.
+const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const userOverridden = useRef(false);
+  const [expanded, setExpanded] = useState(part.status === 'running');
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (part.status === 'running' && !userOverridden.current) setExpanded(true);
+    else if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
+  }, [part.status]);
+
+  // Auto-scroll body div to bottom as new content streams in
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !expanded) return;
+    const observer = new MutationObserver(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [expanded]);
+
+  const toggle = () => {
+    userOverridden.current = true;
+    setExpanded((v) => !v);
+  };
+  const toggleTool = useCallback((id: string) => {
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }, []);
+
+  const statusIcon =
+    part.status === 'running' ? svgIcon('dot') : part.status === 'done' ? svgIcon('check-circle') : svgIcon('close');
+  const statusLabel = part.status === 'running' ? '执行中' : part.status === 'done' ? '完成' : '失败';
+  const statusCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
+
+  const streaming = part.status === 'running';
+
+  // Memoized parts list — re-builds only when sub-agent content changes,
+  // not on every parent re-render (performance fix for large chat histories).
+  const renderedParts = useMemo(() => {
+    const items: React.ReactNode[] = [];
+    let i = 0;
+    while (i < part.parts.length) {
+      const p = part.parts[i];
+      if (p.type === 'tool') {
+        const run: typeof part.parts = [];
+        while (i < part.parts.length && part.parts[i].type === 'tool') {
+          run.push(part.parts[i]);
+          i++;
+        }
+        const tools = run as any[];
+        const doneTools = tools.filter((t: any) => t.status === 'done' || t.status === 'error');
+        const allDone = doneTools.length === tools.length && tools.length >= 3;
+        const groupExpanded = tools.some((t: any) => expandedTools.has(t.toolId));
+        const collapsed = allDone && !groupExpanded;
+        items.push(
+          <div key={`tool-group-${i}`} className="msg-tool-wrapper">
+            {collapsed ? (
+              <ToolSummary
+                tools={doneTools as any}
+                expandedTools={expandedTools}
+                onExpandAll={() => {
+                  setExpandedTools((prev) => {
+                    const n = new Set(prev);
+                    for (const t of tools) n.add((t as any).toolId);
+                    return n;
+                  });
+                }}
+                onCollapseAll={() => {}}
+              />
+            ) : (
+              <>
+                {allDone && (
+                  <ToolSummary
+                    tools={doneTools as any}
+                    expandedTools={expandedTools}
+                    onExpandAll={() => {
+                      setExpandedTools((prev) => {
+                        const n = new Set(prev);
+                        for (const t of tools) n.add((t as any).toolId);
+                        return n;
+                      });
+                    }}
+                    onCollapseAll={() => {
+                      setExpandedTools((prev) => {
+                        const n = new Set(prev);
+                        for (const t of tools) n.delete((t as any).toolId);
+                        return n;
+                      });
+                    }}
+                  />
+                )}
+                {tools.map((t: any) => (
+                  <ToolCard
+                    key={t.toolId}
+                    part={t}
+                    expanded={expandedTools.has(t.toolId)}
+                    onToggle={() => toggleTool(t.toolId)}
+                  />
+                ))}
+              </>
+            )}
+          </div>,
+        );
+      } else if (p.type === 'reasoning') {
+        items.push(<SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />);
+        i++;
+      } else if (p.type === 'text') {
+        items.push(<MarkdownContent key={i} text={(p as any).text} streaming={streaming && !(p as any).finalised} />);
+        i++;
+      } else {
+        i++;
+      }
+    }
+    return items;
+  }, [expandedTools, toggleTool, part.parts.length, streaming, part.parts]);
+
+  return (
+    <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
+      <div className="msg-sub-agent-header" onClick={toggle}>
+        <span
+          dangerouslySetInnerHTML={{
+            __html: expanded ? svgIcon('chevron-down') : svgIcon('chevron-right'),
+          }}
+        />
+        <span className="msg-sub-agent-icon" dangerouslySetInnerHTML={{ __html: statusIcon }} />
+        <span className="msg-sub-agent-desc">{part.description}</span>
+        <span className={`msg-tool-badge ${statusCls}`}>{statusLabel}</span>
+      </div>
+      <div ref={bodyRef} className={`msg-sub-agent-body${expanded ? ' open' : ''}`}>
+        {renderedParts}
+        {part.parts.length === 0 && part.status === 'running' && (
+          <div className="msg-text" style={{ color: 'var(--obs-text-3)', padding: '8px 0' }}>
+            分析中…
+          </div>
+        )}
+        {part.parts.length === 0 && part.status === 'error' && (
+          <div className="msg-text" style={{ color: 'var(--obs-fail)', padding: '8px 0' }}>
+            执行失败
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── User message ──
+
+const UserBubble: React.FC<{
+  msg: UserMessage;
+  onEdit?: (m: UserMessage) => void;
+  onResend?: (m: UserMessage) => void;
+}> = React.memo(({ msg, onEdit, onResend }) => (
+  <div className="msg-user-row" data-message-id={msg._id}>
+    <div className="msg-bubble user">
+      <div className="msg-text">{msg.text}</div>
+      {msg.files && msg.files.length > 0 && (
+        <div className="msg-attach-pills">
+          {msg.files.map((f, i) => (
+            <span key={i} className="msg-attach-pill">
+              {f.name}{' '}
+              <span className="attach-pill-size">
+                ({f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`})
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+    <span className="msg-actions">
+      {onEdit && (
+        <span
+          className="msg-action-btn"
+          onClick={() => onEdit(msg)}
+          title="编辑"
+          dangerouslySetInnerHTML={{ __html: svgIcon('edit') }}
+        />
+      )}
+      {onResend && (
+        <span
+          className="msg-action-btn"
+          onClick={() => onResend(msg)}
+          title="重发"
+          dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+        />
+      )}
+    </span>
+  </div>
+));
+
+// ── Assistant message ──
+
+const AssistantBubble: React.FC<{
+  msg: AssistantMessage;
+  expandedTools: Set<string>;
+  onToggleTool: (id: string) => void;
+  onExpandAllTools: (ids: string[]) => void;
+  onCollapseAllTools: (ids: string[]) => void;
+  onCopy?: () => void;
+  onRetry?: () => void;
+  onNavigateToNode?: (name: string) => void;
+}> = ({
+  msg,
+  expandedTools,
+  onToggleTool,
+  onExpandAllTools,
+  onCollapseAllTools,
+  onCopy,
+  onRetry,
+  onNavigateToNode,
+}) => {
+  const streaming = msg.status === 'streaming';
+
+  // Count reasoning blocks so we know which one is "last" (still streaming)
+  let reasoningTotal = 0;
+  for (const p of msg.parts) {
+    if (p.type === 'reasoning') reasoningTotal++;
+  }
+  let reasoningSeen = 0;
+
+  // Build flat render groups — reasoning blocks are NOT pulled out to top;
+  // they render inline, interspersed with tool groups and text.
+  const groups: Array<
+    | { kind: 'tool'; tools: ToolCallPart[] }
+    | { kind: 'reasoning'; text: string; idx: number }
+    | { kind: 'text'; text: string; finalised: boolean; idx: number }
+    | { kind: 'subagent'; part: SubAgentPart }
+  > = [];
+  let i = 0;
+  while (i < msg.parts.length) {
+    const p = msg.parts[i];
+    if (p.type === 'tool') {
+      const run: ToolCallPart[] = [p as ToolCallPart];
+      i++;
+      while (i < msg.parts.length && msg.parts[i].type === 'tool') {
+        run.push(msg.parts[i] as ToolCallPart);
+        i++;
+      }
+      groups.push({ kind: 'tool', tools: run });
+    } else if (p.type === 'reasoning') {
+      reasoningSeen++;
+      groups.push({ kind: 'reasoning', text: p.text, idx: reasoningSeen });
+      i++;
+    } else if (p.type === 'text') {
+      const tp = p as TextPart;
+      groups.push({ kind: 'text', text: tp.text, finalised: tp.finalised, idx: i });
+      i++;
+    } else if (p.type === 'subagent') {
+      groups.push({ kind: 'subagent', part: p as SubAgentPart });
+      i++;
+    } else {
+      i++;
+    }
+  }
+
+  return (
+    <div className="msg-assistant-row" data-message-id={msg._id}>
+      <div className="msg-bubble assistant">
+        {groups.map((g, gi) => {
+          if (g.kind === 'tool') {
+            const tools = g.tools;
+            const doneCount = tools.filter((t) => t.status === 'done' || t.status === 'error').length;
+            const allDone = doneCount === tools.length && tools.length >= 3;
+            const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
+            const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
+            // ponytail: when collapsed, show summary ONLY; when expanded, show cards + summary as toggle
+            const collapsed = allDone && !groupExpanded;
+            return (
+              <div key={gi} className="msg-tool-wrapper">
+                {collapsed ? (
+                  <ToolSummary
+                    tools={doneTools}
+                    expandedTools={expandedTools}
+                    onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                    onCollapseAll={() => {}}
+                  />
+                ) : (
+                  <>
+                    {allDone && (
+                      <ToolSummary
+                        tools={doneTools}
+                        expandedTools={expandedTools}
+                        onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                        onCollapseAll={() => onCollapseAllTools(tools.map((t) => t.toolId))}
+                      />
+                    )}
+                    {tools.map((t) => (
+                      <ToolCard
+                        key={t.toolId}
+                        part={t}
+                        expanded={expandedTools.has(t.toolId)}
+                        onToggle={() => onToggleTool(t.toolId)}
+                      />
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          }
+
+          if (g.kind === 'reasoning') {
+            const isLast = g.idx === reasoningTotal;
+            return (
+              <ReasoningBlock
+                key={gi}
+                text={g.text}
+                streaming={streaming && isLast}
+                reasoningComplete={!streaming || !isLast}
+              />
+            );
+          }
+
+          if (g.kind === 'text') {
+            return (
+              <MarkdownContent
+                key={gi}
+                text={g.text}
+                streaming={streaming && !g.finalised}
+                onNavigateToNode={onNavigateToNode}
+              />
+            );
+          }
+
+          if (g.kind === 'subagent') {
+            return <SubAgentBlock key={gi} part={g.part} />;
+          }
+
+          return null;
+        })}
+      </div>
+      <span className="msg-actions">
+        {onCopy && (
+          <span
+            className="msg-action-btn"
+            onClick={onCopy}
+            title="复制"
+            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
+          />
+        )}
+        {onRetry && msg.status === 'done' && (
+          <span
+            className="msg-action-btn"
+            onClick={onRetry}
+            title="重试"
+            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+          />
+        )}
+      </span>
+    </div>
+  );
+};
+
+// ── Notice ──
+
+const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
+  <div className={`msg-notice msg-notice-${msg.level}`}>{msg.text}</div>
+);
+
+// ── Permission card ──
+
+// ── Main component ──
+// P2′-2b：直接挂在 ChatBeacon 树里（Controller 包装已删）。
+// React.memo 隔离 ChatBeacon 重渲染（模式/角标变化不触碰消息树）；
+// 消息更新走 store 订阅，与旧独立 root 语义一致。
+
+export const ChatMessagesApp: React.FC<{
+  callbacks: ChatMessagesCallbacks;
+  scrollContainer?: HTMLElement;
+  panelId: string;
+}> = React.memo(({ callbacks, scrollContainer, panelId }) => {
+  // ponytail: messages live in per-session stores — subscribe to the active session's store.
+  // React re-renders automatically on session switch because activeSessionId changes.
+  const sessStore = useMemo(() => getSessionStore(panelId), [panelId]);
+  const activeSessionId = useStore(sessStore, (s) => {
+    const active = s.sessions[s.activeIdx];
+    return active?.id ?? null;
+  });
+  const msgStore = useMemo(
+    () =>
+      activeSessionId != null
+        ? getMessagesStore(`${panelId}:${activeSessionId}`)
+        : getMessagesStore(`${panelId}:__empty__`),
+    [panelId, activeSessionId],
+  );
+  const messages = useStore(msgStore, (s) => s.messages);
+  const _version = useStore(msgStore, (s) => s.version);
+
+  // ponytail: callback-ref state 而非 useRef —— 元素挂载后触发一次重渲染，
+  // 让依赖 scrollEl 的 effect 拿到真实节点（内联后本组件自带滚动容器）。
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const stickRef = useRef(true);
+  const autoScrollRaf = useRef<number | null>(null);
+  const lastMsgCount = useRef(0);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+
+  // Reset stick-to-bottom when switching sessions — don't inherit the
+  // scroll position (and stickRef=false) from the previous session.
+  useEffect(() => {
+    stickRef.current = true;
+  }, []);
+
+  // Resolve the actual scrollable element (外部指定或自身)
+  const scrollEl = scrollContainer ?? listEl;
+
+  // Auto-scroll: coalesce into single pending rAF
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (autoScrollRaf.current !== null) return;
+
+    if (messages.length > lastMsgCount.current && messages[messages.length - 1]?.role === 'user') {
+      stickRef.current = true;
+    }
+    lastMsgCount.current = messages.length;
+
+    if (!stickRef.current) return;
+
+    autoScrollRaf.current = requestAnimationFrame(() => {
+      autoScrollRaf.current = null;
+      if (!stickRef.current) return;
+      if (scrollEl) {
+        scrollEl.style.scrollBehavior = 'auto';
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+    });
+  }, [scrollEl?.style, messages.length, messages, scrollEl?.scrollHeight, scrollEl] as const); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-scroll during streaming — MutationObserver catches incremental DOM
+  // additions when message parts are mutated in-place (no version bump).
+  useEffect(() => {
+    const el = scrollEl;
+    if (!el) return;
+
+    const observer = new MutationObserver(() => {
+      if (!stickRef.current) return;
+      if (autoScrollRaf.current !== null) return;
+      autoScrollRaf.current = requestAnimationFrame(() => {
+        autoScrollRaf.current = null;
+        if (!stickRef.current) return;
+        el.scrollTop = el.scrollHeight;
+      });
+    });
+
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [scrollEl]);
+
+  useEffect(() => {
+    return () => {
+      if (autoScrollRaf.current !== null) cancelAnimationFrame(autoScrollRaf.current);
+    };
+  }, []);
+
+  // Scroll tracking: capture phase wheel + scroll event
+  // ponytail: direction-aware — only re-enable auto-scroll when user actively
+  // scrolls DOWN to the bottom. A scroll-up near the bottom won't re-engage it.
+  useEffect(() => {
+    const el = scrollEl;
+    if (!el) return;
+
+    let lastScrollTop = el.scrollTop;
+
+    const onWheelCapture = (e: WheelEvent) => {
+      // Ignore ctrl+wheel (zoom), horizontal scroll, scroll-down
+      if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY >= 0) return;
+      stickRef.current = false;
+    };
+
+    const onScroll = () => {
+      const currentTop = el.scrollTop;
+      const scrollingDown = currentTop > lastScrollTop;
+      lastScrollTop = currentTop;
+
+      if (scrollingDown && isNearBottom(el)) {
+        stickRef.current = true;
+      }
+    };
+
+    el.addEventListener('wheel', onWheelCapture, true);
+    el.addEventListener('scroll', onScroll);
+    return () => {
+      el.removeEventListener('wheel', onWheelCapture, true);
+      el.removeEventListener('scroll', onScroll);
+    };
+  }, [scrollEl]);
+
+  const toggleTool = useCallback((id: string) => {
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }, []);
+  const expandAllTools = useCallback((ids: string[]) => {
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      for (const id of ids) n.add(id);
+      return n;
+    });
+  }, []);
+  const collapseAllTools = useCallback((ids: string[]) => {
+    setExpandedTools((prev) => {
+      const n = new Set(prev);
+      for (const id of ids) n.delete(id);
+      return n;
+    });
+  }, []);
+
+  return (
+    <div className="chat-messages" ref={setListEl}>
+      {messages.map((msg) => {
+        switch (msg.role) {
+          case 'user':
+            return (
+              <UserBubble
+                key={msg._id}
+                msg={msg}
+                onEdit={callbacks.onEditUserMessage}
+                onResend={callbacks.onResendUserMessage}
+              />
+            );
+          case 'assistant':
+            return (
+              <AssistantBubble
+                key={msg._id}
+                msg={msg}
+                expandedTools={expandedTools}
+                onToggleTool={toggleTool}
+                onExpandAllTools={expandAllTools}
+                onCollapseAllTools={collapseAllTools}
+                onCopy={
+                  callbacks.onCopyText
+                    ? () => {
+                        const text = msg.parts
+                          .filter((p): p is TextPart => p.type === 'text')
+                          .map((p) => p.text)
+                          .join('\n');
+                        callbacks.onCopyText?.(text);
+                      }
+                    : undefined
+                }
+                onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant?.(msg) : undefined}
+                onNavigateToNode={callbacks.onNavigateToNode}
+              />
+            );
+          case 'notice':
+            return <NoticeBubble key={msg._id} msg={msg} />;
+        }
+      })}
+    </div>
+  );
+});

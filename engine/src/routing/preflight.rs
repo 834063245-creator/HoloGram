@@ -1,0 +1,505 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+use crate::analysis::{coupling_report, detect_cycles, dataflow_engine::query_dataflow_files};
+use crate::community::louvain::detect_communities;
+use crate::graph::{Graph, NodeKind};
+use crate::pipeline::discovery::is_ignored_path;
+use crate::routing::{constraints::{ConstraintConfig, check_constraints}, signals::{DataflowSignalCounts, SignalGenerator}, summary::generate_summary};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+
+/// Path to the per-project graph snapshot used as the briefing baseline.
+pub fn baseline_path(project_root: &Path) -> PathBuf {
+    project_root.join(".hologram").join("baseline.json")
+}
+
+/// Path to the violation-id snapshot — IDs from the last non-quiet check.
+fn baseline_violations_path(project_root: &Path) -> PathBuf {
+    project_root.join(".hologram").join("baseline_violations.json")
+}
+
+pub fn load_baseline(project_root: &Path) -> Graph {
+    let path = baseline_path(project_root);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Graph::default()
+    }
+}
+
+fn load_previous_violation_ids(project_root: &Path) -> Vec<String> {
+    let path = baseline_violations_path(project_root);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
+fn save_violation_ids(project_root: &Path, ids: &[String]) {
+    let dir = project_root.join(".hologram");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string_pretty(ids) {
+        let _ = std::fs::write(baseline_violations_path(project_root), json);
+    }
+}
+
+/// Extract violation IDs from a slice of violation Value objects.
+fn extract_violation_ids(violations: &[Value]) -> Vec<String> {
+    violations.iter()
+        .filter_map(|v| v["signal"]["violation_id"].as_str().map(String::from))
+        .collect()
+}
+
+pub fn save_baseline(project_root: &Path, graph: &Graph) {
+    let dir = project_root.join(".hologram");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string_pretty(graph) {
+        let _ = std::fs::write(baseline_path(project_root), json);
+    }
+}
+
+/// Full CheckResult properties for timeline round-trip (historical briefing click).
+pub fn check_timeline_props(result: &Value) -> Value {
+    json!({
+        "passed": result["passed"],
+        "timestamp": result["timestamp"],
+        "changed_files": result["changed_files"],
+        "total_changed_files": result["total_changed_files"],
+        "l5_violations": result["l5_violations"],
+        "l4_violations": result["l4_violations"],
+        "l3_violations": result["l3_violations"],
+        "l2_violations": result["l2_violations"],
+        "passed_checks": result["passed_checks"],
+        "blast_radius": result["blast_radius"],
+        "cross_community_edges": result["cross_community_edges"],
+        "new_cycles": result["new_cycles"],
+        "new_thread_conflicts": result["new_thread_conflicts"],
+        "api_signature_changes": result["api_signature_changes"],
+        "violation_count": result["violation_count"],
+        "new_violations": result["new_violations"],
+        "resolved_violations": result["resolved_violations"],
+        "persistent_violations": result["persistent_violations"],
+    })
+}
+
+fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: bool) -> Value {
+    json!({
+        "passed": true,
+        "one_line": one_line,
+        "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "changed_files": changed_files,
+        "total_changed_files": changed_files.len(),
+        "l5_violations": [],
+        "l4_violations": [],
+        "l3_violations": [],
+        "l2_violations": [],
+        "passed_checks": Vec::<String>::new(),
+        "blast_radius": 0u32,
+        "cross_community_edges": 0u32,
+        "new_cycles": 0u32,
+        "new_thread_conflicts": 0u32,
+        "api_signature_changes": 0u32,
+        "coupling_l4": 0u32,
+        "cycles_detected": 0u32,
+        "signals_count": 0u32,
+        "violation_count": 0u32,
+        "new_violations": 0u32,
+        "resolved_violations": 0u32,
+        "persistent_violations": 0u32,
+        "quiet": !baseline_seed,
+        "baseline_seed": baseline_seed,
+    })
+}
+
+/// run_full_check — equivalent of Python preflight.py run_full_check()
+pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _project_root: &str) -> Value {
+    // Filter out changes to ignored directories (.hologram, .git, node_modules, etc.)
+    // These are tooling/runtime artifacts — not user source code — and should not
+    // generate constraint violations in the briefing.
+    let changed_files: Vec<String> = changed_files.iter()
+        .filter(|f| !is_ignored_path(f))
+        .cloned()
+        .collect();
+    let changed_files = changed_files.as_slice();
+
+    // First open: establish baseline quietly — don't audit the whole project.
+    if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
+        return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+    }
+
+    // No file changes → nothing to report, regardless of graph size difference.
+    // A size difference without changed_files means the graph was rebuilt (e.g.
+    // re-analysis with more nodes discovered), not a user edit. Reporting L2/L4
+    // deltas in that case is a stale-baseline false positive.
+    if changed_files.is_empty() {
+        return quiet_check_result(changed_files, "无新变更", false);
+    }
+
+    let coupling = coupling_report(after, ""); // full graph
+    let l4_count = coupling["L4"].as_u64().unwrap_or(0) as usize;
+    let cycles = detect_cycles(after);
+    let cycle_count = cycles.len();
+    let cycles_before = detect_cycles(before).len();
+
+    // ── Dataflow: run on changed_files for L3/L4 signals ──
+    let df_counts: Option<DataflowSignalCounts> = if !changed_files.is_empty() {
+        let paths: Vec<std::path::PathBuf> = changed_files.iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let df_results = query_dataflow_files(&paths);
+        let mut l3_shared = 0usize; let mut l3_reads = 0usize; let mut l3_writes = 0usize;
+        let mut l4_triggers = 0usize; let mut l4_awaits = 0usize; let mut l4_seqs = 0usize;
+        for r in &df_results {
+            if let Ok(df) = &r.result {
+                l3_shared += df.shared.len();
+                for s in &df.scopes {
+                    l3_reads += s.reads.len();
+                    l3_writes += s.writes.len();
+                    l4_triggers += s.triggers.len();
+                    l4_awaits += s.awaits_callbacks.len();
+                    l4_seqs += s.sequence_calls.len();
+                }
+            }
+        }
+        let _df_l4_total = l4_triggers + l4_awaits + l4_seqs;
+        Some(DataflowSignalCounts {
+            l3_shared_vars: l3_shared, l3_reads, l3_writes,
+            l4_triggers, l4_awaits, l4_sequences: l4_seqs,
+        })
+    } else {
+        None
+    };
+    // Use dataflow L4 count when available, else fall back to graph edges
+    let effective_l4 = df_counts.as_ref()
+        .map(|d| d.l4_triggers + d.l4_awaits + d.l4_sequences)
+        .unwrap_or(l4_count);
+
+    let signals = SignalGenerator::new().generate(before, after, changed_files, effective_l4, cycle_count, df_counts.as_ref());
+    let config = ConstraintConfig::from_yaml_file(&PathBuf::from(_project_root));
+    let constraint_result = check_constraints(&signals, &config);
+    let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();
+    let summary = generate_summary(changed_files, &violations, l4_count, cycle_count);
+
+    // ── Violation diff: compare current IDs with previous check snapshot ──
+    let current_ids: Vec<String> = extract_violation_ids(&violations);
+    let previous_ids: HashSet<String> = load_previous_violation_ids(&PathBuf::from(_project_root))
+        .into_iter().collect();
+    let current_set: HashSet<String> = current_ids.iter().cloned().collect();
+    let new_count      = current_set.difference(&previous_ids).count() as u32;
+    let resolved_count = previous_ids.difference(&current_set).count() as u32;
+    let persistent_count = current_set.intersection(&previous_ids).count() as u32;
+    // Save current IDs so the next check can compute a diff against this run.
+    let project_path = PathBuf::from(_project_root);
+    save_violation_ids(&project_path, &current_ids);
+
+    // ── blast_radius: BFS from all nodes whose file is in changed_files ──
+    let blast_radius = if changed_files.is_empty() {
+        0usize
+    } else {
+        let mut seed_nodes: HashSet<&str> = HashSet::new();
+        for node in after.nodes.values() {
+            if let Some(ref loc) = node.location {
+                if changed_files.iter().any(|f| loc.starts_with(f.as_str()) || loc.contains(f.as_str())) {
+                    seed_nodes.insert(node.id.as_str());
+                }
+            }
+        }
+        // BFS up to depth 3 from seed nodes
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut queue = VecDeque::new();
+        for &sid in &seed_nodes {
+            visited.insert(sid);
+            queue.push_back((sid, 0usize));
+        }
+        // Build adjacency
+        let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in after.edges.values() {
+            adj.entry(&edge.source).or_default().push(&edge.target);
+            adj.entry(&edge.target).or_default().push(&edge.source);
+        }
+        while let Some((cur, depth)) = queue.pop_front() {
+            if depth >= 3 { continue; }
+            if let Some(nbs) = adj.get(cur) {
+                for &nb in nbs {
+                    if visited.insert(nb) {
+                        queue.push_back((nb, depth + 1));
+                    }
+                }
+            }
+        }
+        visited.len().saturating_sub(seed_nodes.len()) // exclude seeds themselves
+    };
+
+    // ── cross_community_edges: communities on after graph ──
+    let communities = detect_communities(after, 42);
+    let mut node_to_comm: HashMap<&str, usize> = HashMap::new();
+    for (ci, comm) in communities.iter().enumerate() {
+        for nid in comm {
+            node_to_comm.insert(nid.as_str(), ci);
+        }
+    }
+    let cross_community_edges = after.edges.values()
+        .filter(|e| {
+            let sc = node_to_comm.get(e.source.as_str());
+            let tc = node_to_comm.get(e.target.as_str());
+            sc != tc || sc.is_none()
+        })
+        .count();
+
+        // ── thread_conflicts ──
+    let new_thread_conflicts = 0u32;
+
+    // ── api_signature_changes: count function/method nodes changed ──
+    let api_signature_changes = if before.nodes.is_empty() {
+        0u32
+    } else {
+        let mut changed = 0u32;
+        for (nid, after_node) in after.nodes.iter() {
+            if !matches!(after_node.kind, NodeKind::Symbol) { continue; }
+            if let Some(before_node) = before.nodes.get(nid) {
+                // Count as changed if in/out degree differs
+                if before_node.out_degree != after_node.out_degree
+                    || before_node.in_degree != after_node.in_degree
+                {
+                    changed += 1;
+                }
+            } else {
+                // New symbol node
+                changed += 1;
+            }
+        }
+        changed
+    };
+
+    json!({
+        "passed": summary["passed"],
+        "one_line": summary["one_line"],
+        "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "changed_files": changed_files,
+        "total_changed_files": changed_files.len(),
+        "l5_violations": violations.iter().filter(|v| v["level"]==5).collect::<Vec<_>>(),
+        "l4_violations": violations.iter().filter(|v| v["level"]==4).collect::<Vec<_>>(),
+        "l3_violations": violations.iter().filter(|v| v["level"]==3).collect::<Vec<_>>(),
+        "l2_violations": violations.iter().filter(|v| v["level"]==2).collect::<Vec<_>>(),
+        "passed_checks": Vec::<String>::new(),
+        "blast_radius": blast_radius as u32,
+        "cross_community_edges": cross_community_edges as u32,
+        "new_cycles": cycle_count.saturating_sub(cycles_before) as u32,
+        "new_thread_conflicts": new_thread_conflicts,
+        "api_signature_changes": api_signature_changes,
+        "coupling_l4": l4_count as u32,
+        "cycles_detected": cycle_count as u32,
+        "signals_count": signals.len() as u32,
+        "violation_count": violations.len() as u32,
+        "new_violations": new_count,
+        "resolved_violations": resolved_count,
+        "persistent_violations": persistent_count,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use super::*;
+
+    #[test]
+    fn test_preflight_empty_graphs() {
+        let g = Graph::new();
+        let r = run_full_check(&g, &g, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["blast_radius"], 0);
+        assert_eq!(r["violation_count"], 0);
+    }
+
+    #[test]
+    fn test_preflight_no_changes() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+
+        let r = run_full_check(&g, &g, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["blast_radius"], 0);
+    }
+
+    #[test]
+    fn test_preflight_detects_l5_on_migration() {
+        let g = Graph::new();
+        let r = run_full_check(&g, &g, &["migrations/0001_init.py".into()], ".");
+        assert!(!r["passed"].as_bool().unwrap());
+        assert!(r["violation_count"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_preflight_blast_radius_with_changes() {
+        let mut g = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("src/handler.rs".into());
+        g.add_node(a);
+        let mut b = Node::new("b", "mod_b", NodeKind::Symbol);
+        b.location = Some("src/handler.rs".into());
+        g.add_node(b);
+        g.add_node(Node::new("c", "mod_c", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "c", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "c", "b", EdgeKind::Calls));
+
+        let r = run_full_check(&g, &g, &["src/handler.rs".into()], ".");
+        // BFS from a,b should include c within depth 3
+        assert!(r["blast_radius"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_preflight_api_signature_changes() {
+        let mut before = Graph::new();
+        let mut a = Node::new("a", "fn_a", NodeKind::Symbol);
+        a.out_degree = 1;
+        before.add_node(a);
+
+        let mut after = Graph::new();
+        let mut a2 = Node::new("a", "fn_a", NodeKind::Symbol);
+        a2.out_degree = 3; // changed
+        after.add_node(a2);
+        let mut b = Node::new("b", "fn_b", NodeKind::Symbol);
+        b.out_degree = 1;
+        after.add_node(b);
+
+        let r = run_full_check(&before, &after, &["src/a.rs".into()], ".");
+        assert_eq!(r["api_signature_changes"], 2, "a changed + b new = 2");
+    }
+
+    #[test]
+    fn test_preflight_stable_cycles_no_false_alarm() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "b", NodeKind::Symbol));
+        g.add_node(Node::new("c", "c", NodeKind::Symbol));
+        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        let r = run_full_check(&g, &g, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["violation_count"], 0);
+    }
+
+    #[test]
+    fn test_preflight_baseline_seed() {
+        let mut after = Graph::new();
+        after.add_node(Node::new("a", "fn", NodeKind::Symbol));
+        let before = Graph::new();
+        let r = run_full_check(&before, &after, &[], ".");
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["baseline_seed"], true);
+        assert_eq!(r["violation_count"], 0);
+    }
+
+    /// Regression: stale baseline (fewer nodes/cycles) + re-analysis (more nodes/cycles)
+    /// + NO changed_files → must NOT produce false L2 "new cycles" violations.
+    /// This is the exact bug that produced the "53 new circular dependency cycles" false alarm.
+    #[test]
+    fn test_stale_baseline_no_false_positive() {
+        // ── "Old baseline": small graph with 1 cycle (3 nodes) ──
+        let mut before = Graph::new();
+        before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
+        before.add_node(Node::new("y", "old_y", NodeKind::Symbol));
+        before.add_node(Node::new("z", "old_z", NodeKind::Symbol));
+        before.add_edge(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
+        before.add_edge(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
+        before.add_edge(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 1 cycle: x→y→z→x
+
+        // ── "After re-analysis": bigger graph with 2 cycles ──
+        let mut after = Graph::new();
+        after.add_node(Node::new("x", "old_x", NodeKind::Symbol));
+        after.add_node(Node::new("y", "old_y", NodeKind::Symbol));
+        after.add_node(Node::new("z", "old_z", NodeKind::Symbol));
+        after.add_edge(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // cycle 1
+        after.add_node(Node::new("a", "new_a", NodeKind::Symbol));
+        after.add_node(Node::new("b", "new_b", NodeKind::Symbol));
+        after.add_node(Node::new("c", "new_c", NodeKind::Symbol));
+        after.add_edge(Edge::new("e_ab", "a", "b", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // cycle 2
+
+        // No files changed — this should be quiet
+        let r = run_full_check(&before, &after, &[], ".");
+        assert!(r["passed"].as_bool().unwrap(), "stale baseline without changed_files should pass");
+        assert_eq!(r["violation_count"], 0, "should have zero violations");
+        assert_eq!(r["one_line"], "无新变更");
+        assert_eq!(r["new_cycles"], 0, "should report 0 new cycles");
+    }
+
+    /// Companion: same scenario as test_stale_baseline_no_false_positive, but WITH
+    /// changed_files → must still detect real violations.  Ensures the guard doesn't
+    /// suppress genuine alerts.
+    #[test]
+    fn test_stale_baseline_still_detects_with_real_changes() {
+        let mut before = Graph::new();
+        before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
+        before.add_edge(Edge::new("e_self", "x", "x", EdgeKind::Calls));
+
+        let mut after = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("src/new_module.rs".into());
+        after.add_node(a);
+        after.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
+        let mut e = Edge::new("e_ab", "a", "b", EdgeKind::Calls);
+        e.coupling_depth = 4;
+        after.add_edge(e);
+        after.add_node(Node::new("c", "mod_c", NodeKind::Symbol));
+        after.add_edge(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
+        after.add_edge(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // 1 new cycle
+
+        // WITH changed files → should still fire
+        let r = run_full_check(&before, &after, &["src/new_module.rs".into()], ".");
+        assert!(!r["passed"].as_bool().unwrap(), "real changes should not pass");
+        assert!(r["violation_count"].as_u64().unwrap() > 0, "should have violations");
+        assert!(r["new_cycles"].as_u64().unwrap() > 0, "should detect new cycles");
+    }
+
+    /// Regression: changes to `.hologram/` or other ignored directories must NOT
+    /// produce violations. Previously, `.hologram/baseline.json` matched the
+    /// config-file pattern (`.json$`) and triggered a false L5 violation.
+    #[test]
+    fn test_preflight_filters_ignored_paths() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+
+        // Only ignored paths → should be quiet (no violations)
+        let r = run_full_check(&g, &g, &[
+            ".hologram/baseline.json".into(),
+            ".hologram/memory/context.json".into(),
+            ".git/HEAD".into(),
+            "node_modules/express/index.js".into(),
+        ], ".");
+        assert!(r["passed"].as_bool().unwrap(), "ignored paths should not produce violations");
+        assert_eq!(r["violation_count"], 0, "ignored paths should have zero violations");
+        assert_eq!(r["total_changed_files"], 0, "ignored paths should be filtered out");
+    }
+
+    /// Mixed: ignored paths + real source files → only real files counted.
+    #[test]
+    fn test_preflight_filters_ignored_mixed_with_real() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+
+        let r = run_full_check(&g, &g, &[
+            ".hologram/baseline.json".into(),  // ignored — would be L5 false positive
+            "migrations/0001_init.py".into(),   // real — should be L5
+        ], ".");
+        // Only the migration file should produce a violation
+        assert!(!r["passed"].as_bool().unwrap(), "migration file should produce violation");
+        assert_eq!(r["violation_count"], 1, "only 1 violation from migration, not from .hologram");
+        assert_eq!(r["total_changed_files"], 1, "only 1 real changed file");
+    }
+}

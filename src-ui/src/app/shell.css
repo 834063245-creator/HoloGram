@@ -1,0 +1,590 @@
+/* ═══════════════════════════════════════════════════════════════
+   HOLOGRAM · 观测台壳样式（P1）
+   适用范围：src/app/** 新 chrome（CommandBar/StatusBar/DockRail/
+   CommandPalette/ShortcutsOverlay）。只使用 tokens.css 的 --obs-* 变量。
+   z-index 约定：栏/轨 100 · 浮层 300（旧 #toolbar 曾用 100）。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 通用 ─────────────────────────────────────────────────── */
+.cb-bar,
+.sb-bar,
+.dr-rail,
+.pal-box,
+.sx-box {
+  font-family: var(--obs-font-body);
+  color: var(--obs-text);
+}
+.cb-bar kbd,
+.sb-bar kbd,
+.pal-box kbd {
+  font-family: var(--obs-font-mono);
+  font-size: 10px;
+  color: var(--obs-text-3);
+  border: 1px solid var(--obs-line);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  padding: 0.5px 5px;
+}
+
+/* ── 顶部命令栏 ───────────────────────────────────────────── */
+.cb-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--obs-bar-h);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-bottom: 1px solid var(--obs-line);
+  -webkit-app-region: drag; /* 替代原生标题栏 — 整栏可拖动窗口 */
+}
+.cb-bar button,
+.cb-bar input {
+  -webkit-app-region: no-drag;
+}
+.cb-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 0 10px 0 4px;
+  margin-right: 4px;
+  user-select: none;
+}
+.cb-brand-mark {
+  color: var(--obs-brass);
+  font-size: 14px;
+  transform: translateY(1px);
+}
+.cb-brand-name {
+  font-family: var(--obs-font-serif);
+  font-weight: 600;
+  font-size: 13.5px;
+  letter-spacing: 0.06em;
+}
+.cb-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--obs-line);
+  margin: 0 6px;
+  flex: none;
+}
+.cb-spacer {
+  flex: 1;
+}
+.cb-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--obs-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--obs-text-2);
+  padding: 5px 9px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color var(--obs-snap),
+    background var(--obs-snap);
+}
+.cb-btn:hover:not(:disabled) {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+.cb-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cb-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--obs-fail);
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+.cb-palette-trigger {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--obs-font-mono);
+  font-size: 11px;
+  color: var(--obs-text-3);
+  border: 1px solid var(--obs-line);
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: none;
+  cursor: pointer;
+  transition:
+    border-color var(--obs-snap),
+    color var(--obs-snap),
+    background var(--obs-snap);
+}
+.cb-palette-trigger:hover {
+  color: var(--obs-text-2);
+  border-color: rgba(201, 162, 92, 0.4);
+  background: rgba(201, 162, 92, 0.05);
+}
+.cb-search {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.cb-search input {
+  width: 150px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--obs-line);
+  border-radius: 7px;
+  outline: none;
+  color: var(--obs-text);
+  font-family: var(--obs-font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  caret-color: var(--obs-brass);
+  transition: border-color var(--obs-snap);
+}
+.cb-search input:focus {
+  border-color: rgba(201, 162, 92, 0.45);
+}
+.cb-search input::placeholder {
+  color: var(--obs-text-3);
+}
+.cb-path {
+  font-family: var(--obs-font-mono);
+  font-size: 10.5px;
+  color: var(--obs-text-3);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 路径过长时省略号在头部，保住项目名 */
+}
+.cb-win {
+  display: inline-flex;
+  align-items: center;
+}
+.cb-win-btn {
+  width: 34px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--obs-text-3);
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    color var(--obs-snap),
+    background var(--obs-snap);
+}
+.cb-win-btn:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+.cb-win-close:hover {
+  color: #ffd9d6;
+  background: rgba(217, 99, 95, 0.25);
+}
+
+/* ── 底部状态栏 ───────────────────────────────────────────── */
+.sb-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--obs-status-h);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-family: var(--obs-font-mono);
+  font-size: 10.5px;
+  color: var(--obs-text-3);
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-top: 1px solid var(--obs-line);
+}
+.sb-left {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--obs-text-2);
+  min-width: 0;
+}
+.sb-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--obs-pass);
+  box-shadow: 0 0 8px var(--obs-pass);
+  animation: sb-pulse 2.4s ease-in-out infinite;
+  flex: none;
+}
+@keyframes sb-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.sb-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-log-badge {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  background: rgba(160, 180, 220, 0.12);
+  color: var(--obs-text-3);
+  font-family: var(--obs-font-mono);
+}
+.sb-log-badge:hover {
+  color: var(--obs-text);
+}
+.sb-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--obs-status-h) + 6px);
+  width: 420px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--obs-glass-hi);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--obs-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 110;
+}
+.sb-pop-row {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--obs-line-soft);
+  color: var(--obs-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-pop-row.latest {
+  color: var(--obs-text);
+}
+.sb-spacer {
+  flex: 1;
+}
+.sb-tele {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.sb-tele b {
+  font-weight: 500;
+  color: var(--obs-text-2);
+}
+.sb-l4 {
+  color: #f0a8a4;
+}
+.sb-l3 {
+  color: #ecd2a0;
+}
+.sb-path {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+/* ── dock 轨道 ────────────────────────────────────────────── */
+.dr-rail {
+  position: fixed;
+  top: var(--obs-bar-h);
+  bottom: var(--obs-status-h);
+  width: var(--obs-rail-w);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 10px;
+  gap: 4px;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+}
+.dr-left {
+  left: 0;
+  border-right: 1px solid var(--obs-line);
+}
+.dr-right {
+  right: 0;
+  border-left: 1px solid var(--obs-line);
+}
+.dr-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 40px;
+  padding: 7px 0 5px;
+  color: var(--obs-text-3);
+  border: none;
+  border-radius: 9px;
+  background: none;
+  cursor: pointer;
+  transition:
+    color var(--obs-snap),
+    background var(--obs-snap);
+}
+.dr-btn:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+.dr-btn.on {
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+}
+.dr-label {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+}
+
+/* ── 命令面板 ─────────────────────────────────────────────── */
+.pal-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(3, 5, 10, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: flex;
+  justify-content: center;
+}
+.pal-box {
+  margin-top: 15vh;
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  height: fit-content;
+  max-height: 62vh;
+  border-radius: 14px;
+  background: var(--obs-glass-hi);
+  border: 1px solid rgba(170, 185, 225, 0.18);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.55),
+    0 0 120px rgba(201, 162, 92, 0.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pal-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--obs-line);
+}
+.pal-prompt {
+  color: var(--obs-brass);
+  font-family: var(--obs-font-mono);
+  font-size: 14px;
+}
+.pal-input input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--obs-text);
+  font-family: var(--obs-font-mono);
+  font-size: 13px;
+  caret-color: var(--obs-brass);
+}
+.pal-input input::placeholder {
+  color: var(--obs-text-3);
+}
+.pal-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.pal-group {
+  font-family: var(--obs-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.26em;
+  color: var(--obs-text-3);
+  padding: 10px 10px 5px;
+  text-transform: uppercase;
+}
+.pal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--obs-text-3);
+}
+.pal-row .pal-label {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--obs-text-2);
+}
+.pal-row.active {
+  background: var(--obs-brass-dim);
+  border-left-color: var(--obs-brass);
+  color: var(--obs-brass-hi);
+}
+.pal-row.active .pal-label {
+  color: var(--obs-text);
+}
+.pal-foot {
+  display: flex;
+  gap: 14px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--obs-line);
+  font-family: var(--obs-font-mono);
+  font-size: 10px;
+  color: var(--obs-text-3);
+}
+.pal-foot-right {
+  margin-left: auto;
+}
+
+/* ── 快捷键浮层 ───────────────────────────────────────────── */
+.sx-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(3, 5, 10, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sx-box {
+  display: flex;
+  gap: 26px;
+  max-width: calc(100vw - 48px);
+  border-radius: 14px;
+  padding: 20px 24px;
+  background: var(--obs-glass-hi);
+  border: 1px solid rgba(170, 185, 225, 0.18);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+.sx-group {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.sx-sep {
+  position: absolute;
+  left: -14px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--obs-line);
+}
+.sx-group-title {
+  font-family: var(--obs-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.26em;
+  color: var(--obs-brass);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+.sx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--obs-text-2);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--obs-line-soft);
+}
+.sx-keys {
+  display: flex;
+  gap: 3px;
+  min-width: 72px;
+}
+.sx-desc {
+  flex: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7c · 浮层与菜单（快捷键浮层 kbd 并入共享配方——
+   原共享规则只覆盖 .cb-bar/.sb-bar/.pal-box，.sx-box 裸奔浏览器默认样式）
+   ═══════════════════════════════════════════════════════════════ */
+.sx-box kbd {
+  font-family: var(--obs-font-mono);
+  font-size: 10px;
+  color: var(--obs-text-3);
+  border: 1px solid var(--obs-line);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  padding: 0.5px 5px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P7e · chrome 细节（原型对照补齐：brand sub / .on 黄铜 / rail 左条）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* brand：mono 8px 0.32em 黄铜 sub（原型 #brand .sub；TSX 纯装饰节点） */
+.cb-brand-sub {
+  font-family: var(--obs-font-mono);
+  font-size: 8px;
+  letter-spacing: 0.32em;
+  color: var(--obs-brass);
+  opacity: 0.85;
+}
+
+/* 原型 .btn.on（toggle 激活态黄铜；当前 TSX 未 emit .on，先立规则） */
+.cb-btn.on {
+  color: var(--obs-brass-hi);
+}
+
+/* 搜索框 = 原型 palette-trigger hover（brass 边 + brass 淡底） */
+.cb-search input:hover {
+  border-color: rgba(201, 162, 92, 0.4);
+  background: rgba(201, 162, 92, 0.05);
+}
+
+/* DockRail：rail-btn.on 的 2px 黄铜侧条（右轨镜像到右侧） */
+.dr-btn.on::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--obs-brass);
+}
+.dr-right .dr-btn.on::before {
+  left: auto;
+  right: -3px;
+}

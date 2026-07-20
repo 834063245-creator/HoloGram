@@ -1,0 +1,190 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+// ChatFooter — React 重写聊天面板底部状态栏
+// 替代 chat.ts 中 updateFooter() 的 innerHTML + querySelector 命令式操作。
+// 纯声明式：订阅 Zustand stores → 自动渲染，零 DOM 操作。
+
+import type React from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
+import { useStore } from 'zustand';
+import { loadSettings, saveSettings } from '../../settings';
+import { getChatStore } from '../chat-store';
+import { iconHtml } from '../icons';
+import type { CollaborationMode, PermissionMode } from '../panel-store';
+
+// ── Types ──
+
+export interface FooterCallbacks {
+  onOpenSettings: (() => void) | null;
+  onTriggerSlash: () => void;
+  onAttachFile: () => void;
+}
+
+// ── React Component ──
+
+function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: FooterCallbacks }) {
+  const panelStore = getChatStore(panelId).panel;
+
+  const totalTokensUsed = useStore(panelStore, (s) => s.totalTokensUsed);
+  const lastUsageText = useStore(panelStore, (s) => s.lastUsageText);
+  const _projectPath = useStore(panelStore, (s) => s.projectPath);
+
+  // settings are non-reactive — read once and re-render when stores tick
+  const settings = loadSettings();
+  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  const ctxWin = settings.agent?.contextWindow || 0;
+
+  let modelLabel = active?.model || 'unknown';
+  if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '\u2026';
+
+  const thinking = active?.thinking ? ' · 思考' : '';
+  const usageStr = lastUsageText ? ` · ${lastUsageText}` : '';
+
+  // Token bar
+  let tokenBar: React.ReactNode = null;
+  if (ctxWin > 0 && totalTokensUsed > 0) {
+    const pct = Math.min((totalTokensUsed / ctxWin) * 100, 100);
+    let cls = '';
+    if (pct >= 90) cls = 'danger';
+    else if (pct >= 80) cls = 'warn';
+    const labelK = `${(totalTokensUsed / 1000).toFixed(1)}k / ${(ctxWin / 1000).toFixed(0)}k`;
+    tokenBar = (
+      <div className="chat-token-bar-wrap" title="上下文窗口用量">
+        <span>{labelK}</span>
+        <div className="chat-token-bar">
+          <div className={`chat-token-bar-fill ${cls}`} style={{ width: `${pct.toFixed(1)}%` }} />
+        </div>
+      </div>
+    );
+  }
+
+  const handleModelClick = useCallback(() => {
+    callbacks.onOpenSettings?.();
+  }, [callbacks.onOpenSettings]);
+
+  return (
+    <div className="chat-footer-left">
+      <button
+        className="chat-model-badge chat-model-clickable"
+        title={`点击切换模型 · ${active?.name} / ${active?.model}`}
+        onClick={handleModelClick}
+      >
+        <span dangerouslySetInnerHTML={{ __html: iconHtml('agent', 10) }} /> {modelLabel}
+        {thinking}
+      </button>
+      {tokenBar}
+      <span className="chat-usage-badge">{usageStr}</span>
+    </div>
+  );
+}
+
+function ChatFooterRight({ callbacks }: { callbacks: FooterCallbacks }) {
+  return (
+    <div className="chat-footer-right">
+      <button
+        className="chat-shortcuts-btn"
+        data-tooltip="Ctrl+L    打开/关闭面板&#10;Enter     发送 (输入框)&#10;Shift+Enter  换行&#10;Esc       关闭面板&#10;Ctrl+Y    始终允许 (权限)&#10;↑↓        历史导航 (输入框)"
+      >
+        <span dangerouslySetInnerHTML={{ __html: iconHtml('keyboard', 13) }} />
+      </button>
+      <button className="chat-slash-trigger" title="命令菜单" onClick={callbacks.onTriggerSlash}>
+        <span dangerouslySetInnerHTML={{ __html: iconHtml('code', 12) }} />
+        <span className="chat-slash-label">/</span>
+      </button>
+      <button className="chat-session-add chat-attach-btn" title="附加文件" onClick={callbacks.onAttachFile}>
+        <span dangerouslySetInnerHTML={{ __html: iconHtml('file-plus', 13) }} />
+      </button>
+    </div>
+  );
+}
+
+// ── Mode bar ──
+
+function ChatModebar({ panelId }: { panelId: string }) {
+  const panelStore = getChatStore(panelId).panel;
+  const collaborationMode = useStore(panelStore, (s) => s.collaborationMode);
+  const permissionMode = useStore(panelStore, (s) => s.permissionMode);
+
+  const setCollaboration = useCallback(
+    (mode: CollaborationMode) => {
+      panelStore.getState().setCollaborationMode(mode);
+      const s = loadSettings();
+      s.agent = { ...s.agent, collaborationMode: mode };
+      saveSettings(s);
+    },
+    [panelStore],
+  );
+  const setPermission = useCallback(
+    (mode: PermissionMode) => {
+      panelStore.getState().setPermissionMode(mode);
+      const s = loadSettings();
+      s.agent = { ...s.agent, permissionMode: mode };
+      saveSettings(s);
+    },
+    [panelStore],
+  );
+
+  return (
+    <div className="chat-modebar">
+      <div className="chat-modebar-left">
+        <button
+          className={`chat-modebar__btn${collaborationMode === 'plan' ? ' chat-modebar__btn--active' : ''}`}
+          onClick={() => setCollaboration(collaborationMode === 'plan' ? 'normal' : 'plan')}
+          title={collaborationMode === 'plan' ? '退出规划模式' : '规划模式：只读分析，不执行修改'}
+        >
+          <span className="chat-modebar__icon" dangerouslySetInnerHTML={{ __html: iconHtml('plan', 11) }} />
+          <span>规划</span>
+        </button>
+      </div>
+      <div className="chat-modebar-right">
+        <button
+          className={`chat-modebar__seg${permissionMode === 'ask' ? ' chat-modebar__seg--active' : ''}`}
+          onClick={() => setPermission('ask')}
+          title="每个写操作都询问确认"
+        >
+          🛡 询问
+        </button>
+        <button
+          className={`chat-modebar__seg${permissionMode === 'auto' ? ' chat-modebar__seg--active' : ''}`}
+          onClick={() => setPermission('auto')}
+          title="常规编辑自动批准，危险命令仍询问"
+        >
+          ✓ 自动
+        </button>
+        <button
+          className={`chat-modebar__seg chat-modebar__seg--yolo${permissionMode === 'yolo' ? ' chat-modebar__seg--active' : ''}`}
+          onClick={() => setPermission('yolo')}
+          title="全部自动批准（危险！）"
+        >
+          ⚠ YOLO
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Full footer component（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
+
+export interface ChatFooterHandle {
+  /** settings 变更后调用 —— 设置非响应式，需手动催更重读模型名 */
+  refresh(): void;
+}
+
+export const ChatFooter = forwardRef<ChatFooterHandle, { panelId: string; callbacks: FooterCallbacks }>(
+  function ChatFooter({ panelId, callbacks }, ref) {
+    // version 仅用于 refresh() 催更，不参与渲染
+    const [version, setVersion] = useState(0);
+    void version;
+    useImperativeHandle(ref, () => ({ refresh: () => setVersion((v) => v + 1) }), []);
+    return (
+      <div className="chat-footer">
+        <ChatModebar panelId={panelId} />
+        <div className="chat-footer-row">
+          <ChatFooterLeft panelId={panelId} callbacks={callbacks} />
+          <ChatFooterRight callbacks={callbacks} />
+        </div>
+      </div>
+    );
+  },
+);

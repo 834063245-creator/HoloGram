@@ -1,0 +1,6 @@
+# HoloGram dynamic grammar list — one language per line, # for comments.
+# Build with: .\build.ps1 -All
+
+kotlin
+markdown
+toml
