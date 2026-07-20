@@ -217,8 +217,15 @@ export class GraphInteractionController {
     // Standard view: screen-space picking
     const newIdx = this._pickNode();
     if (newIdx !== this.host.hoveredIdx) {
-      // Restore previous hovered node
-      if (this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount) {
+            // Restore previous hovered node
+      // ponytail: check nodeCoreColors length — array may not be synced with _nodeCount
+      // during dynamic graph updates, causing undefined → new THREE.Color(undefined) → black
+      if (
+        this.host.hoveredIdx >= 0 &&
+        this.host.hoveredIdx < this.host._nodeCount &&
+        this.host.hoveredIdx < this.host.nodeCoreColors.length &&
+        typeof this.host.nodeCoreColors[this.host.hoveredIdx] === 'number'
+      ) {
         this.host._setCoreColor(this.host.hoveredIdx, this.host.nodeCoreColors[this.host.hoveredIdx]);
         this.host._setGlowAlpha(this.host.hoveredIdx, 0.55);
       }

@@ -685,6 +685,7 @@ export class GraphSceneLifecycle {
     this.host.nodeLabelIdx = [];
     this.host.nodeGlowColors = [];
     this.host.nodeCoreColors = [];
+    this.host._nodeCount = 0; // ponytail: keep consistent with nodeCoreColors — previously missing, caused hover black-node regression
     this.host._nodeBaseHSL = [];
     this.host._fold.galaxyClouds = [];
     this.host._fold.galaxyGlows = [];

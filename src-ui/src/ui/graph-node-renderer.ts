@@ -67,6 +67,7 @@ export class GraphNodeRenderer {
 
   _setCoreColor(i: number, c: number | THREE.Color): void {
     if (!this.host.nodeCoresInstanced || i >= this.host._nodeCount) return;
+    if (c == null || (typeof c === 'number' && !Number.isFinite(c))) return; // ponytail: reject NaN/undefined → would render black
     const cc = c instanceof THREE.Color ? c : new THREE.Color(c);
     this.host.nodeCoresInstanced.setColorAt(i, cc);
     if (this.host.nodeCoresInstanced.instanceColor) this.host.nodeCoresInstanced.instanceColor.needsUpdate = true;
