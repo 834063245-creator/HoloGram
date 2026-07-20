@@ -578,3 +578,125 @@ describe('StarGraph render abort', () => {
     expect(sg.hasGraph).toBe(true);
   });
 });
+
+describe('StarGraph.clearGraph — nodeCoreColors / _nodeCount consistency', () => {
+  let container: HTMLElement;
+  let sg: StarGraph;
+
+  beforeEach(() => {
+    container = makeContainer();
+    sg = new StarGraph(container);
+  });
+
+  it('resets _nodeCount to 0 after clearGraph (prevents hover black-node regression)', async () => {
+    await sg.render(tinyGraph());
+    // Force clearGraph — _lifecycle.clearGraph() is private but accessible for testing.
+    (sg as any)._lifecycle.clearGraph();
+    expect((sg as any)._nodeCount).toBe(0);
+    expect((sg as any).nodeCoreColors).toEqual([]);
+    expect((sg as any)._nodeCount).toBe((sg as any).nodeCoreColors.length);
+  });
+});
+
+describe('GraphNodeRenderer._setCoreColor — NaN/undefined guard', () => {
+  let container: HTMLElement;
+  let sg: StarGraph;
+
+  beforeEach(async () => {
+    container = makeContainer();
+    sg = new StarGraph(container);
+    await sg.render(tinyGraph());
+  });
+
+  it('rejects undefined (would render black via new THREE.Color(undefined))', () => {
+    const nodes = (sg as any)._nodes;
+    const instanced = (sg as any).nodeCoresInstanced;
+    const spy = vi.spyOn(instanced, 'setColorAt');
+    spy.mockClear(); // reset calls from render()
+    nodes._setCoreColor(0, undefined as any);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('rejects NaN (new THREE.Color(NaN) → black)', () => {
+    const nodes = (sg as any)._nodes;
+    const instanced = (sg as any).nodeCoresInstanced;
+    const spy = vi.spyOn(instanced, 'setColorAt');
+    spy.mockClear();
+    nodes._setCoreColor(0, NaN);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('rejects null', () => {
+    const nodes = (sg as any)._nodes;
+    const instanced = (sg as any).nodeCoresInstanced;
+    const spy = vi.spyOn(instanced, 'setColorAt');
+    spy.mockClear();
+    nodes._setCoreColor(0, null as any);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('still writes valid colors to GPU', () => {
+    const nodes = (sg as any)._nodes;
+    const instanced = (sg as any).nodeCoresInstanced;
+    const spy = vi.spyOn(instanced, 'setColorAt');
+    spy.mockClear();
+    nodes._setCoreColor(0, 0x6ab0ff);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('still writes THREE.Color instances to GPU', () => {
+    const nodes = (sg as any)._nodes;
+    const instanced = (sg as any).nodeCoresInstanced;
+    const spy = vi.spyOn(instanced, 'setColorAt');
+    spy.mockClear();
+    const { Color } = require('three');
+    nodes._setCoreColor(0, new Color(0x6ab0ff));
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GraphInteractionController.updateHover — array length guard', () => {
+  let container: HTMLElement;
+  let sg: StarGraph;
+
+  beforeEach(async () => {
+    container = makeContainer();
+    sg = new StarGraph(container);
+    await sg.render(tinyGraph());
+  });
+
+  it('does not call _setCoreColor when nodeCoreColors is shorter than _nodeCount', () => {
+    const interaction = (sg as any)._interaction;
+    const host = (sg as any);
+    // Simulate the bug: _nodeCount is 2 but nodeCoreColors is empty
+    host._nodeCount = 2;
+    host.nodeCoreColors = [];
+    host.hoveredIdx = 1;
+    host.mouse = { x: 0, y: 0 };
+    const setColorSpy = vi.spyOn(host._nodes, '_setCoreColor');
+    const pickSpy = vi.spyOn(interaction, '_pickNode').mockReturnValue(-1);
+
+    expect(() => interaction.updateHover()).not.toThrow();
+    expect(setColorSpy).not.toHaveBeenCalled();
+
+    pickSpy.mockRestore();
+  });
+
+  it('does not call _setCoreColor when nodeCoreColors element is undefined', () => {
+    const interaction = (sg as any)._interaction;
+    const host = (sg as any);
+    // nodeCoreColors has an entry but it's undefined
+    host._nodeCount = 2;
+    host.nodeCoreColors = [0x6ab0ff, undefined as any];
+    host.hoveredIdx = 1;
+    host.mouse = { x: 0, y: 0 };
+    const setColorSpy = vi.spyOn(host._nodes, '_setCoreColor');
+    const pickSpy = vi.spyOn(interaction, '_pickNode').mockReturnValue(-1);
+
+    expect(() => interaction.updateHover()).not.toThrow();
+    // Should still not crash, and _setCoreColor should not be called for restore
+    expect(setColorSpy).not.toHaveBeenCalled();
+
+    pickSpy.mockRestore();
+  });
+});
