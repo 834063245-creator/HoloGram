@@ -70,6 +70,7 @@ export interface LifecycleHost {
   nodeGlowsPoints: THREE.Points;
   nodeGlows2Points: THREE.Points;
   _coreScales: Float32Array;
+  _nodeMagCache: Float32Array;
   _glowRgba: Float32Array;
   _glow2Rgba: Float32Array;
   _overrideFlags: Float32Array;
@@ -947,6 +948,7 @@ export class GraphSceneLifecycle {
       camMoved ||
       mouseOnCanvas ||
       this.host.hoveredIdx >= 0 ||
+      this.host.focusActive ||
       this.host.focusProgress > 0 ||
       this.host._analysis.blastMode;
     if (isActive) {
@@ -1003,22 +1005,21 @@ export class GraphSceneLifecycle {
       this.host.nodeGlows2Points.geometry.attributes.override.needsUpdate = true;
     }
 
-    // Hover effects — brightness-only, no size inflation
+    // Hover effects — glow brightness only, no core color change
     this.host.hoverScale += (this.host.targetHoverScale - this.host.hoverScale) * 0.18;
     const neighborSet = new Set(this.host.hoveredIdx >= 0 ? this.host.neighborMap[this.host.hoveredIdx] || [] : []);
     if (this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount) {
       this.host._overrideFlags[this.host.hoveredIdx] = 1;
       this.host._prevOverrideSet.add(this.host.hoveredIdx);
-      this.host._nodes._setGlowAlpha(this.host.hoveredIdx, 0.65 + this.host.hoverScale * 0.35);
-      // Brighten core color toward white on hover
-      const origColor = this.host.nodeCoreColors[this.host.hoveredIdx];
-      const brightColor = new THREE.Color(origColor).lerp(new THREE.Color(0xffffff), this.host.hoverScale * 0.6);
-      this.host._nodes._setCoreColor(this.host.hoveredIdx, brightColor);
+      // Boost glow alpha on hover — but keep it proportional to mag
+      const mag = this.host._nodeMagCache[this.host.hoveredIdx] ?? 0.15;
+      this.host._nodes._setGlowAlpha(this.host.hoveredIdx, mag * (0.7 + this.host.hoverScale * 0.3));
       for (const ni of neighborSet) {
         if (ni !== this.host.hoveredIdx && ni < this.host._nodeCount) {
           this.host._overrideFlags[ni] = 1;
           this.host._prevOverrideSet.add(ni);
-          this.host._nodes._setGlowAlpha(ni, 0.55 + this.host.hoverScale * 0.1);
+          const niMag = this.host._nodeMagCache[ni] ?? 0.15;
+          this.host._nodes._setGlowAlpha(ni, niMag * (0.5 + this.host.hoverScale * 0.1));
         }
       }
     }

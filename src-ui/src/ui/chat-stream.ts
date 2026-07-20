@@ -291,7 +291,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
     case EventKind.Message:
       if (ev.text || ev.kind === EventKind.Message) {
         applyEventToParts(_streamingAssistant(ctx).parts, ev);
-        _streamingBump(ctx);
+        _scheduleSync(ctx);
       }
       break;
 

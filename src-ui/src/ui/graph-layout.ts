@@ -167,17 +167,22 @@ async function simulateForces(
         }
       }
     }
-    // ── Shell constraint (adaptive strength) ──
+    // ── Shell constraint (soft, one-sided: only pull in far outliers) ──
+    // Original: pulled ALL nodes toward shellRadius → forced sphere shape.
+    // Fix: only constrain nodes that drift far beyond the shell (2× radius).
+    // This lets the graph find its natural shape while preventing runaway.
+    const hardLimit = shellRadius * 2.5;
     for (let i = 0; i < m; i++) {
       const dx = pos[i * 3],
         dy = pos[i * 3 + 1],
         dz = pos[i * 3 + 2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > 1) {
-        const drift = (dist - shellRadius) * sp;
-        pos[i * 3] -= (dx / dist) * drift;
-        pos[i * 3 + 1] -= (dy / dist) * drift;
-        pos[i * 3 + 2] -= (dz / dist) * drift;
+      if (dist > hardLimit) {
+        // Pull back proportionally — soft, not snapping to shellRadius
+        const pull = (dist - hardLimit) * sp * 3;
+        pos[i * 3] -= (dx / dist) * pull;
+        pos[i * 3 + 1] -= (dy / dist) * pull;
+        pos[i * 3 + 2] -= (dz / dist) * pull;
       }
     }
 
@@ -459,8 +464,8 @@ export function repelCommunityCentroids(
     crossW[sa][ta]++;
     crossW[ta][sa]++;
   }
-  const FACTOR = 2.1;
-  const ITERS = 40;
+  const FACTOR = 1.3;
+  const ITERS = 15;
   const ATT_STR = 0.008;
   for (let iter = 0; iter < ITERS; iter++) {
     const deltas = comms.map(() => ({ dx: 0, dy: 0, dz: 0 }));
@@ -500,10 +505,19 @@ export function repelCommunityCentroids(
         }
       }
     }
-    if (!hadOverlap && iter > 10) break;
+    if (!hadOverlap && iter > 5) break;
+    // Clamp per-iteration delta to prevent runaway displacement
+    const MAX_DELTA = 50;
     for (let a = 0; a < C; a++) {
       const cc = comms[a],
         d = deltas[a];
+      const dmag = Math.sqrt(d.dx * d.dx + d.dy * d.dy + d.dz * d.dz);
+      if (dmag > MAX_DELTA) {
+        const scale = MAX_DELTA / dmag;
+        d.dx *= scale;
+        d.dy *= scale;
+        d.dz *= scale;
+      }
       cc.cx += d.dx;
       cc.cy += d.dy;
       cc.cz += d.dz;
