@@ -276,17 +276,31 @@ export class Workspace {
       console.log('[Workspace.open] step 4: scheduling render...');
       ws.onStatusChange?.('正在渲染图谱...');
       ws._initialRenderActive = true;
-      setTimeout(async () => {
+      // Use requestAnimationFrame to ensure WebGL context is ready before render.
+      // On WebKitGTK, setTimeout(0) can fire before the rendering pipeline initializes.
+      const doInitialRender = async () => {
         console.log('[Workspace.open] render starting');
         try {
           await starGraph.render(ws.graphData);
-        } catch {
-          /* render handles its own errors */
+        } catch (err) {
+          console.error('[Workspace.open] initial render failed:', err);
+          // Retry once after a short delay — WebGL context may need more time
+          await new Promise((r) => setTimeout(r, 500));
+          try {
+            await starGraph.render(ws.graphData);
+            console.log('[Workspace.open] render succeeded on retry');
+          } catch (err2) {
+            console.error('[Workspace.open] render retry also failed:', err2);
+          }
         }
         ws._initialRenderActive = false;
-        // Run initial check to establish baseline — also schedules subsequent checks via doGraphUpdate
         ws.runCheck();
-      }, 0);
+      };
+      if (typeof requestAnimationFrame !== 'undefined') {
+        requestAnimationFrame(() => setTimeout(doInitialRender, 100));
+      } else {
+        setTimeout(doInitialRender, 200);
+      }
 
       // 5. Wire persistent event listeners (graph-updated, analysis-complete, analysis-failed)
       console.log('[Workspace.open] step 5: wiring listeners...');

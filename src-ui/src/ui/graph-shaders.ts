@@ -76,6 +76,7 @@ export function makeCoreFresnelMaterial(spikeTex: THREE.Texture): THREE.MeshBasi
   });
   mat.onBeforeCompile = (shader) => {
     // ── Vertex: varyings for world-normal, UV, world-pos ──
+    const vsBefore = shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
       'void main()',
       `varying vec3 vFresnelWorldNormal;
@@ -83,6 +84,7 @@ export function makeCoreFresnelMaterial(spikeTex: THREE.Texture): THREE.MeshBasi
        varying vec2 vCoreUv;
        void main()`,
     );
+    const vsInjected = shader.vertexShader !== vsBefore;
     shader.vertexShader = shader.vertexShader.replace(
       '#include <project_vertex>',
       `// Fresnel: sphere pos IS the local normal (unit sphere geometry)
@@ -92,9 +94,11 @@ export function makeCoreFresnelMaterial(spikeTex: THREE.Texture): THREE.MeshBasi
        vCoreUv = uv;
        #include <project_vertex>`,
     );
+    const vsProjected = shader.vertexShader !== (vsInjected ? shader.vertexShader.replace(/#include <project_vertex>/, '') : shader.vertexShader); // already replaced
 
     // ── Fragment: center-glow (star-like) + crystalline surface detail ──
     shader.uniforms.uSpikeTex = { value: spikeTex };
+    const fsBefore = shader.fragmentShader;
     shader.fragmentShader = shader.fragmentShader.replace(
       'void main()',
       `varying vec3 vFresnelWorldNormal;
@@ -103,6 +107,7 @@ export function makeCoreFresnelMaterial(spikeTex: THREE.Texture): THREE.MeshBasi
        uniform sampler2D uSpikeTex;
        void main()`,
     );
+    const fsInjected = shader.fragmentShader !== fsBefore;
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <opaque_fragment>',
       `vec3 _fViewDir = normalize(cameraPosition - vFresnelWorldPos);
@@ -112,6 +117,9 @@ export function makeCoreFresnelMaterial(spikeTex: THREE.Texture): THREE.MeshBasi
        outgoingLight = outgoingLight * (0.45 + _fCore * 2.1) * (1.0 + _fSpike * 0.12);
        #include <opaque_fragment>`,
     );
+    // Report which injections failed (helps diagnose WebKitGTK vs WebView2 differences)
+    if (!vsInjected) console.warn('[Fresnel] vertex "void main()" NOT found — WebGL template mismatch');
+    if (!fsInjected) console.warn('[Fresnel] fragment "void main()" NOT found — WebGL template mismatch');
   };
   return mat;
 }
