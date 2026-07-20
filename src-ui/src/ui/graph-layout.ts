@@ -653,8 +653,11 @@ export async function layout3D(
     if (sg >= 0 && tg >= 0 && sg !== tg) crossWeight[sg][tg]++;
   }
 
-  const totalDiameter = groupRadii.reduce((s, r) => s + 2 * r, 0);
-  const R0 = Math.max((SEP * totalDiameter) / (2 * Math.PI), 10);
+  // R0 scales with √C, not linearly with totalDiameter.
+  // Old: R0 = totalDiameter / 4.49 → O(C) growth, 50 communities = 2200+ radius.
+  // New: surface area packing → O(√C) growth. 4πR²/C ≥ π·avgR²·SEP² → R ≥ avgR·√C·SEP/2.
+  const avgR = groupRadii.reduce((s, r) => s + r, 0) / C;
+  const R0 = Math.max(avgR * Math.sqrt(C) * SEP * 1.2, 10);
 
   const centers = fibonacciSphere(C, R0);
   const cVel = new Float32Array(C * 3);
