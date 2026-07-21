@@ -25,6 +25,12 @@ pub fn check_path_safety_read(path: &Path) -> SafetyCheckResult {
         return SafetyCheckResult { safe: false, message: "可疑的 Windows 路径模式".into() };
     }
 
+    // 1b. Linux/macOS — /proc/self/fd/* can leak other process' file descriptors
+    #[cfg(unix)]
+    if is_suspicious_unix_read_path(&path_str) {
+        return SafetyCheckResult { safe: false, message: "受保护的系统路径".into() };
+    }
+
     // 2. Dangerous system config files — protect reads too (credentials)
     if is_dangerous_file(path) {
         return SafetyCheckResult { safe: false, message: "系统配置文件受保护".into() };
@@ -44,6 +50,15 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
         return SafetyCheckResult {
             safe: false,
             message: "可疑的 Windows 路径模式".into(),
+        };
+    }
+
+    // 1b. Linux/macOS suspicious paths (/proc, /sys, /dev writes)
+    #[cfg(unix)]
+    if is_suspicious_unix_path(&path_str) {
+        return SafetyCheckResult {
+            safe: false,
+            message: "受保护的系统路径，不可修改".into(),
         };
     }
 
@@ -178,6 +193,72 @@ fn has_suspicious_windows_path(path_str: &str) -> bool {
     false
 }
 
+/// Linux/macOS suspicious paths for WRITE operations.
+/// /proc and /sys are kernel interfaces — writing can crash the system.
+/// /dev device files — writing can corrupt hardware state.
+#[cfg(unix)]
+fn is_suspicious_unix_path(path_str: &str) -> bool {
+    let p = path_str;
+
+    // /proc/self/* — symlink escape (can access other process' memory, fd, etc.)
+    if p.starts_with("/proc/self/") || p == "/proc/self" {
+        return true;
+    }
+
+    // /sys — kernel interface, writing is dangerous
+    if p.starts_with("/sys/") || p == "/sys" {
+        return true;
+    }
+
+    // /dev — device files, writing can corrupt hardware
+    // Allow /dev/null, /dev/zero, /dev/urandom (common in scripts)
+    if (p.starts_with("/dev/") || p == "/dev")
+        && !p.ends_with("/dev/null")
+        && !p.ends_with("/dev/zero")
+        && !p.ends_with("/dev/urandom")
+        && !p.ends_with("/dev/random")
+        && !p.ends_with("/dev/stdin")
+        && !p.ends_with("/dev/stdout")
+        && !p.ends_with("/dev/stderr")
+        && !p.ends_with("/dev/tty")
+    {
+        return true;
+    }
+
+    // /boot — kernel images, bootloader config
+    if p.starts_with("/boot/") || p == "/boot" {
+        return true;
+    }
+
+    // /etc — system configuration (write)
+    // Reads are allowed (browsing configs is normal), writes are blocked
+    if p.starts_with("/etc/") || p == "/etc" {
+        return true;
+    }
+
+    false
+}
+
+/// Linux/macOS suspicious paths for READ operations.
+/// More permissive than write — allows /etc and /dev reads.
+/// Only blocks /proc/self/fd/* (can leak file descriptors from other processes).
+#[cfg(unix)]
+fn is_suspicious_unix_read_path(path_str: &str) -> bool {
+    // /proc/self/fd/* — can leak file descriptors from the HoloGram process
+    if path_str.starts_with("/proc/self/fd/") {
+        return true;
+    }
+    // /proc/self/mem — process memory dump
+    if path_str.starts_with("/proc/self/mem") {
+        return true;
+    }
+    // /proc/self/environ — environment variables (may contain secrets)
+    if path_str.starts_with("/proc/self/environ") {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +352,70 @@ mod tests {
         assert!(!r.safe, "settings.json writes should be blocked");
         let r = check_path_safety(Path::new(".git/config"));
         assert!(!r.safe, ".git/config writes should be blocked");
+    }
+
+    // ── Unix path safety ──
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_write_blocks_proc() {
+        let r = check_path_safety(Path::new("/proc/self/status"));
+        assert!(!r.safe, "/proc/self writes should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_write_blocks_sys() {
+        let r = check_path_safety(Path::new("/sys/class/net/eth0/mtu"));
+        assert!(!r.safe, "/sys writes should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_write_blocks_dev() {
+        let r = check_path_safety(Path::new("/dev/sda"));
+        assert!(!r.safe, "/dev/sda writes should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_write_allows_dev_null() {
+        let r = check_path_safety(Path::new("/dev/null"));
+        assert!(r.safe, "/dev/null writes should be allowed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_write_blocks_boot() {
+        let r = check_path_safety(Path::new("/boot/grub/grub.cfg"));
+        assert!(!r.safe, "/boot writes should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_write_blocks_etc() {
+        let r = check_path_safety(Path::new("/etc/passwd"));
+        assert!(!r.safe, "/etc writes should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_fd() {
+        let r = check_path_safety_read(Path::new("/proc/self/fd/3"));
+        assert!(!r.safe, "/proc/self/fd reads should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_mem() {
+        let r = check_path_safety_read(Path::new("/proc/self/mem"));
+        assert!(!r.safe, "/proc/self/mem reads should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_allows_etc() {
+        let r = check_path_safety_read(Path::new("/etc/hostname"));
+        assert!(r.safe, "/etc reads should be allowed");
     }
 }
