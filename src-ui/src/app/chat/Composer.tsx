@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { getChatStore } from '../../ui/chat-store';
+import { showContextMenu } from '../../ui/context-menu';
 import { Icon } from '../Icon';
 import type { ChatCore } from './chat-core';
 
@@ -47,6 +48,32 @@ export function Composer({ core }: { core: ChatCore }) {
     const pos = ta?.selectionStart ?? v.length;
     core.handleAtInput(v.slice(0, pos), pos);
     core.handleSlashInput(v.slice(0, pos));
+  };
+
+  const onContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    const ta = taRef.current;
+    showContextMenu(e.nativeEvent, [
+      {
+        label: '剪切',
+        disabled: ta?.selectionStart === ta?.selectionEnd,
+        action: () => document.execCommand('cut'),
+      },
+      {
+        label: '复制',
+        disabled: ta?.selectionStart === ta?.selectionEnd,
+        action: () => document.execCommand('copy'),
+      },
+      {
+        label: '粘贴',
+        action: () => document.execCommand('paste'),
+      },
+      { separator: true, label: '', action: () => {} },
+      {
+        label: '全选',
+        action: () => document.execCommand('selectAll'),
+      },
+    ]);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -146,6 +173,7 @@ export function Composer({ core }: { core: ChatCore }) {
         value={value}
         onChange={(e) => fireChange(e.target.value)}
         onKeyDown={onKeyDown}
+        onContextMenu={onContextMenu}
       />
       <button
         type="button"

@@ -1233,7 +1233,7 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   border-radius: 0;
   outline: none;
   resize: none;
-  overflow-y: hidden;
+  overflow-y: auto;
   transition: all var(--obs-snap);
 }
 
