@@ -120,7 +120,8 @@ fn from_cstr(ptr: *mut c_char) -> String {
     }
 }
 
-/// Resolve aura.dll path. Checks bundled resource first, then dev paths.
+/// Resolve aura library path. Checks bundled resource first, then dev paths.
+/// Platform-aware: .dll on Windows, .so on Linux, .dylib on macOS.
 fn aura_dll_path() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("AURA_DLL") {
         let path = PathBuf::from(&p);
@@ -129,20 +130,33 @@ fn aura_dll_path() -> Result<PathBuf, String> {
         }
     }
 
+    let ext = if cfg!(windows) {
+        "aura.dll"
+    } else if cfg!(target_os = "macos") {
+        "libaura.dylib"
+    } else {
+        "libaura.so"
+    };
+
     // Production: bundled next to exe
     let exe_dir = std::env::current_exe()
-        .map_err(|e| format!("no exe dir: {}", e))?
+        .map_err(|e| format!("no exe dir: {e}"))?
         .parent()
         .ok_or("exe has no parent")?
         .to_path_buf();
 
-    let bundled = exe_dir.join("aura.dll");
+    let bundled = exe_dir.join(ext);
     if bundled.exists() {
         return Ok(bundled);
     }
 
     // Dev paths
     let candidates = [
+        PathBuf::from(format!("../grammars/{ext}")),
+        PathBuf::from(format!("grammars/{ext}")),
+        // Fallback: try all extensions in grammars/ (handles mismatched naming)
+        PathBuf::from("../grammars/aura.so"),
+        PathBuf::from("grammars/aura.so"),
         PathBuf::from("../grammars/aura.dll"),
         PathBuf::from("grammars/aura.dll"),
     ];
@@ -151,7 +165,7 @@ fn aura_dll_path() -> Result<PathBuf, String> {
             return Ok(p.canonicalize().unwrap_or_else(|_| p.clone()));
         }
     }
-    Err(format!("aura.dll not found. Searched: {:?}", candidates))
+    Err(format!("aura library not found. Searched: {candidates:?}"))
 }
 
 // ── Public Tauri commands ──
