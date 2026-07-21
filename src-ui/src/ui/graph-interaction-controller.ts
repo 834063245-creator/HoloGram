@@ -95,6 +95,9 @@ export class GraphInteractionController {
     this.host.container.appendChild(this.reticleEl);
 
     this.host.container.addEventListener('pointermove', (e: PointerEvent) => {
+      // 鼠标在图例面板等覆盖层上时，不更新坐标，防止穿透 raycasting
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('#graph-legend')) return;
       const rect = this.host.container.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
       this.host.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
