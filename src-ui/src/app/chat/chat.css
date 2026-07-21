@@ -288,18 +288,20 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   );
 }
 
-/* 对话面板：底部淡出渐变——新内容从迷雾中浮现，像水面升起 */
+/* 对话面板：底部淡出渐变——新内容从迷雾中浮现，像水面升起。
+   ponytail: reduced from 32px to 20px — larger values mask streaming
+   content at the bottom of the container. */
 .chat-panel.chat-open .chat-messages {
   mask-image: linear-gradient(
     to top,
     transparent 0%,
-    rgba(0, 0, 0, 1) 32px,
+    rgba(0, 0, 0, 1) 20px,
     rgba(0, 0, 0, 1) 100%
   );
   -webkit-mask-image: linear-gradient(
     to top,
     transparent 0%,
-    rgba(0, 0, 0, 1) 32px,
+    rgba(0, 0, 0, 1) 20px,
     rgba(0, 0, 0, 1) 100%
   );
 }
@@ -2606,15 +2608,7 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   }
 }
 
-@keyframes cursor-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
-}
+/* ponytail: cursor-blink replaced by cursor-breathe — dead keyframes removed */
 
 @keyframes token-pulse {
   0%,
@@ -3067,17 +3061,8 @@ button.chat-history-entry {
 }
 
 /* ── 9. 流式 caret（呼吸发光块 · 替代 DOS 闪烁）── */
-.msg-text.streaming::after {
-  content: "";
-  display: inline-block;
-  width: calc(4px * var(--font-scale));
-  height: calc(14px * var(--font-scale));
-  margin-left: 2px;
-  background: var(--obs-brass);
-  border-radius: 2px;
-  vertical-align: -3px;
-  animation: cursor-breathe 1.6s ease-in-out infinite;
-}
+/* ponytail: cursor now rendered via <span class="streaming-cursor"> in JSX.
+   Pseudo-element removed to prevent double-cursor rendering. */
 @keyframes cursor-breathe {
   0%, 100% {
     opacity: 0.55;

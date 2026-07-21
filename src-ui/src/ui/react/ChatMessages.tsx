@@ -309,10 +309,11 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
   expanded,
   onToggle,
 }) => {
-  // Auto-expand running tools so user sees live progress
+  // Auto-expand running tools so user sees live progress;
+  // reset to false when tool finishes so user can collapse the card.
   const [autoExpand, setAutoExpand] = useState(false);
   useEffect(() => {
-    if (part.status === 'running') setAutoExpand(true);
+    setAutoExpand(part.status === 'running');
   }, [part.status]);
 
   const isExpanded = expanded || autoExpand;
@@ -871,7 +872,7 @@ export const ChatMessagesApp: React.FC<{
         autoScrollRaf.current = null;
         if (!stickRef.current) return;
         if (scrollEl) {
-          scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+          scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' });
         }
       });
     },
@@ -890,7 +891,7 @@ export const ChatMessagesApp: React.FC<{
       autoScrollRaf.current = requestAnimationFrame(() => {
         autoScrollRaf.current = null;
         if (!stickRef.current) return;
-        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
       });
     });
 
