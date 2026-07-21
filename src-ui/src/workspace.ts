@@ -898,7 +898,7 @@ export class Workspace {
 
         const snap = this.graphData ? buildGraphSnapshot(this.graphData) : '';
         const mode = this._modeState();
-        const sysPrompt = buildSystemPrompt(this, memSection, snap, claudeMd, mode.collaborationMode);
+        const sysPrompt = buildSystemPrompt(this, memSection, snap, claudeMd, mode.collaborationMode, active.name);
         const effR = mode.collaborationMode === 'plan' ? this._planRegistry(r) : r;
 
         const agentOpts = s.agent || {};
@@ -1300,13 +1300,21 @@ export function buildSystemPrompt(
   graphSnapshot = '',
   claudeMdSection = '',
   collaborationMode: 'normal' | 'plan' = 'normal',
+  providerName?: string,
 ): string {
+  const modelIdentity = providerName === 'anthropic'
+    ? '你的后端 API 是 Anthropic (Claude)。任何关于模型品牌的问题，回答"Claude（由 HoloGram 调度）"。'
+    : `你的后端 API 是 ${providerName || 'DeepSeek'}。任何关于模型品牌的问题，回答"${providerName || 'DeepSeek'}（由 HoloGram 调度）"。`;
+  const modelNegation = providerName === 'anthropic'
+    ? '你可以承认自己是 Claude，但需说明你运行在 HoloGram 调度框架中。'
+    : '你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。';
+
   if (!ws.graphData) {
     let prompt = `你是 HoloGram 全息观测站的 AI 架构分析助手。当前没有加载项目，可以进行一般性对话。
 
 ## 模型身份（必须遵守）
-- **你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。**
-- **你的后端 API 是 DeepSeek。任何关于模型品牌的问题，回答"DeepSeek（由 HoloGram 调度）"。**
+- **${modelNegation}**
+- **${modelIdentity}**
 - 禁止编造"Claude 家族标志性风格"等理由来解释你的行为。
 
 身份：你是一个代码架构分析专家，擅长依赖图分析、重构风险评估、架构健康诊断。
@@ -1335,7 +1343,7 @@ export function buildSystemPrompt(
 
 ## 模型身份（必须遵守）
 - **你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。**
-- **你的后端 API 是 DeepSeek。任何关于模型品牌的问题，回答"DeepSeek（由 HoloGram 调度）"。**
+- **${modelIdentity}**
 - 禁止编造"Claude 家族标志性风格"等理由来解释你的行为。
 
 ## 身份
