@@ -3327,3 +3327,154 @@
   color: var(--obs-brass-hi);
   background: var(--obs-brass-dim);
 }
+
+/* ── 11. ModelSelector — 模型目录搜索下拉 ── */
+
+.ms-container {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.ms-input {
+  width: 100%;
+}
+
+.ms-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--obs-line);
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  background: rgba(14, 19, 32, 0.95);
+  backdrop-filter: blur(12px);
+  margin-top: 2px;
+}
+
+.ms-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background var(--obs-snap);
+  border-bottom: 1px solid rgba(148, 166, 205, 0.04);
+}
+
+.ms-item:last-child {
+  border-bottom: none;
+}
+
+.ms-item:hover,
+.ms-item.active {
+  background: var(--obs-brass-dim);
+  box-shadow: inset 2px 0 0 var(--obs-brass);
+}
+
+.ms-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ms-item-id {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ms-item-name {
+  font-size: calc(8px * var(--font-scale));
+  color: var(--obs-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ms-item-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ms-badge {
+  font-family: var(--obs-font-mono);
+  font-size: calc(7px * var(--font-scale));
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.ms-badge-ctx {
+  color: var(--obs-blue);
+  background: rgba(100, 150, 220, 0.1);
+}
+
+.ms-badge-cost {
+  color: var(--obs-text-2);
+  background: rgba(148, 166, 205, 0.06);
+}
+
+.ms-badge-reason {
+  font-size: calc(9px * var(--font-scale));
+}
+
+.ms-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.ms-meta-tag {
+  font-family: var(--obs-font-mono);
+  font-size: calc(7px * var(--font-scale));
+  color: var(--obs-text-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(148, 166, 205, 0.06);
+  white-space: nowrap;
+}
+
+.ms-meta-reason {
+  color: var(--obs-brass);
+  background: var(--obs-brass-dim);
+}
+
+/* Catalog quick-pick in add-provider form */
+.ms-catalog-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.ms-catalog-chip {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--obs-line);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--obs-text-2);
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+
+.ms-catalog-chip:hover {
+  border-color: rgba(201, 162, 92, 0.45);
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+}
