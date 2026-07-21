@@ -209,6 +209,12 @@ const MarkdownContent: React.FC<{
     if (el) linkifyNodeNames(el, onNavigateToNode);
   }, [streaming, onNavigateToNode]);
 
+  // ── Always call hooks unconditionally ──
+  const { completed, tail } = useMemo(
+    () => (streaming ? splitStreamingBlocks(text) : { completed: '', tail: '' }),
+    [text, streaming],
+  );
+
   // Finalised — full markdown render
   if (!streaming) {
     return (
@@ -227,9 +233,6 @@ const MarkdownContent: React.FC<{
   }
 
   // ── Streaming: incremental rendering ──
-  // Completed blocks → markdown; trailing incomplete block → plain text + cursor
-  const { completed, tail } = useMemo(() => splitStreamingBlocks(text), [text]);
-
   return (
     <div ref={containerRef} className="msg-text msg-markdown streaming">
       {completed ? (
