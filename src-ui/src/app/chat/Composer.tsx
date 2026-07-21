@@ -22,22 +22,7 @@ export function Composer({ core }: { core: ChatCore }) {
   // exec 状态（运行/权限卡）→ stop 按钮显隐
   useEffect(() => core.onExecChange(() => setBusy(core.execBusy)), [core]);
 
-  // 自动高度（≤120px），与旧版一致
-  // 首次挂载同步一次高度，避免用户首次输入时从 rows=2 默认高跳到 scrollHeight
-  useEffect(() => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
-  }, []);
-
-  useEffect(() => {
-    void value; // 文本变化即触发重算
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
-  }, [value]);
+  // 固定高度 rows=2，长内容滚动。不再做 auto-height——transition 交互太脆。
 
   // 注册命令式接口（core 在 idle/ask/fill 时聚焦）
   useEffect(() => {
