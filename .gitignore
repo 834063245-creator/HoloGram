@@ -125,6 +125,7 @@ AGENT_MEMORY_SYSTEM.txt
 # Plagiarism evidence — keep local, not public
 PLAGIARISM_EVIDENCE.md
 plan.md
+HANDOFF_*.md
 
 # Windows reserved device name — accidental creation by tools redirecting output
 nul
