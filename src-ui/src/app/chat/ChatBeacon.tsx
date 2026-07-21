@@ -380,7 +380,7 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
     const onMove = (e: MouseEvent) => {
       if (!dragging) return;
       const maxH = Math.floor(window.innerHeight * 0.7);
-      const h = Math.max(180, Math.min(maxH, startH + (startY - e.clientY)));
+      const h = Math.max(240, Math.min(maxH, startH + (startY - e.clientY)));
       panelEl.style.maxHeight = `${h}px`;
       panelEl.style.minHeight = `${h}px`;
     };
