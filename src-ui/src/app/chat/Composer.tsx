@@ -86,7 +86,7 @@ export function Composer({ core }: { core: ChatCore }) {
         return;
       }
       if (e.key === 'Escape') {
-        core.hideSlash();
+        core.dismissSlash();
         return;
       }
     }

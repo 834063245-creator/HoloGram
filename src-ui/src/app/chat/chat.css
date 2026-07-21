@@ -2972,6 +2972,7 @@ button.chat-history-entry {
   border: 1px solid var(--obs-line);
   border-radius: 10px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  background: rgba(14, 19, 32, 0.88);
 }
 .sp-item:hover {
   background: rgba(160, 180, 220, 0.08);

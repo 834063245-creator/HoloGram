@@ -49,6 +49,20 @@ export const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[];
     }, []);
     const hide = useCallback(() => setVisible(false), []);
 
+    // 点击面板外部时收起
+    const rootRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      if (!visible) return;
+      const handler = (e: MouseEvent) => {
+        const el = rootRef.current;
+        if (el && !el.contains(e.target as Node)) {
+          hide();
+        }
+      };
+      document.addEventListener('mousedown', handler);
+      return () => document.removeEventListener('mousedown', handler);
+    }, [visible, hide]);
+
     const navigate = useCallback((delta: number): boolean => {
       const list = filteredRef.current;
       if (!visibleRef.current || list.length === 0) return false;
@@ -94,7 +108,7 @@ export const SlashPanel = forwardRef<SlashPanelHandle, { commands: CommandDef[];
 
     let flatIdx = 0;
     return (
-      <div className="chat-slash-panel open">
+      <div ref={rootRef} className="chat-slash-panel open">
         {Array.from(groups.entries()).map(([group, items]) => (
           <div className="sp-group" key={group}>
             <div className="sp-group-title">{group}</div>
