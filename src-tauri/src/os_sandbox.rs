@@ -71,10 +71,27 @@ impl SandboxedChild {
 // Public functions
 // ═══════════════════════════════════════════════════════════════
 
-/// One-time init — call at app startup. Creates Job Object.
+/// One-time init — call at app startup. Creates Job Object (Windows).
+/// On Linux, checks bubblewrap availability and logs status.
 pub fn init() {
     #[cfg(windows)]
     imp::job::init();
+    #[cfg(target_os = "linux")]
+    {
+        let s = linux::status();
+        match s {
+            SandboxStatus::Available => {
+                eprintln!("[hologram] bubblewrap sandbox detected — shell commands will be sandboxed");
+            }
+            SandboxStatus::Unavailable => {
+                eprintln!(
+                    "[hologram] bubblewrap not found — install with: apt install bubblewrap \
+                     (or equivalent). Shell commands will run without OS sandbox; \
+                     permission engine still active."
+                );
+            }
+        }
+    }
 }
 
 /// Query the current sandbox status for UI display (spec §6.6).
@@ -591,44 +608,80 @@ mod mac {
 #[cfg(target_os = "linux")]
 mod linux {
     use std::io;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{SandboxStatus, SandboxedChild};
 
-    pub fn status() -> SandboxStatus {
-        let ok = std::process::Command::new("which")
+    /// Check if bwrap binary is available on PATH.
+    fn bwrap_path() -> Option<PathBuf> {
+        // Check common locations first (faster than `which`)
+        let candidates = [
+            "/usr/bin/bwrap",
+            "/usr/local/bin/bwrap",
+        ];
+        for c in &candidates {
+            if Path::new(c).exists() {
+                return Some(PathBuf::from(c));
+            }
+        }
+        // Fall back to PATH lookup
+        let output = std::process::Command::new("which")
             .arg("bwrap")
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let p = String::from_utf8_lossy(&output.stdout);
+            let p = p.trim();
+            if !p.is_empty() {
+                return Some(PathBuf::from(p));
+            }
+        }
+        None
+    }
+
+    pub fn status() -> SandboxStatus {
+        if bwrap_path().is_some() {
             SandboxStatus::Available
         } else {
-            eprintln!(
-                "[hologram] bubblewrap not installed — install with: apt install bubblewrap \
-                 (or equivalent for your distro). Falling back to permission engine only."
-            );
             SandboxStatus::Unavailable
         }
     }
 
     pub fn spawn(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
+        let bwrap = bwrap_path().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "bubblewrap (bwrap) not found")
+        })?;
+
         let ro_binds = existing_ro_binds();
         let temp = std::env::temp_dir();
 
-        let mut cmd = std::process::Command::new("bwrap");
+        // Collect home directory for read-only bind (needed for ~/.cargo, ~/.rustup, ~/.nvm, etc.)
+        let home = std::env::var("HOME").unwrap_or_default();
 
+        let mut cmd = std::process::Command::new(&bwrap);
+
+        // Read-only system paths
         for (src, dst) in &ro_binds {
             cmd.arg("--ro-bind").arg(src).arg(dst);
         }
 
+        // Read-only home directory (dev toolchains need to read ~/.cargo, ~/.nvm, ~/.rustup)
+        if !home.is_empty() && Path::new(&home).exists() {
+            cmd.arg("--ro-bind").arg(&home).arg(&home);
+        }
+
+        // Read-write: project directory and temp
         cmd.arg("--bind").arg(cwd).arg(cwd);
-        cmd.arg("--bind")
-            .arg(temp.as_os_str())
-            .arg("/tmp");
+        cmd.arg("--bind").arg(temp.as_os_str()).arg("/tmp");
+
+        // Process lifecycle: die with parent
         cmd.arg("--die-with-parent");
+
+        // Allow new namespaces (needed for nested process spawning)
+        cmd.arg("--unshare-pid");
+
         cmd.arg("--")
             .arg("sh")
             .arg("-c")
@@ -651,6 +704,7 @@ mod linux {
             ("/sbin", "/sbin"),
             ("/etc", "/etc"),
             ("/proc", "/proc"),
+            ("/dev", "/dev"), // needed for PTY, /dev/null, etc.
         ];
         candidates
             .iter()
