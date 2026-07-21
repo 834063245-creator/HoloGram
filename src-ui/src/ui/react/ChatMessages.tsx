@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
+import { iconSvg } from '../icons';
 import type {
   AssistantMessage,
   AssistantPart,
@@ -65,17 +66,7 @@ export interface ChatMessagesCallbacks {
 // ── Icons ──
 
 function svgIcon(name: string, size: number = 12): string {
-  const icons: Record<string, string> = {
-    edit: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
-    refresh: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>`,
-    copy: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
-    'check-circle': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
-    close: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
-    dot: `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>`,
-    'chevron-right': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`,
-    'chevron-down': `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`,
-  };
-  return icons[name] || '';
+  return iconSvg(name, size);
 }
 
 // ── Node name linkification ──
@@ -781,26 +772,29 @@ export const ChatMessagesApp: React.FC<{
   const scrollEl = scrollContainer ?? listEl;
 
   // Auto-scroll: coalesce into single pending rAF
-  useEffect(() => {
-    if (messages.length === 0) return;
-    if (autoScrollRaf.current !== null) return;
+  useEffect(
+    () => {
+      if (messages.length === 0) return;
+      if (autoScrollRaf.current !== null) return;
 
-    if (messages.length > lastMsgCount.current && messages[messages.length - 1]?.role === 'user') {
-      stickRef.current = true;
-    }
-    lastMsgCount.current = messages.length;
-
-    if (!stickRef.current) return;
-
-    autoScrollRaf.current = requestAnimationFrame(() => {
-      autoScrollRaf.current = null;
-      if (!stickRef.current) return;
-      if (scrollEl) {
-        scrollEl.style.scrollBehavior = 'auto';
-        scrollEl.scrollTop = scrollEl.scrollHeight;
+      if (messages.length > lastMsgCount.current && messages[messages.length - 1]?.role === 'user') {
+        stickRef.current = true;
       }
-    });
-  }, [scrollEl?.style, messages.length, messages, scrollEl?.scrollHeight, scrollEl] as const); // eslint-disable-line react-hooks/exhaustive-deps
+      lastMsgCount.current = messages.length;
+
+      if (!stickRef.current) return;
+
+      autoScrollRaf.current = requestAnimationFrame(() => {
+        autoScrollRaf.current = null;
+        if (!stickRef.current) return;
+        if (scrollEl) {
+          scrollEl.style.scrollBehavior = 'auto';
+          scrollEl.scrollTop = scrollEl.scrollHeight;
+        }
+      });
+    },
+    [scrollEl?.style, messages.length, messages, scrollEl?.scrollHeight, scrollEl] as const,
+  ); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll during streaming — MutationObserver catches incremental DOM
   // additions when message parts are mutated in-place (no version bump).
