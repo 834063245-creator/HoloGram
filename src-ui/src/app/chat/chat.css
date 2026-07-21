@@ -1214,16 +1214,51 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   color: rgba(200, 215, 235, 0.92);
 }
 
-.streaming-typing {
-  white-space: pre-wrap;
-  color: var(--obs-text-2);
+/* ── Incremental streaming: completed blocks get full markdown styling ── */
+.msg-streaming-completed {
+  margin-bottom: 4px;
 }
 
-.msg-text.streaming::after {
-  content: "▍";
-  animation: cursor-blink 0.8s step-end infinite;
-  color: var(--obs-blue);
-  opacity: 0.8;
+/* ── Streaming cursor: breathing glow, placed after tail text ── */
+.streaming-cursor {
+  display: inline-block;
+  width: calc(4px * var(--font-scale));
+  height: calc(14px * var(--font-scale));
+  margin-left: 2px;
+  background: var(--obs-brass);
+  border-radius: 2px;
+  vertical-align: -3px;
+  animation: cursor-breathe 1.6s ease-in-out infinite;
+}
+
+/* ── Streaming code block "editor feel" ── */
+.streaming-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--obs-line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.streaming-code-lang {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 0.1em;
+  color: var(--obs-text-3);
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--obs-line-soft);
+  background: rgba(148, 166, 205, 0.04);
+}
+.streaming-code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1.6;
+  color: rgba(200, 215, 235, 0.85);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  background: transparent;
 }
 
 .chat-input-area {
@@ -2920,6 +2955,29 @@ button.chat-history-entry {
   color: #ecd2a0;
   border-color: rgba(216, 162, 74, 0.4);
   background: rgba(216, 162, 74, 0.1);
+  animation: badge-pulse 1.2s ease-in-out infinite;
+}
+@keyframes badge-pulse {
+  0%, 100% { border-color: rgba(216, 162, 74, 0.4); }
+  50% { border-color: rgba(216, 162, 74, 0.7); }
+}
+
+/* ── Streaming tool card: smooth status transitions ── */
+.msg-tool-card {
+  transition: opacity 0.2s ease, border-color 0.25s ease;
+}
+.msg-tool-badge {
+  transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+}
+.msg-tool-result {
+  max-height: 0;
+  display: block;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+.msg-tool-card.tool-expanded .msg-tool-result {
+  max-height: 500px;
+  display: block;
 }
 .msg-tool-summary {
   background: none;

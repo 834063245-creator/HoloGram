@@ -138,6 +138,63 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
 
 // ── Markdown content (streaming-aware) ──
 
+// ── Incremental streaming block splitter ──
+// Splits streaming text at the last safe paragraph boundary (double newline
+// outside code blocks). Completed portion renders as markdown; trailing
+// incomplete portion renders as plain text with breathing cursor.
+// Also detects open ``` code fences for editor-style rendering.
+
+function splitStreamingBlocks(text: string): { completed: string; tail: string } {
+  if (!text) return { completed: '', tail: '' };
+
+  // Find all ``` positions (crude but in practice ``` rarely appears in prose)
+  const fences: number[] = [];
+  let fi = 0;
+  while (fi < text.length) {
+    const idx = text.indexOf('\n```', fi);
+    if (idx === -1) break;
+    fences.push(idx + 1); // position of the backtick after \n
+    fi = idx + 4;
+  }
+  // Also check if text starts with ```
+  if (text.startsWith('```')) fences.unshift(0);
+
+  // Search backwards for the last safe \n\n
+  let lastSafe = -1;
+  for (let pos = text.length - 2; pos >= 0; pos--) {
+    if (text.slice(pos, pos + 2) === '\n\n') {
+      // Count fences before this position
+      let open = 0;
+      for (const f of fences) if (f < pos) open++;
+      if (open % 2 === 0) {
+        lastSafe = pos + 2;
+        break;
+      }
+    }
+  }
+
+  if (lastSafe <= 0) return { completed: '', tail: text };
+  return { completed: text.slice(0, lastSafe), tail: text.slice(lastSafe) };
+}
+
+function RenderStreamingTail({ text }: { text: string }) {
+  // Detect open code fence: line starting with ``` not yet closed
+  const fenceMatch = text.match(/^```(\S*)\n([\s\S]*)/);
+  if (fenceMatch) {
+    const lang = fenceMatch[1] || '';
+    const code = fenceMatch[2];
+    return (
+      <div className="streaming-code-block">
+        {lang && <div className="streaming-code-lang">{lang}</div>}
+        <pre><code>{code}</code></pre>
+      </div>
+    );
+  }
+  return <div className="msg-streaming-text">{text}</div>;
+}
+
+// ── Markdown content (streaming-aware, incremental rendering) ──
+
 const MarkdownContent: React.FC<{
   text: string;
   streaming: boolean;
@@ -152,30 +209,44 @@ const MarkdownContent: React.FC<{
     if (el) linkifyNodeNames(el, onNavigateToNode);
   }, [streaming, onNavigateToNode]);
 
-  // 【性能】streaming 时用纯文本渲染，避免 react-markdown 全量重解析。
-  // 累积文本每帧都在增长，react-markdown 的 AST 解析是 O(n)，
-  // 5000 字输出时累计解析量 ≈ 12.5 万字（O(n²)），是长文卡顿的主犯。
-  // finalised 后才跑一次完整的 markdown 渲染。
-  if (streaming) {
+  // Finalised — full markdown render
+  if (!streaming) {
     return (
-      <div ref={containerRef} className="msg-text msg-markdown streaming">
-        <div className="msg-streaming-text">{text}</div>
-        <span className="streaming-typing">▊</span>
+      <div ref={containerRef} className="msg-text msg-markdown">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            code: MarkdownCode,
+            pre: ({ children }) => <>{children}</>,
+          }}
+        >
+          {text}
+        </ReactMarkdown>
       </div>
     );
   }
 
+  // ── Streaming: incremental rendering ──
+  // Completed blocks → markdown; trailing incomplete block → plain text + cursor
+  const { completed, tail } = useMemo(() => splitStreamingBlocks(text), [text]);
+
   return (
-    <div ref={containerRef} className="msg-text msg-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code: MarkdownCode,
-          pre: ({ children }) => <>{children}</>,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+    <div ref={containerRef} className="msg-text msg-markdown streaming">
+      {completed ? (
+        <div className="msg-streaming-completed">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              code: MarkdownCode,
+              pre: ({ children }) => <>{children}</>,
+            }}
+          >
+            {completed}
+          </ReactMarkdown>
+        </div>
+      ) : null}
+      {tail ? <RenderStreamingTail text={tail} /> : null}
+      <span className="streaming-cursor" />
     </div>
   );
 });
@@ -235,6 +306,13 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
   expanded,
   onToggle,
 }) => {
+  // Auto-expand running tools so user sees live progress
+  const [autoExpand, setAutoExpand] = useState(false);
+  useEffect(() => {
+    if (part.status === 'running') setAutoExpand(true);
+  }, [part.status]);
+
+  const isExpanded = expanded || autoExpand;
   const icon =
     part.status === 'running'
       ? svgIcon('dot')
@@ -245,17 +323,19 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
           : svgIcon('dot');
   const toolDone = part.status === 'done' || part.status === 'error';
   const badgeLabel =
-    part.status === 'running'
-      ? '执行中'
-      : part.status === 'done'
-        ? '完成'
-        : part.status === 'error'
-          ? '失败'
-          : '等待中';
+    part.status === 'pending'
+      ? '等待中'
+      : part.status === 'running'
+        ? '执行中'
+        : part.status === 'done'
+          ? '完成'
+          : part.status === 'error'
+            ? '失败'
+            : '等待中';
   const badgeCls = part.status === 'done' ? 'badge-ok' : part.status === 'error' ? 'badge-fail' : 'badge-running';
 
   return (
-    <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${expanded ? ' tool-expanded' : ''}`}>
+    <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${isExpanded ? ' tool-expanded' : ''}`}>
       <div className="msg-tool-header" onClick={onToggle}>
         <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
         <span className="tool-name">{part.name}</span>
@@ -264,7 +344,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         </span>
         <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
       </div>
-      {expanded && part.output && (
+      {isExpanded && part.output && (
         <div className="msg-tool-result">
           <pre>
             <code>
@@ -274,7 +354,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
           </pre>
         </div>
       )}
-      {expanded && part.err && (
+      {isExpanded && part.err && (
         <div className="msg-tool-result msg-tool-err">
           <pre>
             <code>{part.err}</code>
