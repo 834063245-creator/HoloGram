@@ -788,8 +788,7 @@ export const ChatMessagesApp: React.FC<{
         autoScrollRaf.current = null;
         if (!stickRef.current) return;
         if (scrollEl) {
-          scrollEl.style.scrollBehavior = 'auto';
-          scrollEl.scrollTop = scrollEl.scrollHeight;
+          scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
         }
       });
     },
@@ -808,7 +807,7 @@ export const ChatMessagesApp: React.FC<{
       autoScrollRaf.current = requestAnimationFrame(() => {
         autoScrollRaf.current = null;
         if (!stickRef.current) return;
-        el.scrollTop = el.scrollHeight;
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
       });
     });
 
