@@ -1234,7 +1234,12 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   outline: none;
   resize: none;
   overflow-y: auto;
+  scrollbar-width: none; /* Firefox: 隐藏滚动条但可滚动 */
   transition: all var(--obs-snap);
+}
+
+.chat-input::-webkit-scrollbar {
+  display: none; /* Chrome/Safari: 隐藏滚动条但可滚动 */
 }
 
 .chat-input:focus {

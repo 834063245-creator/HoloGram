@@ -23,6 +23,14 @@ export function Composer({ core }: { core: ChatCore }) {
   useEffect(() => core.onExecChange(() => setBusy(core.execBusy)), [core]);
 
   // 自动高度（≤120px），与旧版一致
+  // 首次挂载同步一次高度，避免用户首次输入时从 rows=2 默认高跳到 scrollHeight
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+  }, []);
+
   useEffect(() => {
     void value; // 文本变化即触发重算
     const ta = taRef.current;
