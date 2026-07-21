@@ -657,4 +657,107 @@ describe('ChatPanel session persistence', () => {
       expect(h1).toBe(h2);
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Internal meta-message filtering on restore
+  // Agent injects <system-reminder>, <goal>, <truncated-context> as
+  // role=user into the session. These must NOT appear as visible chat
+  // bubbles after restore / export.
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('internal meta-message filtering on restore', () => {
+    const INTERNAL_MESSAGES = [
+      '<system-reminder>some recall context</system-reminder>',
+      '<goal>## 总体目标\n完成项目</goal>',
+      '<truncated-context>前面的消息已被截断</truncated-context>',
+      '<compacted-context>压缩内容</compacted-context>',
+    ];
+
+    const REAL_USER_MSG = '帮我分析这个项目';
+    const REAL_ASSISTANT_MSG = '好的，正在分析…';
+
+    /** A session with internal messages interleaved with real conversation */
+    const sessionWithInternalMsgs = [
+      { role: 'system', content: 'sys prompt' },
+      { role: 'user', content: '<system-reminder>recall</system-reminder>' },
+      { role: 'user', content: REAL_USER_MSG },
+      { role: 'assistant', content: REAL_ASSISTANT_MSG },
+      { role: 'user', content: '<goal>## 总体目标\n完成</goal>' },
+      { role: 'user', content: '<truncated-context>已截断</truncated-context>' },
+      { role: 'user', content: '<compacted-context>压缩</compacted-context>' },
+    ];
+
+    function setupRestorePanel(mockSessionMessages: any[]) {
+      panel = createChatPanel();
+      panel.setProjectPath('D:/test');
+
+      // Mock agent that actually stores session messages passed via setSession
+      let agentSession: any[] = [{ role: 'system', content: 'fresh sys' }];
+      panel.setAgentFactory(
+        async () =>
+          ({
+            getSession: () => agentSession,
+            setSession: (msgs: any[]) => {
+              agentSession = msgs;
+            },
+          }) as any,
+      );
+
+      mockInvoke
+        .mockResolvedValueOnce(JSON.stringify({ lastId: 1, nextId: 2 }))
+        .mockResolvedValueOnce(
+          mockSessionFile(1, mockSessionMessages, '测试会话'),
+        );
+
+      return panel.autoRestoreLastSession('D:/test');
+    }
+
+    it('does not render internal messages as user bubbles', async () => {
+      await setupRestorePanel(sessionWithInternalMsgs);
+
+      const { msgStoreFor } = await import('../src/ui/chat-store');
+      const msgs = msgStoreFor(panel.panelId, 1).getState().messages;
+
+      const userMsgs = msgs.filter((m: any) => m.role === 'user');
+      const userTexts = userMsgs.map((m: any) => m.text);
+
+      // Only the real user message should appear
+      expect(userMsgs).toHaveLength(1);
+      expect(userTexts).toContain(REAL_USER_MSG);
+
+      // None of the internal messages should leak through
+      for (const internal of INTERNAL_MESSAGES) {
+        expect(userTexts).not.toContain(internal);
+      }
+    });
+
+    it('renders compacted-context as a notice, not a user bubble', async () => {
+      await setupRestorePanel(sessionWithInternalMsgs);
+
+      const { msgStoreFor } = await import('../src/ui/chat-store');
+      const msgs = msgStoreFor(panel.panelId, 1).getState().messages;
+
+      const notices = msgs.filter((m: any) => m.role === 'notice');
+      expect(notices.length).toBeGreaterThan(0);
+      expect(notices.some((n: any) => n.text.includes('上下文已压缩'))).toBe(true);
+    });
+
+    it('preserves real user and assistant messages alongside filtered internals', async () => {
+      await setupRestorePanel(sessionWithInternalMsgs);
+
+      const { msgStoreFor } = await import('../src/ui/chat-store');
+      const msgs = msgStoreFor(panel.panelId, 1).getState().messages;
+
+      const userMsgs = msgs.filter((m: any) => m.role === 'user');
+      const assistantMsgs = msgs.filter((m: any) => m.role === 'assistant');
+
+      expect(userMsgs).toHaveLength(1);
+      expect(userMsgs[0].text).toBe(REAL_USER_MSG);
+      expect(assistantMsgs).toHaveLength(1);
+      // Assistant text is in parts — find the text part
+      const textParts = assistantMsgs[0].parts.filter((p: any) => p.type === 'text');
+      expect(textParts.length).toBeGreaterThan(0);
+      expect(textParts[0].text).toBe(REAL_ASSISTANT_MSG);
+    });
+  });
 });
