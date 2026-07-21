@@ -9,12 +9,12 @@ import { create } from 'zustand';
 import { cacheCheckResult } from '../agent/state-inject';
 import type { CheckResult } from './react/CheckPanel';
 
-export type DockPanelId = 'timeline' | 'hotspots' | 'check' | 'constraints' | 'dataflow' | 'settings';
+export type DockPanelId = 'check' | 'constraints' | 'dataflow' | 'settings';
 
 interface DockState {
   /** 面板开合（dataflow/settings 由 DockPanel 条件挂载；其余常驻 + class 切换保过渡动画） */
   open: Record<DockPanelId, boolean>;
-  /** 当前工作区路径（timeline/hotspots/constraints 共用；null = 无项目） */
+  /** 当前工作区路径（constraints 共用；null = 无项目） */
   projectPath: string | null;
   /** 简报面板当前展示的结果（runCheck 推入；查看历史会临时替换，与旧行为一致） */
   checkResult: CheckResult | null;
@@ -31,7 +31,7 @@ interface DockState {
 }
 
 export const useDockStore = create<DockState>((set, get) => ({
-  open: { timeline: false, hotspots: false, check: false, constraints: false, dataflow: false, settings: false },
+  open: { check: false, constraints: false, dataflow: false, settings: false },
   projectPath: null,
   checkResult: null,
 

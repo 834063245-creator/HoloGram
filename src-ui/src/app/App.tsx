@@ -16,6 +16,7 @@ import { DockPanel } from './panels/DockPanel';
 import { FileTranslatorPortal } from './panels/FileTranslatorPortal';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { StatusBar } from './StatusBar';
+import { TimelineHUD } from '../ui/react/TimelineHUD';
 import { useGlobalKeys } from './useGlobalKeys';
 import { useShellStore } from './shell-store';
 
@@ -37,7 +38,7 @@ export function App() {
   return (
     <>
       <CommandBar />
-      <DockRail side="left" />
+      <TimelineHUD />
       <DockRail side="right" />
       <StatusBar />
       <CommandPalette />

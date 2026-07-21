@@ -9,9 +9,7 @@ import type { DockPanelId } from '../../ui/dock-store';
 import { CheckPanel } from '../../ui/react/CheckPanel';
 import { ConstraintsPanel } from '../../ui/react/ConstraintsPanel';
 import { DataflowPanel } from '../../ui/react/DataflowPanel';
-import { HotspotsPanel } from '../../ui/react/HotspotsPanel';
 import { SettingsPanel } from '../../ui/react/SettingsPanel';
-import { TimelinePanel } from '../../ui/react/TimelinePanel';
 
 export interface PanelDef {
   id: DockPanelId;
@@ -28,8 +26,6 @@ export interface PanelDef {
 }
 
 export const PANEL_DEFS: PanelDef[] = [
-  { id: 'timeline', side: 'left', title: '时间轴', icon: 'timeline', askAgent: true, component: TimelinePanel },
-  { id: 'hotspots', side: 'left', title: '热点', icon: 'fire', askAgent: true, component: HotspotsPanel },
   { id: 'check', side: 'right', title: '简报', icon: 'check', askAgent: true, component: CheckPanel },
   { id: 'constraints', side: 'right', title: '约束', icon: 'constraints', askAgent: true, component: ConstraintsPanel },
   { id: 'dataflow', side: null, title: '数据流', icon: 'dataflow', unmountOnClose: true, component: DataflowPanel },

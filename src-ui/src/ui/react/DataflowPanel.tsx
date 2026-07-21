@@ -501,7 +501,7 @@ export function DataflowPanel() {
         style={{ cursor: 'move', userSelect: 'none' }}
         onPointerDown={onDragStart}
       >
-        <span className="df-panel-title">数据流</span>
+        <span className="df-panel-title"><span className="zh">数据流</span>DATAFLOW</span>
         <button
           className="df-panel-close"
           onPointerDown={(e) => e.stopPropagation()}

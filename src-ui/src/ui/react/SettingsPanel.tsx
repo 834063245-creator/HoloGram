@@ -242,7 +242,7 @@ const SettingsPanelApp: React.FC<{
       <div id="settings-panel" className="sp-open">
         {/* Header */}
         <div className="sp-header">
-          <span className="sp-title" dangerouslySetInnerHTML={{ __html: iconHtml('settings', 13) + ' 设置' }} />
+          <span className="sp-title" dangerouslySetInnerHTML={{ __html: iconHtml('settings', 13) + ' <span class="zh">设置</span>SETTINGS' }} />
           <button
             className="sp-close-btn"
             onClick={handleClose}

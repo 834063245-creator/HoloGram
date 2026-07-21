@@ -238,9 +238,9 @@ export class GraphNodeRenderer {
         this.host._glow2Rgba[i * 4 + 1] = gc.g;
         this.host._glow2Rgba[i * 4 + 2] = gc.b;
         this.host._glow2Rgba[i * 4 + 3] = 0.55;
-        this.host._glow2Sizes[i] = 0.8 * baseScale; // outer glow scales with degree — matches core
+        this.host._glow2Sizes[i] = this.host._coreScales[i] * 2.4; // outer glow tied to core scale
       }
-      this.host._glowSizes[i] = 1.0 * baseScale; // inner glow scales with degree — matches core
+      this.host._glowSizes[i] = this.host._coreScales[i] * 3.0; // inner glow tied to core scale
     }
 
     // Pre-compute _nodeMag cache (ponytail: log1p ratio is static, avoid per-frame recalc)
@@ -507,7 +507,7 @@ export class GraphNodeRenderer {
       this.host._glowRgba[i * 4 + 1] = gc.g;
       this.host._glowRgba[i * 4 + 2] = gc.b;
       this.host._glowRgba[i * 4 + 3] = 0.85;
-      this.host._glowSizes[i] = 1.0 * 0.8; // ponytail: 新节点 deg=0, baseScale=0.8; _rebuildEdgeData 后不回填, 跟 core 对齐足够
+      this.host._glowSizes[i] = this.host._coreScales[i] * 3.0; // 辉光始终基于核心球大小
       // Shared anim attrs (write once — both geometries share the same arrays)
       (gAttr.phase.array as Float32Array)[i] = Math.random() * Math.PI * 2;
       (gAttr.speed.array as Float32Array)[i] = 0.5 + Math.random() * 2.5;
@@ -528,7 +528,7 @@ export class GraphNodeRenderer {
         this.host._glow2Rgba[i * 4 + 1] = gc.g;
         this.host._glow2Rgba[i * 4 + 2] = gc.b;
         this.host._glow2Rgba[i * 4 + 3] = 0.55;
-        this.host._glow2Sizes[i] = 0.8 * 0.8; // ponytail: 同 inner glow, baseScale=0.8
+        this.host._glow2Sizes[i] = this.host._coreScales[i] * 2.4; // 外层辉光始终基于核心球大小
       }
 
       if (cid) this.host.nodeCommMap.set(i, cid);

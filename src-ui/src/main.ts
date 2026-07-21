@@ -360,8 +360,6 @@ function escLayer(): void {
   // Global UI layers
   const dock = useDockStore.getState();
   if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
-  else if (dock.isOpen('timeline')) dock.closePanel('timeline');
-  else if (dock.isOpen('hotspots')) dock.closePanel('hotspots');
   else if (dock.isOpen('check')) dock.closePanel('check');
   else if (dock.isOpen('constraints')) dock.closePanel('constraints');
   else if (chatPanel.isOpen()) chatPanel.close();
@@ -630,30 +628,6 @@ async function init(): Promise<void> {
     },
     { id: 'toggle-diff', group: '操作', label: '变更回看着色', icon: 'diff', kbd: 'ctrl D', run: () => toggleDiff() },
     { id: 'search', group: '操作', label: '搜索符号', icon: 'search', run: (q) => doSearch(q || '') },
-    {
-      id: 'panel.timeline',
-      group: '面板',
-      label: '面板：时间轴',
-      icon: 'timeline',
-      run: () => {
-        const dock = useDockStore.getState();
-        if (dock.isOpen('hotspots')) dock.closePanel('hotspots');
-        if (workspace?.path) dock.setProjectPath(workspace.path);
-        dock.togglePanel('timeline');
-      },
-    },
-    {
-      id: 'panel.hotspots',
-      group: '面板',
-      label: '面板：热点',
-      icon: 'fire',
-      run: () => {
-        const dock = useDockStore.getState();
-        if (dock.isOpen('timeline')) dock.closePanel('timeline');
-        if (workspace?.path) dock.setProjectPath(workspace.path);
-        dock.togglePanel('hotspots');
-      },
-    },
     {
       id: 'panel.check',
       group: '面板',
