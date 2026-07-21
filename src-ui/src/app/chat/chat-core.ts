@@ -1163,6 +1163,17 @@ export class ChatCore {
   hideSlash(): void {
     this._hideSlashPanel();
   }
+  /** Escape 专用：剥离输入框中的 /query 文本再隐藏，避免下次按键触发 handleSlashInput 重新弹出 */
+  dismissSlash(): void {
+    const input = getChatStore(this.panelId).input.getState();
+    const v = input.inputText;
+    const slashIdx = v.lastIndexOf('/');
+    if (slashIdx >= 0) {
+      input.setInputText(v.slice(0, slashIdx));
+    }
+    this._hideSlashPanel();
+    this._composer?.focus();
+  }
   private _hideSlashPanel(): void {
     this._slashController?.hide();
   }
@@ -1224,6 +1235,7 @@ export class ChatCore {
     const action = cmd.action;
     switch (action.type) {
       case 'send':
+        getChatStore(this.panelId).input.getState().setInputText('');
         this.sendAgentText(action.text, action.displayLabel);
         break;
       case 'fill':
@@ -1232,9 +1244,11 @@ export class ChatCore {
         this._composer?.selectEnd();
         break;
       case 'local':
+        getChatStore(this.panelId).input.getState().setInputText('');
         action.handler();
         break;
       case 'skill':
+        getChatStore(this.panelId).input.getState().setInputText('');
         this.sendAgentText(`Execute skill: ${action.skillName}`, `/${action.skillName}`);
         break;
     }
