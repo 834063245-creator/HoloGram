@@ -5,18 +5,21 @@
 // Provider | Agent | Display | Languages 四个标签页。
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化。
 
+import { getVersion } from '@tauri-apps/api/app';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
+import { getCatalogProviders, getDefaultModel } from '../../provider/catalog';
+import type { ModelDescriptor } from '../../provider/types';
 import type { AppSettings } from '../../settings';
 import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, saveSettings } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
+import { ModelSelector } from './ModelSelector';
 
 type Tab = 'provider' | 'agent' | 'display' | 'languages' | 'about';
 
@@ -50,8 +53,14 @@ const SettingsPanelApp: React.FC<{
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [activeTab, setActiveTab] = useState<Tab>('provider');
   const [appVersion, setAppVersion] = useState('…');
-  useEffect(() => { getVersion().then(setAppVersion).catch(() => setAppVersion('9.0.1')); }, []);
-  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'available' | 'downloading' | 'done' | 'error'>('idle');
+  useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion('9.0.1'));
+  }, []);
+  const [updateStatus, setUpdateStatus] = useState<
+    'idle' | 'checking' | 'available' | 'downloading' | 'done' | 'error'
+  >('idle');
   const [updateMsg, setUpdateMsg] = useState('');
   const [updateVersion, setUpdateVersion] = useState('');
   const checkUpdate = useCallback(async () => {
@@ -78,7 +87,11 @@ const SettingsPanelApp: React.FC<{
     try {
       const { check: checkUpdate } = await import('@tauri-apps/plugin-updater');
       const update = await checkUpdate();
-      if (!update) { setUpdateStatus('error'); setUpdateMsg('更新信息已过期'); return; }
+      if (!update) {
+        setUpdateStatus('error');
+        setUpdateMsg('更新信息已过期');
+        return;
+      }
       setUpdateMsg('下载中…');
       await update.downloadAndInstall((ev) => {
         if (ev.event === 'Finished') setUpdateMsg('下载完成，重启生效');
@@ -242,7 +255,10 @@ const SettingsPanelApp: React.FC<{
       <div id="settings-panel" className="sp-open">
         {/* Header */}
         <div className="sp-header">
-          <span className="sp-title" dangerouslySetInnerHTML={{ __html: iconHtml('settings', 13) + ' <span class="zh">设置</span>SETTINGS' }} />
+          <span
+            className="sp-title"
+            dangerouslySetInnerHTML={{ __html: iconHtml('settings', 13) + ' <span class="zh">设置</span>SETTINGS' }}
+          />
           <button
             className="sp-close-btn"
             onClick={handleClose}
@@ -353,6 +369,29 @@ const SettingsPanelApp: React.FC<{
                       取消
                     </button>
                   </div>
+                  <div className="ms-catalog-pick">
+                    <span className="sp-hint-sub" style={{ width: '100%', marginBottom: 2 }}>
+                      从目录快速添加：
+                    </span>
+                    {getCatalogProviders().map((provName) => {
+                      const defaultModel = getDefaultModel(provName);
+                      if (!defaultModel) return null;
+                      return (
+                        <button
+                          type="button"
+                          key={provName}
+                          className="ms-catalog-chip"
+                          title={`${defaultModel.name} · ${defaultModel.baseUrl}`}
+                          onClick={() => {
+                            setAddName(provName);
+                            setAddKind(defaultModel.kind);
+                          }}
+                        >
+                          {provName}
+                        </button>
+                      );
+                    })}
+                  </div>
                   {addError && <div style={{ color: '#f66', fontSize: 11, marginTop: 4 }}>{addError}</div>}
                 </div>
               )}
@@ -383,12 +422,25 @@ const SettingsPanelApp: React.FC<{
               </div>
               <div className="sp-field">
                 <label className="sp-label">模型</label>
-                <input
-                  type="text"
-                  className="sp-input"
+                <ModelSelector
                   value={active?.model || ''}
-                  onChange={(e) => updateProvider('model', e.target.value)}
-                  placeholder="deepseek-chat"
+                  providerName={active?.name || ''}
+                  kind={active?.kind || 'openai'}
+                  onChange={(modelId, desc) => {
+                    updateProvider('model', modelId);
+                    // Auto-fill baseUrl if empty or user hasn't customized it
+                    if (desc) {
+                      const currentBase = active?.baseUrl || '';
+                      const defaults = [
+                        'https://api.deepseek.com/v1',
+                        'https://api.anthropic.com',
+                        'https://api.openai.com/v1',
+                      ];
+                      if (!currentBase || defaults.includes(currentBase)) {
+                        updateProvider('baseUrl', desc.baseUrl);
+                      }
+                    }
+                  }}
                 />
               </div>
               <div className="sp-field">
@@ -692,11 +744,7 @@ const SettingsPanelApp: React.FC<{
           </div>
 
           {/* ═══ About Tab ═══ */}
-          <div
-            className="sp-tab-content"
-            data-tab="about"
-            style={{ display: activeTab === 'about' ? '' : 'none' }}
-          >
+          <div className="sp-tab-content" data-tab="about" style={{ display: activeTab === 'about' ? '' : 'none' }}>
             <div className="sp-section">
               <div className="sp-section-title">HoloGram 全息观测站</div>
               <div className="sp-hint" style={{ marginBottom: 16 }}>
@@ -719,22 +767,22 @@ const SettingsPanelApp: React.FC<{
                     检查更新
                   </button>
                 )}
-                {updateStatus === 'checking' && (
-                  <span className="sp-hint">检查中…</span>
-                )}
+                {updateStatus === 'checking' && <span className="sp-hint">检查中…</span>}
                 {updateStatus === 'available' && (
                   <div>
-                    <div className="sp-hint" style={{ marginBottom: 8 }}>{updateMsg}</div>
+                    <div className="sp-hint" style={{ marginBottom: 8 }}>
+                      {updateMsg}
+                    </div>
                     <button className="sp-btn sp-btn-save" onClick={doUpdate}>
                       下载并安装
                     </button>
                   </div>
                 )}
-                {updateStatus === 'downloading' && (
-                  <span className="sp-hint">{updateMsg}</span>
-                )}
+                {updateStatus === 'downloading' && <span className="sp-hint">{updateMsg}</span>}
                 {updateStatus === 'done' && (
-                  <span className="sp-hint" style={{ color: 'var(--obs-pass)' }}>{updateMsg}</span>
+                  <span className="sp-hint" style={{ color: 'var(--obs-pass)' }}>
+                    {updateMsg}
+                  </span>
                 )}
                 {updateStatus === 'error' && (
                   <div>
