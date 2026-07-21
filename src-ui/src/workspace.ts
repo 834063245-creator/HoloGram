@@ -41,7 +41,7 @@ import type { Tool } from './agent/tool';
 import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
-import { createAnthropicProvider } from './provider/anthropic';
+import { createProvider } from './provider';
 import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { msgStoreForActive } from './ui/chat-store';
@@ -92,7 +92,6 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
   };
 }
 
-import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
 import { dbg } from './ui/debug';
 
@@ -584,22 +583,9 @@ export class Workspace {
       this.onStatusChange?.(`[记忆] 已注入 ${memLines} 条${globalCount}`);
     }
 
-    const prov: Provider =
-      active.kind === 'anthropic'
-        ? createAnthropicProvider({
-            name: active.name,
-            apiKey: active.apiKey,
-            baseUrl: active.baseUrl,
-            model: active.model,
-            thinking: active.thinking || undefined,
-          })
-        : createOpenAIProvider({
-            name: active.name,
-            apiKey: active.apiKey,
-            baseUrl: active.baseUrl,
-            model: active.model,
-            disableThinking: settings.agent?.disableThinking,
-          });
+    const prov: Provider = createProvider(active, {
+      disableThinking: settings.agent?.disableThinking,
+    });
 
     const registry = new ToolRegistry();
 
@@ -847,7 +833,8 @@ export class Workspace {
         r.register(
           createSubAgentTool(
             async (description, prompt, onProgress, mode, allowlist, coordSignal) =>
-              agentRef.current?.spawnSubAgent(description, prompt, onProgress, mode, allowlist, coordSignal) ?? Promise.resolve({ text: '', err: 'agent not available' }),
+              agentRef.current?.spawnSubAgent(description, prompt, onProgress, mode, allowlist, coordSignal) ??
+              Promise.resolve({ text: '', err: 'agent not available' }),
             this.subAgentPool,
           ),
         );

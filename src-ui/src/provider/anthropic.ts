@@ -3,10 +3,10 @@
 
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
+import { sendWithRetry } from './retry';
 import {
   type Chunk,
   ChunkType,
-  classifyError,
   type Message,
   type Provider,
   type Request,
@@ -39,7 +39,18 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
 
     async *stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk> {
       const body = buildRequest(sanitizeToolPairing(req.messages), req.tools, model, thinking || '', req.max_tokens);
-      const response = await sendWithRetry(signal, baseUrl, apiKey, name, body);
+      const response = await sendWithRetry({
+        url: `${baseUrl}/v1/messages`,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify(body),
+        signal,
+        name,
+      });
 
       if (!response.body) throw new Error(`${name}: no response body`);
 
@@ -215,62 +226,6 @@ function buildRequest(
   }
 
   return r;
-}
-
-// ---- Retry logic ----
-
-async function sendWithRetry(
-  signal: AbortSignal,
-  baseUrl: string,
-  apiKey: string,
-  name: string,
-  body: AnthRequest,
-): Promise<Response> {
-  const maxAttempts = 3;
-  let lastErr: Error | undefined;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      const delay = 500 * 2 ** (attempt - 1) + Math.random() * 250;
-      await new Promise((r) => setTimeout(r, delay));
-    }
-    if (signal.aborted) throw new Error(`${name}: aborted`);
-
-    let resp: Response;
-    try {
-      resp = await fetch(`${baseUrl}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          'x-api-key': apiKey,
-          'anthropic-version': ANTHROPIC_VERSION,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw new Error(`${name}: aborted`);
-      lastErr = new Error(classifyError(name, 0, '', err.message));
-      continue;
-    }
-
-    if (resp.ok) return resp;
-
-    const msg = await resp.text().catch(() => '');
-    if (resp.status === 401 || resp.status === 403) {
-      throw new Error(classifyError(name, resp.status, msg));
-    }
-    const statusErr = new Error(classifyError(name, resp.status, msg));
-    if (!isRetryableStatus(resp.status)) throw statusErr;
-    lastErr = statusErr;
-  }
-
-  throw lastErr!;
-}
-
-function isRetryableStatus(s: number): boolean {
-  return s === 408 || s === 429 || (s >= 500 && s <= 599);
 }
 
 // ---- SSE stream parsing ----
