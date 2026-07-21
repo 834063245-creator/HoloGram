@@ -8,8 +8,7 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
-import { createAnthropicProvider } from '../../provider/anthropic';
-import { createOpenAIProvider } from '../../provider/openai';
+import { createProvider } from '../../provider';
 import { ChunkType } from '../../provider/types';
 import { getActiveProvider, loadSettings, type ProviderSettings } from '../../settings';
 import { iconHtml } from '../icons';
@@ -273,28 +272,10 @@ export const FileTranslatorApp: React.FC<{
       ];
 
       let rawText = '';
-      if (provider.kind === 'anthropic') {
-        const p = createAnthropicProvider({
-          apiKey: provider.apiKey,
-          baseUrl: provider.baseUrl,
-          model: provider.model,
-          thinking: provider.thinking,
-        });
-        for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
-          if (chunk.type === ChunkType.Text) rawText += chunk.text;
-          else if (chunk.type === ChunkType.Error) throw chunk.err!;
-        }
-      } else {
-        const p = createOpenAIProvider({
-          apiKey: provider.apiKey,
-          baseUrl: provider.baseUrl,
-          model: provider.model,
-          disableThinking: true,
-        });
-        for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
-          if (chunk.type === ChunkType.Text) rawText += chunk.text;
-          else if (chunk.type === ChunkType.Error) throw chunk.err!;
-        }
+      const p = createProvider(provider, { disableThinking: true });
+      for await (const chunk of p.stream(signal, { messages, tools: [], temperature: 0, max_tokens: maxTokens })) {
+        if (chunk.type === ChunkType.Text) rawText += chunk.text;
+        else if (chunk.type === ChunkType.Error) throw chunk.err!;
       }
 
       let parsed: any;

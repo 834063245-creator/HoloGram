@@ -1,0 +1,38 @@
+{
+  "deepseek-v4-flash": {
+    "id": "deepseek-v4-flash",
+    "name": "DeepSeek V4 Flash",
+    "kind": "openai",
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.14,
+      "output": 0.28,
+      "cacheRead": 0.0028
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000
+  },
+  "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro",
+    "kind": "openai",
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.435,
+      "output": 0.87,
+      "cacheRead": 0.003625
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000
+  }
+}

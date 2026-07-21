@@ -75,6 +75,29 @@ export interface Provider {
   stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk>;
 }
 
+// ---- Model catalog ----
+
+/** Cost per 1M tokens (USD). */
+export interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+}
+
+/** Static model descriptor — data-driven model selection, no manual entry needed. */
+export interface ModelDescriptor {
+  id: string; // e.g. "deepseek-v4-pro"
+  name: string; // e.g. "DeepSeek V4 Pro"
+  kind: 'anthropic' | 'openai'; // which provider implementation to use
+  provider: string; // provider name (e.g. "deepseek", "anthropic")
+  baseUrl: string; // API endpoint
+  reasoning: boolean; // supports thinking/reasoning
+  input: ('text' | 'image')[];
+  cost: ModelCost;
+  contextWindow: number;
+  maxTokens: number;
+}
+
 // ---- Error classification ----
 
 /** 把 raw error 映射成人能看懂的分类和操作建议。 */

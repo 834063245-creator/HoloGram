@@ -1,0 +1,57 @@
+{
+  "MiniMax-M2.7": {
+    "id": "MiniMax-M2.7",
+    "name": "MiniMax-M2.7",
+    "kind": "anthropic",
+    "provider": "minimax",
+    "baseUrl": "https://api.minimax.io/anthropic",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.06
+    },
+    "contextWindow": 204800,
+    "maxTokens": 131072
+  },
+  "MiniMax-M2.7-highspeed": {
+    "id": "MiniMax-M2.7-highspeed",
+    "name": "MiniMax-M2.7-highspeed",
+    "kind": "anthropic",
+    "provider": "minimax",
+    "baseUrl": "https://api.minimax.io/anthropic",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.6,
+      "output": 2.4,
+      "cacheRead": 0.06
+    },
+    "contextWindow": 204800,
+    "maxTokens": 131072
+  },
+  "MiniMax-M3": {
+    "id": "MiniMax-M3",
+    "name": "MiniMax-M3",
+    "kind": "anthropic",
+    "provider": "minimax",
+    "baseUrl": "https://api.minimax.io/anthropic",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.06
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000
+  }
+}
