@@ -41,6 +41,13 @@ function agentKey(storeId: string, sid: number): string {
   return `${storeId}:${sid}`;
 }
 
+/** Agent 在 session 中注入的内部上下文消息（非用户输入），恢复/导出时应跳过 */
+const INTERNAL_PREFIXES = ['<system-reminder>', '<goal>', '<truncated-context>', '<compacted-context>'];
+function isInternalMessage(content: string | undefined): boolean {
+  if (!content) return false;
+  return INTERNAL_PREFIXES.some((p) => content.startsWith(p));
+}
+
 const agentHandles = new Map<string, ChatAgentHandle>();
 const sessionExecStates = new Map<string, ExecStateInstance>();
 const turnPairsByPanel = new Map<
@@ -710,7 +717,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
   newAgent.setSession([...freshSys, ...conv]);
 
-  const firstUser = conv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
+  const firstUser = conv.find((m: Message) => m.role === 'user' && !isInternalMessage(m.content));
   const st1 = getChatStore(ctx.storeId).sess.getState();
   const label =
     data.label && !data.label.startsWith('会话 ') && data.label !== '已恢复的会话'
@@ -825,8 +832,10 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
     if (m.role === 'system') continue;
 
     if (m.role === 'user') {
-      if (m.content?.startsWith('<compacted-context>')) {
-        rebuilt.push(createNoticeMessage('📋 上下文已压缩', 'info'));
+      if (isInternalMessage(m.content)) {
+        if (m.content?.startsWith('<compacted-context>')) {
+          rebuilt.push(createNoticeMessage('📋 上下文已压缩', 'info'));
+        }
         continue;
       }
       if (pendingUserText && pendingUserId) {
@@ -995,8 +1004,10 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
   for (const m of msgs) {
     if (m.role === 'system') continue;
     if (m.role === 'user') {
-      if (m.content?.startsWith('<compacted-context>')) {
-        md += `> *[上下文压缩]*\n\n`;
+      if (isInternalMessage(m.content)) {
+        if (m.content?.startsWith('<compacted-context>')) {
+          md += `> *[上下文压缩]*\n\n`;
+        }
         continue;
       }
       md += `## 用户\n${m.content || ''}\n\n`;
