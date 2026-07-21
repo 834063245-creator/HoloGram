@@ -438,6 +438,9 @@ pub(crate) async fn rpc(
                 .ok_or_else(|| "bash_kill: missing 'job_id'".to_string())?;
             commands::shell::bash_kill(job_id).await
         }
+        "drain_bg_notifications" => {
+            commands::shell::drain_bg_notifications().await
+        }
 
         // ═══════════════════════════════════════════════════════
         // Editor (1 command)

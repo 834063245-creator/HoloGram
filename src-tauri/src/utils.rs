@@ -30,12 +30,80 @@ pub(crate) struct BgJob {
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
     start_time: std::time::Instant,
+    #[allow(dead_code)] // stored for future job-listing feature
+    label: String,
+    last_output_time: std::time::Instant,
 }
 
 pub(crate) static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
+/// Notification queue — drained by the agent before each stream() call.
+pub(crate) static COMPLETED_NOTES: std::sync::LazyLock<Mutex<Vec<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+/// Push a notification message to the background notification queue.
+pub(crate) fn push_bg_note(msg: &str) {
+    COMPLETED_NOTES.lock().unwrap().push(msg.to_string());
+}
+
+/// Drain and return all pending background notifications (clears the queue).
+pub(crate) fn drain_bg_notifications() -> String {
+    let mut notes = COMPLETED_NOTES.lock().unwrap();
+    if notes.is_empty() {
+        return String::new();
+    }
+    let result = notes.join("\n");
+    notes.clear();
+    result
+}
+
+/// Stall detection threshold — no output for this duration triggers a warning.
+const STALL_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Spawn a monitor thread that polls the child every second.
+/// On exit: pushes a completion notification to COMPLETED_NOTES.
+/// On stall (no output for STALL_THRESHOLD): pushes a stall warning and resets the timer.
+fn spawn_monitor(id: u32, label: String) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            let mut jobs = BG_JOBS.lock().unwrap();
+            let job = match jobs.get_mut(&id) {
+                Some(j) => j,
+                None => return, // job removed by read_bg_output / kill_bg
+            };
+
+            match job.child.try_wait() {
+                Ok(Some(status)) => {
+                    let elapsed = job.start_time.elapsed().as_secs();
+                    let ec = status.code().unwrap_or(-1);
+                    let msg = format!(
+                        "后台任务已完成: {} (exit code: {}, 耗时: {}s)。使用 bash_output({}) 查看输出。",
+                        label, ec, elapsed, id
+                    );
+                    COMPLETED_NOTES.lock().unwrap().push(msg);
+                    return; // don't remove — read_bg_output cleans up when agent checks
+                }
+                Ok(None) => {
+                    let stall_elapsed = job.last_output_time.elapsed();
+                    if stall_elapsed > STALL_THRESHOLD {
+                        let msg = format!(
+                            "⚠️ 后台任务可能已停滞: {} 已 {}s 无输出 (job_id: {})。考虑用 bash_output({}) 检查或 bash_kill({}) 终止。",
+                            label, stall_elapsed.as_secs(), id, id, id
+                        );
+                        COMPLETED_NOTES.lock().unwrap().push(msg);
+                        job.last_output_time = std::time::Instant::now(); // reset to avoid repeat
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    });
+}
 
 /// Logging guard — initialized once on first project open, held for process lifetime.
 pub(crate) static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
@@ -43,14 +111,25 @@ pub(crate) static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceL
 pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
     let child = os_sandbox::spawn_shell(cmd, cwd)
         .map_err(|e| format!("无法启动后台命令: {e}"))?;
+    let label: String = cmd.chars().take(80).collect();
+    spawn_bg_from_child(child, &label)
+}
+
+/// Register an already-spawned SandboxedChild as a background job.
+/// Used by the foreground timeout path to convert a timed-out command to background.
+pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str) -> Result<u32, String> {
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let now = std::time::Instant::now();
     let job = BgJob {
         child,
         stdout_buf: Vec::new(),
         stderr_buf: Vec::new(),
-        start_time: std::time::Instant::now(),
+        start_time: now,
+        label: label.to_string(),
+        last_output_time: now,
     };
     BG_JOBS.lock().unwrap().insert(id, job);
+    spawn_monitor(id, label.to_string());
     Ok(id)
 }
 
@@ -58,12 +137,13 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
     // Drain what's available without blocking
+    let mut new_output = false;
     if let Some(stdout) = job.child.stdout_reader() {
         let mut buf = [0u8; 4096];
         loop {
             match stdout.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => job.stdout_buf.extend_from_slice(&buf[..n]),
+                Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); new_output = true; }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => break,
             }
@@ -74,11 +154,14 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
         loop {
             match stderr.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => job.stderr_buf.extend_from_slice(&buf[..n]),
+                Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); new_output = true; }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => break,
             }
         }
+    }
+    if new_output {
+        job.last_output_time = std::time::Instant::now();
     }
     let elapsed = job.start_time.elapsed().as_secs();
     let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();

@@ -99,6 +99,7 @@ pub(crate) async fn exec_command(
         let app_done = app.clone();
         let sid_done = stream_id.clone();
         let timeout_ms_val = timeout_ms.unwrap_or(300_000);
+        let cmd_for_bg = command.clone();
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             loop {
@@ -115,12 +116,29 @@ pub(crate) async fn exec_command(
                     }
                     Ok(None) => {
                         if start.elapsed() >= Duration::from_millis(timeout_ms_val) {
-                            child.kill().ok();
-                            let _ = app_done.emit("shell:done", serde_json::json!({
-                                "streamId": sid_done,
-                                "exitCode": -1,
-                                "error": format!("命令超时 ({}ms)，已强制终止", timeout_ms_val),
-                            }));
+                            // Convert to background task instead of killing
+                            let label: String = cmd_for_bg.chars().take(80).collect();
+                            match crate::utils::spawn_bg_from_child(child, &label) {
+                                Ok(job_id) => {
+                                    let msg = format!(
+                                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_kill({}) 终止。",
+                                        timeout_ms_val, job_id, job_id, job_id
+                                    );
+                                    crate::utils::push_bg_note(&msg);
+                                    let _ = app_done.emit("shell:done", serde_json::json!({
+                                        "streamId": sid_done,
+                                        "exitCode": -1,
+                                        "error": msg,
+                                    }));
+                                }
+                                Err(e) => {
+                                    let _ = app_done.emit("shell:done", serde_json::json!({
+                                        "streamId": sid_done,
+                                        "exitCode": -1,
+                                        "error": format!("命令超时且转后台失败: {}", e),
+                                    }));
+                                }
+                            }
                             return;
                         }
                         thread::sleep(Duration::from_millis(50));
@@ -194,8 +212,15 @@ pub(crate) async fn exec_command(
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    child.kill().ok();
-                    return Err(format!("命令超时 ({}ms)，已强制终止", timeout_ms.unwrap_or(300_000)));
+                    // Convert to background task instead of killing
+                    let label: String = command.chars().take(80).collect();
+                    let job_id = crate::utils::spawn_bg_from_child(child, &label)?;
+                    let msg = format!(
+                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_kill({}) 终止。",
+                        timeout_ms.unwrap_or(300_000), job_id, job_id, job_id
+                    );
+                    crate::utils::push_bg_note(&msg);
+                    return Ok(msg);
                 }
                 thread::sleep(Duration::from_millis(50));
             }
@@ -215,4 +240,9 @@ pub(crate) async fn bash_output(job_id: u32) -> Result<String, String> {
 #[tauri::command]
 pub(crate) async fn bash_kill(job_id: u32) -> Result<String, String> {
     crate::utils::kill_bg(job_id)
+}
+
+#[tauri::command]
+pub(crate) async fn drain_bg_notifications() -> Result<String, String> {
+    Ok(crate::utils::drain_bg_notifications())
 }
