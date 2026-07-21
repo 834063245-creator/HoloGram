@@ -288,6 +288,22 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   );
 }
 
+/* 对话面板：底部淡出渐变——新内容从迷雾中浮现，像水面升起 */
+.chat-panel.chat-open .chat-messages {
+  mask-image: linear-gradient(
+    to top,
+    transparent 0%,
+    rgba(0, 0, 0, 1) 32px,
+    rgba(0, 0, 0, 1) 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    transparent 0%,
+    rgba(0, 0, 0, 1) 32px,
+    rgba(0, 0, 0, 1) 100%
+  );
+}
+
 .chat-panel.chat-hud .chat-header {
   opacity: 0.5;
 }
@@ -2992,17 +3008,29 @@ button.chat-history-entry {
   background: rgba(125, 179, 232, 0.16);
 }
 
-/* ── 9. 流式 caret（原型 caret：brass 块闪烁）── */
+/* ── 9. 流式 caret（呼吸发光块 · 替代 DOS 闪烁）── */
 .msg-text.streaming::after {
   content: "";
   display: inline-block;
-  width: calc(6px * var(--font-scale));
-  height: calc(12px * var(--font-scale));
-  margin-left: 1px;
+  width: calc(4px * var(--font-scale));
+  height: calc(14px * var(--font-scale));
+  margin-left: 2px;
   background: var(--obs-brass);
-  vertical-align: -2px;
-  animation: cursor-blink 0.9s steps(2) infinite;
-  opacity: 1;
+  border-radius: 2px;
+  vertical-align: -3px;
+  animation: cursor-breathe 1.6s ease-in-out infinite;
+}
+@keyframes cursor-breathe {
+  0%, 100% {
+    opacity: 0.55;
+    box-shadow: 0 0 4px var(--obs-brass);
+    transform: scaleY(0.85);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 14px rgba(232, 200, 135, 0.7), 0 0 28px rgba(201, 162, 92, 0.25);
+    transform: scaleY(1);
+  }
 }
 
 /* ── 10. SlashPanel / AtAutocomplete 弹层 ── */
