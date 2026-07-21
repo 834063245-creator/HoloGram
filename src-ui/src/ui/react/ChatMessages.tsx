@@ -844,6 +844,9 @@ export const ChatMessagesApp: React.FC<{
 
       if (scrollingDown && isNearBottom(el)) {
         stickRef.current = true;
+      } else if (!scrollingDown && !isNearBottom(el)) {
+        // 向上滚动离开底部 → 脱钩（覆盖滚动条拖动等不产生 wheel 的用户操作）
+        stickRef.current = false;
       }
     };
 
