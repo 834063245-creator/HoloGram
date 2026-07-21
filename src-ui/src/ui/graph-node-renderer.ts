@@ -46,6 +46,7 @@ export interface NodeRendererHost {
   maxDeg: number;
   scaleMode: 'degree' | 'coupling';
   nodeCommMap: Map<number, string>;
+  _graphRadius: number;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -60,7 +61,8 @@ export class GraphNodeRenderer {
   getNodeBaseScale(i: number): number {
     const val = this.host.scaleMode === 'degree' ? this.host.deg[i] : this.host.l34Count[i] || 0;
     const maxVal = this.host.scaleMode === 'degree' ? this.host.maxDeg : Math.max(1, ...this.host.l34Count);
-    return 0.6 + (val / maxVal) * 2.8;
+    const sizeMul = Math.max(1, this.host._graphRadius / 400);
+    return (0.6 + (val / maxVal) * 2.8) * sizeMul;
   }
 
   // ── Batched GPU helpers (ponytail: write to InstancedMesh/Points buffers) ──
@@ -196,7 +198,7 @@ export class GraphNodeRenderer {
       const kind = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const coreColor = NODE_COLORS[kind] || 0x6ab0ff;
-      const baseScale = 0.8 + (deg[i] / this.host.maxDeg) * 2.8;
+      const baseScale = this.getNodeBaseScale(i);
       const px = pos[i * 3],
         py = pos[i * 3 + 1],
         pz = pos[i * 3 + 2];
