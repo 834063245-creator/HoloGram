@@ -775,6 +775,19 @@ ${resumeNote}
 
       this._ui.progress?.(step + 1, 'thinking');
 
+      // Drain background task notifications before each stream() call
+      try {
+        const notes = await rpc<string>('drain_bg_notifications');
+        if (notes) {
+          this.session.push({
+            role: 'user',
+            content: `<system-reminder>\n${notes}\n</system-reminder>`,
+          });
+        }
+      } catch {
+        // best-effort — don't block the loop if drain fails
+      }
+
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
       const executor = new StreamingToolExecutor(
