@@ -11,10 +11,10 @@
   width: 340px;
   max-width: 92vw;
   z-index: 45;
-  background: var(--obs-glass-hi);
-  backdrop-filter: blur(20px) saturate(0.6);
-  -webkit-backdrop-filter: blur(20px) saturate(0.6);
-  border-left: 1px solid rgba(148, 166, 205, 0.12);
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-left: 1px solid var(--obs-line);
   transform: translateX(100%);
   transition: transform var(--obs-glide);
   display: flex;
@@ -576,446 +576,6 @@
   background: rgba(148, 166, 205, 0.22);
 }
 
-#timeline-panel {
-  position: fixed;
-  top: var(--obs-bar-h);
-  left: 0;
-  bottom: var(--obs-status-h);
-  width: 350px;
-  max-width: 88vw;
-  z-index: 46;
-  background: var(--obs-glass-hi);
-  backdrop-filter: blur(20px) saturate(0.6);
-  -webkit-backdrop-filter: blur(20px) saturate(0.6);
-  border: 1px solid rgba(148, 166, 205, 0.12);
-  border-radius: 6px;
-  transform: translateX(-100%);
-  transition: transform var(--obs-glide);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-#timeline-panel.tl-open {
-  transform: translateX(0);
-}
-
-.tl-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  padding: 6px 10px 6px 14px;
-  border-bottom: 1px solid rgba(148, 166, 205, 0.09);
-}
-
-.tl-title {
-  font-family: var(--obs-font-mono);
-  font-size: calc(9px * var(--font-scale));
-  font-weight: 600;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: var(--obs-text-2);
-}
-
-.tl-close {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  font-size: calc(12px * var(--font-scale));
-  line-height: 24px;
-  text-align: center;
-  background: transparent;
-  color: rgba(160, 190, 220, 0.5);
-  border: 1px solid transparent;
-  border-radius: 3px;
-  cursor: pointer;
-  transition: all var(--obs-snap);
-}
-
-.tl-close:hover {
-  color: var(--obs-text);
-  background: rgba(30, 50, 80, 0.4);
-  border-color: rgba(148, 166, 205, 0.16);
-}
-
-.tl-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 12px 10px;
-}
-
-.tl-content::-webkit-scrollbar {
-  width: 5px;
-}
-
-.tl-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tl-content::-webkit-scrollbar-thumb {
-  background: rgba(48, 60, 80, 0.5);
-  border-radius: 3px;
-}
-
-.tl-empty {
-  text-align: center;
-  color: var(--obs-text-3);
-  font-size: calc(10px * var(--font-scale));
-  padding: 28px 12px;
-}
-
-.tl-timeline {
-  position: relative;
-  padding-left: 16px;
-}
-
-.tl-timeline::before {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 5px;
-  bottom: 5px;
-  width: 1px;
-  background: rgba(148, 166, 205, 0.12);
-}
-
-.tl-time-divider {
-  margin: 8px 0 4px 0;
-}
-
-.tl-time-divider span {
-  font-family: var(--obs-font-mono);
-  font-size: calc(8px * var(--font-scale));
-  font-weight: 600;
-  color: var(--obs-text-2);
-  background: var(--obs-glass-hi);
-  padding: 0 4px;
-}
-
-.tl-event {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 4px 0;
-  position: relative;
-}
-
-.tl-event-dot {
-  position: absolute;
-  left: -11px;
-  top: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--obs-blue);
-  opacity: 0.5;
-  border: 1px solid rgba(148, 166, 205, 0.19);
-}
-
-.tl-dot-pass {
-  background: var(--obs-pass);
-  opacity: 0.7;
-  border-color: rgba(61, 165, 93, 0.5);
-}
-
-.tl-dot-fail {
-  background: var(--obs-fail);
-  opacity: 0.8;
-  border-color: rgba(217, 68, 68, 0.5);
-  animation: tl-pulse-fail 2s ease-in-out infinite;
-}
-
-.tl-event-check {
-  border-left: 2px solid transparent;
-  padding-left: 8px;
-}
-
-.tl-event-fail {
-  border-left-color: rgba(217, 68, 68, 0.3);
-}
-
-.tl-event-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.tl-event-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.tl-event-icon {
-  font-size: calc(9px * var(--font-scale));
-}
-
-.tl-event-type {
-  font-family: var(--obs-font-mono);
-  font-size: calc(8px * var(--font-scale));
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--obs-text-2);
-}
-
-.tl-event-file {
-  font-family: var(--obs-font-mono);
-  font-size: calc(8px * var(--font-scale));
-  color: var(--obs-blue);
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 130px;
-  transition: color var(--obs-snap);
-}
-
-.tl-event-file:hover {
-  color: var(--obs-blue);
-}
-
-.tl-ask-btn {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  margin-left: auto;
-  background: none;
-  border: 1px solid transparent;
-  color: var(--obs-text-2);
-  cursor: pointer;
-  border-radius: 3px;
-  font-size: calc(10px * var(--font-scale));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    color var(--obs-snap),
-    border-color var(--obs-snap);
-  flex-shrink: 0;
-  opacity: 0;
-}
-
-.tl-event:hover .tl-ask-btn {
-  opacity: 0.5;
-}
-
-.tl-ask-btn:hover {
-  opacity: 1 !important;
-  color: var(--obs-blue);
-  border-color: var(--obs-line);
-}
-
-.tl-event-summary {
-  font-size: calc(10px * var(--font-scale));
-  color: var(--obs-text);
-  line-height: 1.35;
-  margin-top: 1px;
-  word-break: break-word;
-}
-
-.tl-event-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
-}
-
-.tl-file-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--obs-font-mono);
-  font-size: calc(9px * var(--font-scale));
-  color: var(--obs-blue);
-  background: rgba(148, 166, 205, 0.06);
-  border: 1px solid rgba(148, 166, 205, 0.12);
-  border-radius: 3px;
-  padding: 1px 6px;
-  cursor: pointer;
-  transition: all var(--obs-snap);
-}
-
-.tl-file-chip:hover {
-  background: rgba(148, 166, 205, 0.14);
-  border-color: var(--obs-blue);
-}
-
-.tl-file-chip-action {
-  font-size: calc(8px * var(--font-scale));
-  color: var(--obs-text-2);
-}
-
-.tl-check-badge {
-  font-size: calc(9px * var(--font-scale));
-  padding: 1px 5px;
-  border-radius: 3px;
-  margin-left: 4px;
-  vertical-align: middle;
-}
-
-.tl-check-badge-pass {
-  background: rgba(61, 165, 93, 0.15);
-  color: var(--obs-pass);
-}
-
-.tl-check-badge-fail {
-  background: rgba(217, 68, 68, 0.15);
-  color: var(--obs-fail);
-}
-
-.tl-event-clickable {
-  cursor: pointer;
-  border-radius: 3px;
-  transition: background 0.15s;
-}
-
-.tl-event-clickable:hover {
-  background: rgba(148, 166, 205, 0.07);
-}
-
-#hotspots-panel {
-  position: fixed;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%) translateX(-100%);
-  width: 280px;
-  max-width: 90vw;
-  max-height: 70vh;
-  z-index: 17;
-  background: var(--obs-glass-hi, rgba(4, 12, 28, 0.92));
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-right: 1px solid var(--obs-line, rgba(148, 166, 205, 0.17));
-  border-radius: 0 6px 6px 0;
-  display: flex;
-  flex-direction: column;
-  transition: transform var(--obs-glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1));
-}
-
-#hotspots-panel.hs-open {
-  transform: translateY(-50%) translateX(0);
-}
-
-.hs-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  padding: 6px 10px 6px 14px;
-  border-bottom: 1px solid rgba(148, 166, 205, 0.09);
-}
-
-.hs-title {
-  font-family: var(--obs-font-mono);
-  font-size: calc(9px * var(--font-scale));
-  font-weight: 600;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: var(--obs-text-2);
-}
-
-.hs-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 10px;
-}
-
-.hs-empty {
-  font-size: calc(11px * var(--font-scale));
-  color: var(--obs-text-2);
-  padding: 12px 0;
-  line-height: 1.5;
-}
-
-.hs-item {
-  padding: 5px 6px;
-  margin-bottom: 3px;
-  border-radius: 4px;
-  cursor: pointer;
-  border-left: 2px solid transparent;
-  transition:
-    background 0.12s,
-    border-color 0.12s;
-  position: relative;
-}
-
-.hs-item:hover {
-  background: rgba(240, 170, 50, 0.06);
-  border-left-color: rgba(240, 170, 50, 0.3);
-}
-
-.hs-file-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.hs-count {
-  font-size: calc(11px * var(--font-scale));
-  font-weight: 600;
-  min-width: 22px;
-  color: var(--obs-brass, #f0b848);
-}
-
-.hs-file {
-  font-size: calc(11px * var(--font-scale));
-  font-family: var(--obs-font-mono, "Cascadia Code", monospace);
-  color: var(--obs-text, rgba(180, 205, 240, 0.7));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.hs-line {
-  font-size: calc(9px * var(--font-scale));
-  color: var(--obs-text-2);
-}
-
-.hs-desc {
-  font-size: calc(9px * var(--font-scale));
-  margin-top: 2px;
-  padding-left: 28px;
-  line-height: 1.3;
-  color: var(--obs-text);
-}
-
-.hs-time {
-  font-size: calc(8px * var(--font-scale));
-  color: var(--obs-text-2);
-  padding-left: 28px;
-  margin-top: 1px;
-}
-
-.hs-ask-btn {
-  position: absolute;
-  right: 4px;
-  top: 4px;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.hs-item:hover .hs-ask-btn {
-  opacity: 0.7;
-}
-
-.hs-ask-btn:hover {
-  opacity: 1 !important;
-  background: rgba(148, 166, 205, 0.1);
-}
-
 #constraints-panel {
   position: fixed;
   top: var(--obs-bar-h);
@@ -1024,10 +584,10 @@
   width: 330px;
   max-width: 88vw;
   z-index: 51;
-  background: var(--obs-glass-hi);
-  backdrop-filter: blur(20px) saturate(0.6);
-  -webkit-backdrop-filter: blur(20px) saturate(0.6);
-  border-left: 1px solid rgba(148, 166, 205, 0.12);
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-left: 1px solid var(--obs-line);
   transform: translateX(100%);
   transition: transform var(--obs-glide);
   display: flex;
@@ -1287,17 +847,15 @@
   z-index: 80;
   display: flex;
   flex-direction: column;
-  background: var(--obs-glass-hi);
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
-  border: 1px solid rgba(148, 166, 205, 0.19);
-  border-radius: 6px;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border: 1px solid var(--obs-line);
+  border-radius: 12px;
   overflow: hidden;
   min-width: 260px;
   min-height: 150px;
-  box-shadow:
-    0 0 0 1px rgba(148, 166, 205, 0.03),
-    0 16px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
   opacity: 0;
   transform: scale(0.95);
   transition:
@@ -1384,20 +942,19 @@
   height: 540px;
   max-height: 86vh;
   z-index: 201;
-  background: var(--obs-glass-hi);
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
-  border: 1px solid rgba(148, 166, 205, 0.19);
-  border-radius: 6px;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border: 1px solid var(--obs-line);
+  border-radius: 12px;
   transform: translate(-50%, -50%) scale(0.95);
   opacity: 0;
   pointer-events: none;
   transition: all 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
   display: flex;
   flex-direction: column;
-  box-shadow:
-    0 0 0 1px rgba(148, 166, 205, 0.03),
-    0 18px 52px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
 }
 
 #settings-panel.sp-open {
@@ -2190,15 +1747,14 @@
 }
 
 #dataflow-panel {
-  background: var(--obs-glass-hi);
-  backdrop-filter: blur(22px) saturate(0.5);
-  -webkit-backdrop-filter: blur(22px) saturate(0.5);
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
   border: 1px solid var(--obs-line);
-  border-radius: 0;
+  border-radius: 12px;
   box-shadow:
-    0 12px 48px rgba(0, 2, 12, 0.65),
-    0 0 0 1px rgba(148, 166, 205, 0.02) inset,
-    0 0 30px rgba(148, 166, 205, 0.04);
+    0 24px 80px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(148, 166, 205, 0.03) inset;
   font-size: calc(11.5px * var(--font-scale));
   color: var(--obs-text);
   overflow: hidden;
@@ -2951,16 +2507,6 @@
   }
 }
 
-@keyframes tl-pulse-fail {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(217, 68, 68, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 6px 2px rgba(217, 68, 68, 0.2);
-  }
-}
-
 @keyframes df-hdr-breathe {
   0%,
   100% {
@@ -2982,39 +2528,10 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   P6 · 观测台面板（原型 dock 语言：收进轨道内侧 + 12px 圆角 + 软阴影）
-   布局宽度不动，只改几何外边距与表面；同类选择器后写优先。
+   P6 · 观测台面板（贴边侧边栏 + 玻璃透明质感）
+   P8 阶段：贴边布局不变，玻璃从 glass-hi(0.82)+saturate(0.6) 改为 glass(0.62)+saturate(1.15)。
+   P9 阶段：时间轴改为 C 方案（浮动 HUD · 点击外部收起 · 无底色纯 blur）。
    ═══════════════════════════════════════════════════════════════ */
-
-/* 右侧 dock（简报/约束）：贴边侧边栏（用户确认 P6 浮动化是回归——要侧边栏不要独立面板） */
-#check-panel,
-#constraints-panel {
-  border-left: 1px solid var(--obs-line);
-  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.35);
-}
-
-/* 左侧 dock（时间轴/热点）：贴边侧边栏 */
-#timeline-panel {
-  border: none;
-  border-right: 1px solid var(--obs-line);
-  border-radius: 0;
-  box-shadow: 24px 0 60px rgba(0, 0, 0, 0.35);
-}
-#hotspots-panel {
-  border: none;
-  border-right: 1px solid var(--obs-line);
-  border-radius: 0;
-  box-shadow: 24px 0 60px rgba(0, 0, 0, 0.35);
-}
-
-/* 数据流/设置：圆角统一 */
-#dataflow-panel {
-  border-radius: 12px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
-}
-#settings-panel {
-  border-radius: 12px;
-}
 
 /* 面板头：去底色，纯发丝线（原型 panel-head） */
 .df-panel-header {
@@ -3037,30 +2554,6 @@
 }
 .check-vitem:hover {
   background: rgba(160, 180, 220, 0.045);
-}
-
-.tl-event {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--obs-line-soft);
-  transition: background var(--obs-snap);
-}
-.tl-event:hover,
-.tl-event-clickable:hover {
-  background: rgba(160, 180, 220, 0.045);
-}
-
-.hs-item {
-  padding: 8px 6px;
-  margin-bottom: 0;
-  border-bottom: 1px solid var(--obs-line-soft);
-  border-radius: 0;
-}
-.hs-item:last-child {
-  border-bottom: none;
-}
-.hs-item:hover {
-  background: rgba(160, 180, 220, 0.045);
-  border-left-color: transparent;
 }
 
 .cs-toggle {
@@ -3087,61 +2580,6 @@
 
 /* ── 3. 违规条目：vloc mono text-3 ── */
 .check-vloc {
-  color: var(--obs-text-3);
-}
-
-/* ── 4. 热点：严重度语义色（hs-count-warn/critical、hs-sev-* 此前无样式裸奔）── */
-.hs-count {
-  font-family: var(--obs-font-mono);
-  color: var(--obs-text-2);
-}
-.hs-count-warn {
-  color: var(--obs-warn);
-}
-.hs-count-critical {
-  color: var(--obs-fail);
-}
-.hs-desc {
-  color: var(--obs-text-2);
-}
-.hs-sev-high {
-  color: var(--obs-warn);
-}
-.hs-sev-critical {
-  color: var(--obs-fail);
-}
-.hs-line {
-  font-family: var(--obs-font-mono);
-  color: var(--obs-text-3);
-}
-
-/* ── 5. 时间轴：dot 语义色 6px / divider mono text-3 / file-chip = chip 配方 ── */
-.tl-event-dot {
-  border: none;
-  opacity: 1;
-}
-.tl-dot-pass,
-.tl-dot-fail {
-  border-color: transparent;
-  opacity: 1;
-}
-.tl-time-divider span {
-  color: var(--obs-text-3);
-}
-.tl-file-chip {
-  font-size: calc(9.5px * var(--font-scale));
-  color: var(--obs-text-2);
-  background: none;
-  border: 1px solid var(--obs-line);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
-.tl-file-chip:hover {
-  color: var(--obs-text);
-  background: rgba(160, 180, 220, 0.08);
-  border-color: var(--obs-line);
-}
-.tl-file-chip-action {
   color: var(--obs-text-3);
 }
 
@@ -3376,9 +2814,6 @@
    ═══════════════════════════════════════════════════════════════ */
 .check-tab-label,
 .check-status-label,
-.tl-title,
-.tl-event-type,
-.hs-title,
 .cs-section-title,
 .cs-btn,
 .sp-title,
@@ -3400,4 +2835,495 @@
 }
 .df-tag {
   letter-spacing: normal;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P8 · 浮动玻璃面板表面统一（原型 .panel / .panel-head / .panel-title 语言）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. 面板头：统一 padding + 发丝线底边 ── */
+.check-tab,
+.cs-header,
+.df-panel-header,
+.sp-header {
+  padding: 11px 13px 10px;
+  border-bottom: 1px solid var(--obs-line-soft);
+}
+
+/* ── 2. 面板标题：zh + EN 大写 ── */
+.check-tab-label,
+.df-panel-title,
+.sp-title {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+}
+.check-tab-label .zh,
+.df-panel-title .zh,
+.sp-title .zh,
+.cs-header-title .zh {
+  font-family: var(--obs-font-body);
+  font-size: calc(12.5px * var(--font-scale));
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: none;
+  color: var(--obs-text);
+  margin-right: 7px;
+}
+
+/* ── 3. 约束面板头部（从内联样式迁移） ── */
+.cs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.cs-header-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+}
+.cs-header-title svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.cs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cs-content-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.cs-content-wrap::-webkit-scrollbar {
+  width: 5px;
+}
+.cs-content-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cs-content-wrap::-webkit-scrollbar-thumb {
+  background: rgba(48, 60, 80, 0.5);
+  border-radius: 3px;
+}
+
+/* ── 4. 关闭按钮统一（原型 .btn 风格） ── */
+.check-close-btn,
+.cs-close-btn,
+.df-panel-close,
+.sp-close-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--obs-text-2);
+  cursor: pointer;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--obs-snap), background var(--obs-snap);
+}
+.check-close-btn:hover,
+.cs-close-btn:hover,
+.df-panel-close:hover,
+.sp-close-btn:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+.df-panel-close:hover {
+  color: var(--obs-fail);
+  background: rgba(217, 99, 95, 0.12);
+}
+
+/* ── 5. 约束面板 ask-btn ── */
+.cs-ask-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--obs-text-2);
+  cursor: pointer;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--obs-snap), background var(--obs-snap);
+}
+.cs-ask-btn:hover {
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P9 · 玻璃穿透修复 — 面板内部子元素的深色背景在低透明容器上叠加
+   变成不透明。将这些背景改为透明或极淡，让玻璃效果穿透。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 数据流面板头 — 原本 0.85 近乎不透明 */
+.df-panel-header {
+  background: none !important;
+}
+.df-left {
+  background: none !important;
+}
+.df-query-area {
+  background: none !important;
+}
+
+/* 滚动条 — 0.5 太重 */
+#check-panel ::-webkit-scrollbar-thumb,
+#constraints-panel ::-webkit-scrollbar-thumb,
+#constraints-panel .cs-content-wrap::-webkit-scrollbar-thumb {
+  background: rgba(120, 140, 185, 0.2);
+}
+
+/* 输入框/选择框 — 从 0.7-0.8 降到透明 */
+.sp-input,
+.sp-select,
+.cs-field-input,
+.cs-add-input {
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* 约束面板分区背景 — 从 0.5 降到极淡 */
+.cs-section {
+  background: rgba(0, 0, 0, 0.15) !important;
+}
+
+/* 设置面板分区背景 */
+.sp-section {
+  background: rgba(0, 0, 0, 0.15) !important;
+}
+
+/* check 面板内 file-item 背景 */
+.check-file-item {
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* check history banner */
+.check-history-banner {
+  background: rgba(160, 180, 220, 0.04) !important;
+}
+
+/* 状态条 */
+.check-status-bar.check-status-pass {
+  background: rgba(99, 178, 125, 0.06) !important;
+}
+.check-status-bar.check-status-fail {
+  background: rgba(217, 99, 95, 0.06) !important;
+}
+
+/* df 代码块 */
+.df-src-code,
+.df-md-code {
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* df query input */
+.df-query-input {
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* df hist item selected */
+.df-hist-item-sel {
+  background: rgba(160, 180, 220, 0.08) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P15 · 脉冲点阵 · 时间轴 HUD
+   左侧边缘一串发光点——和星图同语言。
+   major 事件有大点 + 标签；minor 事件只有小点。
+   hover 浮出玻璃气泡。
+   ═══════════════════════════════════════════════════════════════ */
+
+#timeline-hud {
+  position: fixed;
+  left: 0;
+  top: var(--obs-bar-h);
+  bottom: var(--obs-status-h);
+  width: 240px;
+  z-index: 15;
+  pointer-events: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 0 40px 0;
+}
+#timeline-hud::-webkit-scrollbar { width: 0; }
+
+/* 脉冲竖线 */
+.th-rail {
+  position: absolute;
+  left: 7px;
+  top: 28px;
+  bottom: 28px;
+  width: 1px;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(148, 166, 205, 0.08) 8%,
+    rgba(148, 166, 205, 0.04) 50%,
+    rgba(148, 166, 205, 0.08) 92%,
+    transparent 100%);
+  pointer-events: none;
+}
+
+/* 空状态 */
+.th-status {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-3);
+  padding: 32px 0 0 16px;
+  opacity: 0.4;
+}
+.th-spinner {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--obs-text-3);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: th-spin 0.7s linear infinite;
+}
+@keyframes th-spin { to { transform: rotate(360deg); } }
+
+/* 时间标签 */
+.th-time {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 500;
+  color: var(--obs-text-3);
+  letter-spacing: 0.14em;
+  padding-left: 18px;
+  margin: 8px 0 3px;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.9);
+  opacity: 0.75;
+}
+
+/* ── 脉冲点 ── */
+.th-pt {
+  position: relative;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* 外层辉光 */
+.th-glow {
+  position: absolute;
+  left: 2px;
+  border-radius: 50%;
+  filter: blur(4px);
+  z-index: 1;
+  transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* 内层核心 */
+.th-core {
+  position: absolute;
+  left: 4px;
+  border-radius: 50%;
+  z-index: 2;
+  transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* minor — 小点 3px */
+.th-pt-minor .th-glow {
+  width: 9px; height: 9px;
+  opacity: 0.3;
+}
+.th-pt-minor .th-core {
+  width: 3px; height: 3px;
+  opacity: 0.7;
+}
+
+/* major — 大点 6px */
+.th-pt-major .th-glow {
+  width: 16px; height: 16px;
+  opacity: 0.45;
+}
+.th-pt-major .th-core {
+  width: 6px; height: 6px;
+  opacity: 1;
+}
+
+/* hover — 点放大 + 辉光增强 */
+.th-pt-active .th-glow {
+  opacity: 0.8;
+  filter: blur(6px);
+  transform: scale(1.4);
+}
+.th-pt-active .th-core {
+  transform: scale(1.6);
+}
+.th-pt-minor.th-pt-active .th-glow { width: 14px; height: 14px; }
+.th-pt-minor.th-pt-active .th-core { width: 5px; height: 5px; }
+
+/* 语义色 */
+.th-glow-info, .th-core-info { background: var(--obs-blue); }
+.th-glow-pass, .th-core-pass { background: var(--obs-pass); }
+.th-glow-fail, .th-core-fail { background: var(--obs-fail); }
+.th-glow-warn, .th-core-warn { background: var(--obs-warn); }
+.th-glow-brass, .th-core-brass { background: var(--obs-brass); }
+
+.th-core-fail { animation: th-pulse-fail 2s ease-in-out infinite; }
+@keyframes th-pulse-fail {
+  0%, 100% { box-shadow: 0 0 3px var(--obs-fail); }
+  50% { box-shadow: 0 0 8px var(--obs-fail), 0 0 14px var(--obs-fail); }
+}
+
+/* major 事件标签 */
+.th-tag {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8.5px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-left: 14px;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.95);
+  white-space: nowrap;
+}
+.th-tag-info { color: var(--obs-text-2); }
+.th-tag-pass { color: var(--obs-pass); }
+.th-tag-fail { color: var(--obs-fail); }
+.th-tag-warn { color: var(--obs-warn); }
+.th-tag-brass { color: var(--obs-brass); }
+
+/* ── hover 气泡 — 从点"绽放" ── */
+.th-bubble {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 140px;
+  max-width: 200px;
+  padding: 8px 10px 8px 6px;
+  border-radius: 8px;
+  background: rgba(8, 12, 22, 0.22);
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  border: 1px solid rgba(148, 166, 205, 0.1);
+  border-left: 2px solid var(--th-accent, var(--obs-blue));
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    -4px 0 20px var(--th-glow, transparent),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.04);
+  pointer-events: auto;
+  z-index: 20;
+  word-break: break-word;
+  transform-origin: left center;
+  animation: th-bloom 0.38s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+@keyframes th-bloom {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) scaleX(0.2);
+    clip-path: inset(0 100% 0 0);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-50%) scaleX(1.04);
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) scaleX(1);
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* 气泡色条 + 辉光 — 由点颜色驱动 */
+.th-pt:has(.th-core-info) .th-bubble { --th-accent: var(--obs-blue); --th-glow: rgba(125, 179, 232, 0.06); }
+.th-pt:has(.th-core-pass) .th-bubble { --th-accent: var(--obs-pass); --th-glow: rgba(99, 178, 125, 0.06); }
+.th-pt:has(.th-core-fail) .th-bubble { --th-accent: var(--obs-fail); --th-glow: rgba(217, 99, 95, 0.08); }
+.th-pt:has(.th-core-warn) .th-bubble { --th-accent: var(--obs-warn); --th-glow: rgba(216, 162, 74, 0.06); }
+.th-pt:has(.th-core-brass) .th-bubble { --th-accent: var(--obs-brass); --th-glow: rgba(201, 162, 92, 0.06); }
+
+.th-bubble-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.th-bubble-kind {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.th-bubble-kind-info { color: var(--obs-text-2); }
+.th-bubble-kind-pass { color: var(--obs-pass); }
+.th-bubble-kind-fail { color: var(--obs-fail); }
+.th-bubble-kind-warn { color: var(--obs-warn); }
+.th-bubble-kind-brass { color: var(--obs-brass); }
+.th-bubble-time {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  color: var(--obs-text-3);
+  margin-left: auto;
+}
+
+.th-bubble-summary {
+  font-size: calc(10.5px * var(--font-scale));
+  color: var(--obs-text);
+  line-height: 1.4;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.9);
+  margin-bottom: 4px;
+}
+
+.th-bubble-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.th-bubble-file {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-blue);
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.9);
+}
+.th-bubble-file:hover { opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
+.th-bubble-files {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-text-3);
+}
+.th-bubble-ask {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--obs-text-3);
+  cursor: pointer;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.th-bubble-ask:hover {
+  color: var(--obs-brass-hi);
+  background: var(--obs-brass-dim);
 }

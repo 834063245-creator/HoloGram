@@ -312,40 +312,20 @@ const ConstraintsPanelApp: React.FC<{
   return (
     <>
       {/* Header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 12px',
-          borderBottom: '1px solid var(--obs-line, rgba(48,60,80,0.4))',
-          flexShrink: 0,
-        }}
-      >
+      <div className="cs-header">
         <span
-          style={{
-            fontSize: 'calc(13px * var(--font-scale))',
-            fontWeight: 600,
-            color: 'var(--obs-text-2)',
-            letterSpacing: '0.5px',
-          }}
-          dangerouslySetInnerHTML={{ __html: `${iconHtml('constraints', 12)} 约束配置` }}
+          className="cs-header-title"
+          dangerouslySetInnerHTML={{ __html: `${iconHtml('constraints', 12)} <span class="zh">约束</span>CONSTRAINTS` }}
         />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div className="cs-header-actions">
           <button
             className="cs-ask-btn"
             title="问 Agent 关于当前约束配置"
-            style={headerBtnStyle}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--obs-blue)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--obs-text-2, #4a5568)')}
             onClick={handleAskAgent}
             dangerouslySetInnerHTML={{ __html: iconHtml('agent', 12) }}
           />
           <button
             className="cs-close-btn"
-            style={headerBtnStyle}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--obs-text, #c9d1d9)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--obs-text-2, #4a5568)')}
             onClick={handleClose}
             dangerouslySetInnerHTML={{ __html: iconHtml('close', 14) }}
           />
@@ -353,7 +333,7 @@ const ConstraintsPanelApp: React.FC<{
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+      <div className="cs-content-wrap">
         {/* ── Routing ── */}
         <div className="cs-section">
           <div className="cs-section-title">🔀 路由开关</div>
@@ -444,19 +424,6 @@ const ConstraintsPanelApp: React.FC<{
   );
 };
 
-const headerBtnStyle: React.CSSProperties = {
-  width: 24,
-  height: 24,
-  padding: 0,
-  background: 'none',
-  border: 'none',
-  color: 'var(--obs-text-2, #4a5568)',
-  cursor: 'pointer',
-  fontSize: 'calc(14px * var(--font-scale))',
-  borderRadius: 4,
-  transition: 'color var(--obs-snap, 0.12s)',
-};
-
 // ── Helpers ──
 
 function getListEntry(data: ConstraintsData, key: string): string[] | null {
@@ -484,21 +451,6 @@ export function ConstraintsPanel() {
     <div
       id="constraints-panel"
       className={open ? 'cs-open' : ''}
-      style={{
-        position: 'absolute',
-        top: '36px',
-        right: '0',
-        bottom: '28px',
-        width: '340px',
-        maxWidth: '90vw',
-        background: 'var(--obs-glass-hi, rgba(6,12,24,0.97))',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
-        borderLeft: '1px solid var(--obs-line, rgba(48,60,80,0.5))',
-        zIndex: 16,
-        display: 'flex',
-        flexDirection: 'column',
-      }}
     >
       <ConstraintsPanelApp projectPath={projectPath} visible={open} onClose={() => closePanel('constraints')} />
     </div>

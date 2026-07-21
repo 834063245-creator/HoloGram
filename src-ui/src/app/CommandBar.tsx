@@ -168,7 +168,6 @@ export function CommandBar() {
       <BarBtn action="reset-cam" icon="reset-cam" label="复位" title="重置摄像机视角 (R)" />
       <BarBtn action="toggle-diff" icon="diff" label={diffActive ? '清除' : '变更'} title="变更回看着色 (Ctrl+D)" />
       <span className="cb-sep" />
-      <BarBtn action="panel.timeline" icon="timeline" label="时间轴" title="决策时间轴" />
       <BarBtn action="panel.constraints" icon="constraints" label="约束" title="约束配置" />
       <BarBtn action="panel.dataflow" icon="dataflow" label="数据流" title="数据流追踪面板" />
       <span className="cb-sep" />

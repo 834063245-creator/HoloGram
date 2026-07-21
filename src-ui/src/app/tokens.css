@@ -14,8 +14,8 @@
   --font-scale: 1;
 
   /* 蚀刻玻璃 */
-  --obs-glass: rgba(11, 15, 26, 0.62);
-  --obs-glass-hi: rgba(14, 19, 32, 0.82);
+  --obs-glass: rgba(11, 15, 26, 0.18);
+  --obs-glass-hi: rgba(14, 19, 32, 0.35);
   --obs-line: rgba(148, 166, 205, 0.13);
   --obs-line-soft: rgba(148, 166, 205, 0.07);
 

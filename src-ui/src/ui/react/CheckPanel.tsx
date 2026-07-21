@@ -227,7 +227,7 @@ export function CheckPanel() {
       {/* Header */}
       <div className="check-tab">
         <span className={`check-tab-status ${passed ? 'check-pass' : 'check-fail'}`} />
-        <span className="check-tab-label">简报</span>
+        <span className="check-tab-label"><span className="zh">简报</span>BRIEFING</span>
         <button
           className="check-history-btn"
           title="查看历史"
