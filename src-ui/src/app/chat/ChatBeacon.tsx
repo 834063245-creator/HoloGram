@@ -591,20 +591,7 @@ export function ChatBeacon({ core }: { core: ChatCore }) {
           <AtAutocomplete ref={atRef} panelId={core.panelId} onSelect={handleAtSelect} />
         </div>
 
-        {/* Pill 球体装饰（chat.css 绘制） */}
-        <div className="chat-pill-star">
-          <svg viewBox="0 0 32 32" width="22" height="22">
-            <title>观测信标</title>
-            <circle cx="16" cy="16" r="3" fill="currentColor" opacity="0.9" />
-            <polygon
-              points="16,4 28,16 16,28 4,16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="0.7"
-              opacity="0.45"
-            />
-          </svg>
-        </div>
+        <span className="chat-pill-label">AGENT</span>
         <div className={`chat-pill-badge${pillCount > 0 ? ' show' : ''}`}>
           {pillCount > 99 ? '99+' : pillCount || ''}
         </div>

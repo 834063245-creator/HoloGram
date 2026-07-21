@@ -26,39 +26,42 @@
 }
 
 .chat-panel.chat-pill {
-  width: 48px;
-  min-width: 48px;
-  height: 48px;
-  min-height: 48px;
-  border-radius: 50%;
+  width: 128px;
+  min-width: 128px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 18px;
   max-height: none;
   cursor: pointer;
-  overflow: visible; /* allow status label to float outside */
-  background: radial-gradient(circle at 35% 30%, rgba(148, 166, 205, 0.22), rgba(4, 12, 28, 0.96) 70%);
-  border: 1px solid rgba(148, 166, 205, 0.17);
+  overflow: visible;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 0 10px;
+  background:
+    linear-gradient(180deg, rgba(148, 166, 205, 0.06) 0%, transparent 40%),
+    linear-gradient(180deg, rgba(22, 30, 52, 0.6), rgba(6, 10, 22, 0.72));
+  border: 1px solid rgba(148, 166, 205, 0.16);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 4px 14px rgba(0, 0, 0, 0.35);
   transition:
     transform var(--obs-glide),
     border-color var(--obs-glide),
     box-shadow var(--obs-glide),
     background var(--obs-glide);
-  /* ponytail: explicit height prevents flex collapse → oval on border-radius:50% */
-}
-
-.chat-panel.chat-pill .chat-pill-badge,
-.chat-panel.chat-pill .chat-pill-star {
-  /* Keep decorative elements clipped to pill circle */
-  overflow: hidden;
-  border-radius: 50%;
 }
 
 .chat-panel.chat-pill:hover {
-  border-color: var(--obs-text-2);
+  border-color: rgba(148, 166, 205, 0.3);
   box-shadow:
-    0 2px 24px rgba(0, 0, 0, 0.5),
-    0 0 52px var(--obs-text-2),
-    inset 0 0 24px rgba(148, 166, 205, 0.05);
-  transform: translateX(-50%) scale(1.06);
-  background: radial-gradient(circle at 35% 30%, rgba(148, 166, 205, 0.25), rgba(6, 18, 38, 0.96) 70%);
+    0 1px 0 rgba(255, 255, 255, 0.07) inset,
+    0 6px 20px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%) translateY(-2px);
+  background:
+    linear-gradient(180deg, rgba(148, 166, 205, 0.09) 0%, transparent 40%),
+    linear-gradient(180deg, rgba(30, 40, 64, 0.65), rgba(10, 16, 32, 0.78));
 }
 
 .chat-panel.chat-pill .chat-header,
@@ -82,9 +85,9 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
 .chat-panel::before {
   content: "";
   position: absolute;
-  inset: -10px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(148, 166, 205, 0.04) 0%, transparent 70%);
+  inset: -8px;
+  border-radius: 24px;
+  background: radial-gradient(ellipse, rgba(148, 166, 205, 0.04) 0%, transparent 70%);
   animation: pill-breathe 4s ease-in-out infinite;
   pointer-events: none;
   opacity: 0;
@@ -96,14 +99,14 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
 }
 
 .chat-panel.chat-pill:hover::before {
-  background: radial-gradient(circle, rgba(148, 166, 205, 0.12) 0%, transparent 70%);
+  background: radial-gradient(ellipse, rgba(148, 166, 205, 0.12) 0%, transparent 70%);
 }
 
 .chat-panel::after {
   content: "";
   position: absolute;
   inset: 3px;
-  border-radius: 50%;
+  border-radius: 15px;
   border: 1px solid rgba(148, 166, 205, 0.12);
   pointer-events: none;
   opacity: 0;
@@ -114,10 +117,14 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
 
 .chat-panel.chat-pill::after {
   opacity: 1;
+  border: 1px solid transparent;
+  border-top-color: rgba(255, 255, 255, 0.05);
+  border-bottom-color: rgba(0, 0, 0, 0.08);
 }
 
 .chat-panel.chat-pill:hover::after {
-  border-color: rgba(148, 166, 205, 0.22);
+  border-top-color: rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(0, 0, 0, 0.1);
 }
 
 .chat-panel .chat-pill-star {
@@ -129,6 +136,7 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   color: var(--obs-blue);
   opacity: 0;
   pointer-events: none;
+  flex-shrink: 0;
   transition:
     opacity 0.2s ease,
     color var(--obs-glide),
@@ -136,13 +144,39 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
 }
 
 .chat-panel.chat-pill .chat-pill-star {
+  position: relative;
+  inset: auto;
   opacity: 1;
   pointer-events: auto;
 }
 
 .chat-panel.chat-pill:hover .chat-pill-star {
   color: #d8eeff;
-  filter: drop-shadow(0 0 18px var(--obs-text));
+  filter: drop-shadow(0 0 8px rgba(148, 166, 205, 0.3));
+}
+
+/* 胶囊标签 — Fraunces 展示体，多层辐射发光 */
+.chat-pill-label {
+  display: none;
+  font-family: var(--obs-font-serif);
+  font-size: calc(16px * var(--font-scale));
+  font-weight: 700;
+  font-variation-settings: 'opsz' 144;
+  color: var(--obs-brass-hi);
+  letter-spacing: 0.28em;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow:
+    0 0 3px rgba(255, 245, 210, 0.9),
+    0 0 8px rgba(232, 200, 135, 0.6),
+    0 0 16px rgba(201, 162, 92, 0.35),
+    0 0 28px rgba(201, 162, 92, 0.15);
+  transition: color var(--obs-glide), text-shadow var(--obs-glide);
+  padding-left: 0.28em;
+}
+
+.chat-panel.chat-pill .chat-pill-label {
+  display: block;
 }
 
 .chat-pill-badge {
@@ -180,7 +214,7 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
     0 0 36px rgba(240, 170, 50, 0.18),
     inset 0 0 20px rgba(240, 170, 50, 0.04);
   border-color: rgba(240, 170, 50, 0.2);
-  background: radial-gradient(circle at 35% 30%, rgba(240, 170, 50, 0.1), rgba(4, 12, 28, 0.96) 70%);
+  background: linear-gradient(180deg, rgba(28, 24, 16, 0.55), rgba(12, 10, 6, 0.7));
 }
 
 .chat-panel.chat-pill-running .chat-pill-star {
@@ -189,7 +223,7 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
 }
 
 .chat-panel.chat-pill-running::before {
-  background: radial-gradient(circle, rgba(240, 170, 50, 0.1) 0%, transparent 65%);
+  background: radial-gradient(ellipse, rgba(240, 170, 50, 0.1) 0%, transparent 65%);
   animation: pill-breathe 2.5s ease-in-out infinite;
 }
 
@@ -3086,28 +3120,47 @@ button.chat-history-entry {
    hover 统一 0.08；running = 黄铜呼吸；badge = chip 配方）
    ═══════════════════════════════════════════════════════════════ */
 
-/* hover：退役大辉光与蓝色径向渐变，统一 hover 0.08（保留 scale 动效） */
+/* hover：玻璃顶光增强 + 微浮 + 多层阴影（胶囊版） */
 .chat-panel.chat-pill:hover {
-  border-color: var(--obs-line);
-  background: rgba(160, 180, 220, 0.08);
-  box-shadow: 0 2px 24px rgba(0, 0, 0, 0.5);
+  border-color: rgba(148, 166, 205, 0.28);
+  background:
+    linear-gradient(180deg, rgba(148, 166, 205, 0.09) 0%, transparent 40%),
+    linear-gradient(180deg, rgba(30, 40, 64, 0.65), rgba(10, 16, 32, 0.78));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.07) inset,
+    0 6px 20px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%) translateY(-2px);
 }
 .chat-panel.chat-pill:hover .chat-pill-star {
   color: var(--obs-text);
   filter: none;
 }
+.chat-panel.chat-pill:hover .chat-pill-label {
+  color: #fff8e8;
+  text-shadow:
+    0 0 4px rgba(255, 255, 255, 0.95),
+    0 0 10px rgba(255, 230, 160, 0.7),
+    0 0 20px rgba(232, 200, 135, 0.4),
+    0 0 36px rgba(201, 162, 92, 0.2);
+}
 
-/* running：旧 sol 金色族 → --obs-brass 族（呼吸环复用 pill-breathe） */
+/* running：黄铜色族（胶囊版） */
 .chat-panel.chat-pill-running {
   box-shadow:
-    0 2px 20px rgba(0, 0, 0, 0.4),
-    0 0 36px rgba(201, 162, 92, 0.18),
-    inset 0 0 20px rgba(201, 162, 92, 0.04);
-  border-color: rgba(201, 162, 92, 0.2);
-  background: radial-gradient(circle at 35% 30%, rgba(201, 162, 92, 0.1), rgba(4, 12, 28, 0.96) 70%);
+    0 1px 0 rgba(255, 220, 160, 0.08) inset,
+    0 4px 14px rgba(0, 0, 0, 0.35),
+    0 0 36px rgba(201, 162, 92, 0.18);
+  border-color: rgba(201, 162, 92, 0.22);
+  background:
+    linear-gradient(180deg, rgba(201, 162, 92, 0.08) 0%, transparent 40%),
+    linear-gradient(180deg, rgba(28, 24, 16, 0.6), rgba(10, 8, 4, 0.72));
 }
 .chat-panel.chat-pill-running::before {
-  background: radial-gradient(circle, rgba(201, 162, 92, 0.1) 0%, transparent 65%);
+  background: radial-gradient(ellipse, rgba(201, 162, 92, 0.1) 0%, transparent 65%);
+}
+.chat-panel.chat-pill-running::after {
+  border-top-color: rgba(232, 200, 135, 0.06);
+  border-bottom-color: rgba(0, 0, 0, 0.1);
 }
 .chat-panel.chat-pill-running::after {
   border-color: rgba(201, 162, 92, 0.14);
@@ -3133,6 +3186,55 @@ button.chat-history-entry {
   color: #f0a8a4;
   border-radius: 4px;
   box-shadow: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   P8 · 星盘罗盘 pill（观测信标重画：双层刻度环漂移 + 罗盘指针旋转）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* SVG <g> 变换基准：以自身包围盒中心旋转 */
+.chat-panel.chat-pill .astrolabe-outer-ring,
+.chat-panel.chat-pill .astrolabe-inner-ring,
+.chat-panel.chat-pill .astrolabe-needle {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* 外环慢速顺转 60s / 内环逆转 90s — 仪器刻度盘的呼吸感 */
+.chat-panel.chat-pill .astrolabe-outer-ring {
+  animation: astrolabe-drift-cw 60s linear infinite;
+}
+
+.chat-panel.chat-pill .astrolabe-inner-ring {
+  animation: astrolabe-drift-ccw 90s linear infinite;
+}
+
+/* hover：环加速（外 35s / 内 50s），「苏醒」反馈 */
+.chat-panel.chat-pill:hover .astrolabe-outer-ring {
+  animation-duration: 35s;
+}
+.chat-panel.chat-pill:hover .astrolabe-inner-ring {
+  animation-duration: 50s;
+}
+
+/* running：指针旋转 2.5s/圈，容器脉冲保留 pill-core-pulse */
+.chat-panel.chat-pill-running .astrolabe-needle {
+  animation: astrolabe-needle-spin 2.5s linear infinite;
+}
+
+@keyframes astrolabe-drift-cw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes astrolabe-drift-ccw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+
+@keyframes astrolabe-needle-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* ═══════════════════════════════════════════════════════════════
