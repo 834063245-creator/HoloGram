@@ -154,10 +154,6 @@ export class GraphSceneLifecycle {
   private _lastCamPos = new THREE.Vector3();
   private _lastCamTarget = new THREE.Vector3();
 
-  // ponytail: 总览关 bloom 防边密集区雾化; 聚焦开 bloom 让 hover 发光鲜明。滞回防抖。
-  private _bloomFar = false;
-  private _bloomHysteresis = 0; // 0=稳态, 正值刚切换倒计时防回弹
-
   constructor(private host: LifecycleHost) {}
 
   // ── Render ───────────────────────────────────────────────
@@ -352,10 +348,15 @@ export class GraphSceneLifecycle {
     // GPU path: N-body for macro structure, spiral for micro
     if (gpuLayout.ready) {
       // ── GPU N-body: macro structure from edge forces, spiral for micro ──
+      // Filter cross-community edges — they cause filament structures.
+      // Community placement is handled by repelCommunityCentroids.
+      const intraPairs = effGroups.size > 1
+        ? pairs.filter(([s, t]) => nodeCommArr[s] === nodeCommArr[t])
+        : pairs;
       const initPos = fibonacciSphere(nodes.length, shellRadius);
       const gpuResult = await gpuLayout.compute(
         nodes.length,
-        pairs,
+        intraPairs,
         initPos,
         {
           n: nodes.length,
@@ -442,7 +443,7 @@ export class GraphSceneLifecycle {
     // FOV-based camera distance — fills frame regardless of project size
     const fovRad = (this.host.camera.fov * Math.PI) / 180;
     const aspect = this.host.container.clientWidth / Math.max(1, this.host.container.clientHeight);
-    const camDist = ((radius / Math.tan(fovRad / 2)) * 0.4) / Math.min(1, aspect);
+    const camDist = ((radius / Math.tan(fovRad / 2)) * 0.6) / Math.min(1, aspect);
 
     const shellR = Math.cbrt(nodes.length) * 14;
     const isoCount = deg.filter((d) => d === 0).length;
@@ -890,33 +891,6 @@ export class GraphSceneLifecycle {
     this.host._nodes._flushOverrideAttrs();
   }
 
-  // ponytail: 总览(相机距 target > graphRadius*2.2)关 bloom 防边密集叠加区被 bloom 扩散成雾;
-  // 聚焦(< graphRadius*1.6)开 bloom 让 hover/选中节点发光鲜明。滞回 30 帧防阈值抖动回弹。
-  private _updateBloomByDistance(): void {
-    if (this.host._graphRadius < 1 || this.host._fold.foldMode) return;
-    const dist = this.host.camera.position.distanceTo(this.host.controls.target);
-    const farThresh = this.host._graphRadius * 2.2;
-    const nearThresh = this.host._graphRadius * 1.6;
-    const hasBloom = this.host.composer.passes.indexOf(this.host.bloomPass) !== -1;
-    if (this._bloomHysteresis > 0) {
-      this._bloomHysteresis--;
-      return;
-    }
-    if (this._bloomFar) {
-      if (dist < nearThresh) {
-        this._bloomFar = false;
-        if (!hasBloom) this.host.composer.addPass(this.host.bloomPass);
-        this._bloomHysteresis = 30;
-      }
-    } else {
-      if (dist > farThresh) {
-        this._bloomFar = true;
-        if (hasBloom) this.host.composer.removePass(this.host.bloomPass);
-        this._bloomHysteresis = 30;
-      }
-    }
-  }
-
   // ── Animate ──────────────────────────────────────────────
 
   animate(): void {
@@ -981,11 +955,6 @@ export class GraphSceneLifecycle {
         this.host._focus.updateFocus();
       } catch {
         /* ditto */
-      }
-      try {
-        this._updateBloomByDistance();
-      } catch {
-        /* bloom switch must never crash loop */
       }
     }
 
