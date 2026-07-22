@@ -21,8 +21,10 @@ jobs:
         with:
           toolchain: stable
 
-      - run: npm ci
+      - run: npm ci && npm run build
         working-directory: src-ui
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -35,3 +37,4 @@ jobs:
           releaseBody: '请从下方 Assets 下载安装包。'
           releaseDraft: false
           prerelease: false
+          args: --config '{"build":{"beforeBuildCommand":""}}'
