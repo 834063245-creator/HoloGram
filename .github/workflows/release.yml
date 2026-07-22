@@ -21,15 +21,14 @@ jobs:
         with:
           toolchain: stable
 
-      - run: npm ci && npm run build
+      - run: npm ci
         working-directory: src-ui
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          NODE_OPTIONS: --max-old-space-size=4096
         with:
           projectPath: src-tauri
           tagName: ${{ github.ref_name }}
@@ -37,4 +36,4 @@ jobs:
           releaseBody: '请从下方 Assets 下载安装包。'
           releaseDraft: false
           prerelease: false
-          args: --config '{"build":{"beforeBuildCommand":""}}'
+          updaterJsonPreferNsis: true
