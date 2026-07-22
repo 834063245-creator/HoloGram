@@ -12,25 +12,26 @@ jobs:
   release:
     runs-on: windows-latest
     timeout-minutes: 30
-    env:
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '22' }
+        with:
+          node-version: '22'
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { toolchain: stable }
+        with:
+          toolchain: stable
 
-      - run: npm ci && npm run build
+      - run: npm ci
         working-directory: src-ui
 
-      - run: npx @tauri-apps/cli@^2 build
-        working-directory: src-tauri
-
-      - uses: softprops/action-gh-release@v2
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          draft: true
-          files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/msi/*.msi.zip
-            src-tauri/target/release/bundle/msi/*.msi.zip.sig
+          projectPath: src-tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: 'v__VERSION__'
+          releaseBody: '请从下方 Assets 下载安装包。'
+          releaseDraft: false
+          prerelease: false
