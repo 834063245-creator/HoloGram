@@ -43,7 +43,9 @@ impl Graph {
         }
     }
 
-    /// Load a Graph from a Python-format JSON file (nodes/edges as arrays).
+    /// Load a Graph from a JSON file.
+    /// Supports both array format (Python: nodes/edges as arrays) and
+    /// HashMap format (Rust serde: nodes/edges as objects).
     pub fn from_json_file(path: &str) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Cannot read {}: {}", path, e))?;
@@ -54,17 +56,35 @@ impl Graph {
         if let Some(meta) = val.get("meta") {
             g.meta = meta.clone();
         }
-        if let Some(nodes) = val.get("nodes").and_then(|v| v.as_array()) {
-            for n in nodes {
-                if let Ok(node) = serde_json::from_value::<Node>(n.clone()) {
-                    g.nodes.insert(node.id.clone(), node);
+        // Nodes: accept array format [n1, n2, ...] or HashMap format {"id": {...}, ...}
+        if let Some(nodes_val) = val.get("nodes") {
+            if let Some(arr) = nodes_val.as_array() {
+                for n in arr {
+                    if let Ok(node) = serde_json::from_value::<Node>(n.clone()) {
+                        g.nodes.insert(node.id.clone(), node);
+                    }
+                }
+            } else if let Some(map) = nodes_val.as_object() {
+                for (_, n) in map {
+                    if let Ok(node) = serde_json::from_value::<Node>(n.clone()) {
+                        g.nodes.insert(node.id.clone(), node);
+                    }
                 }
             }
         }
-        if let Some(edges) = val.get("edges").and_then(|v| v.as_array()) {
-            for e in edges {
-                if let Ok(edge) = serde_json::from_value::<Edge>(e.clone()) {
-                    g.edges.insert(edge.id.clone(), edge);
+        // Edges: same dual-format support
+        if let Some(edges_val) = val.get("edges") {
+            if let Some(arr) = edges_val.as_array() {
+                for e in arr {
+                    if let Ok(edge) = serde_json::from_value::<Edge>(e.clone()) {
+                        g.edges.insert(edge.id.clone(), edge);
+                    }
+                }
+            } else if let Some(map) = edges_val.as_object() {
+                for (_, e) in map {
+                    if let Ok(edge) = serde_json::from_value::<Edge>(e.clone()) {
+                        g.edges.insert(edge.id.clone(), edge);
+                    }
                 }
             }
         }
@@ -172,7 +192,11 @@ impl Graph {
         };
         for (id, node) in &other.nodes {
             if let Some(before) = self.nodes.get(id) {
-                if before.name != node.name || before.kind != node.kind {
+                if before.name != node.name
+                    || before.kind != node.kind
+                    || before.out_degree != node.out_degree
+                    || before.in_degree != node.in_degree
+                {
                     diff.modified_nodes.push((before.clone(), node.clone()));
                 }
             } else {
@@ -267,5 +291,64 @@ mod tests {
         let diff = before.diff(&after);
         assert_eq!(diff.added_nodes.len(), 1);
         assert_eq!(diff.added_nodes[0].id, "b");
+    }
+
+    #[test]
+    fn test_diff_detects_degree_change_as_modified() {
+        let mut before = Graph::new();
+        before.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        before.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        before.add_node(Node::new("c", "fn_c", NodeKind::Symbol));
+        before.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+
+        // After: a gains a new outgoing edge to c → a.out_degree and c.in_degree change
+        let mut after = before.clone();
+        after.add_edge(Edge::new("e2", "a", "c", EdgeKind::Calls));
+
+        let diff = before.diff(&after);
+        let modified_ids: Vec<&str> = diff.modified_nodes.iter().map(|(_, n)| n.id.as_str()).collect();
+        assert_eq!(diff.modified_nodes.len(), 2, "a (out_degree) and c (in_degree) should be modified");
+        assert!(modified_ids.contains(&"a"));
+        assert!(modified_ids.contains(&"c"));
+        assert_eq!(diff.added_edges.len(), 1);
+    }
+
+    #[test]
+    fn test_from_json_file_array_format() {
+        let json = r#"{
+            "nodes": [
+                {"id":"n1","name":"main","type":"symbol","location":null,"properties":{}},
+                {"id":"n2","name":"helper","type":"function","location":null,"properties":{}}
+            ],
+            "edges": [
+                {"id":"e1","source":"n1","target":"n2","type":"calls"}
+            ]
+        }"#;
+        let tmp = std::env::temp_dir().join("hologram_test_array.json");
+        std::fs::write(&tmp, json).unwrap();
+        let g = Graph::from_json_file(tmp.to_str().unwrap()).unwrap();
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+        assert_eq!(g.get_node("n1").unwrap().name, "main");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_from_json_file_hashmap_format() {
+        // Rust serde serializes Graph with nodes/edges as HashMap objects, not arrays.
+        // This is the format save_baseline writes — from_json_file must be able to read it back.
+        let mut original = Graph::new();
+        original.add_node(Node::new("n1", "main", NodeKind::Symbol));
+        original.add_node(Node::new("n2", "helper", NodeKind::Function));
+        original.add_edge(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
+        let serialized = serde_json::to_string_pretty(&original).unwrap();
+
+        let tmp = std::env::temp_dir().join("hologram_test_hashmap.json");
+        std::fs::write(&tmp, &serialized).unwrap();
+        let g = Graph::from_json_file(tmp.to_str().unwrap()).unwrap();
+        assert_eq!(g.node_count(), 2, "HashMap format nodes should be loaded");
+        assert_eq!(g.edge_count(), 1, "HashMap format edges should be loaded");
+        assert_eq!(g.get_node("n2").unwrap().name, "helper");
+        let _ = std::fs::remove_file(&tmp);
     }
 }

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# HoloGram CLI wrapper — delegates to hologram-engine.exe
+# Usage:
+#   hologram run <tool> [project_path] [--key value ...]
+#   hologram run --list
+#   hologram serve [--project-root <path>]
+#   hologram --version
+#   hologram --help
+#
+# Place this script on your PATH alongside hologram-engine.exe (or .dll).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find the engine binary — same dir, then fall back to engine-bin/
+ENGINE=""
+for candidate in \
+    "$SCRIPT_DIR/hologram-engine" \
+    "$SCRIPT_DIR/hologram-engine.exe" \
+    "$SCRIPT_DIR/../engine-bin/hologram-engine" \
+    "$SCRIPT_DIR/../engine-bin/hologram-engine.exe"; do
+    if [ -x "$candidate" ] || [ -f "$candidate" ]; then
+        ENGINE="$candidate"
+        break
+    fi
+done
+
+if [ -z "$ENGINE" ]; then
+    echo "error: hologram-engine binary not found." >&2
+    echo "  Expected next to this script or in engine-bin/" >&2
+    exit 1
+fi
+
+exec "$ENGINE" "$@"

@@ -14,6 +14,7 @@ use hologram_engine::logging;
 use hologram_engine::routing::preflight::{check_timeline_props, load_baseline, run_full_check, save_baseline};
 use hologram_engine::mcp::{self, McpServer};
 use hologram_engine::stress::{self, StressSize};
+use hologram_engine::tools::ToolRegistry;
 use serde_json::{self, json};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -58,6 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  engine.exe --stress-full <path> [N]  Full pipeline: structure + Dataflow + LSP");
         println!("  engine.exe --stress-dataflow <path> [N]  Dataflow-only benchmark");
         println!("  engine.exe --stress-lsp <path> [N] [ext]  LSP-only benchmark (ext: py,rs,ts,go,...)");
+        println!("  engine.exe run <tool> [project_path] [--key value ...]  Run a tool one-shot");
+        println!("  engine.exe run --list                                 List available tools");
         println!("  engine.exe --version          Print version and copyright");
         println!("  engine.exe --help             Show this help");
         return Ok(());
@@ -135,6 +138,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--stress-suite") {
         stress::run_stress_suite();
         return Ok(());
+    }
+
+    // ── CLI one-shot mode: `engine.exe run <tool> [project_path] [--key value ...]` ──
+    if let Some(pos) = args.iter().position(|a| a == "run") {
+        return cli_run(&args[pos + 1..]);
     }
 
     // ── MCP serve mode ──
@@ -477,7 +485,7 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
     };
 
     let baseline_path = if baseline_path.is_empty() {
-        "hologram_before.json".to_string()
+        ".hologram/baseline.json".to_string()
     } else {
         baseline_path.to_string()
     };
@@ -500,6 +508,9 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
             })).unwrap_or_default()
         }
         Err(_) => {
+            if let Some(parent) = std::path::Path::new(&baseline_path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             let graph_json = serde_json::to_string_pretty(&current).unwrap_or_default();
             if let Err(e) = std::fs::write(&baseline_path, &graph_json) {
                 return serde_json::to_vec(&json!({"error": format!("无法创建基线: {}", e)})).unwrap_or_default();
@@ -600,6 +611,181 @@ fn unframe(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
     let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
     if buf.len() < 4 + len { return None; }
     Some((buf[4..4 + len].to_vec(), 4 + len))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CLI one-shot mode — `engine.exe run <tool> [project_path] [--key value ...]`
+// Reuses ToolRegistry::dispatch — same engine, same baseline, same config as GUI.
+// ═══════════════════════════════════════════════════════════════
+
+/// Parse `--key value` pairs (and positional project_path) into a JSON object.
+/// Returns (tool_name, project_path, args_json).
+fn parse_cli_args(rest: &[String]) -> Result<(String, String, serde_json::Value), String> {
+    if rest.is_empty() {
+        return Err("Usage: engine.exe run <tool> [project_path] [--key value ...]".into());
+    }
+
+    // --list: special — no tool to parse
+    if rest[0] == "--list" {
+        return Ok(("--list".into(), String::new(), json!({})));
+    }
+
+    let tool = rest[0].clone();
+    let mut project_path = String::new();
+    let mut args_map = serde_json::Map::new();
+
+    let mut i = 1;
+    while i < rest.len() {
+        let arg = &rest[i];
+        if arg.starts_with("--") {
+            let key = arg.strip_prefix("--").unwrap_or(arg);
+            let value = rest.get(i + 1).ok_or_else(|| format!("Missing value for --{}", key))?;
+            // Comma-separated values → JSON array (handlers expect arrays for list params)
+            let parsed = if value.contains(',') {
+                let arr: Vec<&str> = value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                json!(arr)
+            } else if value == "true" {
+                json!(true)
+            } else if value == "false" {
+                json!(false)
+            } else if value == "null" {
+                json!(null)
+            } else if let Ok(n) = value.parse::<i64>() {
+                json!(n)
+            } else if let Ok(f) = value.parse::<f64>() {
+                json!(f)
+            } else {
+                json!(value)
+            };
+            args_map.insert(key.to_string(), parsed);
+            i += 2;
+        } else if project_path.is_empty() {
+            project_path = arg.clone();
+            i += 1;
+        } else {
+            return Err(format!("Unexpected positional argument: {}", arg));
+        }
+    }
+
+    let project_path = if project_path.is_empty() { ".".into() } else { project_path };
+    Ok((tool, project_path, json!(args_map)))
+}
+
+/// Extract the tool result text from an MCP JSON-RPC envelope.
+/// Returns (text, is_error).
+fn extract_mcp_result(envelope: &serde_json::Value) -> (String, bool) {
+    // Error response: {"jsonrpc":"2.0","id":...,"error":{"code":...,"message":...}}
+    if let Some(err) = envelope.get("error") {
+        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        return (msg.to_string(), true);
+    }
+    // Success response: {"jsonrpc":"2.0","id":...,"result":{"content":[{"type":"text","text":"..."}]}}
+    let text = envelope
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    (text.to_string(), false)
+}
+
+/// Entry point for `engine.exe run` CLI mode.
+fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let (tool, project_path, args_json) = match parse_cli_args(rest) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(2);
+        }
+    };
+
+    // --list: print all available tool names
+    if tool == "--list" {
+        let tools = ToolRegistry::global().tools_list();
+        for t in &tools {
+            let name = t["name"].as_str().unwrap_or("?");
+            let desc = t.get("description").and_then(|d| d.as_str()).unwrap_or("");
+            println!("{:<22} {}", name, desc);
+        }
+        return Ok(());
+    }
+
+    let root = PathBuf::from(&project_path);
+    if !root.exists() {
+        eprintln!("[cli] Project path not found: {}", project_path);
+        std::process::exit(2);
+    }
+
+    // Initialize engine (opens GraphStore + SQLite, same as GUI/MCP)
+    if let Err(e) = hologram_engine::engine::engine_init(&root) {
+        eprintln!("[cli] Engine init failed (non-fatal): {}", e);
+    }
+
+    // Auto-analyze when the graph is empty — mirrors handle_check behavior.
+    // Skip for tools that don't need a graph (engine_status) or when the tool
+    // itself triggers analysis (analyze_project, validate_project).
+    let self_analyzing = tool == "analyze_project" || tool == "validate_project";
+    if tool != "engine_status" && !self_analyzing {
+        let has_graph = hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0)
+            .unwrap_or(false);
+        if !has_graph {
+            eprintln!("[cli] Graph is empty, analyzing project…");
+            match hologram_engine::engine::engine_analyze(&root) {
+                Ok(result) => info!("[cli] Auto-analysis complete: {} nodes, {} edges", result.node_count, result.edge_count),
+                Err(e) => {
+                    eprintln!("[cli] Analysis failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // analyze_project: run analysis before dispatching (fills the graph)
+    if tool == "analyze_project" {
+        match hologram_engine::engine::engine_analyze(&root) {
+            Ok(result) => info!("[cli] Analysis complete: {} nodes, {} edges", result.node_count, result.edge_count),
+            Err(e) => {
+                eprintln!("[cli] Analysis failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Dispatch through the same registry as MCP and Tauri
+    let id = json!(1);
+    let envelope = ToolRegistry::dispatch(&tool, &args_json, &id);
+    let (text, is_error) = extract_mcp_result(&envelope);
+
+    if is_error {
+        eprintln!("{}", text);
+        std::process::exit(1);
+    }
+
+    // Print result to stdout (raw tool JSON, jq-friendly)
+    println!("{}", text);
+
+    // For validate_project: exit 1 if constraints not passed
+    if tool == "validate_project" {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if !v.get("passed").and_then(|p| p.as_bool()).unwrap_or(false) {
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // For preflight_check: exit 1 if risk is critical or high
+    if tool == "preflight_check" {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            let risk = v.get("risk_level").and_then(|r| r.as_str()).unwrap_or("low");
+            if risk == "critical" || risk == "high" {
+                std::process::exit(1);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -836,5 +1022,99 @@ mod tests {
         let resp = handle_check("check:C:/hologram_definitely_nonexistent_dir_xyz123");
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
         assert_eq!(v["error"], "project not found");
+    }
+
+    // ── CLI arg parsing ──
+
+    #[test]
+    fn test_parse_cli_args_basic() {
+        let args: Vec<String> = vec!["trace_impact".into(), "/tmp/proj".into(), "--node_id".into(), "src/main.rs:fn".into()];
+        let (tool, path, json) = parse_cli_args(&args).unwrap();
+        assert_eq!(tool, "trace_impact");
+        assert_eq!(path, "/tmp/proj");
+        assert_eq!(json["node_id"], "src/main.rs:fn");
+    }
+
+    #[test]
+    fn test_parse_cli_args_no_project() {
+        let args: Vec<String> = vec!["engine_status".into()];
+        let (tool, path, json) = parse_cli_args(&args).unwrap();
+        assert_eq!(tool, "engine_status");
+        assert_eq!(path, ".");
+        assert!(json.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_cli_args_types() {
+        let args: Vec<String> = vec![
+            "preflight_check".into(), "/tmp".into(),
+            "--files".into(), "a.rs,b.rs".into(),
+            "--limit".into(), "42".into(),
+            "--verbose".into(), "true".into(),
+        ];
+        let (tool, path, json) = parse_cli_args(&args).unwrap();
+        assert_eq!(tool, "preflight_check");
+        assert_eq!(path, "/tmp");
+        assert!(json["files"].is_array(), "comma-separated values must be arrays");
+        assert_eq!(json["files"][0], "a.rs");
+        assert_eq!(json["files"][1], "b.rs");
+        assert_eq!(json["limit"], 42);
+        assert_eq!(json["verbose"], true);
+    }
+
+    #[test]
+    fn test_parse_cli_args_single_value_stays_string() {
+        let args: Vec<String> = vec![
+            "trace_impact".into(), "/tmp".into(),
+            "--node_id".into(), "src/main.rs:fn_main".into(),
+        ];
+        let (_, _, json) = parse_cli_args(&args).unwrap();
+        assert!(json["node_id"].is_string(), "values without commas stay as strings");
+        assert_eq!(json["node_id"], "src/main.rs:fn_main");
+    }
+
+    #[test]
+    fn test_parse_cli_args_missing_value() {
+        let args: Vec<String> = vec!["trace_impact".into(), "--node_id".into()];
+        let result = parse_cli_args(&args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing value"));
+    }
+
+    #[test]
+    fn test_parse_cli_args_empty() {
+        let result = parse_cli_args(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cli_args_list_flag() {
+        let args: Vec<String> = vec!["--list".into()];
+        let (tool, _path, _json) = parse_cli_args(&args).unwrap();
+        assert_eq!(tool, "--list");
+    }
+
+    // ── MCP result extraction ──
+
+    #[test]
+    fn test_extract_mcp_result_success() {
+        let envelope = json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "content": [{ "type": "text", "text": "{\"passed\":true}" }] }
+        });
+        let (text, is_error) = extract_mcp_result(&envelope);
+        assert!(!is_error);
+        assert_eq!(text, "{\"passed\":true}");
+    }
+
+    #[test]
+    fn test_extract_mcp_result_error() {
+        let envelope = json!({
+            "jsonrpc": "2.0", "id": 1,
+            "error": { "code": -32000, "message": "Security refusal: blocked" }
+        });
+        let (text, is_error) = extract_mcp_result(&envelope);
+        assert!(is_error);
+        assert_eq!(text, "Security refusal: blocked");
     }
 }

@@ -10,8 +10,8 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-700%2B%20total-brightgreen" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows-blue" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1000%2B%20total-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
@@ -74,7 +74,7 @@
 
 ### 🤙 方式一：MCP 模式（推荐 · 1 分钟 · 零界面）
 
-**不需要桌面应用。** 引擎是单文件二进制，26 种语法静态链接，零依赖。
+**不需要桌面应用。** 引擎是单文件二进制，26 种语法静态链接，零依赖。支持 Windows 和 Linux。
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -93,12 +93,15 @@
 ```
 请帮我安装 HoloGram MCP 服务。步骤：
 
-1. 从 https://github.com/834063245-creator/HoloGram/releases 下载最新版 hologram-engine.exe
-2. 放到用户主目录下的 .hologram 文件夹（没有就新建）
+1. 从 https://github.com/834063245-creator/HoloGram/releases 下载：
+   - Windows: hologram-engine-windows-x64.zip
+   - Linux:   hologram-engine-linux-x64.tar.gz
+2. 解压后运行安装脚本：
+   - Windows: 双击 install.cmd
+   - Linux:   ./install.sh --user
 3. 在当前 AI 编程工具的 MCP 配置中注册：
-   - Windows: ~/.hologram/hologram-engine.exe
-   - macOS/Linux: ~/.hologram/hologram-engine（下载后 chmod +x）
-   - 参数：serve
+   - command: hologram-engine
+   - args: serve
 4. 重启 AI 编程工具，调 engine_status 验证
 ```
 
@@ -113,15 +116,29 @@
 {
   "mcpServers": {
     "hologram": {
-      "command": "~/.hologram/hologram-engine.exe",
+      "command": "hologram-engine",
       "args": ["serve"]
     }
   }
 }
 ```
 
-**Cursor** — Settings → MCP → Add new MCP server，command: `~/.hologram/hologram-engine.exe`，args: `serve`。
+**Cursor** — Settings → MCP → Add new MCP server，command: `hologram-engine`，args: `serve`。
 </details>
+
+### 💻 方式二：CLI 命令行工具
+
+安装后还可以直接在终端使用，适合脚本化场景：
+
+```bash
+hologram run --list                           # 查看所有工具
+hologram run graph_summary .                   # 项目概览
+hologram run trace_impact . --node_id src/main.rs:main  # 查影响面
+hologram run preflight_check . --files a.rs,b.rs        # 改前检查（exit code 表达 pass/fail）
+hologram run detect_cycles .                    # 检测循环依赖
+```
+
+> 💡 `preflight_check` 的 exit code：0=低风险，1=高风险（critical/high），适合 CI/CD 和 git hooks。
 
 ### 🖥️ 方式二：桌面应用
 
@@ -283,16 +300,16 @@
 
 ## 🔨 从源码构建
 
-**系统要求：** Rust 1.80+ · Node.js 20+ · Windows 10+（桌面应用）
+**系统要求：** Rust 1.80+ · Node.js 20+（桌面应用额外需要 Windows 10+）
 
 ```bash
 git clone https://github.com/834063245-creator/HoloGram.git
 cd HoloGram
 
-# 仅引擎 — MCP 模式只需要这个
-cd engine && cargo build --release    # → engine/target/release/hologram-engine.exe
+# 仅引擎 — MCP 模式只需要这个（Linux / Windows 均可）
+cd engine && cargo build --release    # → engine/target/release/hologram-engine
 
-# 桌面应用
+# 桌面应用（仅 Windows）
 cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 ```
 
@@ -326,9 +343,9 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 <summary><strong>🍎 支持 macOS / Linux 吗？</strong></summary>
 <br/>
 
-**MCP 模式：** ✅ 理论上支持（从源码编译引擎，`cargo build --release`）。tree-sitter 语法和 Rust 代码跨平台。
+**引擎 + CLI：** ✅ Windows 和 Linux 均有 CI 测试和预编译二进制发布。从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 下载对应平台包，运行安装脚本即可。macOS 可从源码编译（`cargo build --release`）。
 
-**桌面应用：** ⚠️ 目前仅 Windows。沙箱（JobObject）和凭据层（DPAPI）用了 Windows API。macOS / Linux 移植需要改这两层。
+**桌面应用：** ⚠️ 目前仅 Windows。沙箱（JobObject / bubblewrap / sandbox-exec）、权限层、凭据层（DPAPI / Keychain / Secret Service）均已三平台实现，但尚未在 CI 中构建 Linux/macOS 桌面端。
 </details>
 
 <details>
@@ -390,8 +407,9 @@ Agent 功能需要你自己配置 LLM API key（支持 Anthropic / OpenAI 兼容
 |:--|:--|:--|
 | `engine_status` 无响应 | MCP 服务未注册 | 检查 MCP 配置文件路径和 command |
 | 工具返回空结果 | 引擎还没分析项目 | 先调 `analyze_project` 做全量分析 |
-| "engine not found" | 引擎不在预期位置 | 确认 `~/.hologram/hologram-engine.exe` 存在 |
-| 引擎启动失败 | 缺少 VC++ Redistributable | [下载安装](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| "engine not found" | 引擎不在 PATH 上 | 重新运行 install.sh / install.cmd |
+| 引擎启动失败 (Windows) | 缺少 VC++ Redistributable | [下载安装](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| 引擎启动失败 (Linux) | 缺少 C++ 运行时 | `sudo apt install libstdc++6` |
 
 ### 桌面应用
 
@@ -415,7 +433,9 @@ Agent 功能需要你自己配置 LLM API key（支持 Anthropic / OpenAI 兼容
 ## 👩‍💻 开发
 
 ```bash
-cd engine && cargo test              # 473+ Rust tests
+cd engine && cargo test              # 462+ Rust 引擎测试
+cd src-tauri && cargo test           # 143+ Tauri 壳测试
+cd src-ui && npx vitest run          # 401+ 前端测试
 cd engine && cargo build --release   # 编译引擎
 cargo tauri build                    # 打包桌面应用
 cd src-ui && npm run build           # 类型检查 + 打包前端
@@ -488,5 +508,5 @@ HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)
 
 <p align="center">
   <br/>
-  <em>Built with ❤️ and Rust. One person, ~94,000 lines of code, 257 source files, 26 languages, 700+ tests.</em>
+  <em>Built with ❤️ and Rust. One person, ~94,000 lines of code, 257 source files, 26 languages, 1000+ tests.</em>
 </p>

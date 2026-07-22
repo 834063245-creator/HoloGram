@@ -271,7 +271,12 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
         .args(args)
         .output()
         .map_err(|e| format!("git 命令失败: {e}"))?;
-    // git diff may exit 0 with empty output or 1 with diff output
+    // git diff exits 1 when differences exist — that's not an error.
+    // Any exit code >= 2 indicates a real git failure.
+    if !output.status.success() && output.status.code().unwrap_or(-1) > 1 {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git {:?} 失败: {}", args, stderr.trim()));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -426,5 +431,87 @@ mod tests {
         let input = wt.join("src/main.rs");
         let result = iso.forward_map(&input);
         assert_eq!(result, input); // already in worktree, unchanged
+    }
+
+    #[test]
+    fn test_run_git_errors_on_non_repo() {
+        // git status on a non-repo dir exits 128 → run_git should return Err
+        let tmp = std::env::temp_dir().join("hologram_test_nonrepo");
+        let _ = std::fs::create_dir_all(&tmp);
+        let result = run_git(&tmp, &["status"]);
+        assert!(result.is_err(), "git status on non-repo should error");
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[test]
+    fn test_run_git_succeeds_on_exit_code_0() {
+        // Create a real git repo, commit, then run `git log --oneline` (exit 0)
+        let tmp = std::env::temp_dir().join("hologram_test_git_ok");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["init", "--quiet"])
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["config", "user.email", "test@test.com"])
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["config", "user.name", "Test"])
+            .status().unwrap();
+        std::fs::write(tmp.join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["add", "-A"])
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["commit", "-m", "init", "--quiet"])
+            .status().unwrap();
+
+        let result = run_git(&tmp, &["log", "--oneline"]);
+        assert!(result.is_ok(), "git log (exit 0) should succeed: {:?}", result);
+        assert!(result.unwrap().contains("init"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_run_git_succeeds_on_exit_code_1() {
+        // git diff --stat HEAD with uncommitted changes exits 1 — that's not an error.
+        let tmp = std::env::temp_dir().join("hologram_test_git_diff");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["init", "--quiet"])
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["config", "user.email", "test@test.com"])
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["config", "user.name", "Test"])
+            .status().unwrap();
+        std::fs::write(tmp.join("file.txt"), "v1").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["add", "-A"])
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp)
+            .args(["commit", "-m", "init", "--quiet"])
+            .status().unwrap();
+        // Introduce uncommitted change → git diff exits 1
+        std::fs::write(tmp.join("file.txt"), "v2").unwrap();
+
+        let result = run_git(&tmp, &["diff", "--stat", "HEAD"]);
+        assert!(result.is_ok(), "git diff (exit 1 with changes) should NOT be an error: {:?}", result);
+        assert!(!result.unwrap().is_empty(), "should have diff output");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

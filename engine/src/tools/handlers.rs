@@ -725,6 +725,9 @@ pub(crate) fn handler_diff(args: &Value) -> ToolResponse {
         let before = match Graph::from_json_file(before_path) {
             Ok(g) => g,
             Err(_) => {
+                if let Some(parent) = std::path::Path::new(before_path).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
                 let graph_json = serde_json::to_string_pretty(after).unwrap_or_default();
                 if let Err(e) = std::fs::write(before_path, &graph_json) {
                     return json!({"error": format!("Cannot create baseline: {}", e)});
@@ -1189,10 +1192,6 @@ fn is_entry_point(node: &Node) -> bool {
     }
     // Framework init/bootstrap functions
     if name == "init" && node.out_degree > 3 {
-        return true;
-    }
-    // CLI/shell entry scripts
-    if loc.contains("test-once.ts") || loc.contains("test-agent.ts") {
         return true;
     }
     false
