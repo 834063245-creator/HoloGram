@@ -23,7 +23,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
-    "@types/three": "^0.184.1",
+    "@types/three": "^0.185.1",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
@@ -37,7 +37,7 @@
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "three": "^0.184.0",
+    "three": "^0.185.1",
     "zustand": "^5.0.14"
   },
   "overrides": {
