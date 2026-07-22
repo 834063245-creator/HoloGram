@@ -34,7 +34,7 @@
     "marked": "^18.0.5",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "three": "^0.184.0",
