@@ -8,12 +8,19 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# Platform-adaptive binary name: hologram-engine on Linux, hologram-engine.exe on Windows
+if [[ "$OS" == "Windows_NT" ]] || [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
+    ENGINE_BIN="hologram-engine.exe"
+else
+    ENGINE_BIN="hologram-engine"
+fi
+
 build_engine() {
     echo "═══ 编译引擎 ═══"
     cd engine && cargo build --release && cd ..
     mkdir -p engine-bin
-    cp -f engine/target/release/hologram-engine.exe engine-bin/
-    echo "  ✓ engine-bin/hologram-engine.exe"
+    cp -f "engine/target/release/$ENGINE_BIN" "engine-bin/$ENGINE_BIN"
+    echo "  ✓ engine-bin/$ENGINE_BIN"
 }
 
 build_app() {

@@ -25,7 +25,35 @@ jobs:
       - run: npx vite build
         working-directory: src-ui
 
-  rust:
+  engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: false
+
+      # Linux: install C/C++ build deps for native crates (usearch, libsqlite3-sys, tree-sitter)
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential g++ pkg-config
+
+      - run: cargo test --release
+        working-directory: engine
+        env:
+          RUSTFLAGS: ''
+      - run: cargo build --release
+        working-directory: engine
+        env:
+          RUSTFLAGS: ''
+
+  desktop:
     runs-on: windows-latest
     env:
       RUSTFLAGS: -D warnings
@@ -37,15 +65,6 @@ jobs:
         with:
           toolchain: stable
           cache: false
-
-      - run: cargo test --release
-        working-directory: engine
-        env:
-          RUSTFLAGS: ''
-      - run: cargo build --release
-        working-directory: engine
-        env:
-          RUSTFLAGS: ''
 
       - run: npm ci && npx vite build
         working-directory: src-ui

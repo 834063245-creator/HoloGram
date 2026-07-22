@@ -94,12 +94,12 @@ export class ToolRegistry {
   }
 }
 
-// ---- Hologram 图查询工具 (25 tools — 与引擎 MCP 双线对齐) ----
+// ---- Hologram 图查询工具 (28 tools — 与引擎 MCP 双线对齐) ----
 // 硬编码工具 = Agent 的"嘴"：描述经过 LLM 调优，告诉 Agent 什么时候用、用完了下一步调什么。
-// MCP = 执行通道：长驻引擎进程 <100ms 响应，挂了自动降级 CLI。
+// MCP = 执行通道：长驻引擎进程 <100ms 响应，挂了降级到进程内 ToolRegistry::dispatch 直调。
 // 两者永远对齐——引擎新增 MCP 工具必须同步在此补硬编码定义。
 
-/** Tool executor: invokes tools via MCP (fast, persistent) or CLI (fallback).
+/** Tool executor: invokes tools via MCP (fast, persistent) or in-process dispatch (fallback).
  *  onProgress is an optional callback for streaming partial output during execution. */
 export type ToolExecutor = (
   toolName: string,

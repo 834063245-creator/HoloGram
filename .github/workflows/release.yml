@@ -1,4 +1,6 @@
-# 打 v* tag 自动发版。签名 + 更新清单 + MSI。
+# 打 v* tag 自动发版。
+#   engine-cli: 双平台 engine 二进制 + CLI 安装脚本
+#   desktop:    Windows 桌面应用 (MSI)
 name: Release
 
 on:
@@ -9,7 +11,59 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  engine-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: hologram-engine-linux-x64
+            bin: hologram-engine
+          - os: windows-latest
+            artifact: hologram-engine-windows-x64
+            bin: hologram-engine.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential g++ pkg-config
+
+      - name: Build engine
+        run: cargo build --release
+        working-directory: engine
+
+      - name: Stage artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p staging
+          cp engine/target/release/hologram-engine staging/
+          cp release-bin/hologram staging/
+          cp release-bin/install.sh staging/
+          tar -czf ${{ matrix.artifact }}.tar.gz -C staging .
+      - name: Stage artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp engine/target/release/hologram-engine.exe staging/
+          cp release-bin/hologram.cmd staging/
+          cp release-bin/hologram staging/
+          cp release-bin/install.cmd staging/
+          cd staging && zip -r ../${{ matrix.artifact }}.zip .
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+
+  desktop:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

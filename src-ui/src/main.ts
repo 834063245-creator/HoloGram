@@ -293,7 +293,7 @@ async function toggleDiff(): Promise<void> {
     return;
   }
   try {
-    const beforePath = `${workspace.path}/hologram_before.json`;
+    const beforePath = `${workspace.path}/.hologram/baseline.json`;
     const diffJson = await rpc<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
     const diff = JSON.parse(diffJson);
     if (diff.is_empty) {
