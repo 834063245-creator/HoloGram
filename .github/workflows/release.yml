@@ -21,14 +21,15 @@ jobs:
         with:
           toolchain: stable
 
-      - run: npm ci
+      - run: npm ci && npm run build
         working-directory: src-ui
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          NODE_OPTIONS: --max-old-space-size=4096
         with:
           projectPath: src-tauri
           tagName: ${{ github.ref_name }}
@@ -37,3 +38,4 @@ jobs:
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
+          args: --config '{"build":{"beforeBuildCommand":""}}'
