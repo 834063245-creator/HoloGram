@@ -124,6 +124,17 @@ export class MemoryManager {
     }
   }
 
+  /** Fire a dummy recall to pre-load the SDR index into memory.
+   *  Call during bootstrap to avoid cold-start latency on first user message.
+   *  Waits for initAura() to complete if it's still in progress, then warms up. */
+  prewarmAura(): void {
+    this.initAura().then(() => {
+      if (this._auraReady) {
+        this.auraSemanticRecall('warmup', 1).catch(() => {});
+      }
+    }).catch(() => {});
+  }
+
   /** Filter out Aura records whose source memory file no longer exists.
    *  Records without a [memory:NAME] marker (pre-migration) are kept. */
   private async _filterOrphaned(records: AuraRecord[]): Promise<AuraRecord[]> {

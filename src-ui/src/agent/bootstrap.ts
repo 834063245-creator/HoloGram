@@ -455,6 +455,7 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
             return `AuraSDK 语义记忆召回：\n${lines.join('\n')}`;
           } catch { return null; }
         });
+        mm.prewarmAura();
       }
     }
     return newAgent;
