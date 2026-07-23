@@ -189,10 +189,6 @@ function buildSystemPrompt(
     ? '你可以承认自己是 Claude，但需说明你运行在 HoloGram 调度框架中。'
     : '你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。';
 
-  const nodes = graphData?.nodes
-    ? (Array.isArray(graphData.nodes) ? graphData.nodes.length : Object.keys(graphData.nodes).length)
-    : 0;
-
   // ── No graph loaded — lightweight identity prompt ──
   if (!graphData) {
     let prompt = `你是 HoloGram 的 AI 编码助手。当前没有加载项目。
@@ -206,21 +202,18 @@ function buildSystemPrompt(
   }
 
   // ── Full coding-agent prompt ──
+  // Static prefix (no variables) → cached by provider when identical
   const modeBlock = collaborationMode === 'plan'
     ? `
 ## 规划模式（当前激活）
-你只有只读工具。不能写文件、跑命令、改代码、Git 操作。
-- 用户让你"修"时，输出方案（改哪个文件、怎么改、diff），不要动手
-- 方案确定后用 ask_user 请用户切到正常模式再执行`
+你只有只读工具。不能写文件、跑命令、改代码、Git 操作。用户让你"修"时输出方案，用 ask_user 请用户切到正常模式再执行。`
     : `
 ## 执行模式
 你有写文件、跑命令、Git 的全部工具。用户说"修"就直接修，修完跑测试验证。`;
 
-  return `你是 HoloGram 的编码 Agent。你有 ${nodes} 个节点、${projectPath ? '已加载依赖图' : '当前项目'}。
-
-## 模型身份
-- ${modelNegation}
-- ${modelIdentity}
+  // Static rules block — identical across all sessions, projects, providers.
+  // Placed FIRST for prompt caching: Anthropic/DeepSeek cache the prefix.
+  const staticRules = `你是 HoloGram 的编码 Agent。
 
 ## 行为规则
 1. **能动手就别只建议**。用户说"修"就去修，不要只说"建议修改"。
@@ -236,19 +229,31 @@ function buildSystemPrompt(
 11. **用户犯错时指出来**。用户说错了就直接说，不要为了讨好而同意。
 12. **改完后检查**。注释和文档是否过时，一起更新。
 13. **别用 run_shell 搜文件/搜代码/操作 Git**。找文件用 glob，搜文本用 search_content，Git 用专用 git_* 工具。run_shell 只用于构建和测试。
-${modeBlock}
-${collaborationMode !== 'plan' ? `
-## 子 Agent
-agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。
-- 同一轮发多个 agent_spawn 即可并行
-- prompt 要自足——子 Agent 看不到你的对话
-- 大任务才委派（多文件改动），小任务自己做` : ''}
+${modeBlock}`;
 
-## 项目上下文
-- 路径: \`${projectPath}\`
-${graphSnapshot ? `\n\`\`\`\n${graphSnapshot}\n\`\`\`` : ''}
-${memorySection ? `\n## 记忆库\n${memorySection}` : ''}
-${claudeMdSection ? `\n## 项目规范\n${claudeMdSection}` : ''}`;
+  // Dynamic suffix — changes per session/project. Appended AFTER cacheable prefix
+  // so the static rules stay in cache across turns.
+  let suffix = `\n## 模型身份
+- ${modelNegation}
+- ${modelIdentity}
+- 项目: \`${projectPath}\``;
+
+  if (collaborationMode !== 'plan') {
+    suffix += `\n\n## 子 Agent
+agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。同一轮发多个可并行。大任务才委派，小任务自己做。`;
+  }
+
+  if (graphSnapshot) {
+    suffix += `\n\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\``;
+  }
+  if (memorySection) {
+    suffix += `\n\n## 记忆库\n${memorySection}`;
+  }
+  if (claudeMdSection) {
+    suffix += `\n\n## 项目规范\n${claudeMdSection}`;
+  }
+
+  return staticRules + suffix;
 }
 let _snapshotRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 export function scheduleEngineSnapshotRefresh(ctx: GraphContext, projectPath: string): void {
