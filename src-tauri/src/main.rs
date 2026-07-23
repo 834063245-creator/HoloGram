@@ -31,7 +31,6 @@ mod rpc;
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use tauri::Manager;
 
 // Re-export WorkspaceState so commands can reference it as crate::WorkspaceState
 pub(crate) type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
@@ -98,10 +97,6 @@ fn main() {
             get_active_project,
         ])
         .setup(|app| {
-            // Force-open DevTools for debugging
-            if let Some(win) = app.get_webview_window("main") {
-                win.open_devtools();
-            }
             // Phase 4a: OS sandbox — Job Object for die-with-parent
             os_sandbox::init();
             // Warn if OS sandbox is degraded — permission engine is the fallback

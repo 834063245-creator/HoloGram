@@ -236,7 +236,6 @@ export class StreamingToolExecutor {
       let output = '';
 
       output = await tool.execute(args, (chunk) => {
-        console.warn('[stream] executor onProgress → emit ToolProgress', { tool: call.name, len: chunk?.length || 0 });
         this.emit({
           kind: EventKind.ToolProgress,
           tool: {
