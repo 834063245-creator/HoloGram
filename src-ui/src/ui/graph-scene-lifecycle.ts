@@ -88,7 +88,6 @@ export interface LifecycleHost {
   _graphRadius: number;
   _initCamPos: THREE.Vector3;
   _initCamTarget: THREE.Vector3;
-  _userInteracting: boolean;
 
   // Hover / focus（facade 持有的共享状态）
   mouse: THREE.Vector2;
@@ -154,10 +153,6 @@ export class GraphSceneLifecycle {
   private _idleCounter = 0;
   private _lastCamPos = new THREE.Vector3();
   private _lastCamTarget = new THREE.Vector3();
-
-  // Smart orbit target: auto-recenter pivot on what user is looking at
-  private _smartTarget = new THREE.Vector3();
-  private _smartTargetFrame = 0;
 
   constructor(private host: LifecycleHost) {}
 
@@ -909,47 +904,6 @@ export class GraphSceneLifecycle {
     this.host._nodes._flushOverrideAttrs();
   }
 
-  // ── Smart Orbit Target ───────────────────────────────────
-
-  /** Find nodes near camera forward ray, compute centroid. Called periodically. */
-  private _updateSmartTarget(): void {
-    this._smartTargetFrame++;
-    // Recompute every 15 frames (~0.5s at 30fps) — cheap but no need every frame
-    if (this._smartTargetFrame % 15 !== 0) return;
-
-    const camDir = new THREE.Vector3();
-    this.host.camera.getWorldDirection(camDir);
-    const camPos = this.host.camera.position;
-    const pos = this.host.nodePositions;
-    const dead = this.host._deadIndices;
-    const n = this.host._nodeCount;
-
-    let sx = 0, sy = 0, sz = 0;
-    let count = 0;
-
-    for (let i = 0; i < n; i++) {
-      if (dead.has(i)) continue;
-      const dx = pos[i * 3] - camPos.x;
-      const dy = pos[i * 3 + 1] - camPos.y;
-      const dz = pos[i * 3 + 2] - camPos.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist < 0.01) continue;
-      // cos(35°) ≈ 0.819 — generous cone captures what user is looking at
-      const dot = (dx * camDir.x + dy * camDir.y + dz * camDir.z) / dist;
-      if (dot > 0.82) {
-        sx += pos[i * 3];
-        sy += pos[i * 3 + 1];
-        sz += pos[i * 3 + 2];
-        count++;
-      }
-    }
-
-    if (count > 0) {
-      this._smartTarget.set(sx / count, sy / count, sz / count);
-    }
-    // If count === 0, keep previous _smartTarget — don't drift into empty space
-  }
-
   // ── Animate ──────────────────────────────────────────────
 
   animate(): void {
@@ -1092,19 +1046,6 @@ export class GraphSceneLifecycle {
       this.host._fold._updateCommunityRingHover();
       } // _nodeCount > 0
     }
-
-    // Smart orbit target: slow auto-recenter when user is idle
-    if (
-      !this.host._userInteracting &&
-      !this.host.focusActive &&
-      !this.host._fold.foldMode &&
-      this.host._nodeCount > 0
-    ) {
-      this._updateSmartTarget();
-      // lerp factor 0.012 → ~60% of the way in 2s at 30fps. Barely perceptible.
-      this.host.controls.target.lerp(this._smartTarget, 0.012);
-    }
-
     this.host.controls.update();
     this.host.composer.render();
   }
