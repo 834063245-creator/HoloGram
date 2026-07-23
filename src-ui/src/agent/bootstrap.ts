@@ -273,9 +273,10 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
   } = input;
 
   const active = getActiveProvider(settings);
-  const prov: Provider = createProvider(active, {
+    const prov: Provider = createProvider(active, {
     disableThinking: settings.agent?.disableThinking,
   });
+  prov.prewarm?.();
 
   const registry = new ToolRegistry();
 

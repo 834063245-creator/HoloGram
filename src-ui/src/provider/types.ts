@@ -73,6 +73,9 @@ export interface Provider {
   name(): string;
   /** Start a streaming completion, yielding chunks. Cancelling signal aborts. */
   stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk>;
+  /** Pre-warm the HTTP connection pool. Call once after creation to establish
+   *  TCP+TLS before the first real request. Best-effort — failures are silent. */
+  prewarm?(): void;
 }
 
 // ---- Model catalog ----

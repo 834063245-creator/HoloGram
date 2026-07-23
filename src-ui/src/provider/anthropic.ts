@@ -54,7 +54,16 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
 
       if (!response.body) throw new Error(`${name}: no response body`);
 
-      yield* readSSE(response.body, name, signal);
+            yield* readSSE(response.body, name, signal);
+    },
+
+    prewarm(): void {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 3000);
+      fetch(`${baseUrl}/v1/models`, {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
+        signal: ctrl.signal,
+      }).catch(() => {});
     },
   };
 }

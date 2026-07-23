@@ -58,7 +58,16 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
 
       if (!response.body) throw new Error(`${name}: no response body`);
 
-      yield* readSSE(response.body, name, signal);
+            yield* readSSE(response.body, name, signal);
+    },
+
+    prewarm(): void {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 3000);
+      fetch(`${baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: ctrl.signal,
+      }).catch(() => {});
     },
   };
 }
