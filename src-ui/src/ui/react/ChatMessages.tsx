@@ -315,7 +315,7 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     const header = filePath ? `// ${filePath}\n` : '';
     return (
       <div className="msg-tool-result">
-        <pre><code>{(header + content).slice(0, 2000)}{content.length > 2000 ? '\n…(截断)' : ''}</code></pre>
+        <pre><code>{header + content}</code></pre>
       </div>
     );
   }
@@ -334,7 +334,7 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     for (const l of newPreview.split('\n')) lines.push(`+ ${l}`);
     return (
       <div className="msg-tool-result">
-        <pre><code>{lines.join('\n').slice(0, 2000)}</code></pre>
+        <pre><code>{lines.join('\n')}</code></pre>
       </div>
     );
   }
@@ -388,12 +388,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
       </div>
       {isExpanded && part.output && (
         <div className="msg-tool-result">
-          <pre>
-            <code>
-              {part.output.slice(0, 2000)}
-              {part.output.length > 2000 ? '\n…(截断)' : ''}
-            </code>
-          </pre>
+          <pre><code>{part.output}</code></pre>
         </div>
       )}
       {isExpanded && !part.output && part.status === 'running' && (

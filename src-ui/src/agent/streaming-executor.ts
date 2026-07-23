@@ -27,26 +27,6 @@ interface PendingResult {
   truncated: boolean;
 }
 
-const MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
-
-function truncateToolOutput(s: string, toolName?: string): { body: string; truncMsg?: string } {
-  if (s.length <= MAX_TOOL_OUTPUT_BYTES) return { body: s };
-  const keep = Math.floor(MAX_TOOL_OUTPUT_BYTES / 2);
-  const head = snapToRune(s, 0, keep);
-  const tail = snapToRune(s, s.length - keep, s.length);
-  const omitted = s.length - head.length - tail.length;
-  return {
-    body: `${head}\n\n…[截断 ${omitted} / ${s.length} 字节]…\n💡 用更精确的参数重新调用此工具\n\n${tail}`,
-    truncMsg: `tool output truncated: ${omitted} of ${s.length} bytes elided (${toolName || 'unknown'})`,
-  };
-}
-
-function snapToRune(s: string, lo: number, hi: number): string {
-  while (lo > 0 && (s.charCodeAt(lo) & 0xc0) === 0x80) lo--;
-  while (hi < s.length && (s.charCodeAt(hi) & 0xc0) === 0x80) hi++;
-  return s.slice(lo, hi);
-}
-
 /**
  * StreamingToolExecutor — manages concurrent tool execution during stream.
  *
@@ -262,12 +242,10 @@ export class StreamingToolExecutor {
         output = preflightWarning + '\n\n' + '─'.repeat(40) + '\n\n' + output;
       }
 
-      // Truncate if too large
-      const { body, truncMsg } = truncateToolOutput(output, call.name);
       const result: PendingResult = {
         call,
-        output: body,
-        truncated: !!truncMsg,
+        output,
+        truncated: false,
       };
       this.emitResult(call, tool, result);
       return result;
