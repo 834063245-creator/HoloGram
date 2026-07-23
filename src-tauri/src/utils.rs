@@ -1098,13 +1098,76 @@ pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
 }
 
 /// Atomic write: temp file then rename.
+/// Write a file atomically (tmp → rename), with a .bak backup of the
+/// original file when one already exists. Uses io_retry for transient errors.
+/// Callers must have already passed permission checks — this is pure I/O.
 pub(crate) fn write_atomic(file_path: &str, content: &str) -> Result<(), String> {
     let tmp_path = format!("{}.tmp", file_path);
-    std::fs::write(&tmp_path, content)
-        .map_err(|e| format!("write_atomic(tmp): {}", e))?;
-    std::fs::rename(&tmp_path, file_path)
-        .map_err(|e| format!("write_atomic(rename): {}", e))?;
-    Ok(())
+    let bak_path = format!("{}.bak", file_path);
+
+    // Retry the tmp write (transient I/O errors on NFS, etc.)
+    io_retry(|| std::fs::write(&tmp_path, content), "write_atomic(tmp)")?;
+
+    // Create .bak snapshot before overwriting the original (best-effort)
+    let had_original = std::path::Path::new(file_path).exists();
+    if had_original {
+        // Rename original → .bak; ignore failure (disk full, permission, etc.)
+        let _ = std::fs::rename(file_path, &bak_path);
+    }
+
+    // Atomically replace original with tmp
+    match std::fs::rename(&tmp_path, file_path) {
+        Ok(()) => {
+            // On success, remove the stale .bak (best-effort)
+            if had_original {
+                let _ = std::fs::remove_file(&bak_path);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // If rename failed, try to restore from .bak
+            if had_original && std::path::Path::new(&bak_path).exists() {
+                let _ = std::fs::rename(&bak_path, file_path);
+            }
+            Err(format!("write_atomic(rename): {}", e))
+        }
+    }
+}
+
+/// Retry a fallible I/O closure up to 3 times on transient errors.
+/// Transient = Interrupted, TimedOut, WouldBlock. All other errors fail fast.
+fn io_retry<T, F>(mut op: F, label: &str) -> Result<T, String>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let retry_count = 3u32;
+    for attempt in 0..=retry_count {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let retryable = matches!(
+                    e.kind(),
+                    std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                );
+                if !retryable || attempt == retry_count {
+                    return Err(format!("{} (尝试 {} 次后失败): {}", label, attempt + 1, e));
+                }
+                let delay = std::time::Duration::from_millis(100) * 2u32.pow(attempt);
+                eprintln!(
+                    "[write_atomic] {}: retryable error, attempt {}/{} — {:?} (retrying in {:?})",
+                    label,
+                    attempt + 1,
+                    retry_count,
+                    e,
+                    delay
+                );
+                std::thread::sleep(delay);
+            }
+        }
+    }
+    Err(format!("{}: unreachable", label))
 }
 
 /// Find line in content containing query (fuzzy substring match).

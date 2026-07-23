@@ -130,7 +130,9 @@ fn is_dangerous_file(path: &Path) -> bool {
         "authorized_keys",
         "id_rsa",
         "id_ed25519",
+        ".env",
         ".env.production",
+        ".env.local",
         ".mcp.json",
     ];
     if dangerous_names.contains(&name) {

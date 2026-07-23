@@ -52,17 +52,21 @@ pub(crate) async fn web_search(
 fn bing_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
     let url = format!("https://www.bing.com/search?q={}&setlang=en", crate::utils::urlencoding(query));
 
-    let resp = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout_read(std::time::Duration::from_secs(10))
-        .build()
-        .get(&url)
-        .set("User-Agent", CHROME_UA)
-        .set("Accept-Language", "en-US,en;q=0.9")
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(5)))
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build()
+    );
+
+    let resp = agent.get(&url)
+        .header("User-Agent", CHROME_UA)
+        .header("Accept-Language", "en-US,en;q=0.9")
         .call()
         .map_err(|e| format!("web_search: request failed: {}", e))?;
 
-    let html = resp.into_string().map_err(|e| format!("web_search: read error: {}", e))?;
+    let mut body = resp.into_body();
+    let html = body.read_to_string().map_err(|e| format!("web_search: read error: {}", e))?;
 
     let mut results = Vec::new();
     let block_re = regex::Regex::new(r#"<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)</li>"#).unwrap();
@@ -95,17 +99,21 @@ fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
     let q = crate::utils::urlencoding(query);
     let url = format!("https://html.duckduckgo.com/html/?q={}", q);
 
-    let resp = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout_read(std::time::Duration::from_secs(10))
-        .build()
-        .get(&url)
-        .set("User-Agent", CHROME_UA)
-        .set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8")
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(5)))
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build()
+    );
+
+    let resp = agent.get(&url)
+        .header("User-Agent", CHROME_UA)
+        .header("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8")
         .call()
         .map_err(|e| format!("web_search: request failed: {}", e))?;
 
-    let html = resp.into_string().map_err(|e| format!("web_search: read error: {}", e))?;
+    let mut body = resp.into_body();
+    let html = body.read_to_string().map_err(|e| format!("web_search: read error: {}", e))?;
 
     let mut results = Vec::new();
     let title_re = regex::Regex::new(
@@ -160,33 +168,49 @@ pub(crate) async fn web_fetch(
         return Err("SSRF 防护: 不允许访问内网地址".to_string());
     }
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(30))
-        .build();
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(std::time::Duration::from_secs(10)))
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+    );
 
     let make_request =
-        |ua: &str| -> Result<ureq::Response, ureq::Error> {
+        |ua: &str| -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
             agent.get(url.as_str())
-                .set("User-Agent", ua)
-                .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,text/markdown;q=0.7,*/*;q=0.1")
-                .set("Accept-Language", "en-US,en;q=0.9")
+                .header("User-Agent", ua)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,text/markdown;q=0.7,*/*;q=0.1")
+                .header("Accept-Language", "en-US,en;q=0.9")
                 .call()
         };
 
     let resp = match make_request(CHROME_UA) {
-        Ok(r) => r,
-        Err(ureq::Error::Status(403, response)) if response.header("cf-mitigated") == Some("challenge") => {
-            make_request("opencode").map_err(|e| format!("请求失败 (Cloudflare blocked): {}", e))?
+        Ok(r) if r.status().as_u16() != 403 => r,
+        Ok(r) => {
+            // 403 — check if Cloudflare challenge
+            let is_cf = r.headers().get("cf-mitigated")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v == "challenge")
+                .unwrap_or(false);
+            if is_cf {
+                make_request("opencode").map_err(|e| format!("请求失败 (Cloudflare blocked): {}", e))?
+            } else {
+                r
+            }
         }
         Err(e) => return Err(format!("请求失败: {}", e)),
     };
 
-    let content_type = resp.header("content-type").unwrap_or("").to_lowercase();
+    let content_type = resp.headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
     let max_size: usize = 1 << 20;
     let mut body = String::new();
-    let reader = resp.into_reader();
-    let mut limited = reader.take(max_size as u64);
+    let mut reader = resp.into_body().into_reader();
+    let mut limited = (&mut reader).take(max_size as u64);
     use std::io::Read;
     limited.read_to_string(&mut body)
         .map_err(|e| format!("读取失败: {}", e))?;

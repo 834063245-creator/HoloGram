@@ -10,16 +10,79 @@
 // write_file_content / edit_file all do resolve_*_dispatch then std::fs
 // separately — each command had to remember both steps. Now they can't forget.
 
+use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::AppHandle;
 
 use crate::WorkspaceState;
 
 // ═══════════════════════════════════════════════════════════════
+// Guards — file size limits, read timeout, retry budget
+// ═══════════════════════════════════════════════════════════════
+
+/// Maximum file size for reads (100 MiB). Prevents OOM from reading huge files.
+const MAX_READ_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Maximum content size for writes (100 MiB).
+const MAX_WRITE_BYTES: usize = 100 * 1024 * 1024;
+
+/// Read timeout — a stuck NFS mount must not hang the agent.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Number of retries for transient I/O errors (Interrupted, TimedOut, WouldBlock).
+const IO_RETRY_COUNT: u32 = 3;
+
+/// Delay between retries, doubles each attempt.
+const IO_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
+
+// ═══════════════════════════════════════════════════════════════
+// I/O retry helper
+// ═══════════════════════════════════════════════════════════════
+
+/// Retry a fallible I/O closure up to IO_RETRY_COUNT times on transient errors.
+/// Transient = Interrupted, TimedOut, WouldBlock. Permanent errors (NotFound,
+/// PermissionDenied, etc.) fail immediately.
+fn with_io_retry<T, F>(mut op: F, label: &str) -> Result<T, String>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    let mut last_err: Option<io::Error> = None;
+    for attempt in 0..=IO_RETRY_COUNT {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let retryable = matches!(
+                    e.kind(),
+                    io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                );
+                if !retryable || attempt == IO_RETRY_COUNT {
+                    return Err(format!("{} (尝试 {} 次后失败): {}", label, attempt + 1, e));
+                }
+                let delay = IO_RETRY_BASE_DELAY * 2u32.pow(attempt);
+                eprintln!(
+                    "[confined_fs] {}: retryable error, attempt {}/{} — {:?} (retrying in {:?})",
+                    label, attempt + 1, IO_RETRY_COUNT, e, delay
+                );
+                std::thread::sleep(delay);
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(format!(
+        "{} (尝试 {} 次后失败): {}",
+        label,
+        IO_RETRY_COUNT + 1,
+        last_err.unwrap().to_string()
+    ))
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Read operations — permission check + I/O in one call
 // ═══════════════════════════════════════════════════════════════
 
-/// Read a text file. Path resolution + sandbox + safety + deny rules + I/O.
+/// Read a text file with timeout and size guard. Wraps blocking I/O in
+/// spawn_blocking so a stuck NFS mount does not hang the async runtime.
 pub(crate) async fn read_text(
     file_path: &str,
     is_agent: bool,
@@ -27,12 +90,32 @@ pub(crate) async fn read_text(
     app: &AppHandle,
 ) -> Result<(PathBuf, String), String> {
     let real_path = crate::utils::resolve_read_dispatch(file_path, is_agent, state, app).await?;
-    let content = std::fs::read_to_string(&real_path)
-        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
+    let rp = real_path.clone();
+    let fp = file_path.to_string();
+
+    // Check file size before reading — prevent OOM on huge files
+    let meta = with_io_retry(|| std::fs::metadata(&rp), "stat")?;
+    if meta.len() > MAX_READ_BYTES {
+        return Err(format!(
+            "文件过大 ({} MiB)，超过读取上限 ({} MiB): {}",
+            meta.len() / (1024 * 1024),
+            MAX_READ_BYTES / (1024 * 1024),
+            file_path
+        ));
+    }
+
+    let content = tokio::time::timeout(READ_TIMEOUT, tokio::task::spawn_blocking(move || {
+        with_io_retry(|| std::fs::read_to_string(&rp), "read_to_string")
+    }))
+    .await
+    .map_err(|_| format!("读取文件超时 ({}s): {}", READ_TIMEOUT.as_secs(), fp))?
+    .map_err(|e| format!("读取任务失败: {}", e))?
+    .map_err(|e| format!("无法读取文件 {}: {}", fp, e))?;
+
     Ok((real_path, content))
 }
 
-/// Read a binary file. Same pipe as read_text but returns Vec<u8>.
+/// Read a binary file with timeout and size guard.
 pub(crate) async fn read_bytes(
     file_path: &str,
     is_agent: bool,
@@ -40,8 +123,27 @@ pub(crate) async fn read_bytes(
     app: &AppHandle,
 ) -> Result<(PathBuf, Vec<u8>), String> {
     let real_path = crate::utils::resolve_read_dispatch(file_path, is_agent, state, app).await?;
-    let bytes = std::fs::read(&real_path)
-        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
+    let rp = real_path.clone();
+    let fp = file_path.to_string();
+
+    let meta = with_io_retry(|| std::fs::metadata(&rp), "stat")?;
+    if meta.len() > MAX_READ_BYTES {
+        return Err(format!(
+            "文件过大 ({} MiB)，超过读取上限 ({} MiB): {}",
+            meta.len() / (1024 * 1024),
+            MAX_READ_BYTES / (1024 * 1024),
+            file_path
+        ));
+    }
+
+    let bytes = tokio::time::timeout(READ_TIMEOUT, tokio::task::spawn_blocking(move || {
+        with_io_retry(|| std::fs::read(&rp), "read_bytes")
+    }))
+    .await
+    .map_err(|_| format!("读取文件超时 ({}s): {}", READ_TIMEOUT.as_secs(), fp))?
+    .map_err(|e| format!("读取任务失败: {}", e))?
+    .map_err(|e| format!("无法读取文件 {}: {}", fp, e))?;
+
     Ok((real_path, bytes))
 }
 
@@ -61,6 +163,7 @@ pub(crate) async fn verify_read_path(
 // ═══════════════════════════════════════════════════════════════
 
 /// Write a file atomically (temp file → rename). Creates parent dirs if needed.
+/// Content size is checked against MAX_WRITE_BYTES to prevent OOM.
 pub(crate) async fn write_text(
     file_path: &str,
     content: &str,
@@ -68,6 +171,13 @@ pub(crate) async fn write_text(
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<PathBuf, String> {
+    if content.len() > MAX_WRITE_BYTES {
+        return Err(format!(
+            "内容过大 ({} MiB)，超过写入上限 ({} MiB)",
+            content.len() / (1024 * 1024),
+            MAX_WRITE_BYTES / (1024 * 1024)
+        ));
+    }
     let real_path = crate::utils::resolve_write_dispatch(file_path, is_agent, state, app).await?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
@@ -123,8 +233,12 @@ pub(crate) async fn rename(
 ) -> Result<(PathBuf, PathBuf), String> {
     let resolved_from = crate::utils::resolve_read_dispatch(from, is_agent, state, app).await?;
     let resolved_to = crate::utils::resolve_write_dispatch(to, is_agent, state, app).await?;
-    std::fs::rename(&resolved_from, &resolved_to)
-        .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))?;
+    let rf = resolved_from.clone();
+    let rt = resolved_to.clone();
+    with_io_retry(
+        || std::fs::rename(&rf, &rt),
+        &format!("rename {} -> {}", from, to),
+    )?;
     Ok((resolved_from, resolved_to))
 }
 
