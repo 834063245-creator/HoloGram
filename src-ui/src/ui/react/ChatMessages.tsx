@@ -309,14 +309,9 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
   expanded,
   onToggle,
 }) => {
-  // Auto-expand running tools so user sees live progress;
-  // reset to false when tool finishes so user can collapse the card.
-  const [autoExpand, setAutoExpand] = useState(false);
-  useEffect(() => {
-    setAutoExpand(part.status === 'running');
-  }, [part.status]);
-
-  const isExpanded = expanded || autoExpand;
+  // Auto-expand running tools immediately (no useState+useEffect delay)
+  // so streaming shell output is visible from the first chunk.
+  const isExpanded = expanded || part.status === 'running';
   const icon =
     part.status === 'running'
       ? svgIcon('dot')
