@@ -17,11 +17,16 @@ use std::time::Duration;
 // Spawn retry — transient fork/spawn errors are retried
 // ═══════════════════════════════════════════════════════════════
 
+// ponytail: spawn retry is only used on non-Windows platforms (Linux seccomp,
+// macOS sandbox-exec). On Windows, job objects handle it differently.
+#[cfg_attr(windows, allow(dead_code))]
 const SPAWN_RETRY_COUNT: u32 = 3;
+#[cfg_attr(windows, allow(dead_code))]
 const SPAWN_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
 
 /// Retry a process spawn on transient errors (EAGAIN, ENOMEM, etc.).
 /// Returns the first non-retryable error or the last retryable error.
+#[cfg_attr(windows, allow(dead_code))]
 fn retry_spawn<F>(mut spawn_fn: F) -> io::Result<std::process::Child>
 where
     F: FnMut() -> io::Result<std::process::Child>,
@@ -55,6 +60,7 @@ where
 
 /// Check raw OS error for transient spawn failures.
 /// EAGAIN (11), ENOMEM (12) on Unix; ERROR_NO_SYSTEM_RESOURCES (1450) on Windows.
+#[cfg_attr(windows, allow(dead_code))]
 fn is_transient_spawn_error(e: &io::Error) -> bool {
     match e.raw_os_error() {
         #[cfg(unix)]
