@@ -159,6 +159,11 @@ export class GraphSceneLifecycle {
   private _smartTarget = new THREE.Vector3();
   private _smartTargetFrame = 0;
 
+  /** Latest computed centroid of visible nodes (read by graph.ts on interaction start). */
+  get smartTarget(): THREE.Vector3 {
+    return this._smartTarget;
+  }
+
   constructor(private host: LifecycleHost) {}
 
   // ── Render ───────────────────────────────────────────────
@@ -1093,16 +1098,14 @@ export class GraphSceneLifecycle {
       } // _nodeCount > 0
     }
 
-    // Smart orbit target: slow auto-recenter when user is idle
+    // Smart orbit target: compute centroid of nodes in view, but DON'T move camera.
+    // Instead, graph.ts snap-jumps the orbit pivot on interaction start — zero motion sickness.
     if (
-      !this.host._userInteracting &&
       !this.host.focusActive &&
       !this.host._fold.foldMode &&
       this.host._nodeCount > 0
     ) {
       this._updateSmartTarget();
-      // lerp factor 0.012 → ~60% of the way in 2s at 30fps. Barely perceptible.
-      this.host.controls.target.lerp(this._smartTarget, 0.012);
     }
 
     this.host.controls.update();
