@@ -595,12 +595,24 @@ export class GraphSceneLifecycle {
     let revealedEdges = 0;
     const edgeRevealBatch = Math.max(1, Math.ceil(totalEdgeGroups / 10));
 
-    const revealFrame = () => {
+    // Safety timeout: if the rAF chain dies for any reason (gen bump, crash,
+    // rapid re-render), force-clear _renderInProgress so the animation loop
+    // isn't permanently blocked.
+    let safetyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      safetyTimer = null;
+      if (this.host._renderInProgress) {
+        console.warn('[StarGraph] progressive reveal stuck — force-clearing _renderInProgress');
+        this.host._renderInProgress = false;
+      }
+    }, 15000);
+
+        const revealFrame = () => {
       // ponytail: bail out if a newer render has started — prevents old rAF
       // callbacks from touching the new scene objects (ghost dots root cause).
       // Don't touch _renderInProgress here — the new render owns the flag.
       if (this._revealGeneration !== myGen) return;
       if (this._revealCancelled) {
+        if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
         this.host._renderInProgress = false;
         return;
       }
@@ -641,6 +653,7 @@ export class GraphSceneLifecycle {
         // ponytail: unblock animation loop now that progressive reveal is done.
         // _renderInProgress was kept true since _renderImpl to prevent the
         // animation loop from rendering partial state (ghost dots).
+        if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
         this.host._renderInProgress = false;
         return;
       }
