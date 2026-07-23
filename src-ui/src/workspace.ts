@@ -160,7 +160,7 @@ export class Workspace {
     ws.onLoadingChange = callbacks?.onLoadingChange ?? null;
 
     // Auto-schedule check when agent writes files
-    bus.on('check:schedule', () => ws.scheduleCheck());
+    // (handled via agent:tool-done → onToolDone → scheduleCheck below)
 
     // 1. Register workspace with backend
     ws.onStatusChange?.('正在初始化引擎...');
@@ -506,7 +506,6 @@ export class Workspace {
     }
     this.memoryManager = new MemoryManager(this.path, globalDir);
     this.memoryManager.onSaved = (info) => {
-      bus.emit('memory:saved', info);
       this.agent?.notifyMemorySaved(
         `记忆已更新: **${info.description || info.name}** (${info.confidence || 'reference'})`,
       );

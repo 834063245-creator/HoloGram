@@ -34,7 +34,6 @@ export class AgentVisualizer {
   constructor(graph: StarGraph) {
     this.graph = graph;
     bus.on('agent:tool-done', this._onToolDone.bind(this));
-    bus.on('agent:tool-started', this._onToolStarted.bind(this));
   }
 
   /** Update the star graph reference (for mode switches that recreate the graph). */
@@ -86,10 +85,6 @@ export class AgentVisualizer {
 
   // ── Event handlers ────────────────────────────────────
 
-  private _onToolStarted(_data: { toolName: string; args: Record<string, unknown> }): void {
-    // Reserve for future "tool running" indicator on the graph
-  }
-
   private _onToolDone(data: { toolName: string; args: Record<string, unknown>; output: string }): void {
     try {
       // Extract focused node names from tool args (for lens + trail)
@@ -105,14 +100,6 @@ export class AgentVisualizer {
       // If trail mode is active, update the visualization live
       if (this._trailActive && this._visitedNodes.size > 0) {
         this.graph.showAgentTrail(this._visitedNodes, this._trail);
-      }
-
-      if (focusedNodes.length > 0) {
-        bus.emit('agent:focus-changed', {
-          nodeNames: focusedNodes,
-          toolName: data.toolName,
-          visitedCount: this._visitedNodes.size,
-        });
       }
     } catch {
       // Visualization failure must never break chat or agent

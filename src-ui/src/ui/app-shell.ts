@@ -73,12 +73,10 @@ class AppShell {
 
   highlightFolder(path: string): void {
     this._highlightFolder?.(path);
-    bus.emit('highlight:folder', path); // broadcast for graph listeners
   }
 
   clearHighlight(): void {
     this._clearHighlight?.();
-    bus.emit('highlight:clear'); // broadcast for graph listeners
   }
 
   // ═══════════════════════════════════════════════════════════════

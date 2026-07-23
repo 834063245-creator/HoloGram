@@ -31,12 +31,12 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       // 这里不需要重复处理 — eventSink 已经在 createAgent 时注入
     },
 
-    onAgentStatus(agentId: string, status: string): void {
-      bus.emit('agent:status', { agentId, status });
+    onAgentStatus(_agentId: string, _status: string): void {
+      // Reserved for future multi-agent panel
     },
 
-    onProgress(_agentId: string, step: number, toolName: string): void {
-      bus.emit('agent:progress', { step, toolName });
+    onProgress(_agentId: string, _step: number, _toolName: string): void {
+      // Progress is handled via eventSink → ChatCore.renderEvent
     },
 
     onToolDone(_agentId: string, toolName: string, args: Record<string, unknown>, output: string): void {

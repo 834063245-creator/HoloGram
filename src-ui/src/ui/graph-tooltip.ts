@@ -383,9 +383,6 @@ export class GraphTooltip {
     });
     this._promptBarEl.appendChild(dismissBtn);
     this.host.container.appendChild(this._promptBarEl);
-
-    this._showPromptBound = this._showPrompt;
-    bus.on('graph:show-prompt', this._showPromptBound);
   }
 
   private _showPrompt = (data: { title: string; question: string }): void => {

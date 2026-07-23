@@ -251,7 +251,7 @@ export class ChatCore {
   }
   /** Panel-scoped event sink for agent progress. */
   get progressSink(): (data: { step: number; toolName: string }) => void {
-    return (data: { step: number; toolName: string }) => this._bus.emit('agent:progress', data);
+    return (data: { step: number; toolName: string }) => this._updateStatusBar('thinking', `${data.toolName}…`);
   }
   setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void {
     Session.setAgentFactory(this.panelId, fn);
@@ -750,7 +750,7 @@ export class ChatCore {
       this._streamingTargetSid = null;
       this._activeExec().done();
       this.finishTurn();
-      bus.emit('chat:turn-done', {});
+      bus.emit('chat:turn-done');
     }
   }
 
@@ -965,7 +965,7 @@ export class ChatCore {
       this.finishTurn();
     }
     // Signal main.ts to persist sessions
-    bus.emit('chat:turn-done', {});
+    bus.emit('chat:turn-done');
   }
 
   abort(): void {

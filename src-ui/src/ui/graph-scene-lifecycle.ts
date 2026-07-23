@@ -1085,10 +1085,6 @@ export class GraphSceneLifecycle {
       bus.off('lang:changed', this.host._langHandler);
       this.host._langHandler = null;
     }
-    if (this.host._tooltip._showPromptBound) {
-      bus.off('graph:show-prompt', this.host._tooltip._showPromptBound);
-      this.host._tooltip._showPromptBound = null;
-    }
     // Dispose all GPU resources
     for (const cloud of this.host._fold.galaxyClouds) {
       if (cloud) {

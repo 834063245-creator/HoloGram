@@ -586,11 +586,6 @@ async function init(): Promise<void> {
   });
 
   // ── Bus notifications (pure notification — sender doesn't care who listens) ──
-  bus.on('check:history', ({ checkData }: { checkData: CheckResult; timestamp: string }) => {
-    // 旧 showHistory 从未消费 timestamp — 行为保持：展示该历史结果并展开简报面板
-    useDockStore.getState().showCheckHistory(checkData);
-  });
-
   bus.on('chat:turn-done', () => {
     if (workspace?.path) chatPanel.scheduleAutoSave(workspace.path);
   });
