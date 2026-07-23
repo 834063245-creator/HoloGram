@@ -747,7 +747,25 @@ const AssistantBubble: React.FC<{
   }
 
   return (
-    <div className="msg-assistant-row" data-message-id={msg._id}>
+        <div className="msg-assistant-row" data-message-id={msg._id}>
+      <span className="msg-actions">
+        {onCopy && (
+          <span
+            className="msg-action-btn"
+            onClick={onCopy}
+            title="复制"
+            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
+          />
+        )}
+        {onRetry && msg.status === 'done' && (
+          <span
+            className="msg-action-btn"
+            onClick={onRetry}
+            title="重试"
+            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+          />
+        )}
+      </span>
       <div className="msg-bubble assistant">
         {groups.map((g, gi) => {
           if (g.kind === 'tool') {
@@ -821,24 +839,6 @@ const AssistantBubble: React.FC<{
           return null;
         })}
       </div>
-      <span className="msg-actions">
-        {onCopy && (
-          <span
-            className="msg-action-btn"
-            onClick={onCopy}
-            title="复制"
-            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
-          />
-        )}
-        {onRetry && msg.status === 'done' && (
-          <span
-            className="msg-action-btn"
-            onClick={onRetry}
-            title="重试"
-            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
-          />
-        )}
-      </span>
     </div>
   );
 };

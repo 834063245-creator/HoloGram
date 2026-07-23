@@ -2025,10 +2025,10 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
 .msg-assistant-row .msg-actions {
   display: flex;
   gap: 2px;
-  margin-top: 2px;
-  margin-left: 2px;
+  margin-bottom: 2px;
   opacity: 0;
   transition: opacity 0.15s ease;
+  align-self: flex-end;
 }
 
 .msg-assistant-row:hover .msg-actions {
@@ -2758,6 +2758,7 @@ button.chat-history-entry {
   border: none;
   padding-left: 0;
   padding-right: 0;
+  width: 100%;
 }
 
 /* Agent 行内代码：黄铜（原型 .bubble code） */
