@@ -1055,6 +1055,20 @@ ${resumeNote}
             }
             break;
 
+          case ChunkType.ToolArgPreview:
+            if (chunk.tool_arg_preview) {
+              this._sink({
+                kind: EventKind.ToolProgress,
+                tool: {
+                  id: chunk.tool_arg_preview.tool_id,
+                  name: chunk.tool_arg_preview.tool_name,
+                  output: chunk.tool_arg_preview.content,
+                  read_only: true,
+                },
+              });
+            }
+            break;
+
           case ChunkType.ToolCall:
             if (chunk.tool_call) {
               calls.push(chunk.tool_call);

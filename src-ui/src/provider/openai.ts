@@ -230,6 +230,22 @@ interface ChatChunk {
   };
 }
 
+/** Extract partial content from streaming JSON args for write/edit tools. */
+function extractWritePreview(toolName: string, args: string): string | null {
+  const isWrite = toolName === 'write_file' || toolName === 'write_file_content';
+  const isEdit = toolName === 'edit_file';
+  if (!isWrite && !isEdit) return null;
+  const key = isEdit ? 'newString' : 'content';
+  const re = new RegExp(`"${key}"\\s*:\\s*"(.*)`, 's');
+  const m = args.match(re);
+  if (!m) return null;
+  return m[1]
+    .replace(/\\(["\\\/bfnrt])/g, (_, c: string) =>
+      ({ '"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t' })[c] || c)
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/"\s*\}?\s*$/, '');
+}
+
 async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -319,6 +335,14 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
               }
               if (tcDelta.function?.arguments) {
                 tc.arguments += tcDelta.function.arguments;
+                // Streaming write preview: extract content from partial JSON args
+                const preview = extractWritePreview(tc.name, tc.arguments);
+                if (preview) {
+                  yield {
+                    type: ChunkType.ToolArgPreview,
+                    tool_arg_preview: { tool_id: tc.id, tool_name: tc.name, content: preview },
+                  };
+                }
               }
             }
           }

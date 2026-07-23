@@ -81,7 +81,12 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
         const tp = findToolPart(parts, ev.tool.id);
         if (tp) {
           tp.status = 'running';
-          if (ev.tool.output) tp.output = (tp.output || '') + ev.tool.output;
+          if (ev.tool.output) {
+            // ponytail: replace for write/edit tools (preview content grows as model streams),
+            // append for shell tools (stdout chunks accumulate)
+            const isWrite = tp.name === 'write_file' || tp.name === 'write_file_content' || tp.name === 'edit_file';
+            tp.output = isWrite ? ev.tool.output : (tp.output || '') + ev.tool.output;
+          }
           return true;
         }
       }

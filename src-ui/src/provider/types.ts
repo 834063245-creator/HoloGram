@@ -47,6 +47,8 @@ export enum ChunkType {
   Usage = 4,
   Done = 5,
   Error = 6,
+  /** Partial tool args preview — emitted during input_json_delta for write/edit tools */
+  ToolArgPreview = 7,
 }
 
 export interface Usage {
@@ -64,6 +66,8 @@ export interface Chunk {
   text?: string;
   signature?: string; // ChunkReasoning: Anthropic thinking signature
   tool_call?: ToolCall; // ChunkToolCallStart (id+name only) or ChunkToolCall (complete)
+  /** Partial tool args preview (write_file content, edit_file diff, etc.) */
+  tool_arg_preview?: { tool_id: string; tool_name: string; content: string };
   usage?: Usage;
   err?: Error;
 }
