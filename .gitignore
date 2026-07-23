@@ -140,6 +140,9 @@ src-tauri/gen/schemas/
 *_warnings.txt
 *_check.txt
 
+# Daily progress reports (auto-generated, don't commit)
+scripts/daily-report/report-*.md
+
 # Grammar build artifacts
 grammars/build/
 
