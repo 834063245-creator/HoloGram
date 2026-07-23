@@ -309,9 +309,9 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
   const name = part.name;
 
   // write_file_content — show the file content being written
-  if ((name === 'write_file_content' || name === 'write_to_file') && typeof args.content === 'string') {
+  if ((name === 'write_file' || name === 'write_file_content') && typeof args.content === 'string') {
     const content = args.content as string;
-    const filePath = (args.file_path as string) || (args.path as string) || '';
+    const filePath = (args.filePath as string) || (args.file_path as string) || '';
     const header = filePath ? `// ${filePath}\n` : '';
     return (
       <div className="msg-tool-result">
@@ -321,10 +321,10 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
   }
 
   // edit_file — show the diff (old → new)
-  if (name === 'edit_file' && (typeof args.old_string === 'string' || typeof args.new_string === 'string')) {
-    const oldStr = (args.old_string as string) || '';
-    const newStr = (args.new_string as string) || '';
-    const filePath = (args.file_path as string) || (args.path as string) || '';
+  if (name === 'edit_file' && (typeof args.oldString === 'string' || typeof args.newString === 'string')) {
+    const oldStr = (args.oldString as string) || '';
+    const newStr = (args.newString as string) || '';
+    const filePath = (args.filePath as string) || '';
     const maxLen = 400;
     const oldPreview = oldStr.length > maxLen ? oldStr.slice(0, maxLen) + '…' : oldStr;
     const newPreview = newStr.length > maxLen ? newStr.slice(0, maxLen) + '…' : newStr;
