@@ -325,6 +325,7 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
     }
     if (name === 'exec_command' && onProgress && !args.runInBackground) {
       const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      console.warn('[stream] codingExec 进入流式路径', { streamId, command: String(args.command || '').slice(0, 60) });
       for (const fns of _shellCleanups.values()) for (const fn of fns) fn();
       _shellCleanups.clear();
       return new Promise<string>((resolve) => {
@@ -332,14 +333,15 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
           let fullOutput = ''; let timer: ReturnType<typeof setTimeout> | null = null; let settled = false;
           const cleanup = () => { if (timer) { clearTimeout(timer); timer = null; } const fns = _shellCleanups.get(streamId); if (fns) { for (const fn of fns) fn(); _shellCleanups.delete(streamId); } };
           const resolveOnce = (v: string) => { if (settled) return; settled = true; cleanup(); resolve(v); };
-          const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => { if (e.payload.streamId !== streamId) return; fullOutput += e.payload.chunk; onProgress(e.payload.chunk); });
-          const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => { if (e.payload.streamId !== streamId) return; if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${e.payload.error}`); else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`); else resolveOnce(fullOutput || '(无输出)'); });
+          const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => { if (e.payload.streamId !== streamId) return; console.warn('[stream] shell:output chunk', { len: e.payload.chunk?.length || 0 }); fullOutput += e.payload.chunk; onProgress(e.payload.chunk); });
+          const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => { if (e.payload.streamId !== streamId) return; console.warn('[stream] shell:done', { exitCode: e.payload.exitCode, error: e.payload.error, outputLen: fullOutput.length }); if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${e.payload.error}`); else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`); else resolveOnce(fullOutput || '(无输出)'); });
           _shellCleanups.set(streamId, [unOut, unDone]);
-          timer = setTimeout(() => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)`), SHELL_TIMEOUT);
-          try { await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }); } catch (e: any) { resolveOnce(`错误: ${e}`); }
+          timer = setTimeout(() => { console.warn('[stream] shell 超时'); resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)`); }, SHELL_TIMEOUT);
+          try { await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }); console.warn('[stream] agentInvoke 返回'); } catch (e: any) { console.warn('[stream] agentInvoke 错误', e); resolveOnce(`错误: ${e}`); }
         })();
       });
     }
+    console.warn('[stream] codingExec 走阻塞路径', { name, hasOnProgress: !!onProgress, runInBg: args.runInBackground });
     const result = await agentInvoke<string>(name, args);
     return typeof result === 'string' ? result : JSON.stringify(result);
   };

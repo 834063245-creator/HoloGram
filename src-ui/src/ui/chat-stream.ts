@@ -302,6 +302,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
 
     case EventKind.ToolProgress:
       if (ev.tool) {
+        console.warn('[stream] renderEvent ToolProgress', { tool: ev.tool.name, len: ev.tool.output?.length || 0 });
         applyEventToParts(_streamingAssistant(ctx).parts, ev);
         _scheduleSync(ctx);
       }
