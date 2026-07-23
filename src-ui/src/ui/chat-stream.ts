@@ -215,9 +215,9 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
 
   // Flush pending render
-  const rafId = ctx.getSyncRafId();
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId);
+  const timerId = ctx.getSyncRafId();
+  if (timerId !== null) {
+    clearTimeout(timerId);
     ctx.setSyncRafId(null);
   }
 
@@ -255,25 +255,19 @@ function _streamingBump(ctx: StreamContext): void {
 // _scheduleSync
 // ═══════════════════════════════════════════════════════════
 
+// ponytail: setTimeout(16) debounce instead of requestAnimationFrame.
+// rAF can be paused/throttled in Tauri WebView (background/minimized tabs),
+// causing the syncRafId guard to permanently block subsequent streaming
+// renders. setTimeout always fires — no stuck-flag bug, no safety timeout
+// needed. (Recurring bug: same rAF-guard pattern also froze graph-scene;
+// fixed there with a 15s safety timeout in a231b89.)
 export function _scheduleSync(ctx: StreamContext): void {
   if (ctx.getSyncRafId() !== null) return;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const rafId = requestAnimationFrame(() => {
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
+  const timerId = window.setTimeout(() => {
     ctx.setSyncRafId(null);
     _streamingBump(ctx);
-  });
-  ctx.setSyncRafId(rafId);
-  timeoutId = setTimeout(() => {
-    if (timeoutId !== null) {
-      timeoutId = null;
-    }
-    ctx.setSyncRafId(null);
-    _streamingBump(ctx);
-  }, 500);
+  }, 16);
+  ctx.setSyncRafId(timerId);
 }
 
 // ═══════════════════════════════════════════════════════════
