@@ -1,36 +1,23 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// AgentBootstrap — pure function that creates the Provider, ToolRegistry,
-// and Agent factory. Extracted from Workspace._setupAgentInner to break
-// the God Class pattern.
+// AgentBuilder — 从 bootstrap.ts 提取的纯组合逻辑
 //
-// Responsibilities:
-//   - Create Provider from settings
-//   - Register all tools (hologram, coding, skill, memory, task)
-//   - Build system prompt
-//   - Create Agent factory (used for both initial agent and new sessions)
-//   - Wire hooks (graph context, preflight, AuraSDK recall)
+// 职责：
+//   - 构建 ToolRegistry（hologram tools + coding tools + memory + skill + task）
+//   - 构建 system prompt
+//   - 加载引擎快照（loadEngineSnapshot）
 //
-// NOT responsible for:
-//   - Reading files / persisting settings
-//   - Creating MemoryManager / AgentStore / GoalManager / SkillRegistry
-//   (these are created by Workspace and passed in)
+// 不依赖：React, zustand, ui/event bus, ui/panel-store, ui/chat-store
 //
-// ⚠️ This is a BRIDGE MODULE — it imports from both agent/ and ui/ layers
-// because it wires the Agent (agent layer) to zustand stores and event bus
-// (ui layer). The one-way boundary (ui → agent, never agent → ui) does not
-// apply here because bootstrap IS the boundary. Do not add new ui/ imports
-// without understanding this contract.
+// UI 回调通过 BuilderDeps 注入，不直接 import ui/ 模块。
 
-import { Agent } from './agent';
-import { AgentStore } from './agent-store';
-import type { AgentEvent, AgentUINotifier, EventSink } from './agent-types';
-import { createCompactionTools } from './compaction-model';
-import { SubAgentPool } from './coordinator';
-import type { ExecStateInstance } from './execution-state';
-import { GoalManager } from './goal-manager';
-import type { GraphContext } from './hooks';
+import type { Tool, ToolExecutor } from '../tool';
+import { ToolRegistry, agentInvoke } from '../tool';
+import { rpc, listen } from '../../bridge';
+import type { Provider } from '../../provider/types';
+import { createCompactionTools } from '../compaction-model';
+import type { GraphContext } from '../hooks';
 import {
   buildFileNodeIndex,
   buildGraphSnapshot,
@@ -41,55 +28,40 @@ import {
   createStateReadHook,
   HookRegistry,
   PreflightHookRegistry,
-} from './hooks';
-import { memoryBundleIngest } from './memory-bundle-client';
-import { MemoryManager } from './memory';
-import { createSkillTool, SkillRegistry } from './skills';
-import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './state-inject';
-import { createTaskTools, TaskManager } from './task';
-import type { Tool } from './tool';
-import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, ToolRegistry } from './tool';
-
-import { listen, rpc } from '../bridge';
-import type { Message, Provider } from '../provider/types';
-import { createProvider } from '../provider';
-import { defaultPricing, getActiveProvider, loadSettings, restoreSecrets, persistSecrets } from '../settings';
-import { getChatStore, msgStoreFor, msgStoreForActive, bumpSession } from '../ui/chat-store';
-import { rebuildMessagesFromMessages } from '../ui/chat-session';
-import { bus } from '../ui/events';
-import { getDiagnosticsForFile } from '../ui/lsp-client';
-import type { SubAgentPart } from '../ui/message-model';
-import { getPanelStore } from '../ui/panel-store';
-import { createSubAgentSink } from '../ui/subagent-sink';
-import { dbg } from '../ui/debug';
-import { refreshGitStatus as _rgs, refreshTimeline as _rt } from './state-inject';
+} from '../hooks';
+import type { Agent } from '../agent';
+import { createCodingTools } from '../tools/coding';
+import { createSubAgentTool } from '../tools/subagent';
+import { createSkillTool } from '../skills';
+import { createTaskTools } from '../task';
 
 // ── Types ──
 
-export interface BootstrapInput {
-  settings: ReturnType<typeof loadSettings>;
-  projectPath: string;
-  graphData: any;
-  memoryManager: MemoryManager;
-  skillRegistry: SkillRegistry;
-  taskManager: TaskManager;
-  agentStore: AgentStore;
-  goalManager: GoalManager;
-  subAgentPool: SubAgentPool;
-  storeId: string;
-  eventSink: (ev: AgentEvent) => void;
-  execState: ExecStateInstance;
-  onStatusChange: ((msg: string) => void) | null;
+/** UI 依赖注入 — 由调用者（UI 层）提供，agent-builder 不直接 import ui/ */
+export interface BuilderDeps {
+  /** ask_user 工具的 UI 请求回调 */
+  onAskUser?: (req: {
+    id: string;
+    question: string;
+    header: string;
+    options: { label: string; description: string }[];
+    multiSelect: boolean;
+    callback: (answer: string[] | null) => void;
+  }) => void;
+  /** dataflow_save 后的通知（UI 面板刷新） */
+  onDataflowSaved?: () => void;
+  /** LSP 诊断数据源（用于 state hooks） */
+  diagnosticsSource?: {
+    getDiagnosticsForFile(filePath: string): Promise<Array<{ line: number; severity: string; message: string; source: string }>>;
+  };
+  /** Shell 流式输出监听（由 UI 层提供 Tauri event listener） */
+  shellStream?: {
+    onOutput(streamId: string, cb: (chunk: string) => void): () => void;
+    onDone(streamId: string, cb: (exitCode: number, error?: string) => void): () => void;
+  };
 }
 
-export interface BootstrapOutput {
-  provider: Provider;
-  toolRegistry: ToolRegistry;
-  factory: () => Promise<Agent | null>;
-  preflightCtx: GraphContext | null;
-}
-
-// ── Dynamic tool loading from engine registry ──
+// ── MCP Schema loading ──
 
 interface McpSchema {
   name: string;
@@ -101,7 +73,7 @@ interface McpSchema {
   };
 }
 
-async function loadHologramSchemas(): Promise<McpSchema[]> {
+export async function loadHologramSchemas(): Promise<McpSchema[]> {
   try {
     const raw = await rpc<string>('hologram_tools_list');
     return JSON.parse(raw) as McpSchema[];
@@ -110,7 +82,7 @@ async function loadHologramSchemas(): Promise<McpSchema[]> {
   }
 }
 
-function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
+export function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
   const required = schema.inputSchema.required || [];
   return {
     name: () => schema.name,
@@ -125,7 +97,7 @@ function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
   };
 }
 
-// ── Helpers ──
+// ── Graph helpers ──
 
 export function extractGraphNodeNames(graphData: unknown): string[] | undefined {
   if (!graphData || typeof graphData !== 'object') return undefined;
@@ -150,35 +122,13 @@ export function extractGraphNodeNames(graphData: unknown): string[] | undefined 
   return undefined;
 }
 
-function registerCompactionTools(agent: Agent, reg: ToolRegistry): void {
-  for (const tool of createCompactionTools(
-    () => agent.getCompactionTracker(),
-    () => agent.getPricing(),
-    () => ({
-      compactRatio: agent.getCompactRatio(),
-      recentKeep: agent.getRecentKeep(),
-      contextWindow: agent.getContextWindow(),
-    }),
-    async () => agent.loadCompactionConfig(),
-  )) {
-    reg.register(tool);
-  }
+export function buildGraphContextFromData(graphData: any): GraphContext | null {
+  if (!graphData) return null;
+  const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(graphData);
+  return createGraphContext(fileIndex, fanIn, fanOut);
 }
 
-function modeState(storeId: string): { collaborationMode: 'normal' | 'plan'; permissionMode: 'ask' | 'auto' | 'yolo' } {
-  try {
-    const ps = getPanelStore(storeId).getState();
-    return { collaborationMode: ps.collaborationMode as any, permissionMode: ps.permissionMode as any };
-  } catch {
-    return { collaborationMode: 'normal', permissionMode: 'ask' };
-  }
-}
-
-function planRegistry(base: ToolRegistry): ToolRegistry {
-  const out = new ToolRegistry();
-  for (const t of base.filterReadOnly()) out.register(t);
-  return out;
-}
+// ── System prompt builder ──
 
 export function buildSystemPrompt(
   graphData: any,
@@ -196,7 +146,6 @@ export function buildSystemPrompt(
     ? '你可以承认自己是 Claude，但需说明你运行在 HoloGram 调度框架中。'
     : '你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。';
 
-  // ── No graph loaded — lightweight identity prompt ──
   if (!graphData) {
     let prompt = `你是 HoloGram 的 AI 编码助手。当前没有加载项目。
 ## 模型身份
@@ -208,8 +157,6 @@ export function buildSystemPrompt(
     return prompt;
   }
 
-  // ── Full coding-agent prompt ──
-  // Static prefix (no variables) → cached by provider when identical
   const modeBlock = collaborationMode === 'plan'
     ? `
 ## 规划模式（当前激活）
@@ -218,8 +165,6 @@ export function buildSystemPrompt(
 ## 执行模式
 你有写文件、跑命令、Git 的全部工具。用户说"修"就直接修，修完跑测试验证。`;
 
-  // Static rules block — identical across all sessions, projects, providers.
-  // Placed FIRST for prompt caching: Anthropic/DeepSeek cache the prefix.
   const staticRules = `你是 HoloGram 的编码 Agent。
 
 ## 行为规则
@@ -238,8 +183,6 @@ export function buildSystemPrompt(
 13. **别用 run_shell 搜文件/搜代码/操作 Git**。找文件用 glob，搜文本用 search_content，Git 用专用 git_* 工具。run_shell 只用于构建和测试。
 ${modeBlock}`;
 
-  // Dynamic suffix — changes per session/project. Appended AFTER cacheable prefix
-  // so the static rules stay in cache across turns.
   let suffix = `\n## 模型身份
 - ${modelNegation}
 - ${modelIdentity}
@@ -262,22 +205,29 @@ agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。同一轮�
 
   return staticRules + suffix;
 }
-// ── Main bootstrap function ──
 
-export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOutput> {
-  const {
-    settings, projectPath, graphData,
-    memoryManager: mm, skillRegistry, taskManager,
-    agentStore, goalManager, subAgentPool,
-    storeId, eventSink, execState,
-  } = input;
+// ── Tool registry builder ──
 
-  const active = getActiveProvider(settings);
-    const prov: Provider = createProvider(active, {
-    disableThinking: settings.agent?.disableThinking,
-  });
-  prov.prewarm?.();
+export interface ToolRegistryOptions {
+  graphData: any;
+  provider: Provider;
+  deps: BuilderDeps;
+  memoryManager?: MemoryManager;
+  skillRegistry?: SkillRegistry;
+  taskManager: TaskManager;
+  subAgentPool: SubAgentPool;
+  /** 子 Agent spawn 函数 — 由 Runtime 注入 */
+  subAgentSpawner?: SubAgentSpawner;
+}
 
+import type { MemoryManager } from '../memory';
+import type { SkillRegistry } from '../skills';
+import type { SubAgentPool } from '../coordinator';
+import type { TaskManager } from '../task';
+import type { SubAgentSpawner } from '../tools/subagent';
+
+export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<ToolRegistry> {
+  const { graphData, provider, deps, memoryManager: mm, skillRegistry, taskManager, subAgentPool, subAgentSpawner } = opts;
   const registry = new ToolRegistry();
 
   // ── Hologram tools ──
@@ -288,14 +238,13 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
     };
     const schemas = await loadHologramSchemas();
     for (const tool of schemas.map((s) => mcpSchemaToTool(s, holoExec))) registry.register(tool);
-    dbg('bootstrap', `${schemas.length} hologram tools registered`);
 
     registry.register({
       name: () => 'dataflow_save',
       description: () => '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。',
       parameters: () => ({ type: 'object', properties: { query: { type: 'string' }, content: { type: 'string' } }, required: ['query', 'content'] }),
       readOnly: () => false,
-      execute: async (args) => { const r = await agentInvoke('dataflow_save', args); bus.emit('dataflow:saved'); return r; },
+      execute: async (args) => { const r = await agentInvoke('dataflow_save', args); deps.onDataflowSaved?.(); return r; },
     });
     registry.register({
       name: () => 'dataflow_query',
@@ -306,7 +255,7 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
     });
   }
 
-  // ── Coding tools (with streaming shell) ──
+  // ── Coding tools ──
   const _shellCleanups = new Map<string, Array<() => void>>();
   const SHELL_TIMEOUT = 600_000;
   const codingExec: ToolExecutor = async (name, args, onProgress) => {
@@ -343,130 +292,46 @@ export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOu
     const result = await agentInvoke<string>(name, args);
     return typeof result === 'string' ? result : JSON.stringify(result);
   };
-  for (const tool of createCodingTools(codingExec, prov, { askUser: (req) => bus.emit('prompt:ask', req) })) registry.register(tool);
+  for (const tool of createCodingTools(codingExec, provider, { askUser: deps.onAskUser ?? (() => {}) })) registry.register(tool);
   registry.alias('read_file', 'read_file_content');
   if (skillRegistry) registry.register(createSkillTool(skillRegistry));
-  if (mm) for (const tool of (await import('./memory')).createMemoryTools(mm) as any) registry.register(tool);
+  if (mm) for (const tool of (await import('../memory')).createMemoryTools(mm) as any) registry.register(tool);
   for (const tool of createTaskTools(taskManager)) registry.register(tool);
 
-  // ── Graph context for hooks ──
-  const hookCtx: GraphContext | null = graphData ? (() => {
-    const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(graphData);
-    return createGraphContext(fileIndex, fanIn, fanOut);
-  })() : null;
+  // ── Sub-agent tool ──
+  if (subAgentSpawner) {
+    registry.register(createSubAgentTool(subAgentSpawner, subAgentPool));
+  }
 
-  // ── Agent factory ──
-  const factory = async (): Promise<Agent | null> => {
-    let s = loadSettings();
-    s = await restoreSecrets(s);
-    const act = getActiveProvider(s);
-    if (!act.apiKey || act.apiKey.trim() === '') return null;
-
-    const r = new ToolRegistry();
-    for (const t of registry.all()) r.register(t);
-
-    const agentRef = { current: null as Agent | null };
-    r.register(createSubAgentTool(
-      async (desc, prompt, prog, mode, al, sig) => agentRef.current?.spawnSubAgent(desc, prompt, prog, mode, al, sig) ?? Promise.resolve({ text: '', err: 'agent not available' }),
-      subAgentPool,
-    ));
-
-    // 3.6: bumpStore targets the correct session by sessionId, not just active
-    const bumpStore = (sid: number) => msgStoreFor(storeId, sid)?.getState().bump();
-
-    const uiNotifier: AgentUINotifier = {
-      progress: (step, toolName) => bus.emit('agent:progress', { step, toolName }),
-      toolDone: (toolName, args, output) => bus.emit('agent:tool-done', { toolName, args, output }),
-      subAgentSpawn: (info, onProgress) => {
-        const sid = info.sessionId;
-        const store = msgStoreFor(storeId, sid);
-        if (!store) return undefined;
-        const subPart: SubAgentPart = { type: 'subagent', agentId: info.agentId, description: info.description, status: 'running', parts: [], version: 0 };
-        const msgs = store.getState().messages;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.role === 'assistant' && (m as any).status === 'streaming') { (m as any).parts.push(subPart); break; }
-        }
-        bumpStore(sid);
-        return createSubAgentSink({ subPart, bump: () => bumpStore(sid), onProgress });
-      },
-      subAgentFinished: (id, sessionId, ok) => {
-        // subParts cleanup is handled per-agent; just bump the correct session
-        bumpStore(sessionId);
-      },
-      // 3.3: sessionReplaced — rebuild ChatMessage[] when agent's session changes
-      sessionReplaced: (messages: Message[]) => {
-        const sessStore = getChatStore(storeId).sess.getState();
-        const sid = sessStore.sessions[sessStore.activeIdx]?.id;
-        if (sid != null) {
-          rebuildMessagesFromMessages(messages, storeId, sid);
-        }
-      },
-    };
-
-    let memSection = '';
-    if (mm) { try { memSection = await mm.loadPromptSection(graphData ? extractGraphNodeNames(graphData) : undefined); } catch {} }
-    let claudeMd = '';
-    try { claudeMd = await rpc<string>('read_file_content', { filePath: `${projectPath}/CLAUDE.md` }); } catch {}
-    const snap = graphData ? buildGraphSnapshot(graphData) : '';
-    const ms = modeState(storeId);
-    const sysPrompt = buildSystemPrompt(graphData, projectPath, memSection, snap, claudeMd, ms.collaborationMode, act.name);
-    const effR = ms.collaborationMode === 'plan' ? planRegistry(r) : r;
-
-    const agentOpts = s.agent || {};
-    const newAgent = new Agent(prov, effR, sysPrompt, {
-      agentId: 'main', parentId: null, eventSink, execState,
-      onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
-        memoryBundleIngest(messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })), 'holo', _sid).catch(() => {});
-        (async () => { await refreshGitStatus(projectPath); await refreshTimeline(projectPath); const block = buildTurnStartBlock(); if (block) newAgent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true }); })().catch(() => {});
-      },
-      pricing: defaultPricing(act.kind, act.model),
-      temperature: agentOpts.temperature ?? 0.7,
-      contextWindow: agentOpts.contextWindow ?? 0,
-      maxTokens: act.maxTokens ?? 0,
-      ui: uiNotifier,
-    });
-
-    newAgent.setCompactionConfigPath(projectPath);
-    newAgent.setAgentStore(agentStore);
-    newAgent.setGoalManager(goalManager);
-    newAgent.applyAutoTuneConfig().catch(() => {});
-    newAgent.setSubAgentPool(subAgentPool);
-    agentRef.current = newAgent;
-    registerCompactionTools(newAgent, r);
-
-    if (hookCtx) {
-      loadEngineSnapshot(hookCtx, projectPath).catch(() => {});
-      const hooks = new HookRegistry();
-      hooks.register(createGraphContextHook(hookCtx));
-      hooks.register(createStateReadHook(projectPath, getDiagnosticsForFile));
-      newAgent.setHooks(hooks);
-      const preflightHooks = new PreflightHookRegistry();
-      preflightHooks.register(createGraphPreflightHook(hookCtx));
-      preflightHooks.register(createStatePreflightHook(getDiagnosticsForFile));
-      newAgent.setPreflightHooks(preflightHooks);
-      if (mm) {
-        newAgent.setPreRunHook(async (input: string) => {
-          if (!mm.auraReady) return null;
-          try {
-            const records = await mm.auraSemanticRecall(input, 5);
-            if (records.length === 0) return null;
-            const lines = records.map((r) => { const t = r.tags?.length ? `[${r.tags.join(', ')}] ` : ''; return `- ${t}${r.content.slice(0, 250)}`; });
-            return `AuraSDK 语义记忆召回：\n${lines.join('\n')}`;
-          } catch { return null; }
-        });
-        mm.prewarmAura();
-      }
-    }
-    return newAgent;
-  };
-
-  return { provider: prov, toolRegistry: registry, factory, preflightCtx: hookCtx };
+  return registry;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// loadEngineSnapshot — fetch engine-level data for enriched preflight
-// ═══════════════════════════════════════════════════════════════
+// ── Compaction tools ──
+
+export function registerCompactionTools(agent: Agent, reg: ToolRegistry): void {
+  for (const tool of createCompactionTools(
+    () => agent.getCompactionTracker(),
+    () => agent.getPricing(),
+    () => ({
+      compactRatio: agent.getCompactRatio(),
+      recentKeep: agent.getRecentKeep(),
+      contextWindow: agent.getContextWindow(),
+    }),
+    async () => agent.loadCompactionConfig(),
+  )) {
+    reg.register(tool);
+  }
+}
+
+// ── Plan mode registry ──
+
+export function planRegistry(base: ToolRegistry): ToolRegistry {
+  const out = new ToolRegistry();
+  for (const t of base.filterReadOnly()) out.register(t);
+  return out;
+}
+
+// ── Engine snapshot ──
 
 export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefresh = false): Promise<void> {
   try {

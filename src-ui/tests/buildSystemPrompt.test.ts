@@ -59,7 +59,7 @@ vi.mock('../src/ui/panel-store', () => ({ getPanelStore: () => ({ getState: () =
 vi.mock('../src/ui/subagent-sink', () => ({ createSubAgentSink: vi.fn() }));
 vi.mock('../src/ui/message-model', () => ({}));
 
-import { buildSystemPrompt } from '../src/agent/bootstrap';
+import { buildSystemPrompt } from '../src/agent/runtime/agent-builder';
 
 describe('buildSystemPrompt', () => {
   it('empty graph prompt contains model identity disclaimer', () => {

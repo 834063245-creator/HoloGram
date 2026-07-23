@@ -12,54 +12,46 @@
 // Switching workspaces is atomic: old.deactivate() → new = Workspace.open() → assign.
 
 import { Agent } from './agent/agent';
-import { bootstrapAgent, extractGraphNodeNames, loadEngineSnapshot, scheduleEngineSnapshotRefresh } from './agent/bootstrap';
 import { AgentStore } from './agent/agent-store';
-import type { AgentUINotifier } from './agent/agent-types';
 import { auraShutdown } from './agent/aura-memory';
-import { createCompactionTools } from './agent/compaction-model';
 import { SubAgentPool } from './agent/coordinator';
 import { GoalManager } from './agent/goal-manager';
 import type { GraphContext } from './agent/hooks';
-import {
-  buildFileNodeIndex,
-  buildGraphSnapshot,
-  createGraphContext,
-  createGraphContextHook,
-  createGraphPreflightHook,
-  createStatePreflightHook,
-  createStateReadHook,
-  HookRegistry,
-  PreflightHookRegistry,
-} from './agent/hooks';
 import { initLogger } from './agent/logger';
-// ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
-import { createMemoryTools, MemoryManager } from './agent/memory';
-import { memoryBundleIngest } from './agent/memory-bundle-client';
-import { createSkillTool, SkillRegistry } from './agent/skills';
+import { MemoryManager } from './agent/memory';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/state-inject';
-import { createTaskTools, TaskManager } from './agent/task';
+import { TaskManager } from './agent/task';
 import type { Tool } from './agent/tool';
-import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, ToolRegistry } from './agent/tool';
+import { ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createProvider } from './provider';
 import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
-import { msgStoreForActive } from './ui/chat-store';
 import { useDockStore } from './ui/dock-store';
 import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import { getDiagnosticsForFile } from './ui/lsp-client';
-import type { SubAgentPart } from './ui/message-model';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
-import { createSubAgentSink } from './ui/subagent-sink';
+// ── Runtime layer (replaces bootstrap.ts) ──
+import { AgentRuntime } from './agent/runtime/runtime';
+import {
+  buildGraphContextFromData,
+  buildToolRegistry,
+  extractGraphNodeNames,
+  scheduleEngineSnapshotRefresh,
+  type BuilderDeps,
+} from './agent/runtime/agent-builder';
+import { createRuntimeAdapter, createBuilderDeps } from './ui/runtime-adapter';
+import type { Provider } from './provider/types';
+import { memoryBundleIngest } from './agent/memory-bundle-client';
+import { SkillRegistry } from './agent/skills';
 
 // ═══════════════════════════════════════════════════════
 // Dynamic tool loading from engine registry
 // ═══════════════════════════════════════════════════════
 
-import type { Provider } from './provider/types';
 import { dbg } from './ui/debug';
 
 // ── Path util ──────────────────────────────────────────────────────
@@ -99,6 +91,9 @@ export class Workspace {
   skillRegistry: SkillRegistry | null = null;
   agentStore: AgentStore | null = null;
   goalManager: GoalManager | null = null;
+
+  // ── Runtime ──
+  runtime: AgentRuntime | null = null;
 
   // ── Sub-agent pool ──
   subAgentPool = new SubAgentPool();
@@ -405,6 +400,13 @@ export class Workspace {
     // Clear agent & memory
     // Stop all running sub-agents before clearing
     this.subAgentPool.stopAll();
+    // Destroy runtime agents
+    if (this.runtime) {
+      for (const summary of this.runtime.listAgents()) {
+        this.runtime.destroyAgent(summary.id);
+      }
+      this.runtime = null;
+    }
     // Persist agent state before clearing
     if (this.agent) {
       this.agent.saveState('done').catch(() => {});
@@ -529,37 +531,120 @@ export class Workspace {
       this.onStatusChange?.(`[记忆] 已注入 ${memLines} 条${globalCount}`);
     }
 
-    // ── Bootstrap: create provider, tool registry, and agent factory ──
-    const boot = await bootstrapAgent({
-      settings,
-      projectPath: this.path,
+    // ── Create Provider ──
+    const prov: Provider = createProvider(active, {
+      disableThinking: settings.agent?.disableThinking,
+    });
+    prov.prewarm?.();
+    this.prov = prov;
+
+    // ── Create Runtime + UI adapter ──
+    const runtime = new AgentRuntime();
+    const adapter = createRuntimeAdapter(this._storeId);
+    runtime.setNotifier(adapter);
+    runtime.setDiagnosticsSource(getDiagnosticsForFile);
+    this.runtime = runtime;
+
+    // ── Build graph context ──
+    const graphCtx = buildGraphContextFromData(this.graphData);
+    this._preflightCtx = graphCtx;
+
+    // ── Build tool registry (via agent-builder, zero UI imports) ──
+    const builderDeps: BuilderDeps = createBuilderDeps(this._storeId);
+    const agentRef = { current: null as Agent | null };
+
+    const registry = await buildToolRegistry({
       graphData: this.graphData,
+      provider: prov,
+      deps: builderDeps,
       memoryManager: this.memoryManager,
       skillRegistry: this.skillRegistry,
       taskManager: this.taskManager,
-      agentStore: this.agentStore,
-      goalManager: this.goalManager,
       subAgentPool: this.subAgentPool,
-      storeId: this._storeId,
-      eventSink: chatPanel.eventSink,
-      execState: chatPanel.execState,
-      onStatusChange: this.onStatusChange,
+      subAgentSpawner: async (desc, prompt, prog, mode, al, sig) =>
+        agentRef.current?.spawnSubAgent(desc, prompt, prog, mode, al, sig) ??
+        Promise.resolve({ text: '', err: 'agent not available' }),
     });
-
-    this.prov = boot.provider;
-    this.registry = boot.toolRegistry;
-    this._preflightCtx = boot.preflightCtx;
+    this.registry = registry;
 
     // Wire tool schemas to UI panel
-    chatPanel.setToolSchemas(boot.toolRegistry.schemas());
+    chatPanel.setToolSchemas(registry.schemas());
 
     // Cold-start: prime state caches
     refreshGitStatus(this.path).catch(() => {});
     refreshTimeline(this.path).catch(() => {});
 
+    // ── Factory: creates fresh agent via runtime on each call ──
+    const factory = async (): Promise<Agent | null> => {
+      let s = loadSettings();
+      s = await restoreSecrets(s);
+      const act = getActiveProvider(s);
+      if (!act.apiKey || act.apiKey.trim() === '') return null;
+
+      const ms = this._modeState();
+      const agentOpts = s.agent || {};
+
+      const handle = await runtime.createAgent({
+        agentId: 'main',
+        parentId: null,
+        projectPath: this.path,
+        graphData: this.graphData,
+        provider: prov,
+        tools: registry,
+        memoryManager: this.memoryManager ?? undefined,
+        skillRegistry: this.skillRegistry ?? undefined,
+        goalManager: this.goalManager ?? undefined,
+        agentStore: this.agentStore ?? undefined,
+        subAgentPool: this.subAgentPool,
+        taskManager: this.taskManager,
+        graphContext: graphCtx,
+        eventSink: chatPanel.eventSink,
+        execState: chatPanel.execState,
+        collaborationMode: ms.collaborationMode,
+        pricing: defaultPricing(act.kind, act.model),
+        temperature: agentOpts.temperature ?? 0.7,
+        contextWindow: agentOpts.contextWindow ?? 0,
+        maxTokens: act.maxTokens ?? 0,
+        preRunHook: this.memoryManager
+          ? async (input: string) => {
+              if (!this.memoryManager!.auraReady) return null;
+              try {
+                const records = await this.memoryManager!.auraSemanticRecall(input, 5);
+                if (records.length === 0) return null;
+                const lines = records.map((r) => {
+                  const t = r.tags?.length ? `[${r.tags.join(', ')}] ` : '';
+                  return `- ${t}${r.content.slice(0, 250)}`;
+                });
+                return `AuraSDK 语义记忆召回：\n${lines.join('\n')}`;
+              } catch {
+                return null;
+              }
+            }
+          : undefined,
+        onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
+          memoryBundleIngest(
+            messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+            'holo',
+            _sid,
+          ).catch(() => {});
+          (async () => {
+            await refreshGitStatus(this.path);
+            await refreshTimeline(this.path);
+            const block = buildTurnStartBlock();
+            if (block) agentRef.current?.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true });
+          })().catch(() => {});
+        },
+      });
+
+      const agent = (handle as any)._getAgent() as Agent;
+      agentRef.current = agent;
+      this.memoryManager?.prewarmAura();
+      return agent;
+    };
+
     // Register factory + create initial agent
-    chatPanel.setAgentFactory(boot.factory);
-    const initialAgent = await boot.factory();
+    chatPanel.setAgentFactory(factory);
+    const initialAgent = await factory();
     if (initialAgent) {
       this.agent = initialAgent;
       chatPanel.setAgent(initialAgent);

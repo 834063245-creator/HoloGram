@@ -1,14 +1,11 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// One-way boundary enforcement: src/agent (agent core) must never import from
-// src/ui (rendering) and never touch browser-only APIs. UI code may freely
-// import agent/ — the reverse direction is what rotted the seams (workspace
-// god-object bugs, unmockable hidden singletons, un-headless-able core).
-//
-// This test IS the boundary constraint — it runs on every `vitest run`,
-// no graph engine or human memory required. If you need a new agent→ui
-// channel, add a callback to AgentUINotifier / constructor injection instead.
+// bootstrap.ts has been replaced by agent/runtime/agent-builder.ts (pure, zero
+// ui/ imports) and ui/runtime-adapter.ts (UI implementation). All agent/ files
+// must remain pure — no UI imports, no browser APIs.
+// If you need a new agent→ui channel, add a callback to AgentUINotifier /
+// RuntimeNotifier / constructor injection instead.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -16,17 +13,12 @@ import { describe, expect, it } from 'vitest';
 
 const AGENT_DIR = join(process.cwd(), 'src', 'agent');
 
-// bootstrap.ts is the wiring layer — it bridges agent core and UI,
-// so it legitimately imports from ../ui/. All other agent/ files must
-// remain pure (no UI imports, no browser APIs).
-const BOUNDARY_EXEMPT = new Set(['bootstrap.ts']);
-
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...walk(full));
-    else if (entry.endsWith('.ts') && !BOUNDARY_EXEMPT.has(entry)) out.push(full);
+    else if (entry.endsWith('.ts')) out.push(full);
   }
   return out;
 }
