@@ -26,9 +26,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git-cliff needs full history to build changelog
+
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
 
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential g++ pkg-config
@@ -56,9 +63,14 @@ jobs:
           cp release-bin/install.cmd staging/
           cd staging && zip -r ../${{ matrix.artifact }}.zip .
 
+      - name: Generate changelog
+        shell: bash
+        run: git cliff --latest > /tmp/changelog.md
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: /tmp/changelog.md
           files: |
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.zip
@@ -68,6 +80,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git-cliff needs full history to build changelog
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -75,10 +90,24 @@ jobs:
         with:
           toolchain: stable
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
       - run: npm ci && npm run build
         working-directory: src-ui
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Generate changelog
+        id: cliff
+        shell: bash
+        run: |
+          {
+            echo 'changelog<<CLIFF_EOF'
+            git cliff --latest
+            echo CLIFF_EOF
+          } >> "$GITHUB_OUTPUT"
 
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -88,7 +117,7 @@ jobs:
           projectPath: src-tauri
           tagName: ${{ github.ref_name }}
           releaseName: 'v__VERSION__'
-          releaseBody: '请从下方 Assets 下载安装包。'
+          releaseBody: ${{ steps.cliff.outputs.changelog }}
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true

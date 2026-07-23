@@ -1,0 +1,58 @@
+# git-cliff configuration for HoloGram
+# https://git-cliff.org/docs/configuration
+#
+# Usage:
+#   git cliff --latest           # changelog for latest tag only
+#   git cliff -o CHANGELOG.md    # write entire history to file
+
+[changelog]
+header = """\
+# Changelog
+
+All notable changes to HoloGram are documented here. \
+This file is auto-generated from commit history — never edited by hand.
+"""
+body = """\
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") | trim_start_matches(pat="V") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message | upper_first | trim }}\
+{%- if commit.remote.pr_number %} ([#{{ commit.remote.pr_number }}]({{ commit.remote.pr_url }})){% endif %}
+{%- endfor %}
+
+{% endfor %}"""
+trim = true
+
+[git]
+filter_commits = true
+topo_order = true
+
+# Feature commits — show in changelog
+[[git.commit_parsers]]
+message = "^feat(\\(.*\\))?:.*"
+group = "🚀 Features"
+
+# Bug fix commits — show in changelog
+[[git.commit_parsers]]
+message = "^fix(\\(.*\\))?:.*"
+group = "🐛 Bug Fixes"
+
+# Performance commits — show in changelog
+[[git.commit_parsers]]
+message = "^perf(\\(.*\\))?:.*"
+group = "⚡ Performance"
+
+# Revert commits — show in changelog (users need to know what was rolled back)
+[[git.commit_parsers]]
+message = "^revert(\\(.*\\))?:.*"
+group = "⏪ Reverts"
+
+# Everything else is skipped silently (refactor, chore, docs, style, test, ci, build, etc.)
+[[git.commit_parsers]]
+message = ".*"
+skip = true
