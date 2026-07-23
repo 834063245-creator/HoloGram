@@ -396,7 +396,13 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
           </pre>
         </div>
       )}
-      {isExpanded && !part.output && part.status === 'running' && renderToolContentPreview(part)}
+      {isExpanded && !part.output && part.status === 'running' && (
+        renderToolContentPreview(part) || (
+          <div className="msg-tool-result msg-tool-running">
+            <div className="msg-text" style={{ color: 'var(--obs-text-3)' }}>执行中，等待输出…</div>
+          </div>
+        )
+      )}
       {isExpanded && part.err && (
         <div className="msg-tool-result msg-tool-err">
           <pre>
