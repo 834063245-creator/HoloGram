@@ -49,4 +49,7 @@ export interface ChatAgentHandle {
 
   /** 当前正在运行的子Agent数量 */
   runningSubAgentCount(): number;
+
+  /** Set the UI session ID — used for precise per-session bump in sub-agent notifications */
+  setUiSessionId(sid: number): void;
 }

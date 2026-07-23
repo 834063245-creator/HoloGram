@@ -4,7 +4,7 @@
 // Shared agent types — extracted from agent.ts to avoid circular imports
 // between agent.ts and streaming-executor.ts.
 
-import type { Usage } from '../provider/types';
+import type { Message, Usage } from '../provider/types';
 
 export enum EventKind {
   TurnStarted = 'turn_started',
@@ -68,11 +68,15 @@ export interface AgentUINotifier {
   /** A tool call finished (panels auto-refresh). */
   toolDone?(toolName: string, args: Record<string, unknown>, output: string): void;
   /** A sub-agent is starting. The UI builds its render state here and returns
-   *  the EventSink the child agent should stream into (undefined → no-op sink). */
+   *  the EventSink the child agent should stream into (undefined → no-op sink).
+   *  sessionId identifies the UI session that owns this sub-agent's output. */
   subAgentSpawn?(
-    info: { agentId: string; description: string },
+    info: { agentId: string; description: string; sessionId: number },
     onProgress?: (chunk: string) => void,
   ): EventSink | undefined;
   /** Sub-agent finished — UI finalizes its render state. */
-  subAgentFinished?(agentId: string, ok: boolean): void;
+  subAgentFinished?(agentId: string, sessionId: number, ok: boolean): void;
+  /** Agent's session array has been replaced (compaction / retract / setSession).
+   *  ChatCore needs to rebuild its ChatMessage[] projection. */
+  sessionReplaced?(messages: Message[]): void;
 }

@@ -15,7 +15,6 @@ import { dbg } from './debug';
 // ── Known event signatures ──
 
 export interface BusEvents {
-  'agent:event': [ev: import('../agent/agent-types').AgentEvent];
   'agent:diag': [d: { text: string; ready: boolean }];
   'agent:progress': [data: { step: number; toolName: string }];
   'agent:tool-started': [data: { toolName: string; args: Record<string, unknown> }];

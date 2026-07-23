@@ -760,18 +760,15 @@ function renderRestoredSession(ctx: SessionContext): void {
 
 /** Populate the active session's per-session messages store + turnPairs from the
  *  agent's getSession() raw messages. Pure data rebuild — no DOM, no notices. */
-export function _rebuildMessagesFromSession(ctx: SessionContext): void {
-  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
-  const sid = sessions[activeIdx]?.id;
-  if (sid == null) return;
-  const agent = agentSessionState.getAgent(ctx.storeId, sid);
-  if (!agent) return;
-
-  const msgs = agent.getSession();
+export function rebuildMessagesFromMessages(
+  msgs: Message[],
+  storeId: string,
+  sessionId: number,
+): void {
   const rebuilt: ChatMessage[] = [];
 
   resetMsgIdCounter();
-  setTurnPairs(ctx.storeId, []);
+  setTurnPairs(storeId, []);
 
   const toolResults = new Map<string, string>();
   for (const m of msgs) {
@@ -798,7 +795,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
         continue;
       }
       if (pendingUserText && pendingUserId) {
-        getTurnPairs(ctx.storeId).push({
+        getTurnPairs(storeId).push({
           userText: pendingUserText,
           userBubble: null,
           assistantBubble: null,
@@ -846,7 +843,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
       rebuilt.push(am);
 
       if (pendingUserText) {
-        getTurnPairs(ctx.storeId).push({
+        getTurnPairs(storeId).push({
           userText: pendingUserText,
           userBubble: null,
           assistantBubble: null,
@@ -859,7 +856,7 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   }
 
   if (pendingUserText) {
-    getTurnPairs(ctx.storeId).push({
+    getTurnPairs(storeId).push({
       userText: pendingUserText,
       userBubble: null,
       assistantBubble: null,
@@ -868,7 +865,19 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   }
 
   // ponytail: write to per-session store — the ONLY source of truth
-  msgStoreFor(ctx.storeId, sid).getState().setMessages(rebuilt);
+  msgStoreFor(storeId, sessionId).getState().setMessages(rebuilt);
+  bumpSession(storeId, sessionId);
+}
+
+/** Wrapper that resolves the active agent's session and delegates to rebuildMessagesFromMessages. */
+export function _rebuildMessagesFromSession(ctx: SessionContext): void {
+  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
+  const sid = sessions[activeIdx]?.id;
+  if (sid == null) return;
+  const agent = agentSessionState.getAgent(ctx.storeId, sid);
+  if (!agent) return;
+
+  rebuildMessagesFromMessages(agent.getSession(), ctx.storeId, sid);
 }
 
 // ── Turn retraction ──

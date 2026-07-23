@@ -44,6 +44,10 @@ export interface StreamContext {
   getSyncRafId: () => number | null;
   setSyncRafId: (id: number | null) => void;
 
+  // ── Streaming target session (replaces _pendingStreamingSessions global Map) ──
+  getStreamingTargetSid: () => number | null;
+  setStreamingTargetSid: (sid: number | null) => void;
+
   // ── turnPairs ──
   getTurnPairs: () => TurnPair[];
 
@@ -94,12 +98,9 @@ interface SessionTarget {
 
 /** Track which session started the current streaming run.
  *  Set by sendMessage (or sendAgentText/runGoal) before agent.run(),
- *  cleared in _finaliseStreamingAssistant. */
-const _pendingStreamingSessions = new Map<string, number>();
-
-export function setPendingStreamingSession(storeId: string, sessionId: number): void {
-  _pendingStreamingSessions.set(storeId, sessionId);
-}
+ *  cleared in _finaliseStreamingAssistant or by the caller's finally block.
+ *  Now stored on RenderContext (getStreamingTargetSid/setStreamingTargetSid)
+ *  instead of a module-level Map — eliminates global mutable state. */
 
 function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null): SessionTarget | null {
   const sessStore = getChatStore(ctx.storeId).sess;
@@ -117,7 +118,7 @@ function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null
   }
 
   // 2) No assistant yet → use the session that started the run
-  const pendingSid = _pendingStreamingSessions.get(ctx.storeId);
+  const pendingSid = ctx.getStreamingTargetSid();
   if (pendingSid != null) {
     const msgs = ctx.getSessionMessages(pendingSid);
     return { sessionId: pendingSid, messages: msgs, isActive: pendingSid === activeSid };
@@ -159,9 +160,9 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   // Persist + bump the session's store
   ctx.setSessionMessages(target.sessionId, [...msgs]);
   ctx.bumpSessionMessages(target.sessionId);
-  // ponytail: assistant ID is now established — future events can find it via
-  // session store scan. Pending is no longer needed.
-  _pendingStreamingSessions.delete(ctx.storeId);
+  // ponytail: assistant ID is now established — future events find it via
+  // session store scan. Streaming target no longer needed for this run.
+  ctx.setStreamingTargetSid(null);
   return assistant;
 }
 

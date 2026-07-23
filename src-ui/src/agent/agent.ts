@@ -132,6 +132,10 @@ export class Agent {
   // UI notification port (workspace-injected; no-op when headless)
   private _ui: AgentUINotifier;
 
+  /** UI session ID — set by ChatCore before running so sub-agent notifications
+   *  bump the correct session store (not just the active one). */
+  private _uiSessionId: number = 0;
+
   // Last usage for status display
   private lastUsage: Usage | undefined;
 
@@ -199,6 +203,10 @@ export class Agent {
     this.preflightHooks = hooks;
   }
 
+  setUiSessionId(sid: number): void {
+    this._uiSessionId = sid;
+  }
+
   /** Set a hook that fires before each user message enters the session.
    *  Returns optional context injected as <system-reminder> before the message.
    *  Used for per-turn AuraSDK semantic memory recall. */
@@ -215,6 +223,7 @@ export class Agent {
   setSession(msgs: Message[]): void {
     this.session = msgs;
     this._execState.bumpVersion();
+    this._ui.sessionReplaced?.(this.session);
   }
 
   getLastUsage(): Usage | undefined {
@@ -324,6 +333,7 @@ export class Agent {
     this.session.splice(sessionIndex, end - sessionIndex);
     this._execState.bumpVersion();
     this._sink({ kind: EventKind.SessionChanged });
+    this._ui.sessionReplaced?.(this.session);
   }
 
   /** Predicted session index of the next insert. Call before insertMessage to get index. */
@@ -1196,6 +1206,7 @@ ${resumeNote}
         ];
         this.session = truncated;
         this._execState.bumpVersion();
+        this._ui.sessionReplaced?.(this.session);
         this.stormSig = '';
         this.stormCount = 0;
         this.compactStuck = false;
@@ -1236,6 +1247,7 @@ ${resumeNote}
         ];
         this.session = truncated;
         this._execState.bumpVersion();
+        this._ui.sessionReplaced?.(this.session);
         this.stormSig = '';
         this.stormCount = 0;
         this.compactStuck = false;
@@ -1271,6 +1283,7 @@ ${resumeNote}
       ];
       this.session = compacted;
       this._execState.bumpVersion();
+      this._ui.sessionReplaced?.(this.session);
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
@@ -1381,6 +1394,7 @@ ${resumeNote}
         ];
         this.session = compacted;
         this._execState.bumpVersion();
+        this._ui.sessionReplaced?.(this.session);
         this.stormSig = '';
         this.stormCount = 0;
 
@@ -1609,7 +1623,7 @@ ${subTools
     // ── Hand the child's event stream to the UI (workspace-injected port builds
     // the SubAgentPart and returns the sink; headless → no-op sink) ──
     const subAgentId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const subSink = this._ui.subAgentSpawn?.({ agentId: subAgentId, description }, onProgress) ?? (() => {});
+    const subSink = this._ui.subAgentSpawn?.({ agentId: subAgentId, description, sessionId: this._uiSessionId }, onProgress) ?? (() => {});
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(this.prov, subTools, subSystem, {
@@ -1664,7 +1678,7 @@ ${subTools
       subAgent.saveState('failed').catch(() => {});
       result = { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
-      this._ui.subAgentFinished?.(subAgentId, subAgentSucceeded);
+      this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
     }
 
     // ── Finalize isolation worktree (serialized — parallel sub-agents must not

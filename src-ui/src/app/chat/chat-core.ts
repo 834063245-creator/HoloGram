@@ -64,6 +64,9 @@ export class ChatCore {
   /** rAF handle for batching streaming updates. */
   private _syncRafId: number | null = null;
 
+  /** Streaming target session ID — replaces _pendingStreamingSessions global Map. */
+  private _streamingTargetSid: number | null = null;
+
   private onOpenSettings: (() => void) | null = null;
   private _onTrailToggle: (() => void) | null = null;
 
@@ -184,8 +187,8 @@ export class ChatCore {
     // Re-bind when user switches active session
     getChatStore(this.panelId).sess.subscribe(() => _bindExecState());
 
-    // ── Receive Agent events via panel-scoped bus ──
-    this._bus.on('agent:event', (ev: AgentEvent) => this.renderEvent(ev));
+    // ── Agent events are delivered directly via eventSink → renderEvent ──
+    // (4.2: eliminated bus round-trip — Agent → ChatCore is 1:1, no bus needed)
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -242,9 +245,9 @@ export class ChatCore {
     this._onTrailToggle?.();
   }
 
-  /** Panel-scoped event sink for agent events — prevents cross-panel leaks. */
+  /** Panel-scoped event sink for agent events — direct call, no bus round-trip. */
   get eventSink(): (ev: AgentEvent) => void {
-    return (ev: AgentEvent) => this._bus.emit('agent:event', ev);
+    return (ev: AgentEvent) => this.renderEvent(ev);
   }
   /** Panel-scoped event sink for agent progress. */
   get progressSink(): (data: { step: number; toolName: string }) => void {
@@ -517,6 +520,10 @@ export class ChatCore {
       setSyncRafId: (id) => {
         this._syncRafId = id;
       },
+      getStreamingTargetSid: () => this._streamingTargetSid,
+      setStreamingTargetSid: (sid) => {
+        this._streamingTargetSid = sid;
+      },
       getTurnPairs: () => Session.getTurnPairs(this.panelId),
       getAgent: () => this.agent,
       getStarGraph: () => this.starGraph,
@@ -615,10 +622,10 @@ export class ChatCore {
 
   // ── Send ──
 
-  private sendAgentText(text: string, displayLabel?: string): void {
+  private async sendAgentText(text: string, displayLabel?: string): Promise<void> {
     const agent = this.agent;
     if (!agent) return;
-    this._runAgentTurn({
+    await this._runAgentTurn({
       userText: displayLabel,
       bubbleLabel: displayLabel,
       drive: (signal) => agent.run(signal, text),
@@ -626,10 +633,10 @@ export class ChatCore {
   }
 
   /** Resume a previously paused goal. */
-  runGoalResume(): void {
+  async runGoalResume(): Promise<void> {
     const agent = this.agent;
     if (!agent) return;
-    this._runAgentTurn({
+    await this._runAgentTurn({
       userText: '/goal resume',
       bubbleLabel: '🔄 恢复目标',
       drive: (signal) => agent.resumeGoal(signal),
@@ -637,10 +644,10 @@ export class ChatCore {
     });
   }
 
-  private runGoal(goal: string): void {
+  private async runGoal(goal: string): Promise<void> {
     const agent = this.agent;
     if (!agent) return;
-    this._runAgentTurn({
+    await this._runAgentTurn({
       userText: `/goal ${goal}`,
       bubbleLabel: `🎯 ${goal}`,
       drive: (signal) => agent.runGoal(signal, goal),
@@ -689,12 +696,12 @@ export class ChatCore {
   }
 
   /** Shared scaffolding for agent turns. */
-  private _runAgentTurn(opts: {
+  private async _runAgentTurn(opts: {
     userText?: string;
     bubbleLabel?: string;
     drive: (signal: AbortSignal) => Promise<unknown>;
     onResult?: (result: GoalRunResult) => void;
-  }): void {
+  }): Promise<void> {
     if (!this.agent || this._activeExec().isRunning) return;
     if (Session.hasRunningBackgroundSession(this.panelId)) {
       this.addNotice('有后台会话运行中，请等待完成', 'info');
@@ -717,30 +724,34 @@ export class ChatCore {
       this.appendUserBubble(opts.bubbleLabel);
     }
 
+    // 3.6: Set UI session ID on agent so sub-agent notifications bump the correct session
     {
       const sessStore = getChatStore(this.panelId).sess.getState();
       const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
-      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+      if (activeSid != null) {
+        this._streamingTargetSid = activeSid;
+        this.agent.setUiSessionId(activeSid);
+      }
     }
-    opts
-      .drive(signal)
-      .then((result) => {
-        if (result) opts.onResult?.(result as GoalRunResult);
-      })
-      .catch((err: Error) => {
-        if (err.message?.includes('aborted') || err.message?.includes('AbortError')) {
-          this.addNotice('已中止', 'info');
-        } else if (err.message?.includes('paused after')) {
-          this.addNotice(err.message, 'warn');
-        } else {
-          this.addNotice(`错误: ${err.message || err}`, 'error');
-        }
-      })
-      .finally(() => {
-        this._activeExec().done();
-        this.finishTurn();
-        bus.emit('chat:turn-done', {});
-      });
+
+    try {
+      const result = await opts.drive(signal);
+      if (result) opts.onResult?.(result as GoalRunResult);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('aborted') || msg.includes('AbortError')) {
+        this.addNotice('已中止', 'info');
+      } else if (msg.includes('paused after')) {
+        this.addNotice(msg, 'warn');
+      } else {
+        this.addNotice(`错误: ${msg}`, 'error');
+      }
+    } finally {
+      this._streamingTargetSid = null;
+      this._activeExec().done();
+      this.finishTurn();
+      bus.emit('chat:turn-done', {});
+    }
   }
 
   private _notifyGoalResult(result: GoalRunResult): void {
@@ -930,7 +941,10 @@ export class ChatCore {
     {
       const sessStore = getChatStore(this.panelId).sess.getState();
       const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
-      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+      if (activeSid != null) {
+        this._streamingTargetSid = activeSid;
+        this.agent?.setUiSessionId(activeSid);
+      }
     }
 
     // Run agent
@@ -946,6 +960,7 @@ export class ChatCore {
         this.addNotice(`错误: ${msg}。发送任意消息重试，或输入 /compact 压缩上下文，或输入 /new 新建会话`, 'error');
       }
     } finally {
+      this._streamingTargetSid = null;
       this._activeExec().done();
       this.finishTurn();
     }
@@ -1110,7 +1125,10 @@ export class ChatCore {
     {
       const sessStore = getChatStore(this.panelId).sess.getState();
       const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
-      if (activeSid != null) Stream.setPendingStreamingSession(this.panelId, activeSid);
+      if (activeSid != null) {
+        this._streamingTargetSid = activeSid;
+        this.agent?.setUiSessionId(activeSid);
+      }
     }
     agent
       .run(signal, userText)
@@ -1120,6 +1138,7 @@ export class ChatCore {
         }
       })
       .finally(() => {
+        this._streamingTargetSid = null;
         this._activeExec().done();
         this.finishTurn();
       });
