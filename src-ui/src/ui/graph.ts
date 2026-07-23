@@ -182,7 +182,8 @@ export class StarGraph {
     });
     this.controls.staticMoving = false; // enable damping (quaternion-based, no gimbal lock)
     this.controls.dynamicDampingFactor = 0.15; // quick stop
-    this.controls.rotateSpeed = 0.5; // halved — no whip
+    this.controls.rotateSpeed = 2.5; // trackball default is 1.0, orbit was 0.5 — compensate
+    this.controls.panSpeed = 0.15; // halved from default 0.3 — too fast before
     this.controls.zoomSpeed = 1.0; // responsive zoom
     this.controls.minDistance = 5;
     this.controls.maxDistance = 4000;
