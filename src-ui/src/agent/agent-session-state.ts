@@ -63,8 +63,9 @@ export interface AgentSessionStateApi {
   // ── Bulk operations ──
   /** Remove all agent handles and exec states for a panel. */
   clearPanelState(storeId: string): void;
-  /** Check if any non-active session has a running agent. */
-  hasRunningBackgroundSession(storeId: string): boolean;
+  /** Check if any session (including active) has a running agent.
+   *  Callers that need "background only" should filter out the active session. */
+  hasAnyRunningSession(storeId: string): boolean;
 
   // ── Subscription ──
   /** Subscribe to state changes. Returns unsubscribe. */
@@ -187,14 +188,10 @@ export function createAgentSessionState(): AgentSessionStateApi {
       _bump();
     },
 
-    hasRunningBackgroundSession(storeId): boolean {
-      // Needs the session store to know which session is active — but we can't
-      // import chat-store (circular). The caller passes the sessions list via
-      // the exported function in chat-session.ts which has access to both.
-      // Here we just scan all exec states for this panel.
+    hasAnyRunningSession(storeId): boolean {
       const prefix = storeId + ':';
-      for (const [k, es] of _execBySession) {
-        if (k.startsWith(prefix) && es.isRunning) return true;
+      for (const [, es] of _execBySession) {
+        if (es.isRunning) return true;
       }
       return false;
     },
