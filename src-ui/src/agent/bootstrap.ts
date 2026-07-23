@@ -16,6 +16,12 @@
 //   - Reading files / persisting settings
 //   - Creating MemoryManager / AgentStore / GoalManager / SkillRegistry
 //   (these are created by Workspace and passed in)
+//
+// ⚠️ This is a BRIDGE MODULE — it imports from both agent/ and ui/ layers
+// because it wires the Agent (agent layer) to zustand stores and event bus
+// (ui layer). The one-way boundary (ui → agent, never agent → ui) does not
+// apply here because bootstrap IS the boundary. Do not add new ui/ imports
+// without understanding this contract.
 
 import { Agent } from './agent';
 import { AgentStore } from './agent-store';
@@ -45,10 +51,11 @@ import type { Tool } from './tool';
 import { agentInvoke, createCodingTools, createSubAgentTool, type ToolExecutor, ToolRegistry } from './tool';
 
 import { listen, rpc } from '../bridge';
-import type { Provider } from '../provider/types';
+import type { Message, Provider } from '../provider/types';
 import { createProvider } from '../provider';
 import { defaultPricing, getActiveProvider, loadSettings, restoreSecrets, persistSecrets } from '../settings';
-import { msgStoreForActive } from '../ui/chat-store';
+import { getChatStore, msgStoreFor, msgStoreForActive, bumpSession } from '../ui/chat-store';
+import { rebuildMessagesFromMessages } from '../ui/chat-session';
 import { bus } from '../ui/events';
 import { getDiagnosticsForFile } from '../ui/lsp-client';
 import type { SubAgentPart } from '../ui/message-model';
@@ -255,6 +262,277 @@ agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。同一轮�
 
   return staticRules + suffix;
 }
+// ── Main bootstrap function ──
+
+export async function bootstrapAgent(input: BootstrapInput): Promise<BootstrapOutput> {
+  const {
+    settings, projectPath, graphData,
+    memoryManager: mm, skillRegistry, taskManager,
+    agentStore, goalManager, subAgentPool,
+    storeId, eventSink, execState,
+  } = input;
+
+  const active = getActiveProvider(settings);
+  const prov: Provider = createProvider(active, {
+    disableThinking: settings.agent?.disableThinking,
+  });
+
+  const registry = new ToolRegistry();
+
+  // ── Hologram tools ──
+  if (graphData) {
+    const holoExec: ToolExecutor = async (name, args) => {
+      const result = await rpc<string>('hologram_call', { tool: name, args });
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    };
+    const schemas = await loadHologramSchemas();
+    for (const tool of schemas.map((s) => mcpSchemaToTool(s, holoExec))) registry.register(tool);
+    dbg('bootstrap', `${schemas.length} hologram tools registered`);
+
+    registry.register({
+      name: () => 'dataflow_save',
+      description: () => '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。',
+      parameters: () => ({ type: 'object', properties: { query: { type: 'string' }, content: { type: 'string' } }, required: ['query', 'content'] }),
+      readOnly: () => false,
+      execute: async (args) => { const r = await agentInvoke('dataflow_save', args); bus.emit('dataflow:saved'); return r; },
+    });
+    registry.register({
+      name: () => 'dataflow_query',
+      description: () => '查询已保存的数据流追踪结果。',
+      parameters: () => ({ type: 'object', properties: { traceId: { type: 'string' }, list: { type: 'boolean' } } }),
+      readOnly: () => true,
+      execute: (args) => agentInvoke('dataflow_query', args),
+    });
+  }
+
+  // ── Coding tools (with streaming shell) ──
+  const _shellCleanups = new Map<string, Array<() => void>>();
+  const SHELL_TIMEOUT = 600_000;
+  const codingExec: ToolExecutor = async (name, args, onProgress) => {
+    if (name === 'run_shell' && args.runInBackground) {
+      const taskId = await agentInvoke<string>('run_shell', args);
+      let done = false;
+      while (!done) {
+        await new Promise((r) => setTimeout(r, 300));
+        try {
+          const st: any = await agentInvoke<any>('bash_output', { taskId });
+          if (st.output && onProgress) onProgress(st.output);
+          if (st.done) { done = true; return st.output || '(无输出)'; }
+        } catch { done = true; return '(后台任务已结束)'; }
+      }
+      return '';
+    }
+    if (name === 'exec_command' && onProgress && !args.runInBackground) {
+      const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      for (const fns of _shellCleanups.values()) for (const fn of fns) fn();
+      _shellCleanups.clear();
+      return new Promise<string>((resolve) => {
+        void (async () => {
+          let fullOutput = ''; let timer: ReturnType<typeof setTimeout> | null = null; let settled = false;
+          const cleanup = () => { if (timer) { clearTimeout(timer); timer = null; } const fns = _shellCleanups.get(streamId); if (fns) { for (const fn of fns) fn(); _shellCleanups.delete(streamId); } };
+          const resolveOnce = (v: string) => { if (settled) return; settled = true; cleanup(); resolve(v); };
+          const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => { if (e.payload.streamId !== streamId) return; fullOutput += e.payload.chunk; onProgress(e.payload.chunk); });
+          const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => { if (e.payload.streamId !== streamId) return; if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${e.payload.error}`); else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`); else resolveOnce(fullOutput || '(无输出)'); });
+          _shellCleanups.set(streamId, [unOut, unDone]);
+          timer = setTimeout(() => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)`), SHELL_TIMEOUT);
+          try { await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }); } catch (e: any) { resolveOnce(`错误: ${e}`); }
+        })();
+      });
+    }
+    const result = await agentInvoke<string>(name, args);
+    return typeof result === 'string' ? result : JSON.stringify(result);
+  };
+  for (const tool of createCodingTools(codingExec, prov, { askUser: (req) => bus.emit('prompt:ask', req) })) registry.register(tool);
+  registry.alias('read_file', 'read_file_content');
+  if (skillRegistry) registry.register(createSkillTool(skillRegistry));
+  if (mm) for (const tool of (await import('./memory')).createMemoryTools(mm) as any) registry.register(tool);
+  for (const tool of createTaskTools(taskManager)) registry.register(tool);
+
+  // ── Graph context for hooks ──
+  const hookCtx: GraphContext | null = graphData ? (() => {
+    const { fileIndex, fanIn, fanOut } = buildFileNodeIndex(graphData);
+    return createGraphContext(fileIndex, fanIn, fanOut);
+  })() : null;
+
+  // ── Agent factory ──
+  const factory = async (): Promise<Agent | null> => {
+    let s = loadSettings();
+    s = await restoreSecrets(s);
+    const act = getActiveProvider(s);
+    if (!act.apiKey || act.apiKey.trim() === '') return null;
+
+    const r = new ToolRegistry();
+    for (const t of registry.all()) r.register(t);
+
+    const agentRef = { current: null as Agent | null };
+    r.register(createSubAgentTool(
+      async (desc, prompt, prog, mode, al, sig) => agentRef.current?.spawnSubAgent(desc, prompt, prog, mode, al, sig) ?? Promise.resolve({ text: '', err: 'agent not available' }),
+      subAgentPool,
+    ));
+
+    // 3.6: bumpStore targets the correct session by sessionId, not just active
+    const bumpStore = (sid: number) => msgStoreFor(storeId, sid)?.getState().bump();
+
+    const uiNotifier: AgentUINotifier = {
+      progress: (step, toolName) => bus.emit('agent:progress', { step, toolName }),
+      toolDone: (toolName, args, output) => bus.emit('agent:tool-done', { toolName, args, output }),
+      subAgentSpawn: (info, onProgress) => {
+        const sid = info.sessionId;
+        const store = msgStoreFor(storeId, sid);
+        if (!store) return undefined;
+        const subPart: SubAgentPart = { type: 'subagent', agentId: info.agentId, description: info.description, status: 'running', parts: [], version: 0 };
+        const msgs = store.getState().messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.role === 'assistant' && (m as any).status === 'streaming') { (m as any).parts.push(subPart); break; }
+        }
+        bumpStore(sid);
+        return createSubAgentSink({ subPart, bump: () => bumpStore(sid), onProgress });
+      },
+      subAgentFinished: (id, sessionId, ok) => {
+        // subParts cleanup is handled per-agent; just bump the correct session
+        bumpStore(sessionId);
+      },
+      // 3.3: sessionReplaced — rebuild ChatMessage[] when agent's session changes
+      sessionReplaced: (messages: Message[]) => {
+        const sessStore = getChatStore(storeId).sess.getState();
+        const sid = sessStore.sessions[sessStore.activeIdx]?.id;
+        if (sid != null) {
+          rebuildMessagesFromMessages(messages, storeId, sid);
+        }
+      },
+    };
+
+    let memSection = '';
+    if (mm) { try { memSection = await mm.loadPromptSection(graphData ? extractGraphNodeNames(graphData) : undefined); } catch {} }
+    let claudeMd = '';
+    try { claudeMd = await rpc<string>('read_file_content', { filePath: `${projectPath}/CLAUDE.md` }); } catch {}
+    const snap = graphData ? buildGraphSnapshot(graphData) : '';
+    const ms = modeState(storeId);
+    const sysPrompt = buildSystemPrompt(graphData, projectPath, memSection, snap, claudeMd, ms.collaborationMode, act.name);
+    const effR = ms.collaborationMode === 'plan' ? planRegistry(r) : r;
+
+    const agentOpts = s.agent || {};
+    const newAgent = new Agent(prov, effR, sysPrompt, {
+      agentId: 'main', parentId: null, eventSink, execState,
+      onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
+        memoryBundleIngest(messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })), 'holo', _sid).catch(() => {});
+        (async () => { await refreshGitStatus(projectPath); await refreshTimeline(projectPath); const block = buildTurnStartBlock(); if (block) newAgent.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true }); })().catch(() => {});
+      },
+      pricing: defaultPricing(act.kind, act.model),
+      temperature: agentOpts.temperature ?? 0.7,
+      contextWindow: agentOpts.contextWindow ?? 0,
+      maxTokens: act.maxTokens ?? 0,
+      ui: uiNotifier,
+    });
+
+    newAgent.setCompactionConfigPath(projectPath);
+    newAgent.setAgentStore(agentStore);
+    newAgent.setGoalManager(goalManager);
+    newAgent.applyAutoTuneConfig().catch(() => {});
+    newAgent.setSubAgentPool(subAgentPool);
+    agentRef.current = newAgent;
+    registerCompactionTools(newAgent, r);
+
+    if (hookCtx) {
+      loadEngineSnapshot(hookCtx, projectPath).catch(() => {});
+      const hooks = new HookRegistry();
+      hooks.register(createGraphContextHook(hookCtx));
+      hooks.register(createStateReadHook(projectPath, getDiagnosticsForFile));
+      newAgent.setHooks(hooks);
+      const preflightHooks = new PreflightHookRegistry();
+      preflightHooks.register(createGraphPreflightHook(hookCtx));
+      preflightHooks.register(createStatePreflightHook(getDiagnosticsForFile));
+      newAgent.setPreflightHooks(preflightHooks);
+      if (mm) {
+        newAgent.setPreRunHook(async (input: string) => {
+          if (!mm.auraReady) return null;
+          try {
+            const records = await mm.auraSemanticRecall(input, 5);
+            if (records.length === 0) return null;
+            const lines = records.map((r) => { const t = r.tags?.length ? `[${r.tags.join(', ')}] ` : ''; return `- ${t}${r.content.slice(0, 250)}`; });
+            return `AuraSDK 语义记忆召回：\n${lines.join('\n')}`;
+          } catch { return null; }
+        });
+      }
+    }
+    return newAgent;
+  };
+
+  return { provider: prov, toolRegistry: registry, factory, preflightCtx: hookCtx };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// loadEngineSnapshot — fetch engine-level data for enriched preflight
+// ═══════════════════════════════════════════════════════════════
+
+export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefresh = false): Promise<void> {
+  try {
+    const [fragileRaw, cycleRaw, healthRaw, blindspotsRaw] = await Promise.all([
+      rpc<string>('hologram_call', { tool: 'fragile_modules', args: { limit: 15 } }),
+      rpc<string>('hologram_call', { tool: 'detect_cycles', args: { mode: 'all' } }),
+      rpc<string>('hologram_call', { tool: 'project_health', args: { path: projectPath, days: 30 } }),
+      rpc<string>('hologram_call', { tool: 'arch_blindspots', args: { filter: 'all' } }).catch(() => '{"blindspots":[]}'),
+    ]);
+    const fragileData = JSON.parse(fragileRaw);
+    const fragilityRanks: Array<{ file: string; score: number }> = [];
+    if (fragileData.fragile_modules || fragileData.modules) {
+      const list = fragileData.fragile_modules || fragileData.modules;
+      for (const m of list) fragilityRanks.push({ file: m.file || m.module || '', score: m.fragility_score || m.score || 0 });
+    }
+    const cycleData = JSON.parse(cycleRaw);
+    const cycleCount = cycleData.total_cycles || cycleData.cycles?.length || 0;
+    const healthData = JSON.parse(healthRaw);
+    const healthScore = healthData.coupling_density_score || healthData.score || 0;
+    const blindspotsData = JSON.parse(blindspotsRaw);
+    const synthesisAlerts: Array<{ type: string; count: number; detail: string }> = [];
+    const rawBlindspots = blindspotsData.blindspots || blindspotsData.alerts || [];
+    const typeCounts = new Map<string, number>();
+    for (const b of rawBlindspots) { const t = b.type || b.kind || 'unknown'; typeCounts.set(t, (typeCounts.get(t) || 0) + 1); }
+    for (const [type, count] of typeCounts) synthesisAlerts.push({ type, count, detail: `${count} detected in project` });
+    const lspHotspots: Array<{ file: string; symbol: string; callers: number }> = [];
+    for (const r of fragilityRanks.slice(0, 5)) { if (r.score > 100) lspHotspots.push({ file: r.file, symbol: r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '', callers: Math.round(r.score / 10) }); }
+    const lspCallers = new Map<string, Array<{ symbol: string; count: number }>>();
+    for (const r of fragilityRanks.slice(0, 3)) {
+      try {
+        const resolveRaw = await rpc<string>('hologram_call', { tool: 'resolve_call', args: { file: r.file } }).catch(() => '{}');
+        const resolveData = JSON.parse(resolveRaw);
+        if (resolveData.calls && Array.isArray(resolveData.calls)) {
+          const fc = new Map<string, number>();
+          for (const c of resolveData.calls) { const fn = c.callee || c.function || c.name || ''; if (fn) fc.set(fn, (fc.get(fn) || 0) + 1); }
+          const sorted = [...fc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([symbol, count]) => ({ symbol, count }));
+          if (sorted.length > 0) lspCallers.set(r.file, sorted);
+        }
+      } catch {}
+    }
+    const semanticNeighbors = new Map<string, Array<{ name: string; file: string }>>();
+    for (const r of fragilityRanks.slice(0, 3)) {
+      const symbol = r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+      if (!symbol) continue;
+      try {
+        const searchRaw = await rpc<string>('hologram_call', { tool: 'search_symbols', args: { query: symbol, limit: 5 } }).catch(() => '{"results":[]}');
+        const searchData = JSON.parse(searchRaw);
+        const results = searchData.results || [];
+        const neighbors = results.filter((s: any) => (s.name || '').toLowerCase() !== symbol.toLowerCase()).slice(0, 3).map((s: any) => ({ name: s.name || '', file: s.location || s.file || '' }));
+        if (neighbors.length > 0) semanticNeighbors.set(r.file, neighbors);
+      } catch {}
+    }
+    let baselineFragility: Map<string, number>;
+    let sessionDrift = 0;
+    if (!isRefresh && !ctx.engine) {
+      baselineFragility = new Map<string, number>();
+      for (const r of fragilityRanks) baselineFragility.set(r.file, r.score);
+    } else {
+      const prev = ctx.engine?.baselineFragility;
+      if (prev && prev.size > 0) { let delta = 0; for (const r of fragilityRanks) { const before = prev.get(r.file) ?? 0; if (r.score > before) delta += (r.score - before) / Math.max(before, 1); } sessionDrift = delta; }
+      baselineFragility = ctx.engine?.baselineFragility ?? new Map();
+    }
+    ctx.engine = { fragilityRanks, cycleCount, healthScore, baselineFragility, sessionDrift, lspHotspots, lspCallers, synthesisAlerts, semanticNeighbors, vectorReady: semanticNeighbors.size > 0 };
+  } catch (e) {
+    console.warn('[loadEngineSnapshot] engine data unavailable:', e);
+  }
+}
+
 let _snapshotRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 export function scheduleEngineSnapshotRefresh(ctx: GraphContext, projectPath: string): void {
   if (_snapshotRefreshTimer) clearTimeout(_snapshotRefreshTimer);
