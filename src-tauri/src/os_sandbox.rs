@@ -11,6 +11,59 @@
 
 use std::io::{self, Read};
 use std::process::ExitStatus;
+use std::time::Duration;
+
+// ═══════════════════════════════════════════════════════════════
+// Spawn retry — transient fork/spawn errors are retried
+// ═══════════════════════════════════════════════════════════════
+
+const SPAWN_RETRY_COUNT: u32 = 3;
+const SPAWN_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
+
+/// Retry a process spawn on transient errors (EAGAIN, ENOMEM, etc.).
+/// Returns the first non-retryable error or the last retryable error.
+fn retry_spawn<F>(mut spawn_fn: F) -> io::Result<std::process::Child>
+where
+    F: FnMut() -> io::Result<std::process::Child>,
+{
+    let mut last_err: Option<io::Error> = None;
+    for attempt in 0..=SPAWN_RETRY_COUNT {
+        match spawn_fn() {
+            Ok(child) => return Ok(child),
+            Err(e) => {
+                let retryable = matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) || is_transient_spawn_error(&e);
+                if !retryable || attempt == SPAWN_RETRY_COUNT {
+                    return Err(e);
+                }
+                let delay = SPAWN_RETRY_BASE_DELAY * 2u32.pow(attempt);
+                eprintln!(
+                    "[hologram] spawn retry {}/{} — {:?} (retrying in {:?})",
+                    attempt + 1, SPAWN_RETRY_COUNT, e, delay
+                );
+                std::thread::sleep(delay);
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "spawn: unreachable")))
+}
+
+/// Check raw OS error for transient spawn failures.
+/// EAGAIN (11), ENOMEM (12) on Unix; ERROR_NO_SYSTEM_RESOURCES (1450) on Windows.
+fn is_transient_spawn_error(e: &io::Error) -> bool {
+    match e.raw_os_error() {
+        #[cfg(unix)]
+        Some(11 /* EAGAIN */) | Some(12 /* ENOMEM */) => true,
+        #[cfg(windows)]
+        Some(1450 /* ERROR_NO_SYSTEM_RESOURCES */) => true,
+        _ => false,
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Cross-platform public API
@@ -153,16 +206,20 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
 }
 
 /// Plain shell spawn without any sandbox wrapping — used as fallback when
-/// OS sandbox is unavailable (spec §6.7).
+/// OS sandbox is unavailable (spec §6.7). Retries on transient fork errors.
 #[cfg(not(windows))]
 fn spawn_plain(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
-    let child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
+    let cmd = command.to_string();
+    let dir = cwd.to_string();
+    let child = retry_spawn(|| {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+    })?;
     Ok(SandboxedChild { inner: child })
 }
 
@@ -562,17 +619,26 @@ mod mac {
             return Err(io::Error::new(io::ErrorKind::NotFound, "sandbox-exec not found"));
         }
         let profile = build_profile(cwd);
-        let child = std::process::Command::new("/usr/bin/sandbox-exec")
-            .arg("-p")
-            .arg(&profile)
-            .arg("--")
-            .arg("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+        // Wrap with ulimit for resource bounds (8 GiB VM, 300s CPU)
+        let limited_cmd = format!(
+            "ulimit -v {} -t {} && exec {}",
+            8 * 1024 * 1024, // 8 GiB in KiB
+            300,             // 300s CPU time
+            command
+        );
+        let child = super::retry_spawn(|| {
+            std::process::Command::new("/usr/bin/sandbox-exec")
+                .arg("-p")
+                .arg(&profile)
+                .arg("--")
+                .arg("sh")
+                .arg("-c")
+                .arg(&limited_cmd)
+                .current_dir(cwd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+        })?;
         Ok(SandboxedChild { inner: child })
     }
 
@@ -660,6 +726,16 @@ mod linux {
         // Collect home directory for read-only bind (needed for ~/.cargo, ~/.rustup, ~/.nvm, etc.)
         let home = std::env::var("HOME").unwrap_or_default();
 
+        // Wrap command with resource limits: 8 GiB virtual memory, 300s CPU time.
+        // ulimit -v limits address space (stack+heap+mmap), catches most runaway
+        // processes without requiring cgroup or systemd-run. SIGKILL on exceed.
+        let limited_cmd = format!(
+            "ulimit -v {} -t {} && exec {}",
+            8 * 1024 * 1024, // 8 GiB in KiB
+            300,             // 300s CPU time
+            command
+        );
+
         let mut cmd = std::process::Command::new(&bwrap);
 
         // Read-only system paths
@@ -685,13 +761,13 @@ mod linux {
         cmd.arg("--")
             .arg("sh")
             .arg("-c")
-            .arg(command);
+            .arg(&limited_cmd);
 
         cmd.current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn()?;
+        let child = super::retry_spawn(|| cmd.spawn())?;
         Ok(SandboxedChild { inner: child })
     }
 
