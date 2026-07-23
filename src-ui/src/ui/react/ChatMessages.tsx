@@ -299,6 +299,49 @@ const ReasoningBlock: React.FC<{
   );
 });
 
+function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
+  let args: Record<string, unknown>;
+  try {
+    args = JSON.parse(part.args || '{}');
+  } catch {
+    return null;
+  }
+  const name = part.name;
+
+  // write_file_content — show the file content being written
+  if ((name === 'write_file_content' || name === 'write_to_file') && typeof args.content === 'string') {
+    const content = args.content as string;
+    const filePath = (args.file_path as string) || (args.path as string) || '';
+    const header = filePath ? `// ${filePath}\n` : '';
+    return (
+      <div className="msg-tool-result">
+        <pre><code>{(header + content).slice(0, 2000)}{content.length > 2000 ? '\n…(截断)' : ''}</code></pre>
+      </div>
+    );
+  }
+
+  // edit_file — show the diff (old → new)
+  if (name === 'edit_file' && (typeof args.old_string === 'string' || typeof args.new_string === 'string')) {
+    const oldStr = (args.old_string as string) || '';
+    const newStr = (args.new_string as string) || '';
+    const filePath = (args.file_path as string) || (args.path as string) || '';
+    const maxLen = 400;
+    const oldPreview = oldStr.length > maxLen ? oldStr.slice(0, maxLen) + '…' : oldStr;
+    const newPreview = newStr.length > maxLen ? newStr.slice(0, maxLen) + '…' : newStr;
+    const lines: string[] = [];
+    if (filePath) lines.push(`// ${filePath}`);
+    for (const l of oldPreview.split('\n')) lines.push(`- ${l}`);
+    for (const l of newPreview.split('\n')) lines.push(`+ ${l}`);
+    return (
+      <div className="msg-tool-result">
+        <pre><code>{lines.join('\n').slice(0, 2000)}</code></pre>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 // ── Tool card ──
 
 // ponytail: NOT wrapped in React.memo — part-mutator mutates ToolCallPart in-place
@@ -353,6 +396,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
           </pre>
         </div>
       )}
+      {isExpanded && !part.output && part.status === 'running' && renderToolContentPreview(part)}
       {isExpanded && part.err && (
         <div className="msg-tool-result msg-tool-err">
           <pre>
