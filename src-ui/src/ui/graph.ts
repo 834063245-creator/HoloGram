@@ -13,7 +13,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -48,7 +48,7 @@ export class StarGraph {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
-  private controls: OrbitControls;
+  private controls: TrackballControls;
   private container: HTMLElement;
   private galaxyGroup = new THREE.Group(); // parent for full-mode rotation
   private nodeGroup = new THREE.Group();
@@ -167,7 +167,7 @@ export class StarGraph {
     );
     this.composer.addPass(this.bloomPass);
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls = new TrackballControls(this.camera, this.renderer.domElement);
     // ponytail: 用户手动操作即放弃自动 fly，避免抢镜头
     this.controls.addEventListener('start', () => {
       this._userInteracting = true;
@@ -180,13 +180,11 @@ export class StarGraph {
     this.controls.addEventListener('end', () => {
       this._userInteracting = false;
     });
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.15; // quick stop
+    this.controls.staticMoving = false; // enable damping (quaternion-based, no gimbal lock)
+    this.controls.dynamicDampingFactor = 0.15; // quick stop
     this.controls.rotateSpeed = 0.5; // halved — no whip
     this.controls.zoomSpeed = 1.0; // responsive zoom
-    this.controls.screenSpacePanning = true; // right-drag to pan = recenter orbit target
     this.controls.minDistance = 5;
-    this.controls.maxDistance = 12000;
     this.controls.maxDistance = 4000;
 
     this.glowTex = createSpikeTexture();
