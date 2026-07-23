@@ -91,6 +91,8 @@ const _EDGE_COLORS: Record<string, number> = {
   triggers: 0xff8833,
   awaits: 0xc068ff,
   sequences: 0x8866ff,
+  usage: 0x88aacc,
+  throws: 0xff4466,
   data: 0xff5566,
   temporal: 0xff8833,
   structural: 0x4a9adf,

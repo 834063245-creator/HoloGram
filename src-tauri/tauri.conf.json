@@ -1,12 +1,12 @@
 {
   "productName": "全息观测站",
   "identifier": "com.hologram.hg",
-  "version": "9.2.1",
+  "version": "9.2.0",
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "cd ../src-ui && NODE_OPTIONS=--max-old-space-size=4096 npm run dev",
-    "beforeBuildCommand": "cd ../src-ui && NODE_OPTIONS=--max-old-space-size=4096 npm run build"
+    "beforeDevCommand": "cd /d D:\\HoloGramHG\\src-ui && npm run dev",
+    "beforeBuildCommand": "cd /d D:\\HoloGramHG\\src-ui && npm run build"
   },
   "app": {
     "windows": [
@@ -22,7 +22,6 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "resources": ["../grammars/*.dll"],
     "windows": {
