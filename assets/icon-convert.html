@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>HoloGram Icon PNG</title></head>
+<body>
+<canvas id="c" width="512" height="512"></canvas>
+<script>
+const svg = `SVG_PLACEHOLDER`;
+const blob = new Blob([svg], { type: 'image/svg+xml' });
+const url = URL.createObjectURL(blob);
+const img = new Image();
+img.onload = () => {
+  const c = document.getElementById('c');
+  const ctx = c.getContext('2d');
+  // Fill with dark bg (SVG is transparent outside clip)
+  ctx.fillStyle = '#050810';
+  ctx.fillRect(0, 0, 512, 512);
+  ctx.drawImage(img, 0, 0, 512, 512);
+  const a = document.createElement('a');
+  a.download = 'hologram-icon.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+  URL.revokeObjectURL(url);
+};
+img.src = url;
+</script>
+</body>
+</html>

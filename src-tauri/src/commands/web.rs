@@ -54,7 +54,7 @@ fn bing_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
 
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
-            .timeout_connect(Some(std::time::Duration::from_secs(5)))
+            .timeout_per_call(Some(std::time::Duration::from_secs(5)))
             .timeout_global(Some(std::time::Duration::from_secs(10)))
             .build()
     );
@@ -101,7 +101,7 @@ fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
 
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
-            .timeout_connect(Some(std::time::Duration::from_secs(5)))
+            .timeout_per_call(Some(std::time::Duration::from_secs(5)))
             .timeout_global(Some(std::time::Duration::from_secs(10)))
             .build()
     );
@@ -171,7 +171,7 @@ pub(crate) async fn web_fetch(
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .http_status_as_error(false)
-            .timeout_connect(Some(std::time::Duration::from_secs(10)))
+            .timeout_per_call(Some(std::time::Duration::from_secs(10)))
             .timeout_global(Some(std::time::Duration::from_secs(30)))
             .build()
     );
