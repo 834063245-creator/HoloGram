@@ -176,9 +176,6 @@ export class StarGraph {
         clearTimeout(this._flyDebounce);
         this._flyDebounce = null;
       }
-      // Snap orbit pivot to whatever nodes are in the camera's view cone.
-      // No animation — just jump. Zero motion sickness.
-      this.controls.target.copy(this._lifecycle.smartTarget);
     });
     this.controls.addEventListener('end', () => {
       this._userInteracting = false;
