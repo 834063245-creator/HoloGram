@@ -45,7 +45,6 @@ import {
   appendUserBubble,
   finishTurn,
   renderEvent,
-  setPendingStreamingSession,
 } from '../src/ui/chat-stream';
 import type { AssistantMessage, ChatMessage, MessageId } from '../src/ui/message-model';
 import { getSessionStore } from '../src/ui/session-store';
@@ -70,6 +69,7 @@ function setupSessions(activeSession: number = SESSION_A) {
 }
 
 let _streamingId: MessageId | null = null;
+let _streamingTargetSid: number | null = null;
 
 function makeCtx(activeSession: number = SESSION_A): StreamContext {
   setupSessions(activeSession);
@@ -87,6 +87,8 @@ function makeCtx(activeSession: number = SESSION_A): StreamContext {
     setStreamingAssistantId: ((id: MessageId | null) => {
       _streamingId = id;
     }) as (id: MessageId | null) => void,
+    getStreamingTargetSid: () => _streamingTargetSid,
+    setStreamingTargetSid: (sid: number | null) => { _streamingTargetSid = sid; },
     getUserScrolledUp: () => false,
     setUserScrolledUp: vi.fn(),
     getSyncRafId: () => null,
@@ -98,6 +100,7 @@ function makeCtx(activeSession: number = SESSION_A): StreamContext {
     setLastUsageText: vi.fn(),
     addNotice: vi.fn(),
     saveActiveSession: vi.fn(),
+    scheduleAutoSave: vi.fn(),
     bumpPillBadge: vi.fn(),
     animateBubbleIn: vi.fn(),
     setRunning: vi.fn(),
@@ -126,6 +129,7 @@ function turnStartedEvent(): AgentEvent {
 describe('cross-session streaming leak regression', () => {
   beforeEach(() => {
     _streamingId = null;
+    _streamingTargetSid = null;
     getSessionStore(STORE_ID).setState({
       sessions: [],
       activeIdx: -1,
@@ -137,7 +141,7 @@ describe('cross-session streaming leak regression', () => {
 
   it('streaming routes to pending session after TurnStarted + tab switch', () => {
     const ctx = makeCtx(SESSION_A);
-    setPendingStreamingSession(STORE_ID, SESSION_A);
+    ctx.setStreamingTargetSid(SESSION_A);
     appendUserBubble(ctx, 'hello from session A');
     renderEvent(ctx, turnStartedEvent());
 
@@ -158,7 +162,7 @@ describe('cross-session streaming leak regression', () => {
 
   it('subsequent events route via assistant ID after first event establishes it', () => {
     const ctx = makeCtx(SESSION_A);
-    setPendingStreamingSession(STORE_ID, SESSION_A);
+    ctx.setStreamingTargetSid(SESSION_A);
     appendUserBubble(ctx, 'hello');
     renderEvent(ctx, textEvent('First chunk'));
 
@@ -184,7 +188,7 @@ describe('cross-session streaming leak regression', () => {
 
   it('routes notice to pending session after tab switch', () => {
     const ctx = makeCtx(SESSION_A);
-    setPendingStreamingSession(STORE_ID, SESSION_A);
+    ctx.setStreamingTargetSid(SESSION_A);
     getSessionStore(STORE_ID).setState({ activeIdx: 1 });
     addNotice(ctx, 'notice during streaming');
 
@@ -198,7 +202,7 @@ describe('cross-session streaming leak regression', () => {
 
   it('finishes turn in the correct session', () => {
     const ctx = makeCtx(SESSION_A);
-    setPendingStreamingSession(STORE_ID, SESSION_A);
+    ctx.setStreamingTargetSid(SESSION_A);
     appendUserBubble(ctx, 'hello');
     renderEvent(ctx, textEvent('response'));
     finishTurn(ctx);

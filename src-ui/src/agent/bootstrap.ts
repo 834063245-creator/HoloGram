@@ -180,7 +180,7 @@ function planRegistry(base: ToolRegistry): ToolRegistry {
   return out;
 }
 
-function buildSystemPrompt(
+export function buildSystemPrompt(
   graphData: any,
   projectPath: string,
   memorySection = '',

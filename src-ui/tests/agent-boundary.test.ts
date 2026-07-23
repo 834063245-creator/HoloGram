@@ -16,12 +16,17 @@ import { describe, expect, it } from 'vitest';
 
 const AGENT_DIR = join(process.cwd(), 'src', 'agent');
 
+// bootstrap.ts is the wiring layer — it bridges agent core and UI,
+// so it legitimately imports from ../ui/. All other agent/ files must
+// remain pure (no UI imports, no browser APIs).
+const BOUNDARY_EXEMPT = new Set(['bootstrap.ts']);
+
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...walk(full));
-    else if (entry.endsWith('.ts')) out.push(full);
+    else if (entry.endsWith('.ts') && !BOUNDARY_EXEMPT.has(entry)) out.push(full);
   }
   return out;
 }
