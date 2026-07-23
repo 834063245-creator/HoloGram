@@ -119,7 +119,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['filePath'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('read_file_content', args),
+      execute: (args, onProgress) => exec('read_file_content', args, onProgress),
     },
     {
       name: () => 'write_file',
@@ -145,7 +145,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['filePath', 'content'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('write_file_content', args),
+      execute: (args, onProgress) => exec('write_file_content', args, onProgress),
     },
     {
       name: () => 'edit_file',
@@ -181,13 +181,13 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['filePath', 'oldString', 'newString'],
       }),
       readOnly: () => false,
-      execute: (args) =>
+      execute: (args, onProgress) =>
         exec('edit_file', {
           filePath: args.filePath,
           oldString: args.oldString,
           newString: args.newString,
           replaceAll: args.replaceAll,
-        }),
+        }, onProgress),
     },
     {
       name: () => 'list_directory',
@@ -204,7 +204,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('list_directory', args),
+      execute: (args, onProgress) => exec('list_directory', args, onProgress),
     },
     {
       name: () => 'read_constraints',
@@ -221,7 +221,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['projectPath'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('read_constraints', args),
+      execute: (args, onProgress) => exec('read_constraints', args, onProgress),
     },
 
     // ── Code Search ──
@@ -286,7 +286,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['directory', 'pattern'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('search_content', args),
+      execute: (args, onProgress) => exec('search_content', args, onProgress),
     },
 
     // ── Glob ──
@@ -309,7 +309,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['pattern'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('glob', args),
+      execute: (args, onProgress) => exec('glob', args, onProgress),
     },
 
     // ── Shell ──
@@ -343,7 +343,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['command'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('exec_command', args),
+      execute: (args, onProgress) => exec('exec_command', args, onProgress),
     },
 
     // ── Shell: Background job management ──
@@ -362,7 +362,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['jobId'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('bash_output', { jobId: args.jobId }),
+      execute: (args, onProgress) => exec('bash_output', { jobId: args.jobId }, onProgress),
     },
     {
       name: () => 'bash_kill',
@@ -378,7 +378,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['jobId'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('bash_kill', { jobId: args.jobId }),
+      execute: (args, onProgress) => exec('bash_kill', { jobId: args.jobId }, onProgress),
     },
 
     // ── Git ──
@@ -397,7 +397,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('git_status', args),
+      execute: (args, onProgress) => exec('git_status', args, onProgress),
     },
     {
       name: () => 'git_diff',
@@ -424,12 +424,12 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => true,
-      execute: async (args) => {
+      execute: async (args, onProgress) => {
         const staged = args.staged === true;
         return exec(staged ? 'git_diff_staged' : 'git_diff_unstaged', {
           path: args.path,
           file: args.file || '.',
-        });
+        }, onProgress);
       },
     },
     {
@@ -452,7 +452,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('git_log', { path: args.path, count: args.count || 10 }),
+      execute: (args, onProgress) => exec('git_log', { path: args.path, count: args.count || 10 }, onProgress),
     },
     {
       name: () => 'git_stage',
@@ -472,18 +472,18 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path', 'files'],
       }),
       readOnly: () => false,
-      execute: async (args) => {
+      execute: async (args, onProgress) => {
         const filesRaw = args.files as string | undefined;
         if (!filesRaw) return 'error: files argument is required';
         const files = filesRaw.trim();
         if (files === '.' || files === 'all') {
-          return exec('git_stage_all', { path: args.path });
+          return exec('git_stage_all', { path: args.path }, onProgress);
         }
         // Stage individual files
         const fileList = files.split(',').map((f) => f.trim());
         const results: string[] = [];
         for (const f of fileList) {
-          const r = await exec('git_stage', { path: args.path, files: [f] });
+          const r = await exec('git_stage', { path: args.path, files: [f] }, onProgress);
           results.push(r);
         }
         return results.join('\n');
@@ -513,7 +513,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path', 'message'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_commit', { path: args.path, message: args.message }),
+      execute: (args, onProgress) => exec('git_commit', { path: args.path, message: args.message }, onProgress),
     },
     {
       name: () => 'git_push',
@@ -529,7 +529,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_push', { path: args.path }),
+      execute: (args, onProgress) => exec('git_push', { path: args.path }, onProgress),
     },
     {
       name: () => 'git_pull',
@@ -545,7 +545,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_pull', { path: args.path }),
+      execute: (args, onProgress) => exec('git_pull', { path: args.path }, onProgress),
     },
 
     // ── Web Search — 已禁用 (2026-07)
@@ -569,7 +569,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['url'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('web_fetch', args),
+      execute: (args, onProgress) => exec('web_fetch', args, onProgress),
     },
 
     // ── Phase 2a: File Operations (Tauri commands already exist) ──
@@ -590,7 +590,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('delete_file_or_dir', args),
+      execute: (args, onProgress) => exec('delete_file_or_dir', args, onProgress),
     },
     {
       name: () => 'create_directory',
@@ -604,7 +604,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('create_directory', args),
+      execute: (args, onProgress) => exec('create_directory', args, onProgress),
     },
     {
       name: () => 'move_file',
@@ -623,7 +623,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['from', 'to'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('move_file', args),
+      execute: (args, onProgress) => exec('move_file', args, onProgress),
     },
     {
       name: () => 'rename_file',
@@ -643,7 +643,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path', 'new_name'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('rename_file_or_dir', { filePath: args.path, newName: args.new_name }),
+      execute: (args, onProgress) => exec('rename_file_or_dir', { filePath: args.path, newName: args.new_name }, onProgress),
     },
 
     // ── Phase 2b: Git Operations (Tauri commands already exist) ──
@@ -658,7 +658,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_init', args),
+      execute: (args, onProgress) => exec('git_init', args, onProgress),
     },
     {
       name: () => 'git_checkout',
@@ -677,7 +677,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path', 'branch'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_checkout', args),
+      execute: (args, onProgress) => exec('git_checkout', args, onProgress),
     },
     {
       name: () => 'git_create_branch',
@@ -692,7 +692,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path', 'branch'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_create_branch', args),
+      execute: (args, onProgress) => exec('git_create_branch', args, onProgress),
     },
     {
       name: () => 'git_discard',
@@ -712,7 +712,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path', 'file'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_discard', args),
+      execute: (args, onProgress) => exec('git_discard', args, onProgress),
     },
     {
       name: () => 'git_stash_push',
@@ -726,7 +726,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_stash_push', args),
+      execute: (args, onProgress) => exec('git_stash_push', args, onProgress),
     },
     {
       name: () => 'git_stash_pop',
@@ -740,7 +740,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['path'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('git_stash_pop', args),
+      execute: (args, onProgress) => exec('git_stash_pop', args, onProgress),
     },
 
     // ── Phase 2c: Agent Worktree Isolation (Tauri commands already exist) ──
@@ -756,7 +756,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['agent_id'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('agent_isolation_create', args),
+      execute: (args, onProgress) => exec('agent_isolation_create', args, onProgress),
     },
     {
       name: () => 'agent_isolation_diff',
@@ -769,7 +769,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['agent_id'],
       }),
       readOnly: () => true,
-      execute: (args) => exec('agent_isolation_diff', args),
+      execute: (args, onProgress) => exec('agent_isolation_diff', args, onProgress),
     },
     {
       name: () => 'agent_isolation_merge',
@@ -782,7 +782,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['agent_id'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('agent_isolation_merge', args),
+      execute: (args, onProgress) => exec('agent_isolation_merge', args, onProgress),
     },
     {
       name: () => 'agent_isolation_discard',
@@ -796,7 +796,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         required: ['agent_id'],
       }),
       readOnly: () => false,
-      execute: (args) => exec('agent_isolation_discard', args),
+      execute: (args, onProgress) => exec('agent_isolation_discard', args, onProgress),
     },
     {
       name: () => 'agent_isolation_status',
@@ -806,7 +806,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         properties: {},
       }),
       readOnly: () => true,
-      execute: (args) => exec('agent_isolation_status', args),
+      execute: (args, onProgress) => exec('agent_isolation_status', args, onProgress),
     },
   ];
 }
