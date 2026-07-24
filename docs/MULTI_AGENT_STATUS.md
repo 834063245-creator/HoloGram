@@ -113,6 +113,9 @@
 | `src/agent/lifecycle-manager.ts` | 全局空闲判定 + 泄漏检测 + worktree TTL |
 | `src/agent/hooks/board-tracking-hook.ts` | PostTool hook 自动追踪文件修改 |
 | `src/agent/tools/merge.ts` | agent_merge 工具 |
+| `src/ui/agent-panel-store.ts` | Agent 面板 zustand store（agents/taskBoard/messageFlow/alerts） |
+| `src/ui/react/AgentsPanel.tsx` | Agent 可观测性面板 React 组件 |
+| `src/ui/react/AgentsPanel.css` | Agent 面板样式 |
 | `tests/lifecycle-unit.test.ts` | 单元测试 |
 | `tests/lifecycle-integration.test.ts` | 集成测试 |
 | `tests/async-spawn-fixes.test.ts` | P0/P1 修复验证测试 |
@@ -126,13 +129,26 @@
 | `message-bus.ts` | `register()` 加 onWake、`_deliver()` 投递后触发回调 + `transport.onDelivered`、debounced flush、broadcast `to` 字段修复 |
 | `message-types.ts` | `MessageTransport` 加 `onDelivered?` |
 | `runtime/types.ts` | `AgentConfig` 加 `taskBoard?` |
-| `runtime/runtime.ts` | 构造函数接收 projectPath、注入 board、注册 merge tool、注册 board hook、lifecycle manager、持久化恢复、孤儿检测、destroyAgent flush |
+| `runtime/runtime.ts` | 构造函数接收 projectPath、注入 board、注册 merge tool、注册 board hook、lifecycle manager、持久化恢复、孤儿检测、destroyAgent flush + clearFlushTimer、ready()、AgentHandleImpl.status 派生、_wrapNotifier 转发 onStatusChange、LifecycleManager wrappedSink 转发 Notice → onLifecycleAlert |
 | `tools/subagent.ts` | schema 加 `async` 参数、统一 agentId（agentIdOverride） |
-| `workspace.ts` | `new AgentRuntime(this.path)`、spawner lambda 传 asyncMode + agentIdOverride |
+| `workspace.ts` | `new AgentRuntime(this.path)`、spawner lambda 传 asyncMode + agentIdOverride、`await runtime.ready()`、agent panel 初始化刷新 + bus.subscribe 消息流 + deactivate 清理 |
+| `runtime/agent-builder.ts` | `buildSystemPrompt()` 加多 Agent 协作指南段落（async spawn / merge / 通信 / 决策指南） |
+| `runtime/types.ts` | `AgentConfig` 加 `taskBoard?`、`RuntimePort` 加 `ready()`、`RuntimeNotifier` 加 `onLifecycleAlert?` |
+| `agent-types.ts` | `AgentUINotifier` 加 `onStatusChange?` |
+| `agent.ts` | `get isRunning()`、`run()` 触发 `onStatusChange(true)`、`runLoop()` finally 触发 `onStatusChange(false)` |
+| `ui/runtime-adapter.ts` | 实现 `onAgentStatus`（更新 store + emit bus）、`onSubAgentFinished`（推送告警）、`onLifecycleAlert`（推送 pushAlert） |
+| `ui/dock-store.ts` | `DockPanelId` 加 `'agents'` |
+| `app/panels/panel-def.ts` | 注册 agents 面板 |
+| `app/panels/dock-panels.css` | 统一右侧面板尺寸 + `.zh` 规则覆盖 ap-tab-label |
+| `ui/events.ts` | 加 `agent:status` 事件类型 |
+| `main.ts` | 加 `panel.agents` 命令 + 面板互斥逻辑 |
 
 ## 提交历史
 
 ```
+d106a70 fix(agent): wire Agent status push + LifecycleManager alerts to panel
+9763be9 feat(agent): add multi-agent system prompt + observability UI panel
+e977372 docs: update commit history in MULTI_AGENT_STATUS.md
 48bf828 fix(agent): fix restore race condition and clearFlushTimer leak, add persistence tests
 7fa4cc4 feat(agent): add persistence & crash recovery for multi-agent runtime
 336177b test(agent): add 5 async-spawn-fixes tests
