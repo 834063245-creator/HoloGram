@@ -1,0 +1,422 @@
+/* ═══════════════════════════════════════════════════════════════
+   HOLOGRAM · Agent 可观测性面板样式
+   变量映射 --obs-*；参照 check-panel / constraints-panel 结构
+   ═══════════════════════════════════════════════════════════════ */
+
+#agents-panel {
+  position: fixed;
+  top: var(--obs-bar-h);
+  right: 0;
+  bottom: var(--obs-status-h);
+  width: 340px;
+  max-width: 92vw;
+  z-index: 50;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-left: 1px solid var(--obs-line);
+  transform: translateX(100%);
+  transition: transform var(--obs-glide);
+  display: flex;
+  flex-direction: column;
+}
+
+#agents-panel.ap-open {
+  transform: translateX(0);
+}
+
+/* ── Header ── */
+
+.ap-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(148, 166, 205, 0.12);
+  cursor: default;
+  user-select: none;
+}
+
+.ap-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--obs-blue);
+}
+
+.ap-tab-label {
+  font-family: var(--obs-font-mono);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+}
+
+.ap-close-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--obs-text-2);
+  cursor: pointer;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--obs-snap);
+}
+
+.ap-close-btn:hover {
+  color: var(--obs-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ── Content ── */
+
+.ap-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.ap-content::-webkit-scrollbar {
+  width: 5px;
+}
+
+.ap-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ap-content::-webkit-scrollbar-thumb {
+  background: rgba(48, 60, 80, 0.5);
+  border-radius: 3px;
+}
+
+/* ── Section ── */
+
+.ap-section {
+  border-bottom: 1px solid rgba(148, 166, 205, 0.06);
+}
+
+.ap-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--obs-snap);
+}
+
+.ap-section-head:hover {
+  background: rgba(160, 180, 220, 0.045);
+}
+
+.ap-section-arrow {
+  font-size: calc(11px * var(--font-scale));
+  color: var(--obs-text-2);
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.ap-section-label {
+  font-family: var(--obs-font-mono);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--obs-text-2);
+}
+
+.ap-section-badge {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+  margin-left: auto;
+}
+
+.ap-section-body {
+  padding: 0 16px 10px 16px;
+}
+
+.ap-section-body.collapsed {
+  display: none;
+}
+
+/* ── Agent tree ── */
+
+.ap-agent-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background var(--obs-snap);
+}
+
+.ap-agent-node:hover {
+  background: rgba(160, 180, 220, 0.045);
+}
+
+.ap-agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.ap-agent-dot.running {
+  background: var(--obs-pass);
+  animation: ap-pulse 1.2s ease-in-out infinite;
+}
+
+.ap-agent-dot.idle {
+  background: var(--obs-text-2);
+}
+
+.ap-agent-dot.completed {
+  background: var(--obs-blue);
+}
+
+.ap-agent-dot.failed {
+  background: var(--obs-fail);
+}
+
+.ap-agent-dot.stopped {
+  background: var(--obs-warn);
+}
+
+.ap-agent-dot.paused {
+  background: var(--obs-text-2);
+  opacity: 0.5;
+}
+
+.ap-agent-dot.merged {
+  background: var(--obs-text-2);
+  opacity: 0.6;
+}
+
+@keyframes ap-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+  50% { opacity: 0.5; box-shadow: 0 0 8px currentColor; }
+}
+
+.ap-agent-id {
+  font-family: var(--obs-font-mono);
+  font-size: calc(11px * var(--font-scale));
+  color: var(--obs-text);
+  font-weight: 500;
+}
+
+.ap-agent-desc {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.ap-agent-children {
+  margin-left: 16px;
+  border-left: 1px solid rgba(148, 166, 205, 0.08);
+  padding-left: 4px;
+}
+
+/* ── TaskBoard table ── */
+
+.ap-tb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ap-tb-table th {
+  text-align: left;
+  padding: 4px 6px;
+  color: var(--obs-text-2);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(148, 166, 205, 0.1);
+}
+
+.ap-tb-table td {
+  padding: 5px 6px;
+  color: var(--obs-text);
+  border-bottom: 1px solid rgba(148, 166, 205, 0.04);
+}
+
+.ap-tb-row {
+  cursor: pointer;
+  transition: background var(--obs-snap);
+}
+
+.ap-tb-row:hover {
+  background: rgba(160, 180, 220, 0.04);
+}
+
+.ap-tb-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: calc(9px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.ap-tb-badge.running {
+  background: rgba(100, 160, 255, 0.12);
+  color: var(--obs-blue);
+}
+
+.ap-tb-badge.completed {
+  background: rgba(60, 200, 110, 0.1);
+  color: var(--obs-pass);
+}
+
+.ap-tb-badge.failed {
+  background: rgba(220, 70, 60, 0.12);
+  color: var(--obs-fail);
+}
+
+.ap-tb-badge.stopped {
+  background: rgba(240, 168, 72, 0.1);
+  color: var(--obs-warn);
+}
+
+.ap-tb-badge.merged {
+  background: rgba(148, 166, 205, 0.08);
+  color: var(--obs-text-2);
+}
+
+.ap-tb-detail {
+  padding: 8px 6px;
+  background: rgba(6, 14, 26, 0.5);
+  border-radius: 3px;
+  margin: 2px 0;
+}
+
+.ap-tb-detail-label {
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.ap-tb-detail-text {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ap-tb-diff {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(3, 8, 20, 0.6);
+  border: 1px solid rgba(148, 166, 205, 0.08);
+  border-radius: 3px;
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-text-2);
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Message flow ── */
+
+.ap-msg-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  border-bottom: 1px solid rgba(148, 166, 205, 0.04);
+}
+
+.ap-msg-from {
+  color: var(--obs-blue);
+  flex-shrink: 0;
+}
+
+.ap-msg-arrow {
+  color: var(--obs-text-2);
+  flex-shrink: 0;
+}
+
+.ap-msg-to {
+  color: var(--obs-blue);
+  flex-shrink: 0;
+}
+
+.ap-msg-type {
+  color: var(--obs-warn);
+  flex-shrink: 0;
+}
+
+.ap-msg-payload {
+  color: var(--obs-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Alerts ── */
+
+.ap-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  border-radius: 3px;
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ap-alert.warn {
+  background: rgba(240, 168, 72, 0.06);
+  border-left: 3px solid var(--obs-warn);
+}
+
+.ap-alert.info {
+  background: rgba(100, 160, 255, 0.04);
+  border-left: 3px solid var(--obs-blue);
+}
+
+.ap-alert-text {
+  color: var(--obs-text);
+  flex: 1;
+  line-height: 1.4;
+}
+
+.ap-alert-time {
+  color: var(--obs-text-2);
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  flex-shrink: 0;
+}
+
+/* ── Empty state ── */
+
+.ap-empty {
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--obs-text-2);
+  font-family: var(--obs-font-mono);
+  font-size: calc(11px * var(--font-scale));
+}

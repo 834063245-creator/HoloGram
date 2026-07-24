@@ -11,6 +11,7 @@ import { dbg } from './debug';
 export interface BusEvents {
   // ── Agent ──
   'agent:diag': [d: { text: string; ready: boolean }];
+  'agent:status': [data: { agentId: string; status: string }];
   'agent:tool-done': [data: { toolName: string; args: Record<string, unknown>; output: string }];
   'prompt:ask': [
     data: {

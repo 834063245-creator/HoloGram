@@ -631,6 +631,7 @@ async function init(): Promise<void> {
       run: () => {
         const dock = useDockStore.getState();
         if (dock.isOpen('constraints')) dock.closePanel('constraints');
+        if (dock.isOpen('agents')) dock.closePanel('agents');
         dock.togglePanel('check');
         if (dock.isOpen('check') && workspace?.path) runCheck();
         useShellStore.getState().setViolations(0); // 打开即视为已知晓
@@ -645,6 +646,7 @@ async function init(): Promise<void> {
         const dock = useDockStore.getState();
         if (workspace?.path) dock.setProjectPath(workspace.path);
         if (dock.isOpen('check')) dock.closePanel('check');
+        if (dock.isOpen('agents')) dock.closePanel('agents');
         dock.togglePanel('constraints');
       },
     },
@@ -658,6 +660,18 @@ async function init(): Promise<void> {
       },
     },
     {
+      id: 'panel.agents',
+      group: '面板',
+      label: '面板：智能体',
+      icon: 'agent',
+      run: () => {
+        const dock = useDockStore.getState();
+        if (dock.isOpen('check')) dock.closePanel('check');
+        if (dock.isOpen('constraints')) dock.closePanel('constraints');
+        dock.togglePanel('agents');
+      },
+    },
+    {
       id: 'toggle-chat',
       group: '面板',
       label: '展开 / 折叠对话',
@@ -667,6 +681,7 @@ async function init(): Promise<void> {
         const dock = useDockStore.getState();
         if (dock.isOpen('check')) dock.closePanel('check');
         if (dock.isOpen('constraints')) dock.closePanel('constraints');
+        if (dock.isOpen('agents')) dock.closePanel('agents');
         chatPanel.toggle();
       },
     },

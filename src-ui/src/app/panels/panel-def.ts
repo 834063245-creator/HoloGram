@@ -10,6 +10,7 @@ import { CheckPanel } from '../../ui/react/CheckPanel';
 import { ConstraintsPanel } from '../../ui/react/ConstraintsPanel';
 import { DataflowPanel } from '../../ui/react/DataflowPanel';
 import { SettingsPanel } from '../../ui/react/SettingsPanel';
+import { AgentsPanel } from '../../ui/react/AgentsPanel';
 
 export interface PanelDef {
   id: DockPanelId;
@@ -30,4 +31,5 @@ export const PANEL_DEFS: PanelDef[] = [
   { id: 'constraints', side: 'right', title: '约束', icon: 'constraints', askAgent: true, component: ConstraintsPanel },
   { id: 'dataflow', side: null, title: '数据流', icon: 'dataflow', unmountOnClose: true, component: DataflowPanel },
   { id: 'settings', side: null, title: '设置', icon: 'settings', unmountOnClose: true, component: SettingsPanel },
+  { id: 'agents', side: 'right', title: '智能体', icon: 'agent', askAgent: false, component: AgentsPanel },
 ];

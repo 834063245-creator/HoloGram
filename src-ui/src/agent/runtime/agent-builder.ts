@@ -189,8 +189,35 @@ ${modeBlock}`;
 - 项目: \`${projectPath}\``;
 
   if (collaborationMode !== 'plan') {
-    suffix += `\n\n## 子 Agent
-agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。同一轮发多个可并行。大任务才委派，小任务自己做。`;
+    suffix += `\n\n## 多 Agent 协作
+
+### 子 Agent
+- agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。同一轮发多个可并行。大任务才委派，小任务自己做。
+
+### 异步子 Agent
+- 设 async=true 时 agent_spawn 立即返回 agentId，不阻塞当前轮次。
+- 适合长时间任务（重构、批量修改、跑测试套件）。你在等待期间可以继续处理其他工作。
+- 异步子 Agent 完成后，结果通过 agent_message（type: 'result'）推送到你的 inbox。
+- 收到 type: 'result' 消息后：用 agent_ack 确认，然后调 agent_merge 合并其工作成果到主仓库。
+- 异步子 Agent 最多 5 个并发。池满时 agent_spawn 返回错误——先 agent_merge 清理已完成的，或等现有任务结束。
+
+### 合并
+- agent_merge 将已完成子 Agent 的 worktree 串行合并回主仓库。
+- 冲突时 diff 保存在 TaskBoard 上，你需要手动用 edit_file 应用。
+- 合并是不可逆操作——确认子 Agent 工作无误后再合并。
+
+### Agent 间通信
+- agent_message 向指定 Agent 发消息（fire-and-forget，不等回复）。
+- agent_reply 回复 inbox 中的消息（同时 ACK 原消息）。
+- agent_ack 将消息标记为已读，从 inbox 移除。
+- agent_inbox 列出未读消息。
+- agent_list 列出当前拓扑下可通信的 Agent。
+
+### 决策指南
+- **同步 spawn**：短任务（< 1 分钟）、需要结果才能继续、单文件改动。
+- **异步 spawn**：长任务（> 1 分钟）、互不依赖的并行任务、批量操作。
+- **通信**：只在需要协调时发消息。收到 type: 'result' 后必须 agent_merge。
+- **不要**对正在运行的异步子 Agent 发 agent_message 催促进度——等 result 消息。`;
   }
 
   if (graphSnapshot) {

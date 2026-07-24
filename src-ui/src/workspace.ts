@@ -29,6 +29,7 @@ import { createProvider } from './provider';
 import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
+import { useAgentPanelStore } from './ui/agent-panel-store';
 import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import { getDiagnosticsForFile } from './ui/lsp-client';
@@ -407,6 +408,9 @@ export class Workspace {
       }
       this.runtime = null;
     }
+    // Clear agent panel data
+    useAgentPanelStore.getState().setAgents([]);
+    useAgentPanelStore.getState().setTaskBoard([]);
     // Persist agent state before clearing
     if (this.agent) {
       this.agent.saveState('done').catch(() => {});
@@ -543,6 +547,14 @@ export class Workspace {
     runtime.setNotifier(adapter);
     runtime.setDiagnosticsSource(getDiagnosticsForFile);
     this.runtime = runtime;
+
+    // ── Initialize agent panel data + subscribe to message flow ──
+    useAgentPanelStore.getState().setRuntime(runtime);
+    useAgentPanelStore.getState().refresh(runtime);
+    const unsubMsg = runtime.getBus().subscribe({}, (msg) => {
+      useAgentPanelStore.getState().pushMessage(msg);
+    });
+    this._unlisteners.push(unsubMsg);
 
     // ── Build graph context ──
     const graphCtx = buildGraphContextFromData(this.graphData);

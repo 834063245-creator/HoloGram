@@ -1,6 +1,6 @@
 # 多 Agent 系统实现状态文档
 
-> 最后更新：2026-07-24
+> 最后更新：2026-07-24（Phase 3 完成）
 > 用途：跨窗口交接的完整上下文
 
 ## 已落地的功能
@@ -68,18 +68,21 @@
 |------|--------|------|
 | `tests/persistence-recovery.test.ts` | 9（MessageBus flush/restore 往返、TaskBoard flush/restore 往返、debounced flush 不丢数据、空启动恢复、孤儿检测） | ✅ 全过 |
 
-### Phase 3：可用性（未开始）
+### Phase 3：系统提示词适配 + 可观测性 UI
 
-**系统提示词适配：**
-- `buildSystemPrompt()` 中加多 Agent 协作指南
-- 教 LLM 何时用 `async: true`、何时调 `agent_merge`、收到 `type: 'result'` 消息后该做什么
-- 当前 LLM 完全不知道 async spawn 和 merge 的存在
-
-**可观测性 UI：**
-- TaskBoard 视图（谁改了什么文件、merge 状态）
-- 消息流（谁给谁发了什么）
-- 生命周期告警面板（泄漏检测、TTL 清理）
-- 当前只有 SubAgentPart 基础状态（running/done/error）
+| 能力 | 文件 | 状态 |
+|------|------|------|
+| 系统提示词加多 Agent 协作指南（async spawn / merge / 通信 / 决策指南） | `runtime/agent-builder.ts` → `buildSystemPrompt()` | ✅ |
+| AgentPanelStore（agents / taskBoard / messageFlow / alerts 单一数据源） | `ui/agent-panel-store.ts` | ✅ |
+| AgentsPanel React 组件（Agent 树 / TaskBoard 表格 / 消息流 / 告警） | `ui/react/AgentsPanel.tsx` | ✅ |
+| AgentsPanel.css 样式 | `ui/react/AgentsPanel.css` | ✅ |
+| DockPanelId 加 'agents' + 初始关闭 | `ui/dock-store.ts` | ✅ |
+| 面板注册到 PANEL_DEFS（icon: 'agent'） | `app/panels/panel-def.ts` | ✅ |
+| RuntimeNotifier.onAgentStatus 实现（更新 store + emit bus） | `ui/runtime-adapter.ts` | ✅ |
+| RuntimeNotifier.onSubAgentFinished 实现（推送告警） | `ui/runtime-adapter.ts` | ✅ |
+| MessageBus.subscribe → pushMessage（消息流推送到 store） | `workspace.ts` | ✅ |
+| 初始化刷新 + deactivate 清理 | `workspace.ts` | ✅ |
+| bus 事件 'agent:status' 类型声明 | `ui/events.ts` | ✅ |
 
 ### Phase 4：协作能力（未开始）
 
@@ -147,5 +150,6 @@ cfac45a feat(agent): add multi-agent communication layer (Phase 1)
 
 1. ~~修 Phase 2 的 2 个问题（竞态 + clearFlushTimer）~~ ✅ 已完成
 2. ~~补 Phase 2 测试~~ ✅ 已完成
-3. Phase 3：系统提示词 + UI
+3. ~~Phase 3：系统提示词 + UI~~ ✅ 已完成
 4. 实际运行验证
+5. Phase 4：协作能力

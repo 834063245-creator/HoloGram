@@ -16,7 +16,8 @@ import { getChatStore, msgStoreFor } from './chat-store';
 import { rebuildMessagesFromMessages } from './chat-session';
 import type { SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
-import type { RuntimeNotifier } from '../agent/runtime/types';
+import type { RuntimeNotifier, AgentStatus } from '../agent/runtime/types';
+import { useAgentPanelStore } from './agent-panel-store';
 
 /**
  * 创建 RuntimeNotifier — 桥接 Runtime 事件到 UI store。
@@ -31,8 +32,10 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       // 这里不需要重复处理 — eventSink 已经在 createAgent 时注入
     },
 
-    onAgentStatus(_agentId: string, _status: string): void {
-      // Reserved for future multi-agent panel
+    onAgentStatus(agentId: string, status: AgentStatus): void {
+      const store = useAgentPanelStore.getState();
+      store.setAgents(store.agents.map((a) => (a.id === agentId ? { ...a, status } : a)));
+      bus.emit('agent:status', { agentId, status });
     },
 
     onProgress(_agentId: string, _step: number, _toolName: string): void {
@@ -79,10 +82,12 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       });
     },
 
-    onSubAgentFinished(_agentId: string, _parentAgentId: string, _ok: boolean): void {
-      // subParts cleanup is handled per-agent; just bump the correct session
-      // The sessionId is encoded in the sub-agent's UI session ID — handled by ChatCore
-      // This callback is for future multi-agent UI (when we have an agent panel)
+    onSubAgentFinished(agentId: string, _parentAgentId: string, ok: boolean): void {
+      useAgentPanelStore.getState().pushAlert({
+        id: `finish-${agentId}-${Date.now()}`,
+        level: ok ? 'info' : 'warn',
+        text: ok ? `子 Agent ${agentId} 已完成` : `子 Agent ${agentId} 失败`,
+      });
     },
   };
 }
