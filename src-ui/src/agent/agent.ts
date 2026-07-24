@@ -965,6 +965,7 @@ ${resumeNote}
           cache_hit_tokens: usage.cache_hit_tokens,
           elapsed_ms: Math.round(performance.now() - turnStart),
         });
+        this._diagTokenBreakdown(usage);
         this.cacheHitTotal += usage.cache_hit_tokens;
         this.cacheMissTotal += usage.cache_miss_tokens;
         this.lastUsage = usage;
@@ -1330,6 +1331,53 @@ ${resumeNote}
       if (m.reasoning_content) totalChars += m.reasoning_content.length;
     }
     return Math.ceil(totalChars / 2.5);
+  }
+
+  /** Diagnostic: breakdown token consumption by component.
+   *  Logged to .hologram/logs/ui.log after each turn as structured NDJSON.
+   *  Filter with: jq 'select(.module=="agent" and .message=="token breakdown") | .ctx' */
+  private _diagTokenBreakdown(apiUsage: Usage | undefined): void {
+    try {
+      const est = (chars: number) => Math.ceil(chars / 2.5);
+      const T = this.tools.schemas();
+      const toolSchemaChars = T.reduce((s, t) => s + t.name.length + t.description.length + JSON.stringify(t.parameters).length, 0);
+
+      let sysChars = 0, userChars = 0, reminderChars = 0, assistantChars = 0, toolChars = 0;
+      let reminderCount = 0, inboxInjCount = 0, discoveryInjCount = 0;
+
+      for (const m of this.session) {
+        const chars = (typeof m.content === 'string' ? m.content.length : 0) +
+          (m.tool_calls?.reduce((s, tc) => s + (tc.name?.length || 0) + (tc.arguments?.length || 0), 0) || 0);
+
+        if (m.role === 'system') { sysChars += chars; }
+        else if (m.role === 'user') {
+          if (typeof m.content === 'string' && m.content.includes('<system-reminder>')) {
+            reminderChars += chars; reminderCount++;
+            if (m.content.includes('📬 Agent 消息')) inboxInjCount++;
+            if (m.content.includes('🔬 共享发现')) discoveryInjCount++;
+          } else { userChars += chars; }
+        }
+        else if (m.role === 'assistant') { assistantChars += chars; }
+        else if (m.role === 'tool') { toolChars += chars; }
+      }
+
+      const diag = {
+        turn_session_msgs: this.session.length,
+        // ── cost centres ──
+        system_prompt: { tokens: est(sysChars), msgs: this.session.filter(m => m.role === 'system').length },
+        user_real:    { tokens: est(userChars), msgs: this.session.filter(m => m.role === 'user' && typeof m.content === 'string' && !m.content.includes('<system-reminder>')).length },
+        reminders:    { tokens: est(reminderChars), msgs: reminderCount, inbox: inboxInjCount, discovery: discoveryInjCount },
+        assistant:    { tokens: est(assistantChars), msgs: this.session.filter(m => m.role === 'assistant').length },
+        tool_results: { tokens: est(toolChars), msgs: this.session.filter(m => m.role === 'tool').length },
+        tool_schemas: { tokens: est(toolSchemaChars), count: T.length },
+        // ── totals ──
+        estimated_total: est(sysChars + userChars + reminderChars + assistantChars + toolChars),
+        api_reported: apiUsage ? { prompt: apiUsage.prompt_tokens, completion: apiUsage.completion_tokens, total: apiUsage.total_tokens } : null,
+        cache: apiUsage ? { hit: apiUsage.cache_hit_tokens, miss: apiUsage.cache_miss_tokens } : null,
+      };
+
+      log.info('agent', 'token breakdown', diag);
+    } catch { /* diagnostic must never throw */ }
   }
 
   /** Check if an error looks like a context-length exceedance. */
