@@ -1,6 +1,6 @@
 # 多 Agent 系统实现状态文档
 
-> 最后更新：2026-07-24（Phase 3 完成）
+> 最后更新：2026-07-24（Phase 3 收尾 — 状态推送 + 告警接入已修复）
 > 用途：跨窗口交接的完整上下文
 
 ## 已落地的功能
@@ -80,6 +80,11 @@
 | 面板注册到 PANEL_DEFS（icon: 'agent'） | `app/panels/panel-def.ts` | ✅ |
 | RuntimeNotifier.onAgentStatus 实现（更新 store + emit bus） | `ui/runtime-adapter.ts` | ✅ |
 | RuntimeNotifier.onSubAgentFinished 实现（推送告警） | `ui/runtime-adapter.ts` | ✅ |
+| AgentUINotifier.onStatusChange 回调（runLoop 开始/结束触发） | `agent.ts` + `agent-types.ts` | ✅ 已修复 |
+| AgentHandleImpl.status 从 Agent.isRunning 派生（不再硬编码 idle） | `runtime/runtime.ts` | ✅ 已修复 |
+| _wrapNotifier 转发 onStatusChange → onAgentStatus | `runtime/runtime.ts` | ✅ 已修复 |
+| LifecycleManager 告警接入面板（wrappedSink 转发 Notice → onLifecycleAlert） | `runtime/runtime.ts` + `runtime-adapter.ts` | ✅ 已修复 |
+| RuntimeNotifier.onLifecycleAlert 实现（推送 pushAlert 到面板告警区） | `ui/runtime-adapter.ts` | ✅ 已修复 |
 | MessageBus.subscribe → pushMessage（消息流推送到 store） | `workspace.ts` | ✅ |
 | 初始化刷新 + deactivate 清理 | `workspace.ts` | ✅ |
 | bus 事件 'agent:status' 类型声明 | `ui/events.ts` | ✅ |

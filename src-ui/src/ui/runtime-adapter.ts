@@ -89,6 +89,14 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         text: ok ? `子 Agent ${agentId} 已完成` : `子 Agent ${agentId} 失败`,
       });
     },
+
+    onLifecycleAlert(agentId: string, level: 'info' | 'warn' | 'error', text: string): void {
+      useAgentPanelStore.getState().pushAlert({
+        id: `lifecycle-${agentId}-${Date.now()}`,
+        level: level === 'error' ? 'warn' : level, // store 只支持 'warn' | 'info'
+        text,
+      });
+    },
   };
 }
 

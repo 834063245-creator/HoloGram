@@ -74,6 +74,8 @@ export interface AgentUINotifier {
     info: { agentId: string; description: string; sessionId: number },
     onProgress?: (chunk: string) => void,
   ): EventSink | undefined;
+  /** Agent 运行状态变更（idle ↔ running） */
+  onStatusChange?(running: boolean): void;
   /** Sub-agent finished — UI finalizes its render state. */
   subAgentFinished?(agentId: string, sessionId: number, ok: boolean): void;
   /** Agent's session array has been replaced (compaction / retract / setSession).

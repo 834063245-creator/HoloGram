@@ -46,6 +46,8 @@ export interface RuntimeNotifier {
   onToolDone(agentId: string, toolName: string, args: Record<string, unknown>, output: string): void;
   /** 循环进度（状态栏） */
   onProgress(agentId: string, step: number, toolName: string): void;
+  /** LifecycleManager 告警（泄漏检测、TTL 清理） */
+  onLifecycleAlert?(agentId: string, level: 'info' | 'warn' | 'error', text: string): void;
 }
 
 // ── 子 Agent 启动信息 ──

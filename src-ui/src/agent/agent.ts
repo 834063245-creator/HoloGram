@@ -168,6 +168,11 @@ export class Agent {
   // Whether runLoop is currently active — used by bus wakeup to avoid re-entry
   private _isRunning = false;
 
+  /** Whether the runLoop is currently active */
+  get isRunning(): boolean {
+    return this._isRunning;
+  }
+
   // TaskBoard — shared state for async sub-agent tracking
   private _taskBoard: TaskBoard | null = null;
 
@@ -550,6 +555,7 @@ export class Agent {
    *  starts from _injectInbox(), treating inbox messages as the sole input. */
   async run(signal: AbortSignal, input: string): Promise<void> {
     this._isRunning = true;
+    this._ui.onStatusChange?.(true);
     // Reset injected message tracking — user-driven run re-evaluates all unacked msgs
     if (input) this._injectedMsgIds.clear();
     if (this._preRunHook && input) {
@@ -1006,6 +1012,7 @@ ${resumeNote}
     }
     } finally {
       this._isRunning = false;
+      this._ui.onStatusChange?.(false);
       // Re-check for NEW (not-yet-injected) messages — avoid infinite loop
       // from unacked messages that were already injected this cycle.
       if (!signal.aborted && this._bus) {

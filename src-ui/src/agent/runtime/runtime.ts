@@ -19,6 +19,7 @@ import { defaultPricing } from '../../settings';
 import { Agent } from '../agent';
 import type { AgentStore } from '../agent-store';
 import type { AgentEvent, AgentUINotifier, EventSink } from '../agent-types';
+import { EventKind } from '../agent-types';
 import type { SubAgentPool } from '../coordinator';
 import { createExecState, type ExecStateInstance } from '../execution-state';
 import type { GoalManager } from '../goal-manager';
@@ -77,8 +78,7 @@ class AgentHandleImpl implements AgentHandle {
     return this._agent.parentId;
   }
   get status(): AgentStatus {
-    // Agent doesn't expose a status field directly — derive from execState
-    return 'idle';
+    return this._agent.isRunning ? 'running' : 'idle';
   }
 
   run(signal: AbortSignal, input: string): Promise<void> {
@@ -311,12 +311,20 @@ export class AgentRuntime implements RuntimePort {
 
     // 7c. Wire LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
     if (config.subAgentPool) {
+      const rawSink = config.eventSink ?? (() => {});
+      const wrappedSink: EventSink = (ev) => {
+        rawSink(ev);
+        // Forward Notice events to the notifier for the panel
+        if (ev.kind === EventKind.Notice) {
+          this.notifier?.onLifecycleAlert?.(agentId, ev.level ?? 'info', ev.text ?? '');
+        }
+      };
       const lifecycle = new AgentLifecycleManager(
         config.subAgentPool,
         this._taskBoard,
         this._bus,
         isolationExec,
-        config.eventSink ?? (() => {}),
+        wrappedSink,
       );
       lifecycle.start();
       this._lifecycleManagers.set(agentId, lifecycle);
@@ -416,6 +424,9 @@ export class AgentRuntime implements RuntimePort {
       },
       subAgentFinished: (id, sessionId, ok) => {
         this.notifier?.onSubAgentFinished(id, agentId, ok);
+      },
+      onStatusChange: (running: boolean) => {
+        this.notifier?.onAgentStatus(agentId, running ? 'running' : 'idle');
       },
       sessionReplaced: (messages: Message[]) => {
         this.notifier?.onSessionReplaced(agentId, messages);
