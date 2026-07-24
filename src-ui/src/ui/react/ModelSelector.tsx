@@ -3,6 +3,7 @@
 
 // ModelSelector — searchable combobox for picking models from the catalog.
 // Supports free text input for custom models not in the catalog.
+// Dynamic models fetched from API are marked with a "live" badge.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDynamicModelCount, getModel, searchModels } from '../../provider/catalog';
@@ -20,6 +21,10 @@ interface ModelSelectorProps {
   onRefreshModels?: () => Promise<number>;
 }
 
+function hasMetadata(m: ModelDescriptor): boolean {
+  return m.cost.input > 0 || m.contextWindow > 0;
+}
+
 export function ModelSelector({ value, onChange, providerName, kind, onRefreshModels }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -33,7 +38,6 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
   const results = useMemo(() => {
     if (!open) return [];
     const q = query.toLowerCase().trim();
-    // Search all models, then sort: current provider first, then by id
     const all = q ? searchModels(q) : searchModels('');
     return all
       .filter((m) => m.kind === kind)
@@ -78,7 +82,6 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
     [onChange, close],
   );
 
-  // Click outside to close
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -90,7 +93,6 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
     return () => document.removeEventListener('mousedown', handler);
   }, [open, close]);
 
-  // Scroll active item into view
   useEffect(() => {
     const el = listRef.current?.querySelector('.ms-item.active') as HTMLElement;
     el?.scrollIntoView({ block: 'nearest' });
@@ -116,30 +118,40 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
   };
 
   return (
-    <div className="ms-container" ref={containerRef}>
+    <div className={`ms-container${open ? ' ms-open' : ''}`} ref={containerRef}>
       <div className="ms-input-row">
-        <input
-          type="text"
-          className="sp-input ms-input"
-          value={open ? query : value}
-          placeholder="搜索模型或输入名称…"
-          onFocus={() => {
-            setOpen(true);
-            setQuery(value);
-          }}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            if (!open) setOpen(true);
-            setActiveIdx(0);
-            // Live-update the value as user types
-            onChange(e.target.value);
-          }}
-          onKeyDown={handleKeyDown}
-        />
+        <div className="ms-input-wrap">
+          <span className="ms-input-icon" dangerouslySetInnerHTML={{ __html: iconHtml('search', 12) }} />
+          <input
+            type="text"
+            className="sp-input ms-input"
+            value={open ? query : value}
+            placeholder="搜索模型或输入名称…"
+            onFocus={() => {
+              setOpen(true);
+              setQuery(value);
+            }}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (!open) setOpen(true);
+              setActiveIdx(0);
+              onChange(e.target.value);
+            }}
+            onKeyDown={handleKeyDown}
+          />
+          {value && !open && (
+            <span
+              className="ms-input-clear"
+              title="清除"
+              onClick={() => onChange('')}
+              dangerouslySetInnerHTML={{ __html: iconHtml('close', 10) }}
+            />
+          )}
+        </div>
         {onRefreshModels && (
           <button
             type="button"
-            className="ms-refresh-btn"
+            className={`ms-refresh-btn${refreshing ? ' spinning' : ''}`}
             title="从 API 获取模型列表"
             onClick={handleRefresh}
             dangerouslySetInnerHTML={{
@@ -151,44 +163,69 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
       {refreshMsg && <div className="ms-refresh-msg">{refreshMsg}</div>}
       {open && results.length > 0 && (
         <div className="ms-dropdown" ref={listRef}>
-          {results.map((m, i) => (
-            <button
-              type="button"
-              key={m.id}
-              className={`ms-item${i === activeIdx ? ' active' : ''}`}
-              onMouseEnter={() => setActiveIdx(i)}
-              onClick={() => handleSelect(m)}
-            >
-              <div className="ms-item-main">
-                <span className="ms-item-id">{m.id}</span>
-                <span className="ms-item-name">{m.name}</span>
-              </div>
-              <div className="ms-item-badges">
-                {m.reasoning && (
-                  <span className="ms-badge ms-badge-reason" title="支持推理/思考">
-                    🧠
-                  </span>
-                )}
-                <span className="ms-badge ms-badge-ctx" title="上下文窗口">
-                  {(m.contextWindow / 1000).toFixed(0)}k
-                </span>
-                <span className="ms-badge ms-badge-cost" title="每 1M token 价格">
-                  ${m.cost.input}/${m.cost.output}
-                </span>
-              </div>
-            </button>
-          ))}
+          {results.map((m, i) => {
+            const isDynamic = !hasMetadata(m);
+            return (
+              <button
+                type="button"
+                key={m.id}
+                className={`ms-item${i === activeIdx ? ' active' : ''}${m.id === value ? ' selected' : ''}`}
+                onMouseEnter={() => setActiveIdx(i)}
+                onClick={() => handleSelect(m)}
+              >
+                <div className="ms-item-main">
+                  <div className="ms-item-id-row">
+                    <span className="ms-item-id">{m.id}</span>
+                    {isDynamic && <span className="ms-badge-live">LIVE</span>}
+                    {m.id === value && (
+                      <span className="ms-item-check" dangerouslySetInnerHTML={{ __html: iconHtml('check', 11) }} />
+                    )}
+                  </div>
+                  {m.name !== m.id && <span className="ms-item-name">{m.name}</span>}
+                </div>
+                <div className="ms-item-badges">
+                  {m.reasoning && (
+                    <span className="ms-badge ms-badge-reason" title="支持推理/思考">
+                      🧠
+                    </span>
+                  )}
+                  {m.contextWindow > 0 && (
+                    <span className="ms-badge ms-badge-ctx" title="上下文窗口">
+                      {(m.contextWindow / 1000).toFixed(0)}k
+                    </span>
+                  )}
+                  {m.cost.input > 0 && (
+                    <span className="ms-badge ms-badge-cost" title="每 1M token 价格">
+                      ${m.cost.input}/${m.cost.output}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
-      {selectedDesc && (
+      {open && results.length === 0 && (
+        <div className="ms-dropdown ms-empty">
+          <span className="ms-empty-text">{query ? `无匹配模型「${query}」` : '目录为空，点击刷新从 API 获取'}</span>
+        </div>
+      )}
+      {selectedDesc && !open && (
         <div className="ms-meta">
           {selectedDesc.reasoning && <span className="ms-meta-tag ms-meta-reason">推理</span>}
-          <span className="ms-meta-tag">{(selectedDesc.contextWindow / 1000).toFixed(0)}k 上下文</span>
-          <span className="ms-meta-tag">输入 ${selectedDesc.cost.input}/M</span>
-          <span className="ms-meta-tag">输出 ${selectedDesc.cost.output}/M</span>
-          {selectedDesc.cost.cacheRead > 0 && (
-            <span className="ms-meta-tag">缓存 ${selectedDesc.cost.cacheRead}/M</span>
+          {selectedDesc.contextWindow > 0 && (
+            <span className="ms-meta-tag">{(selectedDesc.contextWindow / 1000).toFixed(0)}k 上下文</span>
           )}
+          {selectedDesc.cost.input > 0 && (
+            <>
+              <span className="ms-meta-tag">输入 ${selectedDesc.cost.input}/M</span>
+              <span className="ms-meta-tag">输出 ${selectedDesc.cost.output}/M</span>
+              {selectedDesc.cost.cacheRead > 0 && (
+                <span className="ms-meta-tag">缓存 ${selectedDesc.cost.cacheRead}/M</span>
+              )}
+            </>
+          )}
+          {!hasMetadata(selectedDesc) && <span className="ms-meta-tag ms-meta-live">来自 API</span>}
         </div>
       )}
     </div>
