@@ -1105,6 +1105,14 @@ ${resumeNote}
       // regardless of whether the error is normally retryable.
       if (this.isContextLengthError(lastErr) && !this.compactStuck && !this.compactRunning) {
         log.info('agent', 'reactive compact triggered by context-length error');
+        // Auto-adjust contextWindow: the model can't actually handle the current
+        // window size, so lower it to the point where the error fired (with margin).
+        const atTokens = this.tokenCountWithEstimation();
+        if (atTokens > 0 && atTokens < this.contextWindow) {
+          const adjusted = Math.max(atTokens - 10000, 50000); // 10K margin, floor 50K
+          log.info('agent', 'auto-lowering contextWindow', { from: this.contextWindow, to: adjusted, erroredAt: atTokens });
+          this.contextWindow = adjusted;
+        }
         this._sink({ kind: EventKind.Notice, level: 'warn', text: '上下文过长，自动压缩后重试…' });
         try {
           await this.compactNow(signal);

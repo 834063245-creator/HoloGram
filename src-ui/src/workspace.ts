@@ -658,7 +658,7 @@ export class Workspace {
         collaborationMode: ms.collaborationMode,
         pricing: defaultPricing(act.kind, act.model),
         temperature: agentOpts.temperature ?? 0.7,
-        contextWindow: agentOpts.contextWindow || getModel(act.model)?.contextWindow || 200000,
+        contextWindow: agentOpts.contextWindow || Math.min(getModel(act.model)?.contextWindow ?? 200000, 200000),
         maxTokens: act.maxTokens ?? 0,
         preRunHook: this.memoryManager
           ? async (input: string) => {
