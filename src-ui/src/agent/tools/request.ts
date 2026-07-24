@@ -65,13 +65,6 @@ export function createRequestTool(bus: MessageBus, getAgentId: () => string): To
         return `Failed: topology denied — you cannot request from '${target}'. Check agent_list for allowed targets.`;
       }
 
-      // Check target exists
-      try {
-        bus.canSend(from, target); // already checked above
-      } catch {
-        return `Failed: agent '${target}' not found`;
-      }
-
       // 发送请求消息
       let msgId: string;
       try {
