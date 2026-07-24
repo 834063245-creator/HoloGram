@@ -25,7 +25,7 @@ import {
   estimateTokens,
   maybeTune,
 } from './compaction-model';
-import { type ExecStateInstance, execState } from './execution-state';
+import { type ExecStateInstance, createExecState, execState } from './execution-state';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
 import { log } from './logger';
@@ -1662,8 +1662,10 @@ ${resumeNote}
     // Merge abort sources — the child dies when the user's run is stopped OR
     // the pool stops/times-out this spawn. (The old wiring handed the pool
     // signal over too late, so "stopped" agents kept running detached.)
+    // async 模式下子 agent 生命周期独立于父单轮 run；
+    // sync 模式下父 agent 在等，父被 stop 子 agent 也该 stop
     const abortSources: AbortSignal[] = [];
-    if (this._currentRunSignal) abortSources.push(this._currentRunSignal);
+    if (this._currentRunSignal && !asyncMode) abortSources.push(this._currentRunSignal);
     if (poolSignal) abortSources.push(poolSignal);
     const signal =
       abortSources.length > 1 ? AbortSignal.any(abortSources) : (abortSources[0] ?? new AbortController().signal);
@@ -1752,6 +1754,7 @@ ${subTools
       eventSink: subSink,
       agentId: subAgentId,
       parentId: this.id,
+      execState: createExecState(),
     });
     if (isolationId) {
       subAgent._isolationId = isolationId;

@@ -152,6 +152,7 @@ export class MessageBus {
   /** 投递消息到 inbox + 触发唤醒回调 */
   private _deliver(agentId: string, msg: AgentMessage): void {
     this.transport.deliver(agentId, msg);
+    this.transport.onDelivered?.(agentId);
     // 投递成功后触发唤醒 — agent idle 时用来启动 runLoop
     this.wakeCallbacks.get(agentId)?.();
   }
@@ -270,7 +271,7 @@ export class MessageBus {
       if (this.topology.canSend(from, agentId, this)) {
         try {
           // 为每个接收者创建独立的副本（独立 ID 以便 msgIndex 追踪）
-          const copy: AgentMessage = { ...msg, id: generateId() };
+          const copy: AgentMessage = { ...msg, id: generateId(), to: agentId };
           this._deliver(agentId, copy);
           this._notifySubscribers(copy);
           delivered.push(agentId);
