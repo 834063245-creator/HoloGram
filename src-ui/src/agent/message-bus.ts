@@ -10,8 +10,8 @@
 //   - 每个 agent 有有界 inbox，满了不会 OOM（背压控制）
 //   - 消息保留在 inbox 直到被显式 ack（peek + ack 模型）
 //   - msgIndex 提供 O(1) 消息查找（reply / ack 不需遍历）
-//   - LRU 去重窗口防止重复投递
 //   - 拓扑策略注入，默认 TreeTopology
+//   - 传输层可替换（InProcessTransport 默认，未来可换跨进程/跨机器）
 
 import type {
   AgentAddress,
@@ -19,6 +19,7 @@ import type {
   BackpressureStrategy,
   MessageFilter,
   MessageStore,
+  MessageTransport,
   TopologyPolicy,
 } from './message-types';
 import { AgentNotFoundError, InboxFullError, MessageNotFoundError, TopologyDeniedError } from './message-types';
@@ -26,11 +27,55 @@ import { TreeTopology } from './topology';
 
 const DEFAULT_INBOX_CAPACITY = 100;
 const DEFAULT_BACKPRESSURE: BackpressureStrategy = 'reject';
-const DEDUP_WINDOW = 500;
-const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 分钟
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// ── InProcessTransport — 内存直达传输 ──
+//
+// 把消息直接写入目标 agent 的 inbox 数组。
+// 未来可替换为 TauriEventTransport / RpcTransport。
+
+class InProcessTransport implements MessageTransport {
+  constructor(
+    private inboxes: Map<string, AgentMessage[]>,
+    private msgIndex: Map<string, { agentId: string; index: number }>,
+    private getCapacity: () => number,
+    private getStrategy: () => BackpressureStrategy,
+  ) {}
+
+  deliver(agentId: string, msg: AgentMessage): void {
+    let inbox = this.inboxes.get(agentId);
+    if (!inbox) {
+      inbox = [];
+      this.inboxes.set(agentId, inbox);
+    }
+
+    const capacity = this.getCapacity();
+    const strategy = this.getStrategy();
+
+    // 检查 inbox 容量
+    if (inbox.length >= capacity) {
+      switch (strategy) {
+        case 'reject':
+          throw new InboxFullError(`inbox full for '${agentId}' (capacity ${capacity} exceeded)`, agentId);
+        case 'drop': {
+          // 移除最旧消息
+          const oldest = inbox.shift();
+          if (oldest) this.msgIndex.delete(oldest.id);
+          break;
+        }
+        case 'block':
+          // Phase 1 中不适用 — 仅同步 request 场景，Phase 2+
+          throw new InboxFullError(`inbox full for '${agentId}' (block strategy not supported in Phase 1)`, agentId);
+      }
+    }
+
+    const index = inbox.length;
+    inbox.push(msg);
+    this.msgIndex.set(msg.id, { agentId, index });
+  }
 }
 
 export class MessageBus {
@@ -59,10 +104,19 @@ export class MessageBus {
   private inboxCapacity = DEFAULT_INBOX_CAPACITY;
   private backpressureStrategy: BackpressureStrategy = DEFAULT_BACKPRESSURE;
 
-  // 去重 — LRU 窗口
-  private seenIds = new Set<string>();
-  private seenIdOrder: string[] = [];
-  private seenIdTs = new Map<string, number>();
+  // 传输层 — 可替换（默认 InProcessTransport）
+  private transport: MessageTransport;
+
+  constructor(transport?: MessageTransport) {
+    this.transport =
+      transport ??
+      new InProcessTransport(
+        this.inboxes,
+        this.msgIndex,
+        () => this.inboxCapacity,
+        () => this.backpressureStrategy,
+      );
+  }
 
   // ── 注册 ──
 
@@ -100,12 +154,6 @@ export class MessageBus {
       meta: msg.meta,
     };
 
-    // 去重检查：相同 from+to+type+payload+ts 组合在 TTL 内不重复投递
-    // (去重基于消息内容指纹，而非 ID — ID 每次都是新的)
-    // 实际上设计文档说的是 seenIds 去重，但 ID 每次生成不同，
-    // 所以这里的去重应该是针对"重复 send 调用相同消息"的场景。
-    // 我们用 from+to+type+payload 的指纹做去重。
-
     // ── 查找目标 agent（在拓扑检查之前，确保未注册的 agent 报 AgentNotFoundError 而非 TopologyDeniedError） ──
     if (!this.agents.has(fullMsg.to)) {
       throw new AgentNotFoundError(`agent '${fullMsg.to}' not found`, fullMsg.to);
@@ -116,14 +164,13 @@ export class MessageBus {
       throw new TopologyDeniedError(`topology denied: ${fullMsg.from} → ${fullMsg.to}`, fullMsg.from, fullMsg.to);
     }
 
-    // ── 投递到 inbox ──
-    this._deliverToInbox(fullMsg.to, fullMsg);
-
-    // ── 记录去重 ──
-    this._recordSeen(fullMsg.id);
+    // ── 投递到 inbox（通过 transport） ──
+    this.transport.deliver(fullMsg.to, fullMsg);
 
     // ── 通知订阅者 ──
     this._notifySubscribers(fullMsg);
+
+    // Phase 2: 实现内容指纹去重 hash(from+to+type+payload)
 
     return fullMsg.id;
   }
@@ -142,20 +189,17 @@ export class MessageBus {
       throw new MessageNotFoundError(`inbox for '${callerId}' not found`, originalMsgId);
     }
 
-    // 找到原消息
-    const originalMsg = inbox[entry.index];
+    // 找到原消息 — index 可能因 splice 失效，回退到线性搜索
+    let originalMsg = inbox[entry.index];
     if (!originalMsg || originalMsg.id !== originalMsgId) {
-      // index 可能因移除操作而不准确，回退到线性搜索
       const found = inbox.find((m) => m.id === originalMsgId);
       if (!found) {
         throw new MessageNotFoundError(`message '${originalMsgId}' not found in inbox`, originalMsgId);
       }
+      originalMsg = found;
     }
 
-    // 从 callerId 的 inbox 移除原消息（自动 ack）+ 清理 msgIndex
-    this._removeFromInbox(callerId, originalMsgId);
-
-    // 构造回复消息并投递到原发送者
+    // 构造回复消息
     const replyMsg: AgentMessage = {
       id: generateId(),
       ts: Date.now(),
@@ -167,8 +211,16 @@ export class MessageBus {
       meta,
     };
 
-    // 投递回复（走拓扑检查 + msgIndex 记录）
-    // 如果原发送者已注销，拓扑检查会 throw — 这是正确行为
+    // ── 先检查拓扑 + 目标存在性，都通过后才移除原消息 ──
+    // 这样如果投递失败，原消息仍在 inbox 中不会丢失
+
+    if (!this.agents.has(replyMsg.to)) {
+      throw new AgentNotFoundError(
+        `agent '${replyMsg.to}' not found (original sender may have been unregistered)`,
+        replyMsg.to,
+      );
+    }
+
     if (!this.topology.canSend(replyMsg.from, replyMsg.to, this)) {
       throw new TopologyDeniedError(
         `topology denied for reply: ${replyMsg.from} → ${replyMsg.to}`,
@@ -177,15 +229,9 @@ export class MessageBus {
       );
     }
 
-    if (!this.agents.has(replyMsg.to)) {
-      // 原发送者已注销 — 回复无法投递，但不报错（消息已 ack）
-      // 返回一个特殊 ID 表示投递失败
-      this._recordSeen(replyMsg.id);
-      return replyMsg.id;
-    }
-
-    this._deliverToInbox(replyMsg.to, replyMsg);
-    this._recordSeen(replyMsg.id);
+    // 全部通过 — 移除原消息（自动 ack）+ 投递回复
+    this._removeFromInbox(callerId, originalMsgId);
+    this.transport.deliver(replyMsg.to, replyMsg);
     this._notifySubscribers(replyMsg);
 
     return replyMsg.id;
@@ -210,8 +256,7 @@ export class MessageBus {
         try {
           // 为每个接收者创建独立的副本（独立 ID 以便 msgIndex 追踪）
           const copy: AgentMessage = { ...msg, id: generateId() };
-          this._deliverToInbox(agentId, copy);
-          this._recordSeen(copy.id);
+          this.transport.deliver(agentId, copy);
           this._notifySubscribers(copy);
           delivered.push(agentId);
         } catch {
@@ -299,35 +344,6 @@ export class MessageBus {
 
   // ── 内部方法 ──
 
-  private _deliverToInbox(agentId: string, msg: AgentMessage): void {
-    let inbox = this.inboxes.get(agentId);
-    if (!inbox) {
-      inbox = [];
-      this.inboxes.set(agentId, inbox);
-    }
-
-    // 检查 inbox 容量
-    if (inbox.length >= this.inboxCapacity) {
-      switch (this.backpressureStrategy) {
-        case 'reject':
-          throw new InboxFullError(`inbox full for '${agentId}' (capacity ${this.inboxCapacity} exceeded)`, agentId);
-        case 'drop': {
-          // 移除最旧消息
-          const oldest = inbox.shift();
-          if (oldest) this.msgIndex.delete(oldest.id);
-          break;
-        }
-        case 'block':
-          // Phase 1 中不适用 — 仅同步 request 场景，Phase 2+
-          throw new InboxFullError(`inbox full for '${agentId}' (block strategy not supported in Phase 1)`, agentId);
-      }
-    }
-
-    const index = inbox.length;
-    inbox.push(msg);
-    this.msgIndex.set(msg.id, { agentId, index });
-  }
-
   private _removeFromInbox(agentId: string, msgId: string): boolean {
     const inbox = this.inboxes.get(agentId);
     if (!inbox) return false;
@@ -348,34 +364,6 @@ export class MessageBus {
     }
 
     return true;
-  }
-
-  private _recordSeen(msgId: string): void {
-    const now = Date.now();
-
-    // 清理过期条目
-    if (this.seenIdOrder.length >= DEDUP_WINDOW) {
-      // 淘汰最旧条目
-      const oldest = this.seenIdOrder.shift();
-      if (oldest) {
-        this.seenIds.delete(oldest);
-        this.seenIdTs.delete(oldest);
-      }
-    }
-
-    // TTL 过期清理
-    for (const [id, ts] of this.seenIdTs) {
-      if (now - ts > DEDUP_TTL_MS) {
-        this.seenIds.delete(id);
-        this.seenIdTs.delete(id);
-        const orderIdx = this.seenIdOrder.indexOf(id);
-        if (orderIdx >= 0) this.seenIdOrder.splice(orderIdx, 1);
-      }
-    }
-
-    this.seenIds.add(msgId);
-    this.seenIdOrder.push(msgId);
-    this.seenIdTs.set(msgId, now);
   }
 
   private _notifySubscribers(msg: AgentMessage): void {

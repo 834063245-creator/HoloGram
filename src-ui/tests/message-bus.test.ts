@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { MessageBus } from '../src/agent/message-bus';
-import type { AgentAddress } from '../src/agent/message-types';
+import type { AgentAddress, AgentMessage } from '../src/agent/message-types';
 import {
   AgentNotFoundError,
   InboxFullError,
@@ -144,6 +144,61 @@ describe('MessageBus — reply', () => {
   it('reply throws MessageNotFoundError for unknown msgId', () => {
     const { bus, child1 } = setupTree();
     expect(() => bus.reply(child1, 'nonexistent-msg', 'reply')).toThrow(MessageNotFoundError);
+  });
+
+  it('reply preserves original message when topology denies delivery', () => {
+    // Bug 4: reply() should not ack (remove) original message if delivery fails
+    const bus = new MessageBus();
+    bus.register(addr('a', null, 0));
+    bus.register(addr('b', 'a', 1));
+    bus.register(addr('c', 'a', 1));
+    bus.setTopology(new TreeTopology());
+
+    // a sends to b
+    bus.send({ from: 'a', to: 'b', type: 'msg', payload: 'hello' });
+    expect(bus.peekInbox('b').length).toBe(1);
+
+    // Now switch to a topology that blocks b → a
+    bus.setTopology(new MeshTopology()); // temporarily allow for setup
+    bus.setTopology(new TreeTopology()); // back to tree — b→a is allowed in tree
+    // Actually tree allows child→parent, so let's test with sibling
+    // b tries to reply to a message that came from c — but b can't reach c
+    // Let's send from c to b first (via mesh)
+    bus.setTopology(new MeshTopology());
+    const msgFromC = bus.send({ from: 'c', to: 'b', type: 'msg', payload: 'from c' });
+    expect(bus.peekInbox('b').length).toBe(2);
+
+    // Now switch to tree — b can reach parent (a) but not sibling (c)
+    bus.setTopology(new TreeTopology());
+
+    // b tries to reply to c's message — tree blocks b→c
+    expect(() => bus.reply('b', msgFromC, 'reply to c')).toThrow(TopologyDeniedError);
+
+    // Original message from c should still be in b's inbox (not acked)
+    const inbox = bus.peekInbox('b');
+    expect(inbox.length).toBe(2); // both messages still there
+    expect(inbox.some((m) => m.id === msgFromC)).toBe(true);
+  });
+
+  it('reply preserves original message when target agent unregistered', () => {
+    // Bug 5: reply() should not silently succeed when target is gone
+    const bus = new MessageBus();
+    bus.register(addr('a', null, 0));
+    bus.register(addr('b', 'a', 1));
+    bus.setTopology(new TreeTopology());
+
+    // a sends to b
+    const msgId = bus.send({ from: 'a', to: 'b', type: 'msg', payload: 'hello' });
+    expect(bus.peekInbox('b').length).toBe(1);
+
+    // a unregisters
+    bus.unregister('a');
+
+    // b tries to reply to a — should throw AgentNotFoundError
+    expect(() => bus.reply('b', msgId, 'reply')).toThrow(AgentNotFoundError);
+
+    // Original message should still be in b's inbox (not acked)
+    expect(bus.peekInbox('b').length).toBe(1);
   });
 });
 
@@ -397,6 +452,37 @@ describe('MessageBus — flush & restore', () => {
 
     // inbox should be unchanged
     expect(bus.peekInbox('b').length).toBe(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// Transport interface
+// ═══════════════════════════════════════════════════════
+
+describe('MessageBus — transport', () => {
+  it('uses custom transport when provided', () => {
+    const delivered: Array<{ agentId: string; msg: AgentMessage }> = [];
+    const customTransport = {
+      deliver(agentId: string, msg: AgentMessage) {
+        delivered.push({ agentId, msg });
+      },
+    };
+    const bus = new MessageBus(customTransport);
+    bus.register(addr('a', null, 0));
+    bus.register(addr('b', 'a', 1));
+    bus.setTopology(new MeshTopology());
+
+    bus.send({ from: 'a', to: 'b', type: 'msg', payload: 'hello' });
+
+    expect(delivered.length).toBe(1);
+    expect(delivered[0].agentId).toBe('b');
+    expect(delivered[0].msg.payload).toBe('hello');
+  });
+
+  it('default InProcessTransport delivers to inbox', () => {
+    const { bus, parent, child1 } = setupTree();
+    bus.send({ from: parent, to: child1, type: 'msg', payload: 'hello' });
+    expect(bus.peekInbox(child1).length).toBe(1);
   });
 });
 

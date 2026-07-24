@@ -12,56 +12,49 @@
 //
 // UI 层通过 setNotifier() 注入通知器，Runtime 通过它路由事件。
 
+import { rpc } from '../../bridge';
+import { createProvider } from '../../provider';
+import type { Message, Provider } from '../../provider/types';
+import { defaultPricing } from '../../settings';
 import { Agent } from '../agent';
+import type { AgentStore } from '../agent-store';
 import type { AgentEvent, AgentUINotifier, EventSink } from '../agent-types';
+import type { SubAgentPool } from '../coordinator';
 import { createExecState, type ExecStateInstance } from '../execution-state';
+import type { GoalManager } from '../goal-manager';
+import type { GraphContext } from '../hooks';
 import {
-  HookRegistry,
-  PreflightHookRegistry,
+  buildGraphSnapshot,
   createGraphContextHook,
   createGraphPreflightHook,
   createStatePreflightHook,
   createStateReadHook,
+  HookRegistry,
+  PreflightHookRegistry,
 } from '../hooks';
-import type { Message, Provider } from '../../provider/types';
-import { rpc } from '../../bridge';
-import { defaultPricing } from '../../settings';
-import { createProvider } from '../../provider';
+import { log } from '../logger';
+import type { MemoryManager } from '../memory';
+import { memoryBundleIngest } from '../memory-bundle-client';
+import { MessageBus } from '../message-bus';
+import type { SkillRegistry } from '../skills';
+import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
+import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
+import type { TaskManager } from '../task';
+import { ToolRegistry } from '../tool';
+import { createCommunicationTools } from '../tools/communication';
+import type { SubAgentSpawner } from '../tools/subagent';
 import {
+  type BuilderDeps,
   buildGraphContextFromData,
   buildSystemPrompt,
+  buildToolRegistry,
   extractGraphNodeNames,
   loadEngineSnapshot,
   planRegistry,
   registerCompactionTools,
-  buildToolRegistry,
-  type BuilderDeps,
 } from './agent-builder';
-import { buildGraphSnapshot } from '../hooks';
-import type { SubAgentSpawner } from '../tools/subagent';
-import type { SubAgentPool } from '../coordinator';
-import { ToolRegistry } from '../tool';
-import { MessageBus } from '../message-bus';
-import { createCommunicationTools } from '../tools/communication';
-import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
-import { log } from '../logger';
-import { memoryBundleIngest } from '../memory-bundle-client';
-import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
-import type { MemoryManager } from '../memory';
-import type { SkillRegistry } from '../skills';
-import type { AgentStore } from '../agent-store';
-import type { GoalManager } from '../goal-manager';
-import type { TaskManager } from '../task';
-import type { GraphContext } from '../hooks';
 
-import type {
-  AgentConfig,
-  AgentHandle,
-  AgentStatus,
-  AgentSummary,
-  RuntimeNotifier,
-  RuntimePort,
-} from './types';
+import type { AgentConfig, AgentHandle, AgentStatus, AgentSummary, RuntimeNotifier, RuntimePort } from './types';
 
 // ── AgentHandleImpl ──
 
@@ -71,30 +64,64 @@ class AgentHandleImpl implements AgentHandle {
     private readonly _runtime: AgentRuntime,
   ) {}
 
-  get id(): string { return this._agent.id; }
-  get parentId(): string | null { return this._agent.parentId; }
+  get id(): string {
+    return this._agent.id;
+  }
+  get parentId(): string | null {
+    return this._agent.parentId;
+  }
   get status(): AgentStatus {
     // Agent doesn't expose a status field directly — derive from execState
     return 'idle';
   }
 
-  run(signal: AbortSignal, input: string): Promise<void> { return this._agent.run(signal, input); }
-  runGoal(signal: AbortSignal, goal: string) { return this._agent.runGoal(signal, goal); }
-  resumeGoal(signal: AbortSignal, id?: string) { return this._agent.resumeGoal(signal, id); }
-  compactNow(signal: AbortSignal) { return this._agent.compactNow(signal); }
-  retractTurnAt(sessionIndex: number) { return this._agent.retractTurnAt(sessionIndex); }
-  getSession() { return this._agent.getSession(); }
-  setSession(msgs: Message[]) { return this._agent.setSession(msgs); }
-  newSession() { return this._agent.newSession(); }
-  get nextInsertIndex() { return this._agent.nextInsertIndex; }
-  insertMessage(text: string, opts?: { silent?: boolean }) { return this._agent.insertMessage(text, opts); }
-  cascadeAbort() { return this._agent.cascadeAbort(); }
-  stopAllSubAgents() { return this._agent.stopAllSubAgents(); }
-  runningSubAgentCount() { return this._agent.runningSubAgentCount(); }
-  setUiSessionId(sid: number) { return this._agent.setUiSessionId(sid); }
+  run(signal: AbortSignal, input: string): Promise<void> {
+    return this._agent.run(signal, input);
+  }
+  runGoal(signal: AbortSignal, goal: string) {
+    return this._agent.runGoal(signal, goal);
+  }
+  resumeGoal(signal: AbortSignal, id?: string) {
+    return this._agent.resumeGoal(signal, id);
+  }
+  compactNow(signal: AbortSignal) {
+    return this._agent.compactNow(signal);
+  }
+  retractTurnAt(sessionIndex: number) {
+    return this._agent.retractTurnAt(sessionIndex);
+  }
+  getSession() {
+    return this._agent.getSession();
+  }
+  setSession(msgs: Message[]) {
+    return this._agent.setSession(msgs);
+  }
+  newSession() {
+    return this._agent.newSession();
+  }
+  get nextInsertIndex() {
+    return this._agent.nextInsertIndex;
+  }
+  insertMessage(text: string, opts?: { silent?: boolean }) {
+    return this._agent.insertMessage(text, opts);
+  }
+  cascadeAbort() {
+    return this._agent.cascadeAbort();
+  }
+  stopAllSubAgents() {
+    return this._agent.stopAllSubAgents();
+  }
+  runningSubAgentCount() {
+    return this._agent.runningSubAgentCount();
+  }
+  setUiSessionId(sid: number) {
+    return this._agent.setUiSessionId(sid);
+  }
 
   /** Direct access to the underlying Agent — for internal use only */
-  _getAgent(): Agent { return this._agent; }
+  _getAgent(): Agent {
+    return this._agent;
+  }
 }
 
 // ── AgentRuntime ──
@@ -190,8 +217,9 @@ export class AgentRuntime implements RuntimePort {
       parentId: config.parentId ?? null,
       depth: config.subagentDepth ?? 0,
     });
-    // Register communication tools on the agent's registry copy
+    // Register communication tools — plan mode gets only read-only tools (agent_inbox / agent_list)
     for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
+      if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
     }
 
@@ -238,7 +266,10 @@ export class AgentRuntime implements RuntimePort {
   destroyAgent(id: string): void {
     const handle = this.agents.get(id);
     if (!handle) return;
-    handle._getAgent().saveState('done').catch(() => {});
+    handle
+      ._getAgent()
+      .saveState('done')
+      .catch(() => {});
     this._bus.unregister(id);
     this.agents.delete(id);
     log.info('runtime', `agent destroyed: ${id}`);

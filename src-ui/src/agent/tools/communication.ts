@@ -93,6 +93,8 @@ export function createCommunicationTools(bus: MessageBus, agentId: () => string)
       } catch (e) {
         if (e instanceof MessageNotFoundError)
           return `Failed: message '${msgId}' not found in your inbox (already acknowledged or expired)`;
+        if (e instanceof AgentNotFoundError)
+          return `Failed: original sender no longer exists (may have been unregistered)`;
         if (e instanceof TopologyDeniedError) return `Failed: topology denied — cannot reply to the original sender`;
         return `Failed: ${e instanceof Error ? e.message : String(e)}`;
       }

@@ -71,6 +71,18 @@ export interface MessageStore {
   restore(): Promise<Map<string, AgentMessage[]>>;
 }
 
+// ── 消息传输层接口 — 将 bus 逻辑与传输解耦 ──
+//
+// Phase 1: InProcessTransport（内存直达）
+// Phase 2+: TauriEventTransport（跨窗口）/ RpcTransport（跨机器）
+
+export interface MessageTransport {
+  /** 投递消息到目标 agent 的 inbox。
+   *  实现负责：inbox 容量检查、背压策略、msgIndex 维护。
+   *  抛 InboxFullError / AgentNotFoundError 由调用方处理。 */
+  deliver(agentId: string, msg: AgentMessage): void;
+}
+
 // ── 自定义错误类型 ──
 
 export class TopologyDeniedError extends Error {
