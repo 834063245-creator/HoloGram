@@ -37,6 +37,7 @@ import { log } from '../logger';
 import type { MemoryManager } from '../memory';
 import { memoryBundleIngest } from '../memory-bundle-client';
 import { MessageBus } from '../message-bus';
+import { JsonMessageStore } from '../message-store';
 import { TaskBoard } from '../task-board';
 import type { SkillRegistry } from '../skills';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
@@ -46,6 +47,7 @@ import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
 import { createMergeTool } from '../tools/merge';
 import { AgentLifecycleManager } from '../lifecycle-manager';
+import { enqueueIsolationOp } from '../isolation-queue';
 import type { SubAgentSpawner } from '../tools/subagent';
 import {
   type BuilderDeps,
@@ -133,12 +135,28 @@ class AgentHandleImpl implements AgentHandle {
 export class AgentRuntime implements RuntimePort {
   private agents = new Map<string, AgentHandleImpl>();
   private notifier: RuntimeNotifier | null = null;
-  /** 全局 MessageBus 实例 — 构造时创建，所有 agent 共享 */
-  private _bus = new MessageBus();
-  /** 全局 TaskBoard 实例 — 构造时创建，所有 agent 共享 */
-  private _taskBoard = new TaskBoard();
+  /** 全局 MessageBus 实例 */
+  private _bus: MessageBus;
+  /** 全局 TaskBoard 实例 */
+  private _taskBoard: TaskBoard;
+  /** 项目路径 — 用于持久化 */
+  private _projectPath: string;
   /** LifecycleManager 实例 — 每个 agent 一个，持有 pool/board/bus/exec/sink 引用 */
   private _lifecycleManagers = new Map<string, AgentLifecycleManager>();
+
+  constructor(projectPath?: string) {
+    this._projectPath = projectPath ?? '';
+    if (projectPath) {
+      const store = new JsonMessageStore(projectPath);
+      this._bus = new MessageBus(undefined, store);
+      this._taskBoard = new TaskBoard(projectPath);
+      // 启动恢复 — 在 createAgent() 之前完成
+      void this._restore();
+    } else {
+      this._bus = new MessageBus();
+      this._taskBoard = new TaskBoard();
+    }
+  }
 
   /** 注入 UI 通知器 — 由 UI 层在启动时设置 */
   setNotifier(n: RuntimeNotifier): void {
@@ -153,6 +171,45 @@ export class AgentRuntime implements RuntimePort {
   /** 获取全局 TaskBoard 实例 */
   getTaskBoard(): TaskBoard {
     return this._taskBoard;
+  }
+
+  /** 启动恢复 — 在 createAgent() 之前完成。
+   *  1. 恢复所有 inbox 消息
+   *  2. 恢复 TaskBoard 条目
+   *  3. 孤儿检测：崩溃时还在跑的子 agent，进程已死，标记为 stopped 并清理 worktree
+   *  best-effort — 永不抛异常阻塞启动 */
+  private async _restore(): Promise<void> {
+    try {
+      // 1. 恢复所有 inbox 消息
+      await this._bus.restore();
+
+      // 2. 恢复 TaskBoard 条目
+      await this._taskBoard.restore();
+
+      // 3. 孤儿检测：找 status === 'running' 的条目 — 这些是崩溃时还在跑的子 agent
+      const orphans = this._taskBoard.getAllEntries().filter((e) => e.status === 'running');
+      for (const orphan of orphans) {
+        this._taskBoard.stop(orphan.agentId);
+        // 清理 worktree
+        if (orphan.isolationId) {
+          try {
+            await enqueueIsolationOp(async () => {
+              await agentInvoke<string>('agent_isolation_discard', { agent_id: orphan.isolationId! }).catch(() => {});
+            });
+          } catch {
+            /* best-effort */
+          }
+        }
+        console.warn(`[AgentRuntime] 检测到孤儿 agent: ${orphan.agentId}, 已标记为 stopped`);
+      }
+
+      // 4. 刷新持久化（把 stop 状态写回）
+      if (orphans.length > 0) {
+        await this._taskBoard.flush();
+      }
+    } catch {
+      // best-effort — 恢复失败不阻塞启动
+    }
   }
 
   /** 创建 Agent — 接收完整配置，Runtime 不做 UI 依赖的事 */
@@ -302,6 +359,9 @@ export class AgentRuntime implements RuntimePort {
   destroyAgent(id: string): void {
     const handle = this.agents.get(id);
     if (!handle) return;
+    // Flush 持久化 — 在清理前落盘
+    void this._bus.flush();
+    void this._taskBoard.flush();
     handle
       ._getAgent()
       .saveState('done')

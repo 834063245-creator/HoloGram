@@ -12,6 +12,17 @@
 //   2. 通过 bus 发消息通知父 Agent（bus.send type=result）
 //
 // 父 Agent 收到 bus 消息后从 TaskBoard 读结构化状态。
+//
+// 持久化：flush() / restore() 将 entries 序列化到 .hologram/taskboard.json。
+// 状态变更后通过 debounced flush 延迟批量写入，避免频繁 I/O。
+
+import { rpc } from '../bridge'
+
+// ── Helpers ──
+
+function stripNums(text: string): string {
+  return text.replace(/^\s*\d+\t/gm, '')
+}
 
 export type BoardStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'merged';
 
@@ -30,6 +41,84 @@ export interface BoardEntry {
 
 export class TaskBoard {
   private entries = new Map<string, BoardEntry>();
+  private _projectPath: string;
+  private _dirReady = false;
+  // debounced flush — 延迟批量写入
+  private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(projectPath?: string) {
+    this._projectPath = projectPath ?? '';
+  }
+
+  private get _boardPath(): string {
+    return this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/taskboard.json';
+  }
+
+  private async _ensureDir(): Promise<void> {
+    if (this._dirReady) return;
+    try {
+      await rpc('create_directory', {
+        path: this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram',
+      });
+    } catch {
+      /* already exists */
+    }
+    this._dirReady = true;
+  }
+
+  /** 序列化 entries（Map → Array）写文件。best-effort — 永不抛异常。 */
+  async flush(): Promise<void> {
+    if (!this._projectPath) return;
+    try {
+      await this._ensureDir();
+      const arr = Array.from(this.entries.entries());
+      await rpc('write_file_content', {
+        filePath: this._boardPath,
+        content: JSON.stringify(arr, null, 2),
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** 读文件，反序列化回 Map。文件不存在时静默返回。 */
+  async restore(): Promise<void> {
+    if (!this._projectPath) return;
+    try {
+      const raw = await rpc<string>('read_file_content', { filePath: this._boardPath });
+      const arr = JSON.parse(stripNums(raw)) as [string, BoardEntry][];
+      if (Array.isArray(arr)) {
+        for (const [id, entry] of arr) {
+          this.entries.set(id, entry);
+        }
+      }
+    } catch {
+      /* 文件不存在 — 无可恢复数据 */
+    }
+  }
+
+  /** 获取所有条目 — 用于孤儿检测等全局遍历 */
+  getAllEntries(): BoardEntry[] {
+    return Array.from(this.entries.values());
+  }
+
+  /** debounced flush — 2 秒后批量写入，避免频繁 I/O */
+  private _scheduleFlush(): void {
+    if (!this._projectPath) return;
+    if (this._flushTimer) clearTimeout(this._flushTimer);
+    this._flushTimer = setTimeout(() => {
+      this._flushTimer = null;
+      void this.flush();
+    }, 2000);
+  }
+
+  /** 清理 flush 定时器 — 销毁时调用 */
+  clearFlushTimer(): void {
+    if (this._flushTimer) {
+      clearTimeout(this._flushTimer);
+      this._flushTimer = null;
+    }
+  }
 
   /** 父 Agent spawn 时调用 */
   register(entry: Omit<BoardEntry, 'status' | 'filesTouched' | 'startedAt'>): void {
@@ -47,6 +136,7 @@ export class TaskBoard {
     if (!entry) return;
     if (!entry.filesTouched.includes(filepath)) {
       entry.filesTouched.push(filepath);
+      this._scheduleFlush();
     }
   }
 
@@ -58,6 +148,7 @@ export class TaskBoard {
     entry.summary = summary;
     entry.diff = diff;
     entry.finishedAt = Date.now();
+    this._scheduleFlush();
   }
 
   /** 子 Agent 失败时调用 */
@@ -67,6 +158,7 @@ export class TaskBoard {
     entry.status = 'failed';
     entry.summary = error;
     entry.finishedAt = Date.now();
+    this._scheduleFlush();
   }
 
   /** 子 Agent 被中止时调用 */
@@ -75,6 +167,7 @@ export class TaskBoard {
     if (!entry) return;
     entry.status = 'stopped';
     entry.finishedAt = Date.now();
+    this._scheduleFlush();
   }
 
   /** merge 成功后标记 */
@@ -82,6 +175,7 @@ export class TaskBoard {
     const entry = this.entries.get(agentId);
     if (!entry) return;
     entry.status = 'merged';
+    this._scheduleFlush();
   }
 
   /** 父 Agent 查询全部子 Agent 状态 */

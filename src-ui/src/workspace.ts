@@ -538,7 +538,7 @@ export class Workspace {
     this.prov = prov;
 
     // ── Create Runtime + UI adapter ──
-    const runtime = new AgentRuntime();
+    const runtime = new AgentRuntime(this.path);
     const adapter = createRuntimeAdapter(this._storeId);
     runtime.setNotifier(adapter);
     runtime.setDiagnosticsSource(getDiagnosticsForFile);

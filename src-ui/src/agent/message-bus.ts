@@ -100,6 +100,9 @@ export class MessageBus {
   // 持久化后端（Phase 1: null → flush/restore 为 no-op）
   private store: MessageStore | null = null;
 
+  // debounced flush 定时器 — 投递后延迟批量写入
+  private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+
   // 背压配置
   private inboxCapacity = DEFAULT_INBOX_CAPACITY;
   private backpressureStrategy: BackpressureStrategy = DEFAULT_BACKPRESSURE;
@@ -110,7 +113,7 @@ export class MessageBus {
   // 传输层 — 可替换（默认 InProcessTransport）
   private transport: MessageTransport;
 
-  constructor(transport?: MessageTransport) {
+  constructor(transport?: MessageTransport, store?: MessageStore) {
     this.transport =
       transport ??
       new InProcessTransport(
@@ -119,6 +122,7 @@ export class MessageBus {
         () => this.inboxCapacity,
         () => this.backpressureStrategy,
       );
+    if (store) this.store = store;
   }
 
   // ── 注册 ──
@@ -188,6 +192,9 @@ export class MessageBus {
 
     // Phase 2: 实现内容指纹去重 hash(from+to+type+payload)
 
+    // ── debounced flush 持久化 ──
+    this._scheduleFlush();
+
     return fullMsg.id;
   }
 
@@ -250,6 +257,9 @@ export class MessageBus {
     this._deliver(replyMsg.to, replyMsg);
     this._notifySubscribers(replyMsg);
 
+    // ── debounced flush 持久化 ──
+    this._scheduleFlush();
+
     return replyMsg.id;
   }
 
@@ -280,6 +290,9 @@ export class MessageBus {
         }
       }
     }
+
+    // ── debounced flush 持久化 ──
+    if (delivered.length > 0) this._scheduleFlush();
 
     return delivered;
   }
@@ -330,7 +343,7 @@ export class MessageBus {
     this.backpressureStrategy = strategy;
   }
 
-  // ── 持久化（Phase 1: no-op；Phase 2 实现） ──
+  // ── 持久化 ──
 
   async flush(): Promise<void> {
     if (!this.store) return;
@@ -345,6 +358,24 @@ export class MessageBus {
       for (let i = 0; i < msgs.length; i++) {
         this.msgIndex.set(msgs[i].id, { agentId, index: i });
       }
+    }
+  }
+
+  /** debounced flush — 2 秒后批量写入，避免频繁 I/O */
+  private _scheduleFlush(): void {
+    if (!this.store) return;
+    if (this._flushTimer) clearTimeout(this._flushTimer);
+    this._flushTimer = setTimeout(() => {
+      this._flushTimer = null;
+      void this.flush();
+    }, 2000);
+  }
+
+  /** 清理 flush 定时器 — 销毁时调用 */
+  clearFlushTimer(): void {
+    if (this._flushTimer) {
+      clearTimeout(this._flushTimer);
+      this._flushTimer = null;
     }
   }
 
