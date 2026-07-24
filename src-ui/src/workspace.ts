@@ -26,7 +26,7 @@ import { ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createProvider } from './provider';
-import { mergeDynamicModels } from './provider/catalog';
+import { mergeDynamicModels, getModel } from './provider/catalog';
 import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
@@ -658,7 +658,7 @@ export class Workspace {
         collaborationMode: ms.collaborationMode,
         pricing: defaultPricing(act.kind, act.model),
         temperature: agentOpts.temperature ?? 0.7,
-        contextWindow: agentOpts.contextWindow ?? 0,
+        contextWindow: agentOpts.contextWindow || getModel(act.model)?.contextWindow || 200000,
         maxTokens: act.maxTokens ?? 0,
         preRunHook: this.memoryManager
           ? async (input: string) => {

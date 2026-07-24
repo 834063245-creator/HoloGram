@@ -202,7 +202,7 @@ export class Agent {
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxTokens = opts.maxTokens ?? 0;
-    this.contextWindow = opts.contextWindow ?? 1000000; // 1M tokens default — covers all current models, triggers compaction only when truly needed
+    this.contextWindow = opts.contextWindow || 1000000; // 1M tokens default; || catches zero (settings default) so compaction is never silently disabled
     // ponytail: 0.55 puts threshold at 550K tokens (1M window).
     // 0.7 was too high — largest real sessions (450-630K) never triggered.
     // Tune based on compaction-model.ts data when enough samples accumulate.
