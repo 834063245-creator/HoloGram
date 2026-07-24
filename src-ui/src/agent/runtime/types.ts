@@ -40,8 +40,8 @@ export interface RuntimeNotifier {
   onSessionReplaced(agentId: string, messages: Message[]): void;
   /** 子 Agent 启动 — UI 构建渲染状态并返回 EventSink */
   onSubAgentSpawn(info: SubAgentSpawnInfo): EventSink | undefined;
-  /** 子 Agent 结束 — UI 收尾渲染状态 */
-  onSubAgentFinished(agentId: string, parentAgentId: string, ok: boolean): void;
+    /** 子 Agent 结束 — UI 收尾渲染状态 */
+  onSubAgentFinished(agentId: string, parentAgentId: string, sessionId: number, ok: boolean): void;
   /** 工具执行完成（面板自动刷新） */
   onToolDone(agentId: string, toolName: string, args: Record<string, unknown>, output: string): void;
   /** 循环进度（状态栏） */

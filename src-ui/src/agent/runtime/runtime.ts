@@ -452,8 +452,8 @@ export class AgentRuntime implements RuntimePort {
           onProgress,
         });
       },
-      subAgentFinished: (id, sessionId, ok) => {
-        this.notifier?.onSubAgentFinished(id, agentId, ok);
+            subAgentFinished: (id, sessionId, ok) => {
+        this.notifier?.onSubAgentFinished(id, agentId, sessionId, ok);
       },
       onStatusChange: (running: boolean) => {
         this.notifier?.onAgentStatus(agentId, running ? 'running' : 'idle');

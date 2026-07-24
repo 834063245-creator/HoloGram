@@ -82,12 +82,30 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       });
     },
 
-    onSubAgentFinished(agentId: string, _parentAgentId: string, ok: boolean): void {
+        onSubAgentFinished(agentId: string, _parentAgentId: string, sessionId: number, ok: boolean): void {
       useAgentPanelStore.getState().pushAlert({
         id: `finish-${agentId}-${Date.now()}`,
         level: ok ? 'info' : 'warn',
         text: ok ? `子 Agent ${agentId} 已完成` : `子 Agent ${agentId} 失败`,
       });
+      // Find and update the SubAgentPart in the streaming assistant message
+      const store = msgStoreFor(storeId, sessionId);
+      if (!store) return;
+      const msgs = store.getState().messages;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (m.role === 'assistant') {
+          const parts = (m as any).parts as any[];
+          for (const p of parts) {
+            if (p.type === 'subagent' && p.agentId === agentId) {
+              p.status = ok ? 'done' : 'error';
+              p.version++;
+              bumpStore(sessionId);
+              return;
+            }
+          }
+        }
+      }
     },
 
     onLifecycleAlert(agentId: string, level: 'info' | 'warn' | 'error', text: string): void {

@@ -476,9 +476,19 @@ const SubReasoningBlock: React.FC<{
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
 
+// Memoised wrapper: only re-render when part.version or part.status changes.
+// SubAgentPart is mutated in-place by subagent-sink (version++), so default
+// React.memo (reference equality) would never trigger. Custom comparator
+// checks the two fields that actually change during streaming.
+const MemoSubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(
+  ({ part }) => <SubAgentBlock part={part} />,
+  (prev, next) =>
+    prev.part.version === next.part.version && prev.part.status === next.part.status,
+);
+
 // ponytail: NOT wrapped in React.memo — subagent-sink mutates SubAgentPart in-place
-// (push to parts[], version++), so the object reference never changes. React.memo
-// would block re-renders. Performance is handled by useMemo on renderedParts.
+// (push to parts[], version++), so the object reference never changes.
+// MemoSubAgentBlock above handles the bail-out.
 const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
@@ -490,15 +500,25 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
     else if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
   }, [part.status]);
 
-  // Auto-scroll body div to bottom as new content streams in
+  // Auto-scroll body div to bottom as new content streams in.
+  // rAF-throttled to avoid synchronous layout thrashing from MutationObserver
+  // firing on every DOM mutation during rapid streaming.
   useEffect(() => {
     const el = bodyRef.current;
     if (!el || !expanded) return;
+    let raf: number | null = null;
     const observer = new MutationObserver(() => {
-      el.scrollTop = el.scrollHeight;
+      if (raf !== null) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        el.scrollTop = el.scrollHeight;
+      });
     });
     observer.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (raf !== null) cancelAnimationFrame(raf);
+    };
   }, [expanded]);
 
   const toggle = () => {
@@ -744,25 +764,7 @@ const AssistantBubble: React.FC<{
   }
 
   return (
-        <div className="msg-assistant-row" data-message-id={msg._id}>
-      <span className="msg-actions">
-        {onCopy && (
-          <span
-            className="msg-action-btn"
-            onClick={onCopy}
-            title="复制"
-            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
-          />
-        )}
-        {onRetry && msg.status === 'done' && (
-          <span
-            className="msg-action-btn"
-            onClick={onRetry}
-            title="重试"
-            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
-          />
-        )}
-      </span>
+                <div className="msg-assistant-row" data-message-id={msg._id}>
       <div className="msg-bubble assistant">
         {groups.map((g, gi) => {
           if (g.kind === 'tool') {
@@ -830,12 +832,30 @@ const AssistantBubble: React.FC<{
           }
 
           if (g.kind === 'subagent') {
-            return <SubAgentBlock key={gi} part={g.part} />;
+            return <MemoSubAgentBlock key={gi} part={g.part} />;
           }
 
           return null;
         })}
       </div>
+      <span className="msg-actions">
+        {onCopy && (
+          <span
+            className="msg-action-btn"
+            onClick={onCopy}
+            title="复制"
+            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
+          />
+        )}
+        {onRetry && msg.status === 'done' && (
+          <span
+            className="msg-action-btn"
+            onClick={onRetry}
+            title="重试"
+            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+          />
+        )}
+      </span>
     </div>
   );
 }, (prev, next) => {
