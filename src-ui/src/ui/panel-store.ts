@@ -126,12 +126,24 @@ function createPanelStoreImpl() {
 
 // ── Per-panel registry ──
 
-const stores = new Map<string, PanelStoreApi>();
+// ponytail: store Map on window so Vite HMR doesn't wipe it (module-level
+// variables are re-initialized on hot reload, breaking React subscriptions).
+const PANEL_STORES_KEY = '__hologram_panel_stores__';
 const DEFAULT_ID = '__default__';
-stores.set(DEFAULT_ID, createPanelStoreImpl());
+
+function _storesMap(): Map<string, PanelStoreApi> {
+  const w = window as any;
+  if (!w[PANEL_STORES_KEY]) {
+    const m = new Map<string, PanelStoreApi>();
+    m.set(DEFAULT_ID, createPanelStoreImpl());
+    w[PANEL_STORES_KEY] = m;
+  }
+  return w[PANEL_STORES_KEY] as Map<string, PanelStoreApi>;
+}
 
 export function getPanelStore(storeId?: string): PanelStoreApi {
   const id = storeId || DEFAULT_ID;
+  const stores = _storesMap();
   let s = stores.get(id);
   if (!s) {
     s = createPanelStoreImpl();

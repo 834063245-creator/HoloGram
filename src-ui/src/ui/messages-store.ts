@@ -54,12 +54,22 @@ function createMessagesStoreImpl() {
 // BROKE BEFORE: 6+ commits (1f7fc04 → c927dd2) fixing cross-panel streaming leaks
 // caused by agents adding global state instead of per-panel state.
 
-const stores = new Map<string, MessagesStoreApi>();
+const STORES_KEY = '__hologram_msg_stores__';
 const DEFAULT_ID = '__default__';
-stores.set(DEFAULT_ID, createMessagesStoreImpl());
+
+function _storesMap(): Map<string, MessagesStoreApi> {
+  const w = window as any;
+  if (!w[STORES_KEY]) {
+    const m = new Map<string, MessagesStoreApi>();
+    m.set(DEFAULT_ID, createMessagesStoreImpl());
+    w[STORES_KEY] = m;
+  }
+  return w[STORES_KEY] as Map<string, MessagesStoreApi>;
+}
 
 export function getMessagesStore(storeId?: string): MessagesStoreApi {
   const id = storeId || DEFAULT_ID;
+  const stores = _storesMap();
   let s = stores.get(id);
   if (!s) {
     s = createMessagesStoreImpl();

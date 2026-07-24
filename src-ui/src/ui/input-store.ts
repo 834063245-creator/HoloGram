@@ -53,12 +53,24 @@ function createInputStoreImpl() {
 
 // ── Per-panel registry ──
 
-const stores = new Map<string, InputStoreApi>();
+// ponytail: store Map on window so Vite HMR doesn't wipe it (module-level
+// variables are re-initialized on hot reload, breaking React subscriptions).
+const INPUT_STORES_KEY = '__hologram_input_stores__';
 const DEFAULT_ID = '__default__';
-stores.set(DEFAULT_ID, createInputStoreImpl());
+
+function _storesMap(): Map<string, InputStoreApi> {
+  const w = window as any;
+  if (!w[INPUT_STORES_KEY]) {
+    const m = new Map<string, InputStoreApi>();
+    m.set(DEFAULT_ID, createInputStoreImpl());
+    w[INPUT_STORES_KEY] = m;
+  }
+  return w[INPUT_STORES_KEY] as Map<string, InputStoreApi>;
+}
 
 export function getInputStore(storeId?: string): InputStoreApi {
   const id = storeId || DEFAULT_ID;
+  const stores = _storesMap();
   let s = stores.get(id);
   if (!s) {
     s = createInputStoreImpl();

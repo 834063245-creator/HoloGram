@@ -295,7 +295,10 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         const t = ev.tool;
         ctx._recordToolUsage(t.name, t.args || '');
         ctx._updateStatusBar('running', `执行 ${t.name}`);
-        applyEventToParts(_streamingAssistant(ctx).parts, ev);
+        // agent_spawn renders via SubAgentBlock — skip ToolCard
+        if (t.name !== 'agent_spawn') {
+          applyEventToParts(_streamingAssistant(ctx).parts, ev);
+        }
         _streamingBump(ctx);
       }
       break;

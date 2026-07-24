@@ -51,12 +51,24 @@ function createSessionStoreImpl() {
 
 // ── Per-panel registry ──
 
-const stores = new Map<string, SessionStoreApi>();
+// ponytail: store Map on window so Vite HMR doesn't wipe it (module-level
+// variables are re-initialized on hot reload, breaking React subscriptions).
+const SESSION_STORES_KEY = '__hologram_session_stores__';
 const DEFAULT_ID = '__default__';
-stores.set(DEFAULT_ID, createSessionStoreImpl());
+
+function _storesMap(): Map<string, SessionStoreApi> {
+  const w = window as any;
+  if (!w[SESSION_STORES_KEY]) {
+    const m = new Map<string, SessionStoreApi>();
+    m.set(DEFAULT_ID, createSessionStoreImpl());
+    w[SESSION_STORES_KEY] = m;
+  }
+  return w[SESSION_STORES_KEY] as Map<string, SessionStoreApi>;
+}
 
 export function getSessionStore(storeId?: string): SessionStoreApi {
   const id = storeId || DEFAULT_ID;
+  const stores = _storesMap();
   let s = stores.get(id);
   if (!s) {
     s = createSessionStoreImpl();
