@@ -9,6 +9,7 @@ import {
   type Chunk,
   ChunkType,
   type Message,
+  type ModelDescriptor,
   type Provider,
   type Request,
   type Role,
@@ -68,6 +69,36 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: ctrl.signal,
       }).catch(() => {});
+    },
+
+    async fetchModels(): Promise<ModelDescriptor[]> {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 10000);
+      try {
+        const resp = await fetch(`${baseUrl}/models`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: ctrl.signal,
+        });
+        if (!resp.ok) return [];
+        const json = await resp.json();
+        const data: Array<{ id: string }> = json.data || [];
+        return data
+          .filter((m) => m.id)
+          .map((m) => ({
+            id: m.id,
+            name: m.id,
+            kind: 'openai' as const,
+            provider: name,
+            baseUrl,
+            reasoning: false,
+            input: ['text'] as ('text' | 'image')[],
+            cost: { input: 0, output: 0, cacheRead: 0 },
+            contextWindow: 0,
+            maxTokens: 0,
+          }));
+      } catch {
+        return [];
+      }
     },
   };
 }

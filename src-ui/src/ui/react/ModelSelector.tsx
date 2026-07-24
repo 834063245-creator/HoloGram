@@ -5,8 +5,9 @@
 // Supports free text input for custom models not in the catalog.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getModel, searchModels } from '../../provider/catalog';
+import { getDynamicModelCount, getModel, searchModels } from '../../provider/catalog';
 import type { ModelDescriptor } from '../../provider/types';
+import { iconHtml } from '../icons';
 
 interface ModelSelectorProps {
   value: string;
@@ -15,12 +16,17 @@ interface ModelSelectorProps {
   providerName: string;
   /** Provider kind — filters catalog to matching API protocol. */
   kind: 'anthropic' | 'openai';
+  /** Optional: fetch models from the provider's API and merge into catalog. */
+  onRefreshModels?: () => Promise<number>;
 }
 
-export function ModelSelector({ value, onChange, providerName, kind }: ModelSelectorProps) {
+export function ModelSelector({ value, onChange, providerName, kind, onRefreshModels }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
+  const [dynamicCount, setDynamicCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -41,6 +47,22 @@ export function ModelSelector({ value, onChange, providerName, kind }: ModelSele
   }, [open, query, kind, providerName]);
 
   const selectedDesc = useMemo(() => getModel(value), [value]);
+
+  const handleRefresh = useCallback(async () => {
+    if (!onRefreshModels || refreshing) return;
+    setRefreshing(true);
+    setRefreshMsg('');
+    try {
+      const count = await onRefreshModels();
+      setDynamicCount(getDynamicModelCount(providerName));
+      setRefreshMsg(count > 0 ? `已发现 ${count} 个模型` : '未获取到新模型');
+    } catch {
+      setRefreshMsg('获取失败');
+    } finally {
+      setRefreshing(false);
+      setTimeout(() => setRefreshMsg(''), 3000);
+    }
+  }, [onRefreshModels, refreshing, providerName]);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -95,24 +117,38 @@ export function ModelSelector({ value, onChange, providerName, kind }: ModelSele
 
   return (
     <div className="ms-container" ref={containerRef}>
-      <input
-        type="text"
-        className="sp-input ms-input"
-        value={open ? query : value}
-        placeholder="搜索模型或输入名称…"
-        onFocus={() => {
-          setOpen(true);
-          setQuery(value);
-        }}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          if (!open) setOpen(true);
-          setActiveIdx(0);
-          // Live-update the value as user types
-          onChange(e.target.value);
-        }}
-        onKeyDown={handleKeyDown}
-      />
+      <div className="ms-input-row">
+        <input
+          type="text"
+          className="sp-input ms-input"
+          value={open ? query : value}
+          placeholder="搜索模型或输入名称…"
+          onFocus={() => {
+            setOpen(true);
+            setQuery(value);
+          }}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            if (!open) setOpen(true);
+            setActiveIdx(0);
+            // Live-update the value as user types
+            onChange(e.target.value);
+          }}
+          onKeyDown={handleKeyDown}
+        />
+        {onRefreshModels && (
+          <button
+            type="button"
+            className="ms-refresh-btn"
+            title="从 API 获取模型列表"
+            onClick={handleRefresh}
+            dangerouslySetInnerHTML={{
+              __html: iconHtml(refreshing ? 'loading' : 'refresh', 13),
+            }}
+          />
+        )}
+      </div>
+      {refreshMsg && <div className="ms-refresh-msg">{refreshMsg}</div>}
       {open && results.length > 0 && (
         <div className="ms-dropdown" ref={listRef}>
           {results.map((m, i) => (

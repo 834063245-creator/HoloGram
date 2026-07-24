@@ -80,6 +80,10 @@ export interface Provider {
   /** Pre-warm the HTTP connection pool. Call once after creation to establish
    *  TCP+TLS before the first real request. Best-effort — failures are silent. */
   prewarm?(): void;
+  /** Fetch available models from the provider's /models API endpoint.
+   *  Returns ModelDescriptor[] with minimal metadata (cost/contextWindow unknown from API).
+   *  Best-effort — returns empty array on failure. */
+  fetchModels?(): Promise<ModelDescriptor[]>;
 }
 
 // ---- Model catalog ----

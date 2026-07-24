@@ -26,6 +26,7 @@ import { ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createProvider } from './provider';
+import { mergeDynamicModels } from './provider/catalog';
 import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
@@ -575,6 +576,12 @@ export class Workspace {
       disableThinking: settings.agent?.disableThinking,
     });
     prov.prewarm?.();
+    // Fetch dynamic models from API, merge into catalog (best-effort)
+    prov.fetchModels?.()
+      .then((models) => {
+        if (models.length > 0) mergeDynamicModels(active.name, models);
+      })
+      .catch(() => {});
     this.prov = prov;
 
     // ── Create Runtime + UI adapter ──

@@ -3337,8 +3337,49 @@
   min-width: 0;
 }
 
+.ms-input-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .ms-input {
   width: 100%;
+  flex: 1;
+}
+
+.ms-refresh-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: rgba(15, 25, 42, 0.5);
+  border: 1px solid var(--obs-line);
+  border-radius: 4px;
+  color: var(--obs-text-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--obs-snap);
+}
+
+.ms-refresh-btn:hover {
+  color: var(--obs-blue);
+  border-color: var(--obs-blue);
+  background: rgba(25, 45, 75, 0.5);
+}
+
+.ms-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ms-refresh-msg {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  color: var(--obs-text-3);
+  padding: 2px 0;
 }
 
 .ms-dropdown {

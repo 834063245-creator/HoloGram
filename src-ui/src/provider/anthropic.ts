@@ -8,6 +8,7 @@ import {
   type Chunk,
   ChunkType,
   type Message,
+  type ModelDescriptor,
   type Provider,
   type Request,
   type Role,
@@ -64,6 +65,36 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
         headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
         signal: ctrl.signal,
       }).catch(() => {});
+    },
+
+    async fetchModels(): Promise<ModelDescriptor[]> {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 10000);
+      try {
+        const resp = await fetch(`${baseUrl}/v1/models`, {
+          headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
+          signal: ctrl.signal,
+        });
+        if (!resp.ok) return [];
+        const json = await resp.json();
+        const data: Array<{ id: string; display_name?: string }> = json.data || [];
+        return data
+          .filter((m) => m.id)
+          .map((m) => ({
+            id: m.id,
+            name: m.display_name || m.id,
+            kind: 'anthropic' as const,
+            provider: name,
+            baseUrl,
+            reasoning: m.id.includes('sonnet') || m.id.includes('opus') || m.id.includes('haiku'),
+            input: ['text', 'image'] as ('text' | 'image')[],
+            cost: { input: 0, output: 0, cacheRead: 0 },
+            contextWindow: 0,
+            maxTokens: 0,
+          }));
+      } catch {
+        return [];
+      }
     },
   };
 }

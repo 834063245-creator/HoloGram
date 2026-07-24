@@ -31,14 +31,46 @@ interface CatalogData {
 
 let _catalog: CatalogData | undefined;
 
+// ── Dynamic models (fetched from provider APIs at runtime) ──
+// Static catalog takes priority for same model ID (richer metadata: cost, contextWindow, etc.)
+const _dynamicModels = new Map<string, ModelDescriptor[]>();
+
+/** Merge dynamically-fetched models into the catalog. Invalidates the cache.
+ *  Models with IDs already in the static catalog are skipped (static has richer metadata). */
+export function mergeDynamicModels(providerName: string, models: ModelDescriptor[]): void {
+  if (models.length === 0) return;
+  _dynamicModels.set(providerName, models);
+  _catalog = undefined; // invalidate cache
+}
+
+/** Get the count of dynamically discovered models for a provider. */
+export function getDynamicModelCount(providerName: string): number {
+  return _dynamicModels.get(providerName)?.length ?? 0;
+}
+
 function loadCatalog(): CatalogData {
   if (_catalog) return _catalog;
   const all: ModelDescriptor[] = [];
+  const seenIds = new Set<string>();
+
+  // Static catalog first (rich metadata — cost, contextWindow, reasoning, etc.)
   for (const file of Object.values(CATALOG_FILES)) {
     for (const model of Object.values(file)) {
       all.push(model);
+      seenIds.add(model.id);
     }
   }
+
+  // Merge dynamic models (skip if already in static — static has richer metadata)
+  for (const [, models] of _dynamicModels) {
+    for (const model of models) {
+      if (!seenIds.has(model.id)) {
+        all.push(model);
+        seenIds.add(model.id);
+      }
+    }
+  }
+
   _catalog = { allModels: all, modelMap: new Map(all.map((m) => [m.id, m])) };
   return _catalog;
 }

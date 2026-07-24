@@ -15,6 +15,9 @@ import { getCatalogProviders, getDefaultModel } from '../../provider/catalog';
 import type { ModelDescriptor } from '../../provider/types';
 import type { AppSettings } from '../../settings';
 import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, saveSettings } from '../../settings';
+import { createProvider } from '../../provider';
+import { mergeDynamicModels } from '../../provider/catalog';
+import { getActiveProvider } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
@@ -247,6 +250,18 @@ const SettingsPanelApp: React.FC<{
     if (onSave) onSave();
   }, [settings, onSave]);
 
+  const handleRefreshModels = useCallback(async (): Promise<number> => {
+    const s = loadSettings();
+    const activeProvider = getActiveProvider(s);
+    if (!activeProvider.apiKey?.trim()) return 0;
+    const prov = createProvider(activeProvider);
+    const models = (await prov.fetchModels?.()) ?? [];
+    if (models.length > 0) {
+      mergeDynamicModels(activeProvider.name, models);
+    }
+    return models.length;
+  }, []);
+
   // ── Render ──
 
   return (
@@ -426,6 +441,7 @@ const SettingsPanelApp: React.FC<{
                   value={active?.model || ''}
                   providerName={active?.name || ''}
                   kind={active?.kind || 'openai'}
+                  onRefreshModels={handleRefreshModels}
                   onChange={(modelId, desc) => {
                     updateProvider('model', modelId);
                     // Auto-fill baseUrl if empty or user hasn't customized it
