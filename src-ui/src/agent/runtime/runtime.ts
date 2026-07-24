@@ -143,6 +143,8 @@ export class AgentRuntime implements RuntimePort {
   private _projectPath: string;
   /** LifecycleManager 实例 — 每个 agent 一个，持有 pool/board/bus/exec/sink 引用 */
   private _lifecycleManagers = new Map<string, AgentLifecycleManager>();
+  /** 启动恢复 promise — createAgent 前必须 await ready() */
+  private _readyPromise: Promise<void>;
 
   constructor(projectPath?: string) {
     this._projectPath = projectPath ?? '';
@@ -150,12 +152,18 @@ export class AgentRuntime implements RuntimePort {
       const store = new JsonMessageStore(projectPath);
       this._bus = new MessageBus(undefined, store);
       this._taskBoard = new TaskBoard(projectPath);
-      // 启动恢复 — 在 createAgent() 之前完成
-      void this._restore();
+      // 启动恢复 — 保留 promise 引用，createAgent 前必须 await ready()
+      this._readyPromise = this._restore();
     } else {
       this._bus = new MessageBus();
       this._taskBoard = new TaskBoard();
+      this._readyPromise = Promise.resolve();
     }
+  }
+
+  /** 等待启动恢复完成 — createAgent 前必须 await */
+  ready(): Promise<void> {
+    return this._readyPromise;
   }
 
   /** 注入 UI 通知器 — 由 UI 层在启动时设置 */
@@ -360,6 +368,8 @@ export class AgentRuntime implements RuntimePort {
     const handle = this.agents.get(id);
     if (!handle) return;
     // Flush 持久化 — 在清理前落盘
+    this._bus.clearFlushTimer();
+    this._taskBoard.clearFlushTimer();
     void this._bus.flush();
     void this._taskBoard.flush();
     handle

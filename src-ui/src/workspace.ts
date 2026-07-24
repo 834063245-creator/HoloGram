@@ -583,6 +583,7 @@ export class Workspace {
       const ms = this._modeState();
       const agentOpts = s.agent || {};
 
+      await runtime.ready();
       const handle = await runtime.createAgent({
         agentId: 'main',
         parentId: null,

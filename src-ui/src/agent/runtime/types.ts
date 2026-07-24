@@ -143,6 +143,8 @@ export interface AgentSummary {
 // ── UI → Runtime 的调用接口 ──
 
 export interface RuntimePort {
+  /** 等待启动恢复完成 — createAgent 前必须 await */
+  ready(): Promise<void>;
   /** 创建一个 Agent 实例 */
   createAgent(config: AgentConfig): Promise<AgentHandle>;
   /** 获取 Agent */
