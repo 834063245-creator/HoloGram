@@ -117,6 +117,8 @@ export interface AgentConfig {
   messageBus?: MessageBus;
   /** TaskBoard — 共享状态区，追踪异步子 Agent 的工作状态 */
   taskBoard?: TaskBoard;
+  /** DiscoveryBoard — 共享发现区，Agent 间交换探索结果 */
+  discoveryBoard?: import('../discovery-board').DiscoveryBoard;
 }
 
 // ── Agent 句柄 ──

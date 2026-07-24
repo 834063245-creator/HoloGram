@@ -1,6 +1,6 @@
 # 多 Agent 系统实现状态文档
 
-> 最后更新：2026-07-24（隔离层鲁棒性修复 — merge 降级 + discard 容忍 + force_purge）
+> 最后更新：2026-07-24（Phase 4 落地 — Rate limit 退避 + 共享发现区 + 同步请求）
 > 用途：跨窗口交接的完整上下文
 
 ## 已落地的功能
@@ -90,11 +90,46 @@
 | 初始化刷新 + deactivate 清理 | `workspace.ts` | ✅ |
 | bus 事件 'agent:status' 类型声明 | `ui/events.ts` | ✅ |
 
-### Phase 4：协作能力（未开始）
+### Phase 4：协作能力（已落地）
 
-- 同步请求（`agent_request` + runLoop 等待中断点 + 死锁检测）
-- 拓扑扩展（兄弟 agent 直接通信、DAG 拓扑）
-- 共享发现区
+| 能力 | 文件 | 状态 |
+|------|------|------|
+| SubAgentPool 排队机制（池满时排队，完成后 dequeue，最多 20 排队） | `coordinator.ts` | ✅ |
+| spawn 工具返回"已排队"提示（async 模式） | `tools/subagent.ts` | ✅ |
+| DiscoveryBoard（共享发现区：post / query / flush / restore） | `discovery-board.ts` | ✅ |
+| agent_discover / agent_lookup 工具 | `tools/discovery.ts` | ✅ |
+| Agent._injectDiscoveries()（每轮自动注入其他 Agent 的发现） | `agent.ts` | ✅ |
+| _injectedDiscoveryIds 防重复注入 | `agent.ts` | ✅ |
+| Runtime 创建 DiscoveryBoard + 恢复 + 注册工具 + 注入 Agent | `runtime/runtime.ts` | ✅ |
+| AgentConfig 加 discoveryBoard? | `runtime/types.ts` | ✅ |
+| 系统提示词加 agent_request / agent_discover / agent_lookup / 共享发现段落 | `runtime/agent-builder.ts` | ✅ |
+| agent_request 工具（同步请求 + timeout 兜底 + 拓扑检查） | `tools/request.ts` | ✅ |
+| MessageBus.canSend() 公开方法 | `message-bus.ts` | ✅ |
+| AgentPanelStore 加 discoveries 数据源 + setDiscoveries | `ui/agent-panel-store.ts` | ✅ |
+| AgentsPanel 加发现区 section | `ui/react/AgentsPanel.tsx` | ✅ |
+| Workspace deactivate 清理 discoveries | `workspace.ts` | ✅ |
+| Phase 4 测试（5 用例：discovery post/query、持久化、request reply、request timeout、pool queue） | `tests/phase4-collaboration.test.ts` | ✅ |
+
+**Phase 4 文件清单**：
+
+| 文件 | 改动 |
+|------|------|
+| `coordinator.ts` | SubAgentPool 加 queue + _enqueue + _drainQueue + isQueued |
+| `tools/subagent.ts` | 池满返回"已排队"而非报错 |
+| `discovery-board.ts` | **新建** — DiscoveryBoard |
+| `tools/discovery.ts` | **新建** — agent_discover / agent_lookup |
+| `tools/request.ts` | **新建** — agent_request |
+| `agent.ts` | discoveryBoard 字段 + _injectDiscoveries() + _injectedDiscoveryIds |
+| `message-bus.ts` | 加 public canSend() 方法 |
+| `runtime/types.ts` | AgentConfig 加 discoveryBoard? |
+| `runtime/runtime.ts` | 创建 DiscoveryBoard + restore + 注册 discovery/request 工具 + destroy 清理 |
+| `runtime/agent-builder.ts` | 系统提示词加 agent_request / agent_discover / agent_lookup + 共享发现段落 |
+| `ui/agent-panel-store.ts` | 加 discoveries 数据源 + setDiscoveries |
+| `ui/react/AgentsPanel.tsx` | 加发现区 section |
+| `workspace.ts` | deactivate 清理 discoveries |
+| `tests/phase4-collaboration.test.ts` | **新建** — Phase 4 测试（9 用例） |
+| `tests/coordinator.test.ts` | 更新"returns null at maxConcurrent"为排队测试 |
+| `tests/agent-spawn-sync.test.ts` | 更新"reports busy"为"reports queued" |
 
 ### Phase 5：高级能力（未开始）
 
@@ -173,6 +208,6 @@ cfac45a feat(agent): add multi-agent communication layer (Phase 1)
 1. ~~修 Phase 2 的 2 个问题（竞态 + clearFlushTimer）~~ ✅ 已完成
 2. ~~补 Phase 2 测试~~ ✅ 已完成
 3. ~~Phase 3：系统提示词 + UI~~ ✅ 已完成
-4. 实际运行验证
-5. Phase 4：协作能力
-6. Phase 5：高级能力
+4. ~~Phase 4：协作能力~~ ✅ 已完成
+5. 实际运行验证
+6. Phase 5：高级能力（pub/sub topic、消息转换/过滤管道、跨进程传输）

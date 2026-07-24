@@ -131,11 +131,28 @@ describe('SubAgentPool', () => {
     expect(handle.error).toContain('timeout');
   });
 
-  it('returns null at maxConcurrent', () => {
+  it('queues at maxConcurrent instead of returning null', () => {
     const pool = new SubAgentPool(1);
     pool.spawn('a', () => new Promise<{ text: string }>(() => {}));
     const second = pool.spawn('b', fakeRun('b'));
-    expect(second).toBeNull();
+    // Now queues instead of returning null
+    expect(second).not.toBeNull();
+    expect(second?.id).toBeTruthy();
+    expect(pool.isQueued(second!.id)).toBe(true);
+    pool.stopAll();
+  });
+
+  it('returns null when queue is full (20 items)', () => {
+    const pool = new SubAgentPool(1);
+    pool.spawn('blocker', () => new Promise<{ text: string }>(() => {}));
+    // Fill the queue
+    for (let i = 0; i < 20; i++) {
+      const s = pool.spawn(`q-${i}`, fakeRun('ok'));
+      expect(s).not.toBeNull();
+    }
+    // 21st should return null
+    const overflow = pool.spawn('overflow', fakeRun('nope'));
+    expect(overflow).toBeNull();
     pool.stopAll();
   });
 

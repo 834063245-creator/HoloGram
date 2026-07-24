@@ -32,12 +32,13 @@ describe('agent_spawn — synchronous result flow', () => {
     expect(out).toContain('boom');
   });
 
-  it('reports busy when the pool is at maxConcurrent', async () => {
+  it('reports queued when the pool is at maxConcurrent (async mode)', async () => {
     const pool = new SubAgentPool(1);
     pool.spawn('blocker', () => new Promise<{ text: string }>(() => {}));
     const tool = createSubAgentTool(makeSpawner({ text: 'x' }), pool);
-    const out = await tool.execute({ description: 't', prompt: 'p' });
-    expect(out).toContain('并发上限');
+    // Async mode — returns immediately with "queued" instead of "busy"
+    const out = await tool.execute({ description: 't', prompt: 'p', async: true });
+    expect(out).toContain('已排队');
     pool.stopAll();
   });
 

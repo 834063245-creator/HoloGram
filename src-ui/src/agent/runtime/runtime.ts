@@ -40,6 +40,8 @@ import { memoryBundleIngest } from '../memory-bundle-client';
 import { MessageBus } from '../message-bus';
 import { JsonMessageStore } from '../message-store';
 import { TaskBoard } from '../task-board';
+import { DiscoveryBoard } from '../discovery-board';
+import { createDiscoveryTools } from '../tools/discovery';
 import type { SkillRegistry } from '../skills';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
@@ -47,6 +49,7 @@ import type { TaskManager } from '../task';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
 import { createMergeTool } from '../tools/merge';
+import { createRequestTool } from '../tools/request';
 import { AgentLifecycleManager } from '../lifecycle-manager';
 import { enqueueIsolationOp } from '../isolation-queue';
 import type { SubAgentSpawner } from '../tools/subagent';
@@ -139,6 +142,8 @@ export class AgentRuntime implements RuntimePort {
   private _bus: MessageBus;
   /** 全局 TaskBoard 实例 */
   private _taskBoard: TaskBoard;
+  /** 全局 DiscoveryBoard 实例 */
+  private _discoveryBoard: DiscoveryBoard;
   /** 项目路径 — 用于持久化 */
   private _projectPath: string;
   /** LifecycleManager 实例 — 每个 agent 一个，持有 pool/board/bus/exec/sink 引用 */
@@ -152,11 +157,13 @@ export class AgentRuntime implements RuntimePort {
       const store = new JsonMessageStore(projectPath);
       this._bus = new MessageBus(undefined, store);
       this._taskBoard = new TaskBoard(projectPath);
+      this._discoveryBoard = new DiscoveryBoard(projectPath);
       // 启动恢复 — 保留 promise 引用，createAgent 前必须 await ready()
       this._readyPromise = this._restore();
     } else {
       this._bus = new MessageBus();
       this._taskBoard = new TaskBoard();
+      this._discoveryBoard = new DiscoveryBoard();
       this._readyPromise = Promise.resolve();
     }
   }
@@ -181,6 +188,11 @@ export class AgentRuntime implements RuntimePort {
     return this._taskBoard;
   }
 
+  /** 获取全局 DiscoveryBoard 实例 */
+  getDiscoveryBoard(): DiscoveryBoard {
+    return this._discoveryBoard;
+  }
+
   /** 启动恢复 — 在 createAgent() 之前完成。
    *  1. 恢复所有 inbox 消息
    *  2. 恢复 TaskBoard 条目
@@ -193,6 +205,9 @@ export class AgentRuntime implements RuntimePort {
 
       // 2. 恢复 TaskBoard 条目
       await this._taskBoard.restore();
+
+      // 2b. 恢复 DiscoveryBoard 条目
+      await this._discoveryBoard.restore();
 
       // 3. 孤儿检测：找 status === 'running' 的条目 — 这些是崩溃时还在跑的子 agent
       const orphans = this._taskBoard.getAllEntries().filter((e) => e.status === 'running');
@@ -291,8 +306,16 @@ export class AgentRuntime implements RuntimePort {
     // 7b. Wire message bus + register communication tools
     // setBus() handles bus.register() with wake callback — no duplicate call needed
     newAgent.setBus(this._bus);
+    // Wire discovery board for inter-agent knowledge sharing
+    newAgent.setDiscoveryBoard(this._discoveryBoard);
     // Register communication tools — plan mode gets only read-only tools (agent_inbox / agent_list)
     for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
+      if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
+      effR.register(tool);
+    }
+
+    // Register discovery tools — plan mode: only read-only agent_lookup
+    for (const tool of createDiscoveryTools(this._discoveryBoard, () => newAgent.id)) {
       if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
     }
@@ -307,6 +330,11 @@ export class AgentRuntime implements RuntimePort {
     // Register agent_merge tool — allows parent to merge completed async sub-agent worktrees
     if (config.collaborationMode !== 'plan') {
       effR.register(createMergeTool(this._taskBoard, () => newAgent.id, isolationExec));
+    }
+
+    // Register agent_request tool — synchronous request with timeout
+    if (config.collaborationMode !== 'plan') {
+      effR.register(createRequestTool(this._bus, () => newAgent.id));
     }
 
     // 7c. Wire LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
@@ -378,8 +406,10 @@ export class AgentRuntime implements RuntimePort {
     // Flush 持久化 — 在清理前落盘
     this._bus.clearFlushTimer();
     this._taskBoard.clearFlushTimer();
+    this._discoveryBoard.clearFlushTimer();
     void this._bus.flush();
     void this._taskBoard.flush();
+    void this._discoveryBoard.flush();
     handle
       ._getAgent()
       .saveState('done')

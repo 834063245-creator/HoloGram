@@ -35,7 +35,7 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       'Fork mode (default — omit subagent_type) injects your recent context so the sub-agent knows what you already did; set subagent_type="fresh" for a clean-slate agent. ' +
       'File edits run in an isolated git worktree and are auto-merged back on success; on merge conflict the diff is returned to you for manual application. ' +
       'Set async=true to spawn non-blocking — returns immediately with the sub-agent ID, and the result arrives via agent_message (type: "result"). Use agent_merge to merge all completed async sub-agents. ' +
-      'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, agent_spawn returns an error — wait for existing sub-agents to finish or use agent_merge to clear completed ones. ' +
+      'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, spawn requests are queued (up to 20) and started as slots free up. ' +
       'Give the sub-agent a complete, self-contained directive: what to do, which files, and how to verify (e.g. run cargo check / npm test before finishing).',
     parameters: () => ({
       type: 'object',
@@ -97,12 +97,15 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
         timeoutMs,
       );
       if (!spawned) {
-        return `无法启动子Agent：已达到并发上限（${pool.runningCount} 个正在运行）。先等本轮其他 agent_spawn 完成，或下一轮再试。`;
+        return `无法启动子Agent：池已满且队列已满（最多 ${pool.runningCount} 个运行中 + 20 个排队）。请稍后重试。`;
       }
 
       // 异步模式：立即返回 agentId，子 Agent 在后台运行
       // 结果通过 bus 消息（type=result）通知父 Agent
       if (asyncMode) {
+        if (pool.isQueued(spawned.id)) {
+          return `子Agent已排队 (id: ${agentId})。将在有空闲槽位后启动。完成后通过消息通知你。`;
+        }
         return `子Agent已启动 (id: ${agentId})。完成后将通过消息通知你。`;
       }
 

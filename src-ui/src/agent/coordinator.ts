@@ -51,7 +51,16 @@ interface PendingAgent {
   abortController: AbortController;
 }
 
+interface QueuedSpawn {
+  description: string;
+  runFn: SubAgentRunFn;
+  callId?: string;
+  timeoutMs?: number;
+  resolve: (spawned: SpawnedAgent) => void;
+}
+
 const DEFAULT_MAX_CONCURRENT = 5;
+const MAX_QUEUE_SIZE = 20;
 // 10 minutes — coding sub-agents run builds/tests; 2 min timed out healthy agents
 // and (worse) left them running detached while the parent was told they failed.
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -63,6 +72,10 @@ export class SubAgentPool {
   private maxConcurrent: number;
   private defaultTimeoutMs: number;
   private timeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // ── Queue for rate-limit backoff ──
+  private queue: QueuedSpawn[] = [];
+  private _queuedIds = new Set<string>();
 
   constructor(maxConcurrent = DEFAULT_MAX_CONCURRENT, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
     this.maxConcurrent = maxConcurrent;
@@ -76,7 +89,8 @@ export class SubAgentPool {
     }
   }
 
-  /** Spawn a sub-agent. Returns null when at maxConcurrent.
+  /** Spawn a sub-agent. When at maxConcurrent, queues the request instead of failing.
+   *  Returns null only when the queue is also full.
    *  Idempotent on callId: re-dispatch of the same tool call (stream retry)
    *  returns the already-running agent instead of starting a duplicate. */
   spawn(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent | null {
@@ -86,11 +100,21 @@ export class SubAgentPool {
           return { id, signal: pending.abortController.signal, done: pending.done };
         }
       }
+      // Also check queue for duplicates
+      if (this.queue.some((q) => q.callId === callId)) {
+        return null; // already queued with this callId
+      }
     }
     if (this.agents.size >= this.maxConcurrent) {
-      return null; // caller reports "busy" to the model
+      // Queue instead of failing — model gets back a "queued" SpawnedAgent
+      return this._enqueue(description, runFn, callId, timeoutMs);
     }
 
+    return this._doSpawn(description, runFn, callId, timeoutMs);
+  }
+
+  /** Core spawn logic — extracted so spawn() and _drainQueue() can share it. */
+  private _doSpawn(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const handle: SubAgentHandle = {
       id,
@@ -129,6 +153,9 @@ export class SubAgentPool {
       this._addCompleted(handle);
       this.agents.delete(id);
       pending.resolve(handle);
+
+      // Drain queue — a slot just freed up
+      this._drainQueue();
     };
 
     const ms = timeoutMs ?? this.defaultTimeoutMs;
@@ -148,6 +175,57 @@ export class SubAgentPool {
     );
 
     return { id, signal: abortController.signal, done };
+  }
+
+  /** Enqueue a spawn request when the pool is full. Returns a "queued" SpawnedAgent.
+   *  The actual spawn happens when _drainQueue() fires. */
+  private _enqueue(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent | null {
+    if (this.queue.length >= MAX_QUEUE_SIZE) {
+      return null; // queue full — model must retry
+    }
+
+    const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this._queuedIds.add(id);
+    const abortController = new AbortController();
+
+    let resolveDone!: (h: SubAgentHandle) => void;
+    const done = new Promise<SubAgentHandle>((r) => {
+      resolveDone = r;
+    });
+
+    // Store the resolve function so _drainQueue can wire up the real spawn
+    this.queue.push({
+      description,
+      runFn,
+      callId,
+      timeoutMs,
+      resolve: (real: SpawnedAgent) => {
+        // When the real spawn fires, connect its done to our deferred promise
+        real.done.then((h) => {
+          this._queuedIds.delete(id);
+          resolveDone({ ...h, id }); // preserve the queued ID for the caller
+        });
+        // Forward abort from the real signal
+        real.signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      },
+    });
+
+    return { id, signal: abortController.signal, done };
+  }
+
+  /** Drain the queue — start as many queued spawns as slots allow. */
+  private _drainQueue(): void {
+    while (this.queue.length > 0 && this.agents.size < this.maxConcurrent) {
+      const item = this.queue.shift()!;
+      const spawned = this._doSpawn(item.description, item.runFn, item.callId, item.timeoutMs);
+      item.resolve(spawned);
+      this._queuedIds.delete(spawned.id);
+    }
+  }
+
+  /** Check if an agent ID is currently queued (not yet spawned). */
+  isQueued(id: string): boolean {
+    return this._queuedIds.has(id);
   }
 
   /** Look up a sub-agent by ID — running first, then completed history. */
@@ -189,6 +267,8 @@ export class SubAgentPool {
     this._addCompleted(pending.handle);
     this.agents.delete(id);
     pending.resolve(pending.handle);
+    // Drain queue — stopping an agent frees a slot
+    this._drainQueue();
   }
 
   /** Summary of running + recently completed agents (for status display). */

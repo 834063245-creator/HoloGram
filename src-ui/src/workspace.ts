@@ -411,6 +411,7 @@ export class Workspace {
     // Clear agent panel data
     useAgentPanelStore.getState().setAgents([]);
     useAgentPanelStore.getState().setTaskBoard([]);
+    useAgentPanelStore.getState().setDiscoveries([]);
     // Persist agent state before clearing
     if (this.agent) {
       this.agent.saveState('done').catch(() => {});

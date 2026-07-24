@@ -10,6 +10,7 @@ import { useDockStore } from '../dock-store';
 import { useAgentPanelStore, type AgentPanelEntry } from '../agent-panel-store';
 import type { AgentSummary } from '../../agent/runtime/types';
 import type { BoardEntry } from '../../agent/task-board';
+import type { DiscoveryEntry } from '../../agent/discovery-board';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
 import './AgentsPanel.css';
@@ -154,6 +155,7 @@ export function AgentsPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
   const agents = useAgentPanelStore((s) => s.agents);
   const taskBoard = useAgentPanelStore((s) => s.taskBoard);
+  const discoveries = useAgentPanelStore((s) => s.discoveries);
   const messageFlow = useAgentPanelStore((s) => s.messageFlow);
   const alerts = useAgentPanelStore((s) => s.alerts);
 
@@ -234,6 +236,22 @@ export function AgentsPanel() {
                 ))}
               </tbody>
             </table>
+          )}
+        </Section>
+
+        {/* ── Discovery board ── */}
+        <Section title="发现区" count={String(discoveries.length)} startOpen={false}>
+          {discoveries.length === 0 ? (
+            <div className="ap-empty">无共享发现</div>
+          ) : (
+            discoveries.map((entry) => (
+              <div key={entry.id} className="ap-msg-item">
+                <span className="ap-msg-type">[{entry.category}]</span>
+                <span className="ap-msg-from">{entry.agentId}</span>
+                <span className="ap-msg-arrow">→</span>
+                <span className="ap-msg-payload">{entry.key}: {entry.value.slice(0, 100)}</span>
+              </div>
+            ))
           )}
         </Section>
 

@@ -212,6 +212,14 @@ ${modeBlock}`;
 - agent_ack 将消息标记为已读，从 inbox 移除。
 - agent_inbox 列出未读消息。
 - agent_list 列出当前拓扑下可通信的 Agent。
+- agent_request 向指定 Agent 发同步请求并阻塞等待回复（有超时，默认 30 秒）。当你需要另一个 Agent 的直接回答时使用，而非 fire-and-forget。
+
+### 共享发现
+- agent_discover 将你的发现发布到共享发现区（key / value / category）。
+  类别：architecture（架构决策）、bug（缺陷）、pattern（模式/约定）、config（配置）。
+- agent_lookup 查询其他 Agent 发布的发现。
+  在开始探索前用 agent_lookup 检查已有发现，避免重复工作。
+- 发现区自动注入：每轮开始时，你会看到其他 Agent 最新的发现（5 分钟内，<system-reminder> 格式）。
 
 ### 决策指南
 - **同步 spawn**：短任务（< 1 分钟）、需要结果才能继续、单文件改动。

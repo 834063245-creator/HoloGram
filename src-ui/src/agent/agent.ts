@@ -35,6 +35,7 @@ import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 import type { MessageBus } from './message-bus';
 import type { TaskBoard } from './task-board';
+import type { DiscoveryBoard } from './discovery-board';
 import { createBoardTrackingHook } from './hooks/board-tracking-hook';
 import { enqueueIsolationOp } from './isolation-queue';
 
@@ -75,6 +76,8 @@ export interface AgentOptions {
   messageBus?: MessageBus;
   /** TaskBoard — 共享状态区，追踪异步子 Agent 的工作状态 */
   taskBoard?: TaskBoard;
+  /** DiscoveryBoard — 共享发现区，Agent 间交换探索结果 */
+  discoveryBoard?: DiscoveryBoard;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -176,6 +179,12 @@ export class Agent {
   // TaskBoard — shared state for async sub-agent tracking
   private _taskBoard: TaskBoard | null = null;
 
+  // DiscoveryBoard — shared discovery area for inter-agent knowledge sharing
+  private _discoveryBoard: DiscoveryBoard | null = null;
+
+  // Track discovery IDs already injected — prevents duplicate injection within the same runLoop
+  private _injectedDiscoveryIds = new Set<string>();
+
   // Session persistence
   sessionId: string;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
@@ -205,6 +214,7 @@ export class Agent {
     this._execState = opts.execState ?? execState;
     this._bus = opts.messageBus ?? null;
     this._taskBoard = opts.taskBoard ?? null;
+    this._discoveryBoard = opts.discoveryBoard ?? null;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this._onSessionPersisted = opts.onSessionPersisted;
@@ -399,6 +409,12 @@ export class Agent {
     );
   }
 
+  /** Wire discovery board for inter-agent knowledge sharing.
+   *  Called by the runtime to inject the shared board into each agent. */
+  setDiscoveryBoard(board: DiscoveryBoard): void {
+    this._discoveryBoard = board;
+  }
+
   /** Cascade abort: stop all sub-agents when the parent is interrupted. */
   cascadeAbort(): void {
     const pool = this._subAgentPool;
@@ -514,6 +530,34 @@ export class Agent {
     this.session.push({
       role: 'user',
       content: `<system-reminder>\n📬 Agent 消息 (${newMsgs.length} 条未读):\n${formatted}\n\n可用 agent_reply 工具回复，或 agent_ack 确认已读。\n</system-reminder>`,
+    });
+  }
+
+  /** Inject new discoveries from other agents as a system-reminder.
+   *  Only inject entries not yet seen this cycle + posted by other agents +
+   *  within the last 5 minutes. Uses _injectedDiscoveryIds to prevent re-injection. */
+  private _injectDiscoveries(): void {
+    if (!this._discoveryBoard) return;
+    const entries = this._discoveryBoard.query();
+    if (entries.length === 0) return;
+    // Only inject discoveries from other agents, not yet seen, within last 5 min
+    const recent = entries.filter(
+      (e) =>
+        e.agentId !== this.id &&
+        !this._injectedDiscoveryIds.has(e.id) &&
+        Date.now() - e.ts < 5 * 60 * 1000,
+    );
+    if (recent.length === 0) return;
+    for (const e of recent) this._injectedDiscoveryIds.add(e.id);
+    const formatted = recent
+      .map(
+        (e) =>
+          `[${e.category}] ${e.key}: ${e.value} (by ${e.agentId})`,
+      )
+      .join('\n');
+    this.session.push({
+      role: 'user',
+      content: `<system-reminder>\n🔬 共享发现 (${recent.length} 条):\n${formatted}\n\n用 agent_discover 发布你的发现，agent_lookup 查询全部。\n</system-reminder>`,
     });
   }
 
@@ -893,6 +937,9 @@ ${resumeNote}
 
       // Inject unread inbox messages (peek — does not consume)
       this._injectInbox();
+
+      // Inject new discoveries from other agents
+      this._injectDiscoveries();
 
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();

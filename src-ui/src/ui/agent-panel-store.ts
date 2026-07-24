@@ -12,6 +12,7 @@
 import { create } from 'zustand';
 import type { AgentSummary } from '../agent/runtime/types';
 import type { BoardEntry } from '../agent/task-board';
+import type { DiscoveryEntry } from '../agent/discovery-board';
 import type { AgentMessage } from '../agent/message-types';
 
 export interface AgentPanelEntry extends AgentSummary {
@@ -33,20 +34,26 @@ export interface LifecycleAlert {
 interface AgentPanelState {
   agents: AgentSummary[];
   taskBoard: BoardEntry[];
+  discoveries: DiscoveryEntry[];
   messageFlow: MessageFlowEntry[];
   alerts: LifecycleAlert[];
 
   /** runtime 引用 — 供组件轮询时调 refresh */
-  runtimeRef: { listAgents: () => AgentSummary[]; getTaskBoard: () => { getAllEntries: () => BoardEntry[] } } | null;
+  runtimeRef: {
+    listAgents: () => AgentSummary[];
+    getTaskBoard: () => { getAllEntries: () => BoardEntry[] };
+    getDiscoveryBoard: () => { getAll: () => DiscoveryEntry[] };
+  } | null;
 
   setAgents: (agents: AgentSummary[]) => void;
   setTaskBoard: (entries: BoardEntry[]) => void;
+  setDiscoveries: (entries: DiscoveryEntry[]) => void;
   pushMessage: (msg: AgentMessage) => void;
   pushAlert: (alert: Omit<LifecycleAlert, 'ts'>) => void;
   clearAlert: (id: string) => void;
   setRuntime: (rt: AgentPanelState['runtimeRef']) => void;
   /** 全量刷新 — 从 runtime 拉取最新状态 */
-  refresh: (runtime: { listAgents: () => AgentSummary[]; getTaskBoard: () => { getAllEntries: () => BoardEntry[] } }) => void;
+  refresh: (runtime: NonNullable<AgentPanelState['runtimeRef']>) => void;
 }
 
 const MAX_MESSAGES = 50;
@@ -55,12 +62,14 @@ const MAX_ALERTS = 20;
 export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
   agents: [],
   taskBoard: [],
+  discoveries: [],
   messageFlow: [],
   alerts: [],
   runtimeRef: null,
 
   setAgents: (agents) => set({ agents }),
   setTaskBoard: (entries) => set({ taskBoard: entries }),
+  setDiscoveries: (entries) => set({ discoveries: entries }),
 
   pushMessage: (msg) => {
     const entry: MessageFlowEntry = { msg, ts: Date.now() };
@@ -84,6 +93,7 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
     set({
       agents: runtime.listAgents(),
       taskBoard: runtime.getTaskBoard().getAllEntries(),
+      discoveries: runtime.getDiscoveryBoard().getAll(),
     });
   },
 }));

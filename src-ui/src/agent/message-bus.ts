@@ -333,6 +333,12 @@ export class MessageBus {
     return this.topology;
   }
 
+  /** 检查拓扑是否允许 from → to 的通信。工具层（agent_request）用。 */
+  canSend(from: string, to: string): boolean {
+    if (!this.agents.has(to)) return false;
+    return this.topology.canSend(from, to, this);
+  }
+
   // ── 背压配置 ──
 
   setInboxCapacity(capacity: number): void {
