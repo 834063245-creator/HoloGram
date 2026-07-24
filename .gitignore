@@ -121,6 +121,8 @@ SPEC_AGENT_PANEL_UPGRADE.md
 FIX-*.md
 AGENT_MEMORY_SYSTEM.txt
 .mcp.json.bak
+COMMUNICATION_LAYER_DESIGN.md
+GRAPH_DRIVEN_SEARCH_DESIGN.md
 
 # Plagiarism evidence — keep local, not public
 PLAGIARISM_EVIDENCE.md
@@ -159,3 +161,6 @@ scripts/python-3.14.4-embed-amd64.zip
 .mcp.json
 .cursor/
 .codely-cli/
+
+# Engine binaries
+engine-bin/

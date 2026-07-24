@@ -45,6 +45,7 @@ import type { TaskManager } from '../task';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
 import { createMergeTool } from '../tools/merge';
+import { AgentLifecycleManager } from '../lifecycle-manager';
 import type { SubAgentSpawner } from '../tools/subagent';
 import {
   type BuilderDeps,
@@ -136,6 +137,8 @@ export class AgentRuntime implements RuntimePort {
   private _bus = new MessageBus();
   /** 全局 TaskBoard 实例 — 构造时创建，所有 agent 共享 */
   private _taskBoard = new TaskBoard();
+  /** LifecycleManager 实例 — 每个 agent 一个，持有 pool/board/bus/exec/sink 引用 */
+  private _lifecycleManagers = new Map<string, AgentLifecycleManager>();
 
   /** 注入 UI 通知器 — 由 UI 层在启动时设置 */
   setNotifier(n: RuntimeNotifier): void {
@@ -229,13 +232,29 @@ export class AgentRuntime implements RuntimePort {
       effR.register(tool);
     }
 
+    // isolationExec — 用于 agent_isolation_discard / agent_isolation_merge
+    // 被 agent_merge 工具和 LifecycleManager 共用
+    const isolationExec = async (name: string, args: Record<string, unknown>): Promise<string> => {
+      const result = await agentInvoke<string>(name, args);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    };
+
     // Register agent_merge tool — allows parent to merge completed async sub-agent worktrees
     if (config.collaborationMode !== 'plan') {
-      const isolationExec = async (name: string, args: Record<string, unknown>): Promise<string> => {
-        const result = await agentInvoke<string>(name, args);
-        return typeof result === 'string' ? result : JSON.stringify(result);
-      };
       effR.register(createMergeTool(this._taskBoard, () => newAgent.id, isolationExec));
+    }
+
+    // 7c. Wire LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
+    if (config.subAgentPool) {
+      const lifecycle = new AgentLifecycleManager(
+        config.subAgentPool,
+        this._taskBoard,
+        this._bus,
+        isolationExec,
+        config.eventSink ?? (() => {}),
+      );
+      lifecycle.start();
+      this._lifecycleManagers.set(agentId, lifecycle);
     }
 
     // 8. Register compaction tools on the agent's effective registry
@@ -287,6 +306,9 @@ export class AgentRuntime implements RuntimePort {
       ._getAgent()
       .saveState('done')
       .catch(() => {});
+    // 停止 LifecycleManager 巡检定时器
+    this._lifecycleManagers.get(id)?.stop();
+    this._lifecycleManagers.delete(id);
     this._bus.unregister(id);
     this._taskBoard.unregister(id);
     this.agents.delete(id);
