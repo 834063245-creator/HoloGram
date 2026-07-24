@@ -476,19 +476,11 @@ const SubReasoningBlock: React.FC<{
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
 
-// Memoised wrapper: only re-render when part.version or part.status changes.
-// SubAgentPart is mutated in-place by subagent-sink (version++), so default
-// React.memo (reference equality) would never trigger. Custom comparator
-// checks the two fields that actually change during streaming.
-const MemoSubAgentBlock: React.FC<{ part: SubAgentPart }> = React.memo(
-  ({ part }) => <SubAgentBlock part={part} />,
-  (prev, next) =>
-    prev.part.version === next.part.version && prev.part.status === next.part.status,
-);
-
 // ponytail: NOT wrapped in React.memo — subagent-sink mutates SubAgentPart in-place
-// (push to parts[], version++), so the object reference never changes.
-// MemoSubAgentBlock above handles the bail-out.
+// (push to parts[], version++), so the object reference never changes. React.memo
+// with any comparator on the same reference would always bail out, blocking
+// streaming re-renders entirely. Performance is handled by useMemo on renderedParts
+// and rAF-throttled MutationObserver scroll in subagent-sink.
 const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
@@ -832,7 +824,7 @@ const AssistantBubble: React.FC<{
           }
 
           if (g.kind === 'subagent') {
-            return <MemoSubAgentBlock key={gi} part={g.part} />;
+            return <SubAgentBlock key={gi} part={g.part} />;
           }
 
           return null;
