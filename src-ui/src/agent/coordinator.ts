@@ -63,7 +63,7 @@ const DEFAULT_MAX_CONCURRENT = 5;
 const MAX_QUEUE_SIZE = 20;
 // 10 minutes — coding sub-agents run builds/tests; 2 min timed out healthy agents
 // and (worse) left them running detached while the parent was told they failed.
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class SubAgentPool {
   private agents = new Map<string, PendingAgent>();

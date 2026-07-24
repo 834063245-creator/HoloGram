@@ -33,10 +33,9 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
     description: () =>
       "Spawn a sub-agent to handle a focused, independent task. The call BLOCKS until the sub-agent finishes; its final report is returned as this tool's result. To run several tasks in parallel, emit multiple agent_spawn calls in a single turn. " +
       'Fork mode (default — omit subagent_type) injects your recent context so the sub-agent knows what you already did; set subagent_type="fresh" for a clean-slate agent. ' +
-      'File edits run in an isolated git worktree and are auto-merged back on success; on merge conflict the diff is returned to you for manual application. ' +
+      'In fork mode, file edits run in an isolated git worktree and are auto-merged back on success; on merge conflict the diff is returned to you for manual application. In fresh mode, the sub-agent edits files directly in the working tree — ensure parallel fresh sub-agents have non-overlapping file scopes. ' +
       'Set async=true to spawn non-blocking — returns immediately with the sub-agent ID, and the result arrives via agent_message (type: "result"). Use agent_merge to merge all completed async sub-agents. ' +
-      'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, spawn requests are queued (up to 20) and started as slots free up. ' +
-      'Give the sub-agent a complete, self-contained directive: what to do, which files, and how to verify (e.g. run cargo check / npm test before finishing).',
+      'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, spawn requests are queued (up to 20) and started as slots free up.',
     parameters: () => ({
       type: 'object',
       properties: {
@@ -46,7 +45,8 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
         },
         prompt: {
           type: 'string',
-          description: 'Complete, self-contained task directive for the sub-agent.',
+          description:
+            'Complete, self-contained task directive for the sub-agent. Must include: what to do, which files to modify, and the expected outcome. Do NOT instruct the sub-agent to run builds or tests — it cannot do so (parallel build tools cause file-lock deadlocks). Verification is the parent agent\'s responsibility after all sub-agents finish. When spawning multiple sub-agents in parallel, give each a distinct, non-overlapping set of files to avoid write conflicts.',
         },
         subagent_type: {
           type: 'string',
@@ -61,7 +61,7 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
         },
         timeout_minutes: {
           type: 'number',
-          description: 'Optional timeout override (default 10 minutes). The sub-agent is aborted when it exceeds this.',
+          description: 'Optional timeout override (default 30 minutes). The sub-agent is aborted when it exceeds this.',
         },
         async: {
           type: 'boolean',

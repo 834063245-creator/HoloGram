@@ -1805,6 +1805,26 @@ ${resumeNote}
     // Sub-agents never get recursive-spawn tools (fork children execute directly).
     subTools.unregister('agent_spawn');
 
+    // ── Hard-block build/test commands in sub-agents ──
+    // These commands contend on file locks (cargo target/, node_modules/,
+    // .git/index.lock) when run in parallel, causing deadlocks or timeouts.
+    // The sub-agent should finish file edits and report what it changed;
+    // the parent agent runs verification after all sub-agents finish.
+    const BUILD_TEST_RE = /\b(?:cargo|npm|npx|pnpm|yarn|make|docker|rustc|tsc|gradle|gradlew|mvn|mvnw|cmake|pytest|dotnet|xcodebuild|zig)\b|go\s+(?:build|test|vet|run)|python\s+-m\s+pytest/;
+    const shellTool = subTools.get('run_shell');
+    if (shellTool) {
+      const origShellExec = shellTool.execute.bind(shellTool);
+      shellTool.execute = async (args, onProgress) => {
+        const cmd = (args.command as string) || '';
+        if (BUILD_TEST_RE.test(cmd)) {
+          return `[已拦截] 子 Agent 不允许执行构建/测试/包管理命令（"${cmd.slice(0, 100)}"）。\n` +
+            `原因：并行子 Agent 同时跑这类命令会争抢文件锁（target/、node_modules/、.git/index.lock 等），导致死锁或超时。\n` +
+            `请直接完成文件修改，在结论中说明：你改了哪些文件、建议主 Agent 跑什么命令来验证。`;
+        }
+        return origShellExec(args, onProgress);
+      };
+    }
+
     let subSystem: string;
 
     if (mode === 'fork') {
@@ -1824,7 +1844,7 @@ ${prompt}
 2. **专注** — 只完成分配给你的任务，不要偏离
 3. **先查后动** — 涉及代码库的，先查再动手
 4. **直接给结论** — 不要反问、不要建议下一步、不要写论文
-5. **验证** — 改完代码后跑编译/测试确认没炸
+5. **不跑构建/测试** — 不要跑 cargo / npm / pnpm / make / docker / go build 等任何构建、测试或包管理命令。这些命令在并行环境下会争抢文件锁（如 target/、node_modules/、.git/index.lock），导致死锁或超时。你只负责改文件，验证由主 Agent 在所有子任务完成后统一执行。如果认为改动有风险，在结论里说明即可。
 6. **隔离** — 你的文件修改在独立 git worktree 中进行，正常保存即可；任务成功后变更会自动合并回主仓
 
 ## 父Agent近期上下文（⚠️ 快照 — 可能已过期。操作前自行验证文件当前状态）
@@ -1841,6 +1861,7 @@ ${prompt}
 3. **先查后动** — 涉及代码库的，先调图查询工具（hologram_*）再动手。
 4. **直接给结论** — 不要反问或延续对话。完成后直接输出结果。
 5. **简短** — 输出精炼，不需要写论文。
+6. **不跑构建/测试** — 不要跑 cargo / npm / pnpm / make / docker / go build 等任何构建、测试或包管理命令。这些命令在并行环境下会争抢文件锁（如 target/、node_modules/、.git/index.lock），导致死锁或超时。你只负责改文件，验证由主 Agent 统一执行。如果认为改动有风险，在结论里说明即可。
 
 ## 可用工具
 ${subTools
