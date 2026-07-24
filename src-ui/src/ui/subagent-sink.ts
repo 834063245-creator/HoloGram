@@ -26,14 +26,14 @@ export interface SubAgentSinkOpts {
 export function createSubAgentSink(opts: SubAgentSinkOpts): (ev: AgentEvent) => void {
   const { subPart, bump } = opts;
 
-  let rafId: number | null = null;
+  let timerId: ReturnType<typeof setTimeout> | null = null;
   const tick = () => {
     subPart.version++;
-    if (rafId !== null) return; // already pending this frame
-    rafId = requestAnimationFrame(() => {
-      rafId = null;
+    if (timerId !== null) return; // already pending
+    timerId = setTimeout(() => {
+      timerId = null;
       bump();
-    });
+    }, 16);
   };
 
   return (ev: AgentEvent) => {

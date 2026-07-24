@@ -10,14 +10,14 @@
 // agent/ 层永远不 import 此文件。
 
 import type { AgentEvent, EventSink } from '../agent/agent-types';
+import type { AgentStatus, RuntimeNotifier } from '../agent/runtime/types';
 import type { Message } from '../provider/types';
-import { bus } from './events';
-import { getChatStore, msgStoreFor } from './chat-store';
+import { useAgentPanelStore } from './agent-panel-store';
 import { rebuildMessagesFromMessages } from './chat-session';
+import { getChatStore, msgStoreFor } from './chat-store';
+import { bus } from './events';
 import type { SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
-import type { RuntimeNotifier, AgentStatus } from '../agent/runtime/types';
-import { useAgentPanelStore } from './agent-panel-store';
 
 /**
  * 创建 RuntimeNotifier — 桥接 Runtime 事件到 UI store。
@@ -77,12 +77,15 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       bumpStore(sid);
       return createSubAgentSink({
         subPart,
-        bump: () => bumpStore(sid),
+        bump: () => {
+          const s = store.getState();
+          store.setState({ messages: [...s.messages], version: s.version + 1 });
+        },
         onProgress: info.onProgress,
       });
     },
 
-        onSubAgentFinished(agentId: string, _parentAgentId: string, sessionId: number, ok: boolean): void {
+    onSubAgentFinished(agentId: string, _parentAgentId: string, sessionId: number, ok: boolean): void {
       useAgentPanelStore.getState().pushAlert({
         id: `finish-${agentId}-${Date.now()}`,
         level: ok ? 'info' : 'warn',
@@ -100,7 +103,8 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
             if (p.type === 'subagent' && p.agentId === agentId) {
               p.status = ok ? 'done' : 'error';
               p.version++;
-              bumpStore(sessionId);
+              const s = store.getState();
+              store.setState({ messages: [...s.messages], version: s.version + 1 });
               return;
             }
           }
