@@ -81,6 +81,10 @@ export interface MessageTransport {
    *  实现负责：inbox 容量检查、背压策略、msgIndex 维护。
    *  抛 InboxFullError / AgentNotFoundError 由调用方处理。 */
   deliver(agentId: string, msg: AgentMessage): void;
+
+  /** 注册消息到达回调（agent idle 时用来唤醒 runLoop）。
+   *  transport 实现可选 — MessageBus 自身也维护 wake callbacks。 */
+  onDelivered?(agentId: string): void;
 }
 
 // ── 自定义错误类型 ──

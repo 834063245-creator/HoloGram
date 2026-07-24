@@ -560,8 +560,8 @@ export class Workspace {
       skillRegistry: this.skillRegistry,
       taskManager: this.taskManager,
       subAgentPool: this.subAgentPool,
-      subAgentSpawner: async (desc, prompt, prog, mode, al, sig) =>
-        agentRef.current?.spawnSubAgent(desc, prompt, prog, mode, al, sig) ??
+      subAgentSpawner: async (desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride) =>
+        agentRef.current?.spawnSubAgent(desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride) ??
         Promise.resolve({ text: '', err: 'agent not available' }),
     });
     this.registry = registry;

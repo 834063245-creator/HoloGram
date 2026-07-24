@@ -32,16 +32,19 @@ import {
   HookRegistry,
   PreflightHookRegistry,
 } from '../hooks';
+import { createBoardTrackingHook } from '../hooks/board-tracking-hook';
 import { log } from '../logger';
 import type { MemoryManager } from '../memory';
 import { memoryBundleIngest } from '../memory-bundle-client';
 import { MessageBus } from '../message-bus';
+import { TaskBoard } from '../task-board';
 import type { SkillRegistry } from '../skills';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
 import type { TaskManager } from '../task';
-import { ToolRegistry } from '../tool';
+import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
+import { createMergeTool } from '../tools/merge';
 import type { SubAgentSpawner } from '../tools/subagent';
 import {
   type BuilderDeps,
@@ -131,6 +134,8 @@ export class AgentRuntime implements RuntimePort {
   private notifier: RuntimeNotifier | null = null;
   /** 全局 MessageBus 实例 — 构造时创建，所有 agent 共享 */
   private _bus = new MessageBus();
+  /** 全局 TaskBoard 实例 — 构造时创建，所有 agent 共享 */
+  private _taskBoard = new TaskBoard();
 
   /** 注入 UI 通知器 — 由 UI 层在启动时设置 */
   setNotifier(n: RuntimeNotifier): void {
@@ -140,6 +145,11 @@ export class AgentRuntime implements RuntimePort {
   /** 获取全局 MessageBus 实例 */
   getBus(): MessageBus {
     return this._bus;
+  }
+
+  /** 获取全局 TaskBoard 实例 */
+  getTaskBoard(): TaskBoard {
+    return this._taskBoard;
   }
 
   /** 创建 Agent — 接收完整配置，Runtime 不做 UI 依赖的事 */
@@ -194,6 +204,7 @@ export class AgentRuntime implements RuntimePort {
       maxTokens: config.maxTokens ?? 0,
       ui: this._wrapNotifier(agentId),
       messageBus: this._bus,
+      taskBoard: this._taskBoard,
     });
 
     // 5. Wire isolation
@@ -207,41 +218,47 @@ export class AgentRuntime implements RuntimePort {
     // 7. Wire persistence
     if (config.agentStore) newAgent.setAgentStore(config.agentStore);
     if (config.goalManager) newAgent.setGoalManager(config.goalManager);
-    newAgent.applyAutoTuneConfig().catch(() => {});
     if (config.subAgentPool) newAgent.setSubAgentPool(config.subAgentPool);
 
     // 7b. Wire message bus + register communication tools
+    // setBus() handles bus.register() with wake callback — no duplicate call needed
     newAgent.setBus(this._bus);
-    this._bus.register({
-      agentId,
-      parentId: config.parentId ?? null,
-      depth: config.subagentDepth ?? 0,
-    });
     // Register communication tools — plan mode gets only read-only tools (agent_inbox / agent_list)
     for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
       if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
     }
 
-    // 8. Register compaction tools on the agent's registry copy
-    registerCompactionTools(newAgent, r);
+    // Register agent_merge tool — allows parent to merge completed async sub-agent worktrees
+    if (config.collaborationMode !== 'plan') {
+      const isolationExec = async (name: string, args: Record<string, unknown>): Promise<string> => {
+        const result = await agentInvoke<string>(name, args);
+        return typeof result === 'string' ? result : JSON.stringify(result);
+      };
+      effR.register(createMergeTool(this._taskBoard, () => newAgent.id, isolationExec));
+    }
 
-    // 9. Wire hooks (graph context + state)
+    // 8. Register compaction tools on the agent's effective registry
+    registerCompactionTools(newAgent, effR);
+
+    // 9. Wire hooks (graph context + state + board tracking)
+    const hooks = new HookRegistry();
+    const preflightHooks = new PreflightHookRegistry();
     if (config.graphContext) {
       loadEngineSnapshot(config.graphContext, config.projectPath).catch(() => {});
-      const hooks = new HookRegistry();
       hooks.register(createGraphContextHook(config.graphContext));
       if (this._diagSource) {
         hooks.register(createStateReadHook(config.projectPath, this._diagSource));
       }
-      newAgent.setHooks(hooks);
-      const preflightHooks = new PreflightHookRegistry();
       preflightHooks.register(createGraphPreflightHook(config.graphContext));
       if (this._diagSource) {
         preflightHooks.register(createStatePreflightHook(this._diagSource));
       }
-      newAgent.setPreflightHooks(preflightHooks);
     }
+    // Board tracking hook — always register when board is available
+    hooks.register(createBoardTrackingHook(agentId, this._taskBoard));
+    newAgent.setHooks(hooks);
+    newAgent.setPreflightHooks(preflightHooks);
 
     // 10. Wire pre-run hook (AuraSDK semantic recall)
     if (config.preRunHook) {
@@ -271,6 +288,7 @@ export class AgentRuntime implements RuntimePort {
       .saveState('done')
       .catch(() => {});
     this._bus.unregister(id);
+    this._taskBoard.unregister(id);
     this.agents.delete(id);
     log.info('runtime', `agent destroyed: ${id}`);
   }

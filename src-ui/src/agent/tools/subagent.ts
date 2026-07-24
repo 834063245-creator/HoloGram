@@ -23,6 +23,8 @@ export type SubAgentSpawner = (
   mode?: 'fork' | 'fresh',
   toolAllowlist?: string[] | null,
   signal?: AbortSignal, // pool 的中断信号 — 停/超时通过它杀死子Agent
+  asyncMode?: boolean, // true = 非阻塞，立即返回 agentId，结果通过 bus 回来
+  agentIdOverride?: string, // 显式指定子 Agent ID（异步模式必须，保证 LLM 拿到的 ID 与 board/bus 一致）
 ) => Promise<{ text: string; err?: string }>;
 
 export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool): Tool {
@@ -32,6 +34,8 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       "Spawn a sub-agent to handle a focused, independent task. The call BLOCKS until the sub-agent finishes; its final report is returned as this tool's result. To run several tasks in parallel, emit multiple agent_spawn calls in a single turn. " +
       'Fork mode (default — omit subagent_type) injects your recent context so the sub-agent knows what you already did; set subagent_type="fresh" for a clean-slate agent. ' +
       'File edits run in an isolated git worktree and are auto-merged back on success; on merge conflict the diff is returned to you for manual application. ' +
+      'Set async=true to spawn non-blocking — returns immediately with the sub-agent ID, and the result arrives via agent_message (type: "result"). Use agent_merge to merge all completed async sub-agents. ' +
+      'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, agent_spawn returns an error — wait for existing sub-agents to finish or use agent_merge to clear completed ones. ' +
       'Give the sub-agent a complete, self-contained directive: what to do, which files, and how to verify (e.g. run cargo check / npm test before finishing).',
     parameters: () => ({
       type: 'object',
@@ -59,6 +63,11 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
           type: 'number',
           description: 'Optional timeout override (default 10 minutes). The sub-agent is aborted when it exceeds this.',
         },
+        async: {
+          type: 'boolean',
+          description:
+            'If true, returns immediately with the sub-agent ID. The sub-agent runs in the background; its result arrives via agent_message (type: "result"). If false (default), blocks until the sub-agent finishes. Use agent_merge to merge completed async sub-agents.',
+        },
       },
       required: ['description', 'prompt'],
     }),
@@ -69,22 +78,35 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       const subagentType = args.subagent_type as string | undefined;
       const toolAllowlist = args.tool_allowlist as string[] | undefined;
       const timeoutMinutes = args.timeout_minutes as number | undefined;
+      const asyncMode = args.async === true;
       if (!prompt) return '(agent_spawn: prompt is required)';
       const mode = subagentType === 'fresh' ? 'fresh' : 'fork';
       const callId = (args._callId as string) || undefined;
       const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? Math.min(timeoutMinutes, 60) * 60 * 1000 : undefined;
+      // Generate agent ID before pool.spawn so async mode can return it to the LLM.
+      // This ID is used consistently across board, bus, and UI — the pool's internal
+      // spawned.id is NOT exposed to the LLM.
+      const agentId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       // Pool registers the agent (concurrency cap + timeout + stop propagation),
       // then we BLOCK on its completion — the report becomes this tool's result.
       const spawned = pool.spawn(
         description,
-        (signal) => spawner(description, prompt, onProgress, mode, toolAllowlist ?? null, signal),
+        (signal) => spawner(description, prompt, onProgress, mode, toolAllowlist ?? null, signal, asyncMode, agentId),
         callId,
         timeoutMs,
       );
       if (!spawned) {
         return `无法启动子Agent：已达到并发上限（${pool.runningCount} 个正在运行）。先等本轮其他 agent_spawn 完成，或下一轮再试。`;
       }
+
+      // 异步模式：立即返回 agentId，子 Agent 在后台运行
+      // 结果通过 bus 消息（type=result）通知父 Agent
+      if (asyncMode) {
+        return `子Agent已启动 (id: ${agentId})。完成后将通过消息通知你。`;
+      }
+
+      // 阻塞模式（默认）：等待子 Agent 完成
       const handle = await spawned.done;
       if (handle.status === 'completed') {
         return handle.result || '(子Agent 没有生成回复)';

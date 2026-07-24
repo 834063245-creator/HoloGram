@@ -104,6 +104,9 @@ export class MessageBus {
   private inboxCapacity = DEFAULT_INBOX_CAPACITY;
   private backpressureStrategy: BackpressureStrategy = DEFAULT_BACKPRESSURE;
 
+  // 消息到达回调 — agent idle 时用来唤醒 runLoop
+  private wakeCallbacks = new Map<string, () => void>();
+
   // 传输层 — 可替换（默认 InProcessTransport）
   private transport: MessageTransport;
 
@@ -120,10 +123,14 @@ export class MessageBus {
 
   // ── 注册 ──
 
-  register(addr: AgentAddress): void {
+  /** 注册 agent 地址。可选传入 onWake 回调 — 消息到达时触发，用于唤醒 idle agent。 */
+  register(addr: AgentAddress, onWake?: () => void): void {
     this.agents.set(addr.agentId, addr);
     if (!this.inboxes.has(addr.agentId)) {
       this.inboxes.set(addr.agentId, []);
+    }
+    if (onWake) {
+      this.wakeCallbacks.set(addr.agentId, onWake);
     }
   }
 
@@ -137,9 +144,17 @@ export class MessageBus {
     }
     this.inboxes.delete(agentId);
     this.agents.delete(agentId);
+    this.wakeCallbacks.delete(agentId);
   }
 
   // ── 通信原语（Phase 1: 仅异步） ──
+
+  /** 投递消息到 inbox + 触发唤醒回调 */
+  private _deliver(agentId: string, msg: AgentMessage): void {
+    this.transport.deliver(agentId, msg);
+    // 投递成功后触发唤醒 — agent idle 时用来启动 runLoop
+    this.wakeCallbacks.get(agentId)?.();
+  }
 
   /** 异步发送：发完即走，不等待回复。返回消息 ID */
   send(msg: Omit<AgentMessage, 'id' | 'ts'> & { from: string }): string {
@@ -164,8 +179,8 @@ export class MessageBus {
       throw new TopologyDeniedError(`topology denied: ${fullMsg.from} → ${fullMsg.to}`, fullMsg.from, fullMsg.to);
     }
 
-    // ── 投递到 inbox（通过 transport） ──
-    this.transport.deliver(fullMsg.to, fullMsg);
+    // ── 投递到 inbox + 触发唤醒 ──
+    this._deliver(fullMsg.to, fullMsg);
 
     // ── 通知订阅者 ──
     this._notifySubscribers(fullMsg);
@@ -231,7 +246,7 @@ export class MessageBus {
 
     // 全部通过 — 移除原消息（自动 ack）+ 投递回复
     this._removeFromInbox(callerId, originalMsgId);
-    this.transport.deliver(replyMsg.to, replyMsg);
+    this._deliver(replyMsg.to, replyMsg);
     this._notifySubscribers(replyMsg);
 
     return replyMsg.id;
@@ -256,7 +271,7 @@ export class MessageBus {
         try {
           // 为每个接收者创建独立的副本（独立 ID 以便 msgIndex 追踪）
           const copy: AgentMessage = { ...msg, id: generateId() };
-          this.transport.deliver(agentId, copy);
+          this._deliver(agentId, copy);
           this._notifySubscribers(copy);
           delivered.push(agentId);
         } catch {

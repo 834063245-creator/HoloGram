@@ -27,13 +27,16 @@ import {
 } from './compaction-model';
 import { type ExecStateInstance, execState } from './execution-state';
 import type { GoalManager, GoalRecord } from './goal-manager';
-import type { HookRegistry, PreflightHookRegistry } from './hooks';
+import { HookRegistry, type PreflightHookRegistry } from './hooks';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 import type { MessageBus } from './message-bus';
+import type { TaskBoard } from './task-board';
+import { createBoardTrackingHook } from './hooks/board-tracking-hook';
+import { enqueueIsolationOp } from './isolation-queue';
 
 export { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent };
 
@@ -70,6 +73,8 @@ export interface AgentOptions {
   ui?: AgentUINotifier;
   /** 通信总线（可选 — 无则为 headless 无通信能力） */
   messageBus?: MessageBus;
+  /** TaskBoard — 共享状态区，追踪异步子 Agent 的工作状态 */
+  taskBoard?: TaskBoard;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -151,9 +156,20 @@ export class Agent {
   // Pending memory updates (queued from memory:saved event, applied at safe boundary)
   private _pendingMemoryUpdates: string[] = [];
 
+  // Track inbox messages already injected this runLoop cycle — prevents infinite
+  // wakeup loop when LLM doesn't ack/reply (messages stay in inbox, finally
+  // block would re-trigger _onMessageDelivered endlessly).
+  private _injectedMsgIds = new Set<string>();
+
   // Signal of the currently active runLoop — sub-agents spawned from tool calls
   // merge it into their own abort signal so user-stop cascades to children.
   private _currentRunSignal: AbortSignal | null = null;
+
+  // Whether runLoop is currently active — used by bus wakeup to avoid re-entry
+  private _isRunning = false;
+
+  // TaskBoard — shared state for async sub-agent tracking
+  private _taskBoard: TaskBoard | null = null;
 
   // Session persistence
   sessionId: string;
@@ -183,6 +199,7 @@ export class Agent {
     this.parentId = opts.parentId ?? null;
     this._execState = opts.execState ?? execState;
     this._bus = opts.messageBus ?? null;
+    this._taskBoard = opts.taskBoard ?? null;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this._onSessionPersisted = opts.onSessionPersisted;
@@ -366,9 +383,15 @@ export class Agent {
     this._subAgentPool = pool;
   }
 
-  /** Wire message bus for inter-agent communication. */
+  /** Wire message bus for inter-agent communication.
+   *  Registers the agent address + a wake callback that triggers runLoop
+   *  when messages arrive while the agent is idle. */
   setBus(bus: MessageBus): void {
     this._bus = bus;
+    bus.register(
+      { agentId: this.id, parentId: this.parentId, depth: this._subagentDepth },
+      () => { void this._onMessageDelivered(); },
+    );
   }
 
   /** Cascade abort: stop all sub-agents when the parent is interrupted. */
@@ -379,6 +402,26 @@ export class Agent {
       if (stopped.length > 0) {
         log.info('agent', `cascade abort: stopped ${stopped.length} sub-agents`);
       }
+    }
+  }
+
+  /** Bus wake callback — called when a message is delivered to this agent's inbox.
+   *  If the agent is idle (not running), starts a new runLoop to process the message.
+   *  If already running, _injectInbox will pick up the message on the next iteration.
+   *  Uses execState.start() so user stop (execState.stop()) can abort the wakeup run. */
+  private async _onMessageDelivered(): Promise<void> {
+    if (this._isRunning) return;
+    if (this._bus?.unreadCount(this.id) === 0) return;
+    // Check for truly new messages (not yet injected in previous cycle)
+    const hasNew = this._bus!.peekInbox(this.id).some((m) => !this._injectedMsgIds.has(m.id));
+    if (!hasNew) return;
+    const signal = this._execState.start();
+    try {
+      await this.run(signal, '');
+    } catch {
+      // 唤醒失败不致命——消息还在 inbox，下次 run() 会捡到
+    } finally {
+      this._execState.done();
     }
   }
 
@@ -447,12 +490,17 @@ export class Agent {
   }
 
   /** Inject unread inbox messages as a system-reminder. Non-destructive —
-   *  messages stay in inbox until explicitly acked or replied to. */
+   *  messages stay in inbox until explicitly acked or replied to.
+   *  Tracks injected message IDs to prevent re-injection within the same
+   *  runLoop lifecycle (avoids infinite wakeup loop when LLM doesn't ack). */
   private _injectInbox(): void {
     if (!this._bus) return;
     const msgs = this._bus.peekInbox(this.id);
-    if (msgs.length === 0) return;
-    const formatted = msgs
+    // Only inject messages not yet seen this cycle
+    const newMsgs = msgs.filter((m) => !this._injectedMsgIds.has(m.id));
+    if (newMsgs.length === 0) return;
+    for (const m of newMsgs) this._injectedMsgIds.add(m.id);
+    const formatted = newMsgs
       .map(
         (m) =>
           `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
@@ -460,7 +508,7 @@ export class Agent {
       .join('\n\n');
     this.session.push({
       role: 'user',
-      content: `<system-reminder>\n📬 Agent 消息 (${msgs.length} 条未读):\n${formatted}\n\n可用 agent_reply 工具回复，或 agent_ack 确认已读。\n</system-reminder>`,
+      content: `<system-reminder>\n📬 Agent 消息 (${newMsgs.length} 条未读):\n${formatted}\n\n可用 agent_reply 工具回复，或 agent_ack 确认已读。\n</system-reminder>`,
     });
   }
 
@@ -497,10 +545,14 @@ export class Agent {
       .join('\n\n');
   }
 
-  /** Run one turn: append user input, drive the tool loop. */
+  /** Run one turn: append user input, drive the tool loop.
+   *  Empty input (bus wakeup) skips preRunHook and user message — runLoop
+   *  starts from _injectInbox(), treating inbox messages as the sole input. */
   async run(signal: AbortSignal, input: string): Promise<void> {
-    // Per-turn hook: AuraSDK semantic recall on the user's query
-    if (this._preRunHook) {
+    this._isRunning = true;
+    // Reset injected message tracking — user-driven run re-evaluates all unacked msgs
+    if (input) this._injectedMsgIds.clear();
+    if (this._preRunHook && input) {
       try {
         const recallCtx = await this._preRunHook(input);
         if (recallCtx) {
@@ -510,7 +562,9 @@ export class Agent {
         /* pre-run hook failure is non-fatal */
       }
     }
-    this.session.push({ role: 'user', content: input });
+    if (input) {
+      this.session.push({ role: 'user', content: input });
+    }
     await this.runLoop(signal);
     // Fire onSessionPersisted callback (memory bundle ingest, git refresh, turn-start block)
     if (this._onSessionPersisted) {
@@ -802,6 +856,9 @@ ${resumeNote}
   private async runLoop(signal: AbortSignal): Promise<void> {
     const turnStart = performance.now();
     log.info('agent', 'turn started', { model: this.prov.name() });
+
+    try {
+    this._isRunning = true;
     this._currentRunSignal = signal; // sub-agent spawns merge this for cascade-abort
     this._sink({ kind: EventKind.TurnStarted });
 
@@ -946,6 +1003,17 @@ ${resumeNote}
 
       // Compact if needed before next turn
       this.maybeCompact(usage);
+    }
+    } finally {
+      this._isRunning = false;
+      // Re-check for NEW (not-yet-injected) messages — avoid infinite loop
+      // from unacked messages that were already injected this cycle.
+      if (!signal.aborted && this._bus) {
+        const hasNew = this._bus.peekInbox(this.id).some((m) => !this._injectedMsgIds.has(m.id));
+        if (hasNew) {
+          queueMicrotask(() => { void this._onMessageDelivered(); });
+        }
+      }
     }
   }
 
@@ -1583,6 +1651,8 @@ ${resumeNote}
     mode: 'fork' | 'fresh' = 'fork',
     toolAllowlist?: string[] | null,
     poolSignal?: AbortSignal,
+    asyncMode?: boolean,
+    agentIdOverride?: string,
   ): Promise<{ text: string; err?: string }> {
     // Depth-based recursion guard
     if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
@@ -1669,7 +1739,9 @@ ${subTools
 
     // ── Hand the child's event stream to the UI (workspace-injected port builds
     // the SubAgentPart and returns the sink; headless → no-op sink) ──
-    const subAgentId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    // Use agentIdOverride for both UI and Agent so the LLM-facing ID matches
+    // board/bus entries (async mode returns this ID to the LLM).
+    const subAgentId = agentIdOverride ?? `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const subSink = this._ui.subAgentSpawn?.({ agentId: subAgentId, description, sessionId: this._uiSessionId }, onProgress) ?? (() => {});
 
     // Shared provider, fresh session, no compact
@@ -1678,7 +1750,7 @@ ${subTools
       subagentDepth: this._subagentDepth + 1,
       contextWindow: this.contextWindow,
       eventSink: subSink,
-      agentId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      agentId: subAgentId,
       parentId: this.id,
     });
     if (isolationId) {
@@ -1689,14 +1761,23 @@ ${subTools
       subAgent.setAgentStore(this.agentStore);
     }
 
-    // Inherit message bus from parent — wire bus + register child
+    // Inherit message bus from parent — setBus handles register(addr, onWake)
     if (this._bus) {
       subAgent.setBus(this._bus);
-      this._bus.register({
+    }
+
+    // Register on TaskBoard + file tracking hook — async mode only.
+    // Sync mode doesn't need board tracking (result returned directly, merged immediately).
+    if (this._taskBoard && asyncMode) {
+      this._taskBoard.register({
         agentId: subAgent.id,
-        parentId: this.id,
-        depth: this._subagentDepth + 1,
+        parentAgentId: this.id,
+        description,
+        isolationId,
       });
+      const subHooks = new HookRegistry();
+      subHooks.register(createBoardTrackingHook(subAgent.id, this._taskBoard));
+      subAgent.setHooks(subHooks);
     }
 
     let subAgentSucceeded = false;
@@ -1736,21 +1817,71 @@ ${subTools
       result = { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
       this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
-      // Unregister sub-agent from bus after completion
-      if (this._bus) {
-        this._bus.unregister(subAgent.id);
-      }
     }
 
-    // ── Finalize isolation worktree (serialized — parallel sub-agents must not
-    // merge into the same repo concurrently). Success → merge; conflict → the
-    // diff travels back in the result so the parent can apply it manually
-    // (previously the worktree was discarded anyway = silent data loss). ──
-    if (isolationId) {
-      const mergeNote = await enqueueIsolationOp(() => this._finalizeIsolation(isolationId, subAgentSucceeded));
-      if (mergeNote) {
-        result = { text: (result.text ? result.text + '\n\n' : '') + mergeNote, err: result.err };
+    if (asyncMode) {
+      // ── Async mode: save diff to board + notify via bus (no auto-merge) ──
+      let diffText = '';
+      if (isolationId && subAgentSucceeded) {
+        try {
+          const diffT = this.tools.get('agent_isolation_diff');
+          if (diffT) diffText = await diffT.execute({ agent_id: isolationId });
+        } catch {
+          /* diff unavailable */
+        }
       }
+
+      if (subAgentSucceeded) {
+        this._taskBoard?.complete(subAgent.id, result.text || '(无摘要)', diffText);
+        // Worktree 保留 — 等 agent_merge 时再处理
+      } else if (signal.aborted) {
+        this._taskBoard?.stop(subAgent.id);
+        // 中止时清理 worktree
+        if (isolationId) {
+          const discardT = this.tools.get('agent_isolation_discard');
+          await discardT?.execute({ agent_id: isolationId }).catch(() => {});
+        }
+      } else {
+        this._taskBoard?.fail(subAgent.id, result.err || '子 Agent 执行失败');
+        // 失败时清理 worktree
+        if (isolationId) {
+          const discardT = this.tools.get('agent_isolation_discard');
+          await discardT?.execute({ agent_id: isolationId }).catch(() => {});
+        }
+      }
+
+      // 通过 bus 通知父 Agent
+      if (this._bus) {
+        try {
+          this._bus.send({
+            from: subAgent.id,
+            to: this.id,
+            type: 'result',
+            payload: {
+              summary: subAgentSucceeded ? result.text : '',
+              success: subAgentSucceeded,
+              agentId: subAgent.id,
+              error: subAgentSucceeded ? undefined : result.err,
+            },
+          });
+        } catch {
+          /* bus send failure is non-fatal */
+        }
+      }
+    } else {
+      // ── Sync mode: finalize isolation worktree (serialized) ──
+      if (isolationId) {
+        const mergeNote = await enqueueIsolationOp(() => this._finalizeIsolation(isolationId, subAgentSucceeded));
+        if (mergeNote) {
+          result = { text: (result.text ? result.text + '\n\n' : '') + mergeNote, err: result.err };
+        }
+      }
+      // Sync mode: no board entry was created (async-only), nothing to clean up
+    }
+
+    // Unregister sub-agent from bus after all completion handling
+    if (this._bus) {
+      this._bus.unregister(subAgent.id);
     }
     return result;
   }
@@ -1796,14 +1927,8 @@ ${subTools
   }
 }
 
-// Serialize isolation merge/discard — concurrent sub-agents share one repo,
-// and parallel git merges race on the index lock.
-let _isoQueue: Promise<unknown> = Promise.resolve();
-function enqueueIsolationOp<T>(fn: () => Promise<T>): Promise<T> {
-  const p = _isoQueue.then(fn, fn);
-  _isoQueue = p.catch(() => {});
-  return p;
-}
+// Serialization of isolation merge/discard lives in isolation-queue.ts
+// (shared with merge.ts — concurrent git operations race on the index lock).
 
 // ---- Helpers ----
 

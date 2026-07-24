@@ -19,6 +19,7 @@ import type { SubAgentPool } from '../coordinator';
 import type { TaskManager } from '../task';
 import type { ToolRegistry } from '../tool';
 import type { MessageBus } from '../message-bus';
+import type { TaskBoard } from '../task-board';
 
 // ── Agent 状态 ──
 
@@ -112,6 +113,8 @@ export interface AgentConfig {
   onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
   /** 通信总线（可选 — 无则为 headless 无通信能力） */
   messageBus?: MessageBus;
+  /** TaskBoard — 共享状态区，追踪异步子 Agent 的工作状态 */
+  taskBoard?: TaskBoard;
 }
 
 // ── Agent 句柄 ──
