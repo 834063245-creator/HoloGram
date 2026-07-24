@@ -74,10 +74,31 @@ export function createMergeTool(
         } catch (mergeErr: any) {
           conflicts++;
           const errMsg = mergeErr?.message || String(mergeErr);
-          conflictDetails.push(`${entry.agentId} (${entry.description}): ${errMsg}`);
-          // 冲突时保全 diff（已在 board 上），清理 worktree
+
+          // Check for degraded merge (worktree metadata corrupted but diff salvaged)
+          if (errMsg.startsWith('DEGRADED:')) {
+            conflictDetails.push(`${entry.agentId} (${entry.description}): worktree 元数据损坏，diff 已降级提取`);
+          } else {
+            conflictDetails.push(`${entry.agentId} (${entry.description}): ${errMsg}`);
+          }
+
+          // Best-effort: try to extract diff even after merge failure
+          try {
+            await enqueueIsolationOp(async () => {
+              await exec('agent_isolation_diff', { agent_id: entry.isolationId });
+            });
+          } catch { /* best-effort */ }
+
+          // Clean up worktree — discard first, force_purge as fallback
           await enqueueIsolationOp(async () => {
-            await exec('agent_isolation_discard', { agent_id: entry.isolationId }).catch(() => {});
+            try {
+              await exec('agent_isolation_discard', { agent_id: entry.isolationId });
+            } catch {
+              // discard failed — force purge to clear registry
+              try {
+                await exec('agent_isolation_force_purge', { agent_id: entry.isolationId });
+              } catch { /* best-effort */ }
+            }
           });
         }
       }

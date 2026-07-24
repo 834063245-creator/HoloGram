@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 /// Create a git Command with CREATE_NO_WINDOW on Windows (prevents console flash).
-fn git_cmd() -> std::process::Command {
+pub(crate) fn git_cmd() -> std::process::Command {
     let mut c = std::process::Command::new("git");
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; c.creation_flags(crate::utils::NO_WINDOW); }
@@ -175,7 +175,30 @@ impl AgentIsolation {
         }
         let wt = self.worktree_path.as_ref().ok_or("工作树路径不存在")?;
 
-        let head = git_rev_parse(wt, "HEAD")?;
+        // Check worktree directory exists before accessing git
+        if !wt.exists() {
+            return Err("工作树目录不存在，无法合并。请检查 TaskBoard 上的 diff 备份。".into());
+        }
+
+        let head = match git_rev_parse(wt, "HEAD") {
+            Ok(h) => h,
+            Err(_) => {
+                // HEAD resolution failed — degrade: try git diff to salvage changes
+                let diff = run_git(wt, &["diff"]).unwrap_or_default();
+                let stat = run_git(wt, &["diff", "--stat"]).unwrap_or_default();
+                if diff.trim().is_empty() {
+                    // No changes to salvage — clean up
+                    let _ = remove_worktree(&self.main_repo_path, wt);
+                    return Ok("没有变更需要合并".into());
+                }
+                // Has diff but cannot cherry-pick — return degraded result
+                return Err(format!(
+                    "DEGRADED: worktree git 元数据损坏，无法 cherry-pick。已降级提取 diff:\n{}\n{}",
+                    stat, diff
+                ));
+            }
+        };
+
         if head == self.original_head {
             // No commits — but there might be unstaged changes. Try to commit them.
             let diff_stat = run_git(wt, &["diff", "--stat", "HEAD"])?;
@@ -225,6 +248,15 @@ impl AgentIsolation {
             return Ok(());
         }
         let wt = self.worktree_path.as_ref().ok_or("工作树路径不存在")?;
+
+        // Directory already gone — prune git metadata and return Ok
+        if !wt.exists() {
+            let _ = git_cmd()
+                .args(["-C", &normalize(&self.main_repo_path), "worktree", "prune"])
+                .output();
+            return Ok(());
+        }
+
         remove_worktree(&self.main_repo_path, wt)
     }
 }
@@ -513,5 +545,43 @@ mod tests {
         assert!(!result.unwrap().is_empty(), "should have diff output");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_discard_missing_directory_returns_ok() {
+        // discard() on a non-existent worktree directory should return Ok
+        let tmp = std::env::temp_dir().join("hologram_test_discard_missing");
+        let wt = tmp.join("nonexistent_worktree");
+        let iso = AgentIsolation {
+            kind: IsolationKind::Worktree,
+            worktree_path: Some(wt.clone()),
+            original_head: "abc123".into(),
+            main_repo_path: tmp.clone(),
+        };
+        assert!(!wt.exists(), "sanity: worktree dir should not exist");
+        let result = iso.discard();
+        assert!(result.is_ok(), "discard() on missing dir should return Ok, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_merge_to_main_missing_directory_returns_error() {
+        // merge_to_main() on a non-existent worktree directory should return Err
+        let tmp = std::env::temp_dir().join("hologram_test_merge_missing");
+        let wt = tmp.join("nonexistent_worktree");
+        let iso = AgentIsolation {
+            kind: IsolationKind::Worktree,
+            worktree_path: Some(wt.clone()),
+            original_head: "abc123".into(),
+            main_repo_path: tmp.clone(),
+        };
+        assert!(!wt.exists(), "sanity: worktree dir should not exist");
+        let result = iso.merge_to_main();
+        assert!(result.is_err(), "merge_to_main() on missing dir should return Err");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("工作树目录不存在"),
+            "error should mention directory not existing, got: {}",
+            err
+        );
     }
 }

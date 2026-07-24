@@ -100,10 +100,19 @@ pub(crate) fn agent_isolation_discard(
         .get_isolation()
         .ok_or("没有活跃的隔离环境")?;
 
-    isolation.discard()?;
-    ctx.clear_isolation(&agent_id);
-    crate::permissions::clear_active_agent_id();
-    Ok("工作树已丢弃".into())
+    // discard may fail (corrupted/missing directory) — always clear registry
+    match isolation.discard() {
+        Ok(()) => {
+            ctx.clear_isolation(&agent_id);
+            crate::permissions::clear_active_agent_id();
+            Ok("工作树已丢弃".into())
+        }
+        Err(e) => {
+            ctx.clear_isolation(&agent_id);
+            crate::permissions::clear_active_agent_id();
+            Ok(format!("工作树丢弃遇到错误但 registry 已清除: {e}"))
+        }
+    }
 }
 
 #[tauri::command]
@@ -115,10 +124,16 @@ pub(crate) fn agent_isolation_status(
     let isolations: Vec<serde_json::Value> = entries
         .iter()
         .map(|(id, iso)| {
+            let worktree_exists = iso.worktree_path
+                .as_ref()
+                .map(|p| p.exists())
+                .unwrap_or(false);
             serde_json::json!({
                 "agent_id": id,
                 "kind": if iso.kind == IsolationKind::Worktree { "worktree" } else { "none" },
                 "worktree_path": iso.worktree_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "worktree_exists": worktree_exists,
+                "stale": !worktree_exists,
             })
         })
         .collect();
@@ -139,4 +154,30 @@ pub(crate) fn agent_isolation_prune(
         Ok(n) => Ok(serde_json::json!({"pruned": n}).to_string()),
         Err(e) => Err(e),
     }
+}
+
+#[tauri::command]
+pub(crate) fn agent_isolation_force_purge(
+    agent_id: String,
+    state: tauri::State<'_, crate::WorkspaceState>,
+) -> Result<String, String> {
+    let ctx = crate::utils::get_ctx(&state)?;
+    let project_path = crate::utils::workspace_path(&state)?;
+    let main_path = std::path::PathBuf::from(&project_path);
+
+    // Try normal discard first (may succeed)
+    if let Some(isolation) = ctx.get_isolation() {
+        let _ = isolation.discard();
+    }
+
+    // Always clear registry entry
+    ctx.clear_isolation(&agent_id);
+    crate::permissions::clear_active_agent_id();
+
+    // Run git worktree prune to clean stale metadata
+    let _ = crate::agent_isolation::git_cmd()
+        .args(["-C", &main_path.to_string_lossy().replace('\\', "/"), "worktree", "prune"])
+        .output();
+
+    Ok(format!("agent {} 的隔离记录已强制清除", agent_id))
 }

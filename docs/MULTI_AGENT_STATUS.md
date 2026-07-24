@@ -1,6 +1,6 @@
 # 多 Agent 系统实现状态文档
 
-> 最后更新：2026-07-24（Phase 3 收尾 — 状态推送 + 告警接入已修复）
+> 最后更新：2026-07-24（隔离层鲁棒性修复 — merge 降级 + discard 容忍 + force_purge）
 > 用途：跨窗口交接的完整上下文
 
 ## 已落地的功能
@@ -31,6 +31,7 @@
 | async 模式 signal 不含父 `_currentRunSignal`（不被用户下一条消息杀掉） | `agent.ts` | ✅ |
 | AgentLifecycleManager（全局空闲判定 + 泄漏检测 + worktree TTL 30min） | `lifecycle-manager.ts` | ✅ |
 | isolation-queue.ts（git 操作串行化，共享队列） | `isolation-queue.ts` | ✅ |
+| 隔离层鲁棒性修复（merge 降级提取 diff、discard 对已删目录返回 Ok、force_purge 命令、discard 不跳过 clear_isolation、status 检查磁盘、TS catch 块 diff 保全） | `agent_isolation.rs`、`commands/isolation.rs`、`rpc.rs`、`merge.ts` | ✅ |
 
 ### Phase 2：持久化与崩溃恢复
 

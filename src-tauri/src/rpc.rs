@@ -483,7 +483,7 @@ pub(crate) async fn rpc(
         "credential_clear" => ok_unit(commands::identity::credential_clear()),
 
         // ═══════════════════════════════════════════════════════
-        // Agent Isolation (6 commands)
+        // Agent Isolation (7 commands)
         // ═══════════════════════════════════════════════════════
         "agent_isolation_create" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_create")?;
@@ -506,6 +506,10 @@ pub(crate) async fn rpc(
         }
         "agent_isolation_prune" => {
             commands::isolation::agent_isolation_prune(state)
+        }
+        "agent_isolation_force_purge" => {
+            let agent_id = req_str(&params, "agent_id", "agent_isolation_force_purge")?;
+            commands::isolation::agent_isolation_force_purge(agent_id, state)
         }
 
         // ═══════════════════════════════════════════════════════
