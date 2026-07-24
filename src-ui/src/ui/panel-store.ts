@@ -152,6 +152,11 @@ export function getPanelStore(storeId?: string): PanelStoreApi {
   return s;
 }
 
+/** Remove a panel's store from the registry. */
+export function disposePanelStore(storeId: string): void {
+  _storesMap().delete(storeId);
+}
+
 // ── Non-reactive accessors ──
 
 function _store(storeId?: string) {

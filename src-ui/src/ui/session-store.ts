@@ -77,6 +77,11 @@ export function getSessionStore(storeId?: string): SessionStoreApi {
   return s;
 }
 
+/** Remove a panel's session store from the registry. */
+export function disposeSessionStore(storeId: string): void {
+  _storesMap().delete(storeId);
+}
+
 // ── Non-reactive accessors ──
 
 function _store(storeId?: string) {

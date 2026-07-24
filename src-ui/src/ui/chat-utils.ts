@@ -6,7 +6,6 @@
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import type { AgentEvent } from '../agent/agent-types';
 import { iconHtml } from './icons';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -150,21 +149,6 @@ export function computeSimpleDiff(
     }
   }
   return result;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// computeCostStr
-// ═══════════════════════════════════════════════════════════════════
-
-export function computeCostStr(pricing: AgentEvent['pricing'], usage: AgentEvent['usage']): string {
-  if (!pricing || !usage?.total_tokens) return '';
-  const cost =
-    ((usage.cache_hit_tokens || 0) * pricing.cache_hit +
-      (usage.cache_miss_tokens || 0) * pricing.input +
-      (usage.completion_tokens || 0) * pricing.output) /
-    1_000_000;
-  if (cost < 0.001) return '';
-  return `${pricing.currency}${cost.toFixed(cost < 0.01 ? 4 : 3)}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════

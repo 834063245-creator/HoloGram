@@ -19,9 +19,13 @@ export function nextMsgId(storeId?: string): MessageId {
   return `m${id}`;
 }
 
-/** Resets the global message id counter (for test isolation or /clear). */
-export function resetMsgIdCounter(storeId?: string): void {
-  getChatStore(storeId).sess.setState({ msgIdSeq: 0 });
+/** Resets the message id counter for a given store.
+ *  NOTE: This is now a no-op to prevent cross-session ID collisions.
+ *  The counter monotonically increases, ensuring globally unique IDs.
+ *  Previously, resetting caused new sessions to restart from m1,
+ *  colliding with existing sessions and misrouting streaming events. */
+export function resetMsgIdCounter(_storeId?: string): void {
+  // Intentionally empty — see note above.
 }
 
 // ── Attachments ──────────────────────────────────────────

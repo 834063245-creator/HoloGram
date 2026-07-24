@@ -247,7 +247,16 @@ function _streamingBump(ctx: StreamContext): void {
     ctx.setSessionMessages(target.sessionId, [...target.messages]);
     ctx.bumpSessionMessages(target.sessionId);
   } else {
-    bumpChat(ctx.storeId);
+    // ponytail: fallback — bump the active session's store (React subscribes to
+    // per-session stores, not the panel-level msg store that bumpChat targets).
+    const sessStore = getChatStore(ctx.storeId).sess;
+    const { sessions, activeIdx } = sessStore.getState();
+    const activeSid = sessions[activeIdx]?.id;
+    if (activeSid != null) {
+      ctx.bumpSessionMessages(activeSid);
+    } else {
+      bumpChat(ctx.storeId);
+    }
   }
 }
 

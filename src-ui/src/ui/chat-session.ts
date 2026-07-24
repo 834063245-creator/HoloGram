@@ -410,15 +410,17 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
 // reinit) should call saveActiveSession directly.
 // ═══════════════════════════════════════════════════════════════
 
-let _autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const _autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const AUTO_SAVE_DELAY_MS = 500;
 
 export function scheduleAutoSave(ctx: SessionContext, projectPath: string): void {
-  if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
-  _autoSaveTimer = setTimeout(() => {
-    _autoSaveTimer = null;
+  const existing = _autoSaveTimers.get(ctx.storeId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    _autoSaveTimers.delete(ctx.storeId);
     saveActiveSession(ctx, projectPath).catch(() => {});
   }, AUTO_SAVE_DELAY_MS);
+  _autoSaveTimers.set(ctx.storeId, timer);
 }
 
 /** Restore the last active session on project open.
@@ -1000,7 +1002,7 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     });
     if (filePath) {
-      await rpc('write_file_content', { path: filePath, content: md });
+      await rpc('write_file_content', { filePath, content: md });
       ctx.addNotice(`会话已导出: ${filePath}`, 'info');
     }
   } catch {

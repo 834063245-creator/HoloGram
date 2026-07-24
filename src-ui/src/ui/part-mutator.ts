@@ -101,7 +101,10 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
           // REPLACE (not append) — ToolProgress already accumulated incremental
           // chunks, and ToolResult sends the authoritative full result.
           if (!ev.tool.err) tr.output = ev.tool.output;
-          if (ev.tool.err) tr.err = ev.tool.err;
+          if (ev.tool.err) {
+            tr.err = ev.tool.err;
+            tr.output = undefined;
+          }
           tr.truncated = ev.tool.truncated;
           return true;
         }

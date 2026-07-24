@@ -78,6 +78,17 @@ export function getMessagesStore(storeId?: string): MessagesStoreApi {
   return s;
 }
 
+/** Remove all stores whose key starts with the given prefix (e.g. a panelId).
+ *  Also removes per-session stores (panelId:sessionId). */
+export function disposeMessagesStores(storeId: string): void {
+  const stores = _storesMap();
+  for (const key of Array.from(stores.keys())) {
+    if (key === storeId || key.startsWith(`${storeId}:`)) {
+      stores.delete(key);
+    }
+  }
+}
+
 export const useMessagesStore = getMessagesStore();
 
 // ── Non-reactive accessors ──

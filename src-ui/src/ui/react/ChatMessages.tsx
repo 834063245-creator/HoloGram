@@ -14,6 +14,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
 import { iconSvg } from '../icons';
+import { computeSimpleDiff, formatToolResult } from '../chat-utils';
 import type {
   AssistantMessage,
   AssistantPart,
@@ -70,59 +71,49 @@ function svgIcon(name: string, size: number = 12): string {
 }
 
 // ── Node name linkification ──
+// ReactMarkdown renders `code` as <code> elements. We iterate over inline
+// <code> elements (not block <pre><code>) and wrap them as clickable links.
 
 function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) => void): void {
   if (!onNavigate) return;
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-  const replacements: Array<{ node: Text; frag: DocumentFragment }> = [];
-  let node: Text | null;
-  while ((node = walker.nextNode() as Text | null)) {
-    const text = node.textContent || '';
-    if (!text.includes('`')) continue;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    const re = /`([^`]+)`/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-      const span = document.createElement('span');
-      span.className = 'node-link';
-      span.textContent = m[1];
-      span.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onNavigate(m![1] as string);
-      });
-      frag.appendChild(span);
-      last = m.index + m[0].length;
-    }
-    if (last > 0) {
-      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-      replacements.push({ node, frag });
-    }
-  }
-  for (const { node: n, frag } of replacements) {
-    n.parentNode?.replaceChild(frag, n);
-  }
+  const codeEls = container.querySelectorAll('code:not(pre code)');
+  codeEls.forEach((el) => {
+    if (el.querySelector('.node-link')) return; // already linkified
+    const name = el.textContent || '';
+    if (!name) return;
+    const span = document.createElement('span');
+    span.className = 'node-link';
+    span.textContent = name;
+    span.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onNavigate(name);
+    });
+    el.replaceWith(span);
+  });
 }
 
 // ── react-markdown code component (hljs highlighting) ──
 
 function MarkdownCode({ className, children }: { className?: string; children?: React.ReactNode }) {
-  const ref = useCallback((el: HTMLDivElement | null) => {
-    if (!el) return;
-    el.querySelectorAll('pre code').forEach((block) => {
+  const ref = useRef<HTMLDivElement>(null);
+
+  const text = String(children ?? '').replace(/\n$/, '');
+  const match = /language-([\w-]+)/.exec(className ?? '');
+  const _lang = match?.[1];
+  const isBlock = match !== null || text.includes('\n');
+
+  // Re-highlight on every render — hljs skips already-highlighted elements.
+  // This ensures new code blocks appended during streaming get highlighted.
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.querySelectorAll('pre code').forEach((block) => {
       try {
         hljs.highlightElement(block as HTMLElement);
       } catch {
         /* noop */
       }
     });
-  }, []);
-
-  const text = String(children ?? '').replace(/\n$/, '');
-  const match = /language-([\w-]+)/.exec(className ?? '');
-  const _lang = match?.[1];
-  const isBlock = match !== null || text.includes('\n');
+  }, [text]);
 
   if (isBlock) {
     return (
@@ -146,6 +137,9 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
 
 function splitStreamingBlocks(text: string): { completed: string; tail: string } {
   if (!text) return { completed: '', tail: '' };
+
+  // Normalize Windows-style line endings so \r\n\r\n is treated as \n\n
+  text = text.replace(/\r\n/g, '\n');
 
   // Find all ``` positions (crude but in practice ``` rarely appears in prose)
   const fences: number[] = [];
@@ -320,7 +314,7 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     );
   }
 
-  // edit_file — show the diff (old → new)
+  // edit_file — show the real diff (old → new) using LCS
   if (name === 'edit_file' && (typeof args.oldString === 'string' || typeof args.newString === 'string')) {
     const oldStr = (args.oldString as string) || '';
     const newStr = (args.newString as string) || '';
@@ -328,10 +322,10 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     const maxLen = 400;
     const oldPreview = oldStr.length > maxLen ? oldStr.slice(0, maxLen) + '…' : oldStr;
     const newPreview = newStr.length > maxLen ? newStr.slice(0, maxLen) + '…' : newStr;
+    const diffLines = computeSimpleDiff(oldPreview.split('\n'), newPreview.split('\n'));
     const lines: string[] = [];
     if (filePath) lines.push(`// ${filePath}`);
-    for (const l of oldPreview.split('\n')) lines.push(`- ${l}`);
-    for (const l of newPreview.split('\n')) lines.push(`+ ${l}`);
+    for (const d of diffLines) lines.push(`${d.prefix} ${d.text}`);
     return (
       <div className="msg-tool-result">
         <pre><code>{lines.join('\n')}</code></pre>
@@ -387,9 +381,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
       </div>
       {isExpanded && part.output && (
-        <div className="msg-tool-result">
-          <pre><code>{part.output}</code></pre>
-        </div>
+        <div className="msg-tool-result" dangerouslySetInnerHTML={{ __html: formatToolResult(part.name, part.output, part.truncated ?? false, part.args) }} />
       )}
       {isExpanded && !part.output && part.status === 'running' && (
         renderToolContentPreview(part) || (
@@ -606,7 +598,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
       }
     }
     return items;
-  }, [expandedTools, toggleTool, part.parts.length, streaming, part.parts]);
+  }, [expandedTools, toggleTool, part.parts.length, streaming, part.parts, part.version]);
 
   return (
     <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
@@ -682,6 +674,10 @@ const UserBubble: React.FC<{
 ));
 
 // ── Assistant message ──
+// React.memo with custom comparator: always re-render streaming messages
+// (in-place mutation means reference doesn't change, so default memo would
+// block needed updates). Non-streaming messages skip re-render when their
+// reference and expandedTools haven't changed.
 
 const AssistantBubble: React.FC<{
   msg: AssistantMessage;
@@ -692,16 +688,17 @@ const AssistantBubble: React.FC<{
   onCopy?: () => void;
   onRetry?: () => void;
   onNavigateToNode?: (name: string) => void;
-}> = ({
-  msg,
-  expandedTools,
-  onToggleTool,
-  onExpandAllTools,
-  onCollapseAllTools,
-  onCopy,
-  onRetry,
-  onNavigateToNode,
-}) => {
+}> = React.memo(
+  ({
+    msg,
+    expandedTools,
+    onToggleTool,
+    onExpandAllTools,
+    onCollapseAllTools,
+    onCopy,
+    onRetry,
+    onNavigateToNode,
+  }) => {
   const streaming = msg.status === 'streaming';
 
   // Count reasoning blocks so we know which one is "last" (still streaming)
@@ -841,7 +838,12 @@ const AssistantBubble: React.FC<{
       </div>
     </div>
   );
-};
+}, (prev, next) => {
+  // Always re-render streaming messages (in-place mutation means ref doesn't change)
+  if (prev.msg.status === 'streaming' || next.msg.status === 'streaming') return false;
+  // Skip re-render for non-streaming messages if msg ref and expandedTools are unchanged
+  return prev.msg === next.msg && prev.expandedTools === next.expandedTools;
+});
 
 // ── Notice ──
 
@@ -916,7 +918,7 @@ export const ChatMessagesApp: React.FC<{
         }
       });
     },
-    [scrollEl?.style, messages.length, messages, scrollEl?.scrollHeight, scrollEl] as const,
+    [scrollEl?.style, messages.length, messages, scrollEl] as const,
   ); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll during streaming — MutationObserver catches incremental DOM

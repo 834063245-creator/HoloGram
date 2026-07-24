@@ -20,10 +20,14 @@ import {
   type InputStoreApi,
 } from './input-store';
 import {
+  disposeInputStore,
+} from './input-store';
+import {
   getExpandedReasoningSet as _msg_expandedReasoning,
   getUserScrolledUp as _msg_scrolledUp,
   getStreamingAssistantId as _msg_streamingId,
   bumpMessages,
+  disposeMessagesStores,
   getMessagesStore,
   type MessagesStoreApi,
 } from './messages-store';
@@ -39,6 +43,7 @@ import {
   isHistoryOpen,
   type PanelStoreApi,
 } from './panel-store';
+import { disposePanelStore } from './panel-store';
 import {
   getActiveIdx,
   getActiveSessionId,
@@ -50,6 +55,7 @@ import {
   nextMsgId,
   type SessionStoreApi,
 } from './session-store';
+import { disposeSessionStore } from './session-store';
 
 // ── Re-export types ──
 
@@ -140,3 +146,14 @@ export {
   isHistoryOpen,
   nextMsgId,
 };
+
+// ── Panel disposal — call when a panel is closed to prevent memory leaks ──
+
+/** Dispose all stores associated with a panel (messages, session, panel, input).
+ *  Also removes per-session message stores (panelId:sessionId). */
+export function disposePanelStores(storeId: string): void {
+  disposeMessagesStores(storeId);
+  disposeSessionStore(storeId);
+  disposePanelStore(storeId);
+  disposeInputStore(storeId);
+}

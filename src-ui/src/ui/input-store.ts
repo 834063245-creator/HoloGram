@@ -79,6 +79,11 @@ export function getInputStore(storeId?: string): InputStoreApi {
   return s;
 }
 
+/** Remove a panel's input store from the registry. */
+export function disposeInputStore(storeId: string): void {
+  _storesMap().delete(storeId);
+}
+
 // ── Non-reactive accessors ──
 
 function _store(storeId?: string) {
