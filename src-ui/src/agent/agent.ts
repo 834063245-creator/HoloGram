@@ -33,6 +33,7 @@ import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry'
 import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
+import type { MessageBus } from './message-bus';
 
 export { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent };
 
@@ -67,6 +68,8 @@ export interface AgentOptions {
   /** UI notification port — progress / tool-done / sub-agent lifecycle.
    *  Injected by the workspace; headless agents get none. */
   ui?: AgentUINotifier;
+  /** 通信总线（可选 — 无则为 headless 无通信能力） */
+  messageBus?: MessageBus;
   // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
 }
 
@@ -179,6 +182,7 @@ export class Agent {
     this.id = opts.agentId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.parentId = opts.parentId ?? null;
     this._execState = opts.execState ?? execState;
+    this._bus = opts.messageBus ?? null;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this._onSessionPersisted = opts.onSessionPersisted;
@@ -355,8 +359,16 @@ export class Agent {
   /** Reference to the sub-agent pool. Set by workspace after construction. */
   private _subAgentPool: import('./coordinator').SubAgentPool | null = null;
 
+  /** Message bus for inter-agent communication. Set by runtime/spawnSubAgent. */
+  private _bus: MessageBus | null = null;
+
   setSubAgentPool(pool: import('./coordinator').SubAgentPool): void {
     this._subAgentPool = pool;
+  }
+
+  /** Wire message bus for inter-agent communication. */
+  setBus(bus: MessageBus): void {
+    this._bus = bus;
   }
 
   /** Cascade abort: stop all sub-agents when the parent is interrupted. */
@@ -432,6 +444,24 @@ export class Agent {
       content: `<system-reminder>${text}</system-reminder>`,
     });
     this._pendingMemoryUpdates = [];
+  }
+
+  /** Inject unread inbox messages as a system-reminder. Non-destructive —
+   *  messages stay in inbox until explicitly acked or replied to. */
+  private _injectInbox(): void {
+    if (!this._bus) return;
+    const msgs = this._bus.peekInbox(this.id);
+    if (msgs.length === 0) return;
+    const formatted = msgs
+      .map(
+        (m) =>
+          `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
+      )
+      .join('\n\n');
+    this.session.push({
+      role: 'user',
+      content: `<system-reminder>\n📬 Agent 消息 (${msgs.length} 条未读):\n${formatted}\n\n可用 agent_reply 工具回复，或 agent_ack 确认已读。\n</system-reminder>`,
+    });
   }
 
   /** Start a fresh conversation — keep system prompt, clear everything else. */
@@ -797,6 +827,9 @@ ${resumeNote}
       } catch {
         // best-effort — don't block the loop if drain fails
       }
+
+      // Inject unread inbox messages (peek — does not consume)
+      this._injectInbox();
 
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
@@ -1656,6 +1689,16 @@ ${subTools
       subAgent.setAgentStore(this.agentStore);
     }
 
+    // Inherit message bus from parent — wire bus + register child
+    if (this._bus) {
+      subAgent.setBus(this._bus);
+      this._bus.register({
+        agentId: subAgent.id,
+        parentId: this.id,
+        depth: this._subagentDepth + 1,
+      });
+    }
+
     let subAgentSucceeded = false;
     let result: { text: string; err?: string };
     try {
@@ -1693,6 +1736,10 @@ ${subTools
       result = { text: '', err: e.message || '子 Agent 执行失败' };
     } finally {
       this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
+      // Unregister sub-agent from bus after completion
+      if (this._bus) {
+        this._bus.unregister(subAgent.id);
+      }
     }
 
     // ── Finalize isolation worktree (serialized — parallel sub-agents must not

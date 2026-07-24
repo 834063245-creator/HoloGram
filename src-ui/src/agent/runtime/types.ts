@@ -18,6 +18,7 @@ import type { SkillRegistry } from '../skills';
 import type { SubAgentPool } from '../coordinator';
 import type { TaskManager } from '../task';
 import type { ToolRegistry } from '../tool';
+import type { MessageBus } from '../message-bus';
 
 // ── Agent 状态 ──
 
@@ -109,6 +110,8 @@ export interface AgentConfig {
   preRunHook?: (input: string) => Promise<string | null>;
   /** 会话持久化回调 */
   onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
+  /** 通信总线（可选 — 无则为 headless 无通信能力） */
+  messageBus?: MessageBus;
 }
 
 // ── Agent 句柄 ──

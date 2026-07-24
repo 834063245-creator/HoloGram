@@ -41,6 +41,8 @@ import { buildGraphSnapshot } from '../hooks';
 import type { SubAgentSpawner } from '../tools/subagent';
 import type { SubAgentPool } from '../coordinator';
 import { ToolRegistry } from '../tool';
+import { MessageBus } from '../message-bus';
+import { createCommunicationTools } from '../tools/communication';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
 import { log } from '../logger';
 import { memoryBundleIngest } from '../memory-bundle-client';
@@ -100,10 +102,17 @@ class AgentHandleImpl implements AgentHandle {
 export class AgentRuntime implements RuntimePort {
   private agents = new Map<string, AgentHandleImpl>();
   private notifier: RuntimeNotifier | null = null;
+  /** 全局 MessageBus 实例 — 构造时创建，所有 agent 共享 */
+  private _bus = new MessageBus();
 
   /** 注入 UI 通知器 — 由 UI 层在启动时设置 */
   setNotifier(n: RuntimeNotifier): void {
     this.notifier = n;
+  }
+
+  /** 获取全局 MessageBus 实例 */
+  getBus(): MessageBus {
+    return this._bus;
   }
 
   /** 创建 Agent — 接收完整配置，Runtime 不做 UI 依赖的事 */
@@ -157,6 +166,7 @@ export class AgentRuntime implements RuntimePort {
       contextWindow: config.contextWindow ?? 0,
       maxTokens: config.maxTokens ?? 0,
       ui: this._wrapNotifier(agentId),
+      messageBus: this._bus,
     });
 
     // 5. Wire isolation
@@ -172,6 +182,18 @@ export class AgentRuntime implements RuntimePort {
     if (config.goalManager) newAgent.setGoalManager(config.goalManager);
     newAgent.applyAutoTuneConfig().catch(() => {});
     if (config.subAgentPool) newAgent.setSubAgentPool(config.subAgentPool);
+
+    // 7b. Wire message bus + register communication tools
+    newAgent.setBus(this._bus);
+    this._bus.register({
+      agentId,
+      parentId: config.parentId ?? null,
+      depth: config.subagentDepth ?? 0,
+    });
+    // Register communication tools on the agent's registry copy
+    for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
+      effR.register(tool);
+    }
 
     // 8. Register compaction tools on the agent's registry copy
     registerCompactionTools(newAgent, r);
@@ -217,6 +239,7 @@ export class AgentRuntime implements RuntimePort {
     const handle = this.agents.get(id);
     if (!handle) return;
     handle._getAgent().saveState('done').catch(() => {});
+    this._bus.unregister(id);
     this.agents.delete(id);
     log.info('runtime', `agent destroyed: ${id}`);
   }
