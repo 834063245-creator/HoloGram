@@ -95,11 +95,11 @@
 - 拓扑扩展（兄弟 agent 直接通信、DAG 拓扑）
 - 共享发现区
 
-### Phase 5：优化（未开始）
+### Phase 5：高级能力（未开始）
 
-- 任务自动分解
-- Agent 能力路由
-- 结构化冲突解决
+- 订阅式协作（pub/sub topic）
+- 消息转换/过滤管道
+- 跨进程传输（IPC / WebSocket）
 
 ## 文件清单
 
@@ -174,3 +174,4 @@ cfac45a feat(agent): add multi-agent communication layer (Phase 1)
 3. ~~Phase 3：系统提示词 + UI~~ ✅ 已完成
 4. 实际运行验证
 5. Phase 4：协作能力
+6. Phase 5：高级能力
