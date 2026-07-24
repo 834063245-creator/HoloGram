@@ -448,7 +448,7 @@ const SubReasoningBlock: React.FC<{
 
   // Sync open state when a NEW part becomes the last (streaming progress)
   useEffect(() => {
-    if (isLast) setOpen(true);
+    setOpen(isLast);
   }, [isLast]);
 
   const displayText = open ? (isLast ? truncateReasoning(part.text) : part.text) : '';
@@ -481,7 +481,7 @@ const SubReasoningBlock: React.FC<{
 // with any comparator on the same reference would always bail out, blocking
 // streaming re-renders entirely. Performance is handled by useMemo on renderedParts
 // and rAF-throttled MutationObserver scroll in subagent-sink.
-const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
+const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: string) => void }> = ({ part, onNavigateToNode }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [expanded, setExpanded] = useState(part.status === 'running');
@@ -540,26 +540,26 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
     while (i < part.parts.length) {
       const p = part.parts[i];
       if (p.type === 'tool') {
-        const run: typeof part.parts = [];
+        const run: ToolCallPart[] = [];
         while (i < part.parts.length && part.parts[i].type === 'tool') {
-          run.push(part.parts[i]);
+          run.push(part.parts[i] as ToolCallPart);
           i++;
         }
-        const tools = run as any[];
-        const doneTools = tools.filter((t: any) => t.status === 'done' || t.status === 'error');
+        const tools = run;
+        const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
         const allDone = doneTools.length === tools.length && tools.length >= 3;
-        const groupExpanded = tools.some((t: any) => expandedTools.has(t.toolId));
+        const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
         const collapsed = allDone && !groupExpanded;
         items.push(
           <div key={`tool-group-${i}`} className="msg-tool-wrapper">
             {collapsed ? (
               <ToolSummary
-                tools={doneTools as any}
+                tools={doneTools}
                 expandedTools={expandedTools}
                 onExpandAll={() => {
                   setExpandedTools((prev) => {
                     const n = new Set(prev);
-                    for (const t of tools) n.add((t as any).toolId);
+                    for (const t of tools) n.add(t.toolId);
                     return n;
                   });
                 }}
@@ -569,25 +569,25 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
               <>
                 {allDone && (
                   <ToolSummary
-                    tools={doneTools as any}
+                    tools={doneTools}
                     expandedTools={expandedTools}
                     onExpandAll={() => {
                       setExpandedTools((prev) => {
                         const n = new Set(prev);
-                        for (const t of tools) n.add((t as any).toolId);
+                        for (const t of tools) n.add(t.toolId);
                         return n;
                       });
                     }}
                     onCollapseAll={() => {
                       setExpandedTools((prev) => {
                         const n = new Set(prev);
-                        for (const t of tools) n.delete((t as any).toolId);
+                        for (const t of tools) n.delete(t.toolId);
                         return n;
                       });
                     }}
                   />
                 )}
-                {tools.map((t: any) => (
+                {tools.map((t) => (
                   <ToolCard
                     key={t.toolId}
                     part={t}
@@ -600,17 +600,18 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart }> = ({ part }) => {
           </div>,
         );
       } else if (p.type === 'reasoning') {
-        items.push(<SubReasoningBlock key={i} part={p as any} parts={part.parts} index={i} />);
+        items.push(<SubReasoningBlock key={i} part={p} parts={part.parts} index={i} />);
         i++;
       } else if (p.type === 'text') {
-        items.push(<MarkdownContent key={i} text={(p as any).text} streaming={streaming && !(p as any).finalised} />);
+        const tp = p as TextPart;
+        items.push(<MarkdownContent key={i} text={tp.text} streaming={streaming && !tp.finalised} onNavigateToNode={onNavigateToNode} />);
         i++;
       } else {
         i++;
       }
     }
     return items;
-  }, [expandedTools, toggleTool, part.parts.length, streaming, part.parts, part.version]);
+  }, [expandedTools, toggleTool, part.parts.length, streaming, part.parts, part.version, onNavigateToNode]);
 
   return (
     <div className={`msg-sub-agent${expanded ? ' open' : ''}`}>
@@ -824,7 +825,7 @@ const AssistantBubble: React.FC<{
           }
 
           if (g.kind === 'subagent') {
-            return <SubAgentBlock key={gi} part={g.part} />;
+            return <SubAgentBlock key={gi} part={g.part} onNavigateToNode={onNavigateToNode} />;
           }
 
           return null;
