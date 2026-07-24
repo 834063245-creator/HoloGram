@@ -68,9 +68,23 @@ impl WorkspaceHandle {
     }
 
     /// Deactivate this workspace: stop the file watcher and clear transient state.
+    /// The watcher thread is given 2s to exit gracefully; after that it is detached.
     pub fn deactivate(&mut self) {
         self.watcher_running.store(false, Ordering::SeqCst);
-        self.watcher_thread.take();
+        if let Some(handle) = self.watcher_thread.take() {
+            // Poll for up to 2s for the thread to exit on its own.
+            // The watcher checks `running` every 1s, so 2s is enough for one poll cycle.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                if handle.is_finished() {
+                    let _ = handle.join();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            // If still not finished after 2s, the handle is dropped (detached).
+            // The thread will exit on its next `running` check.
+        }
         if let Ok(mut files) = self.changed_files.lock() {
             files.clear();
         }

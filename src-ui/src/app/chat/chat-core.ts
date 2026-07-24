@@ -582,6 +582,10 @@ export class ChatCore {
   scheduleAutoSave(projectPath: string): void {
     Session.scheduleAutoSave(this._sessionCtx(), projectPath);
   }
+  /** Incrementally persist the last message to backend NDJSON (fire-and-forget). */
+  appendLastMessage(projectPath: string): void {
+    Session.appendLastMessage(this._sessionCtx(), projectPath);
+  }
   async autoRestoreLastSession(projectPath: string): Promise<void> {
     return Session.autoRestoreLastSession(this._sessionCtx(), projectPath);
   }

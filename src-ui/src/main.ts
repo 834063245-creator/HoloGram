@@ -33,6 +33,8 @@ import { GraphInteraction } from './ui/graph-interaction';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
 import { isSamePath, Workspace } from './workspace';
+import { WorkspaceStateMachine } from './lifecycle/state-machine';
+import { withTimeout } from './lifecycle/timeout';
 
 // Lazy FileViewer — avoids pulling Monaco (~5MB) into initial bundle
 let _FileViewer: any = null;
@@ -114,9 +116,9 @@ const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButton
 let workspace: Workspace | null = null;
 const starGraph: StarGraph = new StarGraph(graphEl);
 let agentViz: AgentVisualizer | null = null;
-// Reentry guard for switchWorkspace — prevents stacked concurrent switches
-// when deactivate() stalls on watcher teardown.
-let _switching = false;
+// Unified state machine — replaces ad-hoc _switching boolean.
+// Guards all workspace transitions (open, deactivate, switch, reanalyze).
+const wsMachine = new WorkspaceStateMachine();
 
 // Panel singletons（dock 面板已收编进 App 树 — 开合/数据走 ui/dock-store）
 let chatPanel: ChatCore;
@@ -138,28 +140,42 @@ async function pickFolder(): Promise<string | null> {
 // ═══════════════════════════════════════════════════════════════
 
 async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: any }): Promise<void> {
-  if (_switching) {
+  if (wsMachine.isBusy) {
     pushStatus('正在切换工作区，请稍候…');
     return;
   }
-  _switching = true;
+  wsMachine.transition('switching');
   try {
     const folder = path || (await pickFolder());
-    if (!folder) return;
+    if (!folder) {
+      wsMachine.forceState('idle');
+      return;
+    }
 
     if (workspace?.active && isSamePath(workspace.path, folder)) {
       pushStatus('已在当前工作区');
+      wsMachine.forceState(workspace?._health === 'degraded' ? 'degraded' : 'active');
       return;
     }
 
     // Disable the open button BEFORE the possibly-slow deactivate() await.
-    // Otherwise the button stays clickable while the watcher is being torn
-    // down and repeated clicks stack concurrent switches.
     setLoading(true, folder);
 
-    // Deactivate old
+    // Deactivate old workspace — with 5s timeout to prevent stuck switches
     if (workspace) {
-      await workspace.deactivate(chatPanel);
+      try {
+        await withTimeout(
+          workspace.deactivate(chatPanel),
+          5000,
+          () => {
+            console.warn('[switchWorkspace] deactivate timed out, forcing clear');
+            workspace?.forceClearState();
+          },
+        );
+      } catch (e) {
+        console.error('[switchWorkspace] deactivate error:', e);
+        workspace?.forceClearState();
+      }
       workspace = null;
     }
 
@@ -182,12 +198,20 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
       console.error('[switchWorkspace] Workspace.open threw:', err);
       pushStatus(`分析失败: ${err}`);
       setLoading(false);
+      wsMachine.forceState('idle');
       throw err;
     }
     ws.onStatusChange = onStatusChange;
     ws.onLoadingChange = onLoadingChange;
 
+    // Wire analysis failure callback for degraded mode
+    ws.onAnalysisFailed = (err) => {
+      console.warn('[switchWorkspace] background analysis failed:', err);
+      pushStatus('⚠️ 后台分析未完成 — 缓存图谱可用，点击重新分析重试');
+    };
+
     workspace = ws;
+    wsMachine.transition(ws._health === 'degraded' ? 'degraded' : 'active');
     await notifyAllPanels(ws);
 
     const nodeCount = Array.isArray(ws.graphData.nodes)
@@ -216,7 +240,10 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     ws.runCheck();
     await rpc('workspace_start_watcher').catch(() => {});
   } finally {
-    _switching = false;
+    // Ensure state machine is not stuck in 'switching'
+    if (wsMachine.state === 'switching') {
+      wsMachine.forceState(workspace?._health === 'degraded' ? 'degraded' : (workspace ? 'active' : 'idle'));
+    }
   }
 }
 
@@ -314,7 +341,7 @@ async function toggleDiff(): Promise<void> {
 // ── Re-analyze — 原地重分析，不切换工作区 ──
 
 async function reanalyze(): Promise<void> {
-  if (_switching) {
+  if (wsMachine.isBusy) {
     pushStatus('正在切换工作区，请稍候…');
     return;
   }
@@ -587,7 +614,11 @@ async function init(): Promise<void> {
 
   // ── Bus notifications (pure notification — sender doesn't care who listens) ──
   bus.on('chat:turn-done', () => {
-    if (workspace?.path) chatPanel.scheduleAutoSave(workspace.path);
+    if (workspace?.path) {
+      // Incremental persistence — append last message to backend NDJSON
+      chatPanel.appendLastMessage(workspace.path);
+      chatPanel.scheduleAutoSave(workspace.path);
+    }
   });
 
   // ── 动作注册（CommandBar / 命令面板 / 全局快捷键统一入口）──
@@ -727,10 +758,16 @@ async function init(): Promise<void> {
   // Save sessions on close — scheduleAutoSave is sync (sets timeout).
   // LocalStorage write inside saveActiveSession is sync, so it completes
   // before the window closes even if the RPC disk write doesn't.
+  // Also stop sub-agents synchronously (AbortController.abort is sync).
   window.addEventListener('beforeunload', () => {
     if (workspace?.path) {
       try {
         chatPanel.scheduleAutoSave(workspace.path);
+      } catch {
+        /* silent */
+      }
+      try {
+        workspace.subAgentPool.stopAll();
       } catch {
         /* silent */
       }

@@ -305,6 +305,14 @@ pub async fn lsp_stop(session_id: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Stop all LSP servers — called by ResourceLedger during shutdown.
+pub fn stop_all() {
+    let mut map = SERVERS.lock().unwrap();
+    for (_, mut server) in map.drain() {
+        server.child.kill().ok();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::detect_lsp;

@@ -141,3 +141,10 @@ pub async fn pty_kill(session_id: u32) -> Result<(), String> {
     map_ref.lock().unwrap().remove(&session_id);
     Ok(())
 }
+
+/// Kill all PTY sessions — called by ResourceLedger during shutdown.
+pub fn kill_all() {
+    let map_ref = pty_sessions();
+    let mut map = map_ref.lock().unwrap();
+    map.clear(); // PtySession._child (ChildKiller) kills on drop
+}

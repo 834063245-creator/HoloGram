@@ -565,6 +565,44 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
+        // Session persistence (2 commands)
+        // ═══════════════════════════════════════════════════════
+        "session_append" => {
+            let path = req_str(&params, "path", "session_append")?;
+            let session_id = req_str(&params, "session_id", "session_append")?;
+            let message = params.get("message")
+                .ok_or("session_append: missing 'message'")?;
+            let file = std::path::Path::new(&path)
+                .join(".hologram/sessions")
+                .join(format!("{session_id}.ndjson"));
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("session_append: cannot create dir: {e}"))?;
+            }
+            let line = serde_json::to_string(message)
+                .map_err(|e| format!("session_append: serialize: {e}"))?;
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file)
+                .map_err(|e| format!("session_append: open: {e}"))?;
+            f.write_all(line.as_bytes())
+                .map_err(|e| format!("session_append: write: {e}"))?;
+            f.write_all(b"\n")
+                .map_err(|e| format!("session_append: write: {e}"))?;
+            f.flush()
+                .map_err(|e| format!("session_append: flush: {e}"))?;
+            ok_unit(Ok(()))
+        }
+        "session_flush" => {
+            // Lightweight no-op — session_append already flushes on every write.
+            // This endpoint exists so beforeunload can fire-and-forget a final flush
+            // without blocking, and as a future extension point for batched writes.
+            ok_unit(Ok(()))
+        }
+
+        // ═══════════════════════════════════════════════════════
         // Constraints (2 commands)
         // ═══════════════════════════════════════════════════════
         "read_constraints" => {

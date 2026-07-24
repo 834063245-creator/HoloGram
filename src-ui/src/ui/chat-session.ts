@@ -423,6 +423,32 @@ export function scheduleAutoSave(ctx: SessionContext, projectPath: string): void
   _autoSaveTimers.set(ctx.storeId, timer);
 }
 
+/** Incrementally append the last user/assistant message to backend NDJSON.
+ *  Called on chat:turn-done — ensures most messages are already on disk
+ *  before beforeunload fires, reducing reliance on the sync localStorage save. */
+export async function appendLastMessage(ctx: SessionContext, projectPath: string): Promise<void> {
+  const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
+  if (!projectPath || activeIdx < 0) return;
+  const sMeta = sessions[activeIdx];
+  if (!sMeta) return;
+  const agent = agentSessionState.getAgent(ctx.storeId, sMeta.id);
+  if (!agent) return;
+  const messages = agent.getSession();
+  // Find the last non-system message
+  const last = [...messages].reverse().find((m) => m.role !== 'system');
+  if (!last || !last.content) return;
+  if (isInternalMessage(last.content)) return;
+  try {
+    await rpc('session_append', {
+      path: projectPath,
+      session_id: String(sMeta.id),
+      message: { role: last.role, content: typeof last.content === 'string' ? last.content : JSON.stringify(last.content) },
+    });
+  } catch {
+    /* best-effort — saveActiveSession is the fallback */
+  }
+}
+
 /** Restore the last active session on project open.
  *  Tries file first, falls back to localStorage (survives app crash / force-close). */
 export async function autoRestoreLastSession(ctx: SessionContext, projectPath: string): Promise<void> {

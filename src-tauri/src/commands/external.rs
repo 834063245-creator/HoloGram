@@ -5,12 +5,19 @@
 use std::sync::{Arc, Mutex};
 use std::io::Read;
 use std::net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
 use crate::mcp_manager::McpManager;
 use crate::unity_manager::UnityManager;
 
 pub(crate) static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(McpManager::new())));
+
+/// Retained Child handle for memory-bundle.exe — killed by ResourceLedger on shutdown.
+pub(crate) static MEMORY_BUNDLE_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+/// Shutdown flag for the Unity event TCP server thread.
+pub(crate) static UNITY_EVENT_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 pub(crate) async fn start_mcp_server(project_root: String) -> Result<String, String> {
@@ -27,6 +34,7 @@ pub(crate) async fn stop_mcp_server() -> Result<String, String> {
 }
 
 pub(crate) fn start_unity_event_server(app: tauri::AppHandle) {
+    UNITY_EVENT_SHUTDOWN.store(false, Ordering::SeqCst);
     std::thread::spawn(move || {
         let listener = match StdTcpListener::bind("127.0.0.1:9776") {
             Ok(l) => l,
@@ -35,14 +43,33 @@ pub(crate) fn start_unity_event_server(app: tauri::AppHandle) {
                 return;
             }
         };
+        // Non-blocking so we can poll the shutdown flag
+        let _ = listener.set_nonblocking(true);
         println!("[unity-events] listening on 127.0.0.1:9776");
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(mut s) => {
+        loop {
+            if UNITY_EVENT_SHUTDOWN.load(Ordering::SeqCst) {
+                eprintln!("[unity-events] shutdown flag set, exiting");
+                break;
+            }
+            match listener.accept() {
+                Ok((mut s, _)) => {
+                    // Accepted stream may inherit non-blocking mode from listener
+                    // (platform-dependent). Set back to blocking for the per-connection
+                    // handler which uses blocking read().
+                    let _ = s.set_nonblocking(false);
                     handle_unity_connection(&mut s, &app);
                 }
-                Err(e) => eprintln!("[unity-events] accept error: {}", e),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(e) => {
+                    if UNITY_EVENT_SHUTDOWN.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    eprintln!("[unity-events] accept error: {}", e);
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
             }
         }
     });

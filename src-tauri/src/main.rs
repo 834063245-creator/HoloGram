@@ -28,9 +28,11 @@ mod utils;
 mod commands;
 mod confined_fs;
 mod rpc;
+mod lifecycle;
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use tauri::Manager;
 
 // Re-export WorkspaceState so commands can reference it as crate::WorkspaceState
 pub(crate) type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
@@ -71,23 +73,23 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(workspace_state)
-        .on_window_event(|_window, event| {
+        .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Cleanup: kill background jobs
-                if let Ok(mut jobs) = utils::BG_JOBS.try_lock() {
-                    for (_, job) in jobs.iter_mut() {
-                        let _ = job.child.kill();
-                        let _ = job.child.wait();
+                // Phase 1: Drain — gracefully stop all services via ResourceLedger
+                let app = window.app_handle();
+                if let Some(ledger) = app.try_state::<std::sync::Mutex<lifecycle::ResourceLedger>>() {
+                    let ledger = ledger.lock().unwrap();
+                    ledger.shutdown_all(std::time::Duration::from_secs(2));
+                }
+                // Also deactivate the workspace handle (stops watcher thread)
+                if let Some(ws_state) = app.try_state::<WorkspaceState>() {
+                    if let Ok(mut guard) = ws_state.lock() {
+                        if let Some(handle) = guard.as_mut() {
+                            handle.deactivate();
+                        }
                     }
-                    jobs.clear();
                 }
-                // Stop MCP server
-                if let Ok(mut mgr) = commands::external::MCP_MANAGER.try_lock() {
-                    mgr.stop();
-                }
-                // Stop Unity
-                let _ = commands::external::UNITY_MANAGER.stop();
-                // Hard exit to ensure no zombie processes
+                // Phase 2: Purge — hard exit ensures no zombie processes
                 std::process::exit(0);
             }
         })
@@ -117,10 +119,27 @@ fn main() {
                             .stderr(std::process::Stdio::null());
                         #[cfg(windows)]
                         { mc.creation_flags(crate::utils::NO_WINDOW); }
-                        mc.spawn().ok();
+                        // Retain Child handle for ResourceLedger to kill on shutdown
+                        if let Ok(child) = mc.spawn() {
+                            *commands::external::MEMORY_BUNDLE_CHILD.lock().unwrap() = Some(child);
+                        }
                     }
                 }
             }
+
+            // Register all services with the ResourceLedger
+            let mut ledger = lifecycle::ResourceLedger::new();
+            ledger.register(Box::new(lifecycle::UnityEventService));
+            ledger.register(Box::new(lifecycle::BgJobsService));
+            ledger.register(Box::new(lifecycle::McpService));
+            ledger.register(Box::new(lifecycle::UnityService));
+            ledger.register(Box::new(lifecycle::PtyService));
+            ledger.register(Box::new(lifecycle::LspService));
+            ledger.register(Box::new(lifecycle::AuraService));
+            ledger.register(Box::new(lifecycle::MemoryBundleService));
+            ledger.register(Box::new(lifecycle::LoggingService));
+            app.manage(std::sync::Mutex::new(ledger));
+
             Ok(())
         })
         .run(tauri::generate_context!())

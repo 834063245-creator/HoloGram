@@ -48,6 +48,7 @@ import { createRuntimeAdapter, createBuilderDeps } from './ui/runtime-adapter';
 import type { Provider } from './provider/types';
 import { memoryBundleIngest } from './agent/memory-bundle-client';
 import { SkillRegistry } from './agent/skills';
+import { withTimeout } from './lifecycle/timeout';
 
 // ═══════════════════════════════════════════════════════
 // Dynamic tool loading from engine registry
@@ -114,6 +115,12 @@ export class Workspace {
   // ── Internals ──
   private _active: boolean = false;
   private _unlisteners: Array<() => void> = [];
+
+  /** Health status for cold-start background analysis. */
+  _health: 'unknown' | 'ready' | 'degraded' = 'unknown';
+
+  /** Callback invoked when background analysis fails (cold-start degraded mode). */
+  onAnalysisFailed: ((err: unknown) => void) | null = null;
 
   /** Guard: true while the initial cold-start render (step 4 of open()) is in flight.
    *  Prevents graph-updated events from stomping on the in-progress render with
@@ -197,10 +204,19 @@ export class Workspace {
         // Still fire analyze_and_load (force=false) so engine_init switches
         // the backend engine to THIS project. Without this, all hologram_*
         // tool calls hit the previous session's graph data.
-        // ponytail: fire-and-forget — user sees graph immediately, engine
-        // init finishes in background (~500ms from SQLite).
+        // fire-and-track: user sees graph immediately, engine init finishes in background.
+        // If analysis fails, workspace enters degraded mode — visible but non-blocking.
         ws.graphData = opts.cachedGraph;
-        rpc('analyze_and_load', { path, force: false }).catch(() => {});
+        rpc('analyze_and_load', { path, force: false })
+          .then(() => {
+            if (!ws._active) return;
+            ws._health = 'ready';
+          })
+          .catch((err) => {
+            if (!ws._active) return;
+            ws._health = 'degraded';
+            ws.onAnalysisFailed?.(err);
+          });
       } else {
         // Full analysis
         ws.onLoadingChange?.(true);
@@ -425,6 +441,25 @@ export class Workspace {
     this.memoryManager = null;
 
     // Clear timers
+    if (this.checkTimer) {
+      clearTimeout(this.checkTimer);
+      this.checkTimer = null;
+    }
+  }
+
+  /** Force-clear all state without waiting for async cleanup.
+   *  Called when deactivate() times out — prevents a stuck workspace
+   *  from blocking the next switchWorkspace. */
+  forceClearState(): void {
+    this._active = false;
+    for (const unlisten of this._unlisteners) {
+      try { unlisten(); } catch { /* ignore */ }
+    }
+    this._unlisteners = [];
+    this.subAgentPool.stopAll();
+    this.runtime = null;
+    this.agent = null;
+    this.memoryManager = null;
     if (this.checkTimer) {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
