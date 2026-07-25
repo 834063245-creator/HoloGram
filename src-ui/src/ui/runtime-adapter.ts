@@ -16,7 +16,7 @@ import { useAgentPanelStore } from './agent-panel-store';
 import { rebuildMessagesFromMessages } from './chat-session';
 import { getChatStore, msgStoreFor } from './chat-store';
 import { bus } from './events';
-import type { SubAgentPart } from './message-model';
+import type { AssistantMessage, SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
 
 /**
@@ -24,8 +24,6 @@ import { createSubAgentSink } from './subagent-sink';
  * @param storeId 面板实例 ID（用于 store 路由）
  */
 export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
-  const bumpStore = (sid: number) => msgStoreFor(storeId, sid)?.getState().bump();
-
   return {
     onAgentEvent(_agentId: string, _event: AgentEvent): void {
       // Agent 事件通过 eventSink 直接路由到 ChatCore.renderEvent
@@ -67,20 +65,43 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         version: 0,
       };
       const msgs = store.getState().messages;
+      // Primary target: the last streaming assistant message.
+      let attachIdx = -1;
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
-        if (m.role === 'assistant' && (m as any).status === 'streaming') {
-          (m as any).parts.push(subPart);
+        if (m.role === 'assistant' && (m as AssistantMessage).status === 'streaming') {
+          attachIdx = i;
           break;
         }
       }
-      bumpStore(sid);
+      if (attachIdx < 0) {
+        // Fallback: the spawn event raced with the parent turn finalising —
+        // attach to the last assistant message rather than dropping the card.
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === 'assistant') {
+            attachIdx = i;
+            break;
+          }
+        }
+      }
+      if (attachIdx >= 0) {
+        const m = msgs[attachIdx] as AssistantMessage;
+        m.parts.push(subPart);
+        // Commit through the store's single write path — swaps the message
+        // reference so memoized bubbles render the new card even when the
+        // parent turn already finished.
+        store.getState().touchMessage(m._id);
+      } else {
+        // No assistant message at all — keep the sink alive so events aren't
+        // lost, but make the failure visible instead of silently dropping.
+        console.warn(`[subagent] spawn ${info.agentId}: no assistant message to attach to`);
+      }
       return createSubAgentSink({
         subPart,
-        bump: () => {
-          const s = store.getState();
-          store.setState({ messages: [...s.messages], version: s.version + 1 });
-        },
+        // The sink mutates subPart in place; commit by part identity so the
+        // update lands even after a session rebuild re-attached the part to
+        // a new message object.
+        bump: () => store.getState().touchMessageContaining(subPart),
         onProgress: info.onProgress,
       });
     },
@@ -91,20 +112,21 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         level: ok ? 'info' : 'warn',
         text: ok ? `子 Agent ${agentId} 已完成` : `子 Agent ${agentId} 失败`,
       });
-      // Find and update the SubAgentPart in the streaming assistant message
+      // Find and update the SubAgentPart in the assistant message that owns it
       const store = msgStoreFor(storeId, sessionId);
       if (!store) return;
       const msgs = store.getState().messages;
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
         if (m.role === 'assistant') {
-          const parts = (m as any).parts as any[];
+          const parts = (m as AssistantMessage).parts;
           for (const p of parts) {
             if (p.type === 'subagent' && p.agentId === agentId) {
               p.status = ok ? 'done' : 'error';
               p.version++;
-              const s = store.getState();
-              store.setState({ messages: [...s.messages], version: s.version + 1 });
+              // Commit via the single write path — the parent turn is often
+              // already done here; a bare bump froze the card at "执行中".
+              store.getState().touchMessage(m._id);
               return;
             }
           }

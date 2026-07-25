@@ -479,8 +479,8 @@ const SubReasoningBlock: React.FC<{
 // ponytail: NOT wrapped in React.memo — subagent-sink mutates SubAgentPart in-place
 // (push to parts[], version++), so the object reference never changes. React.memo
 // with any comparator on the same reference would always bail out, blocking
-// streaming re-renders entirely. Performance is handled by useMemo on renderedParts
-// and rAF-throttled MutationObserver scroll in subagent-sink.
+// streaming re-renders entirely. Performance is handled by useMemo on renderedParts;
+// auto-scroll lives in the MutationObserver effect inside the component.
 const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: string) => void }> = ({ part, onNavigateToNode }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
@@ -495,6 +495,8 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: st
   // Auto-scroll body div to bottom as new content streams in.
   // rAF-throttled to avoid synchronous layout thrashing from MutationObserver
   // firing on every DOM mutation during rapid streaming.
+  // Sticks to bottom only when the user is already near it — scrolling up
+  // inside the card must not be yanked back down by incoming chunks.
   useEffect(() => {
     const el = bodyRef.current;
     if (!el || !expanded) return;
@@ -503,7 +505,8 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: st
       if (raf !== null) return;
       raf = requestAnimationFrame(() => {
         raf = null;
-        el.scrollTop = el.scrollHeight;
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        if (nearBottom) el.scrollTop = el.scrollHeight;
       });
     });
     observer.observe(el, { childList: true, subtree: true, characterData: true });
@@ -687,10 +690,12 @@ const UserBubble: React.FC<{
 ));
 
 // ── Assistant message ──
-// React.memo with custom comparator: always re-render streaming messages
-// (in-place mutation means reference doesn't change, so default memo would
-// block needed updates). Non-streaming messages skip re-render when their
-// reference and expandedTools haven't changed.
+// React.memo with pure reference comparison. This is ONLY correct because of
+// the store's single write path rule (messages-store.ts): every in-place
+// mutation of a message or its parts is committed via touchMessage /
+// touchMessageContaining, which swaps in a new message object. No new
+// reference ⇒ no re-render — so any future mutation path that skips the
+// store commit will silently freeze the bubble. Mutate, then touch.
 
 const AssistantBubble: React.FC<{
   msg: AssistantMessage;
@@ -851,12 +856,12 @@ const AssistantBubble: React.FC<{
       </span>
     </div>
   );
-}, (prev, next) => {
-  // Always re-render streaming messages (in-place mutation means ref doesn't change)
-  if (prev.msg.status === 'streaming' || next.msg.status === 'streaming') return false;
-  // Skip re-render for non-streaming messages if msg ref and expandedTools are unchanged
-  return prev.msg === next.msg && prev.expandedTools === next.expandedTools;
-});
+}, (prev, next) =>
+  // Pure reference comparison — safe because every mutation is committed
+  // through the store's touch methods, which always produce a new message
+  // object (see messages-store.ts SINGLE WRITE PATH RULE).
+  prev.msg === next.msg && prev.expandedTools === next.expandedTools,
+);
 
 // ── Notice ──
 

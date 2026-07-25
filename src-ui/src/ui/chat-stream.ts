@@ -212,6 +212,12 @@ export function _finaliseStreamingAssistant(ctx: StreamContext): void {
         (part as any).status = 'error';
       }
     }
+    // Swap in a new message object: AssistantBubble's memo comparator bails
+    // when prev.msg === next.msg, so in-place mutation alone would never
+    // render the streaming→done transition (stuck spinners/cursors).
+    // Shallow copy shares the parts array — live part mutations stay visible.
+    const idx = msgs.indexOf(assistant);
+    if (idx >= 0) msgs[idx] = { ...assistant };
   }
 
   // Flush pending render
@@ -244,6 +250,12 @@ function _streamingBump(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
   const target = _resolveSessionTarget(ctx, sid);
   if (target) {
+    // SINGLE WRITE PATH: swap the streaming message's reference so memoized
+    // bubbles observe the in-place part mutations (see messages-store.ts).
+    if (sid) {
+      const idx = target.messages.findIndex((m) => m._id === sid);
+      if (idx >= 0) target.messages[idx] = { ...target.messages[idx] };
+    }
     ctx.setSessionMessages(target.sessionId, [...target.messages]);
     ctx.bumpSessionMessages(target.sessionId);
   } else {

@@ -16,12 +16,35 @@ interface MessagesStore {
 
   setMessages: (msgs: ChatMessage[]) => void;
   bump: () => void;
+  /** Commit an in-place mutation of one message: swaps its array slot for a
+   *  shallow copy and bumps version. See SINGLE WRITE PATH RULE below. */
+  touchMessage: (id: MessageId) => void;
+  /** Same as touchMessage, but locates the message by a part object it
+   *  contains (identity match). Survives session rebuilds that re-attach the
+   *  same part object to a new message. */
+  touchMessageContaining: (part: object) => void;
   setStreamingAssistantId: (id: MessageId | null) => void;
   setUserScrolledUp: (v: boolean) => void;
   addExpandedReasoning: (idx: number) => void;
   deleteExpandedReasoning: (idx: number) => void;
   clearExpandedReasoning: () => void;
 }
+
+// ── SINGLE WRITE PATH RULE ────────────────────────────────
+// The chat data model mutates message/part objects in place (streaming text
+// does `part.text += chunk` — copying per token is too expensive). React,
+// however, observes changes by REFERENCE. Bridging that gap is the store's
+// job, not the caller's:
+//
+//   ⚠️ After ANY in-place mutation of an existing message or one of its
+//   parts, you MUST commit through touchMessage / touchMessageContaining.
+//   NEVER follow a mutation with a bare `bump()` or a manual
+//   `setState({ messages: [...] })` — the array spread does not change
+//   message references, and memoized bubbles silently skip the update
+//   (this was the recurring "card stuck / last frame lost" bug class).
+//
+// Adding a new mutation path (new event kind, new lifecycle hook)? Mutate,
+// then touch. That is the whole rule.
 
 export type MessagesStoreApi = ReturnType<typeof createMessagesStoreImpl>;
 
@@ -35,6 +58,24 @@ function createMessagesStoreImpl() {
 
     setMessages: (messages) => set({ messages, version: Date.now() }),
     bump: () => set((s) => ({ version: s.version + 1 })),
+    touchMessage: (id) =>
+      set((s) => {
+        const idx = s.messages.findIndex((m) => m._id === id);
+        if (idx < 0) return s;
+        const messages = s.messages.slice();
+        messages[idx] = { ...messages[idx] };
+        return { messages, version: s.version + 1 };
+      }),
+    touchMessageContaining: (part) =>
+      set((s) => {
+        const idx = s.messages.findIndex(
+          (m) => m.role === 'assistant' && (m as AssistantMessage).parts.some((p) => p === part),
+        );
+        if (idx < 0) return s;
+        const messages = s.messages.slice();
+        messages[idx] = { ...messages[idx] };
+        return { messages, version: s.version + 1 };
+      }),
     setStreamingAssistantId: (streamingAssistantId) => set({ streamingAssistantId }),
     setUserScrolledUp: (userScrolledUp) => set({ userScrolledUp }),
     addExpandedReasoning: (idx) =>

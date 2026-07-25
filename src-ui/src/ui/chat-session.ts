@@ -12,7 +12,7 @@ import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
 import { loadSettings } from '../settings';
 import { bumpSession, getChatStore, msgStoreFor } from './chat-store';
-import type { AssistantMessage, ChatMessage, MessageId, UserMessage } from './message-model';
+import type { AssistantMessage, ChatMessage, MessageId, SubAgentPart, UserMessage } from './message-model';
 import {
   createAssistantMessage,
   createNoticeMessage,
@@ -795,6 +795,23 @@ export function rebuildMessagesFromMessages(
 ): void {
   const rebuilt: ChatMessage[] = [];
 
+  // Preserve live SubAgentPart objects keyed by assistant-message ordinal.
+  // Sub-agent sinks hold references to these objects and keep streaming into
+  // them — rebuilding from provider messages alone would drop the cards and
+  // orphan the sinks (frozen cards, lost output). The same objects are
+  // re-attached to the rebuilt messages below.
+  const preservedSubAgents = new Map<number, SubAgentPart[]>();
+  {
+    const existing = msgStoreFor(storeId, sessionId).getState().messages;
+    let aIdx = 0;
+    for (const m of existing) {
+      if (m.role !== 'assistant') continue;
+      const subs = (m as AssistantMessage).parts.filter((p): p is SubAgentPart => p.type === 'subagent');
+      if (subs.length > 0) preservedSubAgents.set(aIdx, subs);
+      aIdx++;
+    }
+  }
+
   resetMsgIdCounter();
   setTurnPairs(storeId, []);
 
@@ -890,6 +907,17 @@ export function rebuildMessagesFromMessages(
       assistantBubble: null,
       sessionIndex: pendingSessionIdx,
     });
+  }
+
+  // Re-attach preserved sub-agent parts by assistant-message ordinal.
+  // Ordinals beyond the rebuilt range (e.g. a still-streaming turn not yet in
+  // provider messages) fall back to the last rebuilt assistant message.
+  if (preservedSubAgents.size > 0) {
+    const rebuiltAssistants = rebuilt.filter((m): m is AssistantMessage => m.role === 'assistant');
+    for (const [ordinal, subs] of preservedSubAgents) {
+      const target = rebuiltAssistants[ordinal] ?? rebuiltAssistants[rebuiltAssistants.length - 1];
+      if (target) target.parts.push(...subs);
+    }
   }
 
   // ponytail: write to per-session store — the ONLY source of truth
