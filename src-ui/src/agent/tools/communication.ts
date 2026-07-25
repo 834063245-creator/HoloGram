@@ -130,23 +130,63 @@ export function createCommunicationTools(bus: MessageBus, agentId: () => string)
   const agentInbox: Tool = {
     name: () => 'agent_inbox',
     description: () =>
-      'List unread messages in your inbox. Messages include ID, sender, type, and content. ' +
-      'result/request/reply messages are auto-consumed; only free-type messages remain here. ' +
-      'Use agent_reply to respond or agent_ack to dismiss. Unread messages expire after 30 minutes.',
+      'Query your inbox. With no parameters, returns a summary (count + id/from/type per message, no content). ' +
+      'Pass message_id to read a specific message. Filter by sender (from) or type, and limit results. ' +
+      'result/reply messages are auto-consumed; only request and free-type messages remain here. ' +
+      'Unread messages expire after 30 minutes.',
     parameters: () => ({
       type: 'object',
-      properties: {},
+      properties: {
+        message_id: {
+          type: 'string',
+          description: 'Read a specific message by ID. Returns full content.',
+        },
+        from: {
+          type: 'string',
+          description: 'Filter by sender agent ID.',
+        },
+        type: {
+          type: 'string',
+          description: 'Filter by message type (e.g. "request", "status", "handoff").',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max messages to return (newest first). Default: all.',
+        },
+      },
     }),
     readOnly: () => true,
-    execute: async () => {
-      const msgs = bus.peekInbox(agentId());
-      if (msgs.length === 0) return '(inbox empty)';
-      return msgs
-        .map(
-          (m) =>
-            `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
-        )
-        .join('\n\n');
+    execute: async (args) => {
+      const msgId = args.message_id as string | undefined;
+      const from = args.from as string | undefined;
+      const type = args.type as string | undefined;
+      const limit = args.limit as number | undefined;
+
+      // If no filter at all — return summary only (id/from/type/ts, no payload)
+      const summaryOnly = !msgId && !from && !type && !limit;
+
+      const result = bus.queryInbox(agentId(), { msgId, from, type, limit, summaryOnly });
+
+      if (Array.isArray(result)) {
+        if (result.length === 0) return '(no matching messages)';
+        // Full content — truncate each payload to 2000 chars
+        return result
+          .map(
+            (m) => {
+              const payload = typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload);
+              const truncated = payload.length > 2000 ? payload.slice(0, 2000) + '…[截断]' : payload;
+              return `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${truncated}`;
+            },
+          )
+          .join('\n\n');
+      }
+
+      // Summary mode
+      if (result.messages.length === 0) return '(inbox empty)';
+      const lines = result.messages
+        .map((m) => `- [msg_id:${m.id}] from:${m.from} type:${m.type}`)
+        .join('\n');
+      return `Inbox: ${result.count} 条消息\n${lines}\n\n用 message_id 参数查看具体消息内容。`;
     },
   };
 

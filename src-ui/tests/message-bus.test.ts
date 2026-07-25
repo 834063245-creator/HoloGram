@@ -651,14 +651,21 @@ describe('Communication tools', () => {
     const { createCommunicationTools } = await import('../src/agent/tools/communication');
     const tools = createCommunicationTools(bus, () => child1);
     const agentInbox = findTool(tools, 'agent_inbox');
-    const result = await agentInbox.execute({});
 
-    expect(result).toContain('msg_id:');
-    expect(result).toContain('from:parent');
-    expect(result).toContain('type:question');
-    expect(result).toContain('hello');
-    expect(result).toContain('type:status');
-    expect(result).toContain('done');
+    // No params → summary only (id/from/type, no payload)
+    const summary = await agentInbox.execute({});
+    expect(summary).toContain('msg_id:');
+    expect(summary).toContain('from:parent');
+    expect(summary).toContain('type:question');
+    expect(summary).toContain('type:status');
+    expect(summary).not.toContain('hello');
+
+    // With message_id → full content
+    const summaryLines = summary;
+    const idMatch = summaryLines.match(/msg_id:(msg-[\w-]+)/);
+    const firstMsgId = idMatch?.[1];
+    const fullResult = await agentInbox.execute({ message_id: firstMsgId });
+    expect(fullResult).toContain('hello');
   });
 
   it('agent_inbox shows empty when no messages', async () => {

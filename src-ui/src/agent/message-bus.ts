@@ -322,6 +322,39 @@ export class MessageBus {
     return this.inboxes.get(agentId) ?? [];
   }
 
+  /** Query inbox with optional filters. Returns matching messages (peek — does not consume).
+   *  All filters are optional; omit all to get a summary instead of full content.
+   *  `limit` caps the number of messages returned (newest first). */
+  queryInbox(
+    agentId: string,
+    filter: { from?: string; type?: string; msgId?: string; limit?: number; summaryOnly?: boolean },
+  ): AgentMessage[] | { count: number; messages: { id: string; from: string; type: string; ts: number }[] } {
+    let inbox = this.inboxes.get(agentId) ?? [];
+
+    // Apply filters
+    if (filter.msgId) {
+      inbox = inbox.filter((m) => m.id === filter.msgId);
+    } else {
+      if (filter.from) inbox = inbox.filter((m) => m.from === filter.from);
+      if (filter.type) inbox = inbox.filter((m) => m.type === filter.type);
+    }
+
+    // Newest first
+    const sorted = [...inbox].sort((a, b) => b.ts - a.ts);
+    const limit = filter.limit ?? sorted.length;
+    const result = sorted.slice(0, limit);
+
+    // Summary-only mode: return id/from/type/ts without payload
+    if (filter.summaryOnly) {
+      return {
+        count: inbox.length,
+        messages: result.map((m) => ({ id: m.id, from: m.from, type: m.type, ts: m.ts })),
+      };
+    }
+
+    return result;
+  }
+
   /** Consume messages of specified types: remove them from the inbox and return.
    *  Remaining (non-matching) messages stay in the inbox. */
   consumeByType(agentId: string, types: string[]): { consumed: AgentMessage[]; remaining: AgentMessage[] } {
