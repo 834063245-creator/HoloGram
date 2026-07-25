@@ -322,6 +322,7 @@ pub(crate) async fn check_permission(
                 "path": tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                 "reason": reason,
                 "danger": danger,
+                "agentId": crate::permissions::active_agent_id(),
                 "suggestions": suggestions.iter().map(|s| serde_json::json!({
                     "rule": s.rule,
                     "behavior": s.behavior,

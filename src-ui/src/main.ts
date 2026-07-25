@@ -454,6 +454,7 @@ async function init(): Promise<void> {
         path: string;
         reason: string;
         danger?: string;
+        agentId?: string;
         suggestions: Array<{ rule: string; behavior: string }>;
       };
 
@@ -468,7 +469,10 @@ async function init(): Promise<void> {
         return;
       }
 
-      // 120s timeout — auto-deny if user doesn't respond
+      // Sub-agent permission asks get a shorter timeout (60s vs 120s)
+      const isSubAgent = p.agentId && p.agentId !== 'main';
+      const timeoutMs = isSubAgent ? 60_000 : 120_000;
+
       const timeoutId = setTimeout(() => {
         timedOutRequests.add(p.requestId);
         rpc('permission_ask_response', {
@@ -476,9 +480,14 @@ async function init(): Promise<void> {
           allow: false,
           remember: false,
         });
-      }, 120_000);
+      }, timeoutMs);
 
-      chatPanel.showPermissionCard(p.tool, p.reason, p.path, p.danger).then((result) => {
+      // Annotate reason with source agent for sub-agent visibility
+      const displayReason = isSubAgent
+        ? `[子Agent ${p.agentId}] ${p.reason}`
+        : p.reason;
+
+      chatPanel.showPermissionCard(p.tool, displayReason, p.path, p.danger).then((result) => {
         clearTimeout(timeoutId);
         if (timedOutRequests.has(p.requestId)) {
           timedOutRequests.delete(p.requestId);
