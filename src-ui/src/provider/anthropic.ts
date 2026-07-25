@@ -112,7 +112,7 @@ interface TextBlock {
 }
 
 interface ContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result' | 'thinking';
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'redacted_thinking';
   text?: string;
   thinking?: string;
   signature?: string;
