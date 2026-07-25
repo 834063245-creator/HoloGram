@@ -428,14 +428,10 @@ export class Agent {
 
   /** Bus wake callback — called when a message is delivered to this agent's inbox.
    *  If the agent is idle (not running), starts a new runLoop to process the message.
-   *  If already running, _injectInbox will pick up the message on the next iteration.
-   *  Uses execState.start() so user stop (execState.stop()) can abort the wakeup run. */
+   *  If already running, _injectInbox will pick up the message on the next iteration. */
   private async _onMessageDelivered(): Promise<void> {
     if (this._isRunning) return;
     if (this._bus?.unreadCount(this.id) === 0) return;
-    // Check for truly new messages (not yet injected in previous cycle)
-    const hasNew = this._bus!.peekInbox(this.id).some((m) => !this._injectedMsgIds.has(m.id));
-    if (!hasNew) return;
     const signal = this._execState.start();
     try {
       await this.run(signal, '');
@@ -513,23 +509,60 @@ export class Agent {
   /** Inject unread inbox messages as a system-reminder. Non-destructive —
    *  messages stay in inbox until explicitly acked or replied to.
    *  Tracks injected message IDs to prevent re-injection within the same
-   *  runLoop lifecycle (avoids infinite wakeup loop when LLM doesn't ack). */
+   *  result/reply are consumed (removed from inbox on inject) — they don't need a reply.
+   *  request gets full content injected but stays in inbox (agent_reply needs it there).
+   *  Free-type messages get a lightweight notification; content stays in inbox
+   *  for agent_inbox lookup. Expired free messages are purged before injection. */
   private _injectInbox(): void {
     if (!this._bus) return;
-    const msgs = this._bus.peekInbox(this.id);
-    // Only inject messages not yet seen this cycle
-    const newMsgs = msgs.filter((m) => !this._injectedMsgIds.has(m.id));
-    if (newMsgs.length === 0) return;
-    for (const m of newMsgs) this._injectedMsgIds.add(m.id);
-    const formatted = newMsgs
-      .map(
-        (m) =>
-          `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
-      )
-      .join('\n\n');
+
+    // 1. Purge expired free-type messages
+    this._bus.purgeExpired(this.id);
+
+    // 2. Consume result/reply: inject full content + remove from inbox
+    const CONSUME_TYPES = ['result', 'reply'];
+    const { consumed, remaining } = this._bus.consumeByType(this.id, CONSUME_TYPES);
+
+    // 3. Non-consumed messages: inject full content for 'request', lightweight for others.
+    //    'request' stays in inbox so agent_reply can find and ack it.
+    const newRemaining = remaining.filter((m) => !this._injectedMsgIds.has(m.id));
+    for (const m of newRemaining) this._injectedMsgIds.add(m.id);
+
+    const newRequests = newRemaining.filter((m) => m.type === 'request');
+    const newFreeMsgs = newRemaining.filter((m) => m.type !== 'request');
+
+    // 4. Build injection content
+    const parts: string[] = [];
+    if (consumed.length > 0) {
+      const formatted = consumed
+        .map(
+          (m) =>
+            `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
+        )
+        .join('\n\n');
+      parts.push(`📬 消息 (${consumed.length} 条):\n${formatted}`);
+    }
+    if (newRequests.length > 0) {
+      const formatted = newRequests
+        .map(
+          (m) =>
+            `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
+        )
+        .join('\n\n');
+      parts.push(`📬 请求 (${newRequests.length} 条，用 agent_reply 回复):\n${formatted}`);
+    }
+    if (newFreeMsgs.length > 0) {
+      const summary = newFreeMsgs
+        .map((m) => `- from:${m.from} type:${m.type} (msg_id:${m.id})`)
+        .join('\n');
+      parts.push(`📬 未读消息 (${newFreeMsgs.length} 条，用 agent_inbox 查看详情):\n${summary}`);
+    }
+
+    if (parts.length === 0) return;
+
     this.session.push({
       role: 'user',
-      content: `<system-reminder>\n📬 Agent 消息 (${newMsgs.length} 条未读):\n${formatted}\n\n可用 agent_reply 工具回复，或 agent_ack 确认已读。\n</system-reminder>`,
+      content: `<system-reminder>\n${parts.join('\n\n')}\n</system-reminder>`,
     });
   }
 
@@ -600,8 +633,6 @@ export class Agent {
   async run(signal: AbortSignal, input: string): Promise<void> {
     this._isRunning = true;
     this._ui.onStatusChange?.(true);
-    // Reset injected message tracking — user-driven run re-evaluates all unacked msgs
-    if (input) this._injectedMsgIds.clear();
     if (this._preRunHook && input) {
       try {
         const recallCtx = await this._preRunHook(input);

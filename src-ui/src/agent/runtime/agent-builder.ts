@@ -209,12 +209,15 @@ ${modeBlock}`;
 - 合并是不可逆操作——确认子 Agent 工作无误后再合并。
 
 ### Agent 间通信
-- agent_message 向指定 Agent 发消息（fire-and-forget，不等回复）。
-- agent_reply 回复 inbox 中的消息（同时 ACK 原消息）。
-- agent_ack 将消息标记为已读，从 inbox 移除。
-- agent_inbox 列出未读消息。
+- agent_message 向指定 Agent 发消息（fire-and-forget，不等回复）。消息存入对方 inbox，30 分钟后自动过期。
+- agent_request 向指定 Agent 发同步请求并阻塞等待回复（有超时，默认 30 秒，最大 120 秒）。当你需要另一个 Agent 的直接回答时使用。
+- **消息自动注入**：result/reply 消息会自动注入到你的上下文并从 inbox 移除，无需手动确认。
+- request 消息会注入完整内容但保留在 inbox 中——用 agent_reply 回复后会自动移除。
+- 其他类型的消息显示轻量通知，用 agent_inbox 查看详情。未查看的消息 30 分钟后自动过期。
+- agent_inbox 列出所有未过期消息。
+- agent_ack 确认自由类型消息已读（从 inbox 移除）。强消费类型消息无需手动 ack。
+- agent_reply 回复 inbox 中的消息。
 - agent_list 列出当前拓扑下可通信的 Agent。
-- agent_request 向指定 Agent 发同步请求并阻塞等待回复（有超时，默认 30 秒）。当你需要另一个 Agent 的直接回答时使用，而非 fire-and-forget。
 
 ### 共享发现
 - agent_discover 将你的发现发布到共享发现区（key / value / category）。

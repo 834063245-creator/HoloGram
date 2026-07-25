@@ -321,6 +321,7 @@ describe('MessageBus — backpressure', () => {
   it('test_backpressure_reject — inbox full throws InboxFullError', () => {
     const { bus, parent, child1 } = setupTree();
     bus.setInboxCapacity(3);
+    bus.setBackpressureStrategy('reject');
 
     bus.send({ from: parent, to: child1, type: 'msg', payload: '1' });
     bus.send({ from: parent, to: child1, type: 'msg', payload: '2' });
@@ -518,6 +519,7 @@ describe('MessageBus — error propagation', () => {
   it('inbox full error has agentId', () => {
     const { bus, parent, child1 } = setupTree();
     bus.setInboxCapacity(1);
+    bus.setBackpressureStrategy('reject');
     bus.send({ from: parent, to: child1, type: 'msg', payload: '1' });
     try {
       bus.send({ from: parent, to: child1, type: 'msg', payload: '2' });
@@ -585,6 +587,7 @@ describe('Communication tools', () => {
   it('agent_message returns error string on inbox full', async () => {
     const { bus, parent, child1 } = setupTree();
     bus.setInboxCapacity(1);
+    bus.setBackpressureStrategy('reject');
     const { createCommunicationTools } = await import('../src/agent/tools/communication');
     const tools = createCommunicationTools(bus, () => parent);
     const agentMessage = findTool(tools, 'agent_message');

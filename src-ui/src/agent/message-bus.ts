@@ -26,7 +26,11 @@ import { AgentNotFoundError, InboxFullError, MessageNotFoundError, TopologyDenie
 import { TreeTopology } from './topology';
 
 const DEFAULT_INBOX_CAPACITY = 100;
-const DEFAULT_BACKPRESSURE: BackpressureStrategy = 'reject';
+const DEFAULT_BACKPRESSURE: BackpressureStrategy = 'drop';
+
+const FREE_MSG_TTL_MS = 30 * 60 * 1000; // 30 min — 自由类型消息过期时间
+// 消息不会过期的类型（result/reply 消费后即删；request 需留在 inbox 供 agent_reply ack）
+const NON_EXPIRING_TYPES = ['result', 'request', 'reply'];
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -149,6 +153,10 @@ export class MessageBus {
     this.inboxes.delete(agentId);
     this.agents.delete(agentId);
     this.wakeCallbacks.delete(agentId);
+    // 异步清理磁盘持久化文件
+    if (this.store) {
+      this.store.delete(agentId).catch(() => {});
+    }
   }
 
   // ── 通信原语（Phase 1: 仅异步） ──
@@ -312,6 +320,57 @@ export class MessageBus {
 
   peekInbox(agentId: string): AgentMessage[] {
     return this.inboxes.get(agentId) ?? [];
+  }
+
+  /** Consume messages of specified types: remove them from the inbox and return.
+   *  Remaining (non-matching) messages stay in the inbox. */
+  consumeByType(agentId: string, types: string[]): { consumed: AgentMessage[]; remaining: AgentMessage[] } {
+    const inbox = this.inboxes.get(agentId);
+    if (!inbox || inbox.length === 0) return { consumed: [], remaining: [] };
+    const consumed: AgentMessage[] = [];
+    const remaining: AgentMessage[] = [];
+    for (const msg of inbox) {
+      if (types.includes(msg.type)) {
+        consumed.push(msg);
+        this.msgIndex.delete(msg.id);
+      } else {
+        remaining.push(msg);
+      }
+    }
+    inbox.length = 0;
+    inbox.push(...remaining);
+    // Rebuild msgIndex for remaining messages
+    for (let i = 0; i < inbox.length; i++) {
+      this.msgIndex.set(inbox[i].id, { agentId, index: i });
+    }
+    this._scheduleFlush();
+    return { consumed, remaining };
+  }
+
+  /** Purge expired free-type messages (non result/request/reply) from an inbox.
+   *  Called before injection to keep the inbox clean. */
+  purgeExpired(agentId: string): void {
+    const inbox = this.inboxes.get(agentId);
+    if (!inbox || inbox.length === 0) return;
+    const now = Date.now();
+    let changed = false;
+    const remaining: AgentMessage[] = [];
+    for (const msg of inbox) {
+      if (!NON_EXPIRING_TYPES.includes(msg.type) && now - msg.ts > FREE_MSG_TTL_MS) {
+        this.msgIndex.delete(msg.id);
+        changed = true;
+      } else {
+        remaining.push(msg);
+      }
+    }
+    if (changed) {
+      inbox.length = 0;
+      inbox.push(...remaining);
+      for (let i = 0; i < inbox.length; i++) {
+        this.msgIndex.set(inbox[i].id, { agentId, index: i });
+      }
+      this._scheduleFlush();
+    }
   }
 
   ackMessage(agentId: string, msgId: string): boolean {

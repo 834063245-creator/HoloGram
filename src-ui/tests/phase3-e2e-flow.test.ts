@@ -187,7 +187,7 @@ describe("端到端：bus 唤醒 idle agent", () => {
     // 验证：session 中有 inbox 注入的 system-reminder
     const session = agent.getSession()
     const reminder = session.find(
-      (m) => m.role === "user" && typeof m.content === "string" && m.content.includes("📬 Agent 消息"),
+      (m) => m.role === "user" && typeof m.content === "string" && m.content.includes("📬 消息"),
     )
     expect(reminder).toBeDefined()
     expect(reminder!.content).toContain("hello-wakeup")

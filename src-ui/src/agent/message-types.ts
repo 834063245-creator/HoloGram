@@ -69,6 +69,8 @@ export type BackpressureStrategy = 'block' | 'drop' | 'reject';
 export interface MessageStore {
   flush(inboxes: Map<string, AgentMessage[]>): Promise<void>;
   restore(): Promise<Map<string, AgentMessage[]>>;
+  /** Delete the persisted inbox for an agent (called on unregister). */
+  delete(agentId: string): Promise<void>;
 }
 
 // ── 消息传输层接口 — 将 bus 逻辑与传输解耦 ──

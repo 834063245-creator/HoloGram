@@ -104,7 +104,9 @@ export function createCommunicationTools(bus: MessageBus, agentId: () => string)
   // ── agent_ack — 确认已读 ──
   const agentAck: Tool = {
     name: () => 'agent_ack',
-    description: () => 'Acknowledge a message as read/processed. Removes it from your inbox so it is not shown again.',
+    description: () =>
+      'Acknowledge a free-type message as read/processed. Removes it from your inbox. ' +
+      'Note: result/request/reply messages are auto-consumed on injection and do not need ack.',
     parameters: () => ({
       type: 'object',
       properties: {
@@ -129,7 +131,8 @@ export function createCommunicationTools(bus: MessageBus, agentId: () => string)
     name: () => 'agent_inbox',
     description: () =>
       'List unread messages in your inbox. Messages include ID, sender, type, and content. ' +
-      'Use agent_reply to respond or agent_ack to dismiss.',
+      'result/request/reply messages are auto-consumed; only free-type messages remain here. ' +
+      'Use agent_reply to respond or agent_ack to dismiss. Unread messages expire after 30 minutes.',
     parameters: () => ({
       type: 'object',
       properties: {},

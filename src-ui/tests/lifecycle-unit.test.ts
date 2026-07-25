@@ -396,52 +396,51 @@ describe("_injectedMsgIds — 防死循环", () => {
     // 注册一个 sender
     bus.register(addr("sender"))
 
-    // 发一条消息到 agent 的 inbox
-    bus.send({ from: "sender", to: agent.id, type: "result", payload: "hello" })
+    // 发一条自由类型消息到 agent 的 inbox
+    bus.send({ from: "sender", to: agent.id, type: "status", payload: "hello" })
     expect(bus.unreadCount(agent.id)).toBe(1)
 
     // run — 会注入 inbox 消息 + 跑一轮 provider
     const ctrl = new AbortController()
     await agent.run(ctrl.signal, "")
 
-    // 消息仍 unread（未 ack），但 runLoop 正常结束，没有无限循环
+    // 自由类型消息注入后仍在 inbox（只发轻量通知，不消费）
     expect(bus.unreadCount(agent.id)).toBe(1)
 
-    // finally 块检查到 hasNew — _injectedMsgIds 已记录，hasNew=false
     // 等一下让 microtask 跑完
     await new Promise((r) => setTimeout(r, 20))
 
-    // runLoop 没有被重新触发
+    // runLoop 没有被重新触发（_injectedMsgIds 阻止重复注入）
     expect(events).toContain("final answer")
   })
 
-  it("新一轮 run (带 input) 清空 _injectedMsgIds 允许重新注入", async () => {
+  it("新一轮 run 不再重新注入已通知的自由类型消息（修复 token 暴增）", async () => {
     const bus = new MessageBus()
     bus.setTopology(new MeshTopology())
     const agent = makeAgent(textProvider("answer"))
     agent.setBus(bus)
     bus.register(addr("sender"))
 
-    // 发消息
-    bus.send({ from: "sender", to: agent.id, type: "result", payload: "hello" })
+    // 发自由类型消息
+    bus.send({ from: "sender", to: agent.id, type: "status", payload: "hello" })
 
     // 第一轮 run（空 input — bus wakeup 路径）
     const ctrl1 = new AbortController()
     await agent.run(ctrl1.signal, "")
 
-    // 消息还在 inbox（未 ack）
+    // 自由类型消息仍在 inbox
     expect(bus.unreadCount(agent.id)).toBe(1)
 
-    // 第二轮 run（带 input — 用户主动触发，清空 _injectedMsgIds）
+    // 第二轮 run（带 input — 用户主动触发）
     const ctrl2 = new AbortController()
     await agent.run(ctrl2.signal, "user message")
 
-    // 消息应该被重新注入到 session 中
+    // 消息不应被重新注入（不再 clear _injectedMsgIds）
     const session = agent.getSession()
     const inboxReminders = session.filter(
-      (m) => typeof m.content === "string" && m.content.includes("📬 Agent 消息"),
+      (m) => typeof m.content === "string" && m.content.includes("📬 未读消息"),
     )
-    // 至少有一条 inbox reminder（可能来自第一轮或第二轮）
-    expect(inboxReminders.length).toBeGreaterThanOrEqual(1)
+    // 只有第一轮注入的 1 条通知，第二轮不重复注入
+    expect(inboxReminders.length).toBe(1)
   })
 })

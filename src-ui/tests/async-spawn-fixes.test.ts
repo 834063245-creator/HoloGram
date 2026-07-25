@@ -266,7 +266,7 @@ describe("wakeup_empty_input", () => {
     // 断言：session 中有一条 role:'user' 的 <system-reminder> 包含 inbox 消息
     const session = agent.getSession()
     const reminder = session.find(
-      (m) => m.role === "user" && typeof m.content === "string" && m.content.includes("📬 Agent 消息"),
+      (m) => m.role === "user" && typeof m.content === "string" && m.content.includes("📬 消息"),
     )
     expect(reminder).toBeDefined()
     expect(reminder!.content).toContain("hello-from-sender")
