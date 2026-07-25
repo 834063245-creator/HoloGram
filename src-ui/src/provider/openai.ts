@@ -185,17 +185,10 @@ function buildChatRequest(
     }
   }
 
-  // Apply cache breakpoint to the last system message (DeepSeek supports cache_control)
-  let sysSet = false;
-  for (let i = chatMsgs.length - 1; i >= 0; i--) {
-    if (chatMsgs[i].role === 'system') {
-      if (!sysSet) {
-        (chatMsgs[i] as any).cache_control = { type: 'ephemeral' };
-        sysSet = true;
-      }
-    }
-  }
-
+  // OpenAI-compatible protocol has NO cache_control field — each provider
+  // does its own server-side prefix caching (auto for DeepSeek, prompt_cache_key
+  // for official OpenAI). Injecting Anthropic's cache_control here would 400 on
+  // strict validators (GLM, Qwen, etc.). cc-switch regression_gh3805.
   const chatTools: ChatTool[] | undefined =
     tools.length > 0
       ? tools.map((t) => ({

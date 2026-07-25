@@ -150,6 +150,16 @@ function ephemeral(): CacheControl {
   return { type: 'ephemeral' };
 }
 
+/** Return the last content block that is NOT a thinking/redacted_thinking block.
+ *  Anthropic 400s if cache_control is placed on a thinking block. */
+function findLastNonThinkingBlock(blocks: ContentBlock[]): ContentBlock | undefined {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const t = blocks[i].type;
+    if (t !== 'thinking' && t !== 'redacted_thinking') return blocks[i];
+  }
+  return undefined;
+}
+
 function buildRequest(
   msgs: Message[],
   tools: Request['tools'],
@@ -224,17 +234,42 @@ function buildRequest(
     input_schema: Object.keys(t.parameters).length > 0 ? t.parameters : { type: 'object', properties: {} },
   }));
 
-  // Cache breakpoints: mark last system block (caches tools+system) or last tool
+  // Cache breakpoints — up to 4, Anthropic's per-request limit.
+  // Pattern from cc-switch cache_injector: system → tools → latest msg → prior user.
+  // Each breakpoint snapshots all content before it. Anthropic 400s on
+  // thinking/redacted_thinking blocks, so findLastNonThinkingBlock skips those.
+
+  // (a) System: cache the full static system prompt at its last block
   if (system.length > 0) {
     system[system.length - 1].cache_control = ephemeral();
-  } else if (anthTools.length > 0) {
+  }
+
+  // (b) Tools: always cache tool definitions at the last tool entry
+  if (anthTools.length > 0) {
     anthTools[anthTools.length - 1].cache_control = ephemeral();
   }
-  // Mark last block of last message
+
+  // (c) Latest message: mark last non-thinking block of the last message.
+  //     When the model just issued tool_use, this anchors the tool-result turn.
   if (anthMsgs.length > 0) {
     const last = anthMsgs[anthMsgs.length - 1];
-    if (last.content.length > 0) {
-      last.content[last.content.length - 1].cache_control = ephemeral();
+    const anchor = findLastNonThinkingBlock(last.content);
+    if (anchor) anchor.cache_control = ephemeral();
+  }
+
+  // (d) Prior user anchor: second user/tool_result from the end.
+  //     Long tool-result turns push the stable prefix outside Anthropic's
+  //     20-block scan window from (c); this second anchor extends it.
+  if (anthMsgs.length >= 4) {
+    let userCount = 0;
+    for (let i = anthMsgs.length - 1; i >= 0; i--) {
+      if (anthMsgs[i].role !== 'user') continue;
+      userCount++;
+      if (userCount === 2) {
+        const block = findLastNonThinkingBlock(anthMsgs[i].content);
+        if (block) block.cache_control = ephemeral();
+        break;
+      }
     }
   }
 

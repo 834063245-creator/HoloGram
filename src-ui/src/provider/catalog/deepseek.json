@@ -34,5 +34,41 @@
     },
     "contextWindow": 1000000,
     "maxTokens": 384000
+  },
+  "deepseek-v4-pro-beta": {
+    "id": "deepseek-v4-pro-beta",
+    "name": "DeepSeek V4 Pro (Beta API)",
+    "kind": "anthropic",
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com/anthropic",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.435,
+      "output": 0.87,
+      "cacheRead": 0.003625
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000
+  },
+  "deepseek-v4-flash-beta": {
+    "id": "deepseek-v4-flash-beta",
+    "name": "DeepSeek V4 Flash (Beta API)",
+    "kind": "anthropic",
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com/anthropic",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.14,
+      "output": 0.28,
+      "cacheRead": 0.0028
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000
   }
 }

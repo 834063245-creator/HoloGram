@@ -99,10 +99,10 @@ describe('catalog', () => {
     expect(anthropicModels.every((m) => m.kind === 'anthropic')).toBe(true);
   });
 
-  it('deepseek models have baseUrl ending with /v1', () => {
+  it('deepseek models have baseUrl ending with /v1 (OpenAI protocol)', () => {
     const deepseekModels = findModels('deepseek');
     for (const m of deepseekModels) {
-      expect(m.baseUrl).toMatch(/\/v1$/);
+      if (m.kind === 'openai') expect(m.baseUrl).toMatch(/\/v1$/);
     }
   });
 
