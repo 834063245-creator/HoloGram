@@ -14,6 +14,7 @@ import type { ToolCall } from '../provider/types';
 import { type AgentEvent, EventKind } from './agent-types';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import type { Tool, ToolRegistry } from './tool';
+import { truncateToolOutput } from './truncate';
 
 export interface ExecutorToolCall {
   call: ToolCall;
@@ -242,10 +243,13 @@ export class StreamingToolExecutor {
         output = preflightWarning + '\n\n' + '─'.repeat(40) + '\n\n' + output;
       }
 
+      // ── Truncate output to cap token consumption (50KB / 2000 lines) ──
+      const trunc = truncateToolOutput(call.name, output);
+
       const result: PendingResult = {
         call,
-        output,
-        truncated: false,
+        output: trunc.content,
+        truncated: trunc.truncated,
       };
       this.emitResult(call, tool, result);
       return result;
