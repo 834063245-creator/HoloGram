@@ -185,6 +185,11 @@ export class Agent {
   // Track discovery IDs already injected — prevents duplicate injection within the same runLoop
   private _injectedDiscoveryIds = new Set<string>();
 
+  // Transient reminders — per-turn <system-reminder> injections that are sent
+  // to the LLM but NOT persisted in this.session. Cleared at the top of each
+  // runLoop step. Keeps session history clean for stable cache prefixes.
+  private _transientReminders: string[] = [];
+
   // Session persistence
   sessionId: string;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
@@ -495,14 +500,12 @@ export class Agent {
   }
 
   /** Apply queued memory updates at a safe boundary.
-   *  Injected as system-reminder so Agent sees updated memories mid-session. */
+   *  Injected as transient system-reminder so Agent sees updated memories mid-session.
+   *  Not persisted in session — Aura system stores memories independently. */
   private _applyPendingMemoryUpdates(): void {
     if (!this._pendingMemoryUpdates?.length) return;
     const text = this._pendingMemoryUpdates.join('\n');
-    this.session.push({
-      role: 'user',
-      content: `<system-reminder>${text}</system-reminder>`,
-    });
+    this._transientReminders.push(`<system-reminder>${text}</system-reminder>`);
     this._pendingMemoryUpdates = [];
   }
 
@@ -531,8 +534,10 @@ export class Agent {
     const newRequests = newRemaining.filter((m) => m.type === 'request');
     const newFreeMsgs = newRemaining.filter((m) => m.type !== 'request');
 
-    // 4. Build injection content
-    const parts: string[] = [];
+    // 4. Strong-type messages (result/reply/request) persist in session — they
+    //    are consumed from inbox or require explicit ack, so they must survive
+    //    as durable context for the agent to act on.
+    const durableParts: string[] = [];
     if (consumed.length > 0) {
       const formatted = consumed
         .map(
@@ -540,7 +545,7 @@ export class Agent {
             `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
         )
         .join('\n\n');
-      parts.push(`📬 消息 (${consumed.length} 条):\n${formatted}`);
+      durableParts.push(`📬 消息 (${consumed.length} 条):\n${formatted}`);
     }
     if (newRequests.length > 0) {
       const formatted = newRequests
@@ -549,21 +554,24 @@ export class Agent {
             `[msg_id:${m.id}] from:${m.from} type:${m.type}\n${typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload)}`,
         )
         .join('\n\n');
-      parts.push(`📬 请求 (${newRequests.length} 条，用 agent_reply 回复):\n${formatted}`);
+      durableParts.push(`📬 请求 (${newRequests.length} 条，用 agent_reply 回复):\n${formatted}`);
     }
+    if (durableParts.length > 0) {
+      this.session.push({
+        role: 'user',
+        content: `<system-reminder>\n${durableParts.join('\n\n')}\n</system-reminder>`,
+      });
+    }
+
+    // 5. Free-type messages are transient (content stays in inbox for agent_inbox lookup)
     if (newFreeMsgs.length > 0) {
       const summary = newFreeMsgs
         .map((m) => `- from:${m.from} type:${m.type} (msg_id:${m.id})`)
         .join('\n');
-      parts.push(`📬 未读消息 (${newFreeMsgs.length} 条，用 agent_inbox 查看详情):\n${summary}`);
+      this._transientReminders.push(
+        `<system-reminder>\n📬 未读消息 (${newFreeMsgs.length} 条，用 agent_inbox 查看详情):\n${summary}\n</system-reminder>`,
+      );
     }
-
-    if (parts.length === 0) return;
-
-    this.session.push({
-      role: 'user',
-      content: `<system-reminder>\n${parts.join('\n\n')}\n</system-reminder>`,
-    });
   }
 
   /** Inject new discoveries from other agents as a system-reminder.
@@ -588,10 +596,10 @@ export class Agent {
           `[${e.category}] ${e.key}: ${e.value} (by ${e.agentId})`,
       )
       .join('\n');
-    this.session.push({
-      role: 'user',
-      content: `<system-reminder>\n🔬 共享发现 (${recent.length} 条):\n${formatted}\n\n用 agent_discover 发布你的发现，agent_lookup 查询全部。\n</system-reminder>`,
-    });
+    // Transient — discoveries can be re-queried via agent_lookup
+    this._transientReminders.push(
+      `<system-reminder>\n🔬 共享发现 (${recent.length} 条):\n${formatted}\n\n用 agent_discover 发布你的发现，agent_lookup 查询全部。\n</system-reminder>`,
+    );
   }
 
   /** Start a fresh conversation — keep system prompt, clear everything else. */
@@ -606,11 +614,13 @@ export class Agent {
     this.stormCount = 0;
     this.compactStuck = false;
     this.compactionTracker.reset();
+    this._transientReminders = [];
     this._sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
   }
 
   /** Extract recent tool results from the parent session as context for a fork.
-   *  Strips system prompt, assistant tool_calls, and truncates to the last N messages. */
+   *  Strips system prompt, assistant tool_calls, and truncates to the last N
+   *  messages. Each message truncated to 1000 chars to keep fork system prompt small. */
   extractRecentContext(maxMessages: number): string {
     const recent = this.session
       .filter((m) => m.role !== 'system') // don't leak parent system prompt
@@ -620,8 +630,9 @@ export class Agent {
       .map((m) => {
         const roleLabel =
           m.role === 'assistant' ? '主Agent' : m.role === 'tool' ? `工具结果(${m.name || '?'})` : '用户';
-        const content =
-          typeof m.content === 'string' ? m.content.slice(0, 2000) : JSON.stringify(m.content).slice(0, 2000);
+        const MAX = 1000;
+        const raw = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        const content = raw.length > MAX ? raw.slice(0, MAX) + '…[截断]' : raw;
         return `[${roleLabel}] ${content}`;
       })
       .join('\n\n');
@@ -637,7 +648,7 @@ export class Agent {
       try {
         const recallCtx = await this._preRunHook(input);
         if (recallCtx) {
-          this.session.push({ role: 'user', content: `<system-reminder>\n${recallCtx}\n</system-reminder>` });
+          this._transientReminders.push(`<system-reminder>\n${recallCtx}\n</system-reminder>`);
         }
       } catch {
         /* pre-run hook failure is non-fatal */
@@ -944,6 +955,12 @@ ${resumeNote}
     this._sink({ kind: EventKind.TurnStarted });
 
     for (let step = 0; ; step++) {
+      // Clear transient reminders from previous step — only current-step
+      // reminders should be visible to the LLM this turn.
+      // Step 0 skips the clear: run() may have already pushed the preRunHook
+      // (aura recall) result into _transientReminders before calling runLoop.
+      if (step > 0) this._transientReminders = [];
+
       // Abort check — signal covers user stop + session replacement (via this._execState.stop)
       if (signal.aborted) throw new Error('aborted');
 
@@ -953,14 +970,12 @@ ${resumeNote}
 
       this._ui.progress?.(step + 1, 'thinking');
 
-      // Drain background task notifications before each stream() call
+      // Drain background task notifications before each stream() call (transient —
+      // progress updates have no value after the turn ends)
       try {
         const notes = await rpc<string>('drain_bg_notifications');
         if (notes) {
-          this.session.push({
-            role: 'user',
-            content: `<system-reminder>\n${notes}\n</system-reminder>`,
-          });
+          this._transientReminders.push(`<system-reminder>\n${notes}\n</system-reminder>`);
         }
       } catch {
         // best-effort — don't block the loop if drain fails
@@ -1205,8 +1220,16 @@ ${resumeNote}
     usage: Usage | undefined;
     err: Error | undefined;
   }> {
+    // Append transient reminders as user messages at the end — they are
+    // visible to the LLM this turn but not persisted in this.session.
+    const transientMsgs: Message[] = this._transientReminders.map((content) => ({
+      role: 'user' as const,
+      content,
+    }));
+    const fullSession = transientMsgs.length > 0 ? [...this.session, ...transientMsgs] : this.session;
+
     const gen = this.prov.stream(signal, {
-      messages: sanitizeToolPairing(this.session),
+      messages: sanitizeToolPairing(fullSession),
       tools: this.tools.schemas(),
       temperature: this.temperature,
       max_tokens: this.maxTokens,
@@ -1369,6 +1392,8 @@ ${resumeNote}
       }
       if (m.reasoning_content) totalChars += m.reasoning_content.length;
     }
+    // Transient reminders are also sent to the LLM this turn — count them
+    for (const r of this._transientReminders) totalChars += r.length;
     return Math.ceil(totalChars / 2.5);
   }
 
@@ -1382,7 +1407,8 @@ ${resumeNote}
       const toolSchemaChars = T.reduce((s, t) => s + t.name.length + t.description.length + JSON.stringify(t.parameters).length, 0);
 
       let sysChars = 0, userChars = 0, reminderChars = 0, assistantChars = 0, toolChars = 0;
-      let reminderCount = 0, inboxInjCount = 0, discoveryInjCount = 0;
+      let reminderCount = 0, inboxInjCount = 0;
+      let transientChars = 0, transientCount = 0;
 
       for (const m of this.session) {
         const chars = (typeof m.content === 'string' ? m.content.length : 0) +
@@ -1392,12 +1418,17 @@ ${resumeNote}
         else if (m.role === 'user') {
           if (typeof m.content === 'string' && m.content.includes('<system-reminder>')) {
             reminderChars += chars; reminderCount++;
-            if (m.content.includes('📬 Agent 消息')) inboxInjCount++;
-            if (m.content.includes('🔬 共享发现')) discoveryInjCount++;
+            if (m.content.includes('📬')) inboxInjCount++;
           } else { userChars += chars; }
         }
         else if (m.role === 'assistant') { assistantChars += chars; }
         else if (m.role === 'tool') { toolChars += chars; }
+      }
+
+      // Transient reminders — sent to LLM but not in session
+      for (const r of this._transientReminders) {
+        transientChars += r.length;
+        transientCount++;
       }
 
       const diag = {
@@ -1405,12 +1436,13 @@ ${resumeNote}
         // ── cost centres ──
         system_prompt: { tokens: est(sysChars), msgs: this.session.filter(m => m.role === 'system').length },
         user_real:    { tokens: est(userChars), msgs: this.session.filter(m => m.role === 'user' && typeof m.content === 'string' && !m.content.includes('<system-reminder>')).length },
-        reminders:    { tokens: est(reminderChars), msgs: reminderCount, inbox: inboxInjCount, discovery: discoveryInjCount },
+        reminders:    { tokens: est(reminderChars), msgs: reminderCount, inbox: inboxInjCount },
+        transient_reminders: { tokens: est(transientChars), msgs: transientCount },
         assistant:    { tokens: est(assistantChars), msgs: this.session.filter(m => m.role === 'assistant').length },
         tool_results: { tokens: est(toolChars), msgs: this.session.filter(m => m.role === 'tool').length },
         tool_schemas: { tokens: est(toolSchemaChars), count: T.length },
         // ── totals ──
-        estimated_total: est(sysChars + userChars + reminderChars + assistantChars + toolChars),
+        estimated_total: est(sysChars + userChars + reminderChars + transientChars + assistantChars + toolChars),
         api_reported: apiUsage ? { prompt: apiUsage.prompt_tokens, completion: apiUsage.completion_tokens, total: apiUsage.total_tokens } : null,
         cache: apiUsage ? { hit: apiUsage.cache_hit_tokens, miss: apiUsage.cache_miss_tokens } : null,
       };
@@ -1863,7 +1895,7 @@ ${resumeNote}
       // parent's session/system prompt — that made forks try to spawn their own
       // sub-agents). The parent's recent tool outputs are injected as context so
       // the fork knows what was already read/modified.
-      const recentContext = this.extractRecentContext(12);
+      const recentContext = this.extractRecentContext(6);
 
       subSystem = `你是主Agent派出的工作进程（fork）。你不是主Agent。
 
@@ -1979,7 +2011,15 @@ ${subTools
       result = { text: summary || '(子 Agent 没有生成回复)' };
     } catch (e: any) {
       subAgent.saveState('failed').catch(() => {});
-      result = { text: '', err: e.message || '子 Agent 执行失败' };
+      let errReason: string;
+      if (signal.aborted) {
+        errReason = `子 Agent 被中止（超时或手动停止）: ${e.message || 'aborted'}`;
+      } else if (e.name === 'AbortError' || e.code === 'ABORT_ERR') {
+        errReason = `子 Agent 超时: ${e.message || 'aborted'}`;
+      } else {
+        errReason = e.message || '子 Agent 执行失败（未知原因）';
+      }
+      result = { text: '', err: errReason };
     } finally {
       this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
     }
