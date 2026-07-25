@@ -1,6 +1,0 @@
-error: no such command: `tauri,`
-
-help: a command with a similar name exists: `tauri`
-
-help: view all installed commands with `cargo --list`
-help: find a package to install `tauri,` with `cargo search cargo-tauri,`
