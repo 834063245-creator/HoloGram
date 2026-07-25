@@ -202,6 +202,8 @@ export class AgentRuntime implements RuntimePort {
     try {
       // 1. 恢复所有 inbox 消息
       await this._bus.restore();
+      // 1b. 清除跨 session 泄漏的 result/reply — 这些只在上个 session 内有效
+      this._bus.purgeEphemeralTypes();
 
       // 2. 恢复 TaskBoard 条目
       await this._taskBoard.restore();

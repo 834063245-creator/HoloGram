@@ -406,6 +406,32 @@ export class MessageBus {
     }
   }
 
+    /** Purge ephemeral message types (result/reply) from ALL inboxes.
+   *  These are only meaningful within a live session — after a restart,
+   *  any pending results/replies are from dead sub-agents and must be discarded.
+   *  Called after restore() to prevent cross-session message leak. */
+  purgeEphemeralTypes(): void {
+    for (const [agentId, inbox] of this.inboxes) {
+      let changed = false;
+      const remaining: AgentMessage[] = [];
+      for (const msg of inbox) {
+        if (msg.type === 'result' || msg.type === 'reply') {
+          this.msgIndex.delete(msg.id);
+          changed = true;
+        } else {
+          remaining.push(msg);
+        }
+      }
+      if (changed) {
+        inbox.length = 0;
+        inbox.push(...remaining);
+        for (let i = 0; i < inbox.length; i++) {
+          this.msgIndex.set(inbox[i].id, { agentId, index: i });
+        }
+      }
+    }
+  }
+
   ackMessage(agentId: string, msgId: string): boolean {
     return this._removeFromInbox(agentId, msgId);
   }
