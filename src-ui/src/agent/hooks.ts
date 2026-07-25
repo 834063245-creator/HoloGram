@@ -967,7 +967,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
         lines.push(`│  → ${verb}前建议调 trace_impact "${topName}" 查看完整波及范围`);
       }
 
-      // ── Engine-layer data: fragility rank, cycles, session drift ──
+      // ── Engine-layer data: compact tag-style summary (was 6 sections, ~20 lines) ──
       if (ctx.engine) {
         const eng = ctx.engine;
         const normFp = fp.replace(/\\/g, '/').toLowerCase();
@@ -977,53 +977,38 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
             normFp.includes(r.file.replace(/\\/g, '/').toLowerCase()),
         );
         if (rankEntry || eng.cycleCount > 0 || eng.sessionDrift > 0) {
-          lines.push(`│`);
-          lines.push(`│  ── 引擎层数据 ──`);
-          if (rankEntry) {
-            lines.push(`│  脆弱度排名: #${eng.fragilityRanks.indexOf(rankEntry) + 1} (${rankEntry.score.toFixed(0)})`);
-          }
-          if (eng.cycleCount > 0) {
-            lines.push(`│  项目循环依赖: ${eng.cycleCount} 个`);
-          }
+          // Line 1: fragility + cycles + drift + health
+          const tags: string[] = [];
+          if (rankEntry) tags.push(`脆弱#${eng.fragilityRanks.indexOf(rankEntry) + 1}(${rankEntry.score.toFixed(0)})`);
+          if (eng.cycleCount > 0) tags.push(`循环×${eng.cycleCount}`);
           if (eng.sessionDrift > 0) {
             const driftPct = (eng.sessionDrift * 100).toFixed(1);
-            lines.push(`│  会话累积退化: +${driftPct}%`);
+            tags.push(`退化+${driftPct}%`);
             if (eng.sessionDrift > 0.1) {
               riskLevel = 'HIGH   ';
-              lines.push(`│  ⚠ 累积退化超过 10%，门禁升级为 HIGH`);
             }
           }
-          lines.push(`│  耦合健康度: ${eng.healthScore}/100`);
+          tags.push(`健康${eng.healthScore}/100`);
+          lines.push(`│  引擎: ${tags.join(' ')}`);
 
-          // ── LSP hotspots ──
-          if (eng.lspHotspots.length > 0) {
-            const fileHit = eng.lspHotspots.filter(
-              (h) =>
-                h.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
-                normFp.includes(h.file.replace(/\\/g, '/').toLowerCase()),
-            );
-            if (fileHit.length > 0) {
-              lines.push(`│  LSP 调用热点:`);
-              for (const h of fileHit.slice(0, 3)) {
-                lines.push(`│  • ${h.symbol} — ~${h.callers} 调用者`);
-              }
-            }
+          // Line 2: LSP hotspots + callers + semantic neighbors + synthesis (if any)
+          const lspParts: string[] = [];
+          const fileHit = eng.lspHotspots.filter(
+            (h) =>
+              h.file.replace(/\\/g, '/').toLowerCase().includes(normFp) ||
+              normFp.includes(h.file.replace(/\\/g, '/').toLowerCase()),
+          );
+          if (fileHit.length > 0) {
+            lspParts.push(fileHit.slice(0, 3).map((h) => `${h.symbol}(${h.callers}↓)`).join(','));
           }
-
-          // ── LSP real call resolution ──
           if (eng.lspCallers.size > 0) {
             const callerEntries =
               eng.lspCallers.get(normFp) ||
               [...eng.lspCallers.entries()].find(([k]) => k.replace(/\\/g, '/').toLowerCase().includes(normFp))?.[1];
             if (callerEntries && callerEntries.length > 0) {
-              lines.push(`│  LSP 调用者 (真实解析):`);
-              for (const c of callerEntries.slice(0, 3)) {
-                lines.push(`│  • \`${c.symbol}\` — ${c.count} 次调用`);
-              }
+              lspParts.push(callerEntries.slice(0, 3).map((c) => `${c.symbol}(${c.count}↓)`).join(','));
             }
           }
-
-          // ── Semantic neighbors ──
           if (eng.semanticNeighbors.size > 0) {
             const neighbors =
               eng.semanticNeighbors.get(normFp) ||
@@ -1031,13 +1016,21 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
                 k.replace(/\\/g, '/').toLowerCase().includes(normFp),
               )?.[1];
             if (neighbors && neighbors.length > 0) {
-              lines.push(`│  语义邻居: ${neighbors.map((n) => `\`${n.name}\``).join(', ')}`);
+              lspParts.push(`邻居:${neighbors.slice(0, 5).map((n) => n.name).join(',')}`);
             }
           }
-
-          // ── Synthesis alerts ──
           if (eng.synthesisAlerts.length > 0) {
-            lines.push(`│  合成引擎: ${eng.synthesisAlerts.map((a) => `${a.type}(${a.count})`).join(', ')}`);
+            lspParts.push(`合成:${eng.synthesisAlerts.map((a) => `${a.type}(${a.count})`).join(',')}`);
+          }
+          if (lspParts.length > 0) {
+            lines.push(`│  LSP: ${lspParts.join(' ')}`);
+          }
+
+          // Upgrade risk level if drift is severe
+          if (eng.sessionDrift > 0.1) {
+            // Update the risk level line we already pushed
+            const riskIdx = lines.findIndex((l) => l.includes('风险等级'));
+            if (riskIdx >= 0) lines[riskIdx] = `│  风险等级: ${riskLevel} ⚠退化>10%`;
           }
         }
       }
