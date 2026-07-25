@@ -15,7 +15,7 @@ fn search_backend() -> &'static str {
 #[tauri::command]
 pub(crate) async fn web_search(
     query: String,
-    _agent_id: Option<String>,
+    agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -27,7 +27,7 @@ pub(crate) async fn web_search(
     }, query.clone());
 
     {
-        let tool = crate::tools::WebFetchTool { url: search_url.clone() };
+        let tool = crate::tools::WebFetchTool { url: search_url.clone(), agent_id: agent_id.clone() };
         crate::utils::check_permission(&tool, &ctx, &app).await?;
     }
 
@@ -150,13 +150,13 @@ fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
 #[tauri::command]
 pub(crate) async fn web_fetch(
     url: String,
-    _agent_id: Option<String>,
+    agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
     {
-        let tool = crate::tools::WebFetchTool { url: url.clone() };
+        let tool = crate::tools::WebFetchTool { url: url.clone(), agent_id };
         crate::utils::check_permission(&tool, &ctx, &app).await?;
     }
 

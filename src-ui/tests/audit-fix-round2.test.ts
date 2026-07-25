@@ -2,13 +2,15 @@
 // Round 2 audit fix tests:
 // R6 (TaskBoard/DiscoveryBoard destroy prevents flush revival)
 // Low-prio: discovery restore dedup, compaction deserializeState replace semantics
-// R1 (inbox recovery) — verified via Rust-side list_dir_recursive filter_ignored param + message-store RPC calls
+// R1 (inbox recovery) — regression test: restore/delete must pass filter_ignored: false
+// A6 (session-scoped boards) — two sessions flush to separate files, no cross-write
 // R4 (discard wrong namespace) — verified via code removal (abort path handles cleanup)
-// R8 (forceClearState flush) — verified via workspace.ts flushAllBoards call before nulling runtime
+// R8 (forceClearState flush) — covered by flushAllBoards being awaited in deactivate()
 
 import { describe, expect, it, vi } from 'vitest';
 import { TaskBoard } from '../src/agent/task-board';
 import { DiscoveryBoard } from '../src/agent/discovery-board';
+import { JsonMessageStore } from '../src/agent/message-store';
 
 // ── Mock RPC ──
 const mockRpc = vi.fn();
@@ -96,5 +98,55 @@ describe('CompactionTracker deserializeState replaces not appends', () => {
     const parsed2 = JSON.parse(tracker.serializeState());
     // Should still be 1, not 2 (replace, not append)
     expect(parsed2.events.length).toBe(1);
+  });
+});
+
+// ── R1: inbox restore must bypass is_ignored_path filtering ──
+describe('R1: JsonMessageStore restore passes filter_ignored: false', () => {
+  it('restore lists .hologram/agents with filter_ignored: false and recovers messages', async () => {
+    const store = new JsonMessageStore('D:/test');
+    mockRpc.mockImplementation((cmd: string) => {
+      if (cmd === 'list_directory') {
+        return Promise.resolve(JSON.stringify([{ name: 'agent-1', is_dir: true }]));
+      }
+      if (cmd === 'read_file_content') {
+        return Promise.resolve(JSON.stringify([{ id: 'm1', from: 'a', type: 'text', payload: 'hi', ts: 1 }]));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const restored = await store.restore();
+
+    // Every list_directory call must carry filter_ignored: false — otherwise
+    // .hologram is filtered by is_ignored_path and inbox recovery silently dies.
+    const listCalls = mockRpc.mock.calls.filter((c) => c[0] === 'list_directory');
+    expect(listCalls.length).toBeGreaterThan(0);
+    for (const c of listCalls) {
+      expect(c[1]).toMatchObject({ filter_ignored: false });
+    }
+    // And the message actually round-trips
+    expect(restored.get('agent-1')?.length).toBe(1);
+  });
+});
+
+// ── A6: session-scoped boards flush to their own files ──
+describe('A6: two sessions flush to separate board files', () => {
+  it('session-a and session-b write distinct taskboard paths', async () => {
+    const boardA = new TaskBoard('D:/test', 'session-a');
+    const boardB = new TaskBoard('D:/test', 'session-b');
+    boardA.register('agent-1', 'parent-1', 'task A', null);
+    boardB.register('agent-2', 'parent-2', 'task B', null);
+
+    mockRpc.mockResolvedValue(undefined);
+    await boardA.flush();
+    await boardB.flush();
+
+    const writes = mockRpc.mock.calls.filter((c) => c[0] === 'write_file_content');
+    const paths = writes.map((c) => (c[1] as { filePath: string }).filePath);
+    expect(paths.some((p) => p.endsWith('.hologram/taskboard/session-a.json'))).toBe(true);
+    expect(paths.some((p) => p.endsWith('.hologram/taskboard/session-b.json'))).toBe(true);
+    // No cross-contamination: session-a's board never written to session-b's path
+    const aWrites = writes.filter((c) => (c[1] as { filePath: string }).filePath.includes('session-a'));
+    expect(aWrites.every((c) => !(c[1] as { filePath: string }).filePath.includes('session-b'))).toBe(true);
   });
 });

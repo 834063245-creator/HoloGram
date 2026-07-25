@@ -1247,4 +1247,52 @@ fn create_order() -> &'static str {
         assert!(!has_express_content("const fastify = require('fastify');"));
     }
 
+    // ── C3: framework property reflects the actual framework, not a hardcoded guess ──
+    #[test]
+    fn test_c3_inject_routes_framework_property() {
+        let mut graph = Graph::new();
+        let routes: Vec<DetectedRoute> = vec![
+            ("GET".to_string(), "/users".to_string(), "index".to_string(), "app.py".to_string(), 3usize),
+        ];
+        let added = inject_routes(&mut graph, &routes, "flask");
+        assert_eq!(added, 1);
+        let route_node = graph
+            .nodes
+            .values()
+            .find(|n| n.properties["kind"] == "route")
+            .expect("route node should exist");
+        assert_eq!(route_node.properties["framework"], "flask");
+        // Regression: was hardcoded — every .py route became "django"
+        assert_ne!(route_node.properties["framework"], "django");
+        assert_eq!(route_node.properties["method"], "GET");
+        assert_eq!(route_node.properties["path"], "/users");
+    }
+
+    // ── C4: cross_file reflects the handler's real location, not hardcoded false ──
+    #[test]
+    fn test_c4_inject_routes_cross_file() {
+        let mut graph = Graph::new();
+        // Handler node living in a DIFFERENT file than the route definition
+        let mut handler = Node::new("handler_views_index", "index", NodeKind::Symbol);
+        handler.location = Some("views.py:10".to_string());
+        graph.add_node(handler);
+
+        let routes: Vec<DetectedRoute> = vec![
+            ("GET".to_string(), "/users".to_string(), "index".to_string(), "urls.py".to_string(), 3usize),
+        ];
+        inject_routes(&mut graph, &routes, "flask");
+        let edge = graph.edges.values().next().expect("route edge should exist");
+        assert_eq!(edge.target, "handler_views_index");
+        assert!(edge.cross_file, "handler in views.py vs route in urls.py must be cross_file");
+
+        // Same-file handler → cross_file == false
+        let mut graph2 = Graph::new();
+        let mut handler2 = Node::new("handler_urls_index", "index", NodeKind::Symbol);
+        handler2.location = Some("urls.py:20".to_string());
+        graph2.add_node(handler2);
+        inject_routes(&mut graph2, &routes, "flask");
+        let edge2 = graph2.edges.values().next().expect("route edge should exist");
+        assert!(!edge2.cross_file, "handler and route both in urls.py must not be cross_file");
+    }
+
 }

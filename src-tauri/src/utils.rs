@@ -322,7 +322,7 @@ pub(crate) async fn check_permission(
                 "path": tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                 "reason": reason,
                 "danger": danger,
-                "agentId": crate::permissions::active_agent_id(),
+                "agentId": tool.agent_id(),
                 "suggestions": suggestions.iter().map(|s| serde_json::json!({
                     "rule": s.rule,
                     "behavior": s.behavior,
@@ -1224,4 +1224,35 @@ pub(crate) fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> 
         }
     }
     None
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── B1: SSRF guard must catch ipv6-mapped-ipv4 (::ffff:a.b.c.d) ──
+    #[test]
+    fn test_b1_is_private_ip_ipv6_mapped() {
+        assert!(is_private_ip("::ffff:127.0.0.1"), "ipv6-mapped loopback must be blocked");
+        assert!(is_private_ip("::ffff:10.0.0.5"), "ipv6-mapped private range must be blocked");
+        assert!(is_private_ip("::ffff:192.168.1.1"), "ipv6-mapped private range must be blocked");
+    }
+
+    #[test]
+    fn test_b1_is_private_ip_baseline() {
+        assert!(is_private_ip("127.0.0.1"));
+        assert!(is_private_ip("10.1.2.3"));
+        assert!(is_private_ip("192.168.0.1"));
+        assert!(is_private_ip("172.16.5.5"));
+        assert!(is_private_ip("169.254.1.1"), "link-local must be blocked");
+        assert!(is_private_ip("0.0.0.0"), "unspecified must be blocked");
+        assert!(is_private_ip("::1"), "ipv6 loopback must be blocked");
+        assert!(is_private_ip("fe80::1"), "ipv6 link-local must be blocked");
+        assert!(is_private_ip("fd00::1"), "ipv6 ULA must be blocked");
+        assert!(is_private_ip("localhost"));
+        // Public addresses must NOT be flagged
+        assert!(!is_private_ip("8.8.8.8"));
+        assert!(!is_private_ip("1.1.1.1"));
+        assert!(!is_private_ip("2606:4700:4700::1111"), "public ipv6 must pass");
+        assert!(!is_private_ip("example.com"), "plain hostname is not an IP literal");
+    }
 }

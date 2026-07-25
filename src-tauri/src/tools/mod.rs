@@ -37,6 +37,10 @@ impl Tool for ReadTool {
         false
     }
 
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
         // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
@@ -71,6 +75,10 @@ impl Tool for EditTool {
 
     fn is_destructive(&self) -> bool {
         true
+    }
+
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
     }
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
@@ -166,6 +174,7 @@ impl Tool for GitTool {
 
 pub struct WebFetchTool {
     pub url: String,
+    pub agent_id: Option<String>,
 }
 
 impl Tool for WebFetchTool {
@@ -183,6 +192,10 @@ impl Tool for WebFetchTool {
 
     fn is_destructive(&self) -> bool {
         false
+    }
+
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
     }
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {

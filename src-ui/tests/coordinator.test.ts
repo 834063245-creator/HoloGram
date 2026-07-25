@@ -253,4 +253,57 @@ describe('SubAgentPool', () => {
     const handle = await queuedSpawn.done;
     expect(handle.status).toBe(SubAgentStatus.Stopped);
   });
+
+  // ── Queue-kill: stopping an agent that is STILL queued (never spawned) ──
+
+  it('stop works on a queued (never-spawned) agent and settles done as stopped', async () => {
+    const pool = new SubAgentPool(1, 60000);
+    pool.spawn('occupier', () => new Promise<{ text: string }>(() => {}));
+    const queued = pool.spawn('queued task', fakeRun('never runs', 5))!;
+    expect(pool.isQueued(queued.id)).toBe(true);
+
+    expect(pool.stop(queued.id)).toBe(true);
+    expect(pool.isQueued(queued.id)).toBe(false);
+
+    const handle = await queued.done;
+    expect(handle.status).toBe(SubAgentStatus.Stopped);
+    expect(handle.error).toContain('queued');
+    // The stopped queued agent is recorded in history under its queued id
+    expect(pool.getHandle(queued.id)?.status).toBe(SubAgentStatus.Stopped);
+    pool.stopAll();
+  });
+
+  it('stop by alias works on a queued agent (before any drain)', async () => {
+    const pool = new SubAgentPool(1, 60000);
+    pool.spawn('occupier', () => new Promise<{ text: string }>(() => {}));
+    const queued = pool.spawn('queued', () => new Promise<{ text: string }>(() => {}))!;
+    pool.registerAlias('sub-still-queued', queued.id);
+
+    expect(pool.stop('sub-still-queued')).toBe(true);
+    const handle = await queued.done;
+    expect(handle.status).toBe(SubAgentStatus.Stopped);
+    pool.stopAll();
+  });
+
+  it('stopAll drains the queue instead of letting _drainQueue spawn queued agents', async () => {
+    const pool = new SubAgentPool(1, 60000);
+    let queuedRan = false;
+    pool.spawn('occupier', () => new Promise<{ text: string }>(() => {}));
+    const queued = pool.spawn('queued', (signal) => {
+      queuedRan = true;
+      return fakeRun('should never resolve', 5)(signal);
+    })!;
+
+    const stopped = pool.stopAll();
+    expect(stopped).toContain(queued.id);
+    expect(pool.isQueued(queued.id)).toBe(false);
+
+    const handle = await queued.done;
+    expect(handle.status).toBe(SubAgentStatus.Stopped);
+
+    // Give any erroneous drain a chance to fire — the queued runFn must never start
+    await new Promise((r) => setTimeout(r, 50));
+    expect(queuedRan).toBe(false);
+    expect(pool.runningCount).toBe(0);
+  });
 });

@@ -21,25 +21,6 @@ use crate::agent_isolation::AgentIsolation;
 use crate::audit::AuditLogger;
 use crate::sandbox::{Sandbox, SandboxResult};
 
-// ponytail: request-local agent_id so forward_map_path / reverse_map_path
-// know which agent's isolation to use without thread-local plumbing through
-// every utility function (require_read, require_write, etc.).
-std::thread_local! {
-    static ACTIVE_AGENT_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-
-pub fn set_active_agent_id(id: &str) {
-    ACTIVE_AGENT_ID.with(|cell| *cell.borrow_mut() = Some(id.to_string()));
-}
-
-pub fn clear_active_agent_id() {
-    ACTIVE_AGENT_ID.with(|cell| *cell.borrow_mut() = None);
-}
-
-pub fn active_agent_id() -> Option<String> {
-    ACTIVE_AGENT_ID.with(|cell| cell.borrow().clone())
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Tool trait — 每个 Tauri command 对应一个 Tool 实现 (spec §4.2)
 // ═══════════════════════════════════════════════════════════════
@@ -54,6 +35,11 @@ pub trait Tool: Sync {
     #[allow(dead_code)]
     fn requires_user_interaction(&self) -> bool {
         false
+    }
+    /// Agent attribution for permission-ask display (60s sub-agent timeout etc.).
+    /// Passed explicitly per-call — no shared/thread-local state (parallel-safe).
+    fn agent_id(&self) -> Option<&str> {
+        None
     }
     /// 工具自治裁决。返回 Passthrough 表示本工具无特殊意见，交给引擎兜底。
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult;

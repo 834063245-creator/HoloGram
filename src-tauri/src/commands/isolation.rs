@@ -165,7 +165,6 @@ pub(crate) fn agent_isolation_force_purge(
 
     // Always clear registry entry
     ctx.clear_isolation(&agent_id);
-    crate::permissions::clear_active_agent_id();
 
     // Run git worktree prune to clean stale metadata
     let _ = crate::agent_isolation::git_cmd()

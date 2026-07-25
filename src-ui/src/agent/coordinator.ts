@@ -274,9 +274,17 @@ export class SubAgentPool {
   }
 
   /** Stop a running sub-agent: aborts its runFn, then marks it stopped.
+   *  Also covers queued (not-yet-spawned) agents — dequeues them and settles
+   *  their `done` as stopped so agent_kill works before a slot frees up.
    *  Accepts both model-visible (sub-...) and internal (subagent-...) ids. */
   stop(id: string): boolean {
     const internalId = this._resolveId(id);
+    const qIdx = this.queue.findIndex((q) => q.queuedId === internalId);
+    if (qIdx >= 0) {
+      const [item] = this.queue.splice(qIdx, 1);
+      this._stopQueued(item);
+      return true;
+    }
     const pending = this.agents.get(internalId);
     if (!pending) return false;
     pending.abortController.abort();
@@ -284,15 +292,40 @@ export class SubAgentPool {
     return true;
   }
 
-  /** Stop all running sub-agents. Returns the stopped agent IDs. */
+  /** Stop all running sub-agents AND drain the queue (otherwise _finishStopped's
+   *  _drainQueue would spawn queued agents right after stopping the running ones).
+   *  Returns the stopped agent IDs. */
   stopAll(): string[] {
     const stopped: string[] = [];
+    while (this.queue.length > 0) {
+      const item = this.queue.shift()!;
+      this._stopQueued(item);
+      stopped.push(item.queuedId);
+    }
     for (const [id, pending] of this.agents) {
       pending.abortController.abort();
       this._finishStopped(pending);
       stopped.push(id);
     }
     return stopped;
+  }
+
+  /** Settle a queued (never-spawned) agent as stopped: records it in completed
+   *  history and resolves the caller's `done` via the stored resolve, producing
+   *  the same { ...handle, id } shape _enqueue would have produced on drain. */
+  private _stopQueued(item: QueuedSpawn): void {
+    this._queuedIds.delete(item.queuedId);
+    const handle: SubAgentHandle = {
+      id: item.queuedId,
+      description: item.description,
+      status: SubAgentStatus.Stopped,
+      startedAt: Date.now(),
+      error: 'stopped while queued',
+    };
+    this._addCompleted(handle);
+    item.resolve({ id: item.queuedId, signal: new AbortController().signal, done: Promise.resolve(handle) });
+    const aliasId = this._reverseAlias(item.queuedId);
+    this.onFinish?.(aliasId ?? item.queuedId, SubAgentStatus.Stopped);
   }
 
   private _finishStopped(pending: PendingAgent): void {

@@ -577,17 +577,23 @@ export class AgentRuntime implements RuntimePort {
   /** E6: Flush all session-scoped boards synchronously (best-effort).
    *  Called from beforeunload to prevent data loss on tab/window close.
    *  Clears debounce timers (sync) and fires flush() (async, may not complete). */
-  flushAllBoards(): void {
+  /** Flush all session-scoped boards + message bus. Awaits every flush so
+   *  callers on the main cleanup path (deactivate) can guarantee data is
+   *  persisted before tearing down the runtime. Uses allSettled so one
+   *  failing board doesn't block the others. */
+  async flushAllBoards(): Promise<void> {
+    const flushes: Promise<unknown>[] = [];
     for (const board of this._taskBoards.values()) {
       board.clearFlushTimer();
-      void board.flush();
+      flushes.push(board.flush());
     }
     for (const board of this._discoveryBoards.values()) {
       board.clearFlushTimer();
-      void board.flush();
+      flushes.push(board.flush());
     }
     this._bus.clearFlushTimer();
-    void this._bus.flush();
+    flushes.push(this._bus.flush());
+    await Promise.allSettled(flushes);
   }
 
   // ── Private: wrap RuntimeNotifier into AgentUINotifier ──

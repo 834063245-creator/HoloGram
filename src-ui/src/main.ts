@@ -811,7 +811,7 @@ async function init(): Promise<void> {
         /* silent */
       }
       try {
-        workspace.runtime?.flushAllBoards();
+        void workspace.runtime?.flushAllBoards();
       } catch {
         /* silent */
       }

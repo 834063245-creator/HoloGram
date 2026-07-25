@@ -418,9 +418,10 @@ export class Workspace {
     // Clear agent & memory
     // Stop all running sub-agents before clearing
     this.subAgentPool.stopAll();
-    // Flush session-scoped boards before destroying runtime
+    // Flush session-scoped boards before destroying runtime — awaited so
+    // board data is persisted before the runtime agents are torn down.
     if (this.runtime) {
-      this.runtime.flushAllBoards();
+      await this.runtime.flushAllBoards();
     }
     // Destroy runtime agents
     if (this.runtime) {
@@ -462,9 +463,10 @@ export class Workspace {
     }
     this._unlisteners = [];
     this.subAgentPool.stopAll();
-    // Best-effort flush before detaching runtime — prevents data loss
+    // Best-effort flush before detaching runtime — fire-and-forget by design
+    // (this is the sync emergency path; deactivate() awaits the flush).
     if (this.runtime) {
-      try { this.runtime.flushAllBoards(); } catch { /* best-effort */ }
+      void this.runtime.flushAllBoards();
     }
     this.runtime = null;
     this.agent = null;
