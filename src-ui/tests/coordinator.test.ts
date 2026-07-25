@@ -202,4 +202,55 @@ describe('SubAgentPool', () => {
     expect(s).toContain('running task');
     pool.stopAll();
   });
+
+  // ── R5: Queue path alias mapping ──
+
+  it('R5: queued agent alias is re-mapped to internal id after drain', async () => {
+    // Fill the pool to capacity, then spawn one more (queued)
+    const pool = new SubAgentPool(1, 60000);
+    // Occupy the single slot
+    const occupying = pool.spawn('occupier', () => new Promise<{ text: string }>(() => {}))!;
+    expect(pool.runningCount).toBe(1);
+
+    // This one should be queued
+    const queuedSpawn = pool.spawn('queued task', fakeRun('queued result', 5))!;
+    const modelId = 'sub-test-123';
+    pool.registerAlias(modelId, queuedSpawn.id);
+
+    // The queued id should be in _queuedIds
+    expect(pool.isQueued(queuedSpawn.id)).toBe(true);
+
+    // Stop the occupier to free a slot → triggers _drainQueue
+    pool.stop(occupying.id);
+
+    // Wait for the queued agent to finish
+    const handle = await queuedSpawn.done;
+    expect(handle.status).toBe(SubAgentStatus.Completed);
+    expect(handle.result).toBe('queued result');
+
+    // After drain + completion, the alias should be cleaned up
+    expect(pool.getHandle(modelId)).toBeDefined(); // Should find in completed
+    pool.stopAll();
+  });
+
+  it('R5: stop by model-visible alias works for drained (previously queued) agent', async () => {
+    const pool = new SubAgentPool(1, 60000);
+    // Fill the slot
+    const occupier = pool.spawn('occupier', () => new Promise<{ text: string }>(() => {}))!;
+    
+    // Queue a second agent
+    const queuedSpawn = pool.spawn('queued', () => new Promise<{ text: string }>(() => {}))!;
+    const modelId = 'sub-alias-test';
+    pool.registerAlias(modelId, queuedSpawn.id);
+
+    // Free the slot → drain happens
+    pool.stop(occupier.id);
+
+    // Now stop the drained agent using the model-visible alias
+    const stopped = pool.stop(modelId);
+    expect(stopped).toBe(true);
+    
+    const handle = await queuedSpawn.done;
+    expect(handle.status).toBe(SubAgentStatus.Stopped);
+  });
 });

@@ -98,11 +98,31 @@ fn extract_django_route(
                     break;
                 }
                 "call" => {
-                    // D3: Check if this is an include() call — not a handler
+                    // D3: Check if this is an include() call — emit as include route
+                    // so the prefix is preserved for potential cross-file resolution
                     if let Some(func) = child.child_by_field_name("function") {
                         let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
                         if func_name == "include" {
-                            return None; // include() is not a handler
+                            // Extract the included module path (first string argument)
+                            let include_target = child
+                                .child_by_field_name("arguments")
+                                .and_then(|include_args| {
+                                    let mut ac = include_args.walk();
+                                    for inc_child in include_args.children(&mut ac) {
+                                        if inc_child.kind() == "string" {
+                                            let t = inc_child.utf8_text(source.as_bytes()).unwrap_or("");
+                                            return Some(strip_py_string_prefix(t).to_string());
+                                        }
+                                    }
+                                    None
+                                })
+                                .unwrap_or_default();
+                            if !route_str.is_empty() {
+                                // Return with handler = "include:target" to preserve prefix info
+                                handler = format!("include({})", include_target);
+                                return Some((http_method.clone(), route_str.clone(), handler));
+                            }
+                            return None;
                         }
                     }
                     // e.g. views.OrderView.as_view()
@@ -187,7 +207,7 @@ fn expand_drf_register(
     //   PATCH  /prefix/{id}/  → partial_update
     //   DELETE /prefix/{id}/  → destroy
     let base = format!("/{}", route_prefix.trim_matches('/'));
-    let detail = format!("/{}/{{id}}", route_prefix.trim_matches('/'));
+    let detail = format!("/{}/{{id}}/", route_prefix.trim_matches('/'));
 
     vec![
         ("GET".into(),    format!("{}/", base),    format!("{}.list", viewset_name),           file.to_string(), line),

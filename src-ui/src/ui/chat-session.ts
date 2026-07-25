@@ -261,20 +261,32 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   removeSessionExecState(ctx.storeId, s.id);
   agentSessionState.removeAgent(ctx.storeId, s.id);
 
-  // Destroy session-scoped boards and their persistence files
-  const runtime = ctx.getRuntime?.();
-  if (runtime) {
-    runtime.destroySessionBoards(String(s.id)).catch(() => {});
-  }
-
   const newSessions = [...st.sessions];
   newSessions.splice(idx, 1);
+  // Adjust activeIdx: if we closed a session before the active one, shift left;
+  // if we closed the active one, the next session becomes active (or clamp).
   let newIdx = st.activeIdx;
+  if (idx < st.activeIdx) newIdx = st.activeIdx - 1;
   if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
   if (newIdx < 0) newIdx = 0;
+
+  // Retarget proxy to the new active session BEFORE destroying old boards —
+  // prevents the orphaned board from being flushed (reviving deleted file)
+  const runtime = ctx.getRuntime?.();
+  const newSessionId = String(newSessions[newIdx].id);
+  if (runtime) {
+    runtime.setCurrentSession(newSessionId);
+    useAgentPanelStore.getState().setCurrentSessionId(newSessionId);
+  }
+
   getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
   // ponytail: no restoreMessages — React reads from per-session store automatically
   ctx.updateFooter();
+
+  // Now destroy the closed session's boards (best-effort, fire-and-forget)
+  if (runtime) {
+    runtime.destroySessionBoards(String(s.id)).catch(() => {});
+  }
 
   const projectPath = ctx.getProjectPath();
   if (projectPath) {
@@ -360,7 +372,7 @@ function trackerFile(projectPath: string): string {
 /** Scan sessions directory for the highest numeric session ID. Returns 0 if no sessions found. */
 export async function scanMaxSessionId(projectPath: string): Promise<number> {
   try {
-    const raw = await rpc<string>('list_directory', { path: sessionsDir(projectPath) });
+    const raw = await rpc<string>('list_directory', { path: sessionsDir(projectPath), filter_ignored: false });
     const entries: any[] = JSON.parse(raw);
     if (!Array.isArray(entries)) return 0;
     let maxId = 0;
@@ -632,7 +644,7 @@ export async function listSavedSessions(
   const dirPath = sessionsDir(projectPath);
   let entries: any[];
   try {
-    const raw = await rpc<string>('list_directory', { path: dirPath });
+    const raw = await rpc<string>('list_directory', { path: dirPath, filter_ignored: false });
     entries = JSON.parse(raw);
   } catch (e) {
     console.error('[chat] listSavedSessions: list_directory failed', e);

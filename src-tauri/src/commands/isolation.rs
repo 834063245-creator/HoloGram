@@ -27,7 +27,7 @@ pub(crate) fn agent_isolation_create(
         if let Ok(guard) = state.lock() {
             if let Some(ref handle) = *guard {
                 handle.permission_ctx.set_isolation(&id, isolation);
-                crate::permissions::set_active_agent_id(&id);
+                handle.permission_ctx.set_active_agent_id_ctx(&id);
             }
         }
     }
@@ -46,8 +46,8 @@ pub(crate) fn agent_isolation_diff(
     agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
-    crate::permissions::set_active_agent_id(&agent_id);
     let ctx = crate::utils::get_ctx(&state)?;
+    ctx.set_active_agent_id_ctx(&agent_id);
     let isolation = ctx
         .get_isolation()
         .ok_or("没有活跃的隔离环境")?;
@@ -77,8 +77,8 @@ pub(crate) fn agent_isolation_merge(
     agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
-    crate::permissions::set_active_agent_id(&agent_id);
     let ctx = crate::utils::get_ctx(&state)?;
+    ctx.set_active_agent_id_ctx(&agent_id);
     let isolation = ctx
         .get_isolation()
         .ok_or("没有活跃的隔离环境")?;
@@ -94,8 +94,8 @@ pub(crate) fn agent_isolation_discard(
     agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
-    crate::permissions::set_active_agent_id(&agent_id);
     let ctx = crate::utils::get_ctx(&state)?;
+    ctx.set_active_agent_id_ctx(&agent_id);
     let isolation = ctx
         .get_isolation()
         .ok_or("没有活跃的隔离环境")?;

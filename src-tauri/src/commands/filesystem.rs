@@ -11,19 +11,22 @@ use hologram_engine::pipeline::discovery::is_ignored_path;
 pub(crate) async fn list_directory(
     path: String,
     is_agent: Option<bool>,
+    filter_ignored: Option<bool>,
     _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    let filter = filter_ignored.unwrap_or(true);
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
             return Err(format!("不是有效目录: {}", path));
         }
-        Ok(crate::utils::list_dir_recursive(&root))
+        Ok(crate::utils::list_dir_recursive(&root, filter))
     })
     .await
     .map_err(|e| format!("目录列表任务失败: {e}"))?
@@ -38,7 +41,8 @@ pub(crate) async fn list_directory_flat(
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
     tokio::task::spawn_blocking(move || {
@@ -62,7 +66,8 @@ pub(crate) async fn read_file_content(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let (_, content) = crate::confined_fs::read_text(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(crate::confined_fs::format_lines(&content, offset, limit))
@@ -91,7 +96,8 @@ pub(crate) async fn read_file_base64(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let (_, bytes) = crate::confined_fs::read_bytes(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
@@ -107,7 +113,8 @@ pub(crate) async fn write_file_content(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let real_path = crate::confined_fs::write_text(&file_path, &content, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
@@ -139,10 +146,10 @@ pub(crate) fn log_append(
     _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
-    if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
-    }
     let ctx = crate::utils::get_ctx(&state)?;
+    if let Some(id) = &_agent_id {
+        ctx.set_active_agent_id_ctx(id);
+    }
     let physical = ctx.forward_map_path(std::path::Path::new(&path));
     let physical_str = physical.to_string_lossy().to_string();
     let tool = crate::tools::EditTool { path: physical_str.clone() };
@@ -165,7 +172,8 @@ pub(crate) async fn create_directory(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     crate::confined_fs::create_dir(&path, is_agent.unwrap_or(false), &state, &app).await?;
     Ok(())
@@ -188,7 +196,8 @@ pub(crate) async fn delete_file_or_dir(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let real = crate::confined_fs::delete(&path, is_agent.unwrap_or(false), &state, &app).await?;
     let rp = real.to_string_lossy().replace('\\', "/");
@@ -214,7 +223,8 @@ pub(crate) async fn rename_file_or_dir(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let is_agent = is_agent.unwrap_or(false);
     let parent = std::path::Path::new(&file_path)
@@ -250,7 +260,8 @@ pub(crate) async fn move_file(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let is_agent = is_agent.unwrap_or(false);
     let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, &state, &app).await?;
@@ -276,7 +287,8 @@ pub(crate) async fn open_in_explorer(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let real = crate::confined_fs::verify_read_path(&path, is_agent.unwrap_or(false), &state, &app).await?;
     #[cfg(target_os = "windows")]

@@ -45,7 +45,8 @@ pub(crate) async fn search_code(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let root = crate::utils::resolve_read_dispatch(&directory, is_agent.unwrap_or(false), &state, &app).await?;
     let is_regex = use_regex.unwrap_or(false);
@@ -294,7 +295,8 @@ pub(crate) async fn glob(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
     let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?;

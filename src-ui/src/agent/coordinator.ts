@@ -56,6 +56,7 @@ interface QueuedSpawn {
   runFn: SubAgentRunFn;
   callId?: string;
   timeoutMs?: number;
+  queuedId: string;
   resolve: (spawned: SpawnedAgent) => void;
 }
 
@@ -208,6 +209,7 @@ export class SubAgentPool {
       runFn,
       callId,
       timeoutMs,
+      queuedId: id,
       resolve: (real: SpawnedAgent) => {
         // When the real spawn fires, connect its done to our deferred promise
         real.done.then((h) => {
@@ -227,8 +229,16 @@ export class SubAgentPool {
     while (this.queue.length > 0 && this.agents.size < this.maxConcurrent) {
       const item = this.queue.shift()!;
       const spawned = this._doSpawn(item.description, item.runFn, item.callId, item.timeoutMs);
+      // Re-map any alias that pointed to the queued id → real internal id
+      for (const [alias, internal] of this._aliasToInternal) {
+        if (internal === item.queuedId) {
+          this._aliasToInternal.set(alias, spawned.id);
+          break;
+        }
+      }
+      // Delete the QUEUED id (not spawned.id which was never in the set)
+      this._queuedIds.delete(item.queuedId);
       item.resolve(spawned);
-      this._queuedIds.delete(spawned.id);
     }
   }
 

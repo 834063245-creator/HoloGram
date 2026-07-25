@@ -44,6 +44,7 @@ export class TaskBoard {
   private _projectPath: string;
   private _sessionId: string;
   private _dirReady = false;
+  private _destroyed = false;
   // debounced flush — 延迟批量写入
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -74,7 +75,7 @@ export class TaskBoard {
 
   /** 序列化 entries（Map → Array）写文件。best-effort — 永不抛异常。 */
   async flush(): Promise<void> {
-    if (!this._projectPath) return;
+    if (!this._projectPath || this._destroyed) return;
     try {
       await this._ensureDir();
       const arr = Array.from(this.entries.entries());
@@ -127,9 +128,12 @@ export class TaskBoard {
     }
   }
 
-  /** 删除持久化文件 — 会话结束时调用 */
+  /** 删除持久化文件 — 会话结束时调用。清除 entries 防止后续 flush 复活文件。 */
   async destroy(): Promise<void> {
     if (!this._projectPath) return;
+    this._destroyed = true;
+    this.entries.clear();
+    this.clearFlushTimer();
     try {
       await rpc('delete_file_or_dir', { path: this._boardPath });
     } catch {

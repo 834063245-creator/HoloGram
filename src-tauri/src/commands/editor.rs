@@ -17,7 +17,8 @@ pub(crate) async fn edit_file(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let is_agent = is_agent.unwrap_or(false);
     let (_, content) = crate::confined_fs::read_text(&file_path, is_agent, &state, &app).await?;

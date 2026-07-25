@@ -64,7 +64,7 @@ export class JsonMessageStore implements MessageStore {
   async restore(): Promise<Map<string, AgentMessage[]>> {
     const result = new Map<string, AgentMessage[]>()
     try {
-      const raw = await rpc<string>('list_directory', { path: this.baseDir })
+      const raw = await rpc<string>('list_directory', { path: this.baseDir, filter_ignored: false })
       const entries = JSON.parse(raw) as Array<{ name: string; is_dir: boolean }>
       if (!Array.isArray(entries)) return result
 
@@ -102,7 +102,7 @@ export class JsonMessageStore implements MessageStore {
       await rpc('delete_file_or_dir', { path: this.inboxPath(agentId) })
       // 尝试删 agent 目录（如果为空）
       try {
-        const raw = await rpc<string>('list_directory', { path: dirPath })
+        const raw = await rpc<string>('list_directory', { path: dirPath, filter_ignored: false })
         const entries = JSON.parse(raw)
         if (Array.isArray(entries) && entries.length === 0) {
           await rpc('delete_file_or_dir', { path: dirPath })

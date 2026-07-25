@@ -276,8 +276,9 @@ pub(crate) async fn rpc(
         "list_directory" => {
             let path = req_str(&params, "path", "list_directory")?;
             let is_agent = opt_bool(&params, "is_agent");
+            let filter_ignored = opt_bool(&params, "filter_ignored");
             let _agent_id = opt_str(&params, "_agent_id");
-            ok_json(commands::filesystem::list_directory(path, is_agent, _agent_id, state, app).await)
+            ok_json(commands::filesystem::list_directory(path, is_agent, filter_ignored, _agent_id, state, app).await)
         }
         "list_directory_flat" => {
             let path = req_str(&params, "path", "list_directory_flat")?;
@@ -409,11 +410,13 @@ pub(crate) async fn rpc(
         // ═══════════════════════════════════════════════════════
         "web_search" => {
             let query = req_str(&params, "query", "web_search")?;
-            commands::web::web_search(query, state, app).await
+            let agent_id = opt_str(&params, "_agent_id");
+            commands::web::web_search(query, agent_id, state, app).await
         }
         "web_fetch" => {
             let url = req_str(&params, "url", "web_fetch")?;
-            commands::web::web_fetch(url, state, app).await
+            let agent_id = opt_str(&params, "_agent_id");
+            commands::web::web_fetch(url, agent_id, state, app).await
         }
 
         // ═══════════════════════════════════════════════════════

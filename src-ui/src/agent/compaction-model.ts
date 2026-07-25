@@ -350,7 +350,7 @@ export class CompactionTracker {
     });
   }
 
-  /** Restore state from a serialized string. Merges with existing data. */
+  /** Restore state from a serialized string. Replaces existing data (not append). */
   deserializeState(json: string): void {
     try {
       const data = JSON.parse(json) as {
@@ -358,17 +358,15 @@ export class CompactionTracker {
         turnsAfter?: number[];
         filesRead?: string[];
       };
+      // Replace, not append — prevents duplicate accumulation on repeated load
       if (Array.isArray(data.events)) {
-        // Merge — append loaded events to current (in case some were already recorded)
-        this.events.push(...data.events);
+        this.events = [...data.events];
       }
       if (Array.isArray(data.turnsAfter)) {
-        this.turnsAfter.push(...data.turnsAfter);
+        this.turnsAfter = [...data.turnsAfter];
       }
       if (Array.isArray(data.filesRead)) {
-        for (const f of data.filesRead) {
-          this.filesRead.add(f);
-        }
+        this.filesRead = new Set(data.filesRead);
       }
     } catch {
       /* corrupt file — start fresh */

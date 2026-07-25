@@ -38,6 +38,7 @@ export class DiscoveryBoard {
   private _projectPath: string;
   private _sessionId: string;
   private _dirReady = false;
+  private _destroyed = false;
   // debounced flush — 延迟批量写入
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -68,7 +69,7 @@ export class DiscoveryBoard {
 
   /** 序列化 entries 写文件。best-effort — 永不抛异常。 */
   async flush(): Promise<void> {
-    if (!this._projectPath) return;
+    if (!this._projectPath || this._destroyed) return;
     try {
       await this._ensureDir();
       await rpc('write_file_content', {
@@ -87,7 +88,10 @@ export class DiscoveryBoard {
       const raw = await rpc<string>('read_file_content', { filePath: this._boardPath });
       const arr = JSON.parse(stripNums(raw)) as DiscoveryEntry[];
       if (Array.isArray(arr)) {
-        this.entries = arr;
+        // Dedup by agentId+key before evict — last entry wins (same semantics as post())
+        const seen = new Map<string, number>();
+        arr.forEach((e, i) => seen.set(`${e.agentId}:${e.key}`, i));
+        this.entries = arr.filter((e, i) => seen.get(`${e.agentId}:${e.key}`) === i);
         this._evict();
       }
     } catch {
@@ -95,9 +99,12 @@ export class DiscoveryBoard {
     }
   }
 
-  /** 删除持久化文件 — 会话结束时调用 */
+  /** 删除持久化文件 — 会话结束时调用。清除 entries 防止后续 flush 复活文件。 */
   async destroy(): Promise<void> {
     if (!this._projectPath) return;
+    this._destroyed = true;
+    this.entries = [];
+    this.clearFlushTimer();
     try {
       await rpc('delete_file_or_dir', { path: this._boardPath });
     } catch {

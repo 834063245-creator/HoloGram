@@ -106,6 +106,9 @@ pub struct PermissionContext {
     audit_logger: AuditLogger,
     /// Agent isolation state — keyed by agent_id for multi-agent parallel isolation.
     isolation: RwLock<HashMap<String, AgentIsolation>>,
+    /// Active agent ID — persisted across .await boundaries (unlike thread_local).
+    /// Set by set_active_agent_id_ctx, read by forward_map_path / reverse_map_path.
+    active_agent_id: RwLock<Option<String>>,
 }
 
 impl PermissionContext {
@@ -128,6 +131,7 @@ impl PermissionContext {
             rules: RwLock::new(rules),
             audit_logger,
             isolation: RwLock::new(isolation),
+            active_agent_id: RwLock::new(None),
         }
     }
 
@@ -174,6 +178,33 @@ impl PermissionContext {
     // Agent isolation — worktree lifecycle + path mapping (spec §5)
     // ═══════════════════════════════════════════════════════════════
 
+    /// Set the active agent ID on this context (persists across .await boundaries).
+    /// Also sets the thread_local for synchronous code paths that don't have ctx access.
+    pub fn set_active_agent_id_ctx(&self, id: &str) {
+        if let Ok(mut guard) = self.active_agent_id.write() {
+            *guard = Some(id.to_string());
+        }
+        set_active_agent_id(id);
+    }
+
+    /// Clear the active agent ID on this context.
+    pub fn clear_active_agent_id_ctx(&self) {
+        if let Ok(mut guard) = self.active_agent_id.write() {
+            *guard = None;
+        }
+        clear_active_agent_id();
+    }
+
+    /// Get the active agent ID — prefers the context field (await-safe) over thread_local.
+    fn get_active_agent_id(&self) -> Option<String> {
+        if let Ok(guard) = self.active_agent_id.read() {
+            if guard.is_some() {
+                return guard.clone();
+            }
+        }
+        active_agent_id()
+    }
+
     /// Set the active agent isolation (e.g. when an agent starts in worktree mode).
     pub fn set_isolation(&self, agent_id: &str, isolation: AgentIsolation) {
         if let Ok(mut iso) = self.isolation.write() {
@@ -191,7 +222,7 @@ impl PermissionContext {
     /// Get the current isolation kind for the active agent.
     #[allow(dead_code)] // ponytail: public API for future mode checks
     pub fn isolation_kind(&self) -> crate::agent_isolation::IsolationKind {
-        active_agent_id()
+        self.get_active_agent_id()
             .and_then(|id| {
                 self.isolation
                     .read()
@@ -203,7 +234,7 @@ impl PermissionContext {
 
     /// Get a clone of the current isolation state for the active agent.
     pub fn get_isolation(&self) -> Option<AgentIsolation> {
-        active_agent_id()
+        self.get_active_agent_id()
             .and_then(|id| {
                 self.isolation
                     .read()
@@ -224,7 +255,7 @@ impl PermissionContext {
     /// Uses the active agent's isolation. Returns path unchanged if no active isolation.
     pub fn reverse_map_path(&self, path: &Path) -> PathBuf {
         if let Ok(iso) = self.isolation.read() {
-            if let Some(id) = active_agent_id() {
+            if let Some(id) = self.get_active_agent_id() {
                 if let Some(isolation) = iso.get(&id) {
                     return isolation.reverse_map(path);
                 }
@@ -237,7 +268,7 @@ impl PermissionContext {
     /// Uses the active agent's isolation. Returns path unchanged if no active isolation.
     pub fn forward_map_path(&self, path: &Path) -> PathBuf {
         if let Ok(iso) = self.isolation.read() {
-            if let Some(id) = active_agent_id() {
+            if let Some(id) = self.get_active_agent_id() {
                 if let Some(isolation) = iso.get(&id) {
                     return isolation.forward_map(path);
                 }

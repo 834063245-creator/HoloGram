@@ -20,7 +20,8 @@ pub(crate) async fn exec_command(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     if let Some(id) = &_agent_id {
-        crate::permissions::set_active_agent_id(id);
+        let ctx = crate::utils::get_ctx(&state)?;
+        ctx.set_active_agent_id_ctx(id);
     }
     let dir = cwd.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
 

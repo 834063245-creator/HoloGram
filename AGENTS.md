@@ -1,6 +1,6 @@
 # Agent 项目理解 — HoloGram
 
-> 生成：2026-06-18 · 更新：2026-07-19 · 供 Cursor/Claude 等 Agent 快速上手  
+> 生成：2026-06-18 · 更新：2026-07-25 · 供 Cursor/Claude 等 Agent 快速上手  
 > 详细架构见 [PROJECT.md](PROJECT.md)
 
 ## 一句话
@@ -22,6 +22,18 @@ HoloGramHG/
 ├── BUGS.md          活 bug 清单（用户写，Agent 修）
 ├── CLAUDE.md        Agent 工作指令
 └── V4_CONSTRUCTION_PLAN.md  v4 施工方案（已竣工）
+```
+
+### `.hologram/` 运行时目录结构
+
+```
+.hologram/
+├── agents/{agentId}/inbox.json   跨 Agent 消息持久化（JsonMessageStore）
+├── taskboard/{sessionId}.json     会话级 TaskBoard（每个会话独立）
+├── discoveries/{sessionId}.json   会话级 DiscoveryBoard（每个会话独立）
+├── goals/{id}/                    Goal 管理器状态
+├── permissions.json               权限规则（项目级）
+└── memory/                        Agent 记忆
 ```
 
 ## 数据流
@@ -51,6 +63,23 @@ flowchart LR
 3. **改引擎：** `cd engine && cargo test --lib`
 4. **改前端：** `cd src-ui && npx tsc --noEmit`
 5. **打包：** `cargo tauri build`（前端改动需先 `npm run build`）
+
+### 子 Agent 工具集（A2）
+
+| 工具 | 用途 |
+|------|------|
+| `agent_spawn` | 派发子 Agent（fork/fresh 模式，支持异步） |
+| `agent_kill` | 停止运行中的子 Agent（幂等） |
+| `agent_merge` | 合并异步子 Agent 的 worktree |
+| `agent_isolation_create` | 创建隔离 worktree |
+| `agent_isolation_diff` | 查看隔离 worktree 的 diff |
+| `agent_isolation_merge` | 合并隔离 worktree |
+| `agent_isolation_discard` | 丢弃隔离 worktree |
+
+子 Agent ID 命名空间：
+- 模型可见 ID：`sub-{timestamp}-{random}` — 用于 board/bus/UI
+- 池内部 ID：`subagent-{timestamp}-{random}` — 不暴露给模型
+- 隔离 worktree ID：`agent-{timestamp}-{random}` — 用于 worktree 路径映射
 
 ## 目标模式（/goal）
 

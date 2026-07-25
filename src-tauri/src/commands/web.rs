@@ -15,9 +15,14 @@ fn search_backend() -> &'static str {
 #[tauri::command]
 pub(crate) async fn web_search(
     query: String,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    let ctx = crate::utils::get_ctx(&state)?;
+    if let Some(id) = &_agent_id {
+        ctx.set_active_agent_id_ctx(id);
+    }
     let backend = search_backend();
     let (search_url, q) = (match backend {
         "bing" => format!("https://www.bing.com/search?q={}&setlang=en", crate::utils::urlencoding(&query)),
@@ -25,7 +30,6 @@ pub(crate) async fn web_search(
     }, query.clone());
 
     {
-        let ctx = crate::utils::get_ctx(&state)?;
         let tool = crate::tools::WebFetchTool { url: search_url.clone() };
         crate::utils::check_permission(&tool, &ctx, &app).await?;
     }
@@ -149,11 +153,15 @@ fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
 #[tauri::command]
 pub(crate) async fn web_fetch(
     url: String,
+    _agent_id: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    let ctx = crate::utils::get_ctx(&state)?;
+    if let Some(id) = &_agent_id {
+        ctx.set_active_agent_id_ctx(id);
+    }
     {
-        let ctx = crate::utils::get_ctx(&state)?;
         let tool = crate::tools::WebFetchTool { url: url.clone() };
         crate::utils::check_permission(&tool, &ctx, &app).await?;
     }

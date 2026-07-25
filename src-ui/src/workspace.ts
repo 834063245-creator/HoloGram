@@ -462,6 +462,10 @@ export class Workspace {
     }
     this._unlisteners = [];
     this.subAgentPool.stopAll();
+    // Best-effort flush before detaching runtime — prevents data loss
+    if (this.runtime) {
+      try { this.runtime.flushAllBoards(); } catch { /* best-effort */ }
+    }
     this.runtime = null;
     this.agent = null;
     this.memoryManager = null;

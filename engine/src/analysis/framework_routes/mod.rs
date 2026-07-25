@@ -346,7 +346,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
 }
 
 /// Find an existing graph node matching a handler reference.
-pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, current_file: &str) -> String {
+pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file: &str) -> String {
     // Try exact name match first
     for (id, node) in &graph.nodes {
         if node.name == handler_ref {
@@ -376,10 +376,8 @@ pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, current_file: 
 fn is_cross_file(graph: &Graph, handler_node_id: &str, route_file: &str) -> bool {
     if let Some(node) = graph.nodes.get(handler_node_id) {
         if let Some(ref loc) = node.location {
-            // Extract file path from "file:line" format
-            let handler_file = loc.rsplit_once(':').map(|(p, _)| p).unwrap_or(loc);
-            // Normalize both paths for comparison
-            let norm_handler = handler_file.replace('\\', "/");
+            // Use file_key for consistent file-path extraction (handles drive letters)
+            let norm_handler = file_key(loc);
             let norm_route = route_file.replace('\\', "/");
             return norm_handler != norm_route;
         }
@@ -1018,7 +1016,7 @@ end
         assert_eq!(routes[0].1, "/health", "No scope prefix should be applied");
     }
 
-    // ── D3: Django include() not treated as handler ──
+    // ── D3: Django include() preserves prefix ──
 
     #[test]
     fn test_django_include_not_handler() {
@@ -1031,9 +1029,10 @@ urlpatterns = [
 ]
 "#;
         let routes = detect_django_routes("urls.py", source);
-        // include() should NOT produce a route — only the real handler should
-        let include_routes: Vec<_> = routes.iter().filter(|r| r.2.contains("include")).collect();
-        assert!(include_routes.is_empty(), "include() should not be treated as a handler, got: {:?}", include_routes);
+        // include() should produce a route with include() handler so prefix is preserved
+        let include_routes: Vec<_> = routes.iter().filter(|r| r.2.starts_with("include(")).collect();
+        assert!(!include_routes.is_empty(), "include() should preserve prefix as include() route, got: {:?}", routes);
+        assert!(include_routes.iter().all(|r| r.1 == "api/"), "include() route should preserve prefix 'api/'");
         assert!(routes.iter().any(|r| r.2.contains("user_list")), "Should still detect the real handler");
     }
 
@@ -1058,7 +1057,7 @@ router.register(r'users', UserViewSet)
         assert!(methods.contains(&"DELETE"), "Should have DELETE (destroy)");
         // Check URLs
         assert!(routes.iter().any(|r| r.1 == "/users/"), "Should have list/create route /users/");
-        assert!(routes.iter().any(|r| r.1 == "/users/{id}"), "Should have detail route /users/{{id}}");
+        assert!(routes.iter().any(|r| r.1 == "/users/{id}/"), "Should have detail route /users/{{id}}/");
         // Check handlers reference the ViewSet
         assert!(routes.iter().all(|r| r.2.starts_with("UserViewSet.")), "Handlers should be ViewSet.action");
     }

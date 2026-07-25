@@ -368,7 +368,6 @@ fn expand_cmd_vars(token: &str) -> String {
 
     // For single-quoted segments, temporarily mask $ to prevent expansion
     // (bash doesn't expand vars inside single quotes)
-    let mut masked = result.clone();
     let mut in_single = false;
     let bytes = result.as_bytes();
     let mut out = String::with_capacity(result.len());
@@ -385,7 +384,7 @@ fn expand_cmd_vars(token: &str) -> String {
         }
         i += 1;
     }
-    masked = out;
+    let mut masked = out;
 
     // Expand bash ${VAR} syntax
     let brace_re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
@@ -651,14 +650,18 @@ fn suspicious_command_heuristic(command: &str) -> Option<String> {
             // openssl base64 decode: openssl enc -d -base64
             || (s.contains("openssl") && s.contains("-d") && s.contains("-base64"))
         });
-        let has_shell_exec = segments.iter().any(|seg| {
-            let first_token = seg.trim().split_whitespace().next().unwrap_or("");
+        let has_shell_exec = {
+            // Only check the LAST segment — that's the one receiving piped data.
+            // `sh build.sh | tail` has sh in the first segment (executing a file, safe).
+            // `echo $CMD | sh` has sh in the last segment (executing piped data, dangerous).
+            let last = segments.last().unwrap_or(&"");
+            let first_token = last.trim().split_whitespace().next().unwrap_or("");
             matches!(first_token, "sh" | "bash" | "zsh" | "dash")
                 || first_token.ends_with("/sh")
                 || first_token.ends_with("/bash")
                 || first_token.ends_with("/zsh")
                 || first_token.ends_with("/dash")
-        });
+        };
         if has_decode && has_shell_exec {
             return Some(format!(
                 "检测到管道解码+执行模式（{} 段管道中包含解码命令和 shell 执行），需用户确认",
@@ -1125,6 +1128,44 @@ mod tests {
         assert!(
             matches!(r, PermissionResult::Ask { .. }),
             "openssl enc -d -base64 pipe to sh must trigger Ask, got: {:?}", r
+        );
+    }
+
+    // ── R2: bash pipe false positive — only check last segment for shell exec ──
+
+    #[test]
+    fn test_r2_benign_pipe_with_sh_first_segment_passthrough() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // `sh build.sh | tail` — sh is in the FIRST segment (executing a file), not receiving piped data
+        let r = check("sh build.sh | tail", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Passthrough),
+            "sh in first segment of pipe is benign, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_r2_pipe_to_shell_last_segment_caught() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // `echo $CMD | sh` — sh is in the LAST segment (executing piped data)
+        let r = check("echo $CMD | sh", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "pipe to shell (last segment) must trigger Ask, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_r2_benign_pipe_with_bash_in_echo() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // `echo "use bash" | grep key` — bash is just text in the first segment
+        let r = check(r#"echo "use bash" | grep key"#, &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Passthrough),
+            "bash as text in first segment is benign, got: {:?}", r
         );
     }
 

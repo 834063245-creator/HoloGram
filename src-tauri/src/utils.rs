@@ -835,18 +835,22 @@ pub(crate) struct DirEntry {
     pub(crate) path: String,
     pub(crate) is_dir: bool,
     pub(crate) children: Option<Vec<DirEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) truncated: Option<bool>,
 }
 
 /// Recursively list directory contents (depth-limited to avoid huge trees).
-/// Max depth: 4 levels, max entries: 2000. Excludes ignored paths via engine's is_ignored_path.
-/// Sets `truncated` flag on the root entry when limits are hit.
-pub(crate) fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
+/// Max depth: 4 levels, max entries: 2000. When `filter_ignored` is true,
+/// excludes ignored paths via engine's is_ignored_path (for agent-facing tool calls).
+/// Internal callers (message store, session scanner) pass false to list .hologram contents.
+pub(crate) fn list_dir_recursive(root: &std::path::Path, filter_ignored: bool) -> Vec<DirEntry> {
     fn recurse(
         dir: &std::path::Path,
         depth: usize,
         entries: &mut Vec<DirEntry>,
         entry_count: &mut usize,
         truncated: &mut bool,
+        filter_ignored: bool,
     ) {
         const MAX_DEPTH: usize = 3; // 0,1,2,3 = 4 levels
         const MAX_ENTRIES: usize = 2000;
@@ -871,8 +875,8 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
             let name = entry.file_name().to_string_lossy().to_string();
 
             let is_dir = path.is_dir();
-            // Reuse engine's is_ignored_path for consistent exclusion
-            if is_dir && hologram_engine::pipeline::discovery::is_ignored_path(
+            // Reuse engine's is_ignored_path for consistent exclusion (agent-facing only)
+            if filter_ignored && is_dir && hologram_engine::pipeline::discovery::is_ignored_path(
                 &path.to_string_lossy().replace('\\', "/"),
             ) {
                 continue;
@@ -880,7 +884,7 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
 
             let children = if is_dir {
                 let mut child_entries = Vec::new();
-                recurse(&path, depth + 1, &mut child_entries, entry_count, truncated);
+                recurse(&path, depth + 1, &mut child_entries, entry_count, truncated, filter_ignored);
                 if child_entries.is_empty() { None } else { Some(child_entries) }
             } else {
                 None
@@ -892,6 +896,7 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
                 path: path.to_string_lossy().to_string(),
                 is_dir,
                 children,
+                truncated: None,
             });
         }
     }
@@ -899,7 +904,11 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
     let mut entries: Vec<DirEntry> = Vec::new();
     let mut entry_count = 0usize;
     let mut truncated = false;
-    recurse(root, 0, &mut entries, &mut entry_count, &mut truncated);
+    recurse(root, 0, &mut entries, &mut entry_count, &mut truncated, filter_ignored);
+    // Set truncated flag on the first entry if limits were hit
+    if truncated && !entries.is_empty() {
+        entries[0].truncated = Some(true);
+    }
     entries
 }
 
@@ -927,6 +936,7 @@ pub(crate) fn list_dir_flat(root: &std::path::Path) -> Vec<DirEntry> {
             path: path.to_string_lossy().to_string(),
             is_dir,
             children: None,
+            truncated: None,
         });
     }
 

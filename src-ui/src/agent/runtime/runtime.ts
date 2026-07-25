@@ -148,6 +148,8 @@ export class AgentRuntime implements RuntimePort {
   /** 主 Agent 的 board proxies — 用于会话切换时动态换 target */
   private _mainTaskProxy: TaskBoardProxy | null = null;
   private _mainDiscoveryProxy: DiscoveryBoardProxy | null = null;
+  /** 主 Agent ID — 用于 setCurrentSession 时更新 _agentSessions */
+  private _mainAgentId: string | null = null;
   /** 已 restore 的会话集合 — 避免重复 restore */
   private _restoredSessions = new Set<string>();
   /** 项目路径 — 用于持久化 */
@@ -220,15 +222,11 @@ export class AgentRuntime implements RuntimePort {
   async destroySessionBoards(sessionId: string): Promise<void> {
     const tb = this._taskBoards.get(sessionId);
     if (tb) {
-      tb.clearFlushTimer();
-      await tb.flush();
       await tb.destroy();
       this._taskBoards.delete(sessionId);
     }
     const db = this._discoveryBoards.get(sessionId);
     if (db) {
-      db.clearFlushTimer();
-      await db.flush();
       await db.destroy();
       this._discoveryBoards.delete(sessionId);
     }
@@ -246,6 +244,10 @@ export class AgentRuntime implements RuntimePort {
     }
     this._mainTaskProxy?.setTarget(tb);
     this._mainDiscoveryProxy?.setTarget(db);
+    // Update main agent's session mapping so sub-agents inherit the active session
+    if (this._mainAgentId) {
+      this._agentSessions.set(this._mainAgentId, sessionId);
+    }
   }
 
   /** 启动恢复 — 在 createAgent() 之前完成。
@@ -358,6 +360,7 @@ export class AgentRuntime implements RuntimePort {
     if (!config.parentId) {
       this._mainTaskProxy = taskProxy;
       this._mainDiscoveryProxy = discoveryProxy;
+      this._mainAgentId = agentId;
     }
 
     // 1. 构建 system prompt（如果没预构建）

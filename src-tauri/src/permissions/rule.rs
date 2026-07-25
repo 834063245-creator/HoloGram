@@ -316,11 +316,19 @@ fn content_matches(pattern: &str, actual: &str) -> bool {
         let regex_str = glob_to_regex(pattern);
         if let Ok(re) = regex::Regex::new(&regex_str) {
             let normalized = actual.replace('\\', "/");
-            // Use find + boundary check: match must start at beginning or after /
-            // This prevents "src/**" from matching "mysrc/x" while still allowing
-            // absolute paths like "C:/proj/src/main.rs" to match.
-            if let Some(m) = re.find(&normalized) {
-                return m.start() == 0 || normalized.as_bytes()[m.start() - 1] == b'/';
+            // Check at every path boundary — split on / and try matching
+            // from each component start. This handles `src/**` matching
+            // `mysrc/src/x` (match starts after the second /).
+            // find_iter is non-overlapping so a long match starting at a
+            // non-boundary position can consume a valid sub-match.
+            for i in 0..=normalized.len() {
+                if i == 0 || normalized.as_bytes().get(i - 1) == Some(&b'/') {
+                    if let Some(m) = re.find(&normalized[i..]) {
+                        if m.start() == 0 {
+                            return true;
+                        }
+                    }
+                }
             }
             return false;
         }
@@ -399,6 +407,16 @@ mod tests {
         assert!(content_matches("src/**", "src/main.rs"));
         assert!(content_matches("src/**", "src/deep/nested/file.ts"));
         assert!(!content_matches("src/**", "tests/main.rs"));
+    }
+
+    #[test]
+    fn test_r3_glob_matches_nested_path() {
+        // R3: `src/**` should match `mysrc/src/x` (src starts at a path boundary after /)
+        assert!(content_matches("src/**", "mysrc/src/x"));
+        assert!(content_matches("src/**", "proj/src/main.rs"));
+        // But NOT when src is part of a longer name (no boundary)
+        assert!(!content_matches("src/**", "mysrc/x"));
+        assert!(!content_matches("src/**", "mysource/file.ts"));
     }
 
     #[test]

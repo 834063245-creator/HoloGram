@@ -166,13 +166,11 @@ export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExec
       if (stopped) {
         let msg = `子Agent ${agentId} 已停止`;
         if (reason) msg += ` (原因: ${reason})`;
-        if (worktree === 'discard' && isolationExec) {
-          try {
-            await isolationExec('agent_isolation_discard', { agent_id: agentId });
-            msg += '，worktree 已清理';
-          } catch {
-            msg += '，worktree 清理失败（best-effort）';
-          }
+        // Worktree cleanup is handled by the abort path in agent.ts, which
+        // calls agent_isolation_discard with the correct isolationId (agent-...).
+        // The worktree param is informational — discard is automatic on stop.
+        if (worktree === 'discard') {
+          msg += '，worktree 将由中断路径自动清理';
         }
         return msg;
       }
