@@ -316,7 +316,13 @@ fn content_matches(pattern: &str, actual: &str) -> bool {
         let regex_str = glob_to_regex(pattern);
         if let Ok(re) = regex::Regex::new(&regex_str) {
             let normalized = actual.replace('\\', "/");
-            return re.is_match(&normalized);
+            // Use find + boundary check: match must start at beginning or after /
+            // This prevents "src/**" from matching "mysrc/x" while still allowing
+            // absolute paths like "C:/proj/src/main.rs" to match.
+            if let Some(m) = re.find(&normalized) {
+                return m.start() == 0 || normalized.as_bytes()[m.start() - 1] == b'/';
+            }
+            return false;
         }
         return false;
     }

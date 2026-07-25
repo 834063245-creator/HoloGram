@@ -665,6 +665,13 @@ fn suspicious_command_heuristic(command: &str) -> Option<String> {
                 segments.len()
             ));
         }
+        // Also catch pipe-to-shell without decode (e.g. echo $CMD | sh, cat script | bash)
+        if has_shell_exec && segments.len() >= 2 {
+            return Some(format!(
+                "检测到管道直接执行模式（{} 段管道末尾为 shell 执行），需用户确认",
+                segments.len()
+            ));
+        }
     }
 
     None

@@ -465,9 +465,31 @@ pub(crate) async fn rpc(
                 Some(v) => v.as_bool().ok_or_else(|| format!("参数 'allow' 必须是布尔值，收到: {}", v))?,
                 None => return Err("参数 'allow' 缺失 — 必须明确指定允许或拒绝".to_string()),
             };
-            let remember = opt_bool(&params, "remember");
-            let rule_to_add = opt_str(&params, "rule_to_add");
-            let rule_behavior = opt_str(&params, "rule_behavior");
+            // Validate optional params — error on wrong type, not silent swallow
+            let remember = match params.get("remember") {
+                None => None,
+                Some(Value::Bool(b)) => Some(*b),
+                Some(v) => return Err(format!("参数 'remember' 必须是布尔值，收到: {}", v)),
+            };
+            let rule_to_add = match params.get("rule_to_add") {
+                None => None,
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::Null) => None,
+                Some(v) => return Err(format!("参数 'rule_to_add' 必须是字符串，收到: {}", v)),
+            };
+            let rule_behavior = match params.get("rule_behavior") {
+                None => None,
+                Some(Value::String(s)) => {
+                    // Validate against known behaviors
+                    let valid = ["allow", "deny", "ask"];
+                    if !valid.contains(&s.as_str()) {
+                        return Err(format!("参数 'rule_behavior' 无效: '{}' (允许: {})", s, valid.join(", ")));
+                    }
+                    Some(s.clone())
+                }
+                Some(Value::Null) => None,
+                Some(v) => return Err(format!("参数 'rule_behavior' 必须是字符串，收到: {}", v)),
+            };
             ok_unit(commands::identity::permission_ask_response(request_id, allow, remember, rule_to_add, rule_behavior, state).await)
         }
         "credential_store" => {
