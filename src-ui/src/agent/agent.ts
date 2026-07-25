@@ -38,6 +38,7 @@ import type { TaskBoard } from './task-board';
 import type { DiscoveryBoard } from './discovery-board';
 import { createBoardTrackingHook } from './hooks/board-tracking-hook';
 import { enqueueIsolationOp } from './isolation-queue';
+import { FileOwnership, WRITE_TOOLS, extractFilePath } from './file-ownership';
 
 export { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent };
 
@@ -189,6 +190,10 @@ export class Agent {
   // to the LLM but NOT persisted in this.session. Cleared at the top of each
   // runLoop step. Keeps session history clean for stable cache prefixes.
   private _transientReminders: string[] = [];
+
+  // File ownership — runtime write-protection for parallel sub-agents.
+  // Only fresh sub-agents (no worktree isolation) are subject to claims.
+  private _fileOwnership: FileOwnership | null = null;
 
   // Session persistence
   sessionId: string;
@@ -429,6 +434,12 @@ export class Agent {
         log.info('agent', `cascade abort: stopped ${stopped.length} sub-agents`);
       }
     }
+  }
+
+  /** Wire file ownership registry for parallel sub-agent write protection.
+   *  Only fresh sub-agents (no worktree) are subject to claims. */
+  setFileOwnership(fo: FileOwnership): void {
+    this._fileOwnership = fo;
   }
 
   /** Bus wake callback — called when a message is delivered to this agent's inbox.
@@ -1895,6 +1906,42 @@ ${resumeNote}
       };
     }
 
+    // ── File ownership for fresh sub-agents (fork has worktree isolation) ──
+    // First writer claims a file; other sub-agents get rejected.
+    // Prevents silent last-write-wins when multiple fresh agents edit
+    // the same working tree concurrently.
+    if (mode === 'fresh') {
+      if (!this._fileOwnership) {
+        this._fileOwnership = new FileOwnership();
+      }
+      const ownership = this._fileOwnership;
+      const subAgentId = agentIdOverride ?? `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      for (const toolName of WRITE_TOOLS) {
+        const tool = subTools.get(toolName);
+        if (!tool) continue;
+        const origExec = tool.execute.bind(tool);
+        tool.execute = async (args, onProgress) => {
+          const filePath = extractFilePath(toolName, args);
+          if (filePath) {
+            const result = ownership.claim(filePath, subAgentId);
+            if (!result.ok) {
+              return `[已拒绝] 文件 "${filePath}" 正在被另一个子 Agent (${result.owner}) 修改。\n` +
+                `原因：并行子 Agent 同时写同一文件会导致后写覆盖先写（静默丢改动）。\n` +
+                `请只修改分配给你的文件。如果确实需要改这个文件，在结论中说明，由主 Agent 统一处理。`;
+            }
+          }
+          // move_file also claims the destination
+          if (toolName === 'move_file' && args.to) {
+            const result = ownership.claim(args.to as string, subAgentId);
+            if (!result.ok) {
+              return `[已拒绝] 目标路径 "${args.to}" 正在被另一个子 Agent (${result.owner}) 修改。`;
+            }
+          }
+          return origExec(args, onProgress);
+        };
+      }
+    }
+
     let subSystem: string;
 
     if (mode === 'fork') {
@@ -2029,6 +2076,8 @@ ${subTools
       result = { text: '', err: errReason };
     } finally {
       this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
+      // Release this sub-agent's file ownership claims
+      this._fileOwnership?.release(subAgent.id);
     }
 
     if (asyncMode) {
