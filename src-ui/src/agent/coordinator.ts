@@ -80,6 +80,9 @@ export class SubAgentPool {
   /** Optional callback fired when any sub-agent finishes (for board archiving etc.) */
   onFinish?: (agentId: string, status: SubAgentStatus) => void;
 
+  /** Map from model-visible id (sub-...) to pool internal id (subagent-...) */
+  private _aliasToInternal = new Map<string, string>();
+
   constructor(maxConcurrent = DEFAULT_MAX_CONCURRENT, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
     this.maxConcurrent = maxConcurrent;
     this.defaultTimeoutMs = defaultTimeoutMs;
@@ -156,7 +159,9 @@ export class SubAgentPool {
       this._addCompleted(handle);
       this.agents.delete(id);
       pending.resolve(handle);
-      this.onFinish?.(id, handle.status);
+      // Resolve alias for onFinish callback — callers (archive) need the model-visible id
+      const aliasId = this._reverseAlias(id);
+      this.onFinish?.(aliasId ?? id, handle.status);
 
       // Drain queue — a slot just freed up
       this._drainQueue();
@@ -232,14 +237,37 @@ export class SubAgentPool {
     return this._queuedIds.has(id);
   }
 
-  /** Look up a sub-agent by ID — running first, then completed history. */
-  getHandle(id: string): SubAgentHandle | undefined {
-    return this.agents.get(id)?.handle ?? this.completed.find((h) => h.id === id);
+  /** Register an alias (model-visible id) for an internal pool id.
+   *  This lets agent_kill use the id the model actually sees. */
+  registerAlias(aliasId: string, internalId: string): void {
+    this._aliasToInternal.set(aliasId, internalId);
   }
 
-  /** Stop a running sub-agent: aborts its runFn, then marks it stopped. */
+  /** Resolve a model-visible id to pool internal id (or return as-is if no alias). */
+  private _resolveId(id: string): string {
+    return this._aliasToInternal.get(id) ?? id;
+  }
+
+  /** Reverse lookup: pool internal id → model-visible id (if registered). */
+  private _reverseAlias(internalId: string): string | undefined {
+    for (const [alias, internal] of this._aliasToInternal) {
+      if (internal === internalId) return alias;
+    }
+    return undefined;
+  }
+
+  /** Look up a sub-agent by ID — running first, then completed history.
+   *  Accepts both model-visible (sub-...) and internal (subagent-...) ids. */
+  getHandle(id: string): SubAgentHandle | undefined {
+    const internalId = this._resolveId(id);
+    return this.agents.get(internalId)?.handle ?? this.completed.find((h) => h.id === internalId);
+  }
+
+  /** Stop a running sub-agent: aborts its runFn, then marks it stopped.
+   *  Accepts both model-visible (sub-...) and internal (subagent-...) ids. */
   stop(id: string): boolean {
-    const pending = this.agents.get(id);
+    const internalId = this._resolveId(id);
+    const pending = this.agents.get(internalId);
     if (!pending) return false;
     pending.abortController.abort();
     this._finishStopped(pending);
@@ -271,7 +299,8 @@ export class SubAgentPool {
     this._addCompleted(pending.handle);
     this.agents.delete(id);
     pending.resolve(pending.handle);
-    this.onFinish?.(id, SubAgentStatus.Stopped);
+    const aliasId = this._reverseAlias(id);
+    this.onFinish?.(aliasId ?? id, SubAgentStatus.Stopped);
     // Drain queue — stopping an agent frees a slot
     this._drainQueue();
   }

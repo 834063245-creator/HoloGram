@@ -81,7 +81,7 @@ fn extract_django_route(
 
         // First string argument = route
         if kind == "string" && !found_route {
-            route_str = text.trim_matches(&['\'', '"', 'r', 'b'][..]).to_string();
+            route_str = strip_py_string_prefix(text).to_string();
             found_route = true;
             next_is_handler = true;
             continue;
@@ -161,8 +161,8 @@ fn expand_drf_register(
     for child in &children {
         match child.kind() {
             "string" if !in_route => {
-                route_prefix = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
-                route_prefix = route_prefix.trim_matches(&['\'', '"', 'r'][..]).to_string();
+                let raw = child.utf8_text(source.as_bytes()).unwrap_or("");
+                route_prefix = strip_py_string_prefix(raw).to_string();
                 in_route = true;
             }
             "identifier" if in_route && viewset_name.is_empty() => {
@@ -197,4 +197,29 @@ fn expand_drf_register(
         ("PATCH".into(),  detail.clone(),          format!("{}.partial_update", viewset_name), file.to_string(), line),
         ("DELETE".into(), detail,                  format!("{}.destroy", viewset_name),        file.to_string(), line),
     ]
+}
+
+/// Strip Python string prefixes (r, b, f, rb, u) and surrounding quotes.
+/// `r'users'` → `users`, `"path"` → `path`, `b"data"` → `data`
+fn strip_py_string_prefix(s: &str) -> &str {
+    let s = s.trim();
+    // Strip known Python string prefixes: r, b, f, u, rb, br, fr, rf (case-insensitive)
+    let mut rest = s;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        if lower.starts_with("rb") || lower.starts_with("br") || lower.starts_with("fr") || lower.starts_with("rf") {
+            rest = &rest[2..];
+        } else if lower.starts_with('r') || lower.starts_with('b') || lower.starts_with('f') || lower.starts_with('u') {
+            // Only strip if followed by a quote
+            let after = rest[1..].trim_start();
+            if after.starts_with('\'') || after.starts_with('"') {
+                rest = &rest[1..];
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    rest.trim_matches(&['\'', '"'][..])
 }

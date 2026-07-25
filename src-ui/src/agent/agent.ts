@@ -49,6 +49,7 @@ function wrapTool(original: Tool, execute: Tool['execute']): Tool {
 import type { MessageBus } from './message-bus';
 import type { TaskBoard } from './task-board';
 import type { DiscoveryBoard } from './discovery-board';
+import { createDiscoveryTools } from './tools/discovery';
 import { createBoardTrackingHook } from './hooks/board-tracking-hook';
 import { enqueueIsolationOp } from './isolation-queue';
 import { FileOwnership, WRITE_TOOLS, extractFilePath } from './file-ownership';
@@ -1944,6 +1945,19 @@ ${resumeNote}
     }
     // Sub-agents never get recursive-spawn tools (fork children execute directly).
     subTools.unregister('agent_spawn');
+    // Sub-agents cannot kill siblings — only the parent can kill sub-agents.
+    subTools.unregister('agent_kill');
+
+    // Re-register discovery tools with the sub-agent's own id — the cloned
+    // tools' getAgentId closure captures the parent's id, which would cause
+    // archive() to never match (onFinish passes the sub-agent's model-visible id).
+    if (this._discoveryBoard) {
+      const subDiscId = agentIdOverride ?? `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      for (const tool of createDiscoveryTools(this._discoveryBoard, () => subDiscId)) {
+        subTools.unregister(tool.name());
+        subTools.register(tool);
+      }
+    }
 
     // ── Hard-block build/test commands in sub-agents ──
     // These commands contend on file locks (cargo target/, node_modules/,

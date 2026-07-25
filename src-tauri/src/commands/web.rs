@@ -206,6 +206,7 @@ pub(crate) async fn web_fetch(
 
     // ── Manual redirect following with SSRF re-check ──
     let mut current_resp = resp;
+    let mut current_url = url.clone();
     let mut redirects = 0u32;
     const MAX_REDIRECTS: u32 = 5;
     loop {
@@ -218,9 +219,9 @@ pub(crate) async fn web_fetch(
             .get("location")
             .and_then(|v| v.to_str().ok())
             .ok_or("重定向响应缺少 Location 头")?;
-        // Resolve relative URLs against the current URL
-        let next_url = url::Url::parse(&url)
-            .and_then(|base| base.join(location))
+        // Resolve relative URLs against the current redirect's URL
+        let base = url::Url::parse(&current_url).map_err(|e| format!("无效基址 URL: {e}"))?;
+        let next_url = base.join(location)
             .map_err(|e| format!("无效重定向 URL: {e}"))?;
         let next_scheme = next_url.scheme();
         if next_scheme != "https" && next_scheme != "http" {
@@ -231,7 +232,8 @@ pub(crate) async fn web_fetch(
             return Err("SSRF 防护: 重定向到内网地址被拒绝".to_string());
         }
         // Follow the redirect
-        current_resp = agent.get(next_url.as_str())
+        current_url = next_url.to_string();
+        current_resp = agent.get(&current_url)
             .header("User-Agent", CHROME_UA)
             .call()
             .map_err(|e| format!("重定向请求失败: {}", e))?;

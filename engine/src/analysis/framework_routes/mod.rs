@@ -162,8 +162,9 @@ pub fn detect_framework_routes(
                 added += inject_routes(graph, &routes, "nestjs");
             }
         } else if frameworks::koa::is_koa_candidate(file) {
-            if source_ref.contains(".get(") || source_ref.contains(".post(")
-                || source_ref.contains(".use(")
+            if frameworks::koa::has_koa_content(source_ref)
+                && (source_ref.contains(".get(") || source_ref.contains(".post(")
+                || source_ref.contains(".use("))
             {
                 let routes = frameworks::koa::detect_koa_routes(file, source_ref);
                 added += inject_routes(graph, &routes, "koa");

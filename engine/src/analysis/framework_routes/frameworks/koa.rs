@@ -14,6 +14,16 @@ pub(crate) fn is_koa_candidate(file: &str) -> bool {
         || lower.contains("koa") || lower.contains("middleware")
 }
 
+/// Content gate — check for Koa-specific imports/patterns.
+/// Prevents Express router split files from being misidentified as Koa.
+pub(crate) fn has_koa_content(source: &str) -> bool {
+    source.contains("require('koa')") || source.contains("require(\"koa\"")
+        || source.contains("import Koa") || source.contains("from 'koa'")
+        || source.contains("from \"koa\"")
+        || source.contains("new Koa(") || source.contains("koa-router")
+        || source.contains("@koa/router")
+}
+
 pub(crate) fn detect_koa_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");

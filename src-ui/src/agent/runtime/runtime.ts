@@ -49,6 +49,7 @@ import type { TaskManager } from '../task';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
 import { createMergeTool } from '../tools/merge';
+import { createAgentKillTool } from '../tools/subagent';
 import { createRequestTool } from '../tools/request';
 import { AgentLifecycleManager } from '../lifecycle-manager';
 import { enqueueIsolationOp } from '../isolation-queue';
@@ -448,8 +449,9 @@ export class AgentRuntime implements RuntimePort {
     };
 
     // Register agent_merge tool — allows parent to merge completed async sub-agent worktrees
-    if (config.collaborationMode !== 'plan') {
+    if (config.collaborationMode !== 'plan' && config.subAgentPool) {
       effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec));
+      effR.register(createAgentKillTool(config.subAgentPool, isolationExec));
     }
 
     // Register agent_request tool — synchronous request with timeout

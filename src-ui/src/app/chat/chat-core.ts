@@ -30,6 +30,7 @@ import * as Stream from '../../ui/chat-stream';
 import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from '../../ui/command-registry';
 import { bus } from '../../ui/events';
 import type { StarGraph } from '../../ui/graph';
+import { useAgentPanelStore } from '../../ui/agent-panel-store';
 import { type AssistantMessage, type ChatMessage, resetMsgIdCounter, type UserMessage } from '../../ui/message-model';
 import type { AtAutocompleteHandle } from '../../ui/react/AtAutocomplete';
 import type { ChatFooterHandle } from '../../ui/react/ChatFooter';
@@ -490,6 +491,7 @@ export class ChatCore {
         s.setDraftText('');
       },
       getStarGraph: () => this.starGraph,
+      getRuntime: () => useAgentPanelStore.getState().runtimeRef as any,
     };
   }
 

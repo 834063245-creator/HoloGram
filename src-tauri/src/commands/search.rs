@@ -185,7 +185,10 @@ pub(crate) async fn search_code(
             }
             if file_has_match { file_sets.insert(fp_str.clone()); }
             // Early exit for files_with_matches/count modes when enough matches found
-            if mode != "content" && file_sets.len() >= max { break; }
+            if mode != "content" && file_sets.len() >= max {
+                truncated_by_budget = true;
+                break;
+            }
             if results.len() >= max { break; }
         }
 

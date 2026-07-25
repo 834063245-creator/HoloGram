@@ -11,6 +11,7 @@ import { createExecState, type ExecStateInstance } from '../agent/execution-stat
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
 import { loadSettings } from '../settings';
+import { useAgentPanelStore } from './agent-panel-store';
 import { bumpSession, getChatStore, msgStoreFor } from './chat-store';
 import type { AssistantMessage, ChatMessage, MessageId, SubAgentPart, UserMessage } from './message-model';
 import {
@@ -193,6 +194,9 @@ export interface SessionContext {
 
   clearInputHistory: () => void;
   getStarGraph: () => import('./graph').StarGraph | null;
+
+  /** Runtime access for session-scoped board switching */
+  getRuntime?: () => import('../agent/runtime/types').RuntimePort | null;
 }
 
 // ── Helpers ──
@@ -233,6 +237,14 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   ctx.clearPendingToolCards();
   getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
 
+  // Switch session-scoped boards to the new session
+  const newSessionId = String(sessions[idx].id);
+  const runtime = ctx.getRuntime?.();
+  if (runtime) {
+    runtime.setCurrentSession(newSessionId);
+    useAgentPanelStore.getState().setCurrentSessionId(newSessionId);
+  }
+
   // Restore token count for target session
   ctx.setTotalTokensUsed(st.sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
@@ -248,6 +260,12 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   const s = st.sessions[idx];
   removeSessionExecState(ctx.storeId, s.id);
   agentSessionState.removeAgent(ctx.storeId, s.id);
+
+  // Destroy session-scoped boards and their persistence files
+  const runtime = ctx.getRuntime?.();
+  if (runtime) {
+    runtime.destroySessionBoards(String(s.id)).catch(() => {});
+  }
 
   const newSessions = [...st.sessions];
   newSessions.splice(idx, 1);
@@ -302,6 +320,14 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   setTurnPairs(ctx.storeId, []);
   ctx.setTotalTokensUsed(0);
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(id, 0);
+
+  // Switch session-scoped boards to the new session
+  const runtime = ctx.getRuntime?.();
+  if (runtime) {
+    runtime.setCurrentSession(String(id));
+    useAgentPanelStore.getState().setCurrentSessionId(String(id));
+  }
+
   ctx.addNotice(`新会话已创建 — 会话 ${st.sessions[st.activeIdx]?.label ?? ''} 仍在后台运行`, 'info');
   ctx.setLastUsageText('');
   ctx.updateFooter();

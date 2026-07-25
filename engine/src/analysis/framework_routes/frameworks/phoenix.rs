@@ -91,11 +91,16 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
                     let scope_prefix: String = block_stack.iter()
                         .filter_map(|b| match b { Block::Scope(p) => Some(p.as_str()), _ => None })
                         .collect::<Vec<_>>()
+                        .iter()
+                        .filter(|p| !p.is_empty())
+                        .map(|p| p.trim_matches('/'))
+                        .filter(|p| !p.is_empty())
+                        .collect::<Vec<_>>()
                         .join("/");
                     let full_path = if scope_prefix.is_empty() {
                         format!("/{}", path.trim_matches('/'))
                     } else {
-                        format!("/{}/{}", scope_prefix.trim_matches('/'), path.trim_matches('/'))
+                        format!("/{}/{}", scope_prefix, path.trim_matches('/'))
                     };
                     result.push((verb.to_uppercase(), full_path, handler, file.to_string(), line_idx + 1));
                 }

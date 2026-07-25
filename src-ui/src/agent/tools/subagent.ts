@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import type { SubAgentPool } from '../coordinator';
-import type { Tool } from '../tool';
+import type { Tool, ToolExecutor } from '../tool';
+import { agentInvoke } from '../tool';
 
 // ═══════════════════════════════════════════════════════════════
 // Sub-Agent Tool — spawn a child Agent for parallel / delegated work
@@ -101,6 +102,9 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
         return `无法启动子Agent：池已满且队列已满（最多 ${pool.runningCount} 个运行中 + 20 个排队）。请稍后重试。`;
       }
 
+      // Register alias so agent_kill can find this agent by the model-visible id
+      pool.registerAlias(agentId, spawned.id);
+
       // 异步模式：立即返回 agentId，子 Agent 在后台运行
       // 结果通过 bus 消息（type=result）通知父 Agent
       if (asyncMode) {
@@ -124,7 +128,7 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
 /** agent_kill — stop a running sub-agent by ID.
  *  Idempotent: returns current status if already finished or not found.
  *  Only the parent agent can kill its own sub-agents (the pool is per-agent). */
-export function createAgentKillTool(pool: SubAgentPool): Tool {
+export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExecutor): Tool {
   return {
     name: () => 'agent_kill',
     description: () =>
@@ -162,10 +166,13 @@ export function createAgentKillTool(pool: SubAgentPool): Tool {
       if (stopped) {
         let msg = `子Agent ${agentId} 已停止`;
         if (reason) msg += ` (原因: ${reason})`;
-        if (worktree === 'discard') {
-          // Worktree cleanup is handled by the isolation queue — fire and forget
-          // The pool's abort already triggered; the worktree discard is best-effort
-          msg += '，worktree 已标记清理';
+        if (worktree === 'discard' && isolationExec) {
+          try {
+            await isolationExec('agent_isolation_discard', { agent_id: agentId });
+            msg += '，worktree 已清理';
+          } catch {
+            msg += '，worktree 清理失败（best-effort）';
+          }
         }
         return msg;
       }

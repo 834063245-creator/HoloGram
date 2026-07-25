@@ -335,13 +335,25 @@ fn is_powershell_command(command: &str) -> bool {
 /// %USERPROFILE%\file → C:\Users\...\file
 /// $HOME/file → /home/.../file
 /// ${HOME}/file → /home/.../file
+/// Only expands when the token looks like a path (contains /, ~, or starts with .)
+/// to avoid false positives on `echo $PATH`, `ls $HOME`, etc.
+/// Skips expansion inside single-quoted segments (bash doesn't expand there).
 fn expand_cmd_vars(token: &str) -> String {
     if !token.contains('%') && !token.contains('$') {
         return token.to_string();
     }
+
+    // Skip $VAR/${VAR} expansion for non-path tokens to avoid false positives.
+    // Only %VAR% (cmd.exe) is always expanded — it has no ambiguity in bash context.
+    let is_path_like = token.contains('/')
+        || token.starts_with('~')
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with('/');
+
     let mut result = token.to_string();
 
-    // Expand cmd.exe %VAR% syntax
+    // Expand cmd.exe %VAR% syntax (always — cmd.exe has no single-quote semantics)
     let pct_re = regex::Regex::new(r"%([^%]+)%").unwrap();
     result = pct_re.replace_all(&result, |caps: &regex::Captures| {
         let var = &caps[1];
@@ -349,23 +361,50 @@ fn expand_cmd_vars(token: &str) -> String {
     })
     .to_string();
 
+    if !is_path_like {
+        // Don't expand bash $VAR/${VAR} for non-path tokens (echo $PATH, ls $HOME, etc.)
+        return result;
+    }
+
+    // For single-quoted segments, temporarily mask $ to prevent expansion
+    // (bash doesn't expand vars inside single quotes)
+    let mut masked = result.clone();
+    let mut in_single = false;
+    let bytes = result.as_bytes();
+    let mut out = String::with_capacity(result.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\'' {
+            in_single = !in_single;
+        }
+        if in_single && c == b'$' {
+            out.push('\x01'); // placeholder for $ inside single quotes
+        } else {
+            out.push(c as char);
+        }
+        i += 1;
+    }
+    masked = out;
+
     // Expand bash ${VAR} syntax
     let brace_re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
-    result = brace_re.replace_all(&result, |caps: &regex::Captures| {
+    masked = brace_re.replace_all(&masked, |caps: &regex::Captures| {
         let var = &caps[1];
         std::env::var(var).unwrap_or_else(|_| caps[0].to_string())
     })
     .to_string();
 
-    // Expand bash $VAR syntax (word characters after $, not followed by {)
+    // Expand bash $VAR syntax
     let dollar_re = regex::Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap();
-    result = dollar_re.replace_all(&result, |caps: &regex::Captures| {
+    masked = dollar_re.replace_all(&masked, |caps: &regex::Captures| {
         let var = &caps[1];
         std::env::var(var).unwrap_or_else(|_| caps[0].to_string())
     })
     .to_string();
 
-    result
+    // Restore masked $ characters
+    masked.replace('\x01', "$")
 }
 
 // ═══════════════════════════════════════════════════════════════

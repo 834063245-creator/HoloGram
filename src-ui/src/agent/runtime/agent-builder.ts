@@ -368,7 +368,6 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   // ── Sub-agent tools ──
   if (subAgentSpawner) {
     registry.register(createSubAgentTool(subAgentSpawner, subAgentPool));
-    registry.register(createAgentKillTool(subAgentPool));
   }
 
   return registry;
