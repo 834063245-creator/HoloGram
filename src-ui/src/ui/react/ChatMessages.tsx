@@ -906,14 +906,22 @@ export const ChatMessagesApp: React.FC<{
   const lastMsgCount = useRef(0);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
-  // Reset stick-to-bottom when switching sessions — don't inherit the
-  // scroll position (and stickRef=false) from the previous session.
-  useEffect(() => {
-    stickRef.current = true;
-  }, []);
-
   // Resolve the actual scrollable element (外部指定或自身)
   const scrollEl = scrollContainer ?? listEl;
+
+  // Reset stick-to-bottom when switching sessions — don't inherit the
+  // scroll position (and stickRef state) from the previous session.
+  // Also reset lastMsgCount so the messages-length effect doesn't mistake
+  // a session switch for a new-user-message arrival, and scroll synchronously
+  // to avoid the delayed rAF "jump" when the previous session was streaming.
+  useEffect(() => {
+    stickRef.current = true;
+    lastMsgCount.current = messages.length;
+    if (scrollEl) {
+      scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, scrollEl]);
 
   // Auto-scroll: coalesce into single pending rAF
   useEffect(
