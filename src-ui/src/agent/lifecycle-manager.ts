@@ -109,21 +109,25 @@ export class AgentLifecycleManager {
     const trulyLeaked = leaked.filter((e) => !this.pool.getHandle(e.agentId))
 
     if (trulyLeaked.length === 0) {
-      this.warnedKeys.clear()
+      // Don't clear warnedKeys — if the same leak reappears next cycle we don't
+      // want to re-report it. warnedKeys only grows until stop() clears it.
       return
     }
 
-    // 去重：只在泄漏集合变化时告警
-    const currentKeys = new Set(trulyLeaked.map((e) => e.agentId))
-    const hasNew = trulyLeaked.some((e) => !this.warnedKeys.has(e.agentId))
-    if (!hasNew) return
+    // 去重：只报告 warnedKeys 中没有的新泄漏 id
+    const newLeaks = trulyLeaked.filter((e) => !this.warnedKeys.has(e.agentId))
+    if (newLeaks.length === 0) return
 
-    this.warnedKeys = currentKeys
+    // Update warnedKeys to include all currently leaked (not just new)
+    for (const e of trulyLeaked) {
+      this.warnedKeys.add(e.agentId)
+    }
 
-    const ids = trulyLeaked.map((e) => e.agentId).join(", ")
+    // Only report the newly leaked agents
+    const newIds = newLeaks.map((e) => e.agentId).join(", ")
     this._notify(
       "warn",
-      `⚠️ 检测到 ${trulyLeaked.length} 个未合并的子 Agent worktree (${ids})，请调用 agent_merge 合并或手动清理`,
+      `⚠️ 检测到 ${newLeaks.length} 个新的未合并子 Agent worktree (${newIds})，请调用 agent_merge 合并或手动清理`,
     )
   }
 

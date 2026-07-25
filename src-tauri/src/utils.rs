@@ -837,42 +837,67 @@ pub(crate) struct DirEntry {
 }
 
 /// Recursively list directory contents (depth-limited to avoid huge trees).
+/// Max depth: 4 levels, max entries: 2000. Excludes common build/dependency dirs.
 pub(crate) fn list_dir_recursive(root: &std::path::Path) -> Vec<DirEntry> {
-    let mut entries: Vec<DirEntry> = Vec::new();
+    fn recurse(
+        dir: &std::path::Path,
+        depth: usize,
+        entries: &mut Vec<DirEntry>,
+        entry_count: &mut usize,
+    ) {
+        const MAX_DEPTH: usize = 4;
+        const MAX_ENTRIES: usize = 2000;
 
-    // ponytail: 只隐藏 VCS 内部目录 — 其他全显示, git ignored 着色在前端处理
-    let skip_dirs: std::collections::HashSet<&str> = [
-        ".git", ".hg", ".svn",
-    ].iter().cloned().collect();
-
-    let readdir = match std::fs::read_dir(root) {
-        Ok(r) => r,
-        Err(_) => return entries,
-    };
-
-    for entry in readdir.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        let is_dir = path.is_dir();
-        if is_dir && skip_dirs.contains(name.as_str()) {
-            continue;
+        if depth > MAX_DEPTH || *entry_count >= MAX_ENTRIES {
+            return;
         }
 
-        let children = if is_dir {
-            Some(list_dir_recursive(&path))
-        } else {
-            None
+        // Exclude VCS dirs + heavy build/dependency dirs
+        let skip_dirs: std::collections::HashSet<&str> = [
+            ".git", ".hg", ".svn",
+            "node_modules", "target", "dist", "build",
+            "__pycache__", ".venv", "venv",
+        ].iter().cloned().collect();
+
+        let readdir = match std::fs::read_dir(dir) {
+            Ok(r) => r,
+            Err(_) => return,
         };
 
-        entries.push(DirEntry {
-            name,
-            path: path.to_string_lossy().to_string(),
-            is_dir,
-            children,
-        });
+        for entry in readdir.flatten() {
+            if *entry_count >= MAX_ENTRIES {
+                break;
+            }
+
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            let is_dir = path.is_dir();
+            if is_dir && skip_dirs.contains(name.as_str()) {
+                continue;
+            }
+
+            let children = if is_dir {
+                let mut child_entries = Vec::new();
+                recurse(&path, depth + 1, &mut child_entries, entry_count);
+                if child_entries.is_empty() { None } else { Some(child_entries) }
+            } else {
+                None
+            };
+
+            *entry_count += 1;
+            entries.push(DirEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                is_dir,
+                children,
+            });
+        }
     }
 
+    let mut entries: Vec<DirEntry> = Vec::new();
+    let mut entry_count = 0usize;
+    recurse(root, 0, &mut entries, &mut entry_count);
     entries
 }
 
@@ -934,6 +959,10 @@ pub(crate) fn is_private_ip(host: &str) -> bool {
             v4.is_private() || v4.is_link_local()
         }
         IpAddr::V6(v6) => {
+            // Check for ipv6-mapped-ipv4 addresses (::ffff:a.b.c.d)
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_private_ip(&mapped.to_string());
+            }
             let segs = v6.segments();
             // link-local (fe80::/10) or ULA (fc00::/7 — includes fd00::/8)
             (segs[0] & 0xffc0 == 0xfe80) || (segs[0] & 0xfe00 == 0xfc00)

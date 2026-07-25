@@ -107,10 +107,11 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     },
 
     onSubAgentFinished(agentId: string, _parentAgentId: string, sessionId: number, ok: boolean): void {
+      const text = ok ? `子 Agent ${agentId} 已完成` : `子 Agent ${agentId} 失败`;
       useAgentPanelStore.getState().pushAlert({
-        id: `finish-${agentId}-${Date.now()}`,
+        id: `finish-${agentId}-${hashStr(text)}`,
         level: ok ? 'info' : 'warn',
-        text: ok ? `子 Agent ${agentId} 已完成` : `子 Agent ${agentId} 失败`,
+        text,
       });
       // Find and update the SubAgentPart in the assistant message that owns it
       const store = msgStoreFor(storeId, sessionId);
@@ -136,12 +137,22 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
 
     onLifecycleAlert(agentId: string, level: 'info' | 'warn' | 'error', text: string): void {
       useAgentPanelStore.getState().pushAlert({
-        id: `lifecycle-${agentId}-${Date.now()}`,
+        id: `lifecycle-${agentId}-${hashStr(text)}`,
         level: level === 'error' ? 'warn' : level, // store 只支持 'warn' | 'info'
         text,
       });
     },
   };
+}
+
+/** Simple string hash for dedup IDs — same text → same ID → store replaces. */
+function hashStr(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h << 5) - h + s.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h).toString(36);
 }
 
 /**

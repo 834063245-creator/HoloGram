@@ -13,10 +13,23 @@ pub(crate) fn is_express_file(file: &str) -> bool {
     lower.contains("route") || lower.contains("router") || lower.contains("app")
 }
 
+/// D7: Content gate for Express detection. Without this, Koa/Fastify files
+/// (which also use `.get()`, `.post()`, etc.) are misidentified as Express
+/// because `is_express_file` matches on filename alone. This checks for
+/// Express-specific import/require patterns in the source.
+pub(crate) fn has_express_content(source: &str) -> bool {
+    source.contains("require('express')")
+        || source.contains("require(\"express\")")
+        || source.contains("from 'express'")
+        || source.contains("from \"express\"")
+        || source.contains("import express")
+        || source.contains("express()")
+}
+
 /// Detect Express-style route registrations.
 /// Patterns:
 ///   app.get('/path', handler)
-///   router.post('/path', middleware, handler)
+///   router.post('/path', middleware, handler)  — last arg is the handler
 ///   app.use('/prefix', subRouter)
 pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
@@ -75,6 +88,7 @@ pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRou
                             let mut route_str = String::new();
                             let mut handler = String::new();
                             let mut found_route = false;
+                            let mut last_identifier = String::new();
 
                             for ac in &arg_children {
                                 let kind = ac.kind();
@@ -90,11 +104,14 @@ pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRou
                                     continue;
                                 }
 
+                                // Track the last non-punctuation argument as the handler
+                                // Express convention: app.get('/path', middleware, handler)
+                                // The handler is the LAST function argument, not the first.
                                 if found_route && kind != "," && kind != "(" && kind != ")" {
-                                    handler = text.to_string();
-                                    break;
+                                    last_identifier = text.to_string();
                                 }
                             }
+                            handler = last_identifier;
 
                             if !route_str.is_empty() {
                                 let method = if is_use {

@@ -39,7 +39,10 @@ pub(crate) fn detect_django_routes(file: &str, source: &str) -> Vec<DetectedRout
                 if is_url_func || is_router_register {
                     if let Some(args) = node.child_by_field_name("arguments") {
                         let line = node.start_position().row + 1;
-                        if let Some((method, url, handler)) = extract_django_route(args, source, func_name, is_router_register) {
+                        if is_router_register {
+                            // D4: Expand DRF register() into 6 CRUD routes
+                            result.extend(expand_drf_register(args, source, file, line));
+                        } else if let Some((method, url, handler)) = extract_django_route(args, source, func_name, false) {
                             result.push((method, url, handler, file.to_string(), line));
                         }
                     }
@@ -60,40 +63,10 @@ fn extract_django_route(
     args: tree_sitter::Node,
     source: &str,
     _func_name: &str,
-    is_register: bool,
+    _is_register: bool,
 ) -> Option<(String, String, String)> {
     let mut cursor = args.walk();
     let children: Vec<tree_sitter::Node> = args.children(&mut cursor).collect();
-
-    if is_register {
-        // router.register(r'users', UserViewSet, basename='user')
-        // children: ( ) string identifier ...
-        let mut route_str = String::new();
-        let mut handler = String::new();
-        let mut in_route = false;
-        for child in &children {
-            match child.kind() {
-                "string" if !in_route => {
-                    route_str = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
-                    route_str = route_str.trim_matches(&['\'', '"', 'r'][..]).to_string();
-                    in_route = true;
-                }
-                "identifier" if in_route => {
-                    handler = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
-                    break;
-                }
-                "attribute" if in_route => {
-                    handler = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if !route_str.is_empty() && !handler.is_empty() {
-            return Some(("ALL".into(), format!("/{}", route_str), handler));
-        }
-        return None;
-    }
 
     // path('route/', view_func, ...)
     let mut route_str = String::new();
@@ -125,6 +98,13 @@ fn extract_django_route(
                     break;
                 }
                 "call" => {
+                    // D3: Check if this is an include() call — not a handler
+                    if let Some(func) = child.child_by_field_name("function") {
+                        let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
+                        if func_name == "include" {
+                            return None; // include() is not a handler
+                        }
+                    }
                     // e.g. views.OrderView.as_view()
                     handler = text.to_string();
                     break;
@@ -161,4 +141,60 @@ fn extract_django_route(
     } else {
         None
     }
+}
+
+/// D4: Expand a DRF `router.register(r'prefix', ViewSet)` call into 6 CRUD routes.
+/// Generates: list, create, retrieve, update, partial_update, destroy.
+fn expand_drf_register(
+    args: tree_sitter::Node,
+    source: &str,
+    file: &str,
+    line: usize,
+) -> Vec<DetectedRoute> {
+    let mut cursor = args.walk();
+    let children: Vec<tree_sitter::Node> = args.children(&mut cursor).collect();
+
+    let mut route_prefix = String::new();
+    let mut viewset_name = String::new();
+    let mut in_route = false;
+
+    for child in &children {
+        match child.kind() {
+            "string" if !in_route => {
+                route_prefix = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                route_prefix = route_prefix.trim_matches(&['\'', '"', 'r'][..]).to_string();
+                in_route = true;
+            }
+            "identifier" if in_route && viewset_name.is_empty() => {
+                viewset_name = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+            }
+            "attribute" if in_route && viewset_name.is_empty() => {
+                viewset_name = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+            }
+            _ => {}
+        }
+    }
+
+    if route_prefix.is_empty() || viewset_name.is_empty() {
+        return Vec::new();
+    }
+
+    // DRF DefaultRouter generates these standard routes:
+    //   GET    /prefix/       → list
+    //   POST   /prefix/       → create
+    //   GET    /prefix/{id}/  → retrieve
+    //   PUT    /prefix/{id}/  → update
+    //   PATCH  /prefix/{id}/  → partial_update
+    //   DELETE /prefix/{id}/  → destroy
+    let base = format!("/{}", route_prefix.trim_matches('/'));
+    let detail = format!("/{}/{{id}}", route_prefix.trim_matches('/'));
+
+    vec![
+        ("GET".into(),    format!("{}/", base),    format!("{}.list", viewset_name),           file.to_string(), line),
+        ("POST".into(),   format!("{}/", base),    format!("{}.create", viewset_name),         file.to_string(), line),
+        ("GET".into(),    detail.clone(),          format!("{}.retrieve", viewset_name),       file.to_string(), line),
+        ("PUT".into(),    detail.clone(),          format!("{}.update", viewset_name),         file.to_string(), line),
+        ("PATCH".into(),  detail.clone(),          format!("{}.partial_update", viewset_name), file.to_string(), line),
+        ("DELETE".into(), detail,                  format!("{}.destroy", viewset_name),        file.to_string(), line),
+    ]
 }

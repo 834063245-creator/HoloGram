@@ -787,6 +787,8 @@ async function init(): Promise<void> {
   // LocalStorage write inside saveActiveSession is sync, so it completes
   // before the window closes even if the RPC disk write doesn't.
   // Also stop sub-agents synchronously (AbortController.abort is sync).
+  // E6: Flush session-scoped boards (DiscoveryBoard + TaskBoard) — clears
+  // debounce timers (sync) and fires flush (best-effort async).
   window.addEventListener('beforeunload', () => {
     if (workspace?.path) {
       try {
@@ -796,6 +798,11 @@ async function init(): Promise<void> {
       }
       try {
         workspace.subAgentPool.stopAll();
+      } catch {
+        /* silent */
+      }
+      try {
+        workspace.runtime?.flushAllBoards();
       } catch {
         /* silent */
       }

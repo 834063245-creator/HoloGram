@@ -49,8 +49,9 @@ export function createDiscoveryTools(
   const agentLookup: Tool = {
     name: () => 'agent_lookup',
     description: () =>
-      'Query the shared discovery board for findings posted by other agents. ' +
-      'Use this before starting exploration to avoid duplicating work that other agents already did.',
+      'Query the session discovery board for findings posted by agents in the same session. ' +
+      'Use this before starting exploration to avoid duplicating work that other agents already did. ' +
+      'By default only active (non-archived) discoveries are returned, limited to 20 most recent.',
     parameters: () => ({
       type: 'object',
       properties: {
@@ -62,15 +63,32 @@ export function createDiscoveryTools(
           type: 'string',
           description: 'Filter by category (optional): "architecture" / "bug" / "pattern" / "config" / "other"',
         },
+        include_archived: {
+          type: 'boolean',
+          description: 'Include archived discoveries (default false)',
+        },
+        since: {
+          type: 'number',
+          description: 'Only return discoveries with ts >= since (Unix ms, optional)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max number of results (default 20)',
+        },
       },
     }),
     readOnly: () => true,
     execute: async (args) => {
       const keyFilter = args.key as string | undefined;
       const catFilter = args.category as string | undefined;
-      // If key filter provided, do a substring match instead of exact
+      const includeArchived = args.include_archived as boolean | undefined;
+      const since = args.since as number | undefined;
+      const limit = args.limit as number | undefined;
       let entries = board.query({
         category: catFilter,
+        includeArchived,
+        since,
+        limit,
       });
       if (keyFilter) {
         entries = entries.filter((e) => e.key.includes(keyFilter));

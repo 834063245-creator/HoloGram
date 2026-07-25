@@ -341,8 +341,13 @@ fn glob_to_regex(pattern: &str) -> String {
                     if chars.peek() == Some(&'/') {
                         chars.next();
                         out.push_str("(.*/)?");
-                    } else {
+                    } else if chars.peek().is_none() {
+                        // ** at end of pattern — match recursively (standard glob)
                         out.push_str(".*");
+                    } else {
+                        // ** in the middle of a component (e.g. foo**bar) —
+                        // treat as single * (don't cross directory separator)
+                        out.push_str("[^/]*");
                     }
                 } else {
                     out.push_str("[^/]*");

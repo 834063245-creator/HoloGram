@@ -98,6 +98,13 @@ pub(crate) async fn search_code(
             regex::Regex::new(&format!("^{}$", pat)).ok()
         });
 
+        // ── Scan budget: prevent unbounded traversal on huge trees ──
+        const MAX_SCAN_FILES: usize = 20_000;
+        const TIME_BUDGET_SECS: u64 = 60;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIME_BUDGET_SECS);
+        let mut scanned_files: usize = 0;
+        let mut truncated_by_budget = false;
+
         for entry in walkdir::WalkDir::new(&root)
             .into_iter()
             .filter_entry(|e| {
@@ -106,6 +113,12 @@ pub(crate) async fn search_code(
                 )
             })
         {
+            // ── Budget checks ──
+            if scanned_files >= MAX_SCAN_FILES || std::time::Instant::now() > deadline {
+                truncated_by_budget = true;
+                break;
+            }
+
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -113,6 +126,8 @@ pub(crate) async fn search_code(
             if !entry.file_type().is_file() {
                 continue;
             }
+            scanned_files += 1;
+
             let fp = entry.path();
             let ext = fp.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             let name = fp.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -169,6 +184,8 @@ pub(crate) async fn search_code(
                 }
             }
             if file_has_match { file_sets.insert(fp_str.clone()); }
+            // Early exit for files_with_matches/count modes when enough matches found
+            if mode != "content" && file_sets.len() >= max { break; }
             if results.len() >= max { break; }
         }
 
@@ -181,7 +198,9 @@ pub(crate) async fn search_code(
                 serde_json::json!({
                     "pattern": pat,
                     "count": total,
-                    "truncated": head > 0 && skip + head < total,
+                    "truncated": (head > 0 && skip + head < total) || truncated_by_budget,
+                    "scanned_files": scanned_files,
+                    "budget_truncated": truncated_by_budget,
                     "files": files,
                 })
             }
@@ -194,7 +213,9 @@ pub(crate) async fn search_code(
                     "pattern": pat,
                     "total_matches": file_counts.values().sum::<usize>(),
                     "file_count": total,
-                    "truncated": head > 0 && skip + head < total,
+                    "truncated": (head > 0 && skip + head < total) || truncated_by_budget,
+                    "scanned_files": scanned_files,
+                    "budget_truncated": truncated_by_budget,
                     "files": counts.into_iter().map(|(f, c)| serde_json::json!({"file": f, "matches": c})).collect::<Vec<_>>(),
                 })
             }
@@ -204,7 +225,9 @@ pub(crate) async fn search_code(
                 serde_json::json!({
                     "pattern": pat,
                     "count": total,
-                    "truncated": head > 0 && skip + head < total,
+                    "truncated": (head > 0 && skip + head < total) || truncated_by_budget,
+                    "scanned_files": scanned_files,
+                    "budget_truncated": truncated_by_budget,
                     "context_lines": ctx,
                     "results": results,
                 })

@@ -47,6 +47,18 @@ use frameworks::laravel::*;
 use frameworks::phoenix::*;
 #[cfg(test)]
 use frameworks::actix::*;
+#[cfg(test)]
+use frameworks::aspnet::*;
+#[cfg(test)]
+use frameworks::sinatra::*;
+#[cfg(test)]
+use frameworks::fiber::*;
+#[cfg(test)]
+use frameworks::fastify::*;
+#[cfg(test)]
+use frameworks::slim::*;
+#[cfg(test)]
+use frameworks::rocket::*;
 
 /// Scan the project for framework routes and inject them into the graph.
 /// Uses the parse cache from Step 1 when available to avoid re-reading + re-parsing.
@@ -80,6 +92,10 @@ pub fn detect_framework_routes(
         }
     }
 
+    // D6: Diagnostic log — flask.rs and fastapi.rs accept all .py files;
+    // log the candidate count so broad-filter impact is observable.
+    eprintln!("[framework_routes] {} candidate files", files.len());
+
     for file in &files {
         // Normalize to absolute path for cache lookup
         let abs_key = if file.contains(':') {
@@ -103,108 +119,112 @@ pub fn detect_framework_routes(
         let source_ref: &str = &source;
         if frameworks::django::is_django_url_file(file) {
             let routes = frameworks::django::detect_django_routes(file, source_ref);
-            added += inject_routes(graph, &routes);
+            added += inject_routes(graph, &routes, "django");
         } else if frameworks::express::is_express_file(file) {
-            let routes = frameworks::express::detect_express_routes(file, source_ref);
-            added += inject_routes(graph, &routes);
+            // D7: Content gate — prevent Koa/Fastify files from being misidentified
+            // as Express (they share .get()/.post() patterns but not Express imports).
+            if frameworks::express::has_express_content(source_ref) {
+                let routes = frameworks::express::detect_express_routes(file, source_ref);
+                added += inject_routes(graph, &routes, "express");
+            }
         } else if frameworks::fastapi::is_fastapi_candidate(file) {
             if source_ref.contains("@app.") || source_ref.contains("@router.") {
                 let routes = frameworks::fastapi::detect_fastapi_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "fastapi");
             }
         } else if frameworks::flask::is_flask_candidate(file) {
             if source_ref.contains("@app.route") || source_ref.contains("@bp.route") {
                 let routes = frameworks::flask::detect_flask_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "flask");
             }
         } else if frameworks::rails::is_rails_file(file) {
             let routes = frameworks::rails::detect_rails_routes(file, source_ref);
-            added += inject_routes(graph, &routes);
+            added += inject_routes(graph, &routes, "rails");
         } else if frameworks::spring::is_spring_candidate(file) {
             if source_ref.contains("@GetMapping") || source_ref.contains("@RequestMapping")
                 || source_ref.contains("@PostMapping")
             {
                 let routes = frameworks::spring::detect_spring_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "spring");
             }
         } else if frameworks::gin::is_gin_candidate(file) {
             if source_ref.contains(".GET(") || source_ref.contains(".POST(")
                 || source_ref.contains(".Use(") || source_ref.contains(".Group(")
             {
                 let routes = frameworks::gin::detect_gin_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "gin");
             }
         } else if frameworks::nestjs::is_nestjs_candidate(file) {
             if source_ref.contains("@Controller") || source_ref.contains("@Get")
                 || source_ref.contains("@Post")
             {
                 let routes = frameworks::nestjs::detect_nestjs_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "nestjs");
             }
         } else if frameworks::koa::is_koa_candidate(file) {
             if source_ref.contains(".get(") || source_ref.contains(".post(")
                 || source_ref.contains(".use(")
             {
                 let routes = frameworks::koa::detect_koa_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "koa");
             }
         } else if frameworks::laravel::is_laravel_candidate(file) {
             if source_ref.contains("Route::") {
                 let routes = frameworks::laravel::detect_laravel_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "laravel");
             }
         } else if frameworks::phoenix::is_phoenix_candidate(file) {
             let routes = frameworks::phoenix::detect_phoenix_routes(file, source_ref);
-            added += inject_routes(graph, &routes);
+            added += inject_routes(graph, &routes, "phoenix");
         } else if frameworks::actix::is_actix_candidate(file) {
             if source_ref.contains("#[get") || source_ref.contains("#[post")
                 || source_ref.contains("#[put") || source_ref.contains("#[delete")
                 || source_ref.contains("#[web::get") || source_ref.contains("#[web::post")
             {
                 let routes = frameworks::actix::detect_actix_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "actix");
             }
         } else if frameworks::aspnet::is_aspnet_candidate(file) {
             if source_ref.contains("[HttpGet") || source_ref.contains("[HttpPost")
                 || source_ref.contains("[HttpPut") || source_ref.contains("[HttpDelete")
             {
                 let routes = frameworks::aspnet::detect_aspnet_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "aspnet");
             }
         } else if frameworks::sinatra::is_sinatra_candidate(file) {
             if source_ref.contains("get '") || source_ref.contains("get \"")
                 || source_ref.contains("post '") || source_ref.contains("post \"")
             {
                 let routes = frameworks::sinatra::detect_sinatra_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "sinatra");
             }
         } else if frameworks::fiber::is_fiber_candidate(file) {
             if source_ref.contains(".Get(") || source_ref.contains(".Post(")
                 || source_ref.contains(".Put(") || source_ref.contains(".Delete(")
             {
                 let routes = frameworks::fiber::detect_fiber_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "fiber");
             }
         } else if frameworks::fastify::is_fastify_candidate(file) {
             if source_ref.contains(".get(") || source_ref.contains(".post(")
                 || source_ref.contains(".put(") || source_ref.contains(".delete(")
             {
                 let routes = frameworks::fastify::detect_fastify_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "fastify");
             }
         } else if frameworks::slim::is_slim_candidate(file) {
             if source_ref.contains("$app->get") || source_ref.contains("$app->post")
                 || source_ref.contains("$app->put") || source_ref.contains("$app->delete")
             {
                 let routes = frameworks::slim::detect_slim_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "slim");
             }
         } else if frameworks::rocket::is_rocket_candidate(file)
             && (source_ref.contains("#[get(") || source_ref.contains("#[post(")
                 || source_ref.contains("#[put(") || source_ref.contains("#[delete("))
             {
                 let routes = frameworks::rocket::detect_rocket_routes(file, source_ref);
-                added += inject_routes(graph, &routes);
+                added += inject_routes(graph, &routes, "rocket");
             }
     }
 
@@ -282,7 +302,7 @@ pub(crate) fn capitalize_first(s: &str) -> String {
 // Route injection into graph
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usize {
+pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framework: &str) -> usize {
     let mut added = 0usize;
     let mut edge_counter = graph.edge_count() as u32;
 
@@ -294,7 +314,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usiz
         route_node.location = Some(format!("{}:{}", file, line));
         route_node.properties = serde_json::json!({
             "kind": "route",
-            "framework": if file.ends_with(".py") { "django" } else { "express" },
+            "framework": framework,
             "method": method,
             "path": url,
         });
@@ -309,7 +329,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usiz
             target: handler_node_id.clone(),
             kind: EdgeKind::Calls,
             coupling_depth: 1,
-            cross_file: false,
+            cross_file: is_cross_file(graph, &handler_node_id, file),
                         temporal_delay_sec: None,
             lsp_resolved: false,
             is_synthesized: false,
@@ -325,7 +345,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute]) -> usiz
 }
 
 /// Find an existing graph node matching a handler reference.
-pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file: &str) -> String {
+pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, current_file: &str) -> String {
     // Try exact name match first
     for (id, node) in &graph.nodes {
         if node.name == handler_ref {
@@ -349,6 +369,22 @@ pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file:
     // Fallback: return handler_ref as the target node ID
     // (it may not exist yet — that's ok, the edge just won't resolve to a real node)
     handler_ref.to_string()
+}
+
+/// Check if the handler node is in a different file than the route.
+fn is_cross_file(graph: &Graph, handler_node_id: &str, route_file: &str) -> bool {
+    if let Some(node) = graph.nodes.get(handler_node_id) {
+        if let Some(ref loc) = node.location {
+            // Extract file path from "file:line" format
+            let handler_file = loc.rsplit_once(':').map(|(p, _)| p).unwrap_or(loc);
+            // Normalize both paths for comparison
+            let norm_handler = handler_file.replace('\\', "/");
+            let norm_route = route_file.replace('\\', "/");
+            return norm_handler != norm_route;
+        }
+    }
+    // If we can't determine, default to false
+    false
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -489,7 +525,7 @@ app.use('/api/v2', v2Router);
             ("GET".into(), "/api/users".into(), "views.user_list".into(), "urls.py".into(), 5),
         ];
 
-        let added = inject_routes(&mut g, &routes);
+        let added = inject_routes(&mut g, &routes, "test");
         assert_eq!(added, 1, "Should add 1 route node");
         assert!(g.node_count() >= 2, "Should have handler + route node");
     }
@@ -903,6 +939,312 @@ async fn health() -> &'static str {
         assert!(is_actix_candidate("main.rs"));
         assert!(is_actix_candidate("handlers.rs"));
         assert!(!is_actix_candidate("main.py"));
+    }
+
+    // ── D1: Spring class-level prefix merge ──
+
+    #[test]
+    fn test_spring_class_prefix_merge() {
+        let source = r#"
+@RestController
+@RequestMapping("/api")
+public class UserController {
+    @GetMapping("/users")
+    public List<User> getUsers() { return List.of(); }
+
+    @PostMapping("/users")
+    public User create() { return null; }
+}
+"#;
+        let routes = detect_spring_routes("UserController.java", source);
+        assert_eq!(routes.len(), 2, "Should detect 2 method-level routes, got {}", routes.len());
+        // Class-level @RequestMapping should NOT produce its own route
+        assert!(routes.iter().all(|r| r.2 != "UserController"),
+            "Class-level @RequestMapping should not create a route");
+        // Method paths should be merged with class prefix
+        assert!(routes.iter().any(|r| r.1 == "/api/users"),
+            "GET path should be /api/users, got: {:?}", routes.iter().map(|r| &r.1).collect::<Vec<_>>());
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[1].0, "POST");
+    }
+
+    #[test]
+    fn test_spring_no_class_prefix() {
+        let source = r#"
+@RestController
+public class HealthController {
+    @GetMapping("/health")
+    public String health() { return "ok"; }
+}
+"#;
+        let routes = detect_spring_routes("HealthController.java", source);
+        assert_eq!(routes.len(), 1, "Should detect 1 route");
+        assert_eq!(routes[0].1, "/health", "Path should not have a prefix when no class-level @RequestMapping");
+    }
+
+    // ── D2: Phoenix scope prefix (strengthened) ──
+
+    #[test]
+    fn test_phoenix_scope_prefix() {
+        let source = r#"
+defmodule MyApp.Router do
+  use Phoenix.Router
+  scope "/api" do
+    get "/users", UserController, :index
+    post "/users", UserController, :create
+  end
+end
+"#;
+        let routes = detect_phoenix_routes("router.ex", source);
+        assert_eq!(routes.len(), 2, "Should detect 2 routes, got {}", routes.len());
+        assert!(routes.iter().any(|r| r.1 == "/api/users"),
+            "Scope prefix /api should be prepended, got: {:?}",
+            routes.iter().map(|r| &r.1).collect::<Vec<_>>());
+        assert!(routes.iter().all(|r| r.1.starts_with("/api/")),
+            "All routes should have /api/ prefix");
+    }
+
+    #[test]
+    fn test_phoenix_no_scope() {
+        let source = r#"
+defmodule MyApp.Router do
+  use Phoenix.Router
+  get "/health", HealthController, :show
+end
+"#;
+        let routes = detect_phoenix_routes("router.ex", source);
+        assert_eq!(routes.len(), 1, "Should detect 1 route");
+        assert_eq!(routes[0].1, "/health", "No scope prefix should be applied");
+    }
+
+    // ── D3: Django include() not treated as handler ──
+
+    #[test]
+    fn test_django_include_not_handler() {
+        let source = r#"
+from django.urls import path, include
+
+urlpatterns = [
+    path('api/', include('other.urls')),
+    path('users/', views.user_list, name='user-list'),
+]
+"#;
+        let routes = detect_django_routes("urls.py", source);
+        // include() should NOT produce a route — only the real handler should
+        let include_routes: Vec<_> = routes.iter().filter(|r| r.2.contains("include")).collect();
+        assert!(include_routes.is_empty(), "include() should not be treated as a handler, got: {:?}", include_routes);
+        assert!(routes.iter().any(|r| r.2.contains("user_list")), "Should still detect the real handler");
+    }
+
+    // ── D4: DRF register() CRUD expansion ──
+
+    #[test]
+    fn test_drf_register_crud_expansion() {
+        let source = r#"
+from rest_framework.routers import DefaultRouter
+
+router = DefaultRouter()
+router.register(r'users', UserViewSet)
+"#;
+        let routes = detect_django_routes("urls.py", source);
+        assert_eq!(routes.len(), 6, "register() should expand to 6 CRUD routes, got {}", routes.len());
+        // Check methods
+        let methods: Vec<&str> = routes.iter().map(|r| r.0.as_str()).collect();
+        assert!(methods.contains(&"GET"), "Should have GET (list/retrieve)");
+        assert!(methods.contains(&"POST"), "Should have POST (create)");
+        assert!(methods.contains(&"PUT"), "Should have PUT (update)");
+        assert!(methods.contains(&"PATCH"), "Should have PATCH (partial_update)");
+        assert!(methods.contains(&"DELETE"), "Should have DELETE (destroy)");
+        // Check URLs
+        assert!(routes.iter().any(|r| r.1 == "/users/"), "Should have list/create route /users/");
+        assert!(routes.iter().any(|r| r.1 == "/users/{id}"), "Should have detail route /users/{{id}}");
+        // Check handlers reference the ViewSet
+        assert!(routes.iter().all(|r| r.2.starts_with("UserViewSet.")), "Handlers should be ViewSet.action");
+    }
+
+    // ── D5: ASP.NET Core tests ──
+
+    #[test]
+    fn test_detect_aspnet_route() {
+        let source = r#"
+[ApiController]
+[Route("api/[controller]")]
+public class UsersController : ControllerBase {
+    [HttpGet("users")]
+    public IActionResult GetUsers() { return Ok(); }
+
+    [HttpPost("users")]
+    public IActionResult CreateUser() { return Ok(); }
+}
+"#;
+        let routes = detect_aspnet_routes("UsersController.cs", source);
+        assert!(!routes.is_empty(), "Should detect ASP.NET routes");
+        assert_eq!(routes[0].0, "GET");
+        assert!(routes.iter().any(|r| r.0 == "POST"), "Should detect POST route");
+    }
+
+    #[test]
+    fn test_is_aspnet_candidate() {
+        assert!(is_aspnet_candidate("UsersController.cs"));
+        assert!(is_aspnet_candidate("api.cs"));
+        assert!(!is_aspnet_candidate("main.py"));
+        assert!(!is_aspnet_candidate("app.js"));
+    }
+
+    // ── D5: Sinatra tests ──
+
+    #[test]
+    fn test_detect_sinatra_route() {
+        let source = r#"
+get '/api/users' do
+  content_type :json
+  { users: [] }.to_json
+end
+
+post '/api/users' do
+  # create user
+end
+"#;
+        let routes = detect_sinatra_routes("app.rb", source);
+        assert!(!routes.is_empty(), "Should detect Sinatra routes");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+        assert!(routes.iter().any(|r| r.0 == "POST"), "Should detect POST route");
+    }
+
+    #[test]
+    fn test_is_sinatra_candidate() {
+        assert!(is_sinatra_candidate("app.rb"));
+        assert!(is_sinatra_candidate("routes.rb"));
+        assert!(!is_sinatra_candidate("main.py"));
+        assert!(!is_sinatra_candidate("app.js"));
+    }
+
+    // ── D5: Fiber tests ──
+
+    #[test]
+    fn test_detect_fiber_route() {
+        let source = r#"
+package main
+import "github.com/gofiber/fiber/v2"
+
+func main() {
+    app := fiber.New()
+    app.Get("/api/users", getUsers)
+    app.Post("/api/orders", createOrder)
+}
+"#;
+        let routes = detect_fiber_routes("main.go", source);
+        assert!(!routes.is_empty(), "Should detect Fiber routes");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+        assert!(routes.iter().any(|r| r.0 == "POST"), "Should detect POST route");
+    }
+
+    #[test]
+    fn test_is_fiber_candidate() {
+        assert!(is_fiber_candidate("main.go"));
+        assert!(is_fiber_candidate("routes.go"));
+        assert!(!is_fiber_candidate("main.py"));
+        assert!(!is_fiber_candidate("main.js"));
+    }
+
+    // ── D5: Fastify tests ──
+
+    #[test]
+    fn test_detect_fastify_route() {
+        let source = r#"
+const fastify = require('fastify');
+const app = fastify();
+
+app.get('/api/users', getUsers);
+app.post('/api/orders', createOrder);
+"#;
+        let routes = detect_fastify_routes("routes.js", source);
+        assert!(!routes.is_empty(), "Should detect Fastify routes");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+        assert!(routes.iter().any(|r| r.0 == "POST"), "Should detect POST route");
+    }
+
+    #[test]
+    fn test_is_fastify_candidate() {
+        assert!(is_fastify_candidate("fastify-app.js"));
+        assert!(is_fastify_candidate("routes.js"));
+        assert!(is_fastify_candidate("plugin.ts"));
+        assert!(!is_fastify_candidate("main.py"));
+        assert!(!is_fastify_candidate("main.go"));
+    }
+
+    // ── D5: Slim tests ──
+
+    #[test]
+    fn test_detect_slim_route() {
+        let source = r#"<?php
+$app->get('/api/users', function ($req, $res) {
+    return $res->withJson(['users' => []]);
+});
+$app->post('/api/orders', function ($req, $res) {
+    return $res->withJson(['created' => true]);
+});
+"#;
+        let routes = detect_slim_routes("routes.php", source);
+        assert!(!routes.is_empty(), "Should detect Slim routes");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+        assert!(routes.iter().any(|r| r.0 == "POST"), "Should detect POST route");
+    }
+
+    #[test]
+    fn test_is_slim_candidate() {
+        assert!(is_slim_candidate("routes.php"));
+        assert!(is_slim_candidate("app.php"));
+        assert!(!is_slim_candidate("main.py"));
+        assert!(!is_slim_candidate("main.js"));
+    }
+
+    // ── D5: Rocket tests ──
+
+    #[test]
+    fn test_detect_rocket_route() {
+        let source = r#"
+#[get("/api/users")]
+fn get_users() -> &'static str {
+    "users"
+}
+
+#[post("/api/orders")]
+fn create_order() -> &'static str {
+    "created"
+}
+"#;
+        let routes = detect_rocket_routes("main.rs", source);
+        assert!(!routes.is_empty(), "Should detect Rocket routes");
+        assert_eq!(routes[0].0, "GET");
+        assert_eq!(routes[0].1, "/api/users");
+        assert!(routes.iter().any(|r| r.0 == "POST"), "Should detect POST route");
+    }
+
+    #[test]
+    fn test_is_rocket_candidate() {
+        assert!(is_rocket_candidate("main.rs"));
+        assert!(is_rocket_candidate("routes.rs"));
+        assert!(!is_rocket_candidate("main.py"));
+        assert!(!is_rocket_candidate("main.go"));
+    }
+
+    // ── D7: Express content gate ──
+
+    #[test]
+    fn test_express_content_gate() {
+        // Express file with proper imports
+        assert!(has_express_content("const express = require('express');"));
+        assert!(has_express_content("import express from 'express';"));
+        assert!(has_express_content("const app = express();"));
+        // Koa file — should NOT pass Express content gate
+        assert!(!has_express_content("const Koa = require('koa');"));
+        // Fastify file — should NOT pass Express content gate
+        assert!(!has_express_content("const fastify = require('fastify');"));
     }
 
 }

@@ -31,7 +31,7 @@ import {
 } from '../hooks';
 import type { Agent } from '../agent';
 import { createCodingTools } from '../tools/coding';
-import { createSubAgentTool } from '../tools/subagent';
+import { createSubAgentTool, createAgentKillTool } from '../tools/subagent';
 import { createSkillTool } from '../skills';
 import { createTaskTools } from '../task';
 
@@ -329,6 +329,33 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
         })();
       });
     }
+    // ── Timeout wrapper for search/list tools — prevent stuck Tauri invokes ──
+    const TOOL_TIMEOUT = 120_000;
+    const TIMEOUT_TOOLS = new Set(['search_content', 'search_code', 'glob', 'list_directory']);
+    if (TIMEOUT_TOOLS.has(name)) {
+      return new Promise<string>((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(`(工具 ${name} 超时 (${TOOL_TIMEOUT / 1000}s)，请缩小搜索范围或使用更精确的模式)`);
+        }, TOOL_TIMEOUT);
+        agentInvoke<string>(name, args)
+          .then((result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(typeof result === 'string' ? result : JSON.stringify(result));
+          })
+          .catch((e: any) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(`错误: ${e?.message || e}`);
+          });
+      });
+    }
+
     const result = await agentInvoke<string>(name, args);
     return typeof result === 'string' ? result : JSON.stringify(result);
   };
@@ -338,9 +365,10 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   if (mm) for (const tool of (await import('../memory')).createMemoryTools(mm) as any) registry.register(tool);
   for (const tool of createTaskTools(taskManager)) registry.register(tool);
 
-  // ── Sub-agent tool ──
+  // ── Sub-agent tools ──
   if (subAgentSpawner) {
     registry.register(createSubAgentTool(subAgentSpawner, subAgentPool));
+    registry.register(createAgentKillTool(subAgentPool));
   }
 
   return registry;

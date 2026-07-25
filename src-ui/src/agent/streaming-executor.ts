@@ -57,6 +57,8 @@ export class StreamingToolExecutor {
   private dispatchedIds = new Set<string>();
 
   private agentId: string | null;
+  /** Abort signal — when set, awaitRemaining races each pending promise against it. */
+  private signal: AbortSignal | null;
 
   constructor(
     tools: ToolRegistry,
@@ -64,12 +66,14 @@ export class StreamingToolExecutor {
     hooks?: HookRegistry | null,
     preflightHooks?: PreflightHookRegistry | null,
     agentId?: string | null,
+    signal?: AbortSignal | null,
   ) {
     this.tools = tools;
     this.emit = emitEvent;
     this.hooks = hooks ?? null;
     this.preflightHooks = preflightHooks ?? null;
     this.agentId = agentId ?? null;
+    this.signal = signal ?? null;
   }
 
   /** Add a tool call from the stream. Execution starts immediately.
@@ -109,15 +113,30 @@ export class StreamingToolExecutor {
 
   /** Wait for all remaining tool executions to complete.
    *  Also drains sync-completed results (unknown tool etc.) that were pushed
-   *  to this.completed during addTool (e.g. unknown tool name). */
+   *  to this.completed during addTool (e.g. unknown tool name).
+   *  If an abort signal is set, races each pending promise against it so
+   *  that a never-resolving tool (e.g. stuck Tauri invoke) doesn't hang the
+   *  loop indefinitely. */
   async awaitRemaining(): Promise<PendingResult[]> {
+    // If already aborted, discard everything immediately
+    if (this.signal?.aborted) {
+      this.discard();
+      return [];
+    }
+
     const remaining: PendingResult[] = [];
     for (const [_id, promise] of this.pending) {
       try {
-        const result = await promise;
+        const result = this.signal
+          ? await this._raceWithAbort(promise)
+          : await promise;
         remaining.push(result);
-      } catch {
-        // Shouldn't happen — executeTool catches all errors
+      } catch (e: any) {
+        // Abort — discard remaining and stop collecting
+        if (e?.name === 'AbortError' || this.signal?.aborted) {
+          break;
+        }
+        // Other errors shouldn't happen — executeTool catches all
       }
     }
     this.pending.clear();
@@ -127,6 +146,24 @@ export class StreamingToolExecutor {
       this.pending.delete(r.call.id);
     }
     return [...syncCompleted, ...remaining];
+  }
+
+  /** Race a tool promise against the abort signal. Rejects with AbortError
+   *  if the signal fires before the promise settles. */
+  private _raceWithAbort(promise: Promise<PendingResult>): Promise<PendingResult> {
+    const sig = this.signal!;
+    if (sig.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    return new Promise<PendingResult>((resolve, reject) => {
+      const onAbort = () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+        sig.removeEventListener('abort', onAbort);
+      };
+      sig.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (r) => { sig.removeEventListener('abort', onAbort); resolve(r); },
+        (e) => { sig.removeEventListener('abort', onAbort); reject(e); },
+      );
+    });
   }
 
   /** Discard all pending executions (e.g., on abort). */

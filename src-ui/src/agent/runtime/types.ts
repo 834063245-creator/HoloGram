@@ -72,6 +72,8 @@ export interface AgentConfig {
   parentId?: string | null;
   /** 子 Agent 深度（0 = 根 Agent） */
   subagentDepth?: number;
+  /** 会话 ID — 用于会话级 board 隔离 */
+  sessionId?: string;
   /** 项目路径 */
   projectPath: string;
   /** 图数据（null = 无图模式） */
@@ -157,4 +159,12 @@ export interface RuntimePort {
   destroyAgent(agentId: string): void;
   /** 获取所有 Agent 概况 */
   listAgents(): AgentSummary[];
+  /** 获取指定会话的 TaskBoard（UI 面板用） */
+  getTaskBoard(sessionId?: string): TaskBoard;
+  /** 获取指定会话的 DiscoveryBoard（UI 面板用） */
+  getDiscoveryBoard(sessionId?: string): import('../discovery-board').DiscoveryBoard;
+  /** 销毁会话级 board 并删除持久化文件 */
+  destroySessionBoards(sessionId: string): Promise<void>;
+  /** 切换当前活跃会话 — 主 Agent 的 board proxies 指向新会话 */
+  setCurrentSession(sessionId: string): void;
 }

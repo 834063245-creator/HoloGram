@@ -259,7 +259,7 @@ describe('CompactionTracker', () => {
     expect(t.estimateLossFactor()).toBeCloseTo(0.5, 5);
   });
 
-  it('reset clears all state', () => {
+  it('reset clears per-session counters but preserves events and filesRead (E5)', () => {
     const t = new CompactionTracker();
     t.recordTurn();
     t.recordFileRead('/src/foo.ts');
@@ -276,9 +276,48 @@ describe('CompactionTracker', () => {
     });
     t.reset();
     const stats = t.getStats();
+    // Per-session counters are reset
     expect(stats.totalTurns).toBe(0);
-    expect(stats.events.length).toBe(0);
     expect(stats.reReadCount).toBe(0);
+    // E5: events and filesRead persist across sessions for compaction tuning
+    expect(stats.events.length).toBe(1);
+    expect(stats.filesReadPreCompact.size).toBe(1);
+  });
+
+  it('serializeState and deserializeState round-trip (E5)', () => {
+    const t = new CompactionTracker();
+    t.recordFileRead('/src/a.ts');
+    t.recordFileRead('/src/b.ts');
+    t.recordCompaction({
+      ts: 12345,
+      regionMsgCount: 5,
+      regionTokensEst: 10000,
+      summaryInputTokens: 10000,
+      summaryOutputTokens: 500,
+      tailMsgCount: 4,
+      preTokens: 15000,
+      postTokens: 5000,
+      outcome: 'summary',
+    });
+
+    const json = t.serializeState();
+
+    // Create a fresh tracker and restore
+    const t2 = new CompactionTracker();
+    t2.deserializeState(json);
+    const stats = t2.getStats();
+    expect(stats.events.length).toBe(1);
+    expect(stats.events[0].ts).toBe(12345);
+    expect(stats.filesReadPreCompact.size).toBe(2);
+    expect(stats.filesReadPreCompact.has('/src/a.ts')).toBe(true);
+    expect(stats.filesReadPreCompact.has('/src/b.ts')).toBe(true);
+  });
+
+  it('deserializeState handles corrupt JSON gracefully (E5)', () => {
+    const t = new CompactionTracker();
+    t.deserializeState('not valid json {{{');
+    // Should not throw, should leave tracker in default state
+    expect(t.getStats().events.length).toBe(0);
   });
 });
 

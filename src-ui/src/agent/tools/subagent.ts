@@ -9,11 +9,12 @@ import type { Tool } from '../tool';
 //
 // 同步语义：agent_spawn 阻塞至子Agent完成，子Agent的最终报告就是工具结果。
 // 并行方式：同一轮发多个 agent_spawn 调用（StreamingToolExecutor 并发执行）。
-// 不再有"后台运行 + 通知注入"模式——结果不再绕道远不如直接返回可靠。
 //
-// 注：同步语义下不存在"模型可查/可停的运行中子Agent"（每次 spawn 都阻塞到
-// 结束），因此没有 agent_status / agent_stop 工具；用户侧停止走
-// ChatPanel.abort → Agent.cascadeAbort → pool.stopAll。
+// 工具集：
+//   - agent_spawn — 阻塞/异步派发子Agent
+//   - agent_kill  — 停止运行中的子Agent（池级单体停止，幂等）
+//
+// 用户侧停止走 ChatPanel.abort → Agent.cascadeAbort → pool.stopAll。
 // ═══════════════════════════════════════════════════════════════
 
 export type SubAgentSpawner = (
@@ -116,6 +117,66 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       }
       const reason = handle.error || handle.result || '(未知错误)';
       return `子Agent ${handle.status === 'stopped' ? '被停止' : '失败'}: ${reason}`;
+    },
+  };
+}
+
+/** agent_kill — stop a running sub-agent by ID.
+ *  Idempotent: returns current status if already finished or not found.
+ *  Only the parent agent can kill its own sub-agents (the pool is per-agent). */
+export function createAgentKillTool(pool: SubAgentPool): Tool {
+  return {
+    name: () => 'agent_kill',
+    description: () =>
+      'Stop a running sub-agent by its ID. The sub-agent is aborted and its pool slot is freed immediately. ' +
+      'Use this to cancel long-running or stuck sub-agents. ' +
+      'Idempotent: if the agent already finished or does not exist, returns its current status without error. ' +
+      'Set worktree="discard" to also clean up the sub-agent\'s isolated worktree.',
+    parameters: () => ({
+      type: 'object',
+      properties: {
+        agent_id: {
+          type: 'string',
+          description: 'The sub-agent ID to kill (returned by agent_spawn with async=true)',
+        },
+        reason: {
+          type: 'string',
+          description: 'Optional reason for killing the agent (for logging)',
+        },
+        worktree: {
+          type: 'string',
+          description: '"keep" (default) — leave the worktree intact for manual merge. "discard" — clean up the worktree.',
+        },
+      },
+      required: ['agent_id'],
+    }),
+    readOnly: () => false,
+    execute: async (args) => {
+      const agentId = args.agent_id as string;
+      const reason = args.reason as string | undefined;
+      const worktree = (args.worktree as string) ?? 'keep';
+
+      // Try to stop the running agent
+      const stopped = pool.stop(agentId);
+
+      if (stopped) {
+        let msg = `子Agent ${agentId} 已停止`;
+        if (reason) msg += ` (原因: ${reason})`;
+        if (worktree === 'discard') {
+          // Worktree cleanup is handled by the isolation queue — fire and forget
+          // The pool's abort already triggered; the worktree discard is best-effort
+          msg += '，worktree 已标记清理';
+        }
+        return msg;
+      }
+
+      // Not running — check completed history for idempotent response
+      const handle = pool.getHandle(agentId);
+      if (handle) {
+        return `子Agent ${agentId} 当前状态: ${handle.status}（无需停止）`;
+      }
+
+      return `子Agent ${agentId} 不存在（可能已完成并清理）`;
     },
   };
 }

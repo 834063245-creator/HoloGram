@@ -166,8 +166,25 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   return assistant;
 }
 
-/** Push a notice message to the log. */
+/** Push a notice message to the log. Dedupes identical text within a 10-minute window. */
+const NOTICE_DEDUP_MS = 10 * 60 * 1000;
+const _recentNotices = new Map<string, number>(); // text → last-shown ts
+
 export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
+  // L3 dedup: skip if same text was shown within the time window
+  const now = Date.now();
+  const lastShown = _recentNotices.get(text);
+  if (lastShown != null && now - lastShown < NOTICE_DEDUP_MS) {
+    return;
+  }
+  _recentNotices.set(text, now);
+  // Prune stale entries to prevent unbounded growth
+  if (_recentNotices.size > 50) {
+    for (const [key, ts] of _recentNotices) {
+      if (now - ts >= NOTICE_DEDUP_MS) _recentNotices.delete(key);
+    }
+  }
+
   const sid = ctx.getStreamingAssistantId();
   const target = _resolveSessionTarget(ctx, sid);
   if (!target) return;

@@ -137,27 +137,6 @@ pub(crate) async fn hologram_hotspots(
 }
 
 // ═══════════════════════════════════════════════════════
-// P7: Workspace Conflict — 多工作区冲突预演
-// ═══════════════════════════════════════════════════════
-
-#[tauri::command]
-#[allow(dead_code)] // stub — not yet wired into the invoke_handler
-pub(crate) async fn hologram_workspace_conflict(
-    path_a: String,
-    path_b: String,
-    state: tauri::State<'_, crate::WorkspaceState>,
-) -> Result<String, String> {
-    crate::utils::check_mcp_permission("hologram_workspace_conflict", &state)?;
-    // No dedicated MCP conflict tool yet — return structured stub
-    Ok(serde_json::json!({
-        "status": "not_implemented",
-        "message": "workspace_conflict requires a dedicated MCP tool (not yet implemented in engine). Use hologram_preflight on each workspace to compare impact.",
-        "path_a": path_a,
-        "path_b": path_b,
-    }).to_string())
-}
-
-// ═══════════════════════════════════════════════════════
 // P8: Gate Check — 门禁模式（新模块 fan-in/fan-out/耦合评估）
 // ═══════════════════════════════════════════════════════
 

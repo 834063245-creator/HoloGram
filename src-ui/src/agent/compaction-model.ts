@@ -327,14 +327,52 @@ export class CompactionTracker {
   }
 
   reset(): void {
-    this.filesRead.clear();
+    // E5: Preserve events, turnsAfter, and filesRead across sessions
+    // so compaction tuning doesn't restart from zero after restart.
+    // Only reset per-session transient counters.
     this.toolSigs.clear();
     this.totalTurns = 0;
-    this.events = [];
-    this.turnsAfter = [];
     this.reReads = 0;
     this.dupTools = 0;
     this.currentPostCompactCounter = -1;
+  }
+
+  // ── E5: Cross-session persistence ──
+
+  /** Serialize persistent state for cross-session survival.
+   *  Only events, turnsAfter, and filesRead are persisted — per-session
+   *  counters (totalTurns, reReads, dupTools, etc.) start fresh each session. */
+  serializeState(): string {
+    return JSON.stringify({
+      events: this.events,
+      turnsAfter: this.turnsAfter,
+      filesRead: Array.from(this.filesRead),
+    });
+  }
+
+  /** Restore state from a serialized string. Merges with existing data. */
+  deserializeState(json: string): void {
+    try {
+      const data = JSON.parse(json) as {
+        events?: CompactionEvent[];
+        turnsAfter?: number[];
+        filesRead?: string[];
+      };
+      if (Array.isArray(data.events)) {
+        // Merge — append loaded events to current (in case some were already recorded)
+        this.events.push(...data.events);
+      }
+      if (Array.isArray(data.turnsAfter)) {
+        this.turnsAfter.push(...data.turnsAfter);
+      }
+      if (Array.isArray(data.filesRead)) {
+        for (const f of data.filesRead) {
+          this.filesRead.add(f);
+        }
+      }
+    } catch {
+      /* corrupt file — start fresh */
+    }
   }
 }
 

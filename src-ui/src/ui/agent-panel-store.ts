@@ -41,9 +41,13 @@ interface AgentPanelState {
   /** runtime 引用 — 供组件轮询时调 refresh */
   runtimeRef: {
     listAgents: () => AgentSummary[];
-    getTaskBoard: () => { getAllEntries: () => BoardEntry[] };
-    getDiscoveryBoard: () => { getAll: () => DiscoveryEntry[] };
+    getTaskBoard: (sessionId?: string) => { getAllEntries: () => BoardEntry[] };
+    getDiscoveryBoard: (sessionId?: string) => { getAll: () => DiscoveryEntry[] };
+    setCurrentSession?: (sessionId: string) => void;
   } | null;
+
+  /** 当前活跃会话 ID — 用于 session-scoped board 查询 */
+  currentSessionId: string;
 
   setAgents: (agents: AgentSummary[]) => void;
   setTaskBoard: (entries: BoardEntry[]) => void;
@@ -52,6 +56,7 @@ interface AgentPanelState {
   pushAlert: (alert: Omit<LifecycleAlert, 'ts'>) => void;
   clearAlert: (id: string) => void;
   setRuntime: (rt: AgentPanelState['runtimeRef']) => void;
+  setCurrentSessionId: (sid: string) => void;
   /** 全量刷新 — 从 runtime 拉取最新状态 */
   refresh: (runtime: NonNullable<AgentPanelState['runtimeRef']>) => void;
 }
@@ -66,6 +71,7 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
   messageFlow: [],
   alerts: [],
   runtimeRef: null,
+  currentSessionId: 'default',
 
   setAgents: (agents) => set({ agents }),
   setTaskBoard: (entries) => set({ taskBoard: entries }),
@@ -80,8 +86,17 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
 
   pushAlert: (alert) => {
     const full: LifecycleAlert = { ...alert, ts: Date.now() };
-    const alerts = [...get().alerts, full];
-    if (alerts.length > MAX_ALERTS) alerts.shift();
+    const existing = get().alerts;
+    // Replace if same ID (content-hash dedup) — prevents duplicate alerts piling up
+    const idx = existing.findIndex((a) => a.id === alert.id);
+    let alerts: LifecycleAlert[];
+    if (idx >= 0) {
+      alerts = [...existing];
+      alerts[idx] = full;
+    } else {
+      alerts = [...existing, full];
+      if (alerts.length > MAX_ALERTS) alerts.shift();
+    }
     set({ alerts });
   },
 
@@ -89,11 +104,15 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
 
   setRuntime: (rt) => set({ runtimeRef: rt }),
 
+  setCurrentSessionId: (sid) => set({ currentSessionId: sid }),
+
   refresh: (runtime) => {
+    const sid = get().currentSessionId;
+    runtime.setCurrentSession?.(sid);
     set({
       agents: runtime.listAgents(),
-      taskBoard: runtime.getTaskBoard().getAllEntries(),
-      discoveries: runtime.getDiscoveryBoard().getAll(),
+      taskBoard: runtime.getTaskBoard(sid).getAllEntries(),
+      discoveries: runtime.getDiscoveryBoard(sid).getAll(),
     });
   },
 }));

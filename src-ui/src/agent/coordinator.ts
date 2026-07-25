@@ -77,6 +77,9 @@ export class SubAgentPool {
   private queue: QueuedSpawn[] = [];
   private _queuedIds = new Set<string>();
 
+  /** Optional callback fired when any sub-agent finishes (for board archiving etc.) */
+  onFinish?: (agentId: string, status: SubAgentStatus) => void;
+
   constructor(maxConcurrent = DEFAULT_MAX_CONCURRENT, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
     this.maxConcurrent = maxConcurrent;
     this.defaultTimeoutMs = defaultTimeoutMs;
@@ -153,6 +156,7 @@ export class SubAgentPool {
       this._addCompleted(handle);
       this.agents.delete(id);
       pending.resolve(handle);
+      this.onFinish?.(id, handle.status);
 
       // Drain queue — a slot just freed up
       this._drainQueue();
@@ -267,6 +271,7 @@ export class SubAgentPool {
     this._addCompleted(pending.handle);
     this.agents.delete(id);
     pending.resolve(pending.handle);
+    this.onFinish?.(id, SubAgentStatus.Stopped);
     // Drain queue — stopping an agent frees a slot
     this._drainQueue();
   }

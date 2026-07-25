@@ -461,7 +461,10 @@ pub(crate) async fn rpc(
         // ═══════════════════════════════════════════════════════
         "permission_ask_response" => {
             let request_id = req_str(&params, "request_id", "permission_ask_response")?;
-            let allow = params.get("allow").and_then(|v| v.as_bool()).unwrap_or(false);
+            let allow = match params.get("allow") {
+                Some(v) => v.as_bool().ok_or_else(|| format!("参数 'allow' 必须是布尔值，收到: {}", v))?,
+                None => return Err("参数 'allow' 缺失 — 必须明确指定允许或拒绝".to_string()),
+            };
             let remember = opt_bool(&params, "remember");
             let rule_to_add = opt_str(&params, "rule_to_add");
             let rule_behavior = opt_str(&params, "rule_behavior");
@@ -541,7 +544,12 @@ pub(crate) async fn rpc(
             let event_type = req_str(&params, "event_type", "hologram_record_event")?;
             let file = opt_str(&params, "file");
             let summary = req_str(&params, "summary", "hologram_record_event")?;
-            commands::hologram::hologram_record_event(event_type, file, summary, state).await
+            // E3: unify return wrapping — map "ok" to "null" for consistency
+            // with other unit-returning commands (ok_unit pattern).
+            // Frontend calls this fire-and-forget, so the return value is not checked.
+            commands::hologram::hologram_record_event(event_type, file, summary, state)
+                .await
+                .map(|_| "null".into())
         }
         "hologram_gate_check" => {
             let path = req_str(&params, "path", "hologram_gate_check")?;

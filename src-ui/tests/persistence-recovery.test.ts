@@ -194,7 +194,7 @@ describe("TaskBoard — flush/restore 往返一致性", () => {
     const fs = createMemFS()
     setupMemFs(fs)
 
-    const board = new TaskBoard("/fake/project")
+    const board = new TaskBoard("/fake/project", "default")
 
     // register 2 个条目（1 个有 isolationId，1 个无）
     board.register({
@@ -221,27 +221,27 @@ describe("TaskBoard — flush/restore 往返一致性", () => {
     // flush
     await board.flush()
 
-    // 验证 mockRpc 被调了 write_file_content，路径含 .hologram/taskboard.json
+    // 验证 mockRpc 被调了 write_file_content，路径含 .hologram/taskboard/default.json
     const writeCalls = mockRpc.mock.calls.filter(
       (c: any[]) => c[0] === 'write_file_content',
     )
     expect(writeCalls.length).toBeGreaterThanOrEqual(1)
     const boardWrite = writeCalls.find(
-      (c: any[]) => ((c[1] as Record<string, unknown>).filePath as string).includes(".hologram/taskboard.json"),
+      (c: any[]) => ((c[1] as Record<string, unknown>).filePath as string).includes(".hologram/taskboard/default.json"),
     )
     expect(boardWrite).toBeDefined()
     const boardPath = (boardWrite![1] as Record<string, unknown>).filePath as string
-    expect(boardPath).toContain(".hologram/taskboard.json")
+    expect(boardPath).toContain(".hologram/taskboard/default.json")
 
     // 验证内容是合法 JSON 数组
-    const raw = fs.files.get("/fake/project/.hologram/taskboard.json")
+    const raw = fs.files.get("/fake/project/.hologram/taskboard/default.json")
     expect(raw).toBeDefined()
     const arr = JSON.parse(raw!)
     expect(Array.isArray(arr)).toBe(true)
     expect(arr).toHaveLength(2)
 
     // 新建 board2，调 restore
-    const board2 = new TaskBoard("/fake/project")
+    const board2 = new TaskBoard("/fake/project", "default")
     await board2.restore()
 
     // 验证所有字段完全一致
@@ -284,7 +284,7 @@ describe("debounced flush — 定时器 pending 时 flush 不丢数据", () => {
     const fs = createMemFS()
     setupMemFs(fs)
 
-    const board = new TaskBoard("/fake/project")
+    const board = new TaskBoard("/fake/project", "default")
     board.register({
       agentId: "sub-1",
       parentAgentId: "main",
@@ -306,7 +306,7 @@ describe("debounced flush — 定时器 pending 时 flush 不丢数据", () => {
     expect(writeCallsBefore.length).toBeGreaterThanOrEqual(1)
 
     // 验证 JSON 内容包含该条目
-    const raw = fs.files.get("/fake/project/.hologram/taskboard.json")
+    const raw = fs.files.get("/fake/project/.hologram/taskboard/default.json")
     expect(raw).toBeDefined()
     const arr = JSON.parse(raw!)
     expect(arr.some((e: [string, unknown]) => e[0] === "sub-1")).toBe(true)
@@ -323,7 +323,7 @@ describe("debounced flush — 定时器 pending 时 flush 不丢数据", () => {
     expect(writeCallsAfter.length).toBeGreaterThanOrEqual(2)
 
     // 两次内容一致（不丢数据）
-    const secondWriteContent = fs.files.get("/fake/project/.hologram/taskboard.json")
+    const secondWriteContent = fs.files.get("/fake/project/.hologram/taskboard/default.json")
     expect(secondWriteContent).toBe(firstWriteContent)
 
     // clearFlushTimer() 后不再有额外 flush
@@ -405,7 +405,7 @@ describe("空启动恢复 — 无持久化文件时不报错", () => {
     mockRpc.mockReset()
     setupRejectAll()
 
-    const board = new TaskBoard("/fake/project")
+    const board = new TaskBoard("/fake/project", "default")
     await board.restore()
     expect(board.getAllEntries()).toHaveLength(0)
   })
@@ -431,7 +431,7 @@ describe("孤儿检测 — running 条目 → stop + discard", () => {
     setupMemFs(fs)
 
     // 构造 TaskBoard，写入 2 个条目
-    const board = new TaskBoard("/fake/project")
+    const board = new TaskBoard("/fake/project", "default")
     board.register({
       agentId: "sub-completed",
       parentAgentId: "main",

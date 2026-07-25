@@ -173,6 +173,7 @@ pub(crate) async fn web_fetch(
             .http_status_as_error(false)
             .timeout_per_call(Some(std::time::Duration::from_secs(10)))
             .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .max_redirects(0) // Disable auto-redirect — manually re-check SSRF on each hop
             .build()
     );
 
@@ -185,6 +186,7 @@ pub(crate) async fn web_fetch(
                 .call()
         };
 
+    // Manually follow redirects, re-checking SSRF on each Location
     let resp = match make_request(CHROME_UA) {
         Ok(r) if r.status().as_u16() != 403 => r,
         Ok(r) => {
@@ -201,6 +203,41 @@ pub(crate) async fn web_fetch(
         }
         Err(e) => return Err(format!("请求失败: {}", e)),
     };
+
+    // ── Manual redirect following with SSRF re-check ──
+    let mut current_resp = resp;
+    let mut redirects = 0u32;
+    const MAX_REDIRECTS: u32 = 5;
+    loop {
+        let status = current_resp.status().as_u16();
+        if !(300..400).contains(&status) { break; }
+        if redirects >= MAX_REDIRECTS {
+            return Err(format!("重定向次数超限 ({MAX_REDIRECTS})"));
+        }
+        let location = current_resp.headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .ok_or("重定向响应缺少 Location 头")?;
+        // Resolve relative URLs against the current URL
+        let next_url = url::Url::parse(&url)
+            .and_then(|base| base.join(location))
+            .map_err(|e| format!("无效重定向 URL: {e}"))?;
+        let next_scheme = next_url.scheme();
+        if next_scheme != "https" && next_scheme != "http" {
+            return Err(format!("重定向到不支持的协议: {}", next_scheme));
+        }
+        let next_host = next_url.host_str().unwrap_or("");
+        if next_host.is_empty() || crate::utils::is_private_ip(next_host) {
+            return Err("SSRF 防护: 重定向到内网地址被拒绝".to_string());
+        }
+        // Follow the redirect
+        current_resp = agent.get(next_url.as_str())
+            .header("User-Agent", CHROME_UA)
+            .call()
+            .map_err(|e| format!("重定向请求失败: {}", e))?;
+        redirects += 1;
+    }
+    let resp = current_resp;
 
     let content_type = resp.headers()
         .get("content-type")

@@ -42,6 +42,7 @@ export interface BoardEntry {
 export class TaskBoard {
   private entries = new Map<string, BoardEntry>();
   private _projectPath: string;
+  private _sessionId: string;
   private _dirReady = false;
   // debounced flush — 延迟批量写入
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -50,19 +51,20 @@ export class TaskBoard {
   private static readonly TERMINAL_TTL_MS = 60 * 60 * 1000; // 1h
   private static readonly MAX_ENTRIES = 200;
 
-  constructor(projectPath?: string) {
+  constructor(projectPath?: string, sessionId?: string) {
     this._projectPath = projectPath ?? '';
+    this._sessionId = sessionId ?? 'default';
   }
 
   private get _boardPath(): string {
-    return this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/taskboard.json';
+    return this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/taskboard/' + this._sessionId + '.json';
   }
 
   private async _ensureDir(): Promise<void> {
     if (this._dirReady) return;
     try {
       await rpc('create_directory', {
-        path: this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram',
+        path: this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/taskboard',
       });
     } catch {
       /* already exists */
@@ -122,6 +124,16 @@ export class TaskBoard {
     if (this._flushTimer) {
       clearTimeout(this._flushTimer);
       this._flushTimer = null;
+    }
+  }
+
+  /** 删除持久化文件 — 会话结束时调用 */
+  async destroy(): Promise<void> {
+    if (!this._projectPath) return;
+    try {
+      await rpc('delete_file_or_dir', { path: this._boardPath });
+    } catch {
+      /* best-effort */
     }
   }
 
@@ -232,5 +244,68 @@ export class TaskBoard {
   /** 注销 */
   unregister(agentId: string): void {
     this.entries.delete(agentId);
+  }
+}
+
+/** Proxy that delegates to a swappable target TaskBoard.
+ *  Used by the main agent (which persists across session switches)
+ *  to dynamically route to the current session's board. */
+export class TaskBoardProxy {
+  private _target: TaskBoard;
+
+  constructor(target: TaskBoard) {
+    this._target = target;
+  }
+
+  /** Swap the underlying board — called when the active session changes */
+  setTarget(board: TaskBoard): void {
+    this._target = board;
+  }
+
+  get target(): TaskBoard {
+    return this._target;
+  }
+
+  getAllEntries(): BoardEntry[] {
+    return this._target.getAllEntries();
+  }
+  getChildren(parentAgentId: string): BoardEntry[] {
+    return this._target.getChildren(parentAgentId);
+  }
+  getEntry(agentId: string): BoardEntry | undefined {
+    return this._target.getEntry(agentId);
+  }
+  register(entry: Omit<BoardEntry, 'status' | 'filesTouched' | 'startedAt'>): void {
+    this._target.register(entry);
+  }
+  recordFileTouch(agentId: string, filepath: string): void {
+    this._target.recordFileTouch(agentId, filepath);
+  }
+  complete(agentId: string, summary: string, diff: string): void {
+    this._target.complete(agentId, summary, diff);
+  }
+  fail(agentId: string, error: string): void {
+    this._target.fail(agentId, error);
+  }
+  stop(agentId: string): void {
+    this._target.stop(agentId);
+  }
+  markMerged(agentId: string): void {
+    this._target.markMerged(agentId);
+  }
+  unregister(agentId: string): void {
+    this._target.unregister(agentId);
+  }
+  async flush(): Promise<void> {
+    return this._target.flush();
+  }
+  async restore(): Promise<void> {
+    return this._target.restore();
+  }
+  async destroy(): Promise<void> {
+    return this._target.destroy();
+  }
+  clearFlushTimer(): void {
+    this._target.clearFlushTimer();
   }
 }

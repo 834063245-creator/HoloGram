@@ -350,7 +350,7 @@ describe("集成：AgentLifecycleManager 泄漏检测 + TTL 清理", () => {
 
     const notice = events.find((e) => e.kind === EventKind.Notice && e.level === "warn")
     expect(notice).toBeDefined()
-    expect(notice!.text).toContain("1 个未合并")
+    expect(notice!.text).toContain("1 个新的未合并")
     expect(notice!.text).toContain("sub-leak")
 
     mgr.stop()

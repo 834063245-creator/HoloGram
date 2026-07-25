@@ -215,6 +215,7 @@ export class Agent {
   // Compaction cost model tracker
   private compactionTracker = new CompactionTracker();
   private _compactionConfigPath: string | null = null;
+  private _compactionTrackerPath: string | null = null;
 
   constructor(prov: Provider, tools: ToolRegistry, systemPrompt: string, opts: AgentOptions = {}) {
     this.prov = prov;
@@ -317,7 +318,44 @@ export class Agent {
 
   /** Set the path for persisting auto-tuned compaction config. */
   setCompactionConfigPath(projectPath: string): void {
-    this._compactionConfigPath = projectPath.replace(/\\/g, '/') + '/.hologram/compaction-config.json';
+    const base = projectPath.replace(/\\/g, '/');
+    this._compactionConfigPath = base + '/.hologram/compaction-config.json';
+    // E5: tracker state (events + filesRead) persisted separately so
+    // compaction tuning doesn't restart from zero after restart.
+    this._compactionTrackerPath = base + '/.hologram/compaction-tracker.json';
+  }
+
+  /** E5: Load persisted tracker state (events + filesRead) from disk.
+   *  Called on startup so compaction tuning has historical data. */
+  async loadCompactionTracker(): Promise<void> {
+    if (!this._compactionTrackerPath) return;
+    try {
+      const raw = await rpc<string>('read_file_content', { filePath: this._compactionTrackerPath });
+      const stripped = raw.replace(/^\s*\d+\t/gm, '');
+      this.compactionTracker.deserializeState(stripped);
+      const stats = this.compactionTracker.getStats(this.pricing);
+      if (stats.events.length > 0) {
+        log.info('agent', 'compaction tracker restored', {
+          events: stats.events.length,
+          filesRead: stats.filesReadPreCompact.size,
+        });
+      }
+    } catch {
+      /* file doesn't exist yet — start fresh */
+    }
+  }
+
+  /** E5: Save tracker state to disk. Best-effort, never throws. */
+  private async saveCompactionTracker(): Promise<void> {
+    if (!this._compactionTrackerPath) return;
+    try {
+      await rpc('write_file_content', {
+        filePath: this._compactionTrackerPath,
+        content: this.compactionTracker.serializeState(),
+      });
+    } catch {
+      /* best-effort */
+    }
   }
 
   /** Try to load persisted compaction config. Returns null if none saved. */
@@ -335,6 +373,8 @@ export class Agent {
 
   /** Apply auto-tuned compaction params. Returns the config if applied. */
   async applyAutoTuneConfig(): Promise<CompactionConfig | null> {
+    // E5: load tracker state first so tuning has historical data
+    await this.loadCompactionTracker();
     const config = await this.loadCompactionConfig();
     if (!config) return null;
     this.contextWindow = 1_000_000;
@@ -822,11 +862,13 @@ export class Agent {
         if (signal.aborted || e?.message === 'aborted') {
           // ── 暂停:裁剪未完成轮次,快照进 goal 槽,记录转 paused ──
           this.session = this.session.slice(0, sessionBefore);
+          this._execState.bumpVersion();
           await mgr.update(record.id, { status: 'paused', iteration: iter, stallRounds });
           await mgr.saveSession(record.id, this.session);
           // Clear goal context from in-memory session so normal chat doesn't auto-continue.
           // Full context lives in the goal slot; /goal resume restores it from there.
           this.session = this.session.length > 0 && this.session[0].role === 'system' ? [this.session[0]] : [];
+          this._execState.bumpVersion();
           this._sink({
             kind: EventKind.Notice,
             level: 'info',
@@ -1026,6 +1068,7 @@ ${resumeNote}
         this.hooks,
         this.preflightHooks,
         this._isolationId ?? null,
+        signal,
       );
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
@@ -1497,9 +1540,12 @@ ${resumeNote}
   }
 
   /** ponytail: record compaction + auto-tune if summary outcome.
-   *  Centralizes the pattern repeated across compactNow and triggerAutoCompact. */
+   *  Centralizes the pattern repeated across compactNow and triggerAutoCompact.
+   *  E5: also persists tracker state so it survives restarts. */
   private recordCompactionEvent(event: CompactionEvent): void {
     this.compactionTracker.recordCompaction(event);
+    // E5: persist tracker state (events + filesRead) for cross-session survival
+    void this.saveCompactionTracker();
     if (event.outcome === 'summary') this.tryAutoTune();
   }
 
