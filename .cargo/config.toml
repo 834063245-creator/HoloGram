@@ -4,3 +4,10 @@
 [target.x86_64-pc-windows-gnu]
 linker = "D:\\HoloGramHG\\grammars\\gcc-wrap.exe"
 rustflags = ["-C", "link-args=-static-libgcc"]
+
+# sccache — shared compilation cache for parallel worktrees.
+# Each worktree has its own target/ (no file-lock contention), but
+# compilation results are cached by content hash. The first build
+# warms the cache; subsequent worktrees hit it instantly.
+[build]
+rustc-wrapper = "sccache"
