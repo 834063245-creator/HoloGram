@@ -134,6 +134,8 @@ fn is_dangerous_file(path: &Path) -> bool {
         ".env.production",
         ".env.local",
         ".mcp.json",
+        ".npmrc",
+        ".htpasswd",
     ];
     if dangerous_names.contains(&name) {
         return true;
@@ -141,6 +143,18 @@ fn is_dangerous_file(path: &Path) -> bool {
     // Check full path for .ssh directory
     let path_str = path.to_string_lossy().replace('\\', "/");
     if path_str.contains("/.ssh/") {
+        return true;
+    }
+    // Check full path for .aws directory (AWS credentials)
+    if path_str.contains("/.aws/") {
+        return true;
+    }
+    // Check full path for .docker directory (Docker config)
+    if path_str.contains("/.docker/") {
+        return true;
+    }
+    // Check full path for .kube directory (Kubernetes config)
+    if path_str.contains("/.kube/") {
         return true;
     }
     false
@@ -151,7 +165,11 @@ fn is_dangerous_dir(path: &Path) -> bool {
     // Check if any path component is a dangerous directory
     for component in path.components() {
         if let Some(s) = component.as_os_str().to_str() {
-            if s == ".git" || s == ".vscode" || s == ".idea" || s == ".cursor" {
+            if s.eq_ignore_ascii_case(".git")
+                || s.eq_ignore_ascii_case(".vscode")
+                || s.eq_ignore_ascii_case(".idea")
+                || s.eq_ignore_ascii_case(".cursor")
+            {
                 return true;
             }
         }
@@ -191,6 +209,24 @@ fn has_suspicious_windows_path(path_str: &str) -> bool {
         if path_str == *name || path_str.starts_with(&format!("{}.", name)) {
             return true;
         }
+    }
+    // Raw device paths: \\.\PhysicalDrive0, \\.\C:, etc.
+    let lower = path_str.to_lowercase();
+    if lower.starts_with("\\\\.\\physicaldrive") {
+        return true;
+    }
+    // \\.\C: pattern (raw volume access)
+    if lower.starts_with("\\\\.\\") {
+        let rest = &path_str[4..]; // after "\\.\"
+        if rest.len() >= 1 && rest.as_bytes()[0].is_ascii_alphabetic() {
+            if rest.len() == 1 || (rest.len() >= 2 && rest.as_bytes()[1] == b':') {
+                return true;
+            }
+        }
+    }
+    // \\?\GLOBALROOT prefix
+    if lower.starts_with("\\\\?\\globalroot") {
+        return true;
     }
     false
 }
@@ -256,6 +292,26 @@ fn is_suspicious_unix_read_path(path_str: &str) -> bool {
     }
     // /proc/self/environ — environment variables (may contain secrets)
     if path_str.starts_with("/proc/self/environ") {
+        return true;
+    }
+    // /proc/self/maps — ASLR leak (memory layout)
+    if path_str.starts_with("/proc/self/maps") {
+        return true;
+    }
+    // /proc/self/cmdline — command line arguments
+    if path_str.starts_with("/proc/self/cmdline") {
+        return true;
+    }
+    // /proc/self/status — process status (may leak sensitive info)
+    if path_str.starts_with("/proc/self/status") {
+        return true;
+    }
+    // /proc/self/cgroup — cgroup membership info
+    if path_str.starts_with("/proc/self/cgroup") {
+        return true;
+    }
+    // /proc/self/mountinfo — mount namespace info
+    if path_str.starts_with("/proc/self/mountinfo") {
         return true;
     }
     false
@@ -419,5 +475,124 @@ mod tests {
     fn test_unix_read_allows_etc() {
         let r = check_path_safety_read(Path::new("/etc/hostname"));
         assert!(r.safe, "/etc reads should be allowed");
+    }
+
+    // ── Fix 1: is_dangerous_dir case-insensitive ──
+
+    #[test]
+    fn test_dangerous_dir_case_insensitive_git() {
+        // .GIT should be blocked just like .git
+        let r = check_path_safety(Path::new(".GIT/config"));
+        assert!(!r.safe, ".GIT/config writes should be blocked (case-insensitive)");
+    }
+
+    #[test]
+    fn test_dangerous_dir_case_insensitive_vscode() {
+        let r = check_path_safety(Path::new(".VSCode/settings.json"));
+        assert!(!r.safe, ".VSCode writes should be blocked (case-insensitive)");
+    }
+
+    #[test]
+    fn test_dangerous_dir_case_insensitive_idea() {
+        let r = check_path_safety(Path::new(".IdEa/workspace.xml"));
+        assert!(!r.safe, ".IdEa writes should be blocked (case-insensitive)");
+    }
+
+    #[test]
+    fn test_dangerous_dir_case_insensitive_cursor() {
+        let r = check_path_safety(Path::new(".CURSOR/rules.txt"));
+        assert!(!r.safe, ".CURSOR writes should be blocked (case-insensitive)");
+    }
+
+    // ── Fix 2: is_suspicious_unix_read_path extra /proc/self paths ──
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_maps() {
+        let r = check_path_safety_read(Path::new("/proc/self/maps"));
+        assert!(!r.safe, "/proc/self/maps reads should be blocked (ASLR leak)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_cmdline() {
+        let r = check_path_safety_read(Path::new("/proc/self/cmdline"));
+        assert!(!r.safe, "/proc/self/cmdline reads should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_status() {
+        let r = check_path_safety_read(Path::new("/proc/self/status"));
+        assert!(!r.safe, "/proc/self/status reads should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_cgroup() {
+        let r = check_path_safety_read(Path::new("/proc/self/cgroup"));
+        assert!(!r.safe, "/proc/self/cgroup reads should be blocked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_read_blocks_proc_mountinfo() {
+        let r = check_path_safety_read(Path::new("/proc/self/mountinfo"));
+        assert!(!r.safe, "/proc/self/mountinfo reads should be blocked");
+    }
+
+    // ── Fix 3: has_suspicious_windows_path device paths ──
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_blocks_physical_drive() {
+        let r = check_path_safety(Path::new("\\\\.\\PhysicalDrive0"));
+        assert!(!r.safe, "PhysicalDrive should be blocked");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_blocks_raw_volume() {
+        let r = check_path_safety(Path::new("\\\\.\\C:"));
+        assert!(!r.safe, "raw volume C: should be blocked");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_blocks_globalroot() {
+        let r = check_path_safety(Path::new("\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1"));
+        assert!(!r.safe, "GLOBALROOT should be blocked");
+    }
+
+    // ── Fix 4: is_dangerous_file extra sensitive files ──
+
+    #[test]
+    fn test_dangerous_file_npmrc() {
+        let r = check_path_safety(Path::new("/home/user/.npmrc"));
+        assert!(!r.safe, ".npmrc should be blocked");
+    }
+
+    #[test]
+    fn test_dangerous_file_htpasswd() {
+        let r = check_path_safety(Path::new("/var/www/.htpasswd"));
+        assert!(!r.safe, ".htpasswd should be blocked");
+    }
+
+    #[test]
+    fn test_dangerous_file_aws_credentials() {
+        let r = check_path_safety(Path::new("/home/user/.aws/credentials"));
+        assert!(!r.safe, ".aws/credentials should be blocked");
+    }
+
+    #[test]
+    fn test_dangerous_file_docker_config() {
+        let r = check_path_safety(Path::new("/home/user/.docker/config.json"));
+        assert!(!r.safe, ".docker/config.json should be blocked");
+    }
+
+    #[test]
+    fn test_dangerous_file_kube_config() {
+        let r = check_path_safety(Path::new("/home/user/.kube/config"));
+        assert!(!r.safe, ".kube/config should be blocked");
     }
 }

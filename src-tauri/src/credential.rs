@@ -79,20 +79,22 @@ pub fn clear_credentials() -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        // List all entries with our service name and delete them
+        // Dump keychain, find all Hologram entries, extract provider names.
         let output = std::process::Command::new("security")
             .args(["dump-keychain"])
             .output()
             .map_err(|e| format!("security dump: {e}"))?;
         let dump = String::from_utf8_lossy(&output.stdout);
-        for line in dump.lines() {
-            if line.contains("\"svce\"<blob>=\"hologram\"") {
-                // Can't easily parse account from dump — use generic approach
-            }
-        }
-        // Best effort: we don't track which providers have keys on macOS
-        // without iterating. Delete known default providers.
-        for prov in &["deepseek", "anthropic"] {
+        let providers = parse_keychain_dump_providers(&dump);
+
+        // If parsing didn't find any providers, fall back to known defaults.
+        let targets: Vec<&str> = if providers.is_empty() {
+            vec!["deepseek", "anthropic", "openai"]
+        } else {
+            providers.iter().map(|s| s.as_str()).collect()
+        };
+
+        for prov in &targets {
             let _ = std::process::Command::new("security")
                 .args(["delete-generic-password", "-s", "hologram", "-a", prov])
                 .output();
@@ -107,6 +109,37 @@ pub fn clear_credentials() -> Result<(), String> {
             .output();
         Ok(())
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// macOS Keychain dump parser — extracts provider names from
+// `security dump-keychain` output.
+// ═══════════════════════════════════════════════════════════════
+
+/// Parse `security dump-keychain` output to find all Hologram-stored
+/// provider names (account names). Splits entries by blank lines, finds
+/// those with `"svce"<blob>="hologram"`, and extracts all `"acct"<blob>`
+/// values from within those entry blocks.
+#[cfg(target_os = "macos")]
+fn parse_keychain_dump_providers(dump: &str) -> Vec<String> {
+    let mut providers: Vec<String> = Vec::new();
+
+    // Split into blocks — each keychain entry is separated by blank lines
+    for block in dump.split("\n\n") {
+        if !block.contains("\"svce\"<blob>=\"hologram\"") {
+            continue;
+        }
+        for line in block.lines() {
+            if let Some(rest) = line.split("\"acct\"<blob>=").nth(1) {
+                let val = rest.trim().trim_matches('"');
+                if !val.is_empty() && !providers.contains(&val.to_string()) {
+                    providers.push(val.to_string());
+                }
+            }
+        }
+    }
+
+    providers
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -409,7 +442,7 @@ mod linux_impl {
 
     pub(super) fn get_linux(provider: &str) -> Result<Option<String>, String> {
         if !secret_tool_available() {
-            return Ok(None); // no secret-tool = no stored keys
+            return Err("Secret Service 不可用（请确认 gnome-keyring/kwallet 正在运行）".into());
         }
 
         let output = std::process::Command::new("secret-tool")
@@ -432,7 +465,7 @@ mod linux_impl {
 
     pub(super) fn delete_linux(provider: &str) -> Result<(), String> {
         if !secret_tool_available() {
-            return Ok(()); // nothing to delete
+            return Err("Secret Service 不可用（请确认 gnome-keyring/kwallet 正在运行）".into());
         }
 
         let _ = std::process::Command::new("secret-tool")
@@ -451,3 +484,188 @@ use linux_impl::*;
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 compile_error!("credential.rs: unsupported platform");
+
+// ═══════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "macos")]
+    use super::parse_keychain_dump_providers;
+
+    // ── JSON map format tests (platform-independent) ──
+
+    #[test]
+    fn test_json_map_roundtrip() {
+        // Verify the JSON Object map format used by Windows credential storage
+        // survives a full serialize → deserialize cycle without data loss.
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "deepseek".to_string(),
+            serde_json::Value::String("sk-abc123".to_string()),
+        );
+        map.insert(
+            "anthropic".to_string(),
+            serde_json::Value::String("sk-ant-xyz".to_string()),
+        );
+
+        let json = serde_json::Value::Object(map.clone()).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("valid JSON roundtrip");
+        let parsed_map = parsed.as_object().expect("top-level must be an object");
+
+        assert_eq!(parsed_map.len(), 2);
+        assert_eq!(
+            parsed_map.get("deepseek").and_then(|v| v.as_str()),
+            Some("sk-abc123")
+        );
+        assert_eq!(
+            parsed_map.get("anthropic").and_then(|v| v.as_str()),
+            Some("sk-ant-xyz")
+        );
+    }
+
+    #[test]
+    fn test_json_map_empty() {
+        let map = serde_json::Map::new();
+        let json = serde_json::Value::Object(map).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("empty map must parse");
+        assert!(parsed.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_json_map_special_characters() {
+        // Keys may contain special JSON characters — ensure they survive.
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "openai".to_string(),
+            serde_json::Value::String("sk-\"quoted\"key\nwith newline".to_string()),
+        );
+
+        let json = serde_json::Value::Object(map.clone()).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("special chars must roundtrip");
+        let parsed_map = parsed.as_object().unwrap();
+
+        assert_eq!(
+            parsed_map.get("openai").and_then(|v| v.as_str()),
+            Some("sk-\"quoted\"key\nwith newline")
+        );
+    }
+
+    #[test]
+    fn test_json_map_overwrite() {
+        // Simulate storing a key twice: latest value must win.
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "deepseek".to_string(),
+            serde_json::Value::String("old-key".to_string()),
+        );
+        map.insert(
+            "deepseek".to_string(),
+            serde_json::Value::String("new-key".to_string()),
+        );
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get("deepseek").and_then(|v| v.as_str()),
+            Some("new-key")
+        );
+    }
+
+    // ── Keychain dump parser tests ──
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_parse_keychain_dump_multiple_providers() {
+        let dump = "\
+keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
+version: 512
+class: \"genp\"
+attributes:
+    \"labl\"<blob>=\"HoloGram: deepseek\"
+    \"svce\"<blob>=\"hologram\"
+    \"acct\"<blob>=\"deepseek\"
+    \"mdat\"<timedate>=0x...
+
+keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
+version: 512
+class: \"genp\"
+attributes:
+    \"labl\"<blob>=\"HoloGram: anthropic\"
+    \"svce\"<blob>=\"hologram\"
+    \"acct\"<blob>=\"anthropic\"
+    \"mdat\"<timedate>=0x...
+";
+
+        let providers = parse_keychain_dump_providers(dump);
+        assert_eq!(providers.len(), 2);
+        assert!(providers.contains(&"deepseek".to_string()));
+        assert!(providers.contains(&"anthropic".to_string()));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_parse_keychain_dump_no_match() {
+        let dump = "\
+keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
+class: \"genp\"
+attributes:
+    \"svce\"<blob>=\"other-app\"
+    \"acct\"<blob>=\"user1\"
+";
+
+        let providers = parse_keychain_dump_providers(dump);
+        assert!(providers.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_parse_keychain_dump_empty() {
+        let providers = parse_keychain_dump_providers("");
+        assert!(providers.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_parse_keychain_dump_duplicate_accounts() {
+        // Same account appearing in multiple entries — only returned once.
+        let dump = "\
+keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
+class: \"genp\"
+attributes:
+    \"svce\"<blob>=\"hologram\"
+    \"acct\"<blob>=\"deepseek\"
+
+keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
+class: \"genp\"
+attributes:
+    \"svce\"<blob>=\"hologram\"
+    \"acct\"<blob>=\"deepseek\"
+";
+
+        let providers = parse_keychain_dump_providers(dump);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0], "deepseek");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_parse_keychain_dump_acct_before_svce() {
+        // Order of attributes is not guaranteed — acct may appear before svce.
+        let dump = "\
+keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
+class: \"genp\"
+attributes:
+    \"acct\"<blob>=\"openai\"
+    \"labl\"<blob>=\"HoloGram: openai\"
+    \"svce\"<blob>=\"hologram\"
+";
+
+        let providers = parse_keychain_dump_providers(dump);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0], "openai");
+    }
+}

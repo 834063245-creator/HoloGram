@@ -444,8 +444,9 @@ async function init(): Promise<void> {
       }
     });
 
-    // ── Backend permission-ask → frontend inline chat card bridge ──
-    const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage']);
+        // ── Backend permission-ask → frontend inline chat card bridge ──
+    const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage', 'delete_file', 'move_file', 'create_directory']);
+    const timedOutRequests = new Set<string>();
     await listen('permission-ask', (event: any) => {
       const p = event.payload as {
         requestId: string;
@@ -467,13 +468,40 @@ async function init(): Promise<void> {
         return;
       }
 
+      // 120s timeout — auto-deny if user doesn't respond
+      const timeoutId = setTimeout(() => {
+        timedOutRequests.add(p.requestId);
+        rpc('permission_ask_response', {
+          requestId: p.requestId,
+          allow: false,
+          remember: false,
+        });
+      }, 120_000);
+
       chatPanel.showPermissionCard(p.tool, p.reason, p.path, p.danger).then((result) => {
+        clearTimeout(timeoutId);
+        if (timedOutRequests.has(p.requestId)) {
+          timedOutRequests.delete(p.requestId);
+          return;
+        }
         rpc('permission_ask_response', {
           requestId: p.requestId,
           allow: result.allow,
           remember: result.remember || undefined,
           ruleToAdd: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
-          ruleBehavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0].behavior : undefined,
+          ruleBehavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0]?.behavior || 'allow' : undefined,
+        });
+      }).catch((err) => {
+        clearTimeout(timeoutId);
+        if (timedOutRequests.has(p.requestId)) {
+          timedOutRequests.delete(p.requestId);
+          return;
+        }
+        console.error('[permission-ask]', err);
+        rpc('permission_ask_response', {
+          requestId: p.requestId,
+          allow: false,
+          remember: false,
         });
       });
     });

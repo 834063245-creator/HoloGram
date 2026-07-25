@@ -576,6 +576,37 @@ fn suspicious_command_heuristic(command: &str) -> Option<String> {
         ));
     }
 
+    // ── 4. Multi-stage pipe decode+execute detection ──
+    // Detect patterns like: echo <base64> | base64 -d | sh
+    // Each segment alone is harmless, but combined they decode and execute.
+    // Also catches: xxd -r -p | sh  and  openssl enc -d -base64 | bash
+    let segments = split_pipeline(command);
+    if segments.len() >= 3 {
+        let has_decode = segments.iter().any(|seg| {
+            let s = seg.trim().to_lowercase();
+            // base64 decode: base64 -d / base64 --decode
+            (s.contains("base64") && (s.contains("-d") || s.contains("--decode")))
+            // xxd hex decode: xxd -r -p / xxd -r
+            || (s.contains("xxd") && s.contains("-r"))
+            // openssl base64 decode: openssl enc -d -base64
+            || (s.contains("openssl") && s.contains("-d") && s.contains("-base64"))
+        });
+        let has_shell_exec = segments.iter().any(|seg| {
+            let first_token = seg.trim().split_whitespace().next().unwrap_or("");
+            matches!(first_token, "sh" | "bash" | "zsh" | "dash")
+                || first_token.ends_with("/sh")
+                || first_token.ends_with("/bash")
+                || first_token.ends_with("/zsh")
+                || first_token.ends_with("/dash")
+        });
+        if has_decode && has_shell_exec {
+            return Some(format!(
+                "检测到管道解码+执行模式（{} 段管道中包含解码命令和 shell 执行），需用户确认",
+                segments.len()
+            ));
+        }
+    }
+
     None
 }
 
@@ -958,5 +989,75 @@ mod tests {
         let s = sandbox_in_temp();
         let rules = PermissionRules::new();
         assert!(matches!(check("", &s, &rules), PermissionResult::Passthrough));
+    }
+
+    // ── Multi-stage pipe decode+execute tests ──
+
+    #[test]
+    fn test_pipe_decode_execute_base64_d_sh() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        let r = check("echo cm0gLXJmIC8= | base64 -d | sh", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "base64 -d pipe to sh must trigger Ask, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_pipe_decode_execute_base64_decode_bash() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        let r = check("echo xxx | base64 --decode | bash", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "base64 --decode pipe to bash must trigger Ask, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_pipe_decode_execute_xxd_r_sh() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        let r = check("echo deadbeef | xxd -r -p | sh", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "xxd -r -p pipe to sh must trigger Ask, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_pipe_decode_no_execute_passthrough() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // base64 decode but no pipe to shell execution (and only 2 segments) → Passthrough
+        let r = check("echo aGk= | base64 -d", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Passthrough),
+            "base64 -d without shell exec must passthrough, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_pipe_normal_two_segment_passthrough() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        // Two segments, normal command → Passthrough
+        let r = check("npm test | grep PASS", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Passthrough),
+            "normal 2-segment pipe must passthrough, got: {:?}", r
+        );
+    }
+
+    #[test]
+    fn test_pipe_decode_execute_openssl_sh() {
+        let s = sandbox_in_temp();
+        let rules = PermissionRules::new();
+        let r = check("echo deadbeef | openssl enc -d -base64 | sh", &s, &rules);
+        assert!(
+            matches!(r, PermissionResult::Ask { .. }),
+            "openssl enc -d -base64 pipe to sh must trigger Ask, got: {:?}", r
+        );
     }
 }

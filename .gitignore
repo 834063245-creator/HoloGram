@@ -133,6 +133,10 @@ plan.md
 tauri_dev_*.txt
 warnings.txt
 
+# Local AI tool memory / log snapshots — machine-specific, don't sync
+CODELY.md
+mem-log/
+
 # Windows reserved device name — accidental creation by tools redirecting output
 nul
 
