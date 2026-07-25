@@ -572,6 +572,13 @@ export class Agent {
         `<system-reminder>\n📬 未读消息 (${newFreeMsgs.length} 条，用 agent_inbox 查看详情):\n${summary}\n</system-reminder>`,
       );
     }
+
+    // 6. Sync _injectedMsgIds with actual inbox — remove IDs for messages
+    //    that were acked, expired, or consumed since last injection.
+    const remainingIds = new Set(remaining.map((m) => m.id));
+    for (const id of this._injectedMsgIds) {
+      if (!remainingIds.has(id)) this._injectedMsgIds.delete(id);
+    }
   }
 
   /** Inject new discoveries from other agents as a system-reminder.
