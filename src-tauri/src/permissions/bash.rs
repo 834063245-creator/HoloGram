@@ -154,6 +154,8 @@ fn extract_command_paths(command: &str) -> Vec<String> {
 }
 
 /// Simple whitespace tokenizer that respects single and double quotes.
+/// Masks $ inside single quotes as \x01 so expand_cmd_vars won't expand them
+/// (bash doesn't expand variables inside single quotes).
 fn tokenize(command: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -169,6 +171,7 @@ fn tokenize(command: &str) -> Vec<String> {
                     tokens.push(std::mem::take(&mut current));
                 }
             }
+            '$' if in_single => current.push('\x01'), // mask $ in single quotes
             _ => current.push(ch),
         }
     }
@@ -339,7 +342,7 @@ fn is_powershell_command(command: &str) -> bool {
 /// to avoid false positives on `echo $PATH`, `ls $HOME`, etc.
 /// Skips expansion inside single-quoted segments (bash doesn't expand there).
 fn expand_cmd_vars(token: &str) -> String {
-    if !token.contains('%') && !token.contains('$') {
+    if !token.contains('%') && !token.contains('$') && !token.contains('\x01') {
         return token.to_string();
     }
 
@@ -363,28 +366,13 @@ fn expand_cmd_vars(token: &str) -> String {
 
     if !is_path_like {
         // Don't expand bash $VAR/${VAR} for non-path tokens (echo $PATH, ls $HOME, etc.)
-        return result;
+        // Still restore masked $ from tokenize (single-quoted $ → \x01)
+        return result.replace('\x01', "$");
     }
 
-    // For single-quoted segments, temporarily mask $ to prevent expansion
-    // (bash doesn't expand vars inside single quotes)
-    let mut in_single = false;
-    let bytes = result.as_bytes();
-    let mut out = String::with_capacity(result.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'\'' {
-            in_single = !in_single;
-        }
-        if in_single && c == b'$' {
-            out.push('\x01'); // placeholder for $ inside single quotes
-        } else {
-            out.push(c as char);
-        }
-        i += 1;
-    }
-    let mut masked = out;
+    // $ inside single quotes was already masked as \x01 by tokenize.
+    // Expand ${VAR} and $VAR (unmasked ones only), then restore masked $.
+    let mut masked = result;
 
     // Expand bash ${VAR} syntax
     let brace_re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
@@ -1001,6 +989,16 @@ mod tests {
         // %VAR% expansion — should resolve env vars for path detection
         let expanded = expand_cmd_vars("%USERPROFILE%\\file.txt");
         assert!(!expanded.contains('%'), "USERPROFILE should be expanded, got: {}", expanded);
+    }
+
+    #[test]
+    fn test_f_single_quote_dollar_not_expanded() {
+        // $HOME inside single quotes should NOT be expanded by tokenize→expand_cmd_vars
+        let tokens = tokenize("echo '$HOME/x'");
+        assert_eq!(tokens.len(), 2, "expected 2 tokens, got {:?}", tokens);
+        // The token should contain the masked placeholder, not the expanded $HOME
+        let expanded = expand_cmd_vars(&tokens[1]);
+        assert!(expanded.contains("$HOME"), "single-quoted $HOME should not be expanded, got: {} (raw token: {:?})", expanded, tokens[1]);
     }
 
     #[test]

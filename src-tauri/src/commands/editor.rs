@@ -16,13 +16,9 @@ pub(crate) async fn edit_file(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
     let is_agent = is_agent.unwrap_or(false);
-    let (_, content) = crate::confined_fs::read_text(&file_path, is_agent, &state, &app).await?;
-    let resolved = crate::utils::resolve_write_dispatch(&file_path, is_agent, &state, &app).await?;
+    let (_, content) = crate::confined_fs::read_text(&file_path, is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let resolved = crate::utils::resolve_write_dispatch(&file_path, is_agent, _agent_id.as_deref(), &state, &app).await?;
     let file_path = resolved.to_string_lossy().to_string();
 
     let replace_all = replace_all.unwrap_or(false);

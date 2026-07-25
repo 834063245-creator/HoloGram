@@ -16,11 +16,7 @@ pub(crate) async fn list_directory(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     let filter = filter_ignored.unwrap_or(true);
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
@@ -40,11 +36,7 @@ pub(crate) async fn list_directory_flat(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::utils::DirEntry>, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     tokio::task::spawn_blocking(move || {
         if !root.is_dir() {
             return Err(format!("不是有效目录: {}", path));
@@ -65,11 +57,7 @@ pub(crate) async fn read_file_content(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let (_, content) = crate::confined_fs::read_text(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
+    let (_, content) = crate::confined_fs::read_text(&file_path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     Ok(crate::confined_fs::format_lines(&content, offset, limit))
 }
 
@@ -95,11 +83,7 @@ pub(crate) async fn read_file_base64(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let (_, bytes) = crate::confined_fs::read_bytes(&file_path, is_agent.unwrap_or(false), &state, &app).await?;
+    let (_, bytes) = crate::confined_fs::read_bytes(&file_path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
@@ -112,11 +96,7 @@ pub(crate) async fn write_file_content(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let real_path = crate::confined_fs::write_text(&file_path, &content, is_agent.unwrap_or(false), &state, &app).await?;
+    let real_path = crate::confined_fs::write_text(&file_path, &content, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
 
     if let Some(ref handle) = *state.lock().unwrap() {
@@ -147,12 +127,9 @@ pub(crate) fn log_append(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    if let Some(id) = &_agent_id {
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let physical = ctx.forward_map_path(std::path::Path::new(&path));
+    let physical = ctx.forward_map_path(std::path::Path::new(&path), _agent_id.as_deref());
     let physical_str = physical.to_string_lossy().to_string();
-    let tool = crate::tools::EditTool { path: physical_str.clone() };
+    let tool = crate::tools::EditTool { path: physical_str.clone(), agent_id: _agent_id.clone() };
     crate::utils::check_permission_sync(&tool, &ctx)?;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -171,11 +148,7 @@ pub(crate) async fn create_directory(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    crate::confined_fs::create_dir(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    crate::confined_fs::create_dir(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     Ok(())
 }
 
@@ -195,11 +168,7 @@ pub(crate) async fn delete_file_or_dir(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let real = crate::confined_fs::delete(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    let real = crate::confined_fs::delete(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     let rp = real.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         if !is_ignored_path(&rp) {
@@ -222,10 +191,6 @@ pub(crate) async fn rename_file_or_dir(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
     let is_agent = is_agent.unwrap_or(false);
     let parent = std::path::Path::new(&file_path)
         .parent()
@@ -236,7 +201,7 @@ pub(crate) async fn rename_file_or_dir(
     } else {
         format!("{}/{}", parent.trim_end_matches('/'), new_name.trim_start_matches('/'))
     };
-    let (_, resolved_to) = crate::confined_fs::rename(&file_path, &to, is_agent, &state, &app).await?;
+    let (_, resolved_to) = crate::confined_fs::rename(&file_path, &to, is_agent, _agent_id.as_deref(), &state, &app).await?;
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         if !is_ignored_path(&rp) {
@@ -259,12 +224,8 @@ pub(crate) async fn move_file(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
     let is_agent = is_agent.unwrap_or(false);
-    let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, &state, &app).await?;
+    let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, _agent_id.as_deref(), &state, &app).await?;
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
     if let Some(ref handle) = *state.lock().unwrap() {
         if !is_ignored_path(&rp) {
@@ -286,11 +247,7 @@ pub(crate) async fn open_in_explorer(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let real = crate::confined_fs::verify_read_path(&path, is_agent.unwrap_or(false), &state, &app).await?;
+    let real = crate::confined_fs::verify_read_path(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     #[cfg(target_os = "windows")]
     {
         if real.is_dir() {

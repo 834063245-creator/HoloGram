@@ -86,10 +86,11 @@ where
 pub(crate) async fn read_text(
     file_path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<(PathBuf, String), String> {
-    let real_path = crate::utils::resolve_read_dispatch(file_path, is_agent, state, app).await?;
+    let real_path = crate::utils::resolve_read_dispatch(file_path, is_agent, agent_id, state, app).await?;
     let rp = real_path.clone();
     let fp = file_path.to_string();
 
@@ -119,10 +120,11 @@ pub(crate) async fn read_text(
 pub(crate) async fn read_bytes(
     file_path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<(PathBuf, Vec<u8>), String> {
-    let real_path = crate::utils::resolve_read_dispatch(file_path, is_agent, state, app).await?;
+    let real_path = crate::utils::resolve_read_dispatch(file_path, is_agent, agent_id, state, app).await?;
     let rp = real_path.clone();
     let fp = file_path.to_string();
 
@@ -152,10 +154,11 @@ pub(crate) async fn read_bytes(
 pub(crate) async fn verify_read_path(
     file_path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<PathBuf, String> {
-    crate::utils::resolve_read_dispatch(file_path, is_agent, state, app).await
+    crate::utils::resolve_read_dispatch(file_path, is_agent, agent_id, state, app).await
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -168,6 +171,7 @@ pub(crate) async fn write_text(
     file_path: &str,
     content: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<PathBuf, String> {
@@ -178,7 +182,7 @@ pub(crate) async fn write_text(
             MAX_WRITE_BYTES / (1024 * 1024)
         ));
     }
-    let real_path = crate::utils::resolve_write_dispatch(file_path, is_agent, state, app).await?;
+    let real_path = crate::utils::resolve_write_dispatch(file_path, is_agent, agent_id, state, app).await?;
     let rp = real_path.to_string_lossy().to_string();
     if let Some(parent) = real_path.parent() {
         std::fs::create_dir_all(parent)
@@ -192,10 +196,11 @@ pub(crate) async fn write_text(
 pub(crate) async fn create_dir(
     path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<PathBuf, String> {
-    let resolved = crate::utils::resolve_write_dispatch(path, is_agent, state, app).await?;
+    let resolved = crate::utils::resolve_write_dispatch(path, is_agent, agent_id, state, app).await?;
     std::fs::create_dir_all(&resolved)
         .map_err(|e| format!("无法创建目录 {}: {}", path, e))?;
     Ok(resolved)
@@ -205,10 +210,11 @@ pub(crate) async fn create_dir(
 pub(crate) async fn delete(
     path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<PathBuf, String> {
-    let real = crate::utils::resolve_write_dispatch(path, is_agent, state, app).await?;
+    let real = crate::utils::resolve_write_dispatch(path, is_agent, agent_id, state, app).await?;
     if !real.exists() {
         return Err(format!("路径不存在: {}", path));
     }
@@ -228,11 +234,12 @@ pub(crate) async fn rename(
     from: &str,
     to: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &AppHandle,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let resolved_from = crate::utils::resolve_read_dispatch(from, is_agent, state, app).await?;
-    let resolved_to = crate::utils::resolve_write_dispatch(to, is_agent, state, app).await?;
+    let resolved_from = crate::utils::resolve_read_dispatch(from, is_agent, agent_id, state, app).await?;
+    let resolved_to = crate::utils::resolve_write_dispatch(to, is_agent, agent_id, state, app).await?;
     let rf = resolved_from.clone();
     let rt = resolved_to.clone();
     with_io_retry(

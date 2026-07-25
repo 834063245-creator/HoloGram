@@ -44,11 +44,7 @@ pub(crate) async fn search_code(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
-    let root = crate::utils::resolve_read_dispatch(&directory, is_agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&directory, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     let is_regex = use_regex.unwrap_or(false);
     let regex = if is_regex {
         Some(regex::RegexBuilder::new(&pattern)
@@ -294,12 +290,8 @@ pub(crate) async fn glob(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
     let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
-    let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?;
+    let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
 
     // Expand brace expressions ({a,b,c}) — the glob crate doesn't support them.
     let expanded = expand_braces(&pattern);

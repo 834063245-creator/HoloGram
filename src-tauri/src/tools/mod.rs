@@ -17,6 +17,7 @@ use crate::permissions::{
 
 pub struct ReadTool {
     pub path: String,
+    pub agent_id: Option<String>,
 }
 
 impl Tool for ReadTool {
@@ -39,7 +40,7 @@ impl Tool for ReadTool {
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
         // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
-        let logical = ctx.reverse_map_path(std::path::Path::new(&self.path));
+        let logical = ctx.reverse_map_path(std::path::Path::new(&self.path), self.agent_id.as_deref());
         let logical_str = logical.to_string_lossy().replace('\\', "/");
         filesystem::check_read_permission(&self.path, &ctx.sandbox, &rules, Some(&logical_str))
     }
@@ -52,6 +53,7 @@ impl Tool for ReadTool {
 
 pub struct EditTool {
     pub path: String,
+    pub agent_id: Option<String>,
 }
 
 impl Tool for EditTool {
@@ -74,7 +76,7 @@ impl Tool for EditTool {
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
         // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
-        let logical = ctx.reverse_map_path(std::path::Path::new(&self.path));
+        let logical = ctx.reverse_map_path(std::path::Path::new(&self.path), self.agent_id.as_deref());
         let logical_str = logical.to_string_lossy().replace('\\', "/");
         filesystem::check_write_permission(&self.path, &ctx.sandbox, &rules, Some(&logical_str))
     }

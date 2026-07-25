@@ -20,9 +20,6 @@ pub(crate) async fn web_search(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    if let Some(id) = &_agent_id {
-        ctx.set_active_agent_id_ctx(id);
-    }
     let backend = search_backend();
     let (search_url, q) = (match backend {
         "bing" => format!("https://www.bing.com/search?q={}&setlang=en", crate::utils::urlencoding(&query)),
@@ -158,9 +155,6 @@ pub(crate) async fn web_fetch(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    if let Some(id) = &_agent_id {
-        ctx.set_active_agent_id_ctx(id);
-    }
     {
         let tool = crate::tools::WebFetchTool { url: url.clone() };
         crate::utils::check_permission(&tool, &ctx, &app).await?;

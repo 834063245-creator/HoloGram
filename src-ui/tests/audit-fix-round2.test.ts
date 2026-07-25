@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Round 2 audit fix tests: R1 (message recovery), R4 (discard), R6 (session isolation),
-// R8 (forceClearState flush), low-prio (discovery dedup, notice scoping, compaction replace)
+// Round 2 audit fix tests:
+// R6 (TaskBoard/DiscoveryBoard destroy prevents flush revival)
+// Low-prio: discovery restore dedup, compaction deserializeState replace semantics
+// R1 (inbox recovery) — verified via Rust-side list_dir_recursive filter_ignored param + message-store RPC calls
+// R4 (discard wrong namespace) — verified via code removal (abort path handles cleanup)
+// R8 (forceClearState flush) — verified via workspace.ts flushAllBoards call before nulling runtime
 
 import { describe, expect, it, vi } from 'vitest';
 import { TaskBoard } from '../src/agent/task-board';

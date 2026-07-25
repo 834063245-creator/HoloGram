@@ -27,7 +27,6 @@ pub(crate) fn agent_isolation_create(
         if let Ok(guard) = state.lock() {
             if let Some(ref handle) = *guard {
                 handle.permission_ctx.set_isolation(&id, isolation);
-                handle.permission_ctx.set_active_agent_id_ctx(&id);
             }
         }
     }
@@ -47,9 +46,8 @@ pub(crate) fn agent_isolation_diff(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    ctx.set_active_agent_id_ctx(&agent_id);
     let isolation = ctx
-        .get_isolation()
+        .get_isolation(Some(&agent_id))
         .ok_or("没有活跃的隔离环境")?;
 
     if isolation.kind == IsolationKind::None {
@@ -78,14 +76,12 @@ pub(crate) fn agent_isolation_merge(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    ctx.set_active_agent_id_ctx(&agent_id);
     let isolation = ctx
-        .get_isolation()
+        .get_isolation(Some(&agent_id))
         .ok_or("没有活跃的隔离环境")?;
 
     let result = isolation.merge_to_main()?;
     ctx.clear_isolation(&agent_id);
-    crate::permissions::clear_active_agent_id();
     Ok(result)
 }
 
@@ -95,21 +91,18 @@ pub(crate) fn agent_isolation_discard(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
-    ctx.set_active_agent_id_ctx(&agent_id);
     let isolation = ctx
-        .get_isolation()
+        .get_isolation(Some(&agent_id))
         .ok_or("没有活跃的隔离环境")?;
 
     // discard may fail (corrupted/missing directory) — always clear registry
     match isolation.discard() {
         Ok(()) => {
             ctx.clear_isolation(&agent_id);
-            crate::permissions::clear_active_agent_id();
             Ok("工作树已丢弃".into())
         }
         Err(e) => {
             ctx.clear_isolation(&agent_id);
-            crate::permissions::clear_active_agent_id();
             Ok(format!("工作树丢弃遇到错误但 registry 已清除: {e}"))
         }
     }
@@ -166,7 +159,7 @@ pub(crate) fn agent_isolation_force_purge(
     let main_path = std::path::PathBuf::from(&project_path);
 
     // Try normal discard first (may succeed)
-    if let Some(isolation) = ctx.get_isolation() {
+    if let Some(isolation) = ctx.get_isolation(Some(&agent_id)) {
         let _ = isolation.discard();
     }
 

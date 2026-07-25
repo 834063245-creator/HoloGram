@@ -19,19 +19,15 @@ pub(crate) async fn exec_command(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if let Some(id) = &_agent_id {
-        let ctx = crate::utils::get_ctx(&state)?;
-        ctx.set_active_agent_id_ctx(id);
-    }
     let dir = cwd.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
 
     let is_bg = run_in_background.unwrap_or(false);
     let physical_dir = if is_bg {
         crate::utils::require_command_sync(&command, &state)?;
-        crate::utils::require_read_sync(&dir, &state)?
+        crate::utils::require_read_sync(&dir, _agent_id.as_deref(), &state)?
     } else {
         crate::utils::require_command(&command, &state, &app).await?;
-        crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), &state, &app).await?
+        crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?
     };
     let physical_dir_str = physical_dir.to_string_lossy().to_string();
 

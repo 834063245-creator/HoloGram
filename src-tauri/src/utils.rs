@@ -361,12 +361,12 @@ pub(crate) fn check_permission_sync(
     }
 }
 
-pub(crate) async fn require_read(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) async fn require_read(file_path: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
     // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
-    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path), agent_id);
     let physical_str = physical.to_string_lossy().to_string();
-    let tool = tools::ReadTool { path: physical_str.clone() };
+    let tool = tools::ReadTool { path: physical_str.clone(), agent_id: agent_id.map(|s| s.to_string()) };
     check_permission(&tool, &ctx, app).await?;
     // Permission granted — sandbox was already consulted inside check_permission.
     // Don't re-check sandbox boundary; user-approved external reads must go through.
@@ -374,12 +374,12 @@ pub(crate) async fn require_read(file_path: &str, state: &tauri::State<'_, Works
         .map_err(|e| format!("无法解析路径 {}: {}", physical_str, e))
 }
 
-pub(crate) async fn require_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) async fn require_write(file_path: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
     // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
-    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path), agent_id);
     let physical_str = physical.to_string_lossy().to_string();
-    let tool = tools::EditTool { path: physical_str.clone() };
+    let tool = tools::EditTool { path: physical_str.clone(), agent_id: agent_id.map(|s| s.to_string()) };
     check_permission(&tool, &ctx, app).await?;
     ctx.resolve_write(&physical_str)
 }
@@ -389,14 +389,14 @@ pub(crate) async fn require_write(file_path: &str, state: &tauri::State<'_, Work
 /// safety check 仍然保留在写路径 (防误操作系统文件).
 pub(crate) fn resolve_path_user_read(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path), None);
     let physical_str = physical.to_string_lossy().to_string();
     ctx.resolve_read(&physical_str)
 }
 
 pub(crate) fn resolve_path_user_write(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path), None);
     let physical_str = physical.to_string_lossy().to_string();
     ctx.resolve_write(&physical_str)
 }
@@ -407,11 +407,12 @@ pub(crate) fn resolve_path_user_write(file_path: &str, state: &tauri::State<'_, 
 pub(crate) async fn resolve_read_dispatch(
     file_path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &tauri::AppHandle,
 ) -> Result<PathBuf, String> {
     if is_agent {
-        require_read(file_path, state, app).await
+        require_read(file_path, agent_id, state, app).await
     } else {
         resolve_path_user_read(file_path, state)
     }
@@ -420,11 +421,12 @@ pub(crate) async fn resolve_read_dispatch(
 pub(crate) async fn resolve_write_dispatch(
     file_path: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &tauri::AppHandle,
 ) -> Result<PathBuf, String> {
     if is_agent {
-        require_write(file_path, state, app).await
+        require_write(file_path, agent_id, state, app).await
     } else {
         resolve_path_user_write(file_path, state)
     }
@@ -435,11 +437,12 @@ pub(crate) async fn require_git_dispatch(
     repo_path: &str,
     subcommand: &str,
     is_agent: bool,
+    agent_id: Option<&str>,
     state: &tauri::State<'_, WorkspaceState>,
     app: &tauri::AppHandle,
 ) -> Result<(), String> {
     if is_agent {
-        require_git(repo_path, subcommand, state, app).await
+        require_git(repo_path, subcommand, agent_id, state, app).await
     } else {
         Ok(())  // user UI git operations are unrestricted
     }
@@ -457,21 +460,21 @@ pub(crate) fn require_command_sync(command: &str, state: &tauri::State<'_, Works
     check_permission_sync(&tool, &ctx)
 }
 
-pub(crate) fn require_read_sync(file_path: &str, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
+pub(crate) fn require_read_sync(file_path: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
     // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
-    let physical = ctx.forward_map_path(std::path::Path::new(file_path));
+    let physical = ctx.forward_map_path(std::path::Path::new(file_path), agent_id);
     let physical_str = physical.to_string_lossy().to_string();
-    let tool = tools::ReadTool { path: physical_str.clone() };
+    let tool = tools::ReadTool { path: physical_str.clone(), agent_id: agent_id.map(|s| s.to_string()) };
     check_permission_sync(&tool, &ctx)?;
     std::fs::canonicalize(&physical)
         .map_err(|e| format!("无法解析路径 {}: {}", physical_str, e))
 }
 
-pub(crate) async fn require_git(repo_path: &str, subcommand: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
+pub(crate) async fn require_git(repo_path: &str, subcommand: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
     let ctx = get_ctx(state)?;
     // Phase 3: forward-map repo path to worktree when isolated (spec §5.6)
-    let physical = ctx.forward_map_path(std::path::Path::new(repo_path));
+    let physical = ctx.forward_map_path(std::path::Path::new(repo_path), agent_id);
     let tool = tools::GitTool { repo_path: physical.to_string_lossy().to_string(), subcommand: subcommand.to_string() };
     check_permission(&tool, &ctx, app).await
 }
