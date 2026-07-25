@@ -13,7 +13,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 // ── bridge mock ──
-const mockRpc = vi.fn();
+// vi.hoisted: vitest v4 hoists vi.mock factories above module-level code,
+// so mockRpc must be hoisted too or the factory references undefined.
+const { mockRpc } = vi.hoisted(() => ({
+  mockRpc: vi.fn(),
+}));
 vi.mock('../src/bridge', () => ({
   rpc: (...args: any[]) => mockRpc(...args),
   listen: vi.fn(),
@@ -85,17 +89,18 @@ describe('DiscoveryBoard', () => {
   it('test_discovery_persistence — flush → restore 往返', async () => {
     const projectPath = '/tmp/test-phase4';
     mockRpc.mockReset();
+    // ponytail: capture what flush writes, echo it back on restore.
+    // Hardcoded fallback runs afoul of vitest v4 vi.mock hoisting where
+    // the factory's mockRpc closure points at a different fn instance.
+    let savedContent = '';
     mockRpc.mockImplementation(async (method: string, args: any) => {
       if (method === 'create_directory') return;
       if (method === 'write_file_content') {
-        // Capture the write for restore
+        savedContent = args?.content || '';
         return;
       }
       if (method === 'read_file_content') {
-        // Return serialized data
-        return JSON.stringify([
-          { id: 'disc-1', agentId: 'agent-a', key: 'test-key', value: 'test-value', category: 'architecture', ts: 1000 },
-        ]);
+        return savedContent;
       }
       return '';
     });
