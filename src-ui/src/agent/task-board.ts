@@ -46,6 +46,10 @@ export class TaskBoard {
   // debounced flush — 延迟批量写入
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // ── Eviction: expired terminal entries are removed after TTL ──
+  private static readonly TERMINAL_TTL_MS = 60 * 60 * 1000; // 1h
+  private static readonly MAX_ENTRIES = 200;
+
   constructor(projectPath?: string) {
     this._projectPath = projectPath ?? '';
   }
@@ -91,6 +95,7 @@ export class TaskBoard {
         for (const [id, entry] of arr) {
           this.entries.set(id, entry);
         }
+        this._evict();
       }
     } catch {
       /* 文件不存在 — 无可恢复数据 */
@@ -117,6 +122,38 @@ export class TaskBoard {
     if (this._flushTimer) {
       clearTimeout(this._flushTimer);
       this._flushTimer = null;
+    }
+  }
+
+  /** Remove terminal entries (completed/failed/stopped/merged) older than TTL.
+   *  Running entries are never evicted. */
+  private _evict(): void {
+    const now = Date.now();
+    const terminal = new Set(['completed', 'failed', 'stopped', 'merged']);
+    let changed = false;
+    for (const [id, entry] of this.entries) {
+      if (
+        terminal.has(entry.status) &&
+        entry.finishedAt != null &&
+        now - entry.finishedAt > TaskBoard.TERMINAL_TTL_MS
+      ) {
+        this.entries.delete(id);
+        changed = true;
+      }
+    }
+    // Hard cap: if still too many, evict oldest terminal entries
+    if (this.entries.size > TaskBoard.MAX_ENTRIES) {
+      const terminalEntries = [...this.entries.entries()]
+        .filter(([, e]) => terminal.has(e.status))
+        .sort((a, b) => (a[1].finishedAt ?? 0) - (b[1].finishedAt ?? 0));
+      const toRemove = this.entries.size - TaskBoard.MAX_ENTRIES;
+      for (let i = 0; i < Math.min(toRemove, terminalEntries.length); i++) {
+        this.entries.delete(terminalEntries[i][0]);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this._scheduleFlush();
     }
   }
 
@@ -148,6 +185,7 @@ export class TaskBoard {
     entry.summary = summary;
     entry.diff = diff;
     entry.finishedAt = Date.now();
+    this._evict();
     this._scheduleFlush();
   }
 
@@ -158,6 +196,7 @@ export class TaskBoard {
     entry.status = 'failed';
     entry.summary = error;
     entry.finishedAt = Date.now();
+    this._evict();
     this._scheduleFlush();
   }
 
@@ -167,6 +206,7 @@ export class TaskBoard {
     if (!entry) return;
     entry.status = 'stopped';
     entry.finishedAt = Date.now();
+    this._evict();
     this._scheduleFlush();
   }
 
@@ -175,6 +215,8 @@ export class TaskBoard {
     const entry = this.entries.get(agentId);
     if (!entry) return;
     entry.status = 'merged';
+    entry.finishedAt = entry.finishedAt ?? Date.now();
+    this._evict();
     this._scheduleFlush();
   }
 

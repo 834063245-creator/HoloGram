@@ -107,30 +107,9 @@ export class StreamingToolExecutor {
     this.pending.set(call.id, promise);
   }
 
-  /** Poll for completed results. Non-blocking — returns whatever is ready. */
-  pollCompleted(): PendingResult[] {
-    const _ready: PendingResult[] = [];
-    // Check each pending promise — if done, move to completed
-    for (const [_id, _promise] of this.pending) {
-      // ponytail: Promise.race with a resolved promise to check if done.
-      // We can't truly poll a Promise, so we use a marker.
-      // Instead, we rely on awaitRemaining() for the final collection.
-      // pollCompleted() returns results that have already resolved in completed[].
-    }
-    // Return what's already completed (from sync errors or previously resolved)
-    const results = [...this.completed];
-    this.completed = [];
-    // Mark which IDs are done
-    for (const r of results) {
-      this.pending.delete(r.call.id);
-    }
-    return results;
-  }
-
   /** Wait for all remaining tool executions to complete.
-   *  Also drains sync-completed results (unknown tool etc.) — runLoop never
-   *  calls pollCompleted, so without this the model would get a generic
-   *  "did not produce a result" instead of the real error. */
+   *  Also drains sync-completed results (unknown tool etc.) that were pushed
+   *  to this.completed during addTool (e.g. unknown tool name). */
   async awaitRemaining(): Promise<PendingResult[]> {
     const remaining: PendingResult[] = [];
     for (const [_id, promise] of this.pending) {
@@ -142,7 +121,11 @@ export class StreamingToolExecutor {
       }
     }
     this.pending.clear();
-    const syncCompleted = this.pollCompleted();
+    const syncCompleted = [...this.completed];
+    this.completed = [];
+    for (const r of syncCompleted) {
+      this.pending.delete(r.call.id);
+    }
     return [...syncCompleted, ...remaining];
   }
 

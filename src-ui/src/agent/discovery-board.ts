@@ -33,6 +33,10 @@ export class DiscoveryBoard {
   // debounced flush — 延迟批量写入
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // ── Eviction: TTL + capacity cap ──
+  private static readonly TTL_MS = 24 * 60 * 60 * 1000; // 24h
+  private static readonly MAX_ENTRIES = 200;
+
   constructor(projectPath?: string) {
     this._projectPath = projectPath ?? '';
   }
@@ -75,6 +79,7 @@ export class DiscoveryBoard {
       const arr = JSON.parse(stripNums(raw)) as DiscoveryEntry[];
       if (Array.isArray(arr)) {
         this.entries = arr;
+        this._evict();
       }
     } catch {
       /* 文件不存在 — 无可恢复数据 */
@@ -103,8 +108,22 @@ export class DiscoveryBoard {
   post(agentId: string, key: string, value: string, category: string): string {
     const id = `disc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.entries.push({ id, agentId, key, value, category, ts: Date.now() });
+    this._evict();
     this._scheduleFlush();
     return id;
+  }
+
+  /** Remove expired entries and enforce capacity cap. */
+  private _evict(): void {
+    const now = Date.now();
+    const before = this.entries.length;
+    this.entries = this.entries.filter((e) => now - e.ts < DiscoveryBoard.TTL_MS);
+    if (this.entries.length > DiscoveryBoard.MAX_ENTRIES) {
+      this.entries = this.entries.slice(-DiscoveryBoard.MAX_ENTRIES);
+    }
+    if (this.entries.length !== before) {
+      this._scheduleFlush();
+    }
   }
 
   /** 查询发现（可选过滤） */

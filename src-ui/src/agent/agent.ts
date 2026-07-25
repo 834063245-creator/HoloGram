@@ -33,6 +33,19 @@ import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry'
 import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
+
+/** Wrap a Tool with a custom execute function, returning a NEW Tool object.
+ *  The original Tool is never mutated — critical because the parent Agent
+ *  shares Tool references with its children. */
+function wrapTool(original: Tool, execute: Tool['execute']): Tool {
+  return {
+    name: () => original.name(),
+    description: () => original.description(),
+    parameters: () => original.parameters(),
+    readOnly: () => original.readOnly(),
+    execute,
+  };
+}
 import type { MessageBus } from './message-bus';
 import type { TaskBoard } from './task-board';
 import type { DiscoveryBoard } from './discovery-board';
@@ -1895,7 +1908,8 @@ ${resumeNote}
     const shellTool = subTools.get('run_shell');
     if (shellTool) {
       const origShellExec = shellTool.execute.bind(shellTool);
-      shellTool.execute = async (args, onProgress) => {
+      subTools.unregister('run_shell');
+      subTools.register(wrapTool(shellTool, async (args, onProgress) => {
         const cmd = (args.command as string) || '';
         if (BUILD_TEST_RE.test(cmd)) {
           return `[已拦截] 子 Agent 不允许执行构建/测试/包管理命令（"${cmd.slice(0, 100)}"）。\n` +
@@ -1903,7 +1917,7 @@ ${resumeNote}
             `请直接完成文件修改，在结论中说明：你改了哪些文件、建议主 Agent 跑什么命令来验证。`;
         }
         return origShellExec(args, onProgress);
-      };
+      }));
     }
 
     // ── File ownership for fresh sub-agents (fork has worktree isolation) ──
@@ -1920,7 +1934,8 @@ ${resumeNote}
         const tool = subTools.get(toolName);
         if (!tool) continue;
         const origExec = tool.execute.bind(tool);
-        tool.execute = async (args, onProgress) => {
+        subTools.unregister(toolName);
+        subTools.register(wrapTool(tool, async (args, onProgress) => {
           const filePath = extractFilePath(toolName, args);
           if (filePath) {
             const result = ownership.claim(filePath, subAgentId);
@@ -1938,7 +1953,7 @@ ${resumeNote}
             }
           }
           return origExec(args, onProgress);
-        };
+        }));
       }
     }
 

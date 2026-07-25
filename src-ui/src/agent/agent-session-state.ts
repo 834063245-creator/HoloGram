@@ -63,9 +63,6 @@ export interface AgentSessionStateApi {
   // ── Bulk operations ──
   /** Remove all agent handles and exec states for a panel. */
   clearPanelState(storeId: string): void;
-  /** Check if any session (including active) has a running agent.
-   *  Callers that need "background only" should filter out the active session. */
-  hasAnyRunningSession(storeId: string): boolean;
 
   // ── Subscription ──
   /** Subscribe to state changes. Returns unsubscribe. */
@@ -186,14 +183,6 @@ export function createAgentSessionState(): AgentSessionStateApi {
         if (k.startsWith(prefix)) _execBySession.delete(k);
       }
       _bump();
-    },
-
-    hasAnyRunningSession(storeId): boolean {
-      const prefix = storeId + ':';
-      for (const [, es] of _execBySession) {
-        if (es.isRunning) return true;
-      }
-      return false;
     },
 
     // ── Subscription ──
