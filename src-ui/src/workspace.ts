@@ -418,6 +418,10 @@ export class Workspace {
     // Clear agent & memory
     // Stop all running sub-agents before clearing
     this.subAgentPool.stopAll();
+    // Flush session-scoped boards before destroying runtime
+    if (this.runtime) {
+      this.runtime.flushAllBoards();
+    }
     // Destroy runtime agents
     if (this.runtime) {
       for (const summary of this.runtime.listAgents()) {
